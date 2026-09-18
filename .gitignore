@@ -1,0 +1,14 @@
+node_modules/
+data.json
+
+# Generated plugin bundle; distributed in releases, rebuilt from source.
+/main.js
+/main.js.map
+
+# Local validation artifacts and packaged releases.
+/evidence/
+/release/
+
+# Python bytecode from local deployment tooling.
+__pycache__/
+*.py[cod]

@@ -1,0 +1,9 @@
+{
+  "id": "send-to-t3-code",
+  "name": "Send to T3 Code",
+  "version": "2.3.0",
+  "minAppVersion": "1.8.7",
+  "description": "Send full Markdown notes to new threads in selected T3 Code projects from the Files menu.",
+  "author": "Send to T3 Code contributors",
+  "isDesktopOnly": false
+}
