@@ -41,7 +41,7 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
  };
  class Base{};class File{path='account-test.md';basename='account-test';name='account-test.md';extension='md';stat={ctime:1,size:10};}
  class Plugin{
-  app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,v:any)=>{local=v;},workspace:{onLayoutReady:()=>{},on:()=>{}},vault:{read:async()=> 'Account connection test'},metadataCache:{}};
+  app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,v:any)=>{local=v;},workspace:{onLayoutReady:()=>{},on:()=>{}},vault:{read:async()=> 'Account connection test',getMarkdownFiles:()=>[]},metadataCache:{}};
   async loadData(){return shared.at(-1)??initial;}async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}
  }
  const api={Plugin,Platform:{isMobile:true},TFile:File,Modal:Base,FuzzySuggestModal:Base,PluginSettingTab:Base,Notice:Base,requestUrl};
@@ -49,13 +49,13 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
  runInNewContext(await readFile('main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian','Mobile must never load Node APIs');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console},{timeout:5000});
  const p=new module.exports.default();await p.onload();await p.startEmailSignIn('user@example.com');
  await assert.rejects(p.finishEmailSignIn('000000'),/incorrect/);assert.equal(p.nativeAccount,null);assert.equal(connects,0);
- await p.finishEmailSignIn('123456');assert.equal(p.nativeAccount.userId,'user-native');assert.ok(p.machineErrors.b);assert.equal(p.settings.paired.length,2);assert.equal(p.settings.directSelected[0],'a-connection:p-a');
- offline=false;await p.refreshMachines();assert.equal(p.settings.paired.length,3);assert.equal(p.settings.directProjects.length,2);assert.equal(Object.keys(p.machineErrors).length,0);
+ await p.finishEmailSignIn('123456');assert.equal(p.nativeAccount.userId,'user-native');assert.ok(p.machineErrors.b);assert.equal(p.directAccountReady(),true,'completed discovery unlocks settings when at least one computer connected');assert.equal(p.settings.paired.length,2);assert.equal(p.settings.directSelected[0],'a-connection:p-a');
+ offline=false;await p.refreshMachines();assert.equal(p.settings.paired.length,3);assert.equal(p.settings.directProjects.length,2);assert.equal(Object.keys(p.machineErrors).length,0);assert.equal(p.directAccountReady(),true);
  const c=p.settings.paired.find((c:any)=>c.environmentId==='a');assert.equal(c.id,'a-connection');assert.equal(c.managed,true);
  const previousConnects=connects;p.pairedSessions[c.id].expiresAt=0;await Promise.all([p.sessionFor(c.id),p.sessionFor(c.id)]);assert.equal(connects,previousConnects+1,'Renewal is coalesced');
  const project=p.settings.directProjects.find((p:any)=>p.id==='p-a');await p.send(new File(),project);assert.equal(dispatches.length,2);assert.equal(dispatches[1].message.text,'Account connection test');assert.equal(p.settings.pending.length,0);p.onunload();
- const q=new module.exports.default();await q.onload();assert.equal(q.nativeAccount.userId,'user-native');assert.equal(dispatches.length,2,'Reload must not send work');
- await q.signOutCloud();assert.equal(q.nativeAccount,null);assert.equal(q.pairedSessions[c.id],undefined);assert.equal(q.pairedSessions.manual.token,'manual-private');assert.equal(revoked,1);
+ const q=new module.exports.default();await q.onload();assert.equal(q.nativeAccount.userId,'user-native');assert.equal(q.directAccountReady(),false,'reload stays gated until this device refreshes its connections');assert.equal(dispatches.length,2,'Reload must not send work');
+ await q.signOutCloud();assert.equal(q.nativeAccount,null);assert.equal(q.directAccountReady(),false);assert.equal(q.pairedSessions[c.id],undefined);assert.equal(q.pairedSessions.manual.token,'manual-private');assert.equal(revoked,1);
  await q.startEmailSignIn('user@example.com');delayed=true;const verify=q.finishEmailSignIn('123456');await new Promise(r=>setImmediate(r));assert.ok(release);q.cancelCloudLogin();release!({});await verify;assert.equal(q.nativeAccount,null,'Cancelled verification must not restore account');
  for(const s of shared)assert.doesNotMatch(JSON.stringify(s),/native-client-secret|bootstrap-private|environment-private|relay-private|manual-private|123456|privateKey|sessionId/);
  q.onunload();

@@ -1,4 +1,4 @@
-import {readDirect,sendDirect, type PairedSession,type DirectPlan} from './direct';
+import {readDirect,sendDirect,type PairedSession,type DirectPlan} from './direct';
 import type { ImageAttachment, ImageContext } from './images';
 import type { NoteCompletion } from './completion';
 export interface Project { id: string; title: string; workspaceRoot: string; connectionId?:string; connectionName?:string }

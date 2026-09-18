@@ -1,4 +1,4 @@
-# Send to T3 Code — 2.3.1
+# Send to T3 Code — 2.4.3
 
 One Obsidian plugin for desktop and mobile. Right-click a Markdown note in **Files → Open in T3 Code → New thread in <project>**. The note is sent verbatim, with embedded images attached at their original positions. No vault/path/title wrapper is added; the note title names the thread, without an “Obsidian:” prefix.
 
@@ -12,7 +12,7 @@ One Obsidian plugin for desktop and mobile. Right-click a Markdown note in **Fil
 4. Enter the six-digit code from T3’s email and click **Verify and connect**. The plugin discovers your account’s computers, authorizes each online connection and scans its projects automatically. No terminal commands, machine URLs, pairing links or per-machine codes are needed.
 5. Enable the projects you want in the note menu. Their names include the destination computer. On mobile, use the note menu → **Open in T3 Code**, or the **Send current note** command.
 
-Sign in once on each device. Project choices and connection names sync, but account credentials do not. Existing project selections are preserved. An offline machine does not prevent other machines connecting; its error is shown next to its name. **Refresh connections** retries discovery and authorization. The plugin refreshes connections after reopening Obsidian and renews account-managed sessions before they expire when used. This never resends notes or queues work.
+Sign in once on each device. Project choices and connection names sync, but account credentials do not. Until this device is signed in and its machine/project discovery completes, the settings page shows only the sign-in or connection-progress screen. Projects, computers, orchestration, workflows, manual pairing, and saved-request controls remain hidden so synced names cannot be mistaken for a live connection. **Refresh connections** retries discovery and authorization. The plugin refreshes connections after reopening Obsidian and renews account-managed sessions before they expire when used. This never resends notes or queues work.
 
 This is an independent integration with T3’s existing native authentication and relay APIs. Email verification uses T3’s Clerk native frontend API, enabled by T3, and its `t3-relay` token template. The relay accepts that credential and issues device-bound connection grants. The plugin requests only environment thread read/operate scopes. It does not read installed T3 credentials or browser cookies, impersonate an existing device session, register a replacement `t3code://` handler, or need access to your email inbox. It does not collect your T3 password or create a new T3 account.
 
@@ -22,7 +22,7 @@ Sources: [T3 relay authorization](https://github.com/pingdotgg/t3code/blob/main/
 
 ### Advanced: manual pairing
 
-Existing manual pairings still work. Expand **Advanced: manual pairing** to use a known HTTPS environment address and a fresh T3 pairing code or link. This is useful without T3 Connect account access. A hosted `https://app.t3.codes/pair?host=…#token=…` link is accepted. Each device pairs separately; manual sessions require pairing again after their displayed expiry. Re-pairing preserves selections and pending requests.
+After account connection finishes, existing manual pairings still work. Expand **Advanced: manual pairing** to use a known HTTPS environment address and a fresh T3 pairing code or link. A hosted `https://app.t3.codes/pair?host=…#token=…` link is accepted. Each device pairs separately; manual sessions require pairing again after their displayed expiry. Re-pairing preserves selections and pending requests.
 
 T3’s Connections page currently hides its pairing controls when Network access and Tailscale HTTPS are both off, even when T3 Connect is enabled. In that case the official `t3 auth pairing create --ttl 10m --label Obsidian --json` command on the destination can issue a code without changing its network settings. This command is **not needed for the recommended account setup**.
 
@@ -62,7 +62,7 @@ Account connections and manual pairing use T3's existing protocols, not an offic
 
 ## Upgrade
 
-Install 2.3 and reload the plugin on each device after Sync finishes. Existing manual connections and project selections remain intact. Users of 2.2’s address-only account discovery verify their email once to enable automatic connections. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
+Install 2.4.3 and reload the plugin on each device after Sync finishes. Existing manual connections and project selections remain intact. Each device clearly requires its own email verification before synced projects and workflow settings become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
 
 Old unconfirmed sends remain visible for review but cannot be retried through the removed mode. Check the original thread in T3 before creating another send, since the earlier request may have started. Discard only removes the local retry record. Old companion completion jobs keep their notes and stop monitoring. Direct/local completion monitoring continues. No request is automatically rerouted or sent during migration.
 
@@ -75,6 +75,14 @@ Settings → Send to T3 Code → **Orchestration → Wait for other threads** is
 > Before starting work on the task below, wait for all other active T3 Code threads in this project to finish. Exclude this thread and threads in other projects. Check their status periodically, and begin work only when no other threads in this project are active. If you cannot check thread status, ask the user before proceeding.
 
 The setting persists per vault. This is an instruction to the receiving agent; the plugin does not enforce a project lock or wait before delivery. There is no delivery queue. It requires the agent to be able to check T3 thread status. The remaining note content and image references are unchanged. Retries use the originally saved prompt, even if this setting changes afterward.
+
+## Folder workflows
+
+Right-click a folder and choose **Link to T3 Code → Link to <project>**. Folder links include nested folders and appear under **Settings → Send to T3 Code → Orchestration → Workflows**. A note is handled once per folder link. Creating or syncing a note into the folder and moving a note in from outside both count; renaming it within the folder does not create another thread.
+
+- **Instant Build** creates a normal T3 thread immediately. Existing notes are processed once when the link is created.
+- **Trigger Mode** creates the thread only when the configured tag is present. Adding the tag later triggers the note once. Tags are case-insensitive.
+Workflow links and successful-send receipts sync with the vault. T3 credentials remain device-local. Outbound request IDs are deterministic per folder link and note, and a receipt is saved only after T3 confirms the thread. Failed sends remain eligible for a later vault scan; unconfirmed sends use the existing manual retry list and are never automatically replayed.
 
 ## When task completes
 
