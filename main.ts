@@ -1,7 +1,7 @@
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from './cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from './native-account';
 import {pair,readDirect,type PairedConnection,type PairedSession} from './direct';
-import { App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, getAllTags } from 'obsidian';
+import { App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal } from 'obsidian';
 import { Buffer } from 'buffer';
 import { deviceState } from './device-state';
 import { downloadImage,nativeAccountFetch } from './network';
@@ -9,8 +9,9 @@ import { collectImages, MAX_IMAGE_BYTES } from './images';
 import { applyOrchestration, OrchestrationSettings } from './orchestration';
 import { CompletionSettings, CompletionJob, CompletionAction, archiveFolder, contentHash, completionState, isOriginalCompletedTurn, cleanCompletedNote } from './completion';
 import { Connection, Project, Request, parseProjects, runBridge, sendRequest, configureBridge, retiredConnection, RETIRED_MESSAGE, projectKey, projectLabel } from './bridge';
-import { claimWorkflowDecision,evaluateWorkflowEvent,makeWorkflowReceipt,normalizeWorkflowLink,type FolderWorkflowLink,type WorkflowEvent,type WorkflowReceipt } from './workflow';
-interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; workflowLinks:FolderWorkflowLink[];workflowReceipts:WorkflowReceipt[] }
+import {FolderTriggerService} from './folder-trigger';
+import {loadFolderTriggerState,type FolderTrigger,type FolderTriggerReceipt} from './folder-trigger-model';
+interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; folderTriggers:FolderTrigger[];folderTriggerReceipts:FolderTriggerReceipt[] }
 export default class SendToT3 extends Plugin {
   declare settings: Settings;
   mode: 'desktop'|'direct' = 'desktop';
@@ -38,11 +39,7 @@ export default class SendToT3 extends Plugin {
   busy = false;
   scanError = '';
   private monitoring = false;
-  private workflowClaims=new Set<string>();
-  private workflowTimers=new Map<string,number>();
-  workflowError='';
-  private workflowErrorNotice='';
-  private workflowErrorNoticeAt=0;
+  folderTriggerService!:FolderTriggerService;
   private stopped = false;
   private saving = Promise.resolve();
   async onload() {
@@ -55,10 +52,8 @@ export default class SendToT3 extends Plugin {
     this.pairedSessions=local?.pairedSessions??{};
     this.cloudAccount=local?.cloudAccount??null;
     this.nativeAccount=local?.nativeAccount??null;
-    const workflowLinks=(Array.isArray(data?.workflowLinks)?data.workflowLinks:[]).filter((link:any)=>link?.mode==='trigger');
-    const workflowLinkIds=new Set(workflowLinks.map((link:any)=>link.id));
-    const workflowReceipts=(Array.isArray(data?.workflowReceipts)?data.workflowReceipts:[]).filter((receipt:any)=>workflowLinkIds.has(receipt?.linkId));
-    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],workflowLinks,workflowReceipts};
+    const triggerState=loadFolderTriggerState(data);
+    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],folderTriggers:triggerState.triggers,folderTriggerReceipts:triggerState.receipts};
     if(!Platform.isMobile && !this.settings.connection.native){
       const old=this.settings.connection;
       this.settings.connection=defaults;
@@ -74,13 +69,14 @@ export default class SendToT3 extends Plugin {
     for(const request of this.settings.pending)request.connection=migrateConnection(request.connection);
     for(const job of this.settings.completionJobs){job.connection=migrateConnection(job.connection);if(retiredConnection(job.connection)&&job.status==='watching'){job.status='kept';job.detail='Kept note: the companion mode was removed. Check the original thread in T3.';}}
     configureBridge({mobile:Platform.isMobile,pairedSession:id=>this.sessionFor(id),saveRequest:async request=>{if(!this.settings.pending.includes(request))throw Error('Saved request is missing. Nothing was sent.');await this.save();}});
+    this.folderTriggerService=new FolderTriggerService({app:this.app,getState:()=>({triggers:this.settings.folderTriggers,receipts:this.settings.folderTriggerReceipts}),save:()=>this.save(),createId:()=>randomId(),resolveProject:trigger=>this.projects().find(p=>p.id===trigger.projectId&&(p.connectionId??'')===trigger.connectionId),ensureConnection:project=>this.requireTriggerConnection(project),send:async(file,project,id)=>Boolean(await this.send(file,project,{id,quiet:true,throwOnError:true})),isBusy:()=>this.busy,isStopped:()=>this.stopped});
     // Migrate unfinished desktop requests once; credentials and jobs never sync.
     await this.save();
     this.addSettingTab(new T3Settings(this.app,this));
-    this.app.workspace.onLayoutReady(()=>{if(!this.stopped){void this.restoreConnectionsThenScanWorkflows();void this.monitorCompletions();this.registerInterval(window.setInterval(()=>{void this.monitorCompletions();},30_000));}});
+    this.app.workspace.onLayoutReady(()=>{if(!this.stopped){void this.restoreConnectionsThenScanTriggers();void this.monitorCompletions();this.registerInterval(window.setInterval(()=>{void this.monitorCompletions();},30_000));}});
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
-        menu.addItem(item=>{item.setTitle('Link to T3 Code').setIcon('workflow');const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>new WorkflowProjectModal(this.app,this,file).open());return;}const selected=this.projects().filter(p=>this.selected().includes(projectKey(p)));if(!selected.length)submenu.addItem(i=>i.setTitle('No projects selected — choose in settings').setDisabled(true));for(const project of selected)submenu.addItem(i=>i.setTitle(`Link to ${projectLabel(project)}`).onClick(()=>new WorkflowModeModal(this.app,this,file,project).open()));});return;
+        menu.addItem(item=>{item.setTitle('Link to T3 Code').setIcon('workflow');const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>new FolderTriggerProjectModal(this.app,this,file).open());return;}const selected=this.projects().filter(p=>this.selected().includes(projectKey(p)));if(!selected.length)submenu.addItem(i=>i.setTitle('No projects selected — choose in settings').setDisabled(true));for(const project of selected)submenu.addItem(i=>i.setTitle(`Link to ${projectLabel(project)}`).onClick(()=>new FolderTriggerModal(this.app,this,file,project).open()));});return;
       }
       if (!(file instanceof TFile) || file.extension.toLowerCase() !== 'md' || (!Platform.isMobile && source !== 'file-explorer-context-menu')) return;
       menu.addItem(item => {
@@ -97,12 +93,7 @@ export default class SendToT3 extends Plugin {
     }));
     this.addCommand({id:'send-current-note',name:'Send current note',checkCallback:checking=>{const file=this.app.workspace.getActiveFile();if(!file || file.extension.toLowerCase()!=='md')return false;if(!checking)new SendProjectModal(this.app,this,file).open();return true;}});
     this.addCommand({id:'choose-projects',name:'Choose projects',callback:()=>new ProjectModal(this.app,this).open()});
-    const vaultEvents=(this.app.vault as any)?.on?.bind(this.app.vault);
-    if(vaultEvents){
-      this.registerEvent(vaultEvents('create',(file:any)=>{if(file instanceof TFile)this.scheduleWorkflowEvent(file,'create');}));
-      this.registerEvent(vaultEvents('rename',(file:any,oldPath:string)=>{if(file instanceof TFile)this.scheduleWorkflowEvent(file,'rename',oldPath);}));
-      this.registerEvent(vaultEvents('modify',(file:any)=>{if(file instanceof TFile)this.scheduleWorkflowEvent(file,'modify');}));
-    }
+    this.folderTriggerService.register(event=>this.registerEvent(event));
   }
   projects(){return this.mode==='direct'?this.settings.directProjects:this.settings.projects;}
   selected(){return this.mode==='direct'?this.settings.directSelected:this.settings.selected;}
@@ -114,7 +105,7 @@ export default class SendToT3 extends Plugin {
     const c:PairedConnection=existing??{id:randomId(),name:name.trim()||result.descriptor.label,url:result.session.url,environmentId:result.descriptor.environmentId};
     if(!existing)this.settings.paired.push(c);
     this.pairedSessions[c.id]=result.session;this.settings.directScanId=c.id;this.mode='direct';await this.save();
-    await this.scan();await this.scanWorkflowFolders();
+    await this.scan();await this.folderTriggerService.scan();
   }
   pairingStatus(c:PairedConnection){const s=this.pairedSessions[c.id];return !s?'Pair on this device':s.expiresAt<=Date.now()?'Pairing expired':`Paired on this device until ${new Date(s.expiresAt).toLocaleDateString()}`;}
   async startEmailSignIn(email:string){
@@ -128,7 +119,7 @@ export default class SendToT3 extends Plugin {
     const account=await verifyEmailLogin(login,code,nativeAccountFetch);
     if(this.stopped||generation!==this.cloudGeneration){void revokeNativeAccount(account,nativeAccountFetch).catch(()=>{});return;}
     this.nativeAccount=account;this.nativeToken=undefined;this.emailLogin=null;this.cloudAccount=null;
-    this.mode='direct';await this.save();await this.refreshMachines();await this.scanWorkflowFolders();
+    this.mode='direct';await this.save();await this.refreshMachines();await this.folderTriggerService.scan();
   }
   async nativeCredential():Promise<CloudAccount>{
     const account=this.nativeAccount;if(!account)throw Error('Sign in to T3 on this device first.');
@@ -207,21 +198,17 @@ export default class SendToT3 extends Plugin {
     if(!this.nativeAccount||this.connecting||!this.connectionSyncComplete||!this.cloudMachines.length)return false;
     return this.cloudMachines.some(machine=>!this.machineErrors[machine.environmentId]&&this.settings.paired.some(connection=>connection.managed&&connection.environmentId===machine.environmentId&&connection.url===machine.url));
   }
-  private async restoreConnectionsThenScanWorkflows(){
-    await this.discardUnstartedWorkflowRequests();
+  private async restoreConnectionsThenScanTriggers(){
+    await this.discardUnstartedTriggerRequests();
     if(this.nativeAccount)try{await this.refreshMachines();}catch(e){this.cloudError=message(e);this.cloudChanged?.();}
-    if(!this.stopped)await this.scanWorkflowFolders();
+    if(!this.stopped)await this.folderTriggerService.scan();
   }
-  private async discardUnstartedWorkflowRequests(){
+  private async discardUnstartedTriggerRequests(){
     const before=this.settings.pending.length;
-    this.settings.pending=this.settings.pending.filter(request=>{
-      if(request.directPlan||!request.completion)return true;
-      const file=this.app.vault.getAbstractFileByPath(request.completion.notePath);if(!(file instanceof TFile))return true;
-      return !this.settings.workflowLinks.some(link=>link.projectId===request.project.id&&link.connectionId===(request.project.connectionId??'')&&workflowRequestId(link.id,String(file.stat.ctime))===request.id);
-    });
+    this.settings.pending=this.settings.pending.filter(request=>request.directPlan||!this.folderTriggerService.ownsPending(request));
     if(this.settings.pending.length!==before)await this.save();
   }
-  private async requireWorkflowConnection(project:Project){
+  private async requireTriggerConnection(project:Project){
     const connection=this.connection(project);if(connection.transport!=='direct')return;
     const paired=this.settings.paired.find(item=>item.id===connection.connectionId);
     const session=await this.sessionFor(connection.connectionId??'');
@@ -306,44 +293,7 @@ export default class SendToT3 extends Plugin {
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;throw e;}
     if(!quiet)new Notice(`Thread created in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
   }
-  projectForWorkflow(link:FolderWorkflowLink){return this.projects().find(p=>p.id===link.projectId&&(p.connectionId??'')===link.connectionId);}
-  async addWorkflowLink(folder:TFolder,project:Project,tag:string){
-    const link=normalizeWorkflowLink({id:randomId(),folderPath:folder.path,connectionId:project.connectionId??'',projectId:project.id,mode:'trigger',tag,enabled:true});
-    this.settings.workflowLinks=this.settings.workflowLinks.filter(existing=>!(existing.folderPath===link.folderPath&&existing.connectionId===link.connectionId&&existing.projectId===link.projectId));
-    this.settings.workflowLinks.push(link);await this.save();new Notice(`${folder.path} linked to ${projectLabel(project)} for #${link.tag}.`);void this.scanWorkflowFolders();
-  }
-  private reportWorkflowError(error:unknown){
-    const detail=message(error);this.workflowError=detail;const now=Date.now();
-    if(detail===this.workflowErrorNotice&&now-this.workflowErrorNoticeAt<30_000)return;
-    this.workflowErrorNotice=detail;this.workflowErrorNoticeAt=now;
-    new Notice(`Send to T3 Code workflows paused: ${detail}`,12000);
-  }
-  async scanWorkflowFolders(){
-    const blocked=new Set<string>();this.workflowError='';
-    for(const file of this.app.vault.getMarkdownFiles())await this.handleWorkflowEvent(file,'scan',undefined,blocked);
-  }
-  scheduleWorkflowEvent(file:TFile,kind:WorkflowEvent['kind'],previousPath?:string){const old=this.workflowTimers.get(file.path);if(old!==undefined)window.clearTimeout(old);const timer=window.setTimeout(()=>{this.workflowTimers.delete(file.path);void this.handleWorkflowEvent(file,kind,previousPath);},1500);this.workflowTimers.set(file.path,timer);}
-  async handleWorkflowEvent(file:TFile,kind:WorkflowEvent['kind'],previousPath?:string,blockedConnections?:Set<string>){
-    if(this.stopped||!this.settings.workflowLinks.length)return;
-    const cache=this.app.metadataCache.getFileCache(file);const tags=cache?(getAllTags(cache)??[]):[];
-    const event:WorkflowEvent={kind,path:file.path,previousPath,noteId:String(file.stat.ctime),tags};
-    const receipts=new Set(this.settings.workflowReceipts.map(r=>r.key));const decisions=evaluateWorkflowEvent(event,this.settings.workflowLinks,receipts);
-    for(const decision of decisions){
-      const connectionId=decision.link.connectionId;if(blockedConnections?.has(connectionId))continue;
-      if(!claimWorkflowDecision(decision,this.workflowClaims))continue;
-      try{
-        const project=this.projectForWorkflow(decision.link);if(!project)throw Error('The workflow project is unavailable. Refresh T3 projects.');
-        await this.requireWorkflowConnection(project);
-        while(this.busy&&!this.stopped)await new Promise(resolve=>window.setTimeout(resolve,250));if(this.stopped)return;
-        const id=workflowRequestId(decision.link.id,event.noteId);const result=await this.send(file,project,{id,quiet:true,throwOnError:true});
-        if(!result)continue;
-        this.settings.workflowReceipts.push(makeWorkflowReceipt(decision,event));
-        this.workflowError='';await this.save();new Notice(`Workflow created “${file.basename}” in ${projectLabel(project)}.`);
-      }catch(e){if(blockedConnections)blockedConnections.add(connectionId);this.reportWorkflowError(e);}
-      finally{this.workflowClaims.delete(decision.receiptKey);}
-    }
-  }
-  onunload(){this.stopped=true;for(const timer of this.workflowTimers.values())window.clearTimeout(timer);this.workflowTimers.clear();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.stopped=true;this.folderTriggerService?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;
@@ -399,10 +349,6 @@ function randomId():string {
   const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
   const hex=Buffer.from(bytes).toString('hex');return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
-function workflowRequestId(linkId:string,noteId:string):string {
-  const h=contentHash(`${linkId}\0${noteId}`).slice(0,32).split('');h[12]='5';h[16]=((parseInt(h[16],16)&3)|8).toString(16);
-  return `${h.slice(0,8).join('')}-${h.slice(8,12).join('')}-${h.slice(12,16).join('')}-${h.slice(16,20).join('')}-${h.slice(20).join('')}`;
-}
 function message(e:unknown) {return e instanceof Error ? e.message : String(e);}
 function projectsUI(container:HTMLElement, plugin:SendToT3, redraw:()=>void) {
   if(plugin.mode==='direct')new Setting(container).setName('Connection to scan').addDropdown(d=>{for(const c of plugin.settings.paired)d.addOption(c.id,c.name);d.setValue(plugin.settings.directScanId).onChange(async id=>{plugin.settings.directScanId=id;await plugin.save();});});
@@ -426,18 +372,18 @@ class SendProjectModal extends FuzzySuggestModal<Project> {
   getItemText(project:Project){return `New thread in ${projectLabel(project)}`;}
   onChooseItem(project:Project){void this.plugin.send(this.file,project);}
 }
-class WorkflowProjectModal extends FuzzySuggestModal<Project>{
+class FolderTriggerProjectModal extends FuzzySuggestModal<Project>{
   constructor(app:App,private plugin:SendToT3,private folder:TFolder){super(app);this.setPlaceholder('Choose a T3 Code project');}
   getItems(){return this.plugin.projects().filter(p=>this.plugin.selected().includes(projectKey(p)));}
   getItemText(project:Project){return `Link to ${projectLabel(project)}`;}
-  onChooseItem(project:Project){new WorkflowModeModal(this.app,this.plugin,this.folder,project).open();}
+  onChooseItem(project:Project){new FolderTriggerModal(this.app,this.plugin,this.folder,project).open();}
 }
-class WorkflowModeModal extends Modal{
+class FolderTriggerModal extends Modal{
   constructor(app:App,private plugin:SendToT3,private folder:TFolder,private project:Project){super(app);}
   onOpen(){
     const el=this.contentEl;el.empty();this.titleEl.setText(`Link ${this.folder.name} to ${this.project.title}`);
     el.createEl('p',{text:'Create a T3 thread when a Markdown note in this folder or one of its subfolders contains the chosen tag.'});
-    let tag='#ready';new Setting(el).setName('Trigger tag').setDesc('Adding this tag to an existing note also triggers it once.').addText(t=>t.setValue(tag).setPlaceholder('#ready').onChange(value=>tag=value)).addButton(b=>b.setButtonText('Link').setCta().onClick(async()=>{try{await this.plugin.addWorkflowLink(this.folder,this.project,tag);this.close();}catch(e){new Notice(message(e));}}));
+    let tag='#ready';new Setting(el).setName('Trigger tag').setDesc('Adding this tag to an existing note also triggers it once.').addText(t=>t.setValue(tag).setPlaceholder('#ready').onChange(value=>tag=value)).addButton(b=>b.setButtonText('Link').setCta().onClick(async()=>{try{await this.plugin.folderTriggerService.add(this.folder,this.project,tag);this.close();}catch(e){new Notice(message(e));}}));
   }
 }
 class T3Settings extends PluginSettingTab {
@@ -446,9 +392,9 @@ class T3Settings extends PluginSettingTab {
   cloudUI(el:HTMLElement){
     const p=this.plugin;p.cloudChanged=()=>this.display();
     el.createEl('h3',{text:p.nativeAccount?'T3 connection on this device':'Sign in on this device'});
-    el.createEl('p',{text:p.nativeAccount?'Your account is stored only on this device. Projects and workflow settings appear after T3 finishes connecting your computers.':'This device is not signed in to T3. Verify your T3 email once here before projects or workflow settings are shown.'});
+    el.createEl('p',{text:p.nativeAccount?'Your account is stored only on this device. Projects and folder triggers appear after T3 finishes connecting your computers.':'This device is not signed in to T3. Verify your T3 email once here before projects or workflow settings are shown.'});
     if(p.nativeAccount){
-      new Setting(el).setName(p.nativeAccount.identity).setDesc(p.connecting?'Connecting computers and discovering projects…':'Signed in. Connections renew automatically.').addButton(b=>b.setButtonText('Refresh connections').setDisabled(p.connecting).onClick(async()=>{try{await p.refreshMachines();await p.scanWorkflowFolders();}catch(e){p.cloudError=message(e);}this.display();})).addButton(b=>b.setButtonText('Sign out').onClick(async()=>{await p.signOutCloud();this.display();}));
+      new Setting(el).setName(p.nativeAccount.identity).setDesc(p.connecting?'Connecting computers and discovering projects…':'Signed in. Connections renew automatically.').addButton(b=>b.setButtonText('Refresh connections').setDisabled(p.connecting).onClick(async()=>{try{await p.refreshMachines();await p.folderTriggerService.scan();}catch(e){p.cloudError=message(e);}this.display();})).addButton(b=>b.setButtonText('Sign out').onClick(async()=>{await p.signOutCloud();this.display();}));
       if(p.connecting)el.createEl('p',{text:'Connecting to T3 and syncing project information…'});
       else if(!p.connectionSyncComplete)el.createEl('p',{text:'Connection setup has not completed. Refresh connections to try again.'});
       else if(!p.cloudMachines.length)el.createEl('p',{text:'No T3 computers are available yet. Enable T3 Connect on a computer, then refresh.'});
@@ -500,13 +446,13 @@ class T3Settings extends PluginSettingTab {
     new Setting(el).setName('Wait for other threads').setDesc('Prepend an instruction to wait for all other active T3 Code threads in the destination project to finish before starting work.').addToggle(t=>t.setValue(this.plugin.settings.orchestration.waitForOtherThreads).onChange(async enabled=>{this.plugin.settings.orchestration.waitForOtherThreads=enabled;await this.plugin.save();}));
     new Setting(el).setName('When task completes').setDesc('After T3 reports the original turn completed successfully. Changed or renamed notes are kept. Applies to newly sent notes.').addDropdown(d=>d.addOptions({keep:'Keep note',archive:'Archive note',delete:'Delete note (vault trash)'}).setValue(this.plugin.settings.completion.action).onChange(async value=>{this.plugin.settings.completion.action=value as CompletionAction;await this.plugin.save();this.display();}));
     if(this.plugin.settings.completion.action==='archive') new Setting(el).setName('Archive folder').setDesc('Folder inside this vault. Original subfolders are preserved; existing notes are never overwritten.').addText(t=>t.setValue(this.plugin.settings.completion.archiveFolder).onChange(async value=>{this.plugin.settings.completion.archiveFolder=value;await this.plugin.save();}));
-    el.createEl('h3',{text:'Workflows'});
+    el.createEl('h3',{text:'Folder triggers'});
     el.createEl('p',{text:'Right-click a folder → Link to T3 Code to create a tag rule. Rules include subfolders and send each matching note once when its tag is present or added later.'});
-    if(this.plugin.workflowError)el.createEl('p',{text:`Paused on this device: ${this.plugin.workflowError}`,cls:'t3-error'});
-    if(!this.plugin.settings.workflowLinks.length)el.createEl('p',{text:'No folders are linked.'});
-    for(const link of this.plugin.settings.workflowLinks){
-      const project=this.plugin.projectForWorkflow(link);
-      new Setting(el).setName(link.folderPath).setDesc(`#${link.tag} → ${project?projectLabel(project):'Unavailable project'}`).addToggle(t=>t.setValue(link.enabled).onChange(async enabled=>{link.enabled=enabled;await this.plugin.save();})).addButton(b=>b.setButtonText('Unlink').onClick(async()=>{this.plugin.settings.workflowLinks=this.plugin.settings.workflowLinks.filter(item=>item!==link);await this.plugin.save();this.display();}));
+    if(this.plugin.folderTriggerService.error)el.createEl('p',{text:`Paused on this device: ${this.plugin.folderTriggerService.error}`,cls:'t3-error'});
+    if(!this.plugin.settings.folderTriggers.length)el.createEl('p',{text:'No folders are linked.'});
+    for(const trigger of this.plugin.settings.folderTriggers){
+      const project=this.plugin.folderTriggerService.project(trigger);
+      new Setting(el).setName(trigger.folderPath).setDesc(`#${trigger.tag} → ${project?projectLabel(project):'Unavailable project'}`).addToggle(t=>t.setValue(trigger.enabled).onChange(async enabled=>{trigger.enabled=enabled;await this.plugin.save();})).addButton(b=>b.setButtonText('Unlink').onClick(async()=>{this.plugin.settings.folderTriggers=this.plugin.settings.folderTriggers.filter(item=>item!==trigger);this.plugin.settings.folderTriggerReceipts=this.plugin.settings.folderTriggerReceipts.filter(item=>item.triggerId!==trigger.id);await this.plugin.save();this.display();}));
     }
     if(this.plugin.settings.completionJobs.length){
       el.createEl('h3',{text:'Task completion monitoring'});
