@@ -55,8 +55,10 @@ export default class SendToT3 extends Plugin {
     this.pairedSessions=local?.pairedSessions??{};
     this.cloudAccount=local?.cloudAccount??null;
     this.nativeAccount=local?.nativeAccount??null;
-    const workflowLinks=(Array.isArray(data?.workflowLinks)?data.workflowLinks:[]).filter((link:any)=>link?.mode==='instant'||link?.mode==='trigger');
-    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],workflowLinks,workflowReceipts:Array.isArray(data?.workflowReceipts)?data.workflowReceipts:[]};
+    const workflowLinks=(Array.isArray(data?.workflowLinks)?data.workflowLinks:[]).filter((link:any)=>link?.mode==='trigger');
+    const workflowLinkIds=new Set(workflowLinks.map((link:any)=>link.id));
+    const workflowReceipts=(Array.isArray(data?.workflowReceipts)?data.workflowReceipts:[]).filter((receipt:any)=>workflowLinkIds.has(receipt?.linkId));
+    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],workflowLinks,workflowReceipts};
     if(!Platform.isMobile && !this.settings.connection.native){
       const old=this.settings.connection;
       this.settings.connection=defaults;
@@ -305,10 +307,10 @@ export default class SendToT3 extends Plugin {
     if(!quiet)new Notice(`Thread created in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
   }
   projectForWorkflow(link:FolderWorkflowLink){return this.projects().find(p=>p.id===link.projectId&&(p.connectionId??'')===link.connectionId);}
-  async addWorkflowLink(folder:TFolder,project:Project,mode:'instant'|'trigger',tag?:string){
-    const link=normalizeWorkflowLink({id:randomId(),folderPath:folder.path,connectionId:project.connectionId??'',projectId:project.id,mode,tag,enabled:true});
+  async addWorkflowLink(folder:TFolder,project:Project,tag:string){
+    const link=normalizeWorkflowLink({id:randomId(),folderPath:folder.path,connectionId:project.connectionId??'',projectId:project.id,mode:'trigger',tag,enabled:true});
     this.settings.workflowLinks=this.settings.workflowLinks.filter(existing=>!(existing.folderPath===link.folderPath&&existing.connectionId===link.connectionId&&existing.projectId===link.projectId));
-    this.settings.workflowLinks.push(link);await this.save();new Notice(`${folder.path} linked to ${projectLabel(project)} in ${mode==='instant'?'Instant Build':'Trigger'} Mode.`);void this.scanWorkflowFolders();
+    this.settings.workflowLinks.push(link);await this.save();new Notice(`${folder.path} linked to ${projectLabel(project)} for #${link.tag}.`);void this.scanWorkflowFolders();
   }
   private reportWorkflowError(error:unknown){
     const detail=message(error);this.workflowError=detail;const now=Date.now();
@@ -434,9 +436,8 @@ class WorkflowModeModal extends Modal{
   constructor(app:App,private plugin:SendToT3,private folder:TFolder,private project:Project){super(app);}
   onOpen(){
     const el=this.contentEl;el.empty();this.titleEl.setText(`Link ${this.folder.name} to ${this.project.title}`);
-    el.createEl('p',{text:'Choose what happens when a Markdown note is created in, moved into, or synced into this folder or one of its subfolders.'});
-    new Setting(el).setName('Instant Build').setDesc('Create a new T3 thread immediately. Existing notes are sent once when the link is created.').addButton(b=>b.setButtonText('Link').setCta().onClick(async()=>{await this.plugin.addWorkflowLink(this.folder,this.project,'instant');this.close();}));
-    let tag='#ready';new Setting(el).setName('Trigger Mode').setDesc('Create a thread when the note contains this tag. Adding the tag later also triggers it once.').addText(t=>t.setValue(tag).setPlaceholder('#ready').onChange(value=>tag=value)).addButton(b=>b.setButtonText('Link').onClick(async()=>{try{await this.plugin.addWorkflowLink(this.folder,this.project,'trigger',tag);this.close();}catch(e){new Notice(message(e));}}));
+    el.createEl('p',{text:'Create a T3 thread when a Markdown note in this folder or one of its subfolders contains the chosen tag.'});
+    let tag='#ready';new Setting(el).setName('Trigger tag').setDesc('Adding this tag to an existing note also triggers it once.').addText(t=>t.setValue(tag).setPlaceholder('#ready').onChange(value=>tag=value)).addButton(b=>b.setButtonText('Link').setCta().onClick(async()=>{try{await this.plugin.addWorkflowLink(this.folder,this.project,tag);this.close();}catch(e){new Notice(message(e));}}));
   }
 }
 class T3Settings extends PluginSettingTab {
@@ -500,12 +501,12 @@ class T3Settings extends PluginSettingTab {
     new Setting(el).setName('When task completes').setDesc('After T3 reports the original turn completed successfully. Changed or renamed notes are kept. Applies to newly sent notes.').addDropdown(d=>d.addOptions({keep:'Keep note',archive:'Archive note',delete:'Delete note (vault trash)'}).setValue(this.plugin.settings.completion.action).onChange(async value=>{this.plugin.settings.completion.action=value as CompletionAction;await this.plugin.save();this.display();}));
     if(this.plugin.settings.completion.action==='archive') new Setting(el).setName('Archive folder').setDesc('Folder inside this vault. Original subfolders are preserved; existing notes are never overwritten.').addText(t=>t.setValue(this.plugin.settings.completion.archiveFolder).onChange(async value=>{this.plugin.settings.completion.archiveFolder=value;await this.plugin.save();}));
     el.createEl('h3',{text:'Workflows'});
-    el.createEl('p',{text:'Right-click a folder → Link to T3 Code to create a rule. Rules include subfolders and send each note once. Instant Build reacts when a note enters the folder; Trigger Mode also reacts when its tag is added later.'});
+    el.createEl('p',{text:'Right-click a folder → Link to T3 Code to create a tag rule. Rules include subfolders and send each matching note once when its tag is present or added later.'});
     if(this.plugin.workflowError)el.createEl('p',{text:`Paused on this device: ${this.plugin.workflowError}`,cls:'t3-error'});
     if(!this.plugin.settings.workflowLinks.length)el.createEl('p',{text:'No folders are linked.'});
     for(const link of this.plugin.settings.workflowLinks){
-      const project=this.plugin.projectForWorkflow(link);const mode=link.mode==='instant'?'Instant Build':`Trigger · #${link.tag}`;
-      new Setting(el).setName(link.folderPath).setDesc(`${mode} → ${project?projectLabel(project):'Unavailable project'}`).addToggle(t=>t.setValue(link.enabled).onChange(async enabled=>{link.enabled=enabled;await this.plugin.save();})).addButton(b=>b.setButtonText('Unlink').onClick(async()=>{this.plugin.settings.workflowLinks=this.plugin.settings.workflowLinks.filter(item=>item!==link);await this.plugin.save();this.display();}));
+      const project=this.plugin.projectForWorkflow(link);
+      new Setting(el).setName(link.folderPath).setDesc(`#${link.tag} → ${project?projectLabel(project):'Unavailable project'}`).addToggle(t=>t.setValue(link.enabled).onChange(async enabled=>{link.enabled=enabled;await this.plugin.save();})).addButton(b=>b.setButtonText('Unlink').onClick(async()=>{this.plugin.settings.workflowLinks=this.plugin.settings.workflowLinks.filter(item=>item!==link);await this.plugin.save();this.display();}));
     }
     if(this.plugin.settings.completionJobs.length){
       el.createEl('h3',{text:'Task completion monitoring'});

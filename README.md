@@ -1,4 +1,4 @@
-# Send to T3 Code — 2.4.3
+# Send to T3 Code — 2.4.4
 
 One Obsidian plugin for desktop and mobile. Right-click a Markdown note in **Files → Open in T3 Code → New thread in <project>**. The note is sent verbatim, with embedded images attached at their original positions. No vault/path/title wrapper is added; the note title names the thread, without an “Obsidian:” prefix.
 
@@ -62,7 +62,7 @@ Account connections and manual pairing use T3's existing protocols, not an offic
 
 ## Upgrade
 
-Install 2.4.3 and reload the plugin on each device after Sync finishes. Existing manual connections and project selections remain intact. Each device clearly requires its own email verification before synced projects and workflow settings become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
+Install 2.4.4 and reload the plugin on each device after Sync finishes. Existing manual connections and project selections remain intact. Each device clearly requires its own email verification before synced projects and workflow settings become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
 
 Old unconfirmed sends remain visible for review but cannot be retried through the removed mode. Check the original thread in T3 before creating another send, since the earlier request may have started. Discard only removes the local retry record. Old companion completion jobs keep their notes and stop monitoring. Direct/local completion monitoring continues. No request is automatically rerouted or sent during migration.
 
@@ -80,7 +80,6 @@ The setting persists per vault. This is an instruction to the receiving agent; t
 
 Right-click a folder and choose **Link to T3 Code → Link to <project>**. Folder links include nested folders and appear under **Settings → Send to T3 Code → Orchestration → Workflows**. A note is handled once per folder link. Creating or syncing a note into the folder and moving a note in from outside both count; renaming it within the folder does not create another thread.
 
-- **Instant Build** creates a normal T3 thread immediately. Existing notes are processed once when the link is created.
 - **Trigger Mode** creates the thread only when the configured tag is present. Adding the tag later triggers the note once. Tags are case-insensitive.
 Workflow links and successful-send receipts sync with the vault. T3 credentials remain device-local. Outbound request IDs are deterministic per folder link and note, and a receipt is saved only after T3 confirms the thread. Failed sends remain eligible for a later vault scan; unconfirmed sends use the existing manual retry list and are never automatically replayed.
 

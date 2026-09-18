@@ -1,4 +1,4 @@
-export type WorkflowMode = 'instant' | 'trigger';
+export type WorkflowMode = 'trigger';
 
 export interface FolderWorkflowLink {
   id: string;
@@ -63,8 +63,8 @@ export function normalizeWorkflowLink(value: FolderWorkflowLink): FolderWorkflow
     enabled: value.enabled !== false,
   };
   if (!link.id || !link.connectionId || !link.projectId) throw new Error('The workflow link is incomplete.');
-  if (link.mode === 'trigger') link.tag = normalizeWorkflowTag(value.tag ?? '');
-  else if (link.mode !== 'instant') throw new Error('Unknown workflow mode.');
+  if (link.mode !== 'trigger') throw new Error('Unknown workflow mode.');
+  link.tag = normalizeWorkflowTag(value.tag ?? '');
   return link;
 }
 
