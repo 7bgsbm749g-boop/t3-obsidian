@@ -21,22 +21,22 @@ def remote(code):
 
 
 def main():
-    archive = ROOT / 'release/send-to-t3-code-2.3.0.zip'
+    archive = ROOT / 'release/send-to-t3-code-2.3.1.zip'
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     remote(f"from pathlib import Path\nPath({STAGE!r}).mkdir(parents=True,exist_ok=True)\nprint('Laptop reachable')\n")
-    subprocess.run(['scp', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', str(archive), f'fleet-laptop:{STAGE}/send-to-t3-code-2.3.0.zip'], check=True, timeout=45)
+    subprocess.run(['scp', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', str(archive), f'fleet-laptop:{STAGE}/send-to-t3-code-2.3.1.zip'], check=True, timeout=45)
     remote(f'''
 import json,hashlib,zipfile,shutil,os,datetime
 from pathlib import Path
 stage=Path({STAGE!r})
-archive=stage/'send-to-t3-code-2.3.0.zip'
+archive=stage/'send-to-t3-code-2.3.1.zip'
 assert hashlib.sha256(archive.read_bytes()).hexdigest()=={digest!r}
 plugin=Path('C:/Users/jacks/Documents/QLO2/.obsidian/plugins/send-to-t3-code')
 assert plugin.is_dir()
 data_path=plugin/'data.json'
 raw=data_path.read_bytes()
 data=json.loads(raw.decode('utf-8-sig'))
-backup=stage/('before-2.3.0-'+datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
+backup=stage/('before-2.3.1-'+datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
 backup.mkdir()
 for name in ['main.js','manifest.json','data.json','README.md','versions.json']:
  if (plugin/name).exists():shutil.copy2(plugin/name,backup/name)

@@ -1,6 +1,6 @@
-# Send to T3 Code — 2.3
+# Send to T3 Code — 2.3.1
 
-One Obsidian plugin for desktop and mobile. Right-click a Markdown note in **Files → Open in T3 Code → New thread in <project>**. The note is sent verbatim, with embedded images attached at their original positions. No vault/path/title wrapper is added; the note title names the thread.
+One Obsidian plugin for desktop and mobile. Right-click a Markdown note in **Files → Open in T3 Code → New thread in <project>**. The note is sent verbatim, with embedded images attached at their original positions. No vault/path/title wrapper is added; the note title names the thread, without an “Obsidian:” prefix.
 
 **No Fleet adapter is required. No persistent delivery queue exists.** The plugin includes local and portable direct T3 clients. There is no companion service or SSH/Python forwarding. Sends require the selected machine to be online and running T3. After a confirmed start, the T3 turn continues independently of Obsidian.
 

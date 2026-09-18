@@ -235,7 +235,7 @@ export default class SendToT3 extends Plugin {
         if(target.stat.size > MAX_IMAGE_BYTES) throw new Error('Image exceeds 10 MiB.');
         return {bytes:Buffer.from(await this.app.vault.readBinary(target)),name:target.name};
       });
-      const request:Request = {id:randomId(),project:{...project},title:`Obsidian: ${file.basename}`.slice(0,160),prompt:applyOrchestration(images.markdown,orchestration),attachments:images.attachments,context:images.context,completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion},connection:this.connection(project)};
+      const request:Request = {id:randomId(),project:{...project},title:file.basename.slice(0,160),prompt:applyOrchestration(images.markdown,orchestration),attachments:images.attachments,context:images.context,completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion},connection:this.connection(project)};
       if(request.prompt.length>120_000) throw new Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
       this.settings.pending.push(request); await this.save(); saved = true;
       await this.dispatch(request);
