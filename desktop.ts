@@ -27,6 +27,12 @@ export function findCli(connection:Connection):string[] {
  const paths=process.platform==='win32'?[join(homedir(),'.t3','bin','t3.exe'),join(homedir(),'AppData','Local','Programs','t3-code-desktop','resources','t3.exe')]:[join(homedir(),'.local','bin','t3'),'/usr/local/bin/t3','/opt/homebrew/bin/t3'];
  const found=paths.find(p=>existsSync(p));return [found??'t3'];
 }
+export async function addDesktopProject(connection:Connection,workspaceRoot:string,title:string):Promise<string>{
+ if(connection.host!=='local')throw Error('A folder can only become a project on the computer that stores it.');
+ if(!workspaceRoot.trim()||!title.trim())throw Error('The folder path or project title is empty.');
+ const output=await cli(findCli(connection),['project','add','--base-dir',connection.baseDir||join(homedir(),'.t3'),'--title',title,workspaceRoot]);
+ const match=/Added project ([0-9a-f-]{36})\b/i.exec(output);if(!match)throw Error('T3 did not confirm the new project.');return match[1];
+}
 export function uuid5(id:string,name:string):string {
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))throw new Error('Invalid request ID.');
  const b=createHash('sha1').update(Buffer.from(id.replace(/-/g,''),'hex')).update(name).digest().subarray(0,16);b[6]=(b[6]&15)|80;b[8]=(b[8]&63)|128;
