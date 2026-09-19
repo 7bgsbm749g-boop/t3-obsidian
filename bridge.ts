@@ -6,6 +6,9 @@ export function projectKey(project:Project){return project.connectionId?`${proje
 export function projectLabel(project:Project){return project.title+(project.connectionName?` · ${project.connectionName}`:'');}
 export interface Connection { executable: string; host: string; scriptPath?: string; transport?: 'desktop'|'https'|'direct'; url?: string; native?:boolean; baseDir?:string; stateDir?:string;connectionId?:string;environmentId?:string }
 export interface Request { id: string; project: Project; title: string; prompt: string; connection: Connection; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion;directPlan?:DirectPlan }
+export class RequestDeliveryError extends Error {
+  constructor(message:string,readonly requestSaved:boolean){super(message);}
+}
 export function parseProjects(value: any): Project[] {
   if (!Array.isArray(value?.projects)) throw new Error('T3 returned an invalid project list.');
   const ids = new Set<string>();

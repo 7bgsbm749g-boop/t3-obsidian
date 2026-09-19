@@ -1,16 +1,19 @@
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from './cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from './native-account';
 import {pair,readDirect,type PairedConnection,type PairedSession} from './direct';
-import { App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal } from 'obsidian';
+import { App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, getAllTags } from 'obsidian';
 import { Buffer } from 'buffer';
 import { deviceState } from './device-state';
 import { downloadImage,nativeAccountFetch } from './network';
 import { collectImages, MAX_IMAGE_BYTES } from './images';
 import { applyOrchestration, OrchestrationSettings } from './orchestration';
 import { CompletionSettings, CompletionJob, CompletionAction, archiveFolder, contentHash, completionState, isOriginalCompletedTurn, cleanCompletedNote } from './completion';
-import { Connection, Project, Request, parseProjects, runBridge, sendRequest, configureBridge, retiredConnection, RETIRED_MESSAGE, projectKey, projectLabel } from './bridge';
+import { Connection, Project, Request, RequestDeliveryError, parseProjects, runBridge, sendRequest, configureBridge, retiredConnection, RETIRED_MESSAGE, projectKey, projectLabel } from './bridge';
 import {loadFolderLinks,upsertFolderLink,type FolderLink} from './folder-link';
-interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; folderLinks:FolderLink[] }
+import {installPaletteChat,type PaletteChatController} from './palette-chat';
+import {openChatFlow,type ChatHost} from './chat-ui';
+import {TagTriggerService,normalizeTriggerTag,type TagReceipt} from './tag-trigger';
+interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; folderLinks:FolderLink[]; chatProjectKey:string }
 export default class SendToT3 extends Plugin {
   declare settings: Settings;
   mode: 'desktop'|'direct' = 'desktop';
@@ -40,17 +43,21 @@ export default class SendToT3 extends Plugin {
   private monitoring = false;
   private stopped = false;
   private saving = Promise.resolve();
+  private paletteChat?:PaletteChatController;
+  private tagTriggers?:TagTriggerService;
+  private tagReceipts:TagReceipt[]=[];
   async onload() {
     const data = await this.loadData();
     const local = this.app.loadLocalStorage(this.localKey);
     this.deviceId=local?.deviceId??randomId();
     const state=await deviceState(this.deviceId);
+    this.tagReceipts=Array.isArray(state?.tagReceipts)?state.tagReceipts:[];
     const defaults:Connection = Platform.isMobile ? {executable:'',host:'local'} : (await import('./desktop')).desktopDefaults();
     this.mode=Platform.isMobile||local?.mode!=='desktop'?'direct':'desktop';
     this.pairedSessions=local?.pairedSessions??{};
     this.cloudAccount=local?.cloudAccount??null;
     this.nativeAccount=local?.nativeAccount??null;
-    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],folderLinks:loadFolderLinks(data)};
+    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],folderLinks:loadFolderLinks(data),chatProjectKey:typeof data?.chatProjectKey==='string'?data.chatProjectKey:''};
     if(!Platform.isMobile && !this.settings.connection.native){
       const old=this.settings.connection;
       this.settings.connection=defaults;
@@ -69,6 +76,12 @@ export default class SendToT3 extends Plugin {
     // Migrate unfinished desktop requests once; credentials and jobs never sync.
     await this.save();
     this.addSettingTab(new T3Settings(this.app,this));
+    this.app.workspace.onLayoutReady(()=>{
+      if(this.stopped)return;
+      this.paletteChat=installPaletteChat(this.app,prompt=>this.openChat(prompt),{onError:error=>new Notice(`T3 Chat: ${message(error)}`,10000)});
+      this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
+      this.startTagTriggers();
+    });
     this.app.workspace.onLayoutReady(()=>{if(!this.stopped){if(this.nativeAccount)void this.refreshMachines().catch(e=>{this.cloudError=message(e);this.cloudChanged?.();});void this.monitorCompletions();this.registerInterval(window.setInterval(()=>{void this.monitorCompletions();},30_000));}});
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
@@ -89,6 +102,116 @@ export default class SendToT3 extends Plugin {
     }));
     this.addCommand({id:'send-current-note',name:'Send current note',checkCallback:checking=>{const file=this.app.workspace.getActiveFile();if(!file || file.extension.toLowerCase()!=='md')return false;if(!checking)new SendProjectModal(this.app,this,file).open();return true;}});
     this.addCommand({id:'choose-projects',name:'Choose projects',callback:()=>new ProjectModal(this.app,this).open()});
+    this.addCommand({id:'new-chat',name:'New T3 chat',callback:()=>this.openChat()});
+  }
+  private startTagTriggers(){
+    let lastError='',lastErrorAt=0;
+    const changed=new WeakSet<TFile>();
+    const service=this.tagTriggers=new TagTriggerService({
+      deviceId:this.deviceId,getLinks:()=>this.settings.folderLinks,getReceipts:()=>this.tagReceipts,
+      save:()=>this.save(),isBusy:()=>this.busy,isStopped:()=>this.stopped,
+      getNote:async path=>{const file=this.app.vault.getAbstractFileByPath(path);if(!(file instanceof TFile)||file.extension.toLowerCase()!=='md'||changed.has(file))return;const cache=this.app.metadataCache.getFileCache(file);return {path:file.path,ctime:file.stat.ctime,tags:cache?(getAllTags(cache)??[]):[]};},
+      send:async(path,link,id)=>{
+        const file=this.app.vault.getAbstractFileByPath(path);if(!(file instanceof TFile))throw Error('The tagged note no longer exists.');
+        const project=this.projects().find(p=>p.id===link.projectId&&(p.connectionId??'')===link.connectionId);
+        if(!project)throw Error('The linked T3 project is unavailable in this connection mode. Refresh projects in settings.');
+        const readiness=this.chatReadinessError();if(readiness)throw Error(readiness);
+        const result=await this.send(file,project,{id,quiet:true,throwOnError:true});
+        if(!result)throw Error('The tagged note could not be sent. It may be empty or another send is active.');
+        new Notice(`Tag trigger created “${file.basename}” in ${projectLabel(project)}.`);
+      },
+      report:error=>{const now=Date.now();if(error!==lastError||now-lastErrorAt>30000){lastError=error;lastErrorAt=now;new Notice(`T3 tag trigger: ${error} Check saved requests in settings.`,12000);}},
+    });
+    // Only changes observed while the plugin is running can trigger a send.
+    // Metadata-cache population on startup must never replay existing notes.
+    const schedule=(file:TFile)=>{if(file.extension.toLowerCase()==='md')changed.add(file);};
+    this.registerEvent(this.app.vault.on('create',file=>{if(file instanceof TFile)schedule(file);}));
+    this.registerEvent(this.app.vault.on('modify',file=>{if(file instanceof TFile)schedule(file);}));
+    this.registerEvent(this.app.metadataCache.on('changed',file=>{if(changed.has(file)){changed.delete(file);service.schedule(file.path);}}));
+    this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{
+      void (async()=>{
+        if(file instanceof TFolder){
+          let updated=false,selfMoved=false;
+          for(const link of this.settings.folderLinks)if(link.folderPath===oldPath||link.folderPath.startsWith(oldPath+'/')){
+            link.folderPath=file.path+link.folderPath.slice(oldPath.length);updated=true;
+            if(link.self){selfMoved=true;if(link.tagTrigger)link.tagTrigger.enabled=false;}
+          }
+          // Keep disabled inner links shielding their subtree before scheduling any moved notes.
+          if(updated)await this.save();
+          if(selfMoved)new Notice('A self-linked folder moved. Its tag trigger is off. Relink it to self to update the T3 project path.',10000);
+        }
+        await service.rename(oldPath,file.path);
+        if(file instanceof TFolder)for(const note of this.app.vault.getMarkdownFiles())if(note.path.startsWith(file.path+'/'))service.schedule(note.path);
+      })().catch(error=>new Notice(message(error)));
+    }));
+    this.registerEvent(this.app.vault.on('delete',file=>{if(file instanceof TFile)changed.delete(file);}));
+  }
+  tagTriggerOnThisDevice(link:FolderLink){return link.tagTrigger?.enabled===true&&link.tagTrigger.deviceId===this.deviceId;}
+  async configureTagTrigger(link:FolderLink,enabled:boolean,tag:string){
+    const normalized=normalizeTriggerTag(enabled?tag:(link.tagTrigger?.tag??'#ready'));
+    const previous=link.tagTrigger;
+    link.tagTrigger={enabled,tag:normalized,deviceId:enabled?this.deviceId:(link.tagTrigger?.deviceId??this.deviceId)};
+    try{await this.save();}catch(error){link.tagTrigger=previous;throw error;}
+  }
+  tagTriggerIssues(link:FolderLink){return this.tagReceipts.filter(r=>r.linkId===link.id&&r.state!=='sent');}
+  async clearTagIssue(receipt:TagReceipt){
+    if(this.settings.pending.some(r=>r.id===receipt.requestId))throw Error('Retry or discard the saved request first.');
+    this.tagReceipts=this.tagReceipts.filter(r=>r!==receipt);await this.save();
+  }
+  paletteChatStatus(){return this.paletteChat?.status??'unavailable';}
+  async onExternalSettingsChange(){
+    await this.saving;
+    const data=await this.loadData();if(this.stopped||!data)return;
+    this.settings.folderLinks=loadFolderLinks(data);
+    this.settings.chatProjectKey=typeof data.chatProjectKey==='string'?data.chatProjectKey:'';
+  }
+  openSettings(){
+    const settings=(this.app as App & {setting?:{open():void;openTabById(id:string):void}}).setting;
+    if(settings){settings.open();settings.openTabById(this.manifest.id);}
+    else new Notice('Open Settings → Send to T3 Code to sign in and select projects.');
+  }
+  chatReadinessError():string|undefined {
+    if(this.stopped)return 'The plugin has been disabled. Re-enable it before sending.';
+    if(this.mode==='desktop')return;
+    if(this.connecting)return 'T3 is still connecting your computers. Wait for connection sync to finish.';
+    if(this.nativeAccount&&!this.connectionSyncComplete)return 'Refresh connections in Send to T3 Code settings before sending.';
+    const hasManualSession=this.settings.paired.some(c=>!c.managed&&this.pairedSessions[c.id]?.expiresAt>Date.now());
+    if(!this.nativeAccount&&!hasManualSession)return 'Sign in to T3 on this device first. Synced project names do not sign this device in.';
+  }
+  openChat(prompt?:string){
+    const host:ChatHost={
+      getProjects:()=>this.projects().filter(p=>this.selected().includes(projectKey(p))),
+      getPreferredProjectKey:()=>this.settings.chatProjectKey,
+      getReadinessError:()=>this.chatReadinessError(),
+      sendChat:(text,project)=>this.sendChat(text,project),
+      openSettings:()=>this.openSettings(),
+    };
+    openChatFlow(this.app,host,prompt);
+  }
+  async sendChat(prompt:string,project:Project):Promise<void> {
+    if(this.busy)throw Error('Another send is in progress. Wait for it to finish.');
+    if(!prompt.trim())throw Error('Enter a message before sending.');
+    const text=applyOrchestration(prompt,this.settings.orchestration);
+    if(text.length>120_000)throw Error('The message exceeds T3’s 120,000-character limit. Shorten it before sending.');
+    const readiness=this.chatReadinessError();if(readiness)throw Error(readiness);
+    if(!this.projects().some(p=>projectKey(p)===projectKey(project))||!this.selected().includes(projectKey(project)))throw Error('This project is no longer selected. Choose a project in settings.');
+    this.busy=true;
+    let saved=false;
+    try{
+      const connection=this.connection(project);
+      if(connection.transport==='direct'){
+        const session=await this.sessionFor(connection.connectionId??'');
+        if(!session||session.expiresAt<=Date.now())throw Error('Sign in or pair this connection on this device before sending.');
+      }
+      const title=prompt.trim().split(/\r?\n/)[0].replace(/\s+/g,' ').trim().slice(0,160);
+      const request:Request={id:randomId(),project:{...project},title,prompt:text,connection};
+      const previousProject=this.settings.chatProjectKey;
+      this.settings.chatProjectKey=projectKey(project);
+      this.settings.pending.push(request);
+      try{await this.save();saved=true;}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);this.settings.chatProjectKey=previousProject;throw e;}
+      await this.dispatch(request);
+    }catch(e){throw new RequestDeliveryError(`${message(e)} ${saved?'Check Unconfirmed requests in settings before sending again.':'No thread was created.'}`,saved);}
+    finally{this.busy=false;}
   }
   projects(){return this.mode==='direct'?this.settings.directProjects:this.settings.projects;}
   selected(){return this.mode==='direct'?this.settings.directSelected:this.settings.selected;}
@@ -225,7 +348,7 @@ export default class SendToT3 extends Plugin {
     const {pending,completionJobs,connection,...shared}=this.settings;
     this.app.saveLocalStorage(this.localKey,JSON.parse(JSON.stringify({deviceId:this.deviceId,mode:this.mode,connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount})));
     const snapshot=JSON.parse(JSON.stringify(shared));
-    const state=JSON.parse(JSON.stringify({pending,completionJobs}));
+    const state=JSON.parse(JSON.stringify({pending,completionJobs,tagReceipts:this.tagReceipts}));
     this.saving=this.saving.catch(()=>{}).then(async()=>{await deviceState(this.deviceId,state);await this.saveData(snapshot);});return this.saving;
   }
   async scan() {
@@ -272,6 +395,8 @@ export default class SendToT3 extends Plugin {
     finally {this.busy = false;}
   }
   rememberStarted(request:Pick<Request,'id'|'project'|'connection'|'completion'>,threadId:string) {
+    const receipt=this.tagReceipts.find(item=>item.requestId===request.id);
+    if(receipt){receipt.state='sent';delete receipt.detail;}
     if(request.completion){
       this.settings.completionJobs=this.settings.completionJobs.filter(j=>j.notePath!==request.completion!.notePath);
       if(request.completion.action!=='keep')this.settings.completionJobs.push({...request.completion,requestId:request.id,threadId,projectId:request.project.id,connection:{...request.connection},status:'watching'});
@@ -286,7 +411,7 @@ export default class SendToT3 extends Plugin {
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;throw e;}
     if(!quiet)new Notice(`Thread created in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
   }
-  onunload(){this.stopped=true;this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.stopped=true;this.paletteChat?.dispose();this.tagTriggers?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;
@@ -428,15 +553,32 @@ class T3Settings extends PluginSettingTab {
     new Setting(el).setName('T3 data directory').setDesc('Usually your home directory followed by .t3. Must match the running T3 installation.').addText(t=>t.setValue(this.plugin.settings.connection.baseDir??'').onChange(async value=>{this.plugin.settings.connection.baseDir=value.trim();await this.plugin.save();}));
 
     }
+    el.createEl('h3',{text:'Chat'});
+    new Setting(el).setName('Command palette chat').setDesc(this.plugin.paletteChatStatus()==='active'?'Type a message into the command palette, then select the live T3 Chat row.':'The live row is unavailable in this Obsidian version or the core Command palette is disabled. Use the New T3 chat command.');
+    new Setting(el).setName('Chat project').setDesc('The palette sends to this project. Your latest chat choice is remembered.').addDropdown(d=>{
+      d.addOption('','Choose on next chat');
+      for(const project of this.plugin.projects().filter(p=>this.plugin.selected().includes(projectKey(p))))d.addOption(projectKey(project),projectLabel(project));
+      d.setValue(this.plugin.settings.chatProjectKey).onChange(async key=>{this.plugin.settings.chatProjectKey=key;await this.plugin.save();});
+    });
     el.createEl('h3',{text:'Orchestration'});
     new Setting(el).setName('Wait for other threads').setDesc('Prepend an instruction to wait for all other active T3 Code threads in the destination project to finish before starting work.').addToggle(t=>t.setValue(this.plugin.settings.orchestration.waitForOtherThreads).onChange(async enabled=>{this.plugin.settings.orchestration.waitForOtherThreads=enabled;await this.plugin.save();}));
     new Setting(el).setName('When task completes').setDesc('After T3 reports the original turn completed successfully. Changed or renamed notes are kept. Applies to newly sent notes.').addDropdown(d=>d.addOptions({keep:'Keep note',archive:'Archive note',delete:'Delete note (vault trash)'}).setValue(this.plugin.settings.completion.action).onChange(async value=>{this.plugin.settings.completion.action=value as CompletionAction;await this.plugin.save();this.display();}));
     if(this.plugin.settings.completion.action==='archive') new Setting(el).setName('Archive folder').setDesc('Folder inside this vault. Original subfolders are preserved; existing notes are never overwritten.').addText(t=>t.setValue(this.plugin.settings.completion.archiveFolder).onChange(async value=>{this.plugin.settings.completion.archiveFolder=value;await this.plugin.save();}));
     el.createEl('h3',{text:'Linked folders'});
-    el.createEl('p',{text:'Folder links are saved configuration for future integrations. They do not monitor notes or create threads. Link to self registers the folder as a project in the local T3 Code installation.'});
+    el.createEl('p',{text:'Folder links are inactive by default. Optionally enable a tag trigger below to send new or changed tagged notes. Link to self registers the folder as a local T3 project.'});
     if(!this.plugin.settings.folderLinks.length)el.createEl('p',{text:'No folders are linked.'});
     for(const link of this.plugin.settings.folderLinks){
       new Setting(el).setName(link.folderPath).setDesc(`${link.self?'Self · ':''}${link.projectTitle} · ${link.workspaceRoot}`).addButton(b=>b.setButtonText('Unlink').onClick(async()=>{this.plugin.settings.folderLinks=this.plugin.settings.folderLinks.filter(item=>item!==link);await this.plugin.save();this.display();}));
+      let tag=link.tagTrigger?.tag??'#ready';
+      const enabled=link.tagTrigger?.enabled===true,here=this.plugin.tagTriggerOnThisDevice(link);
+      const rule=new Setting(el).setName('Automatic send on tag').setDesc(enabled?(here?'Runs on this device while Obsidian is open. Notes send once on this device; failed sends need manual review.':'Runs on another device. Moving it here does not retain that device’s send history; edited tagged notes may send again.'):'Off. Turning this on applies to future note changes, including changes arriving through Sync.').addText(t=>t.setPlaceholder('#ready').setValue(tag).onChange(value=>{tag=value;})).addButton(b=>b.setButtonText('Save tag').onClick(async()=>{
+        try{const normalized=normalizeTriggerTag(tag);link.tagTrigger={...(link.tagTrigger??{enabled:false,deviceId:''}),tag:normalized};await this.plugin.save();this.display();}catch(error){new Notice(message(error));}
+      })).addToggle(t=>t.setValue(enabled).onChange(async value=>{try{await this.plugin.configureTagTrigger(link,value,tag);this.display();}catch(error){t.setValue(enabled);new Notice(message(error));}}));
+      if(enabled&&!here)rule.addButton(b=>b.setButtonText('Run on this device').onClick(async()=>{try{await this.plugin.configureTagTrigger(link,true,tag);this.display();}catch(error){new Notice(message(error));}}));
+      for(const receipt of this.plugin.tagTriggerIssues(link)){
+        const pending=this.plugin.settings.pending.some(r=>r.id===receipt.requestId);
+        new Setting(el).setName(receipt.path).setDesc(pending?'Send needs review. Use Unconfirmed requests below to retry with the original ID.':receipt.detail??'An earlier send was interrupted. Check T3 before allowing another attempt.').addButton(b=>b.setButtonText('Allow on next edit').setDisabled(pending).onClick(async()=>{try{await this.plugin.clearTagIssue(receipt);this.display();}catch(error){new Notice(message(error));}}));
+      }
     }
     if(this.plugin.settings.completionJobs.length){
       el.createEl('h3',{text:'Task completion monitoring'});
