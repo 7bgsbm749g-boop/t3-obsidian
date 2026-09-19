@@ -1,4 +1,4 @@
-# Send to T3 Code — 2.7.0
+# Send to T3 Code — 2.7.1
 
 One Obsidian plugin for desktop and mobile. Right-click a Markdown note in **Files → Open in T3 Code → New thread in <project>**. The note is sent verbatim, with embedded images attached at their original positions. No vault/path/title wrapper is added; the note title names the thread, without an “Obsidian:” prefix.
 
@@ -62,7 +62,7 @@ Account connections and manual pairing use T3's existing protocols, not an offic
 
 ## Upgrade
 
-Install 2.7.0 and reload the plugin on each device after Sync finishes. Existing manual connections and project selections remain intact. Each device clearly requires its own email verification before synced projects and folder links become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
+Install 2.7.1 and reload the plugin on each device after Sync finishes. Existing manual connections and project selections remain intact. Each device clearly requires its own email verification before synced projects and folder links become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
 
 Old unconfirmed sends remain visible for review but cannot be retried through the removed mode. Check the original thread in T3 before creating another send, since the earlier request may have started. Discard only removes the local retry record. Old companion completion jobs keep their notes and stop monitoring. Direct/local completion monitoring continues. No request is automatically rerouted or sent during migration.
 
@@ -88,7 +88,7 @@ The setting persists per vault. This is an instruction to the receiving agent; t
 
 ## Folder links
 
-Right-click a folder and choose **Link to T3 Code → Link to <project>** to save an association between the Obsidian folder and a T3 project. Links appear under **Settings → Send to T3 Code → Orchestration → Linked folders**. Links are inactive by default: saving a link alone does not send notes.
+Right-click a folder and choose **Link to T3 Code → Link to <project>**. The link dialog opens with an **Automatic send on #tag** switch and a tag field. Leave it off to save only the folder association, or turn it on and choose the tag. Click **Link** to save; **Cancel** leaves the saved link unchanged. Selecting the same destination again reopens the dialog with its saved settings and preserves its send history. Links appear under **Settings → Send to T3 Code → Orchestration → Linked folders**. Links are inactive by default: saving a link alone does not send notes.
 
 On desktop, **Link to self** registers the folder as a project in the local T3 Code installation using the official `t3 project add` command, then saves the resolved project ID and workspace root. Arguments are passed directly to the executable without a shell. If T3 already has a project for that path, the existing project is reused. Mobile can save links to discovered projects, but cannot register its private mobile filesystem as a project on another computer.
 
@@ -96,7 +96,7 @@ Folder links sync with the vault. T3 credentials remain device-local. Legacy wor
 
 ### Optional tag sends
 
-Under **Orchestration → Linked folders**, enter a tag (for example `#ready`) and enable **Automatic send on tag** for that link. With the setting off, the link remains a saved association only. The enabled rule applies to new, edited or moved Markdown notes in that folder and its subfolders, including changes arriving through Obsidian Sync. It uses Obsidian’s parsed inline/frontmatter tags, with exact, case-insensitive matching; text in code blocks does not count. A more specific nested folder link owns its subtree, even if its trigger is off.
+In the folder-link dialog, turn on **Automatic send on #tag**, enter a tag (for example `#ready`), and save the link. You can also change it later under **Orchestration → Linked folders → Automatic send on tag**. With the setting off, the link remains a saved association only. The enabled rule applies to new, edited or moved Markdown notes in that folder and its subfolders, including changes arriving through Obsidian Sync. It uses Obsidian’s parsed inline/frontmatter tags, with exact, case-insensitive matching; text in code blocks does not count. A more specific nested folder link owns its subtree, even if its trigger is off.
 
 Renaming linked folders preserves their saved links, including nested links. A renamed self-linked folder pauses its trigger until you relink it to self, because its T3 workspace path must be refreshed.
 
@@ -149,3 +149,5 @@ Release 2.3 passes 32 automated tests covering native email verification, wrong-
 Live 2.3 validation in QLO2: one email verification connected both laptop and VPS, plugin reload preserved sign-in, and Files-pane right-click sends to both hosts completed with two correctly recognized images. Original user settings were restored and test notes removed.
 
 Live 2.7 desktop validation: the real command-palette row submitted the exact typed prompt and received a completed T3 response. A linked folder sent nothing with its trigger disabled, sent one tagged note after enabling, and created no duplicates after repeated edits and a rename. Build and all 66 automated tests passed, including mobile-compatible bundle delivery, palette lifecycle, event parsing, folder renames and retry durability. Test notes were removed and original development-vault settings restored.
+
+Version 2.7.1 restores the folder-link dialog with an optional tag switch. Live desktop testing verified Files-menu selection, the inactive default, enabling a tag and explicit persistence. All 69 automated tests pass, including cancel, reopen, ownership preservation and storage-error recovery.

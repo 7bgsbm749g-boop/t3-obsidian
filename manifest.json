@@ -1,7 +1,7 @@
 {
   "id": "send-to-t3-code",
   "name": "Send to T3 Code",
-  "version": "2.7.0",
+  "version": "2.7.1",
   "minAppVersion": "1.8.7",
   "description": "Chat with T3 from the command palette, send Markdown notes with images, and link folders to T3 projects.",
   "author": "Send to T3 Code contributors",

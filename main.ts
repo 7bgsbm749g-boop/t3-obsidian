@@ -317,8 +317,18 @@ export default class SendToT3 extends Plugin {
     return this.cloudMachines.some(machine=>!this.machineErrors[machine.environmentId]&&this.settings.paired.some(connection=>connection.managed&&connection.environmentId===machine.environmentId&&connection.url===machine.url));
   }
   async linkFolder(folder:TFolder,project:Project,self:boolean){
-    this.settings.folderLinks=upsertFolderLink(this.settings.folderLinks,{id:randomId(),folderPath:folder.path,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self});
-    await this.save();new Notice(`${folder.path} linked to ${projectLabel(project)}.`);
+    new FolderLinkModal(this.app,this,folder,project,self).open();
+  }
+  async saveFolderLink(folder:TFolder,project:Project,self:boolean,trigger:{enabled:boolean;tag:string;takeOwnership:boolean}){
+    if(this.app.vault.getAbstractFileByPath(folder.path)!==folder)throw Error('This folder no longer exists. Choose a folder again.');
+    const previous=this.settings.folderLinks;
+    const existing=previous.find(link=>link.folderPath===folder.path&&link.projectId===project.id&&link.connectionId===(project.connectionId??''));
+    let tag:string;
+    try{tag=normalizeTriggerTag(trigger.tag);}catch(error){if(trigger.enabled)throw error;tag=existing?.tagTrigger?.tag??'#ready';}
+    const deviceId=trigger.enabled&&(trigger.takeOwnership||!existing?.tagTrigger?.enabled)?this.deviceId:(existing?.tagTrigger?.deviceId??this.deviceId);
+    this.settings.folderLinks=upsertFolderLink(previous,{id:existing?.id??randomId(),folderPath:folder.path,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self,tagTrigger:{enabled:trigger.enabled,tag,deviceId}});
+    try{await this.save();}catch(error){this.settings.folderLinks=previous;throw error;}
+    new Notice(`${folder.path} linked to ${projectLabel(project)}.`);
   }
   async linkFolderToSelf(folder:TFolder){
     try{
@@ -496,6 +506,30 @@ class FolderLinkProjectModal extends FuzzySuggestModal<FolderLinkChoice>{
   getItems(){return [...this.plugin.projects().filter(p=>this.plugin.selected().includes(projectKey(p))),...(!Platform.isMobile?[{self:true as const,title:'Self (create this folder as a T3 project)'}]:[])];}
   getItemText(choice:FolderLinkChoice){return 'self' in choice?choice.title:`Link to ${projectLabel(choice)}`;}
   onChooseItem(choice:FolderLinkChoice){if('self' in choice)void this.plugin.linkFolderToSelf(this.folder);else void this.plugin.linkFolder(this.folder,choice,false);}
+}
+class FolderLinkModal extends Modal{
+  constructor(app:App,private plugin:SendToT3,private folder:TFolder,private project:Project,private self:boolean){super(app);}
+  onOpen(){
+    const el=this.contentEl;el.empty();this.titleEl.setText(`Link ${this.folder.name} to ${this.project.title}`);
+    const existing=this.plugin.settings.folderLinks.find(link=>link.folderPath===this.folder.path&&link.projectId===this.project.id&&link.connectionId===(this.project.connectionId??''));
+    let enabled=existing?.tagTrigger?.enabled===true,tag=existing?.tagTrigger?.tag??'#ready',takeOwnership=false,saving=false;
+    el.createEl('p',{text:`${this.folder.path} → ${projectLabel(this.project)}`});
+    const toggle=new Setting(el).setName('Automatic send on #tag').setDesc('Off saves the folder link only. On sends new or changed notes with this tag, including notes in subfolders.');
+    const tagSetting=new Setting(el).setName('Trigger tag').setDesc('Applies to future note changes; existing notes are not sent when you save the link.').addText(t=>t.setValue(tag).setPlaceholder('#ready').onChange(value=>tag=value));
+    const owner=el.createEl('p');
+    const refresh=()=>{
+      tagSetting.setDisabled(!enabled);
+      owner.setText(!enabled?'':existing?.tagTrigger?.enabled&&!this.plugin.tagTriggerOnThisDevice(existing)&&!takeOwnership?'This trigger runs on another device. You can move it to this device in Orchestration → Linked folders.':'Runs on this device while Obsidian is open. Each note sends once; failed sends need manual review.');
+    };
+    toggle.addToggle(t=>t.setValue(enabled).onChange(value=>{enabled=value;if(value)takeOwnership=true;refresh();}));
+    refresh();
+    const actions=new Setting(el).addButton(b=>b.setButtonText('Cancel').onClick(()=>{if(!saving)this.close();})).addButton(b=>b.setButtonText(existing?'Save link':'Link').setCta().onClick(async()=>{
+      if(saving)return;saving=true;toggle.setDisabled(true);tagSetting.setDisabled(true);actions.setDisabled(true);
+      try{await this.plugin.saveFolderLink(this.folder,this.project,this.self,{enabled,tag,takeOwnership});this.close();}
+      catch(error){new Notice(message(error));}
+      finally{saving=false;toggle.setDisabled(false);actions.setDisabled(false);refresh();}
+    }));
+  }
 }
 class T3Settings extends PluginSettingTab {
   constructor(app:App,private plugin:SendToT3){super(app,plugin);}
