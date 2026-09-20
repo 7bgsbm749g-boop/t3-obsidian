@@ -8,6 +8,8 @@ import {createHash} from 'node:crypto';
 import * as http from 'node:http';
 import lockfile from 'proper-lockfile';
 import type {Connection} from './bridge';
+import {existingThreadTurn} from './thread-target';
+import {readNewThreadModel,type ModelSelection} from './model-defaults';
 
 export function desktopDefaults():Connection {return {executable:'',host:'local',native:true,baseDir:join(homedir(),'.t3')};}
 export function cli(command:string[],args:string[]):Promise<string> {
@@ -50,15 +52,17 @@ export function parseOperation(args:string[],input:string):any {
  if(args.length===3 && args[0]==='threads' && args[1]==='--project')return {action:'threads',project:args[2]};
  if(args.length!==9 || args[0]!=='start' || args[1]!=='--project' || args[3]!=='--title' || args[5]!=='--request-id' || !['--prompt-file','--payload-file'].includes(args[7]) || args[8]!=='-')throw new Error('Unsupported T3 operation.');
  const req:any={action:'start',project:args[2],title:args[4],requestId:args[6]};uuid5(req.requestId,'validate');
- if(args[7]==='--payload-file'){const p=JSON.parse(input);req.prompt=p.prompt;req.attachments=p.attachments??[];if(p.context)req.context=p.context;}else req.prompt=input;
+ if(args[7]==='--payload-file'){const p=JSON.parse(input);req.prompt=p.prompt;req.attachments=p.attachments??[];if(p.context)req.context=p.context;if(p.threadId){uuid5(p.threadId,'validate');req.threadId=p.threadId;}}else req.prompt=input;
  if(typeof req.prompt!=='string' || !req.prompt.trim() || req.prompt.length>120000 || !req.title.trim() || req.title.length>160)throw new Error('Invalid prompt or title.');
  return req;
 }
 export function requestJson(origin:string,token:string,path:string,payload?:any):Promise<any> {
  const url=new URL(origin);if(url.protocol!=='http:' || !['localhost','127.0.0.1','[::1]'].includes(url.hostname) || url.username || url.password || url.pathname!=='/' || url.search || url.hash)throw new Error('T3 runtime must use a loopback HTTP origin.');
+ const apiPath=path.startsWith('/api/')?path:'/api/orchestration/'+path;
+ if(apiPath.includes('..')||apiPath.includes('\\')||apiPath.includes('#'))throw new Error('Invalid T3 API path.');
  return new Promise((resolve,reject)=>{
   const data=payload===undefined?undefined:JSON.stringify(payload);
-  const r=http.request(new URL('/api/orchestration/'+path,origin),{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',...(data?{'Content-Length':Buffer.byteLength(data)}:{})}},res=>{
+  const r=http.request(new URL(apiPath,origin),{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',...(data?{'Content-Length':Buffer.byteLength(data)}:{})}},res=>{
    let out='';let bytes=0;res.setEncoding('utf8');res.on('data',(s:string)=>{bytes+=Buffer.byteLength(s);if(bytes>4_000_000)r.destroy(new Error('T3 response too large.'));else out+=s;});
    res.on('error',reject);res.on('end',()=>{if(res.statusCode!==200){reject(new Error(`T3 API returned HTTP ${res.statusCode}. Retry the saved request if sending.`));return;}try{resolve(JSON.parse(out));}catch{reject(new Error('Invalid T3 API response.'));}});
   });
@@ -67,7 +71,7 @@ export function requestJson(origin:string,token:string,path:string,payload?:any)
 }
 async function save(path:string,value:any){const temp=path+'.tmp';const f=await fs.open(temp,'w',0o600);try{await f.writeFile(JSON.stringify(value));await f.sync();}finally{await f.close();}await fs.rename(temp,path);}
 const locks=new Map<string,Promise<any>>();
-export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any,stateDir:string){
+export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any,stateDir:string,loadModel?:(project:any)=>Promise<ModelSelection>){
  const id=req.requestId;const path=join(stateDir,'requests',id+'.json');
  if(locks.has(path))throw new Error('This request is in progress. Retry its original ID later.');
  const work=(async()=>{
@@ -78,12 +82,20 @@ export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any
   const hash=createHash('sha256').update(canonical(req)).digest('hex');let ledger:any;
   try{ledger=JSON.parse(await fs.readFile(path,'utf8'));if(ledger.requestHash!==hash)throw new Error('Request ID already belongs to different parameters.');}catch(e:any){if(e.code!=='ENOENT')throw e;}
   if(!ledger){
+   if(req.threadId){
+    const thread=(await api('threads/'+encodeURIComponent(req.threadId)+'?turnLimit=1')).thread;
+    const turn=existingThreadTurn(thread,{threadId:req.threadId,projectId:req.project},uuid5(id,'turn'),{messageId:uuid5(id,'message'),role:'user',text:req.prompt,attachments:req.attachments??[],...(req.context?{context:req.context}:{})});
+    ledger={requestHash:hash,requestId:id,threadId:req.threadId,project:{id:req.project},phase:'created',create:null,turn};
+    await save(path,ledger);
+   }else{
    const shell=await api('shell');const project=shell.projects.find((p:any)=>p.id===req.project);if(!project)throw new Error('Project no longer exists. Scan projects again.');
    const candidates=[...shell.threads].sort((a:any,b:any)=>b.updatedAt.localeCompare(a.updatedAt));const inherited=candidates.find((t:any)=>t.projectId===project.id)??candidates[0]??{};
-   const model=project.defaultModelSelection??inherited.modelSelection;if(!model)throw new Error('Choose a default model in T3 or create a thread there first.');
+   if(!loadModel)throw new Error('Cannot read T3 model defaults. Retry from the updated plugin.');
+   const model=await loadModel(project);
    const runtime=inherited.runtimeMode??'approval-required';const stamp=new Date().toISOString();const threadId=uuid5(id,'thread');
    const common={threadId,modelSelection:model,runtimeMode:runtime,interactionMode:'default',createdAt:stamp};
    ledger={requestHash:hash,requestId:id,threadId,project,phase:'prepared',create:{...common,type:'thread.create',commandId:uuid5(id,'create'),projectId:project.id,title:req.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:uuid5(id,'turn'),message:{messageId:uuid5(id,'message'),role:'user',text:req.prompt,attachments:req.attachments??[],...(req.context?{context:req.context}:{})}}};await save(path,ledger);
+   }
   }
   if(compromised)throw compromised;
   if(ledger.phase==='prepared'){await api('dispatch',ledger.create);ledger.phase='created';await save(path,ledger);}
@@ -104,7 +116,7 @@ export async function runDesktop(connection:Connection,args:string[],input=''):P
   try{session=JSON.parse(issued);}catch{throw new Error('Invalid T3 session response; credential output withheld.');}
   if(!session.token || !session.sessionId)throw new Error('Unexpected T3 session response.');
   const api=(path:string,payload?:any)=>requestJson(runtime.origin,session.token,path,payload);
-  if(req.action==='start')return await start(api,req,connection.stateDir||join(base,'send-to-t3-code','desktop'));
+  if(req.action==='start')return await start(api,req,connection.stateDir||join(base,'send-to-t3-code','desktop'),project=>readNewThreadModel(api,runtime.origin,project));
   if(req.action==='read')return (await api('threads/'+encodeURIComponent(req.threadId)+'?turnLimit=10')).thread;
   const shell=await api('shell');if(req.action==='projects')return {projects:shell.projects};
   return {threads:shell.threads.filter((t:any)=>t.projectId===req.project)};

@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
+import {settingsSocket} from './rpc-fixture';
 import {webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 
@@ -36,6 +37,7 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
   if(url.endsWith('/environment'))return response({environmentId:id,label:id,orchestrationProtocolVersion:1});
   if(url.endsWith('/oauth/token'))return response({token_type:'DPoP',access_token:'environment-private-'+id,expires_in:600,scope:'orchestration:read orchestration:operate'});
   assert.equal(o.headers.Authorization,'DPoP environment-private-'+id);assert.ok(o.headers.DPoP);
+  if(url.endsWith('/websocket-ticket'))return response({ticket:'ephemeral'});
   if(url.endsWith('/shell'))return response({projects:[{id:'p-'+id,title:'Project '+id,workspaceRoot:'/',defaultModelSelection:{instanceId:'codex',model:'default'}}],threads:[]});
   dispatches.push(JSON.parse(o.body));return response({});
  };
@@ -46,7 +48,7 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
  }
  const api={Plugin,Platform:{isMobile:true},TFile:File,Modal:Base,FuzzySuggestModal:Base,PluginSettingTab:Base,Notice:Base,requestUrl};
  const module={exports:{} as any};
- runInNewContext(await readFile('main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian','Mobile must never load Node APIs');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console},{timeout:5000});
+ runInNewContext(await readFile('main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian','Mobile must never load Node APIs');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:settingsSocket(),Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console},{timeout:5000});
  const p=new module.exports.default();await p.onload();await p.startEmailSignIn('user@example.com');
  await assert.rejects(p.finishEmailSignIn('000000'),/incorrect/);assert.equal(p.nativeAccount,null);assert.equal(connects,0);
  await p.finishEmailSignIn('123456');assert.equal(p.nativeAccount.userId,'user-native');assert.ok(p.machineErrors.b);assert.equal(p.directAccountReady(),true,'completed discovery unlocks settings when at least one computer connected');assert.equal(p.settings.paired.length,2);assert.equal(p.settings.directSelected[0],'a-connection:p-a');

@@ -6,6 +6,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {webcrypto,createHash} from 'node:crypto';
 import {contentHash,initialMessageId} from '../completion';
+import {settingsSocket} from './rpc-fixture';
 
 test('mobile upgrade removes old credentials and settings, retains uncertain work without replay or cleanup',async()=>{
  globalThis.indexedDB=indexedDB;
@@ -51,10 +52,11 @@ test('direct pairing works in mobile bundle, keeps sessions local, and resumes o
   assert.equal(o.redirect,'error');assert.equal(o.credentials,'omit');
   if(url.endsWith('/.well-known/t3/environment'))return new Response(JSON.stringify({environmentId:'env',label:'Laptop',orchestrationProtocolVersion:1}));
   assert.equal(o.headers.Authorization,'Bearer private-session');
+  if(url.endsWith('/websocket-ticket'))return new Response(JSON.stringify({ticket:'ephemeral'}));
   if(url.endsWith('/shell'))return new Response(JSON.stringify({projects:[{...project,defaultModelSelection:{instanceId:'codex',model:'default'}}],threads:[]}));
   const c=JSON.parse(o.body);commands.push(c);if(c.type==='thread.turn.start'&&lose){lose=false;throw Error('lost reply');}return new Response('{}');
  };
- const module={exports:{} as any};runInNewContext(await readFile('main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout,clearTimeout,console},{timeout:5000});
+ const module={exports:{} as any};runInNewContext(await readFile('main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:settingsSocket(),AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout,clearTimeout,console},{timeout:5000});
  const p=new module.exports.default();await p.onload();assert.equal(p.mode,'direct');assert.equal(p.projects()[0].connectionId,'c');await p.send(file,project);assert.equal(p.settings.pending.length,1);const saved=p.settings.pending[0];assert.equal(saved.title,file.basename);assert.equal(commands[0].title,file.basename);assert.equal(saved.directPlan.phase,'created');assert.equal(saved.attachments.length,1);assert.equal(saved.attachments[0].dataUrl,'data:image/png;base64,'+png);assert.equal(saved.prompt.split('t3-context://').length-1,2);assert.ok(saved.prompt.startsWith('# Mobile 🧪\nBefore\n'));p.onunload();
  const q=new module.exports.default();await q.onload();assert.equal(commands.length,2);await q.retry(q.settings.pending[0]);assert.equal(commands.length,3);assert.deepEqual(commands[1],commands[2]);assert.equal(q.settings.pending.length,0);
  for(const s of shared){assert.ok(!JSON.stringify(s).includes('private-session'));assert.ok(!('pending' in s));}
@@ -76,7 +78,7 @@ test('mobile OAuth sign-in discovers machines, persists credentials locally and 
   if(url.endsWith('/oauth/token'))return delayToken?new Promise<Response>(r=>tokenReply=r):token();
   assert.ok(url.endsWith('/v1/environments'));assert.equal(o.headers.Authorization,'Bearer oauth-private');return result({environments:[{environmentId:'env',label:'Laptop',endpoint:{httpBaseUrl:'https://t3.example'}}]});
  };
- const module={exports:{} as any};runInNewContext(await readFile('main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout:(fn:()=>any,delay:number)=>{const id=next++;timers.set(id,{fn,delay});return id;},clearTimeout:(id:number)=>timers.delete(id),console},{timeout:5000});
+ const module={exports:{} as any};runInNewContext(await readFile('main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:settingsSocket(),AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout:(fn:()=>any,delay:number)=>{const id=next++;timers.set(id,{fn,delay});return id;},clearTimeout:(id:number)=>timers.delete(id),console},{timeout:5000});
  const p=new module.exports.default();await p.onload();await p.startCloudLogin();assert.equal(p.cloudLogin.userCode,'ABCD');assert.equal(local.cloudAccount,null);p.cloudLogin.nextPollAt=0;
  let poll=[...timers].find(([,t])=>t.delay<30000)!;timers.delete(poll[0]);await poll[1].fn();assert.equal(p.cloudMachines[0].name,'Laptop');assert.equal(local.cloudAccount.refreshToken,'refresh-private');
  for(const d of shared)assert.ok(!JSON.stringify(d).match(/oauth-private|refresh-private|device-private/));

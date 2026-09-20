@@ -1,4 +1,4 @@
-import type {FolderLink} from './folder-link';
+import {folderLinkForPath,type FolderLink} from './folder-link';
 
 export interface TagReceipt {
   id: string;
@@ -82,9 +82,7 @@ export class TagTriggerService {
 
   private matchingLink(path: string, tags: string[]): FolderLink | undefined {
     // An inner folder link owns its subtree even when its trigger is disabled.
-    const link = this.host.getLinks()
-      .filter(item => path.startsWith(`${item.folderPath}/`))
-      .sort((a, b) => b.folderPath.length - a.folderPath.length)[0];
+    const link = folderLinkForPath(this.host.getLinks(),path);
     const trigger = link?.tagTrigger;
     if (!trigger?.enabled || trigger.deviceId !== this.host.deviceId) return;
     let expected: string;

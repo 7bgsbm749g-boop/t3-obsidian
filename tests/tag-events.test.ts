@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
+import {settingsSocket} from './rpc-fixture';
 import {webcrypto,randomUUID} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 import {deviceState} from '../device-state';
@@ -63,13 +64,14 @@ async function eventHarness(enabled:boolean){
     const response=(value:any)=>new Response(JSON.stringify(value));
     if(url.endsWith('/environment'))return response({environmentId:'tags-env',label:'Laptop',orchestrationProtocolVersion:1});
     assert.equal(options.headers.Authorization,'Bearer dummy-tag-session');
+    if(url.endsWith('/websocket-ticket'))return response({ticket:'ephemeral'});
     if(url.endsWith('/shell'))return response({projects:[{...project,defaultModelSelection:{instanceId:'codex',model:'default'}}],threads:[]});
     commands.push(JSON.parse(options.body));return response({});
   };
   const module={exports:{} as any};
   runInNewContext(await readFile('main.js','utf8'),{
     module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,
-    document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,
+    document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:settingsSocket(),
     Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console,
   },{timeout:5000});
   const plugin=new module.exports.default();await plugin.onload();plugin.startTagTriggers();

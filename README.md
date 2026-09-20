@@ -1,6 +1,6 @@
-# Send to T3 Code — 2.7.1
+# Send to T3 Code — 2.9.2
 
-One Obsidian plugin for desktop and mobile. Right-click a Markdown note in **Files → Open in T3 Code → New thread in <project>**. The note is sent verbatim, with embedded images attached at their original positions. No vault/path/title wrapper is added; the note title names the thread, without an “Obsidian:” prefix.
+One Obsidian plugin for desktop and mobile. Type into the command palette to chat using the current note’s path. Right-click a Markdown note in **Files → Open in T3 Code** to send its contents: linked folders offer **Send to new thread** or **Send to existing thread…** in their linked project; unlinked folders offer your selected projects. The note is sent verbatim, with embedded images attached at their original positions. No vault/path/title wrapper is added; the note title names the thread, without an “Obsidian:” prefix.
 
 **No Fleet adapter is required. No persistent delivery queue exists.** The plugin includes local and portable direct T3 clients. There is no companion service or SSH/Python forwarding. Sends require the selected machine to be online and running T3. After a confirmed start, the T3 turn continues independently of Obsidian.
 
@@ -34,6 +34,8 @@ Desktop users can choose **This computer only (advanced)** to use local T3 witho
 
 The destination must remain online. There is no offline queue or automatic resend. An interrupted send is saved for **manual Retry** with its exact original commands, preventing duplicate threads after a lost response. Completion monitoring uses the same connection while Obsidian is active.
 
+New threads use the selected machine's T3 model defaults: an explicit project override takes precedence over the environment default. Configured model options, including reasoning effort, are preserved; previous threads do not supply the model or reasoning settings. If T3 is set to automatic selection, the plugin uses an enabled provider's advertised default model. Existing-thread sends retain that conversation's model. Saved retries replay their original model and commands even if defaults have since changed.
+
 ## What belongs to T3, and what belongs to this plugin?
 
 | Component | Owner |
@@ -62,7 +64,7 @@ Account connections and manual pairing use T3's existing protocols, not an offic
 
 ## Upgrade
 
-Install 2.7.1 and reload the plugin on each device after Sync finishes. Existing manual connections and project selections remain intact. Each device clearly requires its own email verification before synced projects and folder links become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
+Install 2.9.2 and reload the plugin on each device after Sync finishes. Existing manual connections and project selections remain intact. Each device clearly requires its own email verification before synced projects and folder links become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
 
 Old unconfirmed sends remain visible for review but cannot be retried through the removed mode. Check the original thread in T3 before creating another send, since the earlier request may have started. Discard only removes the local retry record. Old companion completion jobs keep their notes and stop monitoring. Direct/local completion monitoring continues. No request is automatically rerouted or sent during migration.
 
@@ -70,13 +72,19 @@ The obsolete companion service is no longer part of the plugin. Its operator can
 
 ## Command palette chat
 
-Open Obsidian’s command palette (Ctrl/⌘ + P, or your configured mobile swipe-down action) and type a message. **T3 Chat: “your message”** stays at the top of the results alongside normal commands. Select it with Enter or a tap to create a new T3 thread. The full typed text is sent, with its first line used as the title; the open note is not included.
+Open Obsidian’s command palette (Ctrl/⌘ + P, or your configured mobile swipe-down action) and type a message. **T3 Chat: “your message”** stays at the top alongside normal commands. Select it with Enter or a tap, then choose **New thread** or **Existing thread…**. Existing threads are listed newest first and labelled **Active** or **Idle**. The exact typed text is followed by the Obsidian vault name and vault-relative note path. When the destination has a known mapping to the synced vault, chat also includes the distinct destination filesystem path. A new thread uses the first line of your message as its title. Chat does not read or copy the note’s Markdown or embedded images.
 
-With one selected project it sends there. With several, choose the destination on your first chat; the plugin remembers that choice. Change it in **Settings → Send to T3 Code → Chat → Chat project**, or select **Choose on next chat**. You must sign in on this device and finish project discovery first.
+The nearest linked folder supplies the destination, including for notes in subfolders; its tag trigger can remain off. Without a folder link, or with no Markdown note open, chat uses the vault-root link. If that association is missing or its project is no longer discovered, mobile opens **Connect vault** and keeps the original prompt ready. On desktop, connected machines offer the same chooser with **This computer** as an additional option; without remote connections, the plugin can still discover or create the local vault project automatically using the official T3 CLI.
 
-The regular **Send to T3 Code: New T3 chat** command opens a message editor with a project chooser and Send button. It also works as a hotkey/mobile toolbar action, and is the fallback when Obsidian’s live palette integration is unavailable. The live row uses isolated, version-checked internal command-palette methods because Obsidian does not expose a public dynamic-result API. It restores those methods when the plugin is disabled. Keep the core Command palette plugin enabled; future Obsidian changes may require an update.
+Manage the default under **Settings → Send to T3 Code → Orchestration → Vault project machine → Connect vault / Change machine**. Choose any machine discovered through your T3 account or manual pairing, then select **Find vault**. The plugin checks remembered locations and registered projects for this vault's synced identity. Select a matching folder, or use the remote folder browser to find its existing synced copy. **Use this folder** verifies the identity, reuses or creates a project on that machine, saves the association, and resumes the original chat action. Cancelling setup leaves the prompt open. An offline machine leaves setup open for retry or another choice.
 
-Chat messages use the same connection, size limit, optional wait instruction and manual-retry handling as note sends. They do not attach the current note or enroll any note for completion cleanup. If delivery is unconfirmed, use **Unconfirmed requests → Retry** to reuse the original request rather than starting another thread.
+Vault identity, known machine locations, and the chosen root association sync in plugin settings; session credentials and unfinished project-registration commands remain device-local. Enable community-plugin settings in Obsidian Sync on both devices. A matching name alone never connects a folder: different local vault names are fine, but the synced identity must match. With headless Sync, no running desktop Obsidian instance is needed on the destination. The selected computer must already have a synced copy; this feature neither provisions a new Sync account nor uploads a replacement vault.
+
+Newly connected remote vaults check that the referenced note appears in the destination folder before sending, briefly waiting for Obsidian Sync if it is missing. This checks file presence, not whether every edit or attachment has finished syncing. Local desktop sends use the absolute note path. Self-linked remote folders use their project root, while other remote folder links use a root link on the same connection as the destination-vault mapping. If no safe mapping exists, chat reports the vault name and relative path once rather than inventing or duplicating a filesystem path.
+
+The regular **Send to T3 Code: New T3 chat** command opens a message editor using the same automatic routing. It works as a hotkey/mobile toolbar action and is the fallback when the live palette row is unavailable. The note context is captured when chat opens. Switching notes while composing or retrying does not change that context. The live row uses isolated, version-checked internal command-palette methods because Obsidian does not expose a public dynamic-result API; keep the core Command palette plugin enabled.
+
+Chat retains the optional wait instruction, 120,000-character limit (including note context), and manual retry handling. It never enrolls the note for archive/delete cleanup. Choosing **Delete note** or **Archive note** therefore does nothing to a note referenced by command-palette chat. An unconfirmed send must be retried through **Unconfirmed requests → Retry**, which preserves the original prompt, note path, destination, and command IDs.
 
 ## Orchestration
 
@@ -88,15 +96,21 @@ The setting persists per vault. This is an instruction to the receiving agent; t
 
 ## Folder links
 
-Right-click a folder and choose **Link to T3 Code → Link to <project>**. The link dialog opens with an **Automatic send on #tag** switch and a tag field. Leave it off to save only the folder association, or turn it on and choose the tag. Click **Link** to save; **Cancel** leaves the saved link unchanged. Selecting the same destination again reopens the dialog with its saved settings and preserves its send history. Links appear under **Settings → Send to T3 Code → Orchestration → Linked folders**. Links are inactive by default: saving a link alone does not send notes.
+Right-click a folder and choose **Link to T3 Code → Link to <project>**. The link dialog opens with an **Automatic send on #tag** switch and a tag field. Leave it off to save only the folder association, or turn it on and choose the tag. Click **Link** to save; **Cancel** leaves the saved link unchanged. Selecting the same destination again reopens the dialog with its saved settings and preserves its send history. Links appear under **Settings → Send to T3 Code → Orchestration → Linked folders**. Links route manual chat and note sends immediately. Saving a link alone does not send notes; automatic tag sends remain off by default.
 
 On desktop, **Link to self** registers the folder as a project in the local T3 Code installation using the official `t3 project add` command, then saves the resolved project ID and workspace root. Arguments are passed directly to the executable without a shell. If T3 already has a project for that path, the existing project is reused. Mobile can save links to discovered projects, but cannot register its private mobile filesystem as a project on another computer.
 
-Folder links sync with the vault. T3 credentials remain device-local. Legacy workflow/tag settings migrate to inactive links; upgrading never enables automatic sends.
+Folder links sync with the vault. T3 credentials remain device-local. Each explicitly linked folder shows the **T3 logo followed by its linked project name** beside the folder name in the Files explorer on desktop and mobile; descendants are marked only when they have their own link. Long project names truncate to fit the sidebar, with the full name available in the tooltip and accessibility label. The indicator updates when links are added, removed, renamed, or synced. Legacy workflow/tag settings migrate to inactive links; upgrading never enables automatic sends.
+
+### Sending notes into linked projects
+
+For a note inside a linked folder, **Open in T3 Code** offers **Send to new thread** and **Send to existing thread…**. The existing-thread option loads a searchable list of that project’s unarchived threads, newest first, with each thread labelled **Active** or **Idle**. Nested links take precedence. On mobile, or when native submenus are unavailable, tapping the action opens the same two choices. A missing linked project reports an error instead of rerouting the note.
+
+Both choices send the full Markdown and embedded images. Existing-thread sends preserve its model, runtime permissions and interaction mode. An idle thread starts another turn; a running thread receives input through T3’s steering behavior. Resolve pending approvals or structured input in T3 before sending another note. Retries reuse the original thread and message IDs without creating a new thread. Sending to an existing thread keeps the note and supersedes any older cleanup job for that note; archive/delete completion handling applies only to new-thread note sends.
 
 ### Optional tag sends
 
-In the folder-link dialog, turn on **Automatic send on #tag**, enter a tag (for example `#ready`), and save the link. You can also change it later under **Orchestration → Linked folders → Automatic send on tag**. With the setting off, the link remains a saved association only. The enabled rule applies to new, edited or moved Markdown notes in that folder and its subfolders, including changes arriving through Obsidian Sync. It uses Obsidian’s parsed inline/frontmatter tags, with exact, case-insensitive matching; text in code blocks does not count. A more specific nested folder link owns its subtree, even if its trigger is off.
+In the folder-link dialog, turn on **Automatic send on #tag**, enter a tag (for example `#ready`), and save the link. You can also change it later under **Orchestration → Linked folders → Automatic send on tag**. With the setting off, the link still routes manual sends but never sends automatically. The enabled rule applies to new, edited or moved Markdown notes in that folder and its subfolders, including changes arriving through Obsidian Sync. It uses Obsidian’s parsed inline/frontmatter tags, with exact, case-insensitive matching; text in code blocks does not count. A more specific nested folder link owns its subtree, even if its trigger is off.
 
 Renaming linked folders preserves their saved links, including nested links. A renamed self-linked folder pauses its trigger until you relink it to self, because its T3 workspace path must be refreshed.
 
@@ -106,15 +120,25 @@ The device that enables a rule runs it while Obsidian is open. Its ownership is 
 
 Failed or interrupted automatic sends require review in settings. If there is an **Unconfirmed request**, retry with its saved request ID. After checking T3 and discarding an unwanted retry record, **Allow on next edit** permits another attempt. Startup, reconnection and repeated note events never automatically retry a saved failure.
 
+### Folder workflows
+
+Right-click a linked folder and choose **Setup T3 workflow…** to run a plain-language editing task when Markdown notes are created, updated, or both. Create-only is the recommended default. Choose whether subfolders are included; the nearest configured workflow owns a nested subtree. The workflow uses the folder's linked T3 project and runs only on its owning device while Obsidian is open. Saving a workflow never scans or processes existing notes.
+
+New-note typing is debounced into one run. Before dispatch, the plugin saves a device-local run intent and stable request ID, then verifies the note hash again. The prompt names the vault-relative and safely mapped destination paths, includes the expected input hash and images, and tells T3 to edit only that note or report a conflict. A missing safe destination mapping stops the run.
+
+While a run is queued, running, or settling, further file events are coalesced. After the original T3 turn completes, the resulting note hash is saved so T3's own edit cannot trigger an update loop. Multiple distinct changes during an active run are shown as **conflicted** for review. Three runs for one workflow/note within ten minutes trip a circuit breaker until the run is dismissed. Renames preserve workflow paths and run history; deletion cancels pending timers.
+
+Manage workflows under **Orchestration → Folder workflows**. They can be paused, edited, moved to this device, deleted, or tested against the current note. Failed, conflicted, queued, and unconfirmed runs offer the appropriate stable-ID retry or dismiss action. Workflow definitions sync with the vault; run history, pending payloads, and credentials remain device-local.
+
 ## When task completes
 
-Under **Orchestration → When task completes**, choose **Keep note** (default), **Archive note**, or **Delete note (vault trash)**. Archive has a configurable vault-relative folder, defaulting to `Archive/T3 Code`; it preserves the note’s original subfolders and adds a numeric suffix if a destination already exists. Delete moves only the Markdown note to this vault’s `.trash`; embedded image files remain in place.
+For note sends to new threads, under **Orchestration → When task completes**, choose **Keep note** (default), **Archive note**, or **Delete note (vault trash)**. Archive has a configurable vault-relative folder, defaulting to `Archive/T3 Code`; it preserves the note’s original subfolders and adds a numeric suffix if a destination already exists. Delete moves only the Markdown note to this vault’s `.trash`; embedded image files remain in place.
 
 The plugin polls the destination T3 environment every 30 seconds while Obsidian is active. Mobile can suspend the app; checks resume when reopened. The completion signal is the original sent turn reporting `completed`, with its session idle (ready or stopped), no pending approval/input, and its original user message and final assistant message verified. This is a T3 lifecycle signal, not a judgment that the answer fully solved the task. Failed/interrupted turns and conversations that have advanced to additional turns keep the note.
 
 The completion action and note fingerprint are saved when sending. Later setting changes affect new sends only; retries preserve the original action. Monitoring resumes after Obsidian restarts and retries connection errors. **Task completion monitoring** shows status and offers **Check now**, **Stop monitoring**, and **Dismiss**. Starting a newer send for the same note supersedes its previous cleanup action once that send is confirmed.
 
-Notes edited, replaced, renamed, or left with unsaved editor changes are kept. Archive/delete runs in the sending Obsidian vault, including when the T3 thread runs on the VPS. Existing notes and previously sent threads are not automatically enrolled.
+Notes edited, replaced, renamed, or left with unsaved editor changes are kept. Archive/delete runs in the sending Obsidian vault, including when the T3 thread runs on another computer. Existing notes and previously sent threads are not automatically enrolled.
 
 ## Embedded images
 
@@ -128,7 +152,7 @@ The plugin includes image support. The selected T3 model/provider must accept im
 
 ## Empty states and recovery
 
-Empty notes are rejected without creating a thread. No selected projects shows a clear disabled menu item and a project selector. Failed scans report the error and preserve the last discovered list; unavailable selections are retained for later rediscovery. Sending to a removed project reports an error without scheduling delivery.
+Empty notes are rejected without creating a thread. For unlinked note sends, no selected projects shows a clear disabled menu item and a project selector. Linked-folder sends and palette chat use their folder/root association independently of the project-menu selection toggles. Failed scans report the error and preserve the last discovered list; unavailable selections are retained for later rediscovery. Sending to a removed project reports an error without scheduling delivery.
 
 A request is saved before dispatch. During sending, additional sends are disabled. If a response is lost or fails, **Unconfirmed requests** in settings offers **Retry** using the exact original content, connection, and request ID. Do this instead of clicking New thread again, which intentionally creates a separate request. **Discard** removes only saved local retry data; it does not cancel or delete any T3 thread. Restarting Obsidian does not resend anything automatically.
 
@@ -137,6 +161,8 @@ Pending requests store the full note and base64 image bytes in local IndexedDB u
 ## Development
 
 Requires Node.js and npm. Run `npm ci`, `npm run build`, and `npm test`. Build output is `main.js`. The plugin registers Obsidian's vault/metadata events for optional tags and the `file-menu` event and uses the runtime `MenuItem.setSubmenu()` extension, with a project picker fallback if unavailable; mobile uses the picker. See [Obsidian plugin setup](https://docs.obsidian.md/Plugins/Getting%20started/Build%20a%20plugin).
+
+QLO2 is synced from `/home/ubuntu/vaults/QLO2` by the VPS `obsidian-qlo2-sync.service`. After building and packaging a tested release, run `python3 scripts/deploy-qlo2.py` on the VPS. It installs the release into that vault, preserves `data.json`, and stores its backup under `/home/ubuntu/backups/send-to-t3-code`. It pauses continuous Sync during installation, runs a fresh one-shot scan to upload plugin changes, verifies completion, and restarts continuous Sync even if uploading fails. The continuous watcher's generic “Fully synced” heartbeat does not prove it detected changes inside `.obsidian`; deployment must finish the fresh scan before reporting success. Receiving devices still need to finish Sync and reload the plugin. Do not route QLO2 deployment through the Windows laptop.
 
 Git tracks the TypeScript source, tests and dependency lockfile. The generated `main.js`, packaged releases, local validation artifacts and Python caches are ignored. Building creates the `main.js` required for installation; ignoring it does not remove an installed copy.
 
@@ -151,3 +177,15 @@ Live 2.3 validation in QLO2: one email verification connected both laptop and VP
 Live 2.7 desktop validation: the real command-palette row submitted the exact typed prompt and received a completed T3 response. A linked folder sent nothing with its trigger disabled, sent one tagged note after enabling, and created no duplicates after repeated edits and a rename. Build and all 66 automated tests passed, including mobile-compatible bundle delivery, palette lifecycle, event parsing, folder renames and retry durability. Test notes were removed and original development-vault settings restored.
 
 Version 2.7.1 restores the folder-link dialog with an optional tag switch. Live desktop testing verified Files-menu selection, the inactive default, enabling a tag and explicit persistence. All 69 automated tests pass, including cancel, reopen, ownership preservation and storage-error recovery.
+
+Version 2.8.1 adds the new/existing-thread choice to command-palette chat and labels existing-thread choices **Active** or **Idle**. Active threads remain selectable and use T3's steering behavior. All 87 automated tests pass.
+
+Version 2.8.2 separates the destination filesystem path from the vault-relative path. A same-connection vault-root link maps synced mobile notes to their destination path; without a safe mapping, chat sends the vault name and relative path once rather than duplicating it.
+
+Version 2.8.3 adds live **T3** badges to explicitly linked folders in Obsidian’s Files explorer and clarifies that command-palette chat never triggers archive or delete completion actions.
+
+Version 2.9.0 adds machine selection and remote vault-project setup through existing T3 connections. Synced identity verification supports different vault names and paths across computers. Mobile can browse the selected computer, reuse or register its vault project, and continue the original chat. File access uses T3's authenticated WebSocket API; project creation uses its existing orchestration API. No server-specific hostnames or filesystem paths are embedded in the feature.
+
+Version 2.9.1 replaces the colored folder badges with the T3 logo and linked project name. The label follows the Obsidian theme and truncates long names to fit narrow sidebars.
+
+Version 2.9.2 fixes new threads inheriting a recent conversation's model and reasoning effort. Desktop and mobile now read the selected machine's current T3 settings through its authenticated connection, respecting project overrides and automatic model selection. This applies to command-palette chat, note-menu sends, and tag sends. Existing threads and saved retries retain their original selections.

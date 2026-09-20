@@ -5,7 +5,7 @@ export interface Project { id: string; title: string; workspaceRoot: string; con
 export function projectKey(project:Project){return project.connectionId?`${project.connectionId}:${project.id}`:project.id;}
 export function projectLabel(project:Project){return project.title+(project.connectionName?` · ${project.connectionName}`:'');}
 export interface Connection { executable: string; host: string; scriptPath?: string; transport?: 'desktop'|'https'|'direct'; url?: string; native?:boolean; baseDir?:string; stateDir?:string;connectionId?:string;environmentId?:string }
-export interface Request { id: string; project: Project; title: string; prompt: string; connection: Connection; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion;directPlan?:DirectPlan }
+export interface Request { id: string; project: Project; title: string; prompt: string; connection: Connection; threadId?:string; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion;directPlan?:DirectPlan }
 export class RequestDeliveryError extends Error {
   constructor(message:string,readonly requestSaved:boolean){super(message);}
 }
@@ -36,8 +36,8 @@ export async function runBridge(connection:Connection,args:string[],input=''):Pr
 }
 export async function sendRequest(request: Request) {
   if(request.connection.transport==='direct'){if(!runtime?.saveRequest)throw Error('Direct request storage is unavailable.');return sendDirect(request,await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request));}
-  const hasImages = Boolean(request.attachments?.length);
-  const result = await runBridge(request.connection, ['start','--project',request.project.id,'--title',request.title,'--request-id',request.id,hasImages ? '--payload-file' : '--prompt-file','-'], hasImages ? JSON.stringify({prompt:request.prompt,attachments:request.attachments,context:request.context}) : request.prompt);
+  const hasPayload = Boolean(request.attachments?.length||request.threadId);
+  const result = await runBridge(request.connection, ['start','--project',request.project.id,'--title',request.title,'--request-id',request.id,hasPayload ? '--payload-file' : '--prompt-file','-'], hasPayload ? JSON.stringify({prompt:request.prompt,attachments:request.attachments,context:request.context,threadId:request.threadId}) : request.prompt);
   if (result.ok !== true || result.phase!=='started' || typeof result.threadId !== 'string' || result.projectId !== request.project.id) throw new Error('T3 did not confirm the new turn. Retry the saved request.');
   return result as {threadId:string;phase:'started'};
 }
