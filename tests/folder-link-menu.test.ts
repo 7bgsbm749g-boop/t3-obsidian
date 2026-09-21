@@ -165,17 +165,41 @@ test('invalid tags and storage failures leave the link dialog open and preserve 
   }finally{h.plugin.onunload();}
 });
 
-test('linked folder menu creates a create-only workflow with task, destination, and device owner',async()=>{
+test('folder workflow submenu creates multiple workflows and existing workflow dialogs can delete themselves',async()=>{
   const h=await folderMenuHarness();
   try{
     const link=await h.open();await h.button(link,'Link').click();
-    const menu=h.folderMenu(),entry=menu.items.find((item:any)=>item.title==='Setup T3 workflow…');assert.ok(entry);await entry.callback();
-    const modal=h.modals.at(-1);assert.equal(h.setting(modal,'Trigger').controls[0].value,'create');
-    h.setting(modal,'Workflow name').controls[0].change('Gym formatter');h.setting(modal,'Task').controls[0].change('Rewrite with my workout template.');
-    await h.button(modal,'Create workflow').click();
-    assert.equal(modal.closed,true);assert.equal(h.plugin.settings.folderWorkflows.length,1);
+    let entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');assert.ok(entry?.submenu);
+    assert.equal(entry!.submenu!.items.map((item:any)=>item.title).join(','),'Setup new workflow…');await entry!.submenu!.items[0].callback();
+    let modal=h.modals.at(-1);assert.equal(h.setting(modal,'Trigger').controls[0].value,'create');assert.equal(modal.contentEl.settings.flatMap((item:any)=>item.controls).some((control:any)=>control.text==='Delete workflow'),false);
+    h.setting(modal,'Workflow name').controls[0].change('Gym formatter');h.setting(modal,'Task').controls[0].change('Rewrite with my workout template.');await h.button(modal,'Create workflow').click();
+    entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');assert.equal(entry!.submenu!.items.map((item:any)=>item.title).join(','),'Gym formatter,Setup new workflow…');await entry!.submenu!.items[1].callback();
+    modal=h.modals.at(-1);h.setting(modal,'Workflow name').controls[0].change('Gym summary');h.setting(modal,'Task').controls[0].change('Add a workout summary.');await h.button(modal,'Create workflow').click();
+    assert.equal(h.plugin.settings.folderWorkflows.length,2);assert.equal(h.plugin.settings.folderWorkflows.map((item:any)=>item.name).join(','),'Gym formatter,Gym summary');
     assert.equal(h.plugin.settings.folderWorkflows[0].events.join(','),'create');assert.equal(h.plugin.settings.folderWorkflows[0].projectId,h.project.id);assert.equal(h.plugin.settings.folderWorkflows[0].deviceId,h.deviceId);
-    assert.equal(h.shared.at(-1).folderWorkflows[0].task,'Rewrite with my workout template.');assert.equal(h.networkRequests(),0);
+    entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');await entry!.submenu!.items[0].callback();modal=h.modals.at(-1);assert.ok(h.button(modal,'Delete workflow'));h.setting(modal,'Workflow name').controls[0].change('Gym formatter updated');await h.button(modal,'Save workflow').click();
+    assert.equal(h.plugin.settings.folderWorkflows.map((item:any)=>item.name).join(','),'Gym formatter updated,Gym summary','editing must retain sibling workflows and order');
+    entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');await entry!.submenu!.items[0].callback();modal=h.modals.at(-1);await h.button(modal,'Delete workflow').click();
+    assert.equal(modal.closed,true);assert.equal(h.plugin.settings.folderWorkflows.length,1);assert.equal(h.plugin.settings.folderWorkflows[0].name,'Gym summary');assert.equal(h.networkRequests(),0);
+  }finally{h.plugin.onunload();}
+});
+
+test('workflow order saves without sends, survives reopening, and rolls back a failed save',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const base={name:'Duplicate name',folderPath:'Notes',includeSubfolders:true,events:['create'],task:'Format.',connectionId:'c',projectId:'project',deviceId:'other-device',enabled:false};
+    const first={...base,id:'a'},other={...base,id:'other',folderPath:'Elsewhere'},last={...base,id:'b'};
+    h.plugin.settings.folderWorkflows=[first,other,last];
+    await h.plugin.reorderWorkflows('Notes',['b','a'],['a','b']);
+    assert.equal(h.shared.at(-1).folderWorkflows.map((item:any)=>item.id).join(','),'b,other,a');
+    assert.equal(h.plugin.settings.folderWorkflows[0],last);assert.equal(h.plugin.settings.folderWorkflows[1],other);
+    const saves=h.shared.length;await h.plugin.reorderWorkflows('Notes',['b','a'],['b','a']);assert.equal(h.shared.length,saves);
+    assert.equal(h.folderMenu().items.find(item=>item.title==='Setup T3 workflow')!.submenu!.items.length,3);
+    await assert.rejects(()=>h.plugin.reorderWorkflows('Notes',['a','b'],['a','b']),/changed/);
+    h.setFailSave(true);await assert.rejects(()=>h.plugin.reorderWorkflows('Notes',['a','b'],['b','a']),/storage failure/);
+    assert.equal(h.plugin.settings.folderWorkflows.map((item:any)=>item.id).join(','),'b,other,a');
+    h.setFailSave(false);await h.plugin.reorderWorkflows('Notes',['a','b'],['b','a']);
+    assert.equal(h.shared.at(-1).folderWorkflows.map((item:any)=>item.id).join(','),'a,other,b');assert.equal(h.networkRequests(),0);
   }finally{h.plugin.onunload();}
 });
 

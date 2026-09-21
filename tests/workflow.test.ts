@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {FolderWorkflowService,loadWorkflows,normalizeWorkflow,workflowForPath,type FolderWorkflow,type WorkflowHost,type WorkflowRun} from '../workflow';
+import {FolderWorkflowService,loadWorkflows,normalizeWorkflow,reorderFolderWorkflows,workflowForPath,workflowsForPath,type FolderWorkflow,type WorkflowHost,type WorkflowRun} from '../workflow';
 
 const wait=(ms=25)=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check:()=>boolean){for(let n=0;n<100&&!check();n++)await wait(5);assert.ok(check(),'event did not finish');}
@@ -25,6 +25,32 @@ test('the most specific workflow owns a subtree and a disabled nested rule shiel
   nested.includeSubfolders=false;assert.equal(workflowForPath([parent,nested],'Gym/Private/Deep/note.md','create','device')?.id,'workflow');
 });
 
+test('all eligible workflows on the most-specific folder are returned in saved order',()=>{
+  const first=rule({id:'first'}),second=rule({id:'second'}),parent=rule({id:'parent',folderPath:'/'}),otherDevice=rule({id:'other',deviceId:'other'});
+  assert.deepEqual(workflowsForPath([parent,first,second,otherDevice],'Gym/today.md','create','device').map(item=>item.id),['first','second']);
+});
+
+test('reordering preserves definitions, paused workflows, and unrelated folder slots',()=>{
+  const first=rule({id:'first'}),paused=rule({id:'paused',enabled:false,deviceId:'other'}),last=rule({id:'last'}),other=rule({id:'other',folderPath:'Other'});
+  const original=[first,other,paused,last],next=reorderFolderWorkflows(original,'Gym',['last','paused','first'],['first','paused','last']);
+  assert.deepEqual(next,[last,other,paused,first]);assert.equal(next[1],other);assert.equal(next[2],paused);
+  assert.deepEqual(original,[first,other,paused,last]);
+  assert.deepEqual(workflowsForPath(next,'Gym/today.md','create','device').map(item=>item.id),['last','first']);
+  for(const ids of [['first'],['first','first','last'],['first','other','last']])assert.throws(()=>reorderFolderWorkflows(original,'Gym',ids,['first','paused','last']),/invalid/);
+  assert.throws(()=>reorderFolderWorkflows(original,'Gym',['last','paused','first'],['paused','first','last']),/changed/);
+});
+
+test('a saved reorder affects future batches but never changes a queued batch sequence',async()=>{
+  const f=fixture([rule({id:'first'}),rule({id:'second'})]);
+  try{
+    f.service.schedule('Gym/today.md','create');await until(()=>f.sent.length===1);
+    f.workflows.reverse();f.setStatus('complete');await f.service.poll();await until(()=>f.sent.length===2);
+    assert.deepEqual(f.sent.map(item=>item.workflow.id),['first','second']);
+    f.notes.set('Gym/next.md',{path:'Gym/next.md',content:'next workout',mtime:2});f.service.schedule('Gym/next.md','create');await until(()=>f.sent.length===3);
+    assert.equal(f.sent[2].workflow.id,'second');
+  }finally{f.stop();}
+});
+
 test('create and initial typing events debounce into one durable dispatch',async()=>{
   const f=fixture();f.service.schedule('Gym/today.md','create');
   f.notes.get('Gym/today.md')!.content='squats 5x5\nbench 3x5';f.service.schedule('Gym/today.md','modify');
@@ -41,6 +67,23 @@ test('completion settles to an output hash and its modify event cannot loop',asy
   const f=fixture([rule({events:['create','modify']})]);f.service.schedule('Gym/today.md','create');await until(()=>f.sent.length===1);
   f.notes.get('Gym/today.md')!.content='# Workout\n\n- Squats: 5x5';f.service.schedule('Gym/today.md','modify');f.setStatus('complete');await f.service.poll();await until(()=>f.runs[0]?.state==='completed');
   const output=f.runs[0].outputHash;assert.ok(output);f.service.schedule('Gym/today.md','modify');await wait();assert.equal(f.sent.length,1);f.stop();
+});
+
+test('multiple matching workflows form a durable serialized batch and consume settled output in order',async()=>{
+  const first=rule({id:'first',name:'First'}),second=rule({id:'second',name:'Second'}),f=fixture([first,second]);
+  f.service.schedule('Gym/today.md','create');await until(()=>f.sent.length===1);
+  assert.equal(f.sent[0].workflow.id,'first');assert.equal(f.runs.length,2);assert.equal(f.runs[1].state,'queued');assert.equal(f.runs[0].batchId,f.runs[1].batchId);
+  f.notes.get('Gym/today.md')!.content='first output';f.service.schedule('Gym/today.md','modify');f.setStatus('complete');await f.service.poll();await until(()=>f.sent.length===2);
+  assert.equal(f.sent[1].workflow.id,'second');assert.equal(f.sent[1].note.content,'first output');assert.equal(f.runs[0].state,'completed');assert.equal(f.runs[1].state,'running');
+  f.notes.get('Gym/today.md')!.content='final output';f.service.schedule('Gym/today.md','modify');await f.service.poll();await until(()=>f.runs[1].state==='completed');
+  assert.equal(f.runs[0].outputHash,f.runs[1].outputHash,'the final batch hash suppresses every member');
+  f.service.schedule('Gym/today.md','create');await wait();assert.equal(f.sent.length,2,'the batch output must not restart the first workflow');f.stop();
+});
+
+test('a failed workflow blocks later workflows in its batch',async()=>{
+  const f=fixture([rule({id:'first'}),rule({id:'second'})]);f.host.send=async()=>{throw Error('offline');};
+  f.service.schedule('Gym/today.md','create');await until(()=>f.runs[0]?.state==='failed');
+  assert.equal(f.runs[1].state,'queued');assert.match(f.runs[1].detail!,/earlier failed/);f.stop();
 });
 
 test('multiple distinct edits during an active run surface a conflict',async()=>{

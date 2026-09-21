@@ -17,7 +17,9 @@ import {TagTriggerService,normalizeTriggerTag,type TagReceipt} from './tag-trigg
 import {installFolderIndicators,type FolderIndicatorController} from './folder-indicator';
 import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,waitForVaultNote,type VaultLocation,type VaultRegistration} from './vault-connection';
 import {VaultSetupModal,VaultSetupCancelled,type VaultMachine} from './vault-setup-ui';
-import {FolderWorkflowService,loadWorkflows,normalizeWorkflow,type FolderWorkflow,type WorkflowRun,type WorkflowEvent,type WorkflowNote} from './workflow';
+import {FolderWorkflowService,loadWorkflows,normalizeWorkflow,reorderFolderWorkflows,type FolderWorkflow,type WorkflowRun,type WorkflowEvent,type WorkflowNote} from './workflow';
+import {installWorkflowMenuOrder,type WorkflowMenuEntry,type WorkflowMenuController} from './workflow-menu';
+import {workflowActivity} from './workflow-activity';
 interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; folderLinks:FolderLink[];folderWorkflows:FolderWorkflow[];vaultId:string;vaultLocations:VaultLocation[] }
 export default class SendToT3 extends Plugin {
   declare settings: Settings;
@@ -57,6 +59,7 @@ export default class SendToT3 extends Plugin {
   private tagReceipts:TagReceipt[]=[];
   private folderWorkflowService?:FolderWorkflowService;
   private workflowRuns:WorkflowRun[]=[];
+  private workflowMenus=new Set<WorkflowMenuController>();
   async onload() {
     const data = await this.loadData();
     const local = this.app.loadLocalStorage(this.localKey);
@@ -93,7 +96,7 @@ export default class SendToT3 extends Plugin {
       if(this.stopped)return;
       this.paletteChat=installPaletteChat(this.app,prompt=>this.openChat(prompt),{onError:error=>new Notice(`T3 Chat: ${message(error)}`,10000)});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
-      if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined')this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks);
+      if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined')this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>this.settings.folderWorkflows.map(workflow=>workflow.folderPath),()=>workflowActivity(this.settings.folderWorkflows,this.workflowRuns).folders);
       this.startTagTriggers();
       this.startFolderWorkflows();
     });
@@ -101,7 +104,16 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
         menu.addItem(item=>{item.setTitle('Link to T3 Code').setIcon('link');const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,file).open());return;}const selected=this.projects().filter(p=>this.selected().includes(projectKey(p)));for(const project of selected)submenu.addItem(i=>i.setTitle(`Link to ${projectLabel(project)}`).onClick(()=>void this.linkFolder(file,project,false)));submenu.addSeparator();submenu.addItem(i=>i.setTitle('Link to self (create T3 project)').setDisabled(Platform.isMobile).onClick(()=>void this.linkFolderToSelf(file)));if(!selected.length&&Platform.isMobile)submenu.addItem(i=>i.setTitle('Select a project in settings').setDisabled(true));});
-        menu.addItem(item=>item.setTitle('Setup T3 workflow…').setIcon('workflow').onClick(()=>this.openWorkflowSetup(file)));return;
+        menu.addItem(item=>{
+          item.setTitle('Setup T3 workflow').setIcon('workflow');
+          const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>this.openWorkflowSetup(file));return;}
+          const workflows=this.settings.folderWorkflows.filter(workflow=>workflow.folderPath===file.path),entries:WorkflowMenuEntry[]=[];
+          for(const workflow of workflows)submenu.addItem(i=>{i.setTitle(workflow.name).setIcon(workflow.enabled?'workflow':'pause').onClick(()=>this.openWorkflowSetup(file,workflow));entries.push({id:workflow.id,name:workflow.name,item:i});});
+          if(workflows.length)submenu.addSeparator();
+          submenu.addItem(i=>i.setTitle('Setup new workflow…').setIcon('plus').onClick(()=>this.openWorkflowSetup(file)));
+          const controller=installWorkflowMenuOrder(menu,submenu,entries,(ids,previous)=>this.reorderWorkflows(file.path,ids,previous),error=>new Notice(`T3 workflow order: ${message(error)}`,10000),()=>{if(controller)this.workflowMenus.delete(controller);},()=>workflowActivity(this.settings.folderWorkflows,this.workflowRuns).steps);
+          if(controller)this.workflowMenus.add(controller);
+        });return;
       }
       if (!(file instanceof TFile) || file.extension.toLowerCase() !== 'md' || (!Platform.isMobile && source !== 'file-explorer-context-menu')) return;
       menu.addItem(item => {
@@ -184,20 +196,26 @@ export default class SendToT3 extends Plugin {
     })().catch(error=>new Notice(message(error)));}));
     this.registerEvent(this.app.vault.on('delete',file=>service.delete(file.path)));
   }
-  openWorkflowSetup(folder:TFolder){
+  openWorkflowSetup(folder:TFolder,workflow?:FolderWorkflow){
     const link=folderLinkForPath(this.settings.folderLinks,`${folder.path}/placeholder.md`);
     if(!link){new Notice('Link this folder (or a parent folder) to T3 Code before creating a workflow.',10000);return;}
-    new FolderWorkflowModal(this.app,this,folder,link).open();
+    new FolderWorkflowModal(this.app,this,folder,link,workflow).open();
   }
   workflowOnThisDevice(workflow:FolderWorkflow){return workflow.deviceId===this.deviceId;}
   workflowDeviceId(){return this.deviceId;}
   workflowRunsFor(workflow:FolderWorkflow){return this.workflowRuns.filter(run=>run.workflowId===workflow.id);}
   async saveWorkflow(value:FolderWorkflow){
     const workflow=normalizeWorkflow(value);const before=this.settings.folderWorkflows;
-    this.settings.folderWorkflows=[...before.filter(item=>item.id!==workflow.id&&item.folderPath!==workflow.folderPath),workflow];
-    try{await this.save();}catch(error){this.settings.folderWorkflows=before;throw error;}
+    const index=before.findIndex(item=>item.id===workflow.id),next=[...before];if(index>=0)next[index]=workflow;else next.push(workflow);this.settings.folderWorkflows=next;
+    try{await this.save();this.refreshFolderIndicators();}catch(error){this.settings.folderWorkflows=before;throw error;}
   }
-  async deleteWorkflow(workflow:FolderWorkflow){this.settings.folderWorkflows=this.settings.folderWorkflows.filter(item=>item!==workflow);this.workflowRuns=this.workflowRuns.filter(run=>run.workflowId!==workflow.id);await this.save();}
+  async reorderWorkflows(folderPath:string,ids:string[],previous:string[]){
+    const before=this.settings.folderWorkflows,next=reorderFolderWorkflows(before,folderPath,ids,previous);
+    if(next.every((workflow,index)=>workflow===before[index]))return;
+    this.settings.folderWorkflows=next;
+    try{await this.save();}catch(error){if(this.settings.folderWorkflows===next)this.settings.folderWorkflows=before;throw error;}
+  }
+  async deleteWorkflow(workflow:FolderWorkflow){if(this.workflowRuns.some(run=>run.workflowId===workflow.id&&['queued','running','settling'].includes(run.state)))throw Error('This workflow has an active or queued run. Resolve or dismiss that run before deleting the workflow.');this.settings.folderWorkflows=this.settings.folderWorkflows.filter(item=>item!==workflow);this.workflowRuns=this.workflowRuns.filter(run=>run.workflowId!==workflow.id);await this.save();this.refreshFolderIndicators();}
   async dismissWorkflowRun(run:WorkflowRun){if(this.settings.pending.some(request=>request.id===run.requestId))throw Error('Resolve the unconfirmed request first.');this.workflowRuns=this.workflowRuns.filter(item=>item!==run);await this.save();}
   runWorkflowNow(workflow:FolderWorkflow,path:string){return this.folderWorkflowService?.runNow(path,workflow.id)===true;}
   retryWorkflowRun(run:WorkflowRun){if(this.settings.pending.some(request=>request.id===run.requestId))throw Error('Use the unconfirmed request Retry action so the original request ID is preserved.');return this.folderWorkflowService?.retry(run);}
@@ -581,6 +599,7 @@ export default class SendToT3 extends Plugin {
     this.settings.paired=this.settings.paired.filter(c=>c.id!==id);this.settings.directProjects=this.settings.directProjects.filter(p=>p.connectionId!==id);this.settings.directSelected=this.settings.directSelected.filter(k=>!k.startsWith(id+':'));delete this.pairedSessions[id];if(this.settings.directScanId===id)this.settings.directScanId=this.settings.paired[0]?.id??'';await this.save();
   }
   save() {
+    this.refreshFolderIndicators();for(const menu of this.workflowMenus)menu.refresh();
     const {pending,completionJobs,connection,...shared}=this.settings;
     this.app.saveLocalStorage(this.localKey,JSON.parse(JSON.stringify({deviceId:this.deviceId,mode:this.mode,connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,vaultRegistrations:this.vaultRegistrations})));
     const snapshot=JSON.parse(JSON.stringify(shared));
@@ -695,7 +714,7 @@ export default class SendToT3 extends Plugin {
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;throw e;}
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
   }
-  onunload(){this.stopped=true;this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.tagTriggers?.stop();this.folderWorkflowService?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.stopped=true;for(const menu of this.workflowMenus)menu.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.tagTriggers?.stop();this.folderWorkflowService?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;
@@ -815,7 +834,7 @@ class FolderWorkflowModal extends Modal{
   constructor(app:App,private plugin:SendToT3,private folder:TFolder,private link:FolderLink,private existing?:FolderWorkflow){super(app);}
   onOpen(){
     const el=this.contentEl;el.empty();this.titleEl.setText(`T3 workflow for ${this.folder.name}`);
-    const current=this.existing??this.plugin.settings.folderWorkflows.find(item=>item.folderPath===this.folder.path);
+    const current=this.existing;
     let name=current?.name??`${this.folder.name} workflow`,task=current?.task??'',trigger=current?.events.includes('modify')?(current.events.includes('create')?'both':'modify'):'create';
     let includeSubfolders=current?.includeSubfolders??true,enabled=current?.enabled??true,takeOwnership=!current||this.plugin.workflowOnThisDevice(current),saving=false;
     el.createEl('p',{text:`Destination: ${this.link.projectTitle} · ${this.link.workspaceRoot}`});
@@ -825,7 +844,9 @@ class FolderWorkflowModal extends Modal{
     new Setting(el).setName('Task').setDesc('Tell T3 how to edit the note in place.').addTextArea(text=>{text.inputEl.rows=7;text.setValue(task).setPlaceholder('Rewrite this note using my template. Preserve all facts.').onChange(value=>task=value);});
     new Setting(el).setName('Enabled').addToggle(toggle=>toggle.setValue(enabled).onChange(value=>enabled=value));
     if(current&&!this.plugin.workflowOnThisDevice(current))new Setting(el).setName('Run on this device').setDesc('The workflow currently belongs to another device.').addToggle(toggle=>toggle.setValue(false).onChange(value=>takeOwnership=value));
-    const actions=new Setting(el).addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>button.setButtonText(current?'Save workflow':'Create workflow').setCta().onClick(async()=>{
+    const actions=new Setting(el);
+    if(current)actions.addButton(button=>button.setButtonText('Delete workflow').onClick(async()=>{if(saving)return;saving=true;actions.setDisabled(true);try{await this.plugin.deleteWorkflow(current);this.close();new Notice(`Workflow “${current.name}” deleted.`);}catch(error){new Notice(message(error),10000);actions.setDisabled(false);saving=false;}}));
+    actions.addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>button.setButtonText(current?'Save workflow':'Create workflow').setCta().onClick(async()=>{
       if(saving)return;saving=true;actions.setDisabled(true);
       try{const events:WorkflowEvent[]=trigger==='both'?['create','modify']:[trigger as WorkflowEvent];await this.plugin.saveWorkflow({id:current?.id??randomId(),name,folderPath:this.folder.path,includeSubfolders,events,task,connectionId:this.link.connectionId,projectId:this.link.projectId,deviceId:takeOwnership?this.plugin.workflowDeviceId():(current?.deviceId??this.plugin.workflowDeviceId()),enabled});this.close();new Notice(`Workflow “${name.trim()}” saved.`);}
       catch(error){new Notice(message(error),10000);actions.setDisabled(false);saving=false;}
