@@ -1,14 +1,10 @@
 // IndexedDB is local to this Obsidian installation and can hold image requests
 // larger than localStorage's typical 5 MiB limit, plus non-extractable DPoP keys.
 // Neither requests nor keys are placed in the synced vault.
+import {openStateDatabase} from './automation-store';
+
 export async function deviceState(key:string, value?:unknown):Promise<any> {
-  const db=await new Promise<IDBDatabase>((resolve,reject)=>{
-    const request=indexedDB.open('send-to-t3-code',1);
-    request.onupgradeneeded=()=>request.result.createObjectStore('devices');
-    request.onsuccess=()=>resolve(request.result);
-    request.onerror=()=>reject(new Error('Cannot open local request storage.'));
-    request.onblocked=()=>reject(new Error('Local request storage is busy. Reload Obsidian.'));
-  });
+  const db=await openStateDatabase();
   try {
     return await new Promise((resolve,reject)=>{
       const transaction=db.transaction('devices',value===undefined?'readonly':'readwrite');

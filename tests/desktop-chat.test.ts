@@ -98,7 +98,8 @@ for(const existing of [false,true])test(`desktop chat ${existing?'reuses':'creat
     h.plugin.onunload();const restarted=await h.start();
     h.setNote();await restarted.sendChat('Work in the vault');
     assert.equal(h.commands[2].projectId,h.project.id);
-    assert.equal(h.commands[3].message.text,'Work in the vault');
+    assert.ok(h.commands[3].message.text.startsWith('Work in the vault'));
+    assert.match(h.commands[3].message.text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal((await h.cliCalls()).filter(args=>args[0]==='project').length,existing?0:1);
     assert.equal(restarted.settings.completionJobs.length,0);
     restarted.onunload();

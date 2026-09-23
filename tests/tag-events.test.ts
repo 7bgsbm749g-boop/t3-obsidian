@@ -41,6 +41,7 @@ async function eventHarness(enabled:boolean){
   }
   class Plugin {
     private events:Array<{off():void}>=[];
+    private intervals:Array<ReturnType<typeof setInterval>>=[];
     app={
       loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},
       workspace:{onLayoutReady:()=>{},on:()=>({off(){}})},
@@ -56,7 +57,8 @@ async function eventHarness(enabled:boolean){
     async saveData(value:any){shared.push(value);}
     addSettingTab(){} addCommand(){}
     registerEvent(event:{off():void}){this.events.push(event);}
-    removeEvents(){for(const event of this.events)event.off();}
+    registerInterval(interval:ReturnType<typeof setInterval>){this.intervals.push(interval);}
+    removeEvents(){for(const event of this.events)event.off();for(const interval of this.intervals)clearInterval(interval);}
   }
   const api={Plugin,Platform:{isMobile:true},TFile:File,TFolder:Folder,Modal:Base,FuzzySuggestModal:Base,PluginSettingTab:Base,Notice:class{constructor(text:string){notices.push(text);}},getAllTags:(cache:{tags:string[]})=>cache.tags};
   const fetcher=async(url:string,options:any)=>{
@@ -72,10 +74,10 @@ async function eventHarness(enabled:boolean){
   runInNewContext(await readFile('main.js','utf8'),{
     module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,
     document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:settingsSocket(),
-    Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console,
+    Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console,window:{setInterval,clearInterval},
   },{timeout:5000});
-  const plugin=new module.exports.default();await plugin.onload();plugin.startTagTriggers();
-  assert.equal(scans,0,'Starting tag triggers must not scan existing notes');
+  const plugin=new module.exports.default();await plugin.onload();plugin.startTagTriggers();await plugin.startObservationJournal();
+  assert.equal(scans,1,'The shared event engine establishes one startup baseline without dispatching notes');
   const add=(path:string)=>{const file=new File(path);files.set(path,file);caches.set(file,{tags:['#ready']});return file;};
   const parsed=(file:File,tags:string[])=>{caches.set(file,{tags});metadataEvents.emit('changed',file,file.content,caches.get(file));};
   return {plugin,deviceId,commands,shared,notices,add,parsed,files,vaultEvents,metadataEvents,folder:(path:string)=>new Folder(path),scans:()=>scans,reads:()=>reads,dispose:()=>{plugin.onunload();plugin.removeEvents();}};
@@ -97,7 +99,8 @@ test('vault events wait for parsed metadata, inert links stay off, and sent rece
     assert.equal(active.commands.length,2);
     assert.equal(active.commands[0].projectId,'tag-project');
     assert.equal(active.commands[0].title,'note');
-    assert.equal(active.commands[1].message.text,activeNote.content);
+    assert.ok(active.commands[1].message.text.startsWith(activeNote.content));
+    assert.match(active.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal(inert.commands.length,0,'A saved folder link has no trigger until explicitly enabled');
     for(let i=0;i<3;i++){active.vaultEvents.emit('modify',activeNote);active.parsed(activeNote,['#ready']);}
     const oldPath=activeNote.path;active.files.delete(oldPath);activeNote.path='Tasks/renamed.md';active.files.set(activeNote.path,activeNote);
@@ -111,7 +114,7 @@ test('vault events wait for parsed metadata, inert links stay off, and sent rece
     assert.equal(stored.tagReceipts[0].path,'Tasks/renamed.md');
     assert.equal(stored.tagReceipts[0].state,'sent');
     assert.ok(active.shared.every(snapshot=>!('tagReceipts' in snapshot)),'Delivery receipts stay device-local');
-    assert.equal(inert.reads(),0);
+    assert.ok(inert.reads()>0,'The shared event journal observes linked notes even when the v1 tag trigger is disabled');
   }finally{active.dispose();inert.dispose();}
 });
 
@@ -129,7 +132,7 @@ test('removing a tag while its previous parse is scheduled cannot send stale tag
     h.parsed(note,[]);
     await wait(1100);
     assert.equal(h.commands.length,0);
-    assert.equal(h.reads(),0);
+    assert.ok(h.reads()>0,'The shared event journal reads the saved revisions used by both workflow engines');
   }finally{h.dispose();}
 });
 
@@ -142,7 +145,7 @@ test('renaming a linked subtree preserves inactive inner links before scheduling
     const note=h.add('Tasks/Private/note.md');
     h.files.delete(note.path);note.path='Tasks/Renamed/note.md';h.files.set(note.path,note);
     h.vaultEvents.emit('rename',h.folder('Tasks/Renamed'),'Tasks/Private');
-    await until(()=>h.scans()===1);
+    await until(()=>h.shared.at(-1)?.folderLinks?.[1]?.folderPath==='Tasks/Renamed');
     assert.equal(h.plugin.settings.folderLinks[1].folderPath,'Tasks/Renamed');
     assert.equal(h.plugin.settings.folderLinks[2].folderPath,'Tasks/Renamed/Inner');
     assert.equal(h.shared.at(-1).folderLinks[1].id,'private');
@@ -158,7 +161,7 @@ test('moving a self-linked folder disables its trigger until the T3 workspace is
     const link=h.plugin.settings.folderLinks[0];link.self=true;
     const note=h.add('Tasks/note.md');h.files.delete(note.path);note.path='Moved/note.md';h.files.set(note.path,note);
     h.vaultEvents.emit('rename',h.folder('Moved'),'Tasks');
-    await until(()=>h.scans()===1);
+    await until(()=>h.notices.some(text=>text.includes('Relink it to self')));
     assert.equal(link.id,'folder-link');assert.equal(link.folderPath,'Moved');assert.equal(link.tagTrigger.enabled,false);
     assert.equal(link.workspaceRoot,'/tasks','Moving a vault folder must not pretend to update a T3 project path');
     assert.ok(h.notices.some(text=>text.includes('Relink it to self')));

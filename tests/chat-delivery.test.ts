@@ -14,7 +14,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   const rootLink={id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true};
   let activeNote:any;
   const initial={folderLinks:[rootLink],chatProjectKey:'old:unrelated-project',paired:[{id:'chat-connection',name:'Laptop',url:'https://chat.example',environmentId:'chat-env'}],directScanId:'chat-connection',directProjects:[project],directSelected:['chat-connection:chat-project'],completion:{action:'delete'}};
-  const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[];let threads:any[]=[],catalog:any[]=[project];
+  const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[],workspaceEvents:Record<string,((...args:any[])=>void)[]>={};let threads:any[]=[],catalog:any[]=[project];
   let vaultAccesses=0;
   class Base {}
   class Element {
@@ -36,11 +36,21 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     addDropdown(callback:(d:any)=>void){const d={addOption:()=>d,setValue:()=>d,setDisabled:()=>d,onChange:()=>d};callback(d);return this;}
     addText(callback:(t:any)=>void){const t={setValue:()=>t,setPlaceholder:()=>t,setDisabled:()=>t,onChange:()=>t};callback(t);return this;}
   }
+  class File {extension='md';constructor(public path:string){}}
+  class MenuItem {
+    title='';disabled=false;callback:()=>any=()=>{};
+    setTitle(value:string){this.title=value;return this;}setIcon(_value:string){return this;}
+    setDisabled(value:boolean){this.disabled=value;return this;}onClick(callback:()=>any){this.callback=callback;return this;}
+  }
+  class Menu {
+    items:MenuItem[]=[];
+    addItem(callback:(item:MenuItem)=>void){const item=new MenuItem();this.items.push(item);callback(item);return this;}
+  }
   class Plugin {
     app={
       loadLocalStorage:()=>local,
       saveLocalStorage:(_:string,value:any)=>{local=value;},
-      workspace:{onLayoutReady:()=>{},on:()=>{},getActiveViewOfType:()=>activeNote?{file:activeNote}:undefined},
+      workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{(workspaceEvents[name]??=[]).push(callback);return {};},getActiveViewOfType:()=>activeNote?{file:activeNote}:undefined},
       vault:{adapter:{},getName:()=> 'Notes',read:()=>{vaultAccesses++;throw Error('Chat must not read note contents');},readBinary:()=>{vaultAccesses++;throw Error('Chat must not read attachments');}},
     };
     async loadData(){return shared.at(-1)??initial;}
@@ -50,7 +60,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     register(){}
     addCommand(command:any){registered.push(command);}
   }
-  const api={Plugin,Platform:{isMobile:true},Modal,Setting,SuggestModal:Modal,FuzzySuggestModal:Modal,PluginSettingTab:Base,Notice:Base};
+  const api={Plugin,Platform:{isMobile:true},Modal,Menu,MenuItem,Setting,SuggestModal:Modal,FuzzySuggestModal:Modal,PluginSettingTab:Base,Notice:Base,TFile:File,MarkdownView:Base};
   const fetcher=async(url:string,options:any)=>{
     assert.equal(options.credentials,'omit');
     assert.equal(options.redirect,'error');
@@ -92,10 +102,10 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     fetch:fetcher,WebSocket:Socket,Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console,
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();return plugin;};
-  return {plugin:await start(),start,commands,shared,registered,modals,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},vaultAccesses:()=>vaultAccesses};
+  return {plugin:await start(),start,commands,shared,registered,modals,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},editorMenu:(selection:string,path='Notes/Selected.md')=>{const menu=new Menu(),file=new File(path);for(const listener of workspaceEvents['editor-menu']??[])listener(menu,{getSelection:()=>selection},{file});return {menu,file};},vaultAccesses:()=>vaultAccesses};
 }
 
-test('mobile chat without a note uses the root link, sends the exact prompt, and never enrolls note cleanup',async()=>{
+test('mobile chat without a note uses the root link, preserves the prompt, advertises event queries, and never enrolls note cleanup',async()=>{
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';
   try {
@@ -106,7 +116,8 @@ test('mobile chat without a note uses the root link, sends the exact prompt, and
     assert.equal(h.commands[0].projectId,project.id);
     assert.equal(h.commands[0].title,'Plan my café 🧪 notes');
     assert.equal(h.commands[1].type,'thread.turn.start');
-    assert.equal(h.commands[1].message.text,prompt);
+    assert.ok(h.commands[1].message.text.startsWith(prompt));
+    assert.match(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal(h.plugin.settings.pending.length,0);
     assert.equal(h.plugin.settings.completionJobs.length,0,'Delete-note preference must not apply to free text');
     assert.equal(h.vaultAccesses(),0);
@@ -138,7 +149,8 @@ test('an uncertain chat survives restart and retries the original immutable comm
     assert.equal(h.plugin.busy,false);
     assert.equal(h.plugin.settings.pending.length,1);
     const pending=h.plugin.settings.pending[0];
-    assert.equal(pending.prompt,prompt);
+    assert.ok(pending.prompt.startsWith(prompt));
+    assert.match(pending.prompt,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal(pending.completion,undefined);
     assert.equal(pending.directPlan.phase,'created');
     assert.equal(h.plugin.settings.completionJobs.length,0);
@@ -171,7 +183,8 @@ test('chat validates text before creating a thread and applies enabled orchestra
     const firstLine='A'.repeat(180), prompt='\n'+firstLine+'\nContinue with this line.';
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands[0].title,'A'.repeat(160));
-    assert.equal(h.commands[1].message.text,WAIT_FOR_OTHER_THREADS_INSTRUCTION+'\n\n'+prompt);
+    assert.ok(h.commands[1].message.text.startsWith(WAIT_FOR_OTHER_THREADS_INSTRUCTION+'\n\n'+prompt));
+    assert.match(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal(h.plugin.settings.completionJobs.length,0);
   } finally {h.plugin.onunload();}
 });
@@ -207,7 +220,8 @@ test('palette chat sends the visible note path through its nearest link without 
     await h.modals.at(-1).choose(false);
     assert.equal(h.commands[0].projectId,project.id);
     assert.equal(h.commands[0].title,'Work on this note.');
-    assert.equal(h.commands[1].message.text,prompt+'\n\nObsidian vault: "Notes"\nDestination note path: "/projects/notes/Notes/Inner/café \\"draft\\".md"\nVault-relative note path: "Notes/Inner/café \\"draft\\".md"');
+    assert.ok(h.commands[1].message.text.startsWith(prompt+'\n\nObsidian vault: "Notes"\nDestination note path: "/projects/notes/Notes/Inner/café \\"draft\\".md"\nVault-relative note path: "Notes/Inner/café \\"draft\\".md"'));
+    assert.match(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal(h.commands[1].message.attachments.length,0);
     assert.equal(h.plugin.settings.completionJobs.length,0);
     assert.equal(h.vaultAccesses(),0);
@@ -230,6 +244,31 @@ test('palette chat can target an existing thread and labels active and idle conv
     await picker.choose(items[0]);
     assert.equal(h.commands.length,1,'Existing-thread chat must not create a thread');
     assert.equal(h.commands[0].type,'thread.turn.start');assert.equal(h.commands[0].threadId,'active');
+  }finally{h.plugin.onunload();}
+});
+
+test('editor selection menu asks T3 in a new or existing thread and requires an in-note reply',async()=>{
+  const h=await chatHarness();
+  try{
+    assert.equal(h.editorMenu('   ').menu.items.length,0,'Whitespace-only selections do not add an action');
+    const selection='Explain why **this claim** follows.\nKeep [[source links]].';
+    let entry=h.editorMenu(selection,'Notes/Original.md').menu.items.find(item=>item.title==='Ask T3');assert.ok(entry);
+    await entry!.callback();
+    const destination=h.modals.at(-1);assert.equal(destination.constructor.name,'ChatDestinationModal');
+    h.setActiveNote('Notes/Different.md');await destination.choose(false);
+    assert.equal(h.commands[0].type,'thread.create');assert.equal(h.commands[0].title,'Explain why **this claim** follows.');
+    const newThreadText=h.commands[1].message.text;
+    assert.ok(newThreadText.startsWith(selection+'\n\nReply in the Obsidian note itself by editing the note with your answer. Do not only reply in T3.'));
+    assert.match(newThreadText,/Vault-relative note path: "Notes\/Original.md"/);assert.doesNotMatch(newThreadText,/Different.md/);
+
+    h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',updatedAt:'2026-09-19T11:00:00Z',latestTurn:{state:'completed'}}]);
+    const followup='Add the selected evidence to the conclusion.';
+    entry=h.editorMenu(followup,'Notes/Original.md').menu.items.find(item=>item.title==='Ask T3');assert.ok(entry);
+    await entry!.callback();await h.modals.at(-1).choose(true);
+    const picker=h.modals.at(-1);await picker.choose(picker.getItems()[0]);
+    assert.equal(h.commands[2].type,'thread.turn.start');assert.equal(h.commands[2].threadId,'old-thread');
+    assert.ok(h.commands[2].message.text.startsWith(followup+'\n\nReply in the Obsidian note itself by editing the note with your answer. Do not only reply in T3.'));
+    assert.equal(h.vaultAccesses(),0,'Selection chat sends the selection and note path without reading the note body');
   }finally{h.plugin.onunload();}
 });
 
@@ -407,7 +446,7 @@ test('sending a note into an existing thread retains Markdown and images and cle
     assert.equal(result.threadId,'existing');assert.equal(h.commands.length,1);
     assert.equal(h.commands[0].type,'thread.turn.start');assert.equal(h.commands[0].threadId,'existing');
     assert.match(h.commands[0].message.text,/# Note\nBefore/);assert.match(h.commands[0].message.text,/t3-context:\/\//);
-    assert.ok(h.commands[0].message.text.endsWith('\nAfter'));
+    assert.match(h.commands[0].message.text,/\nAfter\n\nT3 EVENT HISTORY CAPABILITY/);
     assert.equal(h.commands[0].message.attachments[0].dataUrl,'data:image/png;base64,'+png);
     assert.equal(result.request.completion.action,'keep');
     assert.equal(h.plugin.settings.completionJobs.length,0);

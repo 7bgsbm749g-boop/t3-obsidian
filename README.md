@@ -1,8 +1,40 @@
-# Send to T3 Code — 2.9.2
+# Send to T3 Code — 2.12.1
 
-One Obsidian plugin for desktop and mobile. Type into the command palette to chat using the current note’s path. Right-click a Markdown note in **Files → Open in T3 Code** to send its contents: linked folders offer **Send to new thread** or **Send to existing thread…** in their linked project; unlinked folders offer your selected projects. The note is sent verbatim, with embedded images attached at their original positions. No vault/path/title wrapper is added; the note title names the thread, without an “Obsidian:” prefix.
+One Obsidian plugin for desktop and mobile. Type into the command palette to chat using the current note’s path. Right-click a Markdown note in **Files → Open in T3 Code** to send its contents: linked folders offer **Send to new thread** or **Send to existing thread…** in their linked project; unlinked folders offer your selected projects. The note body is preserved, embedded images remain at their original positions, and a bounded event-history capability instruction is appended for the receiving agent. No title wrapper is added; the note title names the thread, without an “Obsidian:” prefix.
 
-**No Fleet adapter is required. No persistent delivery queue exists.** The plugin includes local and portable direct T3 clients. There is no companion service or SSH/Python forwarding. Sends require the selected machine to be online and running T3. After a confirmed start, the T3 turn continues independently of Obsidian.
+**No Fleet adapter is required.** The plugin includes local and portable direct T3 clients. There is no companion service or SSH/Python forwarding. Manual sends require the selected machine to be online and running T3. After a confirmed start, the T3 turn continues independently of Obsidian. The optional durable automation journal described below is separate from manual-send delivery.
+
+## Workflow versions
+
+Settings → Send to T3 Code → **Workflow version** selects **Workflows v1** or **Workflows v2**. Only the selected engine runs, and only that engine's settings and controls are shown. Switching snapshots the outgoing version's enabled flags, disables all of its definitions, and restores the flags last saved for the selected version. Switching back restores the previous active set; a failed settings save rolls the switch back.
+
+Both versions consume the same durable saved-state event source. The legacy vault and metadata listeners are no longer separate trigger paths, so one filesystem callback cannot independently dispatch through an old listener and the new journal. Startup reconciliation remains non-triggering. V1 translates live durable observations into its existing create/update/tag/rename/delete behavior; v2 consumes coordinator-accepted normalized events.
+
+## Durable automation journal
+
+With **Workflows v2** selected, Settings → Send to T3 Code → **Durable automation journal** controls publication and coordination. Local durable events remain active for the selected workflow engine even when synced publication is off. Upgrading never migrates, enables, or sends work automatically.
+
+- **Local events only** keeps the common durable event source and baselines device-local, without publishing protocol files.
+- **Shadow (local only)** records future saved-state observations, exact replayable line splices with bounded surrounding context, typed metadata transitions, rename/delete evidence, note identities, revision lineage, and a restart-safe outbox in IndexedDB.
+- **Publish synced journal** additionally writes immutable, hash-verified records beneath the normal `T3 Automation/` vault folder. Obsidian Sync must have **Sync all other types** enabled on every participating device. Publication means “saved locally”; only a coordinator acknowledgement proves ingestion.
+- **Coordinator on this device** explicitly assigns the current installation, scans immutable observation streams, validates producer order/hash chains, persists its cursors and identity registry, and publishes accepted normalized events. It does not elect a replacement after a timeout.
+- **Unsaved editor observations** is a separate opt-in. Those records are evidence and never replace the saved-state baseline.
+
+Startup establishes or reconciles baselines with execution suspended. The engine ignores its own protocol folder, preserves `A → B → A` as distinct occurrences, keeps producer gaps explicit, and never infers an editor or author from the observing device. Installation and stream identities remain device-local. The vault protocol contains no credentials.
+
+For each observed saved revision, `line-splice-v1` records the one-based starting line, exact removed and added lines, and up to three unchanged context lines on each side. The splice has an input precondition and can reconstruct the exact next revision when applied to the recorded predecessor. New files contain an all-lines addition; deleted files contain an all-lines removal. Existing baselines are populated with exact text at startup, so the first subsequent saved change after upgrading is diffable. These records can contain private note text and, when journal publication is enabled, are readable by other devices in the synced vault.
+
+### Agent event-history queries
+
+Every new chat, note send, v1 workflow request, and v2 T3 action tells the receiving agent how to query accepted event history. The agent creates a unique immutable JSON request under `T3 Automation/event-queries/requests/` and waits for the coordinator's matching response under `T3 Automation/event-queries/results/`. The assigned Obsidian coordinator must be open; Sync alone cannot answer queries.
+
+Each request must explicitly select `eventTypes` and `pathGlobs`. Time is chosen per request rather than compiled into the plugin: relative ISO durations such as `PT15M` or `P3W`, calendar `today` with an IANA timezone, exact ISO timestamp bounds, or the previous result cursor for “since last time.” Results contain the complete normalized event payload, including exact note changes, and return a cursor for continuation. A 500-event maximum and immutable request/result paths bound each exchange. Returned note content is identified as untrusted data, not agent instructions.
+
+**Prepare migration drafts** converts legacy folder workflows to disabled typed releases. It preserves saved order and the legacy nearest-folder shielding policy. Draft creation does not scan notes, enable releases, or dispatch T3 requests.
+
+The implemented runtime primitives include closed typed predicates with `unknown` propagation, finite coordinator-ordered sequences, timezone-pinned weekday occurrences, durable debounce candidates, exact release hashing and approval contracts, deterministic request IDs, frozen batches, persist-before-effect execution states, ambiguous-delivery quarantine, conditional plugin-applied note replacements, checkpoints, contiguous-gap acknowledgements, retention gates, and chunked single-writer blobs.
+
+Coordination is deliberately fixed rather than elected. A destination such as `qlo2-vps` needs Obsidian itself running with that vault open on the assigned device; the headless Sync service transports files but cannot run this community plugin. Coordinator assignment, activation, and permissions remain explicit control-plane operations. Only the selected workflow version can match new events or create execution work.
 
 ## Setup: desktop and mobile
 
@@ -64,7 +96,7 @@ Account connections and manual pairing use T3's existing protocols, not an offic
 
 ## Upgrade
 
-Install 2.9.2 and reload the plugin on each device after Sync finishes. Existing manual connections and project selections remain intact. Each device clearly requires its own email verification before synced projects and folder links become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
+Install 2.12.1 and reload the plugin on each device after Sync finishes. Existing manual connections, project selections, folder workflows, and tag triggers remain intact. Workflows v1 is selected by default for existing vaults; v2 drafts remain disabled until explicitly selected and enabled. Each device clearly requires its own email verification before synced projects and folder links become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
 
 Old unconfirmed sends remain visible for review but cannot be retried through the removed mode. Check the original thread in T3 before creating another send, since the earlier request may have started. Discard only removes the local retry record. Old companion completion jobs keep their notes and stop monitoring. Direct/local completion monitoring continues. No request is automatically rerouted or sent during migration.
 
@@ -72,7 +104,7 @@ The obsolete companion service is no longer part of the plugin. Its operator can
 
 ## Command palette chat
 
-Open Obsidian’s command palette (Ctrl/⌘ + P, or your configured mobile swipe-down action) and type a message. **T3 Chat: “your message”** stays at the top alongside normal commands. Select it with Enter or a tap, then choose **New thread** or **Existing thread…**. Existing threads are listed newest first and labelled **Active** or **Idle**. The exact typed text is followed by the Obsidian vault name and vault-relative note path. When the destination has a known mapping to the synced vault, chat also includes the distinct destination filesystem path. A new thread uses the first line of your message as its title. Chat does not read or copy the note’s Markdown or embedded images.
+Open Obsidian’s command palette (Ctrl/⌘ + P, or your configured mobile swipe-down action) and type a message. **T3 Chat: “your message”** stays at the top alongside normal commands. Select it with Enter or a tap, then choose **New thread** or **Existing thread…**. Existing threads are listed newest first and labelled **Active** or **Idle**. The typed text is preserved and followed by the Obsidian vault/path context and event-history capability instructions. When the destination has a known mapping to the synced vault, chat also includes the distinct destination filesystem path. A new thread uses the first line of your message as its title. Chat does not read or copy the note’s Markdown or embedded images.
 
 The nearest linked folder supplies the destination, including for notes in subfolders; its tag trigger can remain off. Without a folder link, or with no Markdown note open, chat uses the vault-root link. If that association is missing or its project is no longer discovered, mobile opens **Connect vault** and keeps the original prompt ready. On desktop, connected machines offer the same chooser with **This computer** as an additional option; without remote connections, the plugin can still discover or create the local vault project automatically using the official T3 CLI.
 
@@ -195,3 +227,7 @@ Version 2.9.0 adds machine selection and remote vault-project setup through exis
 Version 2.9.1 replaces the colored folder badges with the T3 logo and linked project name. The label follows the Obsidian theme and truncates long names to fit narrow sidebars.
 
 Version 2.9.2 fixes new threads inheriting a recent conversation's model and reasoning effort. Desktop and mobile now read the selected machine's current T3 settings through its authenticated connection, respecting project overrides and automatic model selection. This applies to command-palette chat, note-menu sends, and tag sends. Existing threads and saved retries retain their original selections.
+
+Version 2.12.0 adds the durable event/coordinator/runtime foundation and the explicit Workflows v1/v2 selector. Only the selected version runs or exposes controls. Switching versions disables and remembers the outgoing version's enabled definitions and restores the selected version's saved set. Both engines now receive events exclusively through the common durable observation pipeline.
+
+Version 2.12.1 makes workflow settings safe across devices. Established vaults no longer rewrite synced settings on startup, device-only state never touches `data.json`, every shared write merges the latest workflow records first, and workflow revisions plus deletion tombstones prevent a stale device from restoring a deleted workflow.
