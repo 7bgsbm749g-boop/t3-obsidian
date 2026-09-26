@@ -23,7 +23,10 @@ import {workflowActivity} from './workflow-activity';
 import {ObservationEngine,type ObservedNote} from './observation-engine';
 import type {ObservationPayload} from './automation-protocol';
 import {releaseHash,validateWorkflowIR,type WorkflowIR} from './automation-ir';
-import {migrateLegacyWorkflows} from './workflow-compiler';
+import {folderWorkflowIR,folderForWorkflow,runnableFolderWorkflow} from './v2-folder-workflow';
+import {DurableExecutionDriver} from './execution-driver';
+import {exactHash} from './automation-protocol';
+import type {ImmutablePlan,ExecutionEntry} from './execution-journal';
 import {CoordinatorService} from './coordinator-service';
 import {loadWorkflowVersionSettings,switchWorkflowVersion,syncActiveWorkflowFlags,type WorkflowVersion,type WorkflowVersionSettings} from './workflow-version';
 import {DeterministicWorkflowRuntime,noteSnapshot,type RuntimeRelease} from './workflow-runtime';
@@ -158,6 +161,13 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
         menu.addItem(item=>{item.setTitle('Link to T3 Code').setIcon('link');const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,file).open());return;}const selected=this.projects().filter(p=>this.selected().includes(projectKey(p)));for(const project of selected)submenu.addItem(i=>i.setTitle(`Link to ${projectLabel(project)}`).onClick(()=>void this.linkFolder(file,project,false)));submenu.addSeparator();submenu.addItem(i=>i.setTitle('Link to self (create T3 project)').setDisabled(Platform.isMobile).onClick(()=>void this.linkFolderToSelf(file)));if(!selected.length&&Platform.isMobile)submenu.addItem(i=>i.setTitle('Select a project in settings').setDisabled(true));});
+        if(this.settings.workflowVersion.active==='v2')menu.addItem(item=>{
+          item.setTitle('Setup T3 workflow').setIcon('workflow');
+          const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();
+          if(!submenu){item.onClick(()=>this.openV2WorkflowSetup(file));return;}
+          for(const workflow of this.settings.automationDrafts.filter(ir=>folderForWorkflow(ir)===file.path))submenu.addItem(i=>i.setTitle(workflow.name??workflow.workflowId).setIcon(workflow.enabled?'workflow':'pause').onClick(()=>this.openV2WorkflowSetup(file,workflow)));
+          submenu.addItem(i=>i.setTitle('Setup new workflow…').setIcon('plus').onClick(()=>this.openV2WorkflowSetup(file)));
+        });
         if(this.settings.workflowVersion.active==='v1')menu.addItem(item=>{
           item.setTitle('Setup T3 workflow').setIcon('workflow');
           const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>this.openWorkflowSetup(file));return;}
@@ -253,12 +263,12 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.vault.on('modify',file=>{if(file instanceof TFile){this.metadataPending.add(file);void read(file).then(note=>engine.observe('vault.modify',note)).catch(error=>new Notice(message(error)));}}));
     this.registerEvent(this.app.metadataCache.on('changed',file=>{if(file instanceof TFile&&this.metadataPending.has(file)){this.metadataPending.delete(file);void read(file).then(note=>engine.observe('metadata.changed',note)).catch(error=>new Notice(message(error)));}}));
     this.registerEvent(this.app.workspace.on('editor-change',(editor,view)=>{if(!this.settings.automation.captureUnsaved)return;const file=(view as MarkdownView).file;if(file instanceof TFile)void engine.observeEditor({path:file.path,content:editor.getValue(),facts:facts(file)}).catch(error=>new Notice(message(error)));}));
-    this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void (async()=>{if(file instanceof TFolder){let updated=false,selfMoved=false;for(const link of this.settings.folderLinks)if(link.folderPath===oldPath||link.folderPath.startsWith(oldPath+'/')){link.folderPath=file.path+link.folderPath.slice(oldPath.length);updated=true;if(link.self){selfMoved=true;if(link.tagTrigger)link.tagTrigger.enabled=false;}}for(const workflow of this.settings.folderWorkflows)if(workflow.folderPath===oldPath||workflow.folderPath.startsWith(oldPath+'/')){workflow.folderPath=file.path+workflow.folderPath.slice(oldPath.length);updated=true;}if(updated)await this.save();if(selfMoved)new Notice('A self-linked folder moved. Its tag trigger is off. Relink it to self to update the T3 project path.',10000);for(const note of this.app.vault.getMarkdownFiles())if(note.path.startsWith(file.path+'/'))await engine.rename(oldPath+note.path.slice(file.path.length),await read(note));}else if(file instanceof TFile)await engine.rename(oldPath,await read(file));})().catch(error=>new Notice(message(error)));}));
+    this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void (async()=>{if(file instanceof TFolder){let updated=false,selfMoved=false;for(const link of this.settings.folderLinks)if(link.folderPath===oldPath||link.folderPath.startsWith(oldPath+'/')){link.folderPath=file.path+link.folderPath.slice(oldPath.length);updated=true;if(link.self){selfMoved=true;if(link.tagTrigger)link.tagTrigger.enabled=false;}}for(const workflow of this.settings.folderWorkflows)if(workflow.folderPath===oldPath||workflow.folderPath.startsWith(oldPath+'/')){workflow.folderPath=file.path+workflow.folderPath.slice(oldPath.length);updated=true;}for(const ir of this.settings.automationDrafts)if(ir.folderPath&&(ir.folderPath===oldPath||ir.folderPath.startsWith(oldPath+'/'))){const previous=ir.folderPath,next=file.path+previous.slice(oldPath.length),oldRoot=previous==='/'?'':`${previous}/`,newRoot=next==='/'?'':`${next}/`;ir.folderPath=next;ir.scope.path.glob=newRoot+ir.scope.path.glob.slice(oldRoot.length);ir.revision++;updated=true;}if(updated)await this.save();if(selfMoved)new Notice('A self-linked folder moved. Its tag trigger is off. Relink it to self to update the T3 project path.',10000);for(const note of this.app.vault.getMarkdownFiles())if(note.path.startsWith(file.path+'/'))await engine.rename(oldPath+note.path.slice(file.path.length),await read(note));}else if(file instanceof TFile)await engine.rename(oldPath,await read(file));})().catch(error=>new Notice(message(error)));}));
     this.registerEvent(this.app.vault.on('delete',file=>{void (file instanceof TFile?engine.delete(file.path):engine.deletePrefix(file.path)).catch(error=>new Notice(message(error)));}));
     this.registerInterval(window.setInterval(()=>void engine.flush(),30_000));
     await this.restartCoordinator();
   }
-  private async restartCoordinator(){this.coordinatorService?.stop();this.coordinatorService=undefined;if(this.coordinatorTimer!==undefined){window.clearInterval(this.coordinatorTimer);this.coordinatorTimer=undefined;}const engine=this.observationEngine,files=this.journalFiles;if(!engine||!files||this.settings.automation.mode!=='coordinator'||this.settings.automation.coordinatorDeviceId!==this.deviceId)return;const runtime=new DeterministicWorkflowRuntime(engine.store,{currentNote:async(noteId,path)=>{let baseline=await engine.store.getBaseline(noteId);if((!baseline||baseline.tombstone)&&path)baseline=(await engine.store.baselines()).find(item=>item.path===path&&!item.tombstone);if(!baseline||baseline.tombstone)return;const file=this.app.vault.getAbstractFileByPath(baseline.path);if(!(file instanceof TFile))return;return noteSnapshot(noteId,baseline.incarnationId,baseline.path,await this.app.vault.read(file));},environmentId:destinationId=>destinationId,now:()=>new Date(),id:()=>randomId()},this.settings.vaultId),releases=():RuntimeRelease[]=>this.settings.workflowVersion.active==='v2'?this.settings.automationDrafts.map((ir,index)=>({ir,hash:releaseHash(ir),activatedAt:new Date(0).toISOString(),activationSequence:index+1})):[];const service=this.coordinatorService=new CoordinatorService({vaultId:this.settings.vaultId,assignment:{destinationId:this.settings.automation.destinationId,assignmentId:this.coordinatorAssignmentId,installationId:this.deviceId,epoch:1,active:true},store:engine.store,files,runtime,releases,report:error=>new Notice(`T3 automation coordinator: ${error}`,12000)});await service.initialize();await service.scan();this.coordinatorTimer=window.setInterval(()=>void service.scan(),30_000);}
+  private async restartCoordinator(){this.coordinatorService?.stop();this.coordinatorService=undefined;if(this.coordinatorTimer!==undefined){window.clearInterval(this.coordinatorTimer);this.coordinatorTimer=undefined;}const engine=this.observationEngine,files=this.journalFiles;if(!engine||!files||this.settings.automation.mode!=='coordinator'||this.settings.automation.coordinatorDeviceId!==this.deviceId)return;const runtime=new DeterministicWorkflowRuntime(engine.store,{currentNote:async(noteId,path)=>{let baseline=await engine.store.getBaseline(noteId);if((!baseline||baseline.tombstone)&&path)baseline=(await engine.store.baselines()).find(item=>item.path===path&&!item.tombstone);if(!baseline||baseline.tombstone)return;const file=this.app.vault.getAbstractFileByPath(baseline.path);if(!(file instanceof TFile))return;return noteSnapshot(noteId,baseline.incarnationId,baseline.path,await this.app.vault.read(file));},environmentId:destinationId=>destinationId,now:()=>new Date(),id:()=>randomId()},this.settings.vaultId),releases=():RuntimeRelease[]=>this.settings.workflowVersion.active==='v2'?this.settings.automationDrafts.filter(runnableFolderWorkflow).map((ir,index)=>({ir,hash:releaseHash(ir),activatedAt:ir.activatedAt??new Date(0).toISOString(),activationSequence:index+1})):[];const driver=new DurableExecutionDriver(engine.store,{createThread:plan=>this.sendV2Plan(plan),startTurn:async()=>{},poll:(plan,threadId)=>this.pollV2Plan(plan,threadId),apply:async()=>{throw Error('Validated note application is not available in the folder workflow editor.');},emit:async()=>{throw Error('Event emission is not available in the folder workflow editor.');},now:()=>new Date().toISOString()}),service=this.coordinatorService=new CoordinatorService({driver,canExecute:()=>this.settings.workflowVersion.active==='v2'&&!this.stopped,vaultId:this.settings.vaultId,assignment:{destinationId:this.settings.automation.destinationId,assignmentId:this.coordinatorAssignmentId,installationId:this.deviceId,epoch:1,active:true},store:engine.store,files,runtime,releases,report:error=>new Notice(`T3 automation coordinator: ${error}`,12000)});await service.initialize();await service.scan();this.coordinatorTimer=window.setInterval(()=>void service.scan().catch(error=>new Notice(`T3 automation coordinator: ${message(error)}`,12000)),30_000);}
   openWorkflowSetup(folder:TFolder,workflow?:FolderWorkflow){
     if(this.settings.workflowVersion.active!=='v1'){new Notice('Switch to Workflows v1 to edit a v1 folder workflow.');return;}
     const link=folderLinkForPath(this.settings.folderLinks,`${folder.path}/placeholder.md`);
@@ -283,11 +293,35 @@ export default class SendToT3 extends Plugin {
   async dismissWorkflowRun(run:WorkflowRun){if(this.settings.pending.some(request=>request.id===run.requestId))throw Error('Resolve the unconfirmed request first.');this.workflowRuns=this.workflowRuns.filter(item=>item!==run);await this.save();}
   runWorkflowNow(workflow:FolderWorkflow,path:string){return this.settings.workflowVersion.active==='v1'&&this.folderWorkflowService?.runNow(path,workflow.id)===true;}
   retryWorkflowRun(run:WorkflowRun){if(this.settings.pending.some(request=>request.id===run.requestId))throw Error('Use the unconfirmed request Retry action so the original request ID is preserved.');return this.folderWorkflowService?.retry(run);}
-  async setWorkflowVersion(version:WorkflowVersion){if(version===this.settings.workflowVersion.active)return;const previous=this.settings.workflowVersion.active;this.settings.workflowVersion=switchWorkflowVersion(this.settings.workflowVersion,version,this.settings.folderWorkflows,this.settings.automationDrafts);try{await this.save();}catch(error){this.settings.workflowVersion=switchWorkflowVersion(this.settings.workflowVersion,previous,this.settings.folderWorkflows,this.settings.automationDrafts);throw error;}for(const menu of this.workflowMenus)menu.dispose();this.workflowMenus.clear();this.tagTriggers?.stop();this.tagTriggers=undefined;this.folderWorkflowService?.stop();this.folderWorkflowService=undefined;if(version==='v1'){this.startTagTriggers();this.startFolderWorkflows();}await this.coordinatorService?.scan();this.refreshFolderIndicators();}
+  async setWorkflowVersion(version:WorkflowVersion){if(version===this.settings.workflowVersion.active)return;const previous=this.settings.workflowVersion.active,v2Before=this.settings.automationDrafts.map(ir=>({...ir}));this.settings.workflowVersion=switchWorkflowVersion(this.settings.workflowVersion,version,this.settings.folderWorkflows,this.settings.automationDrafts);if(version==='v2')for(const ir of this.settings.automationDrafts)if(ir.enabled){ir.activatedAt=new Date().toISOString();ir.revision++;}try{await this.save();}catch(error){this.settings.workflowVersion=switchWorkflowVersion(this.settings.workflowVersion,previous,this.settings.folderWorkflows,this.settings.automationDrafts);this.settings.automationDrafts=v2Before;throw error;}for(const menu of this.workflowMenus)menu.dispose();this.workflowMenus.clear();this.tagTriggers?.stop();this.tagTriggers=undefined;this.folderWorkflowService?.stop();this.folderWorkflowService=undefined;if(version==='v1'){this.startTagTriggers();this.startFolderWorkflows();}await this.coordinatorService?.scan();this.refreshFolderIndicators();}
   async configureAutomation(mode:AutomationSettings['mode'],destinationId:string,captureUnsaved=this.settings.automation.captureUnsaved){
-    if(!['off','shadow','journal','coordinator'].includes(mode))throw Error('Invalid automation journal mode.');const clean=destinationId.trim();if(mode!=='off'&&!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(clean))throw Error('Destination IDs may contain letters, numbers, dots, dashes, and underscores.');this.settings.automation={...this.settings.automation,mode,destinationId:clean||'qlo2-vps',captureUnsaved,...(mode==='coordinator'?{coordinatorDeviceId:this.deviceId}:{})};await this.save();await this.observationEngine?.setPublishing(mode==='journal'||mode==='coordinator');await this.restartCoordinator();
+    if(!['off','shadow','journal','coordinator'].includes(mode))throw Error('Invalid automation journal mode.');const clean=destinationId.trim();if(mode!=='off'&&!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(clean))throw Error('Destination IDs may contain letters, numbers, dots, dashes, and underscores.');
+    const priorAutomation=this.settings.automation,priorMode=priorAutomation.mode,priorWorkflows=this.settings.automationDrafts.map(ir=>({...ir}));
+    this.settings.automation={...this.settings.automation,mode,destinationId:clean||'qlo2-vps',captureUnsaved,...(mode==='coordinator'?{coordinatorDeviceId:this.deviceId}:{})};
+    if(mode==='coordinator'&&priorMode!=='coordinator')for(const ir of this.settings.automationDrafts)if(ir.enabled){ir.activatedAt=new Date().toISOString();ir.revision++;}
+    try{await this.save();await this.observationEngine?.setPublishing(mode==='journal'||mode==='coordinator');await this.restartCoordinator();}
+    catch(error){this.settings.automation=priorAutomation;this.settings.automationDrafts=priorWorkflows;throw error;}
   }
-  async createMigrationDrafts(){const existing=new Set(this.settings.automationDrafts.map(draft=>draft.workflowId));const converted=migrateLegacyWorkflows(this.settings.folderWorkflows,()=>this.settings.automation.destinationId).map(item=>item.draft).filter(draft=>!existing.has(draft.workflowId));this.settings.automationDrafts.push(...converted);await this.save();return converted.length;}
+  openV2WorkflowSetup(folder:TFolder,workflow?:WorkflowIR){
+    const link=folderLinkForPath(this.settings.folderLinks,`${folder.path}/placeholder.md`);
+    if(!link){new Notice('Link this folder (or a parent folder) to T3 Code before creating a workflow.',10000);return;}
+    new V2FolderWorkflowModal(this.app,this,folder,link,workflow).open();
+  }
+  async saveV2Workflow(ir:WorkflowIR){
+    if(ir.enabled&&(this.settings.automation.mode!=='coordinator'||this.settings.automation.coordinatorDeviceId!==this.deviceId))throw Error('Select “Coordinator on this device” in Durable automation journal before enabling a v2 workflow.');
+    validateWorkflowIR(ir);
+    if(ir.enabled&&!runnableFolderWorkflow(ir))throw Error('Only a linked-folder T3 editing workflow can be enabled from this editor. Recreate older experimental definitions from the folder menu.');
+    const before=this.settings.automationDrafts,index=before.findIndex(item=>item.workflowId===ir.workflowId),next=[...before];
+    if(ir.enabled&&(!before[index]?.enabled||releaseHash(before[index])!==releaseHash(ir)))ir.activatedAt=new Date().toISOString();
+    if(index<0)next.push(ir);else next[index]=ir;
+    this.settings.automationDrafts=next;
+    try{await this.save();await this.coordinatorService?.scan();this.refreshFolderIndicators();}catch(error){this.settings.automationDrafts=before;throw error;}
+  }
+  async removeV2Workflow(ir:WorkflowIR){
+    const before=this.settings.automationDrafts;
+    this.settings.automationDrafts=before.filter(item=>item.workflowId!==ir.workflowId);
+    try{await this.save();this.refreshFolderIndicators();}catch(error){this.settings.automationDrafts=before;throw error;}
+  }
   tagTriggerOnThisDevice(link:FolderLink){return link.tagTrigger?.enabled===true&&link.tagTrigger.deviceId===this.deviceId;}
   async configureTagTrigger(link:FolderLink,enabled:boolean,tag:string){
     const normalized=normalizeTriggerTag(enabled?tag:(link.tagTrigger?.tag??'#ready'));
@@ -301,7 +335,7 @@ export default class SendToT3 extends Plugin {
     this.tagReceipts=this.tagReceipts.filter(r=>r!==receipt);await this.save();
   }
   paletteChatStatus(){return this.paletteChat?.status??'unavailable';}
-  workflowFolders(){if(this.settings.workflowVersion.active==='v1')return this.settings.folderWorkflows.map(workflow=>workflow.folderPath);return this.settings.automationDrafts.map(draft=>draft.scope.path.glob.split(/[*?]/,1)[0].replace(/\/$/,'')||'/');}
+  workflowFolders(){if(this.settings.workflowVersion.active==='v1')return this.settings.folderWorkflows.map(workflow=>workflow.folderPath);return this.settings.automationDrafts.map(ir=>folderForWorkflow(ir)??(ir.scope.path.glob.split(/[*?]/,1)[0].replace(/\/$/,'')||'/'));}
   refreshFolderIndicators(){this.folderIndicators?.refresh();}
   async onExternalSettingsChange(){
     await this.saving;
@@ -833,6 +867,57 @@ export default class SendToT3 extends Plugin {
     }catch(error){throw new RequestDeliveryError(`${message(error)} ${saved?'Check Unconfirmed requests in settings before trying again.':'No thread was created.'}`,saved);}
     finally{this.busy=false;}
   }
+  private async sendV2Plan(plan:ImmutablePlan):Promise<string>{
+    if(this.stopped||this.settings.workflowVersion.active!=='v2'||this.settings.automation.mode!=='coordinator')throw Error('Workflows v2 is not active on this coordinator.');
+    if(plan.actionType!=='t3.startThread'||!plan.notePath||!plan.projectId)throw Error('This v2 action has no supported T3 destination.');
+    const file=this.app.vault.getAbstractFileByPath(plan.notePath);
+    if(!(file instanceof TFile)||exactHash(await this.app.vault.read(file))!==plan.inputHash)throw Error('The workflow note changed before dispatch. Review this run before retrying.');
+    const link=folderLinkForPath(this.settings.folderLinks,file.path);
+    if(!link||link.projectId!==plan.projectId||(plan.connectionId&&link.connectionId!==plan.connectionId))throw Error('The folder destination changed. Review this workflow before sending.');
+    const project=this.projectForLink(link),readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
+    const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
+    const destination=this.destinationNotePath({path:file.path,...(typeof adapter.getFullPath==='function'?{absolutePath:adapter.getFullPath(file.path)}:{})},project,link);
+    if(!destination)throw Error('The destination machine has no safe filesystem mapping for this vault. Connect the vault to that machine first.');
+    const connection=this.connection(project);
+    if(connection.transport==='direct'){
+      const session=await this.sessionFor(connection.connectionId??'');if(!session||session.expiresAt<=Date.now())throw Error('Sign in or pair this connection on this device before sending.');
+      const vaultLink=this.settings.folderLinks.find(item=>item.folderPath==='/'&&item.vaultId===this.settings.vaultId&&(item.connectionId===project.connectionId||item.environmentId===connection.environmentId));
+      const vaultRoot=vaultLink?.workspaceRoot??this.settings.vaultLocations.find(location=>location.environmentId===connection.environmentId)?.workspaceRoot;
+      if(vaultRoot){const remote=await connectVaultRemote(connection,session);try{if(!await remote.matches(vaultRoot,`${this.app.vault.configDir||'.obsidian'}/plugins/${this.manifest?.id||'send-to-t3-code'}/data.json`,this.settings.vaultId))throw Error('The destination vault mapping no longer matches this vault. Reconnect it in settings.');await waitForVaultNote(remote,vaultRoot,file.path,()=>!this.stopped,()=>new Notice('Waiting for this workflow note to reach the selected machine through Obsidian Sync…',10000));}finally{remote.close();}}
+    }
+    if(exactHash(await this.app.vault.read(file))!==plan.inputHash)throw Error('The note changed while preparing the destination; no thread was started.');
+    const prompt=applyOrchestration(`${plan.prompt}\n\nObsidian vault: ${JSON.stringify(this.app.vault.getName())}\nDestination note path: ${JSON.stringify(destination)}`,this.settings.orchestration);
+    if(prompt.length>120_000)throw Error('The workflow task and note exceed T3’s 120,000-character limit.');
+    let request=this.settings.pending.find(item=>item.id===plan.requestId);
+    if(request&&request.prompt!==prompt)throw Error('The saved v2 request does not match its immutable execution plan.');
+    if(!request){request={id:plan.requestId,project:{...project},title:plan.title,prompt,connection};this.settings.pending.push(request);await this.save();}
+    const result=await sendRequest(request);
+    this.settings.pending=this.settings.pending.filter(item=>item.id!==request!.id);await this.save();
+    return result.threadId;
+  }
+  private async pollV2Plan(plan:ImmutablePlan,threadId:string):Promise<{state:'wait'|'complete'|'failed';result?:unknown;detail?:string}>{
+    if(!plan.notePath||!plan.projectId)return {state:'failed',detail:'The v2 plan has no linked project.'};
+    const link=folderLinkForPath(this.settings.folderLinks,plan.notePath);
+    if(!link||link.projectId!==plan.projectId)return {state:'failed',detail:'The linked project changed while this workflow was running.'};
+    const project=this.projectForLink(link),connection=this.connection(project),result=await runBridge(connection,['threads','--project',project.id]);
+    const thread=Array.isArray(result?.threads)?result.threads.find((item:any)=>item.id===threadId):undefined;
+    if(!thread)return {state:'wait'};
+    const job:any={threadId,projectId:project.id,requestId:plan.requestId},state=completionState(thread,job);
+    if(state==='wait')return {state:'wait'};
+    if(state==='keep')return {state:'failed',detail:'The T3 turn failed or was interrupted.'};
+    const full=await runBridge(connection,['read',threadId]);
+    if(!isOriginalCompletedTurn(full,job))return {state:'failed',detail:'The original T3 turn could not be verified.'};
+    const file=this.app.vault.getAbstractFileByPath(plan.notePath);
+    return {state:'complete',result:{threadId,outputHash:file instanceof TFile?exactHash(await this.app.vault.read(file)):null}};
+  }
+  async v2Executions():Promise<ExecutionEntry[]>{return (await this.observationEngine?.store.executions()??[]).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));}
+  async retryV2Execution(runId:string){
+    const store=this.observationEngine?.store;if(!store)throw Error('The v2 journal is not ready.');
+    const entry=(await store.executions()).find(item=>item.runId===runId);
+    if(!entry||entry.state!=='delivery_unknown')throw Error('Only an uncertain delivery can be retried with its original request ID.');
+    await store.putExecution({...entry,state:'planned',detail:'Manually retried with the original request ID.',updatedAt:new Date().toISOString()});
+    await this.coordinatorService?.scan();
+  }
   private async workflowStatus(run:WorkflowRun):Promise<'wait'|'complete'|'failed'>{
     if(!run.threadId)return 'failed';const workflow=this.settings.folderWorkflows.find(item=>item.id===run.workflowId);if(!workflow)return 'failed';
     const link=this.settings.folderLinks.find(item=>item.projectId===workflow.projectId&&item.connectionId===workflow.connectionId);if(!link)throw Error('The workflow destination is no longer linked.');
@@ -976,6 +1061,30 @@ class FolderLinkModal extends Modal{
     }));
   }
 }
+class V2FolderWorkflowModal extends Modal{
+  constructor(app:App,private plugin:SendToT3,private folder:TFolder,private link:FolderLink,private existing?:WorkflowIR){super(app);}
+  onOpen(){
+    const el=this.contentEl;el.empty();this.titleEl.setText(`T3 workflow v2 for ${this.folder.name}`);
+    const current=this.existing;
+    let name=current?.name??`${this.folder.name} workflow`,task=current?.actions.find(action=>action.type==='t3.startThread')?.promptTemplate??'',trigger=current?.trigger.eventTypes?.includes('note.changed')?(current.trigger.eventTypes.includes('note.created')?'both':'modify'):'create';
+    if(current&&task.startsWith('Execute this Obsidian folder workflow:\n\n'))task=task.split('\n\nEdit only the named note.')[0].replace('Execute this Obsidian folder workflow:\n\n','');
+    let includeSubfolders=current?.scope.path.glob.includes('**/')??true,enabled=current?.enabled??false,saving=false;
+    el.createEl('p',{text:`Destination: ${this.link.projectTitle} · ${this.link.workspaceRoot}`});
+    if(this.plugin.settings.automation.mode!=='coordinator')el.createEl('p',{text:'To enable this workflow, choose “Coordinator on this device” under Durable automation journal in settings. Saving it paused is available now.'});
+    new Setting(el).setName('Workflow name').addText(text=>text.setValue(name).setPlaceholder('Gym note formatter').onChange(value=>name=value));
+    new Setting(el).setName('Trigger').addDropdown(dropdown=>dropdown.addOptions({create:'Note created (recommended)',both:'Note created or updated',modify:'Note updated'}).setValue(trigger).onChange(value=>trigger=value));
+    new Setting(el).setName('Include subfolders').addToggle(toggle=>toggle.setValue(includeSubfolders).onChange(value=>includeSubfolders=value));
+    new Setting(el).setName('Task').setDesc('Tell T3 how to edit the note in place.').addTextArea(text=>{text.inputEl.rows=7;text.setValue(task).setPlaceholder('Rewrite this note using my template. Preserve all facts.').onChange(value=>task=value);});
+    new Setting(el).setName('Enabled').addToggle(toggle=>toggle.setValue(enabled).onChange(value=>enabled=value));
+    const actions=new Setting(el);
+    if(current)actions.addButton(button=>button.setButtonText('Delete workflow').onClick(async()=>{if(saving)return;saving=true;actions.setDisabled(true);try{await this.plugin.removeV2Workflow(current);this.close();new Notice(`Workflow “${current.name??current.workflowId}” deleted.`);}catch(error){new Notice(message(error),10000);actions.setDisabled(false);saving=false;}}));
+    actions.addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>button.setButtonText(current?'Save workflow':'Create workflow').setCta().onClick(async()=>{
+      if(saving)return;saving=true;actions.setDisabled(true);
+      try{const events:Array<'create'|'modify'>=trigger==='both'?['create','modify']:[trigger as 'create'|'modify'];const ir=folderWorkflowIR({id:current?.workflowId??randomId(),name,folderPath:this.folder.path,includeSubfolders,events,task,destinationId:this.plugin.settings.automation.destinationId,projectId:this.link.projectId,connectionId:this.link.connectionId,enabled,order:current?.execution.batchOrder??this.plugin.settings.automationDrafts.length,existing:current});await this.plugin.saveV2Workflow(ir);this.close();new Notice(`Workflow “${name.trim()}” saved.`);}
+      catch(error){new Notice(message(error),10000);actions.setDisabled(false);saving=false;}
+    }));
+  }
+}
 class FolderWorkflowModal extends Modal{
   constructor(app:App,private plugin:SendToT3,private folder:TFolder,private link:FolderLink,private existing?:FolderWorkflow){super(app);}
   onOpen(){
@@ -1065,14 +1174,29 @@ class T3Settings extends PluginSettingTab {
     new Setting(el).setName('Workflow version').setDesc('Only the selected engine runs and only its settings are shown. Switching saves and disables this version’s active workflows; switching back restores them.').addDropdown(d=>d.addOptions({v1:'Workflows v1',v2:'Workflows v2'}).setValue(this.plugin.settings.workflowVersion.active).onChange(async value=>{try{await this.plugin.setWorkflowVersion(value as WorkflowVersion);this.display();}catch(error){new Notice(message(error),10000);}}));
     if(this.plugin.settings.workflowVersion.active==='v2'){
     el.createEl('h3',{text:'Durable automation journal'});
-    el.createEl('p',{text:'Both workflow versions use the same durable saved-state event source. These controls configure v2 storage and coordination. Publishing writes immutable JSON records under “T3 Automation”; Obsidian Sync must include all file types. No mode automatically enables or migrates workflows.'});
+    el.createEl('p',{text:'Both workflow versions use the same durable saved-state event source. These controls configure v2 storage and coordination. Publishing writes immutable JSON records under “T3 Automation”; Obsidian Sync must include all file types. Create v2 workflows from a linked folder’s menu.'});
     let journalMode=this.plugin.settings.automation.mode,destinationId=this.plugin.settings.automation.destinationId,captureUnsaved=this.plugin.settings.automation.captureUnsaved;
     const destination=new Setting(el).setName('Execution destination ID').setDesc('A stable destination name such as qlo2-vps. Coordination still requires Obsidian to stay open on its assigned device.').addText(t=>t.setValue(destinationId).onChange(value=>destinationId=value));
     new Setting(el).setName('Unsaved editor observations').setDesc('Off by default. When enabled, buffer changes are evidence only; saved-state observations remain the automation input.').addToggle(t=>t.setValue(captureUnsaved).onChange(value=>captureUnsaved=value));
-    new Setting(el).setName('Event storage and coordination').setDesc('Local durable events always feed the selected workflow version. Journal publication creates normal, non-hidden vault files. Coordinator mode assigns this installation and accepts normalized events, but disabled drafts still cannot execute.').addDropdown(d=>d.addOptions({off:'Local events only',shadow:'Shadow (local inspection)',journal:'Publish synced journal',coordinator:'Coordinator on this device'}).setValue(journalMode).onChange(value=>{journalMode=value as AutomationSettings['mode'];destination.setDisabled(journalMode==='off');})).addButton(b=>b.setButtonText('Apply').onClick(async()=>{b.setDisabled(true);try{await this.plugin.configureAutomation(journalMode,destinationId,captureUnsaved);new Notice(journalMode==='off'?'Local durable events feed the active workflow version; journal publication is off.':journalMode==='shadow'?'Local shadow event inspection is active.':journalMode==='coordinator'?'This open Obsidian installation is the fixed event coordinator; no drafts were enabled.':'Synced journal publication is active; no workflows were enabled.');this.display();}catch(error){new Notice(message(error),10000);b.setDisabled(false);}}));
+    new Setting(el).setName('Event storage and coordination').setDesc('Local durable events always feed the selected workflow version. Journal publication creates normal, non-hidden vault files. Coordinator mode assigns this installation and runs enabled v2 workflows.').addDropdown(d=>d.addOptions({off:'Local events only',shadow:'Shadow (local inspection)',journal:'Publish synced journal',coordinator:'Coordinator on this device'}).setValue(journalMode).onChange(value=>{journalMode=value as AutomationSettings['mode'];destination.setDisabled(journalMode==='off');})).addButton(b=>b.setButtonText('Apply').onClick(async()=>{b.setDisabled(true);try{await this.plugin.configureAutomation(journalMode,destinationId,captureUnsaved);new Notice(journalMode==='off'?'Local durable events feed the active workflow version; journal publication is off.':journalMode==='shadow'?'Local shadow event inspection is active.':journalMode==='coordinator'?'This open Obsidian installation is the fixed event coordinator.':'Synced journal publication is active; workflows require a coordinator to run.');this.display();}catch(error){new Notice(message(error),10000);b.setDisabled(false);}}));
     destination.setDisabled(journalMode==='off');
-    new Setting(el).setName('Prepare migration drafts').setDesc('Converts legacy definitions without enabling them, preserves nearest-folder shielding and saved order, and never scans notes or sends requests.').addButton(b=>b.setButtonText('Create disabled drafts').setDisabled(!this.plugin.settings.folderWorkflows.length).onClick(async()=>{b.setDisabled(true);try{const count=await this.plugin.createMigrationDrafts();new Notice(count?`Created ${count} disabled workflow draft${count===1?'':'s'}.`:'All legacy workflows already have drafts.');this.display();}catch(error){new Notice(message(error),10000);b.setDisabled(false);}}));
-    if(this.plugin.settings.automationDrafts.length){el.createEl('h4',{text:'Workflows v2'});for(const draft of this.plugin.settings.automationDrafts)new Setting(el).setName(draft.workflowId).setDesc(`${draft.scope.path.glob} → ${draft.destinationId} · release ${releaseHash(draft).slice(0,19)}… · ${draft.enabled?'enabled':'paused'}`).addButton(b=>b.setButtonText(draft.enabled?'Pause':'Enable').onClick(async()=>{draft.enabled=!draft.enabled;await this.plugin.save();this.display();})).addButton(b=>b.setButtonText('Remove').onClick(async()=>{this.plugin.settings.automationDrafts=this.plugin.settings.automationDrafts.filter(item=>item!==draft);await this.plugin.save();this.display();}));}
+    el.createEl('h4',{text:'Workflows v2'});
+    if(!this.plugin.settings.automationDrafts.length)el.createEl('p',{text:'No v2 workflows. Long press or right-click a linked folder and choose Setup T3 workflow.'});
+    for(const ir of this.plugin.settings.automationDrafts){
+      const row=new Setting(el).setName(ir.name??ir.workflowId).setDesc(`${ir.scope.path.glob} → ${ir.destinationId} · ${ir.enabled?'enabled':'paused'}`);
+      if(ir.folderPath)row.addButton(b=>b.setButtonText('Edit').onClick(()=>{const folder=this.plugin.app.vault.getAbstractFileByPath(ir.folderPath!);if(folder instanceof TFolder)this.plugin.openV2WorkflowSetup(folder,ir);else new Notice('The workflow folder is unavailable.');}));
+      row.addButton(b=>b.setButtonText(ir.enabled?'Pause':'Enable').onClick(async()=>{try{await this.plugin.saveV2Workflow({...ir,revision:ir.revision+1,enabled:!ir.enabled});this.display();}catch(error){new Notice(message(error),10000);}}));
+      row.addButton(b=>b.setButtonText('Remove').onClick(async()=>{try{await this.plugin.removeV2Workflow(ir);this.display();}catch(error){new Notice(message(error),10000);}}));
+    }
+    const runs=el.createDiv();runs.createEl('h4',{text:'Recent v2 runs'});
+    void this.plugin.v2Executions().then(entries=>{
+      if(!runs.isConnected)return;
+      if(!entries.length){runs.createEl('p',{text:'No v2 runs yet.'});return;}
+      for(const entry of entries.slice(0,20)){
+        const row=new Setting(runs).setName(`${entry.plan.workflowId} · ${entry.state}`).setDesc(`${entry.plan.notePath??entry.plan.title}${entry.detail?` · ${entry.detail}`:''}`);
+        if(entry.state==='delivery_unknown')row.addButton(b=>b.setButtonText('Retry same request').onClick(async()=>{try{await this.plugin.retryV2Execution(entry.runId);this.display();}catch(error){new Notice(message(error),10000);}}));
+      }
+    }).catch(error=>{if(runs.isConnected)runs.createEl('p',{text:`Run history unavailable: ${message(error)}`});});
     }
     if(this.plugin.settings.workflowVersion.active==='v1'){
     el.createEl('h3',{text:'Folder workflows'});

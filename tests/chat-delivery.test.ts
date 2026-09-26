@@ -558,6 +558,8 @@ test('manual Send to T3 streams into the source editor but disabled and automati
     const continued=await h.plugin.send(file,project,{threadId:'existing',throwOnError:true});
     assert.equal(continued.threadId,'existing');
     assert.equal((editor.value.match(/t3-inline:start/g)??[]).length,2,'An existing-thread send receives its own guarded response');
+    for(let attempt=0;attempt<40&&!editor.value.includes('**T3 answer** · `existing`');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.match(editor.value,/\*\*T3 answer\*\* · `existing`/);
     h.plugin.settings.inlineStreaming.sendToT3=false;
     const before=editor.value;
     h.plugin.app.vault.read=async()=> '# Manual\nPlease explain this.';

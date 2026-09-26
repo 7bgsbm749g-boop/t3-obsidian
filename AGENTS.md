@@ -16,12 +16,13 @@ If the current working directory is an installed-plugin directory rather than th
 - For an ordinary user-requested product change, “implement”, “fix”, “add”, or “build” means the full QLO2 delivery path unless the user explicitly narrows the scope:
   1. implement in the canonical checkout;
   2. run the build and complete test suite;
-  3. create a strictly newer immutable release;
-  4. install runtime artifacts into the development vault;
-  5. back up and install QLO2 while preserving `data.json`;
-  6. force and verify a fresh Obsidian Sync scan;
-  7. reload a real QLO2 Obsidian client and smoke-test the changed behavior;
-  8. record immutable smoke evidence.
+  3. commit the reviewed source, documentation, and test changes in the canonical checkout;
+  4. create a strictly newer immutable release from that clean worktree;
+  5. install runtime artifacts into the development vault;
+  6. back up and install QLO2 while preserving `data.json`;
+  7. force and verify a fresh Obsidian Sync scan;
+  8. reload a real QLO2 Obsidian client and smoke-test the changed behavior;
+  9. record immutable smoke evidence.
 - Do not say a product change is deployed, live, complete, or ready merely because `npm run build` passed. A release receipt with status `awaiting-live-smoke` is intentionally incomplete.
 
 ## Required commands
@@ -30,7 +31,7 @@ If the current working directory is an installed-plugin directory rather than th
 - Test: `npm test`.
 - Release: `npm run release:qlo2 -- --bump patch` (or `minor`/`major`). This is the only supported packaging/deployment entry point.
 - If packaging succeeded but installation or Sync failed, retry the exact immutable bytes with `npm run release:qlo2 -- --resume VERSION`; never delete/rebuild that version with different bytes.
-- If the worktree is dirty, the release command refuses by default. `--allow-dirty` is permitted only when the user explicitly authorized deployment of the reviewed dirty worktree; report that fact in the handoff.
+- Commit the reviewed release changes before running the release command. Do not include unrelated user edits in that commit. The release command refuses a dirty worktree by default; `--allow-dirty` remains an exceptional path only when the user explicitly requests deployment of reviewed dirty bytes.
 - After a real client reload and smoke test, record evidence with:
   `npm run release:qlo2 -- --complete-smoke VERSION --device DEVICE --evidence PATH --notes "WHAT WAS VERIFIED"`.
 
@@ -56,5 +57,5 @@ The retired `scripts/deploy-qlo2.py` must continue to refuse direct use. Never h
 ## Worktree and safety
 
 - This repository may contain user changes. Preserve unrelated edits and inspect overlap before patching.
-- Do not commit, push, reset, or discard changes unless the user explicitly requests it.
+- A user request for the full QLO2 product-change delivery path authorizes the pre-release commit of reviewed changes for that request. Do not commit unrelated user edits. Do not push, reset, or discard changes unless the user explicitly requests it.
 - Backups live outside synced vaults under `/home/ubuntu/backups/send-to-t3-code`.

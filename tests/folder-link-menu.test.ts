@@ -184,6 +184,31 @@ test('folder workflow submenu creates multiple workflows and existing workflow d
   }finally{h.plugin.onunload();}
 });
 
+test('v2 folder menu creates and edits a typed workflow without migration or dispatch',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const link=await h.open();await h.button(link,'Link').click();
+    await h.plugin.setWorkflowVersion('v2');
+    let entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');assert.ok(entry?.submenu);
+    assert.equal(entry!.submenu!.items.map((item:any)=>item.title).join(','),'Setup new workflow…');
+    await entry!.submenu!.items[0].callback();let modal=h.modals.at(-1);
+    assert.equal(h.setting(modal,'Enabled').controls[0].value,false);
+    h.setting(modal,'Workflow name').controls[0].change('V2 formatter');
+    h.setting(modal,'Task').controls[0].change('Format the note.');
+    await h.button(modal,'Create workflow').click();
+    assert.equal(modal.closed,true);assert.equal(h.plugin.settings.automationDrafts.length,1);
+    const ir=h.plugin.settings.automationDrafts[0];assert.equal(ir.projectId,h.project.id);assert.equal(ir.folderPath,'Notes');assert.equal(ir.enabled,false);
+    assert.equal(h.networkRequests(),0);
+    await h.plugin.configureAutomation('coordinator','qlo2');
+    entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');
+    assert.equal(entry!.submenu!.items[0].title,'V2 formatter');await entry!.submenu!.items[0].callback();modal=h.modals.at(-1);
+    h.setting(modal,'Enabled').controls[0].change(true);await h.button(modal,'Save workflow').click();
+    assert.equal(h.plugin.settings.automationDrafts[0].enabled,true);
+    assert.equal(h.plugin.settings.automationDrafts[0].revision,2);
+    assert.equal(h.networkRequests(),0,'setup must not send an existing note');
+  }finally{h.plugin.onunload();}
+});
+
 test('workflow order saves without sends, survives reopening, and rolls back a failed save',async()=>{
   const h=await folderMenuHarness();
   try{
