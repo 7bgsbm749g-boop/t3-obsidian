@@ -322,10 +322,11 @@ export default class SendToT3 extends Plugin {
   chatReadinessError():string|undefined {
     if(this.stopped)return 'The plugin has been disabled. Re-enable it before sending.';
     if(this.mode==='desktop')return;
+    const hasDeviceSession=this.settings.paired.some(c=>{const session=this.pairedSessions[c.id];return session?.environmentId===c.environmentId&&session.url===c.url&&session.expiresAt>Date.now()+5000;});
+    if(hasDeviceSession)return;
     if(this.connecting)return 'T3 is still connecting your computers. Wait for connection sync to finish.';
     if(this.nativeAccount&&!this.connectionSyncComplete)return 'Refresh connections in Send to T3 Code settings before sending.';
-    const hasManualSession=this.settings.paired.some(c=>!c.managed&&this.pairedSessions[c.id]?.expiresAt>Date.now());
-    if(!this.nativeAccount&&!hasManualSession)return 'Sign in to T3 on this device first. Synced project names do not sign this device in.';
+    if(!this.nativeAccount)return 'Sign in to T3 on this device first. Synced project names do not sign this device in.';
   }
   private chatNote():{path:string;absolutePath?:string}|undefined {
     const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;

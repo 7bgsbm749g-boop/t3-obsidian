@@ -148,6 +148,15 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
   } finally {h.plugin.onunload();}
 });
 
+test('a locally paired session authorizes a synced managed connection without account sign-in',async()=>{
+  const h=await chatHarness();
+  try{
+    h.plugin.settings.paired[0].managed=true;
+    await h.plugin.sendChat('Use the existing device session.');
+    assert.equal(h.commands.at(-1).type,'thread.turn.start');
+  }finally{h.plugin.onunload();}
+});
+
 test('an uncertain chat survives restart and retries the original immutable commands manually',async()=>{
   let loseResponse=true;
   const h=await chatHarness(async command=>{
