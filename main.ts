@@ -968,7 +968,7 @@ class T3Settings extends PluginSettingTab {
   cloudUI(el:HTMLElement){
     const p=this.plugin;p.cloudChanged=()=>this.display();
     el.createEl('h3',{text:p.nativeAccount?'T3 connection on this device':'Sign in on this device'});
-    el.createEl('p',{text:p.nativeAccount?'Your account is stored only on this device. Projects and saved folder links appear after T3 finishes connecting your computers.':'This device is not signed in to T3. Verify your T3 email once here before projects or saved folder links are shown.'});
+    el.createEl('p',{text:p.nativeAccount?'Your account is stored only on this device. Projects and saved folder links appear after T3 finishes connecting your computers.':'This device is not signed in to T3. Verify your T3 email here, or use advanced manual pairing below.'});
     if(p.nativeAccount){
       new Setting(el).setName(p.nativeAccount.identity).setDesc(p.connecting?'Connecting computers and discovering projects…':'Signed in. Connections renew automatically.').addButton(b=>b.setButtonText('Refresh connections').setDisabled(p.connecting).onClick(async()=>{try{await p.refreshMachines();}catch(e){p.cloudError=message(e);}this.display();})).addButton(b=>b.setButtonText('Sign out').onClick(async()=>{await p.signOutCloud();this.display();}));
       if(p.connecting)el.createEl('p',{text:'Connecting to T3 and syncing project information…'});
@@ -998,7 +998,6 @@ class T3Settings extends PluginSettingTab {
     new Setting(el).setName('Connection on this device').setDesc('T3 Connect works on desktop and mobile. This computer only is available for local desktop use.').addDropdown(d=>{d.addOptions({...(!Platform.isMobile?{desktop:'This computer only (advanced)'}:{}),direct:'T3 Connect (recommended)'});d.setValue(this.plugin.mode).onChange(async value=>{this.plugin.mode=value as 'desktop'|'direct';this.plugin.scanError='';await this.plugin.save();this.display();});});
     if(this.plugin.mode==='direct'){
       this.cloudUI(el);
-      if(!this.plugin.directAccountReady())return;
       const advanced=el.createEl('details');advanced.createEl('summary',{text:'Advanced: manual pairing'});
       advanced.createEl('p',{text:'In T3 Settings → Connections, create a fresh pairing link using an HTTPS address this device can reach. Paste it below. This connects to T3 itself, with no companion, Python, SSH, or Tailscale requirement in the plugin.'});
       let name=this.selectedMachine?.name??'',address=this.selectedMachine?.url??'',code='';
@@ -1007,7 +1006,7 @@ class T3Settings extends PluginSettingTab {
       new Setting(advanced).setName('Pairing code (if separate)').addText(t=>{t.inputEl.type='password';t.inputEl.autocomplete='off';t.onChange(v=>code=v);});
       new Setting(advanced).addButton(b=>b.setButtonText('Pair and discover projects').setCta().onClick(async()=>{b.setDisabled(true);try{await this.plugin.pairConnection(name,address,code,this.selectedMachine?.environmentId);this.selectedMachine=null;new Notice('Paired directly with T3. Select projects below.');this.display();}catch(e){new Notice(message(e),12000);b.setDisabled(false);}}));
       for(const c of this.plugin.settings.paired){
-        const status=c.managed?(this.plugin.nativeAccount?'T3 account connection · renews automatically':'Sign in on this device to connect automatically'):this.plugin.pairingStatus(c);
+        const status=c.managed&&this.plugin.nativeAccount?'T3 account connection · renews automatically':this.plugin.pairingStatus(c);
         const setting=new Setting(el).setName(c.name).setDesc(status);
         if(!c.managed)setting.addButton(b=>b.setButtonText('Forget pairing').onClick(async()=>{await this.plugin.forgetPairing(c.id);this.display();}));
         setting.addButton(b=>b.setButtonText('Remove connection').onClick(async()=>{try{await this.plugin.removeConnection(c.id);this.display();}catch(e){new Notice(message(e));}}));
