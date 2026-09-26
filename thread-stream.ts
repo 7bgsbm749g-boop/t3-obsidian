@@ -8,9 +8,9 @@ export interface ThreadStreamCallbacks {item:(item:ThreadStreamItem)=>void;recon
 /** The Effect RPC stream stays open until stopped. Every reconnect asks for a
  * fresh snapshot, so lost deltas cannot duplicate text or leave a gap. */
 export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url)) {
-  let stopped=false,socket:WebSocket|undefined,timer:ReturnType<typeof setTimeout>|undefined,rotation:ReturnType<typeof setTimeout>|undefined,attempt=0;
+  let stopped=false,socket:WebSocket|undefined,timer:ReturnType<typeof setTimeout>|undefined,rotation:ReturnType<typeof setTimeout>|undefined,pollTimer:ReturnType<typeof setTimeout>|undefined,attempt=0;
   let access:ThreadAccess|undefined;
-  const closeAccess=()=>{const old=access;access=undefined;if(old?.close)void Promise.resolve(old.close()).catch(()=>{});};
+  const closeAccess=()=>{if(pollTimer)clearTimeout(pollTimer);pollTimer=undefined;const old=access;access=undefined;if(old?.close)void Promise.resolve(old.close()).catch(()=>{});};
   const retry=(error:Error)=>{
     if(stopped)return;
     if(rotation)clearTimeout(rotation);
@@ -31,12 +31,21 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       url.searchParams.set('wsTicket',issued.ticket);url.searchParams.set('orchestrationProtocol','1');
       const ws=socket=makeSocket(url.href);let ended=false;
       const fail=(error:Error)=>{if(ended||stopped)return;ended=true;ws.close();retry(error);};
+      const poll=async()=>{
+        if(stopped||ended||access!==ready)return;
+        try{
+          const snapshot=await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?turnLimit=1`);
+          if(!stopped&&!ended&&access===ready&&snapshot?.thread)callbacks.item({kind:'snapshot',snapshot});
+        }catch{/* The socket may still be healthy; the next bounded read can recover. */}
+        if(!stopped&&!ended&&access===ready)pollTimer=setTimeout(()=>{void poll();},1200);
+      };
       const opening=setTimeout(()=>fail(Error('T3 thread stream did not connect.')),15_000);
       ws.onopen=()=>{
         clearTimeout(opening);if(stopped){ws.close();return;}
         attempt=0;
         rotation=setTimeout(()=>fail(Error('Refreshing the T3 stream session.')),4*60_000);
         ws.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId},headers:[]}));
+        pollTimer=setTimeout(()=>{void poll();},1200);
       };
       ws.onmessage=message=>{
         try{

@@ -81,6 +81,7 @@ export class InlineChatManager {
   private receive(job:InlineJob,item:ThreadStreamItem){
     if(this.stopped||!this.jobs.includes(job))return;
     const runtime=this.runtime(job);
+    if(item.kind==='snapshot'&&Number.isSafeInteger(item.snapshot?.snapshotSequence)&&item.snapshot.snapshotSequence<runtime.sequence)return;
     if(item.kind==='event'&&Number.isSafeInteger(item.event?.sequence)&&item.event.sequence<=runtime.sequence)return;
     const applied=applyThreadItem(runtime.state,item);runtime.state=applied.state;
     if(!job.turnId&&job.messageId){

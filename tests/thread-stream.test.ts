@@ -21,3 +21,22 @@ test('thread subscription authenticates, acknowledges chunks, and interrupts on 
   assert.equal(items.length,2);assert.deepEqual(sent[1],{_tag:'Ack',requestId:'1'});
   watcher.stop();assert.deepEqual(sent[2],{_tag:'Interrupt',requestId:'1'});assert.equal(closed,1);
 });
+
+test('a quiet subscription refreshes the current thread snapshot',async()=>{
+  const items:any[]=[],paths:string[]=[];
+  class QuietSocket {
+    onopen?:()=>void;onclose?:()=>void;onmessage?:(event:{data:string})=>void;onerror?:()=>void;
+    constructor(_url:string){queueMicrotask(()=>this.onopen?.());}
+    send(_raw:string){}
+    close(){this.onclose?.();}
+  }
+  const watcher=watchThread('thread-2',async()=>({origin:'https://t3.example',api:async path=>{
+    paths.push(path);
+    return path==='/api/auth/websocket-ticket'?{ticket:'ticket'}:{snapshotSequence:9,thread:{messages:[],latestTurn:{turnId:'turn',state:'completed'}}};
+  }}),{item:item=>items.push(item),reconnecting:error=>assert.fail(error.message)},url=>new QuietSocket(url) as unknown as WebSocket);
+  try{
+    await new Promise(resolve=>setTimeout(resolve,1400));
+    assert.deepEqual(paths,['/api/auth/websocket-ticket','/api/orchestration/threads/thread-2?turnLimit=1']);
+    assert.equal(items[0]?.kind,'snapshot');assert.equal(items[0]?.snapshot.snapshotSequence,9);
+  }finally{watcher.stop();}
+});
