@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applyThreadItem,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnPhase} from '../inline-thread';
+import {applyThreadItem,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
 
 test('selection anchor tolerates unrelated edits, rejects ambiguity, and inserts after fenced code',()=>{
   const source='Before\n```ts\nconst x = 1;\n```\nAfter';
@@ -38,4 +38,17 @@ test('stream deltas, final replacement, snapshots, status, and fence balancing r
   assert.doesNotMatch(renderInlineTurn(state,'turn','thread','complete'),/Action needed/);
   const snapshot={kind:'snapshot',snapshot:{snapshotSequence:20,thread:{messages:[{id:'m1',role:'assistant',text:'Canonical answer',streaming:false,turnId:'turn'}],activities:[],latestTurn:{turnId:'turn',state:'completed'},session:{status:'ready',activeTurnId:null}}}};
   const restored=applyThreadItem(state,snapshot);assert.equal(restored.sequence,20);assert.equal(restored.state.messages[0].text,'Canonical answer');
+});
+
+test('a provider-assigned turn is matched to its dispatched user message by requested time',()=>{
+  const requestedAt='2026-09-26T14:06:06.071Z';
+  const snapshot={kind:'snapshot',snapshot:{snapshotSequence:20,thread:{messages:[
+    {id:'our-message',role:'user',text:'Question',streaming:false,turnId:null,createdAt:requestedAt},
+    {id:'answer',role:'assistant',text:'Answer',streaming:false,turnId:'provider-turn'},
+  ],activities:[],latestTurn:{turnId:'provider-turn',state:'completed',requestedAt},session:{status:'ready',activeTurnId:null}}}};
+  const state=applyThreadItem({messages:[],activities:[]},snapshot).state;
+  assert.equal(turnForMessage(state,'our-message'),'provider-turn');
+  assert.equal(turnForMessage(state,'other-message'),undefined);
+  assert.equal(turnForMessage({...state,latestTurn:{turnId:'other-turn',state:'completed',requestedAt:'2026-09-26T14:06:07.000Z'}},'our-message'),undefined);
+  assert.equal(renderInlineTurn(state,'provider-turn','thread','complete'),'**T3 answer** · `thread`\n\nAnswer');
 });

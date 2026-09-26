@@ -1,9 +1,9 @@
 import {contentHash} from './completion';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
-export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean}
+export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string}
 export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null}
-export interface InlineThreadState {messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null};latestTurn?:{turnId:string;state:string}}
+export interface InlineThreadState {messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null};latestTurn?:{turnId:string;state:string;requestedAt?:string}}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {
   if(!text.trim()||document.slice(start,end)!==text)throw Error('The selected text changed. Select it again before asking T3.');
@@ -76,7 +76,7 @@ export function applyThreadItem(state:InlineThreadState,item:any):{state:InlineT
   if(!Number.isSafeInteger(event?.sequence)||event.sequence<0)return {state};
   if(event.type==='thread.message-sent'&&p&&typeof p.messageId==='string'&&typeof p.text==='string'&&typeof p.role==='string'){
     const old=state.messages.find(m=>m.id===p.messageId);
-    const message:InlineMessage={id:p.messageId,role:p.role,turnId:p.turnId??null,streaming:p.streaming===true,text:old?(p.streaming?old.text+p.text:p.text||old.text):p.text};
+    const message:InlineMessage={id:p.messageId,role:p.role,turnId:p.turnId??null,streaming:p.streaming===true,text:old?(p.streaming?old.text+p.text:p.text||old.text):p.text,createdAt:old?.createdAt??p.createdAt};
     return {state:{...state,messages:old?state.messages.map(m=>m.id===message.id?message:m):[...state.messages,message]},sequence:event.sequence};
   }
   if(event.type==='thread.activity-appended'&&validActivity(p?.activity)){
@@ -94,6 +94,14 @@ export function applyThreadItem(state:InlineThreadState,item:any):{state:InlineT
 }
 function validMessage(value:any):value is InlineMessage{return value&&typeof value.id==='string'&&typeof value.role==='string'&&typeof value.text==='string'&&typeof value.streaming==='boolean';}
 function validActivity(value:any):value is InlineActivity{return value&&typeof value.id==='string'&&typeof value.kind==='string'&&typeof value.summary==='string';}
+
+/** T3 assigns turn IDs when the provider starts; the dispatch command ID is
+ * unrelated. The pending user message and projected turn share requestedAt. */
+export function turnForMessage(state:InlineThreadState,messageId:string):string|undefined {
+  const message=state.messages.find(m=>m.id===messageId&&m.role==='user');
+  const turn=state.latestTurn;
+  return message?.createdAt&&turn?.requestedAt===message.createdAt?turn.turnId:undefined;
+}
 
 function safeStatus(value:string){return value.replace(/[\r\n\t]+/g,' ').replace(/[\\`*_{}\[\]()#+.!>|]/g,'\\$&').slice(0,180);}
 function closeOpenFence(text:string):string {
