@@ -95,7 +95,7 @@ async function folderMenuHarness(){
   };
   const setting=(modal:Modal,name:string)=>{const item=modal.contentEl.settings.find(item=>item.name===name);assert.ok(item);return item as Setting;};
   const button=(modal:Modal,text:string)=>{const item=modal.contentEl.settings.flatMap(setting=>setting.controls).find(control=>control.text===text);assert.ok(item);return item as Control;};
-  return {plugin,open,setting,button,shared,notices,deviceId,project,modals,shownMenu:()=>shownMenu,setThreads:(value:any[])=>{threadsReply=value;},folderMenu:()=>{const menu=new Menu();fileMenu(menu,folder,'file-explorer-context-menu');return menu;},fileMenu:(path:string,mobile:boolean)=>{api.Platform.isMobile=mobile;const menu=new Menu();const file=new File(path);fileMenu(menu,file,'file-explorer-context-menu');return {menu,file};},networkRequests:()=>networkRequests,setFailSave:(value:boolean)=>{failSave=value;}};
+  return {plugin,open,setting,button,shared,notices,deviceId,project,modals,shownMenu:()=>shownMenu,setThreads:(value:any[])=>{threadsReply=value;},folderMenu:(root=false)=>{const menu=new Menu();const selected=new Folder();if(root){selected.path='/';selected.name='QLO2';}fileMenu(menu,selected,'file-explorer-context-menu');return menu;},fileMenu:(path:string,mobile:boolean)=>{api.Platform.isMobile=mobile;const menu=new Menu();const file=new File(path);fileMenu(menu,file,'file-explorer-context-menu');return {menu,file};},networkRequests:()=>networkRequests,setFailSave:(value:boolean)=>{failSave=value;}};
 }
 
 test('folder menu opens an inactive link dialog; cancel is inert and Link alone persists',{timeout:5000},async()=>{
@@ -126,11 +126,24 @@ test('v2 folder menu asks for a description and starts a setup thread',async()=>
     assert.equal(entry!.submenu!.items.map((item:any)=>item.title).join(','),'Setup new workflow…');
     await entry!.submenu!.items[0].callback();let modal=h.modals.at(-1);
     assert.equal(modal.contentEl.settings.length,2);
+    assert.ok(modal.contentEl.children.some((child:any)=>child.text==='Workflow folder: Notes'));
     h.setting(modal,'Description').controls[0].change('When I finish a note, format it.');
     await h.button(modal,'Create workflow').click();
     assert.equal(modal.closed,true);assert.equal(setups.length,1);
     assert.equal(setups[0][0].path,'Notes');assert.equal(setups[0][2],'When I finish a note, format it.');
     assert.ok(h.notices.some(text=>text.includes('setup-thread')));
+  }finally{h.plugin.onunload();}
+});
+
+test('mobile root menu uses the recently pressed folder for workflow setup',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const link=await h.open();await h.button(link,'Link').click();
+    h.plugin.recentFolderGesture={path:'Notes',at:Date.now()};
+    const entry=h.folderMenu(true).items.find((item:any)=>item.title==='Setup T3 workflow');assert.ok(entry?.submenu);
+    await entry.submenu!.items.at(-1)!.callback();
+    const modal=h.modals.at(-1);
+    assert.ok(modal.contentEl.children.some((child:any)=>child.text==='Workflow folder: Notes'));
   }finally{h.plugin.onunload();}
 });
 
@@ -144,16 +157,21 @@ test('workflow creation saves an inert draft before sending its setup request',a
     h.plugin.projectForLink=()=>h.project;
     h.plugin.projectReadinessError=()=>undefined;
     h.plugin.connection=()=>({transport:'desktop',host:'local',executable:'t3'});
+    const files=new Map<string,string>();let folderExists=false;
+    h.plugin.app.vault.adapter={exists:async(path:string)=>path==='T3 Workflow Setup'?folderExists:files.has(path),mkdir:async()=>{folderExists=true;},write:async(path:string,bytes:string)=>{files.set(path,bytes);},remove:async(path:string)=>{files.delete(path);}};
     let sent:any;
-    h.plugin.dispatch=async(request:any)=>{sent=request;assert.equal(h.plugin.settings.automationDrafts[0].enabled,false);assert.equal(h.plugin.settings.pending[0].id,request.id);return 'setup-thread';};
+    h.plugin.dispatch=async(request:any)=>{sent=request;assert.equal(h.plugin.settings.automationDrafts[0].enabled,false);assert.equal(h.plugin.settings.pending[0].id,request.id);assert.equal(files.size,1);return 'setup-thread';};
     const thread=await h.plugin.setupV2Workflow({path:'Notes',name:'Notes'},linked,'When a note is tagged ready, summarize it.');
     assert.equal(thread,'setup-thread');
     const draft=h.plugin.settings.automationDrafts[0];
     assert.equal(draft.setupIntent,'When a note is tagged ready, summarize it.');
     assert.equal(draft.setupRequestId,sent.id);
     assert.equal(draft.activatedAt,undefined);
-    assert.match(sent.prompt,/Proposal file: "\/vault\/T3 Workflow Setup\//);
-    assert.match(sent.prompt,/Use a direct trigger/);
+    assert.match(sent.prompt,/Workflow folder: Notes\nSetup instructions: \/vault\/T3 Workflow Setup\//);
+    assert.doesNotMatch(sent.prompt,/disabled draft|Workflow ID|setupRequestId|eventTypes/);
+    const setup=JSON.parse([...files.values()][0]);
+    assert.equal(setup.draft.workflowId,draft.workflowId);
+    assert.match(setup.instructions,/Use a direct trigger/);
   }finally{h.plugin.onunload();}
 });
 
@@ -164,8 +182,8 @@ test('coordinator applies a matching setup proposal and removes its temporary fi
     h.plugin.settings.automationDrafts=[draft];h.plugin.settings.automation.coordinatorDeviceId=h.deviceId;
     const path='T3 Workflow Setup/setup-request.json';
     const configured={...draft,revision:2,enabled:true,trigger:{eventTypes:['note.changed'],unknown:'hold-for-review'}};
-    const files=new Map([[path,JSON.stringify({workflowId:'setup',setupRequestId:'request',ir:configured})]]);
-    h.plugin.app.vault.adapter={exists:async()=>true,list:async()=>({files:[...files.keys()],folders:[]}),read:async(p:string)=>files.get(p),remove:async(p:string)=>{files.delete(p);},rmdir:async()=>{}};
+    const files=new Map([[path,JSON.stringify({workflowId:'setup',setupRequestId:'request',ir:configured})],['T3 Workflow Setup/setup-request.request.json','setup context']]);
+    h.plugin.app.vault.adapter={exists:async(p:string)=>p==='T3 Workflow Setup'||files.has(p),list:async()=>({files:[...files.keys()],folders:[]}),read:async(p:string)=>files.get(p),remove:async(p:string)=>{files.delete(p);},rmdir:async()=>{}};
     await h.plugin.checkWorkflowProposals();
     assert.equal(files.size,0);
     assert.equal(h.plugin.settings.automationDrafts[0].enabled,true);

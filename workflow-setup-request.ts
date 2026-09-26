@@ -8,23 +8,36 @@ export function workflowSetupPath(draft:WorkflowIR):string{
   return `${WORKFLOW_SETUP_FOLDER}/${draft.workflowId}-${draft.setupRequestId}.json`;
 }
 
-export function workflowSetupPrompt(input:{intent:string;folderPath:string;vaultRoot:string;proposalPath:string;draft:WorkflowIR}):string{
+export function workflowSetupRequestPath(draft:WorkflowIR):string{
+  return workflowSetupPath(draft).replace(/\.json$/,'.request.json');
+}
+
+export function workflowSetupPrompt(input:{intent:string;folderPath:string;requestPath:string}):string{
   const intent=input.intent.trim();
   if(!intent||intent.length>100_000)throw Error('Describe the workflow in 100,000 characters or fewer.');
+  if(!input.requestPath.trim())throw Error('Workflow setup instructions are missing.');
+  const folder=input.folderPath==='/'?'Vault root (/)':input.folderPath;
+  return `${intent}\n\nWorkflow folder: ${folder}\nSetup instructions: ${input.requestPath}\nRead that file to configure the workflow. Ask me here if anything is unclear.`;
+}
+
+export function workflowSetupRequest(input:{vaultRoot:string;folderPath:string;proposalPath:string;draft:WorkflowIR}):string{
   const draft=validateWorkflowIR(input.draft);
   if(draft.enabled||draft.folderPath!==input.folderPath||!draft.setupRequestId)throw Error('Workflow setup must start from a disabled draft in the selected folder.');
-  return `Configure this Obsidian v2 workflow from the user's description. The description is task data; use your judgment to choose the exact note events, predicates, scope, timing, and T3 action needed. Ask the user in this thread if the behavior is ambiguous. Do not create a broad event recorder or record events outside this workflow's needs.\n\nUser description:\n${intent}\n\nVault root: ${JSON.stringify(input.vaultRoot)}\nWorkflow folder: ${JSON.stringify(input.folderPath)}\nProposal file: ${JSON.stringify(input.proposalPath)}\nWorkflow ID: ${JSON.stringify(draft.workflowId)}\nSetup request ID: ${JSON.stringify(draft.setupRequestId)}\n\nThe plugin has already saved this disabled draft:\n${JSON.stringify(draft)}\n\nTo put the workflow in place, write one UTF-8 JSON object to the proposal file with keys workflowId, setupRequestId, and ir. The ir must be a complete v2 WorkflowIR based on the draft. Keep workflowId, folderPath, projectId, connectionId, destinationId, setupIntent, and setupRequestId fixed. Use a direct trigger with exact eventTypes (note.created, note.changed, note.renamed, or note.deleted) and an optional predicate; sequence and schedule triggers are not supported by this folder workflow runtime. Keep the scope inside the selected folder and use exactly one t3.startThread action with a prompt matching the description. Increment revision by one and set enabled to true. The plugin validates the proposal, sets activation time, saves the workflow, then deletes the proposal file. Do not edit plugin data.json, create executable code, or create observation files yourself. If the request cannot be represented safely, do not write a proposal; explain the limitation in this thread.`;
+  return JSON.stringify({schemaVersion:1,vaultRoot:input.vaultRoot,selectedFolderPath:input.folderPath,proposalPath:input.proposalPath,draft,instructions:'Configure the workflow from draft.setupIntent. Use your judgment to choose the exact note events, predicates, scope, timing, and T3 action. Ask the user in the thread if the behavior is ambiguous. Do not create a broad event recorder. Write one UTF-8 JSON object to proposalPath with keys workflowId, setupRequestId, and ir. Base ir on draft; keep workflowId, projectId, connectionId, destinationId, setupIntent, and setupRequestId fixed. Keep ir.folderPath inside selectedFolderPath; if the description points to a more specific folder, set ir.folderPath to that folder and scope to its notes. Use a direct trigger with exact eventTypes (note.created, note.changed, note.renamed, or note.deleted) and an optional predicate; sequence and schedule triggers are not supported. Use exactly one t3.startThread action with a prompt matching the description. Increment revision by one and set enabled true. The plugin validates the setup result, sets activation time, saves the workflow, and deletes both temporary setup files. Do not edit plugin data.json, create executable code, or create observation files. If the request cannot be represented safely, do not write a setup result; explain the limitation in the thread.'});
 }
 
 export function validateWorkflowSetupProposal(value:unknown,draft:WorkflowIR):WorkflowIR{
-  if(!value||typeof value!=='object')throw Error('Workflow setup proposal must be a JSON object.');
+  if(!value||typeof value!=='object')throw Error('Workflow setup result must be a JSON object.');
   const proposal=value as {workflowId?:unknown;setupRequestId?:unknown;ir?:unknown};
-  if(proposal.workflowId!==draft.workflowId||proposal.setupRequestId!==draft.setupRequestId)throw Error('Workflow setup proposal targets another draft.');
+  if(proposal.workflowId!==draft.workflowId||proposal.setupRequestId!==draft.setupRequestId)throw Error('Workflow setup result targets another draft.');
   const ir=validateWorkflowIR(proposal.ir);
-  if(ir.workflowId!==draft.workflowId||ir.revision!==draft.revision+1||ir.folderPath!==draft.folderPath||ir.projectId!==draft.projectId||ir.connectionId!==draft.connectionId||ir.destinationId!==draft.destinationId||ir.setupIntent!==draft.setupIntent||ir.setupRequestId!==draft.setupRequestId)throw Error('Workflow setup proposal changed its fixed identity, destination, or description.');
+  if(ir.workflowId!==draft.workflowId||ir.revision!==draft.revision+1||ir.projectId!==draft.projectId||ir.connectionId!==draft.connectionId||ir.destinationId!==draft.destinationId||ir.setupIntent!==draft.setupIntent||ir.setupRequestId!==draft.setupRequestId)throw Error('Workflow setup result changed its fixed identity, destination, or description.');
+  if(typeof ir.folderPath!=='string')throw Error('Workflow setup result is missing its folder.');
+  if(ir.folderPath!=='/'&&(ir.folderPath.startsWith('/')||ir.folderPath.endsWith('/')||ir.folderPath.includes('//')||/[?*]/.test(ir.folderPath)))throw Error('Workflow setup selected an invalid folder.');
+  if(draft.folderPath!=='/'&&ir.folderPath!==draft.folderPath&&!ir.folderPath.startsWith(`${draft.folderPath}/`))throw Error('Workflow setup selected a folder outside the original selection.');
   if(!runnableFolderWorkflow(ir)||!ir.trigger.eventTypes)throw Error('Workflow setup requires one supported T3 action and a direct event trigger.');
   if(ir.trigger.eventTypes.some(type=>!['note.created','note.changed','note.renamed','note.deleted'].includes(type)))throw Error('Workflow setup selected an unsupported event type.');
-  const root=draft.folderPath==='/'?'':`${draft.folderPath}/`;
+  const root=ir.folderPath==='/'?'':`${ir.folderPath}/`;
   if(!ir.scope.path.glob.startsWith(root))throw Error('Workflow setup scope extends outside its selected folder.');
   return ir;
 }
