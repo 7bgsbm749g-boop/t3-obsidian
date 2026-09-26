@@ -28,7 +28,7 @@ test('stream deltas, final replacement, snapshots, status, and fence balancing r
   const event=(sequence:number,text:string,streaming:boolean)=>({kind:'event',event:{sequence,type:'thread.message-sent',payload:{messageId:'m1',role:'assistant',text,streaming,turnId:'turn'}}});
   state=applyThreadItem(state,event(1,'Here is\n',true)).state;
   state=applyThreadItem(state,event(2,'```ts\nconst x = 1;',true)).state;
-  assert.match(renderInlineTurn(state,'turn','thread'),/const x = 1;\n```$/);
+  assert.match(renderInlineTurn(state,'turn','thread'),/> const x = 1;\n> ```$/);
   state=applyThreadItem(state,event(3,'Here is ```ts\nconst x = 2;\n```',false)).state;
   assert.equal(state.messages[0].text,'Here is ```ts\nconst x = 2;\n```');
   state=applyThreadItem(state,{kind:'event',event:{sequence:4,type:'thread.activity-appended',payload:{activity:{id:'a1',kind:'approval.requested',summary:'Review the command',turnId:'turn'}}}}).state;
@@ -50,5 +50,16 @@ test('a provider-assigned turn is matched to its dispatched user message by requ
   assert.equal(turnForMessage(state,'our-message'),'provider-turn');
   assert.equal(turnForMessage(state,'other-message'),undefined);
   assert.equal(turnForMessage({...state,latestTurn:{turnId:'other-turn',state:'completed',requestedAt:'2026-09-26T14:06:07.000Z'}},'our-message'),undefined);
-  assert.equal(renderInlineTurn(state,'provider-turn','thread','complete'),'**T3 answer** · `thread`\n\nAnswer');
+  assert.equal(renderInlineTurn(state,'provider-turn','thread','complete'),'**T3 answer** · `thread`\n\n> Answer');
+});
+
+test('streamed numbered Markdown remains isolated and marker-safe across trailing newlines',()=>{
+  const id='numbered',region=initialRegion(id),source='Question\n'+region.text+'Following paragraph';
+  const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:'1. First line.\n2. Second line.\n',streaming:true}],activities:[]};
+  const rendered=renderInlineTurn(state,'turn','thread');
+  assert.equal(rendered,'**T3 · Working** · `thread`\n\n> 1. First line.\n> 2. Second line.');
+  const change=replaceRegion(source,id,region.bodyHash,rendered);assert.ok(change);
+  const updated=source.slice(0,change.from)+change.text+source.slice(change.to);
+  assert.equal(regionBody(updated,id)?.body,rendered);
+  assert.ok(replaceRegion(updated,id,change.hash,rendered+'\n> 3. Third line.'));
 });

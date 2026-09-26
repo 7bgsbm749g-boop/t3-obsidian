@@ -117,12 +117,14 @@ function closeOpenFence(text:string):string {
 
 export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running'):string {
   const messages=state.messages.filter(m=>m.turnId===turnId&&m.role==='assistant');
-  const answer=messages.map(m=>m.text).filter(Boolean).join('\n\n');
+  const answer=messages.map(m=>m.text).filter(Boolean).join('\n\n').replace(/\n+$/,'');
   const activity=state.activities.filter(a=>a.turnId===turnId&&/^(tool\.|approval\.|user-input\.|plan\.)/.test(a.kind)).at(-1);
   const needsResponse=activity&&/^(approval\.requested|user-input\.requested)$/.test(activity.kind);
   const heading=phase==='complete'?'**T3 answer**':`**T3 · ${phase==='running'?'Working':phase==='sending'?'Sending':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const status=phase==='complete'?'':needsResponse?'\n\n> Action needed in T3: '+safeStatus(activity.summary):activity?'\n\n> '+safeStatus(activity.summary):'';
-  const body=answer?`\n\n${closeOpenFence(answer)}`:'';
+  // Quote every line to isolate Markdown lists from numbered replies elsewhere
+  // in a Live Preview editor. The marker owns the final newline, not the body.
+  const body=answer?`\n\n${closeOpenFence(answer).split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`:'';
   return `${heading} · \`${threadId}\`${status}${body}`;
 }
 
