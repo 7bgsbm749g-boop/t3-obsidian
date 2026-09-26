@@ -1,7 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {decorateLinkedFolders,LINKED_FOLDER_BADGE_CLASS,WORKFLOW_FOLDER_ATTRIBUTE} from '../folder-indicator';
-import {WORKFLOW_ACTIVITY_ATTRIBUTE} from '../workflow-activity';
+import {decorateLinkedFolders,WORKFLOW_FOLDER_ATTRIBUTE} from '../folder-indicator';
 
 class FakeElement{
   className='';textContent='';title='';parent?:FakeElement;children:FakeElement[]=[];attrs=new Map<string,string>();
@@ -41,16 +40,4 @@ test('file explorer badges mark exact linked folders, update labels, and never d
   assert.equal(descendant.children[0].title,'T3 Code folder workflows configured');
   decorateLinkedFolders(root as any,[]);assert.equal(linked.children.length,0);
   assert.equal(descendant.children.length,0);
-});
-
-test('activity borders persist across a batch handoff and clear on completion without removing folder badges',()=>{
-  const title=new FakeElement('Gym'),root={querySelectorAll:()=>[title]},link:any={folderPath:'/',projectTitle:'Inherited project'};
-  decorateLinkedFolders(root as any,[link],['Gym'],new Map([['Gym','running']]));
-  assert.equal(title.getAttribute(WORKFLOW_ACTIVITY_ATTRIBUTE),'running');assert.equal(title.children.length,2);
-  const border=title.children.find(child=>child.className==='t3-workflow-progress-border');assert.ok(border);
-  decorateLinkedFolders(root as any,[link],['Gym'],new Map([['Gym','queued']]));
-  assert.equal(title.getAttribute(WORKFLOW_ACTIVITY_ATTRIBUTE),'queued');assert.ok(title.children.includes(border));assert.equal(title.children.length,2);
-  decorateLinkedFolders(root as any,[link],['Gym']);
-  assert.equal(title.getAttribute(WORKFLOW_ACTIVITY_ATTRIBUTE),null);assert.equal(title.children.length,1);
-  assert.equal(title.children[0].className,LINKED_FOLDER_BADGE_CLASS);assert.equal(title.children[0].children[1].textContent,'');
 });

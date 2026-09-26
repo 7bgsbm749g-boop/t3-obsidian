@@ -142,7 +142,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
     assert.equal(h.commands[0].title,'Plan my café 🧪 notes');
     assert.equal(h.commands[1].type,'thread.turn.start');
     assert.ok(h.commands[1].message.text.startsWith(prompt));
-    assert.match(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
+    assert.doesNotMatch(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal(h.plugin.settings.pending.length,0);
     assert.equal(h.plugin.settings.completionJobs.length,0,'Delete-note preference must not apply to free text');
     assert.equal(h.vaultAccesses(),0);
@@ -184,7 +184,7 @@ test('an uncertain chat survives restart and retries the original immutable comm
     assert.equal(h.plugin.settings.pending.length,1);
     const pending=h.plugin.settings.pending[0];
     assert.ok(pending.prompt.startsWith(prompt));
-    assert.match(pending.prompt,/T3 EVENT HISTORY CAPABILITY/);
+    assert.doesNotMatch(pending.prompt,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal(pending.completion,undefined);
     assert.equal(pending.directPlan.phase,'created');
     assert.equal(h.plugin.settings.completionJobs.length,0);
@@ -218,7 +218,7 @@ test('chat validates text before creating a thread and applies enabled orchestra
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands[0].title,'A'.repeat(160));
     assert.ok(h.commands[1].message.text.startsWith(WAIT_FOR_OTHER_THREADS_INSTRUCTION+'\n\n'+prompt));
-    assert.match(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
+    assert.doesNotMatch(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal(h.plugin.settings.completionJobs.length,0);
   } finally {h.plugin.onunload();}
 });
@@ -255,7 +255,7 @@ test('palette chat sends the visible note path through its nearest link without 
     assert.equal(h.commands[0].projectId,project.id);
     assert.equal(h.commands[0].title,'Work on this note.');
     assert.ok(h.commands[1].message.text.startsWith(prompt+'\n\nObsidian vault: "Notes"\nDestination note path: "/projects/notes/Notes/Inner/café \\"draft\\".md"\nVault-relative note path: "Notes/Inner/café \\"draft\\".md"'));
-    assert.match(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
+    assert.doesNotMatch(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal(h.commands[1].message.attachments.length,0);
     assert.equal(h.plugin.settings.completionJobs.length,0);
     assert.equal(h.vaultAccesses(),0);
@@ -510,7 +510,7 @@ test('sending a note into an existing thread retains Markdown and images and cle
     assert.equal(result.threadId,'existing');assert.equal(h.commands.length,1);
     assert.equal(h.commands[0].type,'thread.turn.start');assert.equal(h.commands[0].threadId,'existing');
     assert.match(h.commands[0].message.text,/# Note\nBefore/);assert.match(h.commands[0].message.text,/t3-context:\/\//);
-    assert.match(h.commands[0].message.text,/\nAfter\n\nT3 EVENT HISTORY CAPABILITY/);
+    assert.ok(h.commands[0].message.text.endsWith('\nAfter'));
     assert.equal(h.commands[0].message.attachments[0].dataUrl,'data:image/png;base64,'+png);
     assert.equal(result.request.completion.action,'keep');
     assert.equal(h.plugin.settings.completionJobs.length,0);

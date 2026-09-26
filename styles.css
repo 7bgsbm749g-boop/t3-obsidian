@@ -36,66 +36,6 @@
   display: none;
 }
 
-.t3-workflow-menu-row { position: relative; }
-.t3-workflow-drag-handle {
-  align-items: center;
-  border-radius: 3px;
-  color: var(--text-faint);
-  cursor: grab;
-  display: inline-flex;
-  flex: 0 0 auto;
-  justify-content: center;
-  margin-inline-start: 12px;
-  padding: 3px;
-  touch-action: none;
-  user-select: none;
-}
-.t3-workflow-drag-handle svg { width: 14px; height: 14px; }
-.t3-workflow-drag-handle:hover, .t3-workflow-drag-handle:focus-visible { color: #67ddd8; background: var(--background-modifier-hover); }
-.t3-workflow-drag-handle:focus-visible { outline: 1px solid #67ddd8; }
-.t3-workflow-dragging, .t3-workflow-dragging .t3-workflow-drag-handle { cursor: grabbing; }
-.t3-workflow-drag-source { opacity: 0.45; }
-.t3-workflow-drop-before::before, .t3-workflow-drop-after::after {
-  background: #67ddd8;
-  border-radius: 1px;
-  content: '';
-  height: 2px;
-  inset-inline: 4px;
-  pointer-events: none;
-  position: absolute;
-}
-.t3-workflow-drop-before::before { top: -1px; }
-.t3-workflow-drop-after::after { bottom: -1px; }
-
-.t3-workflow-status { color: var(--text-muted); font-size: var(--font-ui-smaller); margin-inline-start: 12px; }
-.t3-workflow-status:empty { display: none; }
-.nav-folder-title[data-t3-workflow-activity], .t3-workflow-menu-row[data-t3-workflow-activity] {
-  position: relative;
-  box-shadow: inset 0 0 0 1px rgba(103, 221, 216, 0.55);
-  border-radius: 5px;
-}
-.t3-workflow-progress-border {
-  color: #67ddd8;
-  height: calc(100% - 3px);
-  inset: 1.5px;
-  overflow: visible;
-  pointer-events: none;
-  position: absolute;
-  width: calc(100% - 3px);
-}
-.t3-workflow-progress-border rect { fill: none; stroke: currentColor; stroke-width: 1.5px; opacity: 0.65; }
-[data-t3-workflow-activity="running"] > .t3-workflow-progress-border rect,
-.nav-folder-title[data-t3-workflow-activity="queued"] > .t3-workflow-progress-border rect {
-  animation: t3-workflow-perimeter 2s linear infinite;
-  stroke-dasharray: 22 78;
-  opacity: 1;
-}
-[data-t3-workflow-activity="blocked"] > .t3-workflow-progress-border rect { stroke-dasharray: 3 3; }
-@keyframes t3-workflow-perimeter { to { stroke-dashoffset: -100; } }
-@media (prefers-reduced-motion: reduce) {
-  [data-t3-workflow-activity] > .t3-workflow-progress-border rect { animation: none; stroke-dasharray: none; }
-}
-
 .send-to-t3-selection-action {
   position: fixed;
   z-index: 1000;

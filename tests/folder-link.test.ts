@@ -16,11 +16,6 @@ test('one saved destination replaces the previous link for a folder',()=>{
   assert.deepEqual(upsertFolderLink([link],next),[next]);
 });
 
-test('legacy folder triggers migrate to inert links without trigger behavior',()=>{
-  const data={folderTriggers:[{id:'old',folderPath:'Projects/App',connectionId:'laptop',projectId:'project',projectTitle:'App',workspaceRoot:'C:/vault/Projects/App',tag:'ready',enabled:true}],folderTriggerReceipts:[{key:'ignored'}]};
-  assert.deepEqual(loadFolderLinks(data),[{id:'old',folderPath:'Projects/App',connectionId:'laptop',projectId:'project',projectTitle:'App',workspaceRoot:'C:/vault/Projects/App',self:false}]);
-});
-
 test('vault root links persist and the nearest folder owns a note on a path boundary',()=>{
   const root={...link,id:'root',folderPath:'/'};
   const nested={...link,id:'nested',folderPath:'Projects/App/Inner'};

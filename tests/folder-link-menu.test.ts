@@ -59,7 +59,7 @@ async function folderMenuHarness(){
       workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{if(name==='file-menu')fileMenu=callback;}},
       vault:{getAbstractFileByPath:(path:string)=>path===folder.path?folder:undefined},
     };
-    async loadData(){return {paired:[{id:'c',name:'Laptop',url:'https://folder.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:project']};}
+    async loadData(){return {...(shared.at(-1)??{}),paired:[{id:'c',name:'Laptop',url:'https://folder.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:project']};}
     async saveData(data:any){if(failSave)throw Error('Simulated settings storage failure');shared.push(data);}
     addSettingTab(){}registerEvent(){}addCommand(){}
   }
@@ -102,85 +102,16 @@ test('folder menu opens an inactive link dialog; cancel is inert and Link alone 
   try{
     const saves=h.shared.length;
     const cancelled=await h.open();
-    assert.equal(h.setting(cancelled,'Automatic send on #tag').controls[0].value,false);
-    assert.equal(h.setting(cancelled,'Trigger tag').disabled,true);
     assert.equal(h.plugin.settings.folderLinks.length,0);
     assert.equal(h.shared.length,saves);
     await h.button(cancelled,'Cancel').click();
     assert.equal(cancelled.closed,true);assert.equal(h.shared.length,saves);
     const modal=await h.open();
-    const toggle=h.setting(modal,'Automatic send on #tag').controls[0];
-    toggle.change(true);h.setting(modal,'Trigger tag').controls[0].change('#invalid tag');toggle.change(false);
-    assert.equal(h.shared.length,saves,'Draft changes must not save');
     await h.button(modal,'Link').click();
     assert.equal(modal.closed,true);
     assert.equal(h.plugin.settings.folderLinks.length,1);
-    assert.equal(h.shared.at(-1).folderLinks[0].tagTrigger.enabled,false);
-    assert.equal(h.shared.at(-1).folderLinks[0].tagTrigger.tag,'#ready','A disabled trigger ignores an invalid draft');
+    assert.equal(h.shared.at(-1).folderLinks[0].tagTrigger,undefined);
     assert.equal(h.networkRequests(),0);
-  }finally{h.plugin.onunload();}
-});
-
-test('saving an optional tag persists it and reopening preserves the link identity and owner',{timeout:5000},async()=>{
-  const h=await folderMenuHarness();
-  try{
-    const modal=await h.open();
-    h.setting(modal,'Automatic send on #tag').controls[0].change(true);
-    h.setting(modal,'Trigger tag').controls[0].change(' Tasks/Ready ');
-    await h.button(modal,'Link').click();
-    const original=h.plugin.settings.folderLinks[0];
-    assert.equal(original.tagTrigger.tag,'#tasks/ready');assert.equal(original.tagTrigger.enabled,true);
-    assert.equal(original.tagTrigger.deviceId,h.deviceId);
-    // A synced trigger owned by another device must remain there when merely reopening and saving.
-    original.tagTrigger.deviceId='another-device';await h.plugin.save();
-    const reopened=await h.open();
-    assert.equal(h.setting(reopened,'Automatic send on #tag').controls[0].value,true);
-    assert.equal(h.setting(reopened,'Trigger tag').controls[0].value,'#tasks/ready');
-    await h.button(reopened,'Save link').click();
-    const saved=h.shared.at(-1).folderLinks[0];
-    assert.equal(saved.id,original.id);assert.equal(saved.tagTrigger.deviceId,'another-device');
-    assert.equal(saved.tagTrigger.tag,'#tasks/ready');assert.equal(h.networkRequests(),0);
-  }finally{h.plugin.onunload();}
-});
-
-test('invalid tags and storage failures leave the link dialog open and preserve the existing link',{timeout:5000},async()=>{
-  const h=await folderMenuHarness();
-  try{
-    const initial=await h.open();await h.button(initial,'Link').click();
-    const previous=JSON.stringify(h.plugin.settings.folderLinks),saves=h.shared.length;
-    const modal=await h.open();
-    h.setting(modal,'Automatic send on #tag').controls[0].change(true);
-    h.setting(modal,'Trigger tag').controls[0].change('#two #tags');
-    await h.button(modal,'Save link').click();
-    assert.equal(modal.closed,false);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),previous);
-    assert.equal(h.shared.length,saves);assert.match(h.notices.at(-1)!,/one tag/i);
-    h.setting(modal,'Trigger tag').controls[0].change('#valid');h.setFailSave(true);
-    await h.button(modal,'Save link').click();
-    assert.equal(modal.closed,false);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),previous);
-    assert.equal(h.shared.length,saves);assert.match(h.notices.at(-1)!,/storage failure/i);
-    assert.equal(h.button(modal,'Save link').disabled,false,'A failed save remains retryable');
-    h.setFailSave(false);await h.button(modal,'Save link').click();
-    assert.equal(modal.closed,true);assert.equal(h.shared.at(-1).folderLinks[0].tagTrigger.tag,'#valid');
-    assert.equal(h.networkRequests(),0);
-  }finally{h.plugin.onunload();}
-});
-
-test('folder workflow submenu creates multiple workflows and existing workflow dialogs can delete themselves',async()=>{
-  const h=await folderMenuHarness();
-  try{
-    const link=await h.open();await h.button(link,'Link').click();
-    let entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');assert.ok(entry?.submenu);
-    assert.equal(entry!.submenu!.items.map((item:any)=>item.title).join(','),'Setup new workflow…');await entry!.submenu!.items[0].callback();
-    let modal=h.modals.at(-1);assert.equal(h.setting(modal,'Trigger').controls[0].value,'create');assert.equal(modal.contentEl.settings.flatMap((item:any)=>item.controls).some((control:any)=>control.text==='Delete workflow'),false);
-    h.setting(modal,'Workflow name').controls[0].change('Gym formatter');h.setting(modal,'Task').controls[0].change('Rewrite with my workout template.');await h.button(modal,'Create workflow').click();
-    entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');assert.equal(entry!.submenu!.items.map((item:any)=>item.title).join(','),'Gym formatter,Setup new workflow…');await entry!.submenu!.items[1].callback();
-    modal=h.modals.at(-1);h.setting(modal,'Workflow name').controls[0].change('Gym summary');h.setting(modal,'Task').controls[0].change('Add a workout summary.');await h.button(modal,'Create workflow').click();
-    assert.equal(h.plugin.settings.folderWorkflows.length,2);assert.equal(h.plugin.settings.folderWorkflows.map((item:any)=>item.name).join(','),'Gym formatter,Gym summary');
-    assert.equal(h.plugin.settings.folderWorkflows[0].events.join(','),'create');assert.equal(h.plugin.settings.folderWorkflows[0].projectId,h.project.id);assert.equal(h.plugin.settings.folderWorkflows[0].deviceId,h.deviceId);
-    entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');await entry!.submenu!.items[0].callback();modal=h.modals.at(-1);assert.ok(h.button(modal,'Delete workflow'));h.setting(modal,'Workflow name').controls[0].change('Gym formatter updated');await h.button(modal,'Save workflow').click();
-    assert.equal(h.plugin.settings.folderWorkflows.map((item:any)=>item.name).join(','),'Gym formatter updated,Gym summary','editing must retain sibling workflows and order');
-    entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');await entry!.submenu!.items[0].callback();modal=h.modals.at(-1);await h.button(modal,'Delete workflow').click();
-    assert.equal(modal.closed,true);assert.equal(h.plugin.settings.folderWorkflows.length,1);assert.equal(h.plugin.settings.folderWorkflows[0].name,'Gym summary');assert.equal(h.networkRequests(),0);
   }finally{h.plugin.onunload();}
 });
 
@@ -188,7 +119,6 @@ test('v2 folder menu creates and edits a typed workflow without migration or dis
   const h=await folderMenuHarness();
   try{
     const link=await h.open();await h.button(link,'Link').click();
-    await h.plugin.setWorkflowVersion('v2');
     let entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');assert.ok(entry?.submenu);
     assert.equal(entry!.submenu!.items.map((item:any)=>item.title).join(','),'Setup new workflow…');
     await entry!.submenu!.items[0].callback();let modal=h.modals.at(-1);
@@ -199,32 +129,12 @@ test('v2 folder menu creates and edits a typed workflow without migration or dis
     assert.equal(modal.closed,true);assert.equal(h.plugin.settings.automationDrafts.length,1);
     const ir=h.plugin.settings.automationDrafts[0];assert.equal(ir.projectId,h.project.id);assert.equal(ir.folderPath,'Notes');assert.equal(ir.enabled,false);
     assert.equal(h.networkRequests(),0);
-    await h.plugin.configureAutomation('coordinator','qlo2');
     entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');
     assert.equal(entry!.submenu!.items[0].title,'V2 formatter');await entry!.submenu!.items[0].callback();modal=h.modals.at(-1);
     h.setting(modal,'Enabled').controls[0].change(true);await h.button(modal,'Save workflow').click();
     assert.equal(h.plugin.settings.automationDrafts[0].enabled,true);
     assert.equal(h.plugin.settings.automationDrafts[0].revision,2);
     assert.equal(h.networkRequests(),0,'setup must not send an existing note');
-  }finally{h.plugin.onunload();}
-});
-
-test('workflow order saves without sends, survives reopening, and rolls back a failed save',async()=>{
-  const h=await folderMenuHarness();
-  try{
-    const base={name:'Duplicate name',folderPath:'Notes',includeSubfolders:true,events:['create'],task:'Format.',connectionId:'c',projectId:'project',deviceId:'other-device',enabled:false};
-    const first={...base,id:'a'},other={...base,id:'other',folderPath:'Elsewhere'},last={...base,id:'b'};
-    h.plugin.settings.folderWorkflows=[first,other,last];
-    await h.plugin.reorderWorkflows('Notes',['b','a'],['a','b']);
-    assert.equal(h.shared.at(-1).folderWorkflows.map((item:any)=>item.id).join(','),'b,other,a');
-    assert.equal(h.plugin.settings.folderWorkflows[0],last);assert.equal(h.plugin.settings.folderWorkflows[1],other);
-    const saves=h.shared.length;await h.plugin.reorderWorkflows('Notes',['b','a'],['b','a']);assert.equal(h.shared.length,saves);
-    assert.equal(h.folderMenu().items.find(item=>item.title==='Setup T3 workflow')!.submenu!.items.length,3);
-    await assert.rejects(()=>h.plugin.reorderWorkflows('Notes',['a','b'],['a','b']),/changed/);
-    h.setFailSave(true);await assert.rejects(()=>h.plugin.reorderWorkflows('Notes',['a','b'],['b','a']),/storage failure/);
-    assert.equal(h.plugin.settings.folderWorkflows.map((item:any)=>item.id).join(','),'b,other,a');
-    h.setFailSave(false);await h.plugin.reorderWorkflows('Notes',['a','b'],['b','a']);
-    assert.equal(h.shared.at(-1).folderWorkflows.map((item:any)=>item.id).join(','),'a,other,b');assert.equal(h.networkRequests(),0);
   }finally{h.plugin.onunload();}
 });
 
