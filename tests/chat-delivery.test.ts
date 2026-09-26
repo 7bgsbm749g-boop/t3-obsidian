@@ -95,14 +95,14 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     }
   }
   const module={exports:{} as any};
-  runInNewContext(await readFile('main.js','utf8'),{
+  runInNewContext(await readFile('dist/main.js','utf8'),{
     module,exports:module.exports,
     require:(name:string)=>{assert.equal(name,'obsidian','Mobile chat must never import Node APIs');return api;},
     indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
     fetch:fetcher,WebSocket:Socket,Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console,
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();return plugin;};
-  return {plugin:await start(),start,commands,shared,registered,modals,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},editorMenu:(selection:string,path='Notes/Selected.md')=>{const menu=new Menu(),file=new File(path);for(const listener of workspaceEvents['editor-menu']??[])listener(menu,{getSelection:()=>selection},{file});return {menu,file};},vaultAccesses:()=>vaultAccesses};
+  return {plugin:await start(),start,commands,shared,registered,modals,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);for(const listener of workspaceEvents['editor-menu']??[])listener(menu,{getSelection:()=>selection},{file});return {menu,file};},vaultAccesses:()=>vaultAccesses};
 }
 
 test('mobile chat without a note uses the root link, preserves the prompt, advertises event queries, and never enrolls note cleanup',async()=>{
@@ -251,6 +251,7 @@ test('editor selection menu asks T3 in a new or existing thread and requires an 
   const h=await chatHarness();
   try{
     assert.equal(h.editorMenu('   ').menu.items.length,0,'Whitespace-only selections do not add an action');
+    assert.ok(h.editorMenu('Cross-window selection','Notes/Popout.md',true).menu.items.some(item=>item.title==='Ask T3'),'Editor menu accepts Obsidian file objects from another window realm');
     const selection='Explain why **this claim** follows.\nKeep [[source links]].';
     let entry=h.editorMenu(selection,'Notes/Original.md').menu.items.find(item=>item.title==='Ask T3');assert.ok(entry);
     await entry!.callback();

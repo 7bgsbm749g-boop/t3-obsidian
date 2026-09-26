@@ -79,7 +79,7 @@ async function folderMenuHarness(){
   }
   const api={Plugin,Menu,Platform:{isMobile:true},TFolder:Folder,TFile:File,Modal,FuzzySuggestModal:Modal,PluginSettingTab:Base,Setting,Notice:class{constructor(text:string){notices.push(text);}}};
   const module={exports:{} as any};
-  runInNewContext(await readFile('main.js','utf8'),{
+  runInNewContext(await readFile('dist/main.js','utf8'),{
     module,exports:module.exports,window:{innerWidth:1000,innerHeight:700},require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,
     document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
     fetch:(url:string)=>{networkRequests++;if(threadsReply===undefined)throw Error('Link configuration must not dispatch or scan T3');return new Response(JSON.stringify(url.endsWith('/environment')?{environmentId:'env',label:'Laptop',orchestrationProtocolVersion:1}:{threads:threadsReply}));},

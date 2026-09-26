@@ -1,7 +1,8 @@
 node_modules/
 data.json
 
-# Generated plugin bundle; distributed in releases, rebuilt from source.
+# Generated plugin bundles; distributed in releases, rebuilt from source.
+/dist/
 /main.js
 /main.js.map
 

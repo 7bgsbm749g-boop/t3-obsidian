@@ -96,7 +96,7 @@ Account connections and manual pairing use T3's existing protocols, not an offic
 
 ## Upgrade
 
-Install 2.12.1 and reload the plugin on each device after Sync finishes. Existing manual connections, project selections, folder workflows, and tag triggers remain intact. Workflows v1 is selected by default for existing vaults; v2 drafts remain disabled until explicitly selected and enabled. Each device clearly requires its own email verification before synced projects and folder links become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
+Install 2.12.3 and reload the plugin on each device after Sync finishes. Existing manual connections, project selections, folder workflows, and tag triggers remain intact. Workflows v1 is selected by default for existing vaults; v2 drafts remain disabled until explicitly selected and enabled. Each device clearly requires its own email verification before synced projects and folder links become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
 
 Old unconfirmed sends remain visible for review but cannot be retried through the removed mode. Check the original thread in T3 before creating another send, since the earlier request may have started. Discard only removes the local retry record. Old companion completion jobs keep their notes and stop monitoring. Direct/local completion monitoring continues. No request is automatically rerouted or sent during migration.
 
@@ -196,13 +196,31 @@ A request is saved before dispatch. During sending, additional sends are disable
 
 Pending requests store the full note and base64 image bytes in local IndexedDB until confirmed/discarded. Direct mode stores the complete immutable commands in device-local IndexedDB before dispatch, without a server-side plugin journal. Local desktop integration keeps a private request journal under the T3 data directory (`send-to-t3-code/desktop`). Journals retain prompt/image bytes to retry exactly; they contain no session credentials. In local mode, T3 credentials are issued through its official CLI and revoked after use. Direct pairing sessions stay in device-local app storage. Official CLI output is bounded and each CLI operation times out after 45 seconds. Note contents and image payloads travel in authenticated HTTP request bodies, never shell commands or CLI arguments.
 
-## Development
+## Development and release pipeline
 
-Requires Node.js and npm. Run `npm ci`, `npm run build`, and `npm test`. Build output is `main.js`. The plugin registers Obsidian's vault/metadata events for optional tags and the `file-menu` event and uses the runtime `MenuItem.setSubmenu()` extension, with a project picker fallback if unavailable; mobile uses the picker. See [Obsidian plugin setup](https://docs.obsidian.md/Plugins/Getting%20started/Build%20a%20plugin).
+The canonical source checkout is `/home/ubuntu/projects/send-to-t3-code`. It is deliberately separate from both installed copies:
 
-QLO2 is synced from `/home/ubuntu/vaults/QLO2` by the VPS `obsidian-qlo2-sync.service`. After building and packaging a tested release, run `python3 scripts/deploy-qlo2.py` on the VPS. It installs the release into that vault, preserves `data.json`, and stores its backup under `/home/ubuntu/backups/send-to-t3-code`. It pauses continuous Sync during installation, runs a fresh one-shot scan to upload plugin changes, verifies completion, and restarts continuous Sync even if uploading fails. The continuous watcher's generic “Fully synced” heartbeat does not prove it detected changes inside `.obsidian`; deployment must finish the fresh scan before reporting success. Receiving devices still need to finish Sync and reload the plugin. Do not route QLO2 deployment through the Windows laptop.
+- `/home/ubuntu/Obsidian Vault/.obsidian/plugins/send-to-t3-code` is the development-vault installation and contains only runtime artifacts plus its local `data.json`.
+- `/home/ubuntu/vaults/QLO2/.obsidian/plugins/send-to-t3-code` is the QLO2 installation published by Obsidian Sync.
 
-Git tracks the TypeScript source, tests and dependency lockfile. The generated `main.js`, packaged releases, local validation artifacts and Python caches are ignored. Building creates the `main.js` required for installation; ignoring it does not remove an installed copy.
+Requires Node.js, npm, and Python 3. Run `npm ci`, `npm run build`, and `npm test`. Build output is `dist/main.js`; a build never writes into a vault. The plugin registers Obsidian's vault/metadata events and editor/file menus. See [Obsidian plugin setup](https://docs.obsidian.md/Plugins/Getting%20started/Build%20a%20plugin).
+
+For a release, run `npm run release:qlo2 -- --bump patch` (or `minor`/`major`) on the VPS. This single entry point aligns all version files, builds, runs the complete test suite, creates a new immutable archive, installs only runtime artifacts in the development vault, backs up QLO2, preserves `data.json`, installs atomically, pauses continuous Sync, forces a fresh one-shot scan, requires `Fully synced`, and restarts continuous Sync. It refuses a dirty worktree unless the user explicitly authorized `--allow-dirty`, refuses an existing archive/receipt, and refuses a version that is not newer than QLO2.
+
+If an immutable archive was created but installation or Sync failed, resume those exact bytes with `npm run release:qlo2 -- --resume VERSION`. Never delete and recreate a versioned archive with different contents.
+
+The deployment receipt is intentionally marked `awaiting-live-smoke`. After a real QLO2 client receives Sync, reload the plugin and exercise the changed behavior. Capture durable evidence and complete the release with:
+
+```sh
+npm run release:qlo2 -- --complete-smoke VERSION \
+  --device DEVICE \
+  --evidence /absolute/path/to/evidence.png \
+  --notes "Exact behavior verified"
+```
+
+A change is not live or complete until that immutable smoke receipt exists. Backups and receipts live outside the synced vault under `/home/ubuntu/backups/send-to-t3-code`. Direct `scripts/deploy-qlo2.py` use is retired so old instructions cannot bypass versioning, tests, packaging, or smoke evidence. Do not route QLO2 installation through the Windows laptop.
+
+Git tracks the TypeScript source, tests, release tooling, and dependency lockfile. Generated `dist/`, packaged releases, local validation artifacts, and Python caches are ignored.
 
 This is a local community-plugin-format build; it has not been submitted to or approved for the public community directory.
 

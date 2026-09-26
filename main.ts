@@ -169,8 +169,8 @@ export default class SendToT3 extends Plugin {
     }));
     this.registerEvent(this.app.workspace.on('editor-menu',(menu,editor,view)=>{
       const selection=editor.getSelection();
-      if(!selection.trim()||!(view.file instanceof TFile)||view.file.extension.toLowerCase()!=='md')return;
       const file=view.file;
+      if(!selection.trim()||!file||file.extension.toLowerCase()!=='md')return;
       menu.addItem(item=>item.setTitle('Ask T3').setIcon('message-circle').setDisabled(this.busy).onClick(()=>this.openEditorChat(selection,file)));
     }));
     this.addCommand({id:'send-current-note',name:'Send current note',checkCallback:checking=>{const file=this.app.workspace.getActiveFile();if(!file || file.extension.toLowerCase()!=='md')return false;if(!checking){if(folderLinkForPath(this.settings.folderLinks,file.path))void this.openLinkedNote(file);else new SendProjectModal(this.app,this,file).open();}return true;}});

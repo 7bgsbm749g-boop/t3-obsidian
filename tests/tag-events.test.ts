@@ -71,7 +71,7 @@ async function eventHarness(enabled:boolean){
     commands.push(JSON.parse(options.body));return response({});
   };
   const module={exports:{} as any};
-  runInNewContext(await readFile('main.js','utf8'),{
+  runInNewContext(await readFile('dist/main.js','utf8'),{
     module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,
     document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:settingsSocket(),
     Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console,window:{setInterval,clearInterval},

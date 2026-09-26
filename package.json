@@ -1,10 +1,11 @@
 {
   "name": "send-to-t3-code",
-  "version": "2.12.1",
+  "version": "2.12.3",
   "private": true,
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts && python3 -m unittest scripts/test_release_qlo2.py",
+    "release:qlo2": "python3 scripts/release-qlo2.py"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

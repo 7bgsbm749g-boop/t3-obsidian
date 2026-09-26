@@ -66,7 +66,7 @@ if(args[0]==='auth'){
     },
   };
   const module={exports:{} as any};
-  runInNewContext(await readFile('main.js','utf8'),{module,exports:module.exports,
+  runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,
     require:(name:string)=>name==='obsidian'?api:realRequire(name),indexedDB,
     global:{},process,Buffer,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
     WebSocket:settingsSocket(),Headers,Response,AbortController,URL,URLSearchParams,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval,console,
