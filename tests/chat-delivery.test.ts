@@ -312,6 +312,19 @@ test('Ask T3 refuses a switched editor before dispatching or inserting',async()=
   }finally{h.plugin.onunload();}
 });
 
+test('Ask T3 selection command opens the inline chooser without changing the note',async()=>{
+  const h=await chatHarness();
+  try{
+    const command=h.registered.find((entry:any)=>entry.id==='ask-selection');assert.ok(command);
+    const context=h.editorMenu('Explain this sentence.','Notes/Original.md');
+    assert.equal(command.editorCheckCallback(true,context.editor,{file:context.file}),true);
+    assert.equal(command.editorCheckCallback(false,context.editor,{file:context.file}),true);
+    assert.equal(h.modals.at(-1).constructor.name,'ChatDestinationModal');
+    assert.equal(h.commands.length,0,'Opening the chooser does not dispatch or edit the note');
+    assert.doesNotMatch(context.value,/t3-inline:start/);
+  }finally{h.plugin.onunload();}
+});
+
 test('unlinked and root-level notes use the root link and a self link resolves the destination note path',async()=>{
   const h=await chatHarness();
   try{

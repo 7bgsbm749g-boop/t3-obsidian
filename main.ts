@@ -30,6 +30,7 @@ import {DeterministicWorkflowRuntime,noteSnapshot,type RuntimeRelease} from './w
 import {eventQueryCapability} from './event-query';
 import {loadWorkflowReplica,mergeWorkflowReplicas,sameWorkflowReplica,workflowChanges,type WorkflowReplica} from './workflow-sync';
 import {InlineChatManager,captureEditorSelection} from './inline-chat';
+import {installMobileSelectionAction} from './mobile-selection-action';
 import type {SelectionAnchor} from './inline-thread';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor:SelectionAnchor};
 const INLINE_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note; the Obsidian plugin will insert your reply.';
@@ -84,6 +85,7 @@ export default class SendToT3 extends Plugin {
   private journalFiles?:{exists(path:string):Promise<boolean>;read(path:string):Promise<string>;write(path:string,data:string):Promise<void>;mkdir(path:string):Promise<void>;list(path:string):Promise<{files:string[];folders:string[]}>};
   private metadataPending=new WeakSet<TFile>();
   private inlineChat?:InlineChatManager;
+  private mobileSelectionAction?:{dispose():void};
   async onload() {
     const data = await this.loadData();
     const local = this.app.loadLocalStorage(this.localKey);
@@ -105,6 +107,9 @@ export default class SendToT3 extends Plugin {
     const folderWorkflows=this.workflowReplica.workflows,workflowVersion=loadWorkflowVersionSettings(data?.workflowVersion,folderWorkflows,automationDrafts);
     this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],folderLinks:loadFolderLinks(data),folderWorkflows,vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data),automation:{mode:automationMode,destinationId:typeof data?.automation?.destinationId==='string'?data.automation.destinationId:'qlo2-vps',coordinatorDeviceId:typeof data?.automation?.coordinatorDeviceId==='string'?data.automation.coordinatorDeviceId:'',captureUnsaved:data?.automation?.captureUnsaved===true},automationDrafts,workflowVersion};
     this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id));
+    if(Platform.isMobile&&typeof document.addEventListener==='function'){
+      this.mobileSelectionAction=installMobileSelectionAction(this.app,()=>this.app.workspace.getActiveViewOfType(MarkdownView),path=>!this.busy&&!this.inlineChat?.activeFor(path).length,captureEditorSelection,({editor,view,text,anchor})=>this.openEditorChat(text,view.file!,{editor,view,anchor}));
+    }
     this.sharedBaseline=JSON.stringify(this.sharedSnapshot());
     if(!Platform.isMobile && !this.settings.connection.native){
       const old=this.settings.connection;
@@ -190,6 +195,14 @@ export default class SendToT3 extends Plugin {
       try{anchor=captureEditorSelection(editor);}catch{return;}
       menu.addItem(item=>item.setTitle('Ask T3').setIcon('message-circle').setDisabled(this.busy||active.length>0).onClick(()=>this.openEditorChat(selection,file,{editor,view,anchor})));
     }));
+    this.addCommand({id:'ask-selection',name:'Ask T3 about selected text',icon:'message-circle',editorCheckCallback:(checking,editor,view)=>{
+      const file=view.file,selection=editor.getSelection();
+      if(!file||file.extension.toLowerCase()!=='md'||!selection.trim()||this.busy||this.inlineChat?.activeFor(file.path).length)return false;
+      let anchor:SelectionAnchor;
+      try{anchor=captureEditorSelection(editor);}catch{return false;}
+      if(!checking)this.openEditorChat(selection,file,{editor,view,anchor});
+      return true;
+    }});
     this.addCommand({id:'send-current-note',name:'Send current note',checkCallback:checking=>{const file=this.app.workspace.getActiveFile();if(!file || file.extension.toLowerCase()!=='md')return false;if(!checking){if(folderLinkForPath(this.settings.folderLinks,file.path))void this.openLinkedNote(file);else new SendProjectModal(this.app,this,file).open();}return true;}});
     this.addCommand({id:'choose-projects',name:'Choose projects',callback:()=>new ProjectModal(this.app,this).open()});
     this.addCommand({id:'new-chat',name:'New T3 chat',callback:()=>this.openChat()});
@@ -824,7 +837,7 @@ export default class SendToT3 extends Plugin {
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;throw e;}
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
   }
-  onunload(){this.stopped=true;this.inlineChat?.dispose();for(const menu of this.workflowMenus)menu.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.tagTriggers?.stop();this.folderWorkflowService?.stop();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.stopped=true;this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();for(const menu of this.workflowMenus)menu.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.tagTriggers?.stop();this.folderWorkflowService?.stop();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;

@@ -95,3 +95,19 @@
 @media (prefers-reduced-motion: reduce) {
   [data-t3-workflow-activity] > .t3-workflow-progress-border rect { animation: none; stroke-dasharray: none; }
 }
+
+.send-to-t3-selection-action {
+  position: fixed;
+  z-index: 1000;
+  min-height: 38px;
+  padding: 6px 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 20px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  box-shadow: var(--shadow-s);
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+  touch-action: manipulation;
+}
+.send-to-t3-selection-action[hidden] { display: none; }
