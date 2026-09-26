@@ -8,7 +8,7 @@ test('setup thread shows the user request once while the separate file carries t
   const prompt=workflowSetupPrompt({intent:draft.setupIntent,folderPath:'Gym',requestPath:`/vault/${workflowSetupRequestPath(draft)}`});
   assert.equal(prompt.split(draft.setupIntent).length-1,1);
   assert.match(prompt,/Workflow folder: Gym/);
-  assert.match(prompt,/T3 Workflow Setup\/draft-request.request.json/);
+  assert.match(prompt,/\.obsidian\/t3-code\/setup\/draft-request.request.json/);
   assert.doesNotMatch(prompt,/disabled draft|Workflow ID|setupRequestId|irVersion|eventTypes|plugin data.json/);
   const request=JSON.parse(workflowSetupRequest({vaultRoot:'/vault',folderPath:'Gym',proposalPath:`/vault/${workflowSetupPath(draft)}`,draft}));
   assert.equal(request.draft.workflowId,'draft');

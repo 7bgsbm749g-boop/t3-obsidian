@@ -8,7 +8,7 @@ beforeEach(()=>{globalThis.indexedDB=new IDBFactory();});
 const payload:ObservationPayload={observationId:'o',source:'vault.modify',note:{noteId:'n',incarnationId:'i',pathBefore:'A.md',pathAfter:'A.md'},revisionContext:{id:'r',parentIds:[],beforeHash:null,afterHash:'sha256:a',hashProfile:'utf8-exact-v1'},provenance:{attribution:'unknown',causedByOperationId:null},historyComplete:false};
 test('protocol records are canonical, validated, and immutable-path safe',()=>{
   const record=createRecord({recordId:'record',recordType:'observation' as const,vaultId:'vault',writer:{deviceId:'device',streamId:'stream',sequence:1,previousRecordHash:null},recordedAt:'2026-01-01T00:00:00.000Z',payload});
-  assert.equal(validateRecord(JSON.parse(JSON.stringify(record))).recordId,'record');assert.match(observationPath(record),/^T3 Automation\/observations\/device\/stream\/0+1-record\.json$/);
+  assert.equal(validateRecord(JSON.parse(JSON.stringify(record))).recordId,'record');assert.match(observationPath(record),/^\.obsidian\/t3-code\/automation\/observations\/device\/stream\/0+1-record\.json$/);
   assert.throws(()=>validateRecord({...record,payload:{...payload,historyComplete:true}}),/hash mismatch/);
   assert.throws(()=>observationPath({...record,writer:{...record.writer,deviceId:'../escape'}}),/Unsafe/);
 });

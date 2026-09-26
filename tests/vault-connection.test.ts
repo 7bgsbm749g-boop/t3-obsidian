@@ -1,12 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {connectVaultRemote,discoverVaultRoots,vaultRegistration,vaultIdentity,waitForVaultNote,type VaultRemote} from '../vault-connection';
+import {RemoteJournalFiles} from '../remote-journal';
 import {randomUUID} from 'node:crypto';
 
 function harness(){
   const id=randomUUID(),c={host:'direct',executable:'',transport:'direct' as const,url:'https://laptop.example',environmentId:'laptop-env'};
   const session={url:c.url,environmentId:c.environmentId,token:'private-token',expiresAt:Date.now()+600_000};
   let projects:any[]=[],lose=false,closed=0,noteChecks=0;
+  const files=new Map<string,string>();
   const commands:any[]=[],rpc:any[]=[],requests:string[]=[];
   const fetcher=async(url:any,options:any)=>{
     requests.push(String(url));
@@ -30,12 +32,16 @@ function harness(){
       if(req.tag==='filesystem.browse')value={parentPath:'C:\\Users\\Alex\\Vault',entries:[]};
       else if(req.tag==='projects.readFile'){
         if(req.payload.cwd==='missing'){queueMicrotask(()=>ws.onmessage({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'ProjectReadFileError'}}]}})}));return;}
-        value={contents:JSON.stringify({vaultId:req.payload.cwd==='wrong'?'another-vault':id}),truncated:false};
-      }else {noteChecks++;value={entries:noteChecks<2?[]:[{path:'Notes/Draft.md',kind:'file'}]};}
+        const contents=files.get(req.payload.relativePath);
+        if(contents===undefined&&!req.payload.relativePath.endsWith('/data.json')){queueMicrotask(()=>ws.onmessage({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'ProjectReadFileError'}}]}})}));return;}
+        value={contents:contents??JSON.stringify({vaultId:req.payload.cwd==='wrong'?'another-vault':id}),truncated:false};
+      }else if(req.tag==='projects.writeFile'){files.set(req.payload.relativePath,req.payload.contents);value={relativePath:req.payload.relativePath};}
+      else if(req.tag==='projects.deleteEntry'){files.delete(req.payload.relativePath);value={relativePath:req.payload.relativePath};}
+      else {noteChecks++;value={entries:noteChecks<2?[]:[{path:'Notes/Draft.md',kind:'file'}]};}
       queueMicrotask(()=>ws.onmessage({data:JSON.stringify([{_tag:'Exit',requestId:req.id,exit:{_tag:'Success',value}}])}));
     }};queueMicrotask(()=>ws.onopen());return ws as WebSocket;
   };
-  return {id,c,session,commands,rpc,requests,connect:()=>connectVaultRemote(c,session,fetcher,socket),lose:()=>{lose=true;},setProjects:(p:any[])=>{projects=p;},closed:()=>closed};
+  return {id,c,session,commands,rpc,requests,files,connect:()=>connectVaultRemote(c,session,fetcher,socket),lose:()=>{lose=true;},setProjects:(p:any[])=>{projects=p;},closed:()=>closed};
 }
 
 test('remote vault discovery uses identity across different folder names and handles missing settings',async()=>{
@@ -87,4 +93,19 @@ test('remote vault access refuses credentials from another environment before op
   const h=harness();let calls=0;
   await assert.rejects(connectVaultRemote(h.c,{...h.session,environmentId:'other'},async()=>{calls++;return new Response('{}');},()=>{throw Error('must not open');}),/Pair this connection/);
   assert.equal(calls,0);
+});
+
+test('paired workflow JSON writes into hidden coordinator storage and verifies exact bytes',async()=>{
+  const h=harness(),journal=new RemoteJournalFiles('/vault',h.connect);
+  const path='.obsidian/t3-code/automation/observations/phone/stream/0001-record.json';
+  try{
+    assert.equal(await journal.exists(path),false);
+    await journal.mkdir('.obsidian/t3-code/automation/observations/phone/stream');
+    await journal.write(path,'{"record":"one"}');
+    assert.equal(await journal.exists(path),true);
+    assert.equal(await journal.read(path),'{"record":"one"}');
+    assert.equal(h.files.get(path),'{"record":"one"}');
+    assert.ok(h.rpc.some(call=>call.tag==='projects.writeFile'&&call.payload.cwd==='/vault'&&call.payload.relativePath===path));
+    assert.equal(h.rpc.filter(call=>call.tag==='projects.writeFile').length,1);
+  }finally{journal.close();}
 });

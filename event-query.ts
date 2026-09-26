@@ -1,8 +1,8 @@
-import {canonical,safeSegment,validateRecord,type EventType,type NormalizedEventPayload,type RecordEnvelope} from './automation-protocol';
+import {AUTOMATION_FOLDER,canonical,safeSegment,validateRecord,type EventType,type NormalizedEventPayload,type RecordEnvelope} from './automation-protocol';
 import {globMatches} from './automation-ir';
 
-export const EVENT_QUERY_REQUESTS='T3 Automation/event-queries/requests';
-export const EVENT_QUERY_RESULTS='T3 Automation/event-queries/results';
+export const EVENT_QUERY_REQUESTS=`${AUTOMATION_FOLDER}/event-queries/requests`;
+export const EVENT_QUERY_RESULTS=`${AUTOMATION_FOLDER}/event-queries/results`;
 const eventTypes:EventType[]=['note.created','note.changed','note.renamed','note.deleted','note.reconciled','workflow.requested','workflow.started','workflow.completed','workflow.failed','note.changeApplied'];
 export type EventQueryRange=
   |{kind:'relative';duration:string}

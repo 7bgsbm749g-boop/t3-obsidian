@@ -2,7 +2,7 @@ import {sha1} from '@noble/hashes/sha1';
 import {sha256} from '@noble/hashes/sha256';
 import {Buffer} from 'buffer';
 
-export const AUTOMATION_FOLDER='T3 Automation';
+export const AUTOMATION_FOLDER='.obsidian/t3-code/automation';
 export const PROTOCOL_VERSION=1;
 export type Attribution='plugin-established'|'reported'|'inferred'|'unknown';
 export type ObservationSource='editor'|'vault.create'|'vault.modify'|'vault.rename'|'vault.delete'|'metadata.changed'|'metadata.deleted'|'reconciliation'|'plugin.command';

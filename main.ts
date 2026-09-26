@@ -17,6 +17,7 @@ import {installFolderIndicators,type FolderIndicatorController} from './folder-i
 import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,waitForVaultNote,type VaultLocation,type VaultRegistration} from './vault-connection';
 import {VaultSetupModal,VaultSetupCancelled,type VaultMachine} from './vault-setup-ui';
 import {ObservationEngine,type ObservedNote} from './observation-engine';
+import {RemoteJournalFiles} from './remote-journal';
 import {releaseHash,validateWorkflowIR,type WorkflowIR} from './automation-ir';
 import {folderWorkflowIR,folderForWorkflow,runnableFolderWorkflow} from './v2-folder-workflow';
 import {WORKFLOW_SETUP_FOLDER,workflowSetupPath,workflowSetupRequestPath,workflowSetupPrompt,workflowSetupRequest,validateWorkflowSetupProposal} from './workflow-setup-request';
@@ -80,6 +81,7 @@ export default class SendToT3 extends Plugin {
   private vaultSetupModal?:VaultSetupModal;
   private vaultRegistrations:Record<string,VaultRegistration>={};
   private observationEngine?:ObservationEngine;
+  private remoteJournal?:RemoteJournalFiles;
   private retiringJournal?:Promise<void>;
   private coordinatorService?:CoordinatorService;
   private coordinatorTimer?:number;
@@ -143,8 +145,8 @@ export default class SendToT3 extends Plugin {
       this.paletteChat=installPaletteChat(this.app,prompt=>this.openChat(prompt),{onError:error=>new Notice(`T3 Chat: ${message(error)}`,10000)});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined')this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>this.workflowFolders());
-      void this.startObservationJournal().then(()=>this.retireUnusedJournal()).catch(error=>new Notice(`T3 automation journal: ${message(error)}`,12000));
-      this.registerInterval(window.setInterval(()=>void this.retireUnusedJournal().catch(error=>new Notice(`T3 automation cleanup: ${message(error)}`,12000)),30_000));
+      void this.startObservationJournal().then(()=>this.retireLegacyWorkflowFolders()).catch(error=>new Notice(`T3 automation journal: ${message(error)}`,12000));
+      this.registerInterval(window.setInterval(()=>void this.retireLegacyWorkflowFolders().catch(error=>new Notice(`T3 automation cleanup: ${message(error)}`,12000)),30_000));
       this.registerInterval(window.setInterval(()=>void this.checkExternalSettings().catch(error=>new Notice(`T3 workflow settings: ${message(error)}`,12000)),5000));
       this.registerInterval(window.setInterval(()=>void this.checkWorkflowProposals().catch(error=>new Notice(`T3 workflow setup: ${message(error)}`,12000)),5000));
     });
@@ -255,32 +257,43 @@ export default class SendToT3 extends Plugin {
       if(file instanceof TFile){if(capture('vault.delete',file.path))void engine.delete(file.path).catch(error=>new Notice(message(error)));}
       else if(file instanceof TFolder)void engine.deletePrefix(file.path,path=>capture('vault.delete',path)).catch(error=>new Notice(message(error)));
     }));
-    this.registerInterval(window.setInterval(()=>void this.observationEngine?.flush(),30_000));
+    this.registerInterval(window.setInterval(()=>{
+      if(this.observationEngine)void this.observationEngine.flush();
+      else if(observationInterest(this.settings.automationDrafts).active)void this.refreshObservationCapture().catch(error=>new Notice(`T3 automation journal: ${message(error)}`,12000));
+    },30_000));
     await this.refreshObservationCapture();
   }
   private async refreshObservationCapture(){
     if(!this.journalFiles)return;
     const interest=observationInterest(this.settings.automationDrafts);
-    if(interest.active&&this.retiringJournal)await this.retiringJournal;
     const signature=JSON.stringify(this.settings.automationDrafts.filter(ir=>ir.enabled).map(ir=>({id:ir.workflowId,scope:ir.scope,trigger:ir.trigger})));
     if(signature===this.captureSignature){await this.restartCoordinator();return;}
-    this.captureSignature=signature;
     this.coordinatorService?.stop();this.coordinatorService=undefined;
     if(this.coordinatorTimer!==undefined){window.clearInterval(this.coordinatorTimer);this.coordinatorTimer=undefined;}
     this.observationEngine?.stop();this.observationEngine=undefined;
-    if(!interest.active)return;
+    this.remoteJournal?.close();this.remoteJournal=undefined;
+    this.journalFiles=this.app.vault.adapter as NonNullable<typeof this.journalFiles>;
+    if(!interest.active){this.captureSignature=signature;return;}
+    if(Platform.isMobile){
+      if(!this.settings.automation.coordinatorDeviceId||this.settings.automation.coordinatorDeviceId===this.deviceId)throw Error('Set up the workflow on the linked desktop before capturing phone events.');
+      const ir=this.settings.automationDrafts.find(draft=>draft.enabled&&draft.connectionId),connectionId=ir?.connectionId;
+      const paired=this.settings.paired.find(item=>item.id===connectionId);
+      const root=paired&&(this.settings.folderLinks.find(item=>item.folderPath==='/'&&(item.connectionId===paired.id||item.environmentId===paired.environmentId))?.workspaceRoot??this.settings.vaultLocations.find(item=>item.environmentId===paired.environmentId)?.workspaceRoot);
+      if(!paired||!root)throw Error('The workflow destination vault is not connected on this device.');
+      const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId,connectionId:paired.id};
+      const remote=this.remoteJournal=new RemoteJournalFiles(root,async()=>connectVaultRemote(connection,await this.sessionFor(paired.id)));
+      this.journalFiles={exists:path=>remote.exists(path),read:path=>remote.read(path),write:(path,data)=>remote.write(path,data),mkdir:path=>remote.mkdir(path),list:async()=>{throw Error('The coordinator scans workflow files on the destination machine.');}};
+    }
     this.streamId=randomId();await this.saveDeviceState();
     const engine=this.observationEngine=new ObservationEngine({vaultId:this.settings.vaultId,deviceId:this.deviceId,streamId:this.streamId,publish:true,files:this.journalFiles,report:error=>new Notice(`T3 automation journal: ${error}`,12000)});
     const files=this.app.vault.getMarkdownFiles().filter(file=>interest.baseline(file.path));
-    await engine.initialize(await Promise.all(files.map(file=>this.readObservedNote(file))),false);
-    await this.restartCoordinator();
+    try{await engine.initialize(await Promise.all(files.map(file=>this.readObservedNote(file))),false);await this.restartCoordinator();this.captureSignature=signature;}
+    catch(error){engine.stop();this.observationEngine=undefined;this.remoteJournal?.close();this.remoteJournal=undefined;throw error;}
   }
-  private async retireUnusedJournal():Promise<void>{
-    if(this.stopped||this.settings.automationDrafts.some(ir=>ir.enabled||ir.activatedAt))return;
+  private async retireLegacyWorkflowFolders():Promise<void>{
+    if(this.stopped)return;
     if(this.retiringJournal)return this.retiringJournal;
-    const folder=this.app.vault.getAbstractFileByPath('T3 Automation');
-    if(!(folder instanceof TFolder))return;
-    this.retiringJournal=this.app.vault.delete(folder,true).finally(()=>{this.retiringJournal=undefined;});
+    this.retiringJournal=(async()=>{for(const path of ['T3 Automation','T3 Workflow Setup']){const folder=this.app.vault.getAbstractFileByPath(path);if(folder instanceof TFolder)await this.app.vault.delete(folder,true);}})().finally(()=>{this.retiringJournal=undefined;});
     await this.retiringJournal;
   }
   private async restartCoordinator(){this.coordinatorService?.stop();this.coordinatorService=undefined;if(this.coordinatorTimer!==undefined){window.clearInterval(this.coordinatorTimer);this.coordinatorTimer=undefined;}const engine=this.observationEngine,files=this.journalFiles;if(!engine||!files||this.settings.automation.coordinatorDeviceId!==this.deviceId)return;const runtime=new DeterministicWorkflowRuntime(engine.store,{currentNote:async(noteId,path)=>{let baseline=await engine.store.getBaseline(noteId);if((!baseline||baseline.tombstone)&&path)baseline=(await engine.store.baselines()).find(item=>item.path===path&&!item.tombstone);if(!baseline||baseline.tombstone)return;const file=this.app.vault.getAbstractFileByPath(baseline.path);if(!(file instanceof TFile))return;return noteSnapshot(noteId,baseline.incarnationId,baseline.path,await this.app.vault.read(file));},environmentId:destinationId=>destinationId,now:()=>new Date(),id:()=>randomId()},this.settings.vaultId),releases=():RuntimeRelease[]=>this.settings.automationDrafts.filter(runnableFolderWorkflow).map((ir,index)=>({ir,hash:releaseHash(ir),activatedAt:ir.activatedAt??new Date(0).toISOString(),activationSequence:index+1}));const driver=new DurableExecutionDriver(engine.store,{createThread:plan=>this.sendV2Plan(plan),startTurn:async()=>{},poll:(plan,threadId)=>this.pollV2Plan(plan,threadId),apply:async()=>{throw Error('Validated note application is not available in the folder workflow editor.');},emit:async()=>{throw Error('Event emission is not available in the folder workflow editor.');},now:()=>new Date().toISOString()}),service=this.coordinatorService=new CoordinatorService({driver,canExecute:()=>observationInterest(this.settings.automationDrafts).active&&!this.stopped,vaultId:this.settings.vaultId,assignment:{destinationId:this.settings.automation.destinationId,assignmentId:this.coordinatorAssignmentId,installationId:this.deviceId,epoch:1,active:true},store:engine.store,files,runtime,releases,report:error=>new Notice(`T3 automation coordinator: ${error}`,12000)});await service.initialize();await service.scan();this.coordinatorTimer=window.setInterval(()=>void service.scan().catch(error=>new Notice(`T3 automation coordinator: ${message(error)}`,12000)),30_000);}
@@ -345,22 +358,29 @@ export default class SendToT3 extends Plugin {
     this.busy=true;
     let requestSaved=false,requestWritten=false;
     try{
-      if(!this.settings.automation.coordinatorDeviceId)this.settings.automation={...this.settings.automation,coordinatorDeviceId:this.deviceId};
+      if(!this.settings.automation.coordinatorDeviceId){
+        if(Platform.isMobile)throw Error('Start the first workflow from the linked desktop so it can coordinate events from this vault.');
+        this.settings.automation={...this.settings.automation,coordinatorDeviceId:this.deviceId};
+      }
       await this.saveV2Workflow(draft);
-      const adapter=this.app.vault.adapter;
-      if(!await adapter.exists(WORKFLOW_SETUP_FOLDER))await adapter.mkdir(WORKFLOW_SETUP_FOLDER);
-      if(await adapter.exists(requestPath))throw Error('A workflow setup request with this ID already exists.');
-      await adapter.write(requestPath,requestDocument);requestWritten=true;
       if(connection.transport==='direct'){
         const remote=await connectVaultRemote(connection,await this.sessionFor(connection.connectionId??''));
-        try{await waitForVaultNote(remote,vaultRoot,requestPath,()=>!this.stopped,()=>new Notice('Waiting for workflow setup instructions to reach the selected machine through Obsidian Sync…',10000));}
+        try{if(await remote.readFile(vaultRoot,requestPath)!==undefined)throw Error('A workflow setup request with this ID already exists.');await remote.writeFile(vaultRoot,requestPath,requestDocument);if(await remote.readFile(vaultRoot,requestPath)!==requestDocument)throw Error('The workflow setup request could not be verified on the destination.');requestWritten=true;}
         finally{remote.close();}
+      }else{
+        const adapter=this.app.vault.adapter;
+        let parent='';for(const part of WORKFLOW_SETUP_FOLDER.split('/')){parent=parent?`${parent}/${part}`:part;if(!await adapter.exists(parent))await adapter.mkdir(parent);}
+        if(await adapter.exists(requestPath))throw Error('A workflow setup request with this ID already exists.');
+        await adapter.write(requestPath,requestDocument);requestWritten=true;
       }
       this.settings.pending.push(request);
       try{await this.save();requestSaved=true;}catch(error){this.settings.pending=this.settings.pending.filter(item=>item!==request);throw error;}
       return await this.dispatch(request);
     }catch(error){
-      if(requestWritten&&!requestSaved)try{await this.app.vault.adapter.remove(requestPath);}catch{/* The unsent request file can be removed when the draft is deleted. */}
+      if(requestWritten&&!requestSaved)try{
+        if(connection.transport==='direct'){const remote=await connectVaultRemote(connection,await this.sessionFor(connection.connectionId??''));try{await remote.deleteFile(vaultRoot,requestPath);}finally{remote.close();}}
+        else await this.app.vault.adapter.remove(requestPath);
+      }catch{/* The unsent request file can be removed when the draft is deleted. */}
       throw error;
     }
     finally{this.busy=false;}
@@ -369,7 +389,15 @@ export default class SendToT3 extends Plugin {
     const before=this.settings.automationDrafts;
     this.settings.automationDrafts=before.filter(item=>item.workflowId!==ir.workflowId);
     try{await this.save();await this.refreshObservationCapture();this.refreshFolderIndicators();}catch(error){this.settings.automationDrafts=before;throw error;}
-    if(ir.setupRequestId)for(const path of [workflowSetupRequestPath(ir),workflowSetupPath(ir)])try{if(await this.app.vault.adapter.exists(path))await this.app.vault.adapter.remove(path);}catch(error){new Notice(`Workflow removed, but its setup file could not be deleted: ${message(error)}`,12000);}
+    if(ir.setupRequestId){
+      const paths=[workflowSetupRequestPath(ir),workflowSetupPath(ir)];
+      const paired=this.settings.paired.find(item=>item.id===ir.connectionId);
+      const root=paired&&(this.settings.folderLinks.find(item=>item.folderPath==='/'&&(item.connectionId===paired.id||item.environmentId===paired.environmentId))?.workspaceRoot??this.settings.vaultLocations.find(item=>item.environmentId===paired.environmentId)?.workspaceRoot);
+      if(paired&&root){
+        try{const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId,connectionId:paired.id},await this.sessionFor(paired.id));try{for(const path of paths)if(await remote.readFile(root,path)!==undefined)await remote.deleteFile(root,path);}finally{remote.close();}}
+        catch(error){new Notice(`Workflow removed, but its setup file could not be deleted: ${message(error)}`,12000);}
+      }else for(const path of paths)try{if(await this.app.vault.adapter.exists(path))await this.app.vault.adapter.remove(path);}catch(error){new Notice(`Workflow removed, but its setup file could not be deleted: ${message(error)}`,12000);}
+    }
   }
   paletteChatStatus(){return this.paletteChat?.status??'unavailable';}
   workflowFolders(){return this.settings.automationDrafts.map(ir=>folderForWorkflow(ir)??(ir.scope.path.glob.split(/[*?]/,1)[0].replace(/\/$/,'')||'/'));}
@@ -952,7 +980,7 @@ export default class SendToT3 extends Plugin {
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;throw e;}
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
   }
-  onunload(){this.stopped=true;this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.stopped=true;this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.remoteJournal?.close();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;

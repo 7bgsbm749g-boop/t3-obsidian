@@ -168,6 +168,7 @@ test('an existing root-associated workflow can be attached to its selected folde
 test('workflow creation saves an inert draft before sending its setup request',async()=>{
   const h=await folderMenuHarness();
   try{
+    h.fileMenu('unused.md',false);
     const link=await h.open();await h.button(link,'Link').click();
     const linked=h.plugin.settings.folderLinks[0];
     h.plugin.settings.folderLinks.push({id:'root',folderPath:'/',vaultId:h.plugin.settings.vaultId,connectionId:'c',projectId:'root',projectTitle:'QLO2',workspaceRoot:'/vault',self:true});
@@ -176,7 +177,7 @@ test('workflow creation saves an inert draft before sending its setup request',a
     h.plugin.projectReadinessError=()=>undefined;
     h.plugin.connection=()=>({transport:'desktop',host:'local',executable:'t3'});
     const files=new Map<string,string>();let folderExists=false;
-    h.plugin.app.vault.adapter={exists:async(path:string)=>path==='T3 Workflow Setup'?folderExists:files.has(path),mkdir:async()=>{folderExists=true;},write:async(path:string,bytes:string)=>{files.set(path,bytes);},remove:async(path:string)=>{files.delete(path);}};
+    h.plugin.app.vault.adapter={exists:async(path:string)=>path==='.obsidian/t3-code/setup'?folderExists:files.has(path),mkdir:async()=>{folderExists=true;},write:async(path:string,bytes:string)=>{files.set(path,bytes);},remove:async(path:string)=>{files.delete(path);}};
     let sent:any;
     h.plugin.dispatch=async(request:any)=>{sent=request;assert.equal(h.plugin.settings.automationDrafts[0].enabled,false);assert.equal(h.plugin.settings.pending[0].id,request.id);assert.equal(files.size,1);return 'setup-thread';};
     const thread=await h.plugin.setupV2Workflow({path:'Notes',name:'Notes'},linked,'When a note is tagged ready, summarize it.');
@@ -185,7 +186,7 @@ test('workflow creation saves an inert draft before sending its setup request',a
     assert.equal(draft.setupIntent,'When a note is tagged ready, summarize it.');
     assert.equal(draft.setupRequestId,sent.id);
     assert.equal(draft.activatedAt,undefined);
-    assert.match(sent.prompt,/Workflow folder: Notes\nSetup instructions: \/vault\/T3 Workflow Setup\//);
+    assert.match(sent.prompt,/Workflow folder: Notes\nSetup instructions: \/vault\/\.obsidian\/t3-code\/setup\//);
     assert.doesNotMatch(sent.prompt,/disabled draft|Workflow ID|setupRequestId|eventTypes/);
     const setup=JSON.parse([...files.values()][0]);
     assert.equal(setup.draft.workflowId,draft.workflowId);
@@ -198,10 +199,10 @@ test('coordinator applies a matching setup proposal and removes its temporary fi
   try{
     const draft={...folderWorkflowIR({id:'setup',name:'Setup',folderPath:'Notes',includeSubfolders:true,events:['create'],task:'Summarize.',destinationId:'qlo2-vps',projectId:'project',connectionId:'c',enabled:false,order:0}),setupIntent:'When tagged ready, summarize.',setupRequestId:'request'};
     h.plugin.settings.automationDrafts=[draft];h.plugin.settings.automation.coordinatorDeviceId=h.deviceId;
-    const path='T3 Workflow Setup/setup-request.json';
+    const path='.obsidian/t3-code/setup/setup-request.json';
     const configured={...draft,revision:2,enabled:true,trigger:{eventTypes:['note.changed'],unknown:'hold-for-review'}};
-    const files=new Map([[path,JSON.stringify({workflowId:'setup',setupRequestId:'request',ir:configured})],['T3 Workflow Setup/setup-request.request.json','setup context']]);
-    h.plugin.app.vault.adapter={exists:async(p:string)=>p==='T3 Workflow Setup'||files.has(p),list:async()=>({files:[...files.keys()],folders:[]}),read:async(p:string)=>files.get(p),remove:async(p:string)=>{files.delete(p);},rmdir:async()=>{}};
+    const files=new Map([[path,JSON.stringify({workflowId:'setup',setupRequestId:'request',ir:configured})],['.obsidian/t3-code/setup/setup-request.request.json','setup context']]);
+    h.plugin.app.vault.adapter={exists:async(p:string)=>p==='.obsidian/t3-code/setup'||files.has(p),list:async()=>({files:[...files.keys()],folders:[]}),read:async(p:string)=>files.get(p),remove:async(p:string)=>{files.delete(p);},rmdir:async()=>{}};
     await h.plugin.checkWorkflowProposals();
     assert.equal(files.size,0);
     assert.equal(h.plugin.settings.automationDrafts[0].enabled,true);

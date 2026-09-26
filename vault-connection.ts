@@ -20,6 +20,9 @@ export interface VaultRemote {
   browse(path:string):Promise<{parentPath:string;entries:{name:string;fullPath:string}[]}>;
   matches(root:string,settingsPath:string,vaultId:string):Promise<boolean>;
   hasNote(root:string,path:string):Promise<boolean>;
+  readFile(root:string,path:string):Promise<string|undefined>;
+  writeFile(root:string,path:string,contents:string):Promise<void>;
+  deleteFile(root:string,path:string):Promise<void>;
   ensureProject(registration:VaultRegistration):Promise<Project>;
   close():void;
 }
@@ -41,6 +44,12 @@ export async function connectVaultRemote(c:Connection,s:PairedSession|undefined,
       try{const result=await rpc('projects.listEntries',{cwd:root,directoryPath});return Array.isArray(result?.entries)&&result.entries.some((x:any)=>x.path===path&&x.kind==='file');}
       catch(error){if(error instanceof VaultRpcError&&['ProjectListEntriesError','ProjectEntriesError'].includes(error.kind))return false;throw error;}
     },
+    readFile:async(root,path)=>{
+      try{const result=await rpc('projects.readFile',{cwd:root,relativePath:path});if(result.truncated||typeof result.contents!=='string')throw Error(`T3 could not read the complete file: ${path}`);return result.contents;}
+      catch(error){if(error instanceof VaultRpcError&&error.kind==='ProjectReadFileError')return undefined;throw error;}
+    },
+    writeFile:async(root,path,contents)=>{await rpc('projects.writeFile',{cwd:root,relativePath:path,contents});},
+    deleteFile:async(root,path)=>{await rpc('projects.deleteEntry',{cwd:root,relativePath:path});},
     ensureProject:async registration=>{
       const root=registration.workspaceRoot;
       const existing=(await projects()).find(p=>sameWorkspacePath(p.workspaceRoot,root));if(existing)return existing;

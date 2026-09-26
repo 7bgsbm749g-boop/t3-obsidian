@@ -1,7 +1,7 @@
 import {validateWorkflowIR,type WorkflowIR} from './automation-ir';
 import {runnableFolderWorkflow} from './v2-folder-workflow';
 
-export const WORKFLOW_SETUP_FOLDER='T3 Workflow Setup';
+export const WORKFLOW_SETUP_FOLDER='.obsidian/t3-code/setup';
 
 export function workflowSetupPath(draft:WorkflowIR):string{
   if(!draft.setupRequestId)throw Error('Workflow setup request is missing.');
