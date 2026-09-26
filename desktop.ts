@@ -8,6 +8,7 @@ import {createHash} from 'node:crypto';
 import * as http from 'node:http';
 import lockfile from 'proper-lockfile';
 import type {Connection} from './bridge';
+import type {ThreadAccess} from './thread-stream';
 import {existingThreadTurn} from './thread-target';
 import {readNewThreadModel,type ModelSelection} from './model-defaults';
 
@@ -121,4 +122,16 @@ export async function runDesktop(connection:Connection,args:string[],input=''):P
   const shell=await api('shell');if(req.action==='projects')return {projects:shell.projects};
   return {threads:shell.threads.filter((t:any)=>t.projectId===req.project)};
  } finally {if(session?.sessionId)try{await cli(command,['auth','session','revoke','--base-dir',base,session.sessionId]);}catch{/* Five-minute expiry bounds failed revocation. */}}
+}
+
+/** A short-lived local session dedicated to one live thread subscription. */
+export async function desktopThreadAccess(connection:Connection):Promise<ThreadAccess>{
+  if(connection.host!=='local')throw Error('Local T3 is available only on this computer.');
+  const base=connection.baseDir||join(homedir(),'.t3');
+  const runtime=JSON.parse(await fs.readFile(join(base,'userdata','server-runtime.json'),'utf8'));
+  const command=findCli(connection);
+  const issued=JSON.parse(await cli(command,['auth','session','issue','--base-dir',base,'--ttl','5m','--label','send-to-t3-code-inline','--json']));
+  if(typeof issued.token!=='string'||typeof issued.sessionId!=='string')throw Error('T3 did not issue a local stream session.');
+  let closed=false;
+  return {origin:runtime.origin,api:(path,payload)=>requestJson(runtime.origin,issued.token,path,payload),async close(){if(closed)return;closed=true;try{await cli(command,['auth','session','revoke','--base-dir',base,issued.sessionId]);}catch{/* Session expires after five minutes. */}}};
 }

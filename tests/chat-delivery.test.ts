@@ -11,6 +11,7 @@ const project={id:'chat-project',title:'Personal notes',workspaceRoot:'/projects
 
 async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   let local:any={mode:'direct',pairedSessions:{'chat-connection':{url:'https://chat.example',environmentId:'chat-env',token:'dummy-chat-session',expiresAt:Date.now()+600_000}}};
+  const localStorage=new Map<string,any>();
   const rootLink={id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true};
   let activeNote:any;
   const initial={folderLinks:[rootLink],chatProjectKey:'old:unrelated-project',paired:[{id:'chat-connection',name:'Laptop',url:'https://chat.example',environmentId:'chat-env'}],directScanId:'chat-connection',directProjects:[project],directSelected:['chat-connection:chat-project'],completion:{action:'delete'}};
@@ -48,9 +49,9 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   }
   class Plugin {
     app={
-      loadLocalStorage:()=>local,
-      saveLocalStorage:(_:string,value:any)=>{local=value;},
-      workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{(workspaceEvents[name]??=[]).push(callback);return {};},getActiveViewOfType:()=>activeNote?{file:activeNote}:undefined},
+      loadLocalStorage:(key:string)=>localStorage.get(key)??(key==='send-to-t3-code-device-v1'?local:undefined),
+      saveLocalStorage:(key:string,value:any)=>{localStorage.set(key,value);if(key==='send-to-t3-code-device-v1')local=value;},
+      workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{(workspaceEvents[name]??=[]).push(callback);return {};},getActiveViewOfType:()=>activeNote?{file:activeNote}:undefined,getLeavesOfType:()=>[]},
       vault:{adapter:{},getName:()=> 'Notes',read:()=>{vaultAccesses++;throw Error('Chat must not read note contents');},readBinary:()=>{vaultAccesses++;throw Error('Chat must not read attachments');}},
     };
     async loadData(){return shared.at(-1)??initial;}
@@ -86,7 +87,13 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     constructor(public url:string){sockets.push(this);queueMicrotask(()=>this.onopen?.());}
     close(){this.closed=true;this.onclose?.();}
     send(raw:string){
-      const req=JSON.parse(raw);let value:any;
+      const req=JSON.parse(raw);if(req._tag==='Ack'||req._tag==='Interrupt'||req._tag==='Pong')return;
+      if(req.tag==='orchestration.subscribeThread'){
+        const turn=commands.at(-1),turnId=turn?.commandId;
+        queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:req.id,values:[{kind:'snapshot',snapshot:{snapshotSequence:5,thread:{id:req.payload.threadId,messages:[{id:'answer',role:'assistant',turnId,text:'Inline reply from T3.',streaming:false}],activities:[],latestTurn:{turnId,state:'completed'},session:{status:'ready',activeTurnId:null}}}}]})}));
+        return;
+      }
+      let value:any;
       if(req.tag==='server.getConfig')value=modelConfig();
       else if(req.tag==='filesystem.browse')value={parentPath:req.payload.partialPath==='~'?'/home/person':req.payload.partialPath.replace(/\/$/,''),entries:[]};
       else if(req.tag==='projects.readFile')value={contents:JSON.stringify(req.payload.cwd===project.workspaceRoot?{vaultId:shared.at(-1).vaultId}:{vaultId:'different-vault'}),truncated:false};
@@ -102,7 +109,14 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     fetch:fetcher,WebSocket:Socket,Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console,
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();return plugin;};
-  return {plugin:await start(),start,commands,shared,registered,modals,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);for(const listener of workspaceEvents['editor-menu']??[])listener(menu,{getSelection:()=>selection},{file});return {menu,file};},vaultAccesses:()=>vaultAccesses};
+  return {plugin:await start(),start,commands,shared,registered,modals,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+    const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
+    let value=selection+'\nTail';
+    const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
+    const posToOffset=(pos:{line:number;ch:number})=>value.split('\n').slice(0,pos.line).reduce((n,line)=>n+line.length+1,0)+pos.ch;
+    const editor={getSelection:()=>selection,getValue:()=>value,getCursor:(side:string)=>offsetToPos(side==='from'?0:selection.length),posToOffset,offsetToPos,replaceRange:(text:string,from:any,to?:any)=>{value=value.slice(0,posToOffset(from))+text+value.slice(to?posToOffset(to):posToOffset(from));}};
+    for(const listener of workspaceEvents['editor-menu']??[])listener(menu,editor,{file});return {menu,file,editor,get value(){return value;}};
+  },vaultAccesses:()=>vaultAccesses};
 }
 
 test('mobile chat without a note uses the root link, preserves the prompt, advertises event queries, and never enrolls note cleanup',async()=>{
@@ -247,29 +261,45 @@ test('palette chat can target an existing thread and labels active and idle conv
   }finally{h.plugin.onunload();}
 });
 
-test('editor selection menu asks T3 in a new or existing thread and requires an in-note reply',async()=>{
+test('editor selection menu streams a T3 reply into its original note for new and existing threads',async()=>{
   const h=await chatHarness();
   try{
     assert.equal(h.editorMenu('   ').menu.items.length,0,'Whitespace-only selections do not add an action');
     assert.ok(h.editorMenu('Cross-window selection','Notes/Popout.md',true).menu.items.some(item=>item.title==='Ask T3'),'Editor menu accepts Obsidian file objects from another window realm');
     const selection='Explain why **this claim** follows.\nKeep [[source links]].';
-    let entry=h.editorMenu(selection,'Notes/Original.md').menu.items.find(item=>item.title==='Ask T3');assert.ok(entry);
+    const first=h.editorMenu(selection,'Notes/Original.md');let entry=first.menu.items.find(item=>item.title==='Ask T3');assert.ok(entry);
     await entry!.callback();
     const destination=h.modals.at(-1);assert.equal(destination.constructor.name,'ChatDestinationModal');
     h.setActiveNote('Notes/Different.md');await destination.choose(false);
     assert.equal(h.commands[0].type,'thread.create');assert.equal(h.commands[0].title,'Explain why **this claim** follows.');
     const newThreadText=h.commands[1].message.text;
-    assert.ok(newThreadText.startsWith(selection+'\n\nReply in the Obsidian note itself by editing the note with your answer. Do not only reply in T3.'));
+    assert.ok(newThreadText.startsWith(selection));assert.match(newThreadText,/Answer in the T3 thread\. Do not edit the Obsidian note/);assert.doesNotMatch(newThreadText,/Reply in the Obsidian note itself/);
     assert.match(newThreadText,/Vault-relative note path: "Notes\/Original.md"/);assert.doesNotMatch(newThreadText,/Different.md/);
+    await new Promise(resolve=>setTimeout(resolve,180));
+    assert.match(first.value,/\*\*T3 answer\*\*[\s\S]*Inline reply from T3\./);
 
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',updatedAt:'2026-09-19T11:00:00Z',latestTurn:{state:'completed'}}]);
     const followup='Add the selected evidence to the conclusion.';
-    entry=h.editorMenu(followup,'Notes/Original.md').menu.items.find(item=>item.title==='Ask T3');assert.ok(entry);
+    const second=h.editorMenu(followup,'Notes/Original.md');entry=second.menu.items.find(item=>item.title==='Ask T3');assert.ok(entry);
     await entry!.callback();await h.modals.at(-1).choose(true);
     const picker=h.modals.at(-1);await picker.choose(picker.getItems()[0]);
     assert.equal(h.commands[2].type,'thread.turn.start');assert.equal(h.commands[2].threadId,'old-thread');
-    assert.ok(h.commands[2].message.text.startsWith(followup+'\n\nReply in the Obsidian note itself by editing the note with your answer. Do not only reply in T3.'));
+    assert.ok(h.commands[2].message.text.startsWith(followup));assert.doesNotMatch(h.commands[2].message.text,/Reply in the Obsidian note itself/);
+    await new Promise(resolve=>setTimeout(resolve,180));assert.match(second.value,/Inline reply from T3\./);
     assert.equal(h.vaultAccesses(),0,'Selection chat sends the selection and note path without reading the note body');
+  }finally{h.plugin.onunload();}
+});
+
+test('Ask T3 refuses a switched editor before dispatching or inserting',async()=>{
+  const h=await chatHarness();
+  try{
+    const context=h.editorMenu('What changed?','Notes/Original.md');
+    const item=context.menu.items.find(entry=>entry.title==='Ask T3');assert.ok(item);
+    await item.callback();
+    context.file.path='Notes/Another.md';
+    await h.modals.at(-1).choose(false);
+    assert.equal(h.commands.length,0);
+    assert.doesNotMatch(context.value,/t3-inline:start/);
   }finally{h.plugin.onunload();}
 });
 

@@ -96,7 +96,7 @@ Account connections and manual pairing use T3's existing protocols, not an offic
 
 ## Upgrade
 
-Install 2.12.3 and reload the plugin on each device after Sync finishes. Existing manual connections, project selections, folder workflows, and tag triggers remain intact. Workflows v1 is selected by default for existing vaults; v2 drafts remain disabled until explicitly selected and enabled. Each device clearly requires its own email verification before synced projects and folder links become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
+Install 2.12.4 and reload the plugin on each device after Sync finishes. Existing manual connections, project selections, folder workflows, and tag triggers remain intact. Workflows v1 is selected by default for existing vaults; v2 drafts remain disabled until explicitly selected and enabled. Each device clearly requires its own email verification before synced projects and folder links become visible. The old HTTPS companion mode and bundled Python/SSH code are removed. Devices previously using that mode now open **T3 Connect** and can use the account setup above. Old service URLs, keys and remote project catalogs are removed from the active settings. Local desktop settings and direct connections remain available.
 
 Old unconfirmed sends remain visible for review but cannot be retried through the removed mode. Check the original thread in T3 before creating another send, since the earlier request may have started. Discard only removes the local retry record. Old companion completion jobs keep their notes and stop monitoring. Direct/local completion monitoring continues. No request is automatically rerouted or sent during migration.
 
@@ -117,6 +117,14 @@ Newly connected remote vaults check that the referenced note appears in the dest
 The regular **Send to T3 Code: New T3 chat** command opens a message editor using the same automatic routing. It works as a hotkey/mobile toolbar action and is the fallback when the live palette row is unavailable. The note context is captured when chat opens. Switching notes while composing or retrying does not change that context. The live row uses isolated, version-checked internal command-palette methods because Obsidian does not expose a public dynamic-result API; keep the core Command palette plugin enabled.
 
 Chat retains the optional wait instruction, 120,000-character limit (including note context), and manual retry handling. It never enrolls the note for archive/delete cleanup. Choosing **Delete note** or **Archive note** therefore does nothing to a note referenced by command-palette chat. An unconfirmed send must be retried through **Unconfirmed requests → Retry**, which preserves the original prompt, note path, destination, and command IDs.
+
+## Ask T3 inline
+
+Select text in a Markdown editor and choose **Ask T3** from the editor menu. Choose **New thread** or **Existing thread…**. The plugin sends the selection and captured note path to T3, then inserts a tracked response below the selected line. It streams the assistant's text into that response, shows the latest tool or approval status, and marks the response complete when the T3 turn ends. The T3 agent is instructed to answer in its thread and leave the note untouched; the plugin owns the note insertion.
+
+The response is surrounded by small HTML comment markers so it can be found after edits elsewhere in the note, file/view switches, or a plugin reload. The plugin only replaces its own response when the previous content still matches. If you edit or remove the response while it is streaming, updates stop instead of overwriting your changes. A closed note catches up when reopened. Markdown code fences in a partial answer are temporarily closed while streaming. Selecting text inside a fenced block places the response after the closing fence; an unclosed fence must be closed first.
+
+An active response offers **Stop T3 response** in the editor menu, which requests an interrupt for that T3 turn. Approval and question prompts are signaled in the note and through an Obsidian notice; respond in the T3 app. Full reasoning traces and tool payloads are not copied into the note. Inline job metadata is device-local, while the visible answer and markers sync with the note. A device without that local job will not start a second stream for the synced response.
 
 ## Orchestration
 

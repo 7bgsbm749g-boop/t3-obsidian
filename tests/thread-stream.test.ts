@@ -1,0 +1,23 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {watchThread} from '../thread-stream';
+
+test('thread subscription authenticates, acknowledges chunks, and interrupts on stop',async()=>{
+  const sent:any[]=[],items:any[]=[],urls:string[]=[];let issueCount=0,closed=0;
+  class Socket {
+    onopen?:()=>void;onmessage?:(event:{data:string})=>void;onerror?:()=>void;onclose?:()=>void;
+    constructor(url:string){urls.push(url);queueMicrotask(()=>this.onopen?.());}
+    send(raw:string){
+      const frame=JSON.parse(raw);sent.push(frame);
+      if(frame.tag==='orchestration.subscribeThread')queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:frame.id,values:[{kind:'snapshot',snapshot:{snapshotSequence:3,thread:{messages:[]}}},{kind:'synchronized'}]})}));
+    }
+    close(){closed++;this.onclose?.();}
+  }
+  const watcher=watchThread('thread-1',async()=>({origin:'https://t3.example',api:async(path,payload)=>{assert.equal(path,'/api/auth/websocket-ticket');assert.deepEqual(payload,{});issueCount++;return {ticket:'short-lived'};}}),{item:item=>items.push(item),reconnecting:error=>assert.fail(error.message)},url=>new Socket(url) as unknown as WebSocket);
+  await new Promise(resolve=>setTimeout(resolve,30));
+  assert.equal(issueCount,1);assert.match(urls[0],/^wss:\/\/t3\.example\/ws\?/);
+  assert.equal(new URL(urls[0]).searchParams.get('orchestrationProtocol'),'1');
+  assert.deepEqual(sent[0],{_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId:'thread-1'},headers:[]});
+  assert.equal(items.length,2);assert.deepEqual(sent[1],{_tag:'Ack',requestId:'1'});
+  watcher.stop();assert.deepEqual(sent[2],{_tag:'Interrupt',requestId:'1'});assert.equal(closed,1);
+});
