@@ -89,8 +89,8 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     send(raw:string){
       const req=JSON.parse(raw);if(req._tag==='Ack'||req._tag==='Interrupt'||req._tag==='Pong')return;
       if(req.tag==='orchestration.subscribeThread'){
-        const turn=commands.at(-1),turnId=turn?.commandId;
-        queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:req.id,values:[{kind:'snapshot',snapshot:{snapshotSequence:5,thread:{id:req.payload.threadId,messages:[{id:'answer',role:'assistant',turnId,text:'Inline reply from T3.',streaming:false}],activities:[],latestTurn:{turnId,state:'completed'},session:{status:'ready',activeTurnId:null}}}}]})}));
+        const turn=commands.at(-1),turnId='provider-turn-'+turn.commandId,requestedAt=turn.createdAt;
+        queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:req.id,values:[{kind:'snapshot',snapshot:{snapshotSequence:5,thread:{id:req.payload.threadId,messages:[{id:turn.message.messageId,role:'user',turnId:null,text:turn.message.text,streaming:false,createdAt:requestedAt},{id:'answer',role:'assistant',turnId,text:'Inline reply from T3.',streaming:false}],activities:[],latestTurn:{turnId,state:'completed',requestedAt},session:{status:'ready',activeTurnId:null}}}}]})}));
         return;
       }
       let value:any;
