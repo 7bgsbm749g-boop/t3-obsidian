@@ -35,8 +35,10 @@ import {hiddenInlineMarkerExtension} from './inline-markers';
 import type {SelectionAnchor} from './inline-thread';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor:SelectionAnchor};
 const INLINE_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note; the Obsidian plugin will insert your reply.';
+const THREAD_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note.';
+interface InlineStreamingSettings {askT3:boolean;sendToT3:boolean}
 interface AutomationSettings {mode:'off'|'shadow'|'journal'|'coordinator';destinationId:string;coordinatorDeviceId:string;captureUnsaved:boolean}
-interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; folderLinks:FolderLink[];folderWorkflows:FolderWorkflow[];vaultId:string;vaultLocations:VaultLocation[];automation:AutomationSettings;automationDrafts:WorkflowIR[];workflowVersion:WorkflowVersionSettings }
+interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; folderLinks:FolderLink[];folderWorkflows:FolderWorkflow[];vaultId:string;vaultLocations:VaultLocation[];automation:AutomationSettings;automationDrafts:WorkflowIR[];workflowVersion:WorkflowVersionSettings }
 export default class SendToT3 extends Plugin {
   declare settings: Settings;
   mode: 'desktop'|'direct' = 'desktop';
@@ -106,7 +108,7 @@ export default class SendToT3 extends Plugin {
     const automationDrafts:WorkflowIR[]=[];for(const candidate of Array.isArray(data?.automationDrafts)?data.automationDrafts:[])try{automationDrafts.push(validateWorkflowIR(candidate));}catch{/* Invalid synced drafts stay inert. */}
     this.workflowReplica=loadWorkflowReplica(data);
     const folderWorkflows=this.workflowReplica.workflows,workflowVersion=loadWorkflowVersionSettings(data?.workflowVersion,folderWorkflows,automationDrafts);
-    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],folderLinks:loadFolderLinks(data),folderWorkflows,vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data),automation:{mode:automationMode,destinationId:typeof data?.automation?.destinationId==='string'?data.automation.destinationId:'qlo2-vps',coordinatorDeviceId:typeof data?.automation?.coordinatorDeviceId==='string'?data.automation.coordinatorDeviceId:'',captureUnsaved:data?.automation?.captureUnsaved===true},automationDrafts,workflowVersion};
+    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{askT3:data?.inlineStreaming?.askT3!==false,sendToT3:data?.inlineStreaming?.sendToT3!==false},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],folderLinks:loadFolderLinks(data),folderWorkflows,vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data),automation:{mode:automationMode,destinationId:typeof data?.automation?.destinationId==='string'?data.automation.destinationId:'qlo2-vps',coordinatorDeviceId:typeof data?.automation?.coordinatorDeviceId==='string'?data.automation.coordinatorDeviceId:'',captureUnsaved:data?.automation?.captureUnsaved===true},automationDrafts,workflowVersion};
     this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id));
     if(typeof this.registerEditorExtension==='function')this.registerEditorExtension(hiddenInlineMarkerExtension());
     if(Platform.isMobile&&typeof document.addEventListener==='function'){
@@ -352,6 +354,15 @@ export default class SendToT3 extends Plugin {
     const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
     return {path:file.path,...(!Platform.isMobile&&typeof adapter.getFullPath==='function'?{absolutePath:adapter.getFullPath(file.path)}:{})};
   }
+  private async editorForNoteSend(file:TFile):Promise<MarkdownView|undefined> {
+    if(typeof this.app.workspace.getLeaf!=='function')return;
+    const existing=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view).find(view=>view instanceof MarkdownView && view.file?.path===file.path);
+    if(existing instanceof MarkdownView)return existing;
+    const leaf=this.app.workspace.getLeaf('tab');
+    await leaf.openFile(file);
+    if(!(leaf.view instanceof MarkdownView)||leaf.view.file?.path!==file.path)throw Error('The note could not be opened in a Markdown editor for inline streaming.');
+    return leaf.view;
+  }
   private projectForLink(link:FolderLink):Project {
     if(link.connectionId){
       const connection=this.settings.paired.find(c=>c.id===link.connectionId)||this.settings.paired.find(c=>c.environmentId===link.environmentId);
@@ -404,25 +415,25 @@ export default class SendToT3 extends Plugin {
     return this.openChatWithNote(this.chatNote(),prompt);
   }
   private openEditorChat(selection:string,file:TFile,context:EditorChatContext){
-    return this.openChatWithNote(this.noteContext(file),selection,context);
+    return this.openChatWithNote(this.noteContext(file),selection,this.settings.inlineStreaming.askT3?context:undefined,true);
   }
-  private openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext){
+  private openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false){
     const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
     const host:ChatHost={
       getTargetDescription:()=>`${note?note.path:'No note open'} → ${link?.projectTitle??this.app.vault.getName()+' (vault root)'}`,
-      sendChat:text=>inline&&note?this.sendInlineChat(text,note,inline):this.sendChat(text,note),
-      sendToExisting:text=>this.openChatThreads(text,note,inline),
+      sendChat:text=>inline&&note?this.sendInlineChat(text,note,inline):this.sendChat(answerOnly?`${text}\n\n${THREAD_REPLY_INSTRUCTION}`:text,note),
+      sendToExisting:text=>this.openChatThreads(text,note,inline,answerOnly),
       openSettings:()=>this.openSettings(),
     };
     return openChatFlow(this.app,host,prompt);
   }
-  private async openChatThreads(prompt:string,note?:{path:string;absolutePath?:string},inline?:EditorChatContext){
+  private async openChatThreads(prompt:string,note?:{path:string;absolutePath?:string},inline?:EditorChatContext,answerOnly=false){
     const {project}=await this.chatTarget(note?.path);
     const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
     new Notice('Loading threads…',2000);
     const threads=projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);
     if(this.stopped)return;
-    new LinkedThreadModal(this.app,threads,thread=>inline&&note?this.sendInlineChat(prompt,note,inline,{threadId:thread.id,expectedProjectKey:projectKey(project)}):this.sendChat(prompt,note,{threadId:thread.id,expectedProjectKey:projectKey(project)}),'Send chat to an existing thread','No existing threads in this project. Use New thread.').open();
+    new LinkedThreadModal(this.app,threads,thread=>inline&&note?this.sendInlineChat(prompt,note,inline,{threadId:thread.id,expectedProjectKey:projectKey(project)}):this.sendChat(answerOnly?`${prompt}\n\n${THREAD_REPLY_INSTRUCTION}`:prompt,note,{threadId:thread.id,expectedProjectKey:projectKey(project)}),'Send chat to an existing thread','No existing threads in this project. Use New thread.').open();
   }
   private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;expectedProjectKey?:string}){
     const manager=this.inlineChat;if(!manager)throw Error('Inline T3 chat is unavailable. Reload the plugin.');
@@ -746,11 +757,13 @@ export default class SendToT3 extends Plugin {
     if (this.busy) return;
     this.busy = true;
     let saved = false;
+    let inlineJob:ReturnType<InlineChatManager['reserveAtEnd']>|undefined;
     const orchestration = {...this.settings.orchestration};
     const completion = {...this.settings.completion};
     try {
-      if(!options?.threadId&&completion.action==='archive') completion.archiveFolder=archiveFolder(completion.archiveFolder);
-      const content = await this.app.vault.read(file);
+      const inlineView=!options?.quiet&&this.settings.inlineStreaming.sendToT3?await this.editorForNoteSend(file):undefined;
+      if(!options?.threadId&&!inlineView&&completion.action==='archive') completion.archiveFolder=archiveFolder(completion.archiveFolder);
+      const content = inlineView?inlineView.editor.getValue():await this.app.vault.read(file);
       if (!content.trim()) {new Notice('This note is empty. Add Markdown before sending.'); return;}
       if(!options?.quiet)new Notice('Preparing note and embedded images…');
       const images = await collectImages(content, async embed => {
@@ -767,11 +780,19 @@ export default class SendToT3 extends Plugin {
         if(target.stat.size > MAX_IMAGE_BYTES) throw new Error('Image exceeds 10 MiB.');
         return {bytes:Buffer.from(await this.app.vault.readBinary(target)),name:target.name};
       });
-      const request:Request = {id:options?.id??randomId(),project:{...project},title:file.basename.slice(0,160),prompt:applyOrchestration(this.agentPrompt(images.markdown),orchestration),attachments:images.attachments,context:images.context,...(options?.threadId?{threadId:options.threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:options?.threadId?'keep':completion.action},connection:this.connection(project)};
+      if(inlineView&&inlineView.editor.getValue()!==content)throw Error('The note changed while preparing the send. Try again with the current text.');
+      const request:Request = {id:options?.id??randomId(),project:{...project},title:file.basename.slice(0,160),prompt:applyOrchestration(this.agentPrompt(images.markdown+(inlineView?`\n\n${INLINE_REPLY_INSTRUCTION}`:'')),orchestration),attachments:images.attachments,context:images.context,...(options?.threadId?{threadId:options.threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:options?.threadId||inlineView?'keep':completion.action},connection:this.connection(project)};
       if(request.prompt.length>120_000) throw new Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
+      if(inlineView){
+        const manager=this.inlineChat;if(!manager)throw Error('Inline T3 streaming is unavailable. Reload the plugin.');
+        inlineJob=manager.reserveAtEnd(inlineView.editor,inlineView,request.id,file.path);
+        manager.prepare(inlineJob,request);
+      }
       this.settings.pending.push(request); await this.save(); saved = true;
-      const threadId=await this.dispatch(request,options?.quiet);return {threadId,request};
-    } catch(e) {if(options?.throwOnError)throw e;new Notice(`Send to T3 Code: ${message(e)} ${saved ? "See settings for saved requests." : "No thread was created."}`,12000);}
+      const threadId=await this.dispatch(request,options?.quiet);
+      if(inlineJob)this.inlineChat?.start(inlineJob);
+      return {threadId,request};
+    } catch(e) {if(inlineJob)this.inlineChat?.deliveryFailed(inlineJob,saved);if(options?.throwOnError)throw e;new Notice(`Send to T3 Code: ${message(e)} ${saved ? "See settings for saved requests." : "No thread was created."}`,12000);}
     finally {this.busy = false;}
   }
   private async sendWorkflowNote(note:WorkflowNote,workflow:FolderWorkflow,id:string,inputHash:string){
@@ -1036,6 +1057,9 @@ class T3Settings extends PluginSettingTab {
     el.createEl('h3',{text:'Chat'});
     new Setting(el).setName('Command palette chat').setDesc(this.plugin.paletteChatStatus()==='active'?'Type a message into the command palette, then select the live T3 Chat row.':'The live row is unavailable in this Obsidian version or the core Command palette is disabled. Use the New T3 chat command.');
     el.createEl('p',{text:'Chat sends your message and the current note’s path to its nearest linked folder project. Without a link or an open note, it uses the vault-root project. Connect the vault to a machine below, or choose one when sending your first chat.'});
+    el.createEl('h3',{text:'Inline responses'});
+    new Setting(el).setName('Stream Ask T3 into the editor').setDesc('Insert the reply below selected text. When off, Ask T3 still sends the selection and keeps the answer in the T3 thread.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.askT3).onChange(async enabled=>{this.plugin.settings.inlineStreaming.askT3=enabled;await this.plugin.save();}));
+    new Setting(el).setName('Stream Send to T3 into the editor').setDesc('Append the reply to a manually sent note, opening that note if needed. Automatic tag sends and workflows do not write replies inline. Streamed notes are kept when the turn finishes.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.sendToT3).onChange(async enabled=>{this.plugin.settings.inlineStreaming.sendToT3=enabled;await this.plugin.save();}));
     el.createEl('h3',{text:'Orchestration'});
     new Setting(el).setName('Wait for other threads').setDesc('Prepend an instruction to wait for all other active T3 Code threads in the destination project to finish before starting work.').addToggle(t=>t.setValue(this.plugin.settings.orchestration.waitForOtherThreads).onChange(async enabled=>{this.plugin.settings.orchestration.waitForOtherThreads=enabled;await this.plugin.save();}));
     new Setting(el).setName('Workflow version').setDesc('Only the selected engine runs and only its settings are shown. Switching saves and disables this version’s active workflows; switching back restores them.').addDropdown(d=>d.addOptions({v1:'Workflows v1',v2:'Workflows v2'}).setValue(this.plugin.settings.workflowVersion.active).onChange(async value=>{try{await this.plugin.setWorkflowVersion(value as WorkflowVersion);this.display();}catch(error){new Notice(message(error),10000);}}));

@@ -3,7 +3,7 @@ import {Notice} from 'obsidian';
 import type {Connection,Request} from './bridge';
 import {commandId,endpoint,environmentApi,type PairedSession} from './direct';
 import {contentHash} from './completion';
-import {applyThreadItem,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase,type InlineThreadState,type SelectionAnchor} from './inline-thread';
+import {applyThreadItem,endInsertionOffset,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase,type InlineThreadState,type SelectionAnchor} from './inline-thread';
 import {watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 
 export interface InlineJob {
@@ -33,10 +33,15 @@ export class InlineChatManager {
   private runtime(job:InlineJob){let runtime=this.runtimes.get(job.id);if(!runtime){runtime={state:{messages:[],activities:[]},sequence:-1};this.runtimes.set(job.id,runtime);}return runtime;}
 
   reserve(editor:Editor,info:MarkdownView|MarkdownFileInfo,anchor:SelectionAnchor,requestId:string,expectedPath:string):InlineJob {
+    return this.reserveAt(editor,info,insertionOffset(editor.getValue(),anchor),requestId,expectedPath);
+  }
+  reserveAtEnd(editor:Editor,info:MarkdownView|MarkdownFileInfo,requestId:string,expectedPath:string):InlineJob {
+    return this.reserveAt(editor,info,endInsertionOffset(editor.getValue()),requestId,expectedPath);
+  }
+  private reserveAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,offset:number,requestId:string,expectedPath:string):InlineJob {
     if(this.stopped)throw Error('The plugin was disabled.');
     const file=info.file;if(!file||file.path!==expectedPath||file.extension.toLowerCase()!=='md')throw Error('The original Markdown note is no longer open. Reopen it and ask T3 again.');
     if(this.activeFor(file.path).length)throw Error('This note already has an active T3 response. Wait for it or stop it first.');
-    const document=editor.getValue();const offset=insertionOffset(document,anchor);
     const id=requestId,region=initialRegion(id);
     const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt:new Date().toISOString()};
     this.jobs.push(job);this.runtime(job).source={editor,info};

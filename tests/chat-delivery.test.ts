@@ -109,13 +109,24 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     fetch:fetcher,WebSocket:Socket,Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console,
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();return plugin;};
-  return {plugin:await start(),start,commands,shared,registered,modals,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+  const plugin=await start();
+  return {plugin,start,commands,shared,registered,modals,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
     const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
     let value=selection+'\nTail';
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
     const posToOffset=(pos:{line:number;ch:number})=>value.split('\n').slice(0,pos.line).reduce((n,line)=>n+line.length+1,0)+pos.ch;
     const editor={getSelection:()=>selection,getValue:()=>value,getCursor:(side:string)=>offsetToPos(side==='from'?0:selection.length),posToOffset,offsetToPos,replaceRange:(text:string,from:any,to?:any)=>{value=value.slice(0,posToOffset(from))+text+value.slice(to?posToOffset(to):posToOffset(from));}};
     for(const listener of workspaceEvents['editor-menu']??[])listener(menu,editor,{file});return {menu,file,editor,get value(){return value;}};
+  },attachEditor:(path:string,initial:string)=>{
+    const file=new File(path),view=Object.assign(new Base(),{file,editor:null as any});
+    let value=initial;
+    const offsetToPos=(offset:number)=>{const lines=value.slice(0,offset).split('\n');return {line:lines.length-1,ch:lines.at(-1)!.length};};
+    const posToOffset=(pos:{line:number;ch:number})=>value.split('\n').slice(0,pos.line).reduce((n,line)=>n+line.length+1,0)+pos.ch;
+    view.editor={getValue:()=>value,getSelection:()=>'',getCursor:()=>offsetToPos(value.length),posToOffset,offsetToPos,replaceRange:(text:string,from:any,to?:any)=>{value=value.slice(0,posToOffset(from))+text+value.slice(to?posToOffset(to):posToOffset(from));}};
+    const leaf={view,openFile:async()=>{}};
+    (plugin.app.workspace as any).getLeavesOfType=()=>[leaf];
+    (plugin.app.workspace as any).getLeaf=()=>leaf;
+    return {file,view,editor:view.editor,get value(){return value;}};
   },vaultAccesses:()=>vaultAccesses};
 }
 
@@ -504,5 +515,57 @@ test('sending a note into an existing thread retains Markdown and images and cle
     assert.equal(result.request.completion.action,'keep');
     assert.equal(h.plugin.settings.completionJobs.length,0);
     assert.equal(h.plugin.settings.pending.length,0);
+  }finally{h.plugin.onunload();}
+});
+
+test('inline streaming switches default on and persist independently',async()=>{
+  const h=await chatHarness();
+  try{
+    assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.inlineStreaming)),{askT3:true,sendToT3:true});
+    h.plugin.settings.inlineStreaming.askT3=false;
+    await h.plugin.save();
+    h.plugin.onunload();
+    const restarted=await h.start();
+    assert.deepEqual(JSON.parse(JSON.stringify(restarted.settings.inlineStreaming)),{askT3:false,sendToT3:true});
+    restarted.onunload();
+  }finally{h.plugin.onunload();}
+});
+
+test('Ask T3 keeps the answer in the T3 thread when its streaming switch is off',async()=>{
+  const h=await chatHarness();
+  try{
+    h.plugin.settings.inlineStreaming.askT3=false;
+    const context=h.editorMenu('Why is this here?');
+    await context.menu.items.find(item=>item.title==='Ask T3')!.callback();
+    await h.modals.at(-1).choose(false);
+    assert.doesNotMatch(context.value,/t3-inline:start/);
+    assert.match(h.commands.at(-1).message.text,/Answer in the T3 thread\. Do not edit the Obsidian note\./);
+  }finally{h.plugin.onunload();}
+});
+
+test('manual Send to T3 streams into the source editor but disabled and automatic sends do not',async()=>{
+  const h=await chatHarness();
+  try{
+    const editor=h.attachEditor('Manual.md','# Manual\nPlease explain this.');
+    const file=Object.assign(editor.file,{basename:'Manual',stat:{ctime:123}});
+    const first=await h.plugin.send(file,project,{throwOnError:true});
+    assert.equal(first.request.completion.action,'keep');
+    assert.match(first.request.prompt,/Answer in the T3 thread\. Do not edit the Obsidian note; the Obsidian plugin will insert your reply\./);
+    assert.doesNotMatch(first.request.prompt,/t3-inline:start/);
+    assert.match(editor.value,/t3-inline:start/);
+    for(let attempt=0;attempt<40&&!editor.value.includes('Inline reply from T3.');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.match(editor.value,/Inline reply from T3\./);
+    const continued=await h.plugin.send(file,project,{threadId:'existing',throwOnError:true});
+    assert.equal(continued.threadId,'existing');
+    assert.equal((editor.value.match(/t3-inline:start/g)??[]).length,2,'An existing-thread send receives its own guarded response');
+    h.plugin.settings.inlineStreaming.sendToT3=false;
+    const before=editor.value;
+    h.plugin.app.vault.read=async()=> '# Manual\nPlease explain this.';
+    await h.plugin.send(file,project,{throwOnError:true});
+    assert.equal(editor.value,before,'A disabled stream leaves the editor unchanged');
+    h.plugin.settings.inlineStreaming.sendToT3=true;
+    h.plugin.app.vault.read=async()=> '# Automatic tag note';
+    await h.plugin.send(file,project,{quiet:true,throwOnError:true});
+    assert.equal(editor.value,before,'An automatic tag send cannot append an inline reply');
   }finally{h.plugin.onunload();}
 });

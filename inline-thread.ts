@@ -19,7 +19,16 @@ export function insertionOffset(document:string,anchor:SelectionAnchor):number {
     end=first+anchor.text.length;
   }
   const lineEnd=document.indexOf('\n',end);
-  let offset=lineEnd<0?document.length:lineEnd+1;
+  return safeInsertionOffset(document,lineEnd<0?document.length:lineEnd+1);
+}
+
+/** Append a response after the note, provided it cannot become code-fence text. */
+export function endInsertionOffset(document:string):number {
+  return safeInsertionOffset(document,document.length);
+}
+
+function safeInsertionOffset(document:string,initialOffset:number):number {
+  let offset=initialOffset;
   const lines=document.slice(0,offset).split('\n');
   let fence:{character:string;length:number}|undefined;
   for(const line of lines){

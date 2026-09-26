@@ -118,9 +118,17 @@ The regular **Send to T3 Code: New T3 chat** command opens a message editor usin
 
 Chat retains the optional wait instruction, 120,000-character limit (including note context), and manual retry handling. It never enrolls the note for archive/delete cleanup. Choosing **Delete note** or **Archive note** therefore does nothing to a note referenced by command-palette chat. An unconfirmed send must be retried through **Unconfirmed requests → Retry**, which preserves the original prompt, note path, destination, and command IDs.
 
+## Inline responses
+
+Under **Settings → Send to T3 Code → Inline responses**, **Stream Ask T3 into the editor** and **Stream Send to T3 into the editor** are both on by default. Each can be turned off independently. New T3 chat remains a thread-only conversation.
+
+Manually sending a note with **Open in T3 Code** or **Send current note** appends a streamed reply at the end of that note. The plugin opens the note in a Markdown tab if needed. It captures the note content before inserting the response, sends that content and its images to T3, and instructs T3 to answer in the thread rather than edit the note. A streamed note stays in place even if archive or delete is selected under **When task completes**. Automatic tag sends and folder workflows do not stream into the editor. Turning either switch off affects new sends; an already active response continues to completion or until stopped.
+
 ## Ask T3 inline
 
 Select text in a Markdown editor and choose **Ask T3** from the editor menu. Choose **New thread** or **Existing thread…**. The plugin sends the selection and captured note path to T3, then inserts a tracked response below the selected line. It streams the assistant's text into that response, shows the latest tool or approval status, and marks the response complete when the T3 turn ends. The T3 agent is instructed to answer in its thread and leave the note untouched; the plugin owns the note insertion.
+
+With Ask T3 streaming off, the same selection and note path are sent, and T3 answers in its thread without adding a response to the note.
 
 On mobile, selecting text in the Markdown editor shows a small **Ask T3** button above the selection. Tap it to open the same thread chooser; no mobile toolbar setup is needed. The button disappears when the selection is cleared or another note becomes active. **Ask T3 about selected text** is also available as an editor command for accessibility and as a fallback. The iOS Cut/Copy/Paste menu itself cannot host plugin actions.
 

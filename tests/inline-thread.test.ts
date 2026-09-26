@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applyThreadItem,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
+import {applyThreadItem,endInsertionOffset,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
 
 test('selection anchor tolerates unrelated edits, rejects ambiguity, and inserts after fenced code',()=>{
   const source='Before\n```ts\nconst x = 1;\n```\nAfter';
@@ -9,6 +9,12 @@ test('selection anchor tolerates unrelated edits, rejects ambiguity, and inserts
   assert.equal(insertionOffset('New line\n'+source,anchor),'New line\n'.length+source.indexOf('After'));
   assert.throws(()=>insertionOffset('New line\n'+source+'\n'+selected,anchor),/moved or changed/);
   assert.throws(()=>insertionOffset('```ts\n'+selected,selectionAnchor('```ts\n'+selected,selected,6,6+selected.length)),/unclosed Markdown code fence/);
+});
+
+test('end-of-note insertion rejects an unclosed Markdown fence',()=>{
+  const closed='A note\n```ts\ncode\n```\n';
+  assert.equal(endInsertionOffset(closed),closed.length);
+  assert.throws(()=>endInsertionOffset('A note\n```ts\ncode'),/unclosed Markdown code fence/);
 });
 
 test('inline markers permit edits outside the response but stop on edits inside it',()=>{
