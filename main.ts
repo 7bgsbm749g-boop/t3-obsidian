@@ -31,6 +31,7 @@ import {eventQueryCapability} from './event-query';
 import {loadWorkflowReplica,mergeWorkflowReplicas,sameWorkflowReplica,workflowChanges,type WorkflowReplica} from './workflow-sync';
 import {InlineChatManager,captureEditorSelection} from './inline-chat';
 import {installMobileSelectionAction} from './mobile-selection-action';
+import {hiddenInlineMarkerExtension} from './inline-markers';
 import type {SelectionAnchor} from './inline-thread';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor:SelectionAnchor};
 const INLINE_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note; the Obsidian plugin will insert your reply.';
@@ -107,6 +108,7 @@ export default class SendToT3 extends Plugin {
     const folderWorkflows=this.workflowReplica.workflows,workflowVersion=loadWorkflowVersionSettings(data?.workflowVersion,folderWorkflows,automationDrafts);
     this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],folderLinks:loadFolderLinks(data),folderWorkflows,vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data),automation:{mode:automationMode,destinationId:typeof data?.automation?.destinationId==='string'?data.automation.destinationId:'qlo2-vps',coordinatorDeviceId:typeof data?.automation?.coordinatorDeviceId==='string'?data.automation.coordinatorDeviceId:'',captureUnsaved:data?.automation?.captureUnsaved===true},automationDrafts,workflowVersion};
     this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id));
+    if(typeof this.registerEditorExtension==='function')this.registerEditorExtension(hiddenInlineMarkerExtension());
     if(Platform.isMobile&&typeof document.addEventListener==='function'){
       this.mobileSelectionAction=installMobileSelectionAction(this.app,()=>this.app.workspace.getActiveViewOfType(MarkdownView),path=>!this.busy&&!this.inlineChat?.activeFor(path).length,captureEditorSelection,({editor,view,text,anchor})=>this.openEditorChat(text,view.file!,{editor,view,anchor}));
     }
