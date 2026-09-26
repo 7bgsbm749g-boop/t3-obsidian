@@ -165,6 +165,8 @@ export default class SendToT3 extends Plugin {
           const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();
           if(!submenu){item.onClick(()=>this.openV2WorkflowSetup(folder));return;}
           for(const workflow of this.settings.automationDrafts.filter(ir=>folderForWorkflow(ir)===folder.path))submenu.addItem(i=>i.setTitle(workflow.name??workflow.workflowId).setIcon(workflow.enabled?'workflow':'pause').onClick(()=>this.openV2WorkflowSetup(folder,workflow)));
+          const link=folderLinkForPath(this.settings.folderLinks,`${folder.path}/placeholder.md`);
+          for(const workflow of this.settings.automationDrafts.filter(ir=>ir.enabled&&folder.path!=='/'&&ir.folderPath!==folder.path&&ir.scope.path.glob.startsWith(`${folder.path}/`)&&ir.projectId===link?.projectId&&ir.connectionId===link?.connectionId))submenu.addItem(i=>i.setTitle(`Move workflow here: ${workflow.name??workflow.workflowId}`).setIcon('folder-input').onClick(()=>this.moveV2WorkflowToFolder(workflow,folder).catch(error=>new Notice(message(error),10000))));
           submenu.addItem(i=>i.setTitle('Setup new workflow…').setIcon('plus').onClick(()=>this.openV2WorkflowSetup(folder)));
         });
         return;
@@ -303,6 +305,13 @@ export default class SendToT3 extends Plugin {
     const priorAutomation=this.settings.automation;
     if(ir.enabled&&this.settings.automation.coordinatorDeviceId!==this.deviceId)this.settings.automation={...priorAutomation,coordinatorDeviceId:this.deviceId};
     try{await this.save();await this.refreshObservationCapture();await this.coordinatorService?.scan();this.refreshFolderIndicators();}catch(error){this.settings.automationDrafts=before;this.settings.automation=priorAutomation;throw error;}
+  }
+  async moveV2WorkflowToFolder(ir:WorkflowIR,folder:TFolder){
+    const current=this.settings.automationDrafts.find(item=>item.workflowId===ir.workflowId);
+    const link=folderLinkForPath(this.settings.folderLinks,`${folder.path}/placeholder.md`);
+    if(!current||!current.enabled||current.revision!==ir.revision||folder.path==='/'||!current.scope.path.glob.startsWith(`${folder.path}/`)||current.projectId!==link?.projectId||current.connectionId!==link?.connectionId)throw Error('The workflow or folder link changed. Reopen the folder menu and try again.');
+    await this.saveV2Workflow({...current,folderPath:folder.path,revision:current.revision+1});
+    new Notice(`Workflow “${current.name??current.workflowId}” is now attached to ${folder.path}.`,10000);
   }
   async setupV2Workflow(folder:TFolder,link:FolderLink,intent:string,existing?:WorkflowIR,workflowId=randomId()):Promise<string>{
     if(this.busy)throw Error('Another T3 request is in progress.');

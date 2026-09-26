@@ -147,6 +147,24 @@ test('mobile root menu uses the recently pressed folder for workflow setup',asyn
   }finally{h.plugin.onunload();}
 });
 
+test('an existing root-associated workflow can be attached to its selected folder without changing its scope',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const linked=await h.open();await h.button(linked,'Link').click();
+    const draft={...folderWorkflowIR({id:'workout',name:'Workout journal',folderPath:'/',includeSubfolders:true,events:['modify'],task:'Summarize workouts.',destinationId:'qlo2-vps',projectId:h.project.id,connectionId:'c',enabled:true,order:0}),scope:{path:{glob:'Notes/Tracker/*.md',case:'sensitive' as const},exclude:[],overlapPolicy:'all-matching' as const}};
+    h.plugin.settings.automationDrafts=[draft];
+    let moved:any;
+    h.plugin.saveV2Workflow=async(ir:any)=>{moved=ir;h.plugin.settings.automationDrafts=[ir];};
+    const entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');assert.ok(entry?.submenu);
+    const move=entry.submenu.items.find((item:any)=>item.title==='Move workflow here: Workout journal');assert.ok(move);
+    await move.callback();
+    assert.equal(moved.folderPath,'Notes');
+    assert.equal(moved.scope.path.glob,'Notes/Tracker/*.md');
+    assert.equal(moved.enabled,true);
+    assert.equal(moved.revision,draft.revision+1);
+  }finally{h.plugin.onunload();}
+});
+
 test('workflow creation saves an inert draft before sending its setup request',async()=>{
   const h=await folderMenuHarness();
   try{
