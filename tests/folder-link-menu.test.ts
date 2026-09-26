@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {webcrypto,randomUUID} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
+import {folderWorkflowIR} from '../v2-folder-workflow';
 
 async function folderMenuHarness(){
   const deviceId=randomUUID();let local:any={deviceId,mode:'direct',pairedSessions:{c:{url:'https://folder.example',environmentId:'env',token:'test',expiresAt:Date.now()+600000}}};
@@ -115,26 +116,61 @@ test('folder menu opens an inactive link dialog; cancel is inert and Link alone 
   }finally{h.plugin.onunload();}
 });
 
-test('v2 folder menu creates and edits a typed workflow without migration or dispatch',async()=>{
+test('v2 folder menu asks for a description and starts a setup thread',async()=>{
   const h=await folderMenuHarness();
   try{
     const link=await h.open();await h.button(link,'Link').click();
+    const setups:any[]=[];
+    h.plugin.setupV2Workflow=async(...args:any[])=>{setups.push(args);return 'setup-thread';};
     let entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');assert.ok(entry?.submenu);
     assert.equal(entry!.submenu!.items.map((item:any)=>item.title).join(','),'Setup new workflow…');
     await entry!.submenu!.items[0].callback();let modal=h.modals.at(-1);
-    assert.equal(h.setting(modal,'Enabled').controls[0].value,false);
-    h.setting(modal,'Workflow name').controls[0].change('V2 formatter');
-    h.setting(modal,'Task').controls[0].change('Format the note.');
+    assert.equal(modal.contentEl.settings.length,2);
+    h.setting(modal,'Description').controls[0].change('When I finish a note, format it.');
     await h.button(modal,'Create workflow').click();
-    assert.equal(modal.closed,true);assert.equal(h.plugin.settings.automationDrafts.length,1);
-    const ir=h.plugin.settings.automationDrafts[0];assert.equal(ir.projectId,h.project.id);assert.equal(ir.folderPath,'Notes');assert.equal(ir.enabled,false);
-    assert.equal(h.networkRequests(),0);
-    entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');
-    assert.equal(entry!.submenu!.items[0].title,'V2 formatter');await entry!.submenu!.items[0].callback();modal=h.modals.at(-1);
-    h.setting(modal,'Enabled').controls[0].change(true);await h.button(modal,'Save workflow').click();
+    assert.equal(modal.closed,true);assert.equal(setups.length,1);
+    assert.equal(setups[0][0].path,'Notes');assert.equal(setups[0][2],'When I finish a note, format it.');
+    assert.ok(h.notices.some(text=>text.includes('setup-thread')));
+  }finally{h.plugin.onunload();}
+});
+
+test('workflow creation saves an inert draft before sending its setup request',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const link=await h.open();await h.button(link,'Link').click();
+    const linked=h.plugin.settings.folderLinks[0];
+    h.plugin.settings.folderLinks.push({id:'root',folderPath:'/',vaultId:h.plugin.settings.vaultId,connectionId:'c',projectId:'root',projectTitle:'QLO2',workspaceRoot:'/vault',self:true});
+    h.plugin.manifest={id:'send-to-t3-code'};
+    h.plugin.projectForLink=()=>h.project;
+    h.plugin.projectReadinessError=()=>undefined;
+    h.plugin.connection=()=>({transport:'desktop',host:'local',executable:'t3'});
+    let sent:any;
+    h.plugin.dispatch=async(request:any)=>{sent=request;assert.equal(h.plugin.settings.automationDrafts[0].enabled,false);assert.equal(h.plugin.settings.pending[0].id,request.id);return 'setup-thread';};
+    const thread=await h.plugin.setupV2Workflow({path:'Notes',name:'Notes'},linked,'When a note is tagged ready, summarize it.');
+    assert.equal(thread,'setup-thread');
+    const draft=h.plugin.settings.automationDrafts[0];
+    assert.equal(draft.setupIntent,'When a note is tagged ready, summarize it.');
+    assert.equal(draft.setupRequestId,sent.id);
+    assert.equal(draft.activatedAt,undefined);
+    assert.match(sent.prompt,/Proposal file: "\/vault\/T3 Workflow Setup\//);
+    assert.match(sent.prompt,/Use a direct trigger/);
+  }finally{h.plugin.onunload();}
+});
+
+test('coordinator applies a matching setup proposal and removes its temporary file',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const draft={...folderWorkflowIR({id:'setup',name:'Setup',folderPath:'Notes',includeSubfolders:true,events:['create'],task:'Summarize.',destinationId:'qlo2-vps',projectId:'project',connectionId:'c',enabled:false,order:0}),setupIntent:'When tagged ready, summarize.',setupRequestId:'request'};
+    h.plugin.settings.automationDrafts=[draft];h.plugin.settings.automation.coordinatorDeviceId=h.deviceId;
+    const path='T3 Workflow Setup/setup-request.json';
+    const configured={...draft,revision:2,enabled:true,trigger:{eventTypes:['note.changed'],unknown:'hold-for-review'}};
+    const files=new Map([[path,JSON.stringify({workflowId:'setup',setupRequestId:'request',ir:configured})]]);
+    h.plugin.app.vault.adapter={exists:async()=>true,list:async()=>({files:[...files.keys()],folders:[]}),read:async(p:string)=>files.get(p),remove:async(p:string)=>{files.delete(p);},rmdir:async()=>{}};
+    await h.plugin.checkWorkflowProposals();
+    assert.equal(files.size,0);
     assert.equal(h.plugin.settings.automationDrafts[0].enabled,true);
-    assert.equal(h.plugin.settings.automationDrafts[0].revision,2);
-    assert.equal(h.networkRequests(),0,'setup must not send an existing note');
+    assert.ok(h.plugin.settings.automationDrafts[0].activatedAt);
+    assert.equal(h.plugin.settings.automationDrafts[0].trigger.eventTypes[0],'note.changed');
   }finally{h.plugin.onunload();}
 });
 

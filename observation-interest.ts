@@ -1,5 +1,6 @@
 import {globMatches,type WorkflowIR} from './automation-ir';
 import type {ObservationSource} from './automation-protocol';
+import {runnableFolderWorkflow} from './v2-folder-workflow';
 
 const eventForSource:Partial<Record<ObservationSource,string>>={
   'vault.create':'note.created',
@@ -20,7 +21,7 @@ function inScope(ir:WorkflowIR,path:string):boolean{
 }
 
 export function observationInterest(workflows:WorkflowIR[]){
-  const active=workflows.filter(ir=>ir.enabled);
+  const active=workflows.filter(ir=>ir.activatedAt&&runnableFolderWorkflow(ir));
   return {
     active:active.length>0,
     baseline:(path:string)=>active.some(ir=>inScope(ir,path)),

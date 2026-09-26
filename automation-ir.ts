@@ -17,6 +17,7 @@ export interface ScheduleTrigger {kind:'weekday';weekdays:number[];localTime:str
 export interface WorkflowIR {
   irVersion:1;semanticsVersion:1;workflowId:string;revision:number;enabled:boolean;destinationId:string;
   name?:string;folderPath?:string;projectId?:string;connectionId?:string;activatedAt?:string;
+  setupIntent?:string;setupRequestId?:string;
   scope:{path:{glob:string;case:'sensitive'|'insensitive'};exclude:string[];overlapPolicy:'all-matching'};
   trigger:{eventTypes?:EventType[];predicate?:Predicate;sequence?:SequenceTrigger;schedule?:ScheduleTrigger;unknown:'hold-for-review'|'no-match'};
   timing:{debounce:{key:'noteId'|'incarnationId';quietMs:number;maxWaitMs:number;preserveTransitions:boolean}};
@@ -42,6 +43,8 @@ export function validateWorkflowIR(value:unknown):WorkflowIR{
   if(!value||typeof value!=='object')throw Error('Workflow release must be an object.');const ir=value as WorkflowIR;
   if(ir.irVersion!==1||ir.semanticsVersion!==1||!id.test(ir.workflowId)||!Number.isSafeInteger(ir.revision)||ir.revision<1||!id.test(ir.destinationId))throw Error('Invalid workflow release identity or version.');
   if(ir.name!==undefined&&(typeof ir.name!=='string'||!ir.name.trim()||ir.name.length>160)||ir.folderPath!==undefined&&(typeof ir.folderPath!=='string'||!ir.folderPath||ir.folderPath.includes('..')||ir.folderPath.includes('\\'))||ir.projectId!==undefined&&(typeof ir.projectId!=='string'||!ir.projectId||ir.projectId.length>256)||ir.connectionId!==undefined&&(typeof ir.connectionId!=='string'||ir.connectionId.length>256))throw Error('Invalid folder workflow destination.');
+  if(ir.setupIntent!==undefined&&(typeof ir.setupIntent!=='string'||!ir.setupIntent.trim()||ir.setupIntent.length>120_000))throw Error('Invalid workflow description.');
+  if(ir.setupRequestId!==undefined&&(typeof ir.setupRequestId!=='string'||!id.test(ir.setupRequestId)))throw Error('Invalid workflow setup request.');
   if(ir.activatedAt!==undefined&&(typeof ir.activatedAt!=='string'||!Number.isFinite(Date.parse(ir.activatedAt))))throw Error('Invalid workflow activation time.');
   if(!ir.scope||!validGlob(ir.scope.path?.glob)||!['sensitive','insensitive'].includes(ir.scope.path.case)||ir.scope.overlapPolicy!=='all-matching'||!Array.isArray(ir.scope.exclude)||ir.scope.exclude.some(x=>!validGlob(x)))throw Error('Invalid workflow scope.');
   const validEvents=['note.created','note.changed','note.renamed','note.deleted','note.reconciled','workflow.requested','workflow.started','workflow.completed','workflow.failed','note.changeApplied'];if(!ir.trigger)throw Error('Invalid workflow trigger.');const modes=Number(Boolean(ir.trigger.eventTypes))+Number(Boolean(ir.trigger.sequence))+Number(Boolean(ir.trigger.schedule));if(modes!==1)throw Error('A workflow needs exactly one direct, sequence, or schedule trigger.');if(ir.trigger.eventTypes&&(!Array.isArray(ir.trigger.eventTypes)||!ir.trigger.eventTypes.length||ir.trigger.eventTypes.some(x=>!validEvents.includes(x))))throw Error('Invalid workflow event types.');

@@ -19,6 +19,7 @@ import {VaultSetupModal,VaultSetupCancelled,type VaultMachine} from './vault-set
 import {ObservationEngine,type ObservedNote} from './observation-engine';
 import {releaseHash,validateWorkflowIR,type WorkflowIR} from './automation-ir';
 import {folderWorkflowIR,folderForWorkflow,runnableFolderWorkflow} from './v2-folder-workflow';
+import {WORKFLOW_SETUP_FOLDER,workflowSetupPath,workflowSetupPrompt,validateWorkflowSetupProposal} from './workflow-setup-request';
 import {DurableExecutionDriver} from './execution-driver';
 import {exactHash} from './automation-protocol';
 import type {ImmutablePlan,ExecutionEntry} from './execution-journal';
@@ -68,12 +69,17 @@ export default class SendToT3 extends Plugin {
   private stopped = false;
   private saving = Promise.resolve();
   private sharedBaseline='';
+  private lastDiskSnapshot='';
+  private checkingExternalSettings=false;
+  private checkingWorkflowProposals=false;
+  private proposalErrors=new Map<string,string>();
   private paletteChat?:PaletteChatController;
   private folderIndicators?:FolderIndicatorController;
   private vaultSetup?:Promise<Project>;
   private vaultSetupModal?:VaultSetupModal;
   private vaultRegistrations:Record<string,VaultRegistration>={};
   private observationEngine?:ObservationEngine;
+  private retiringJournal?:Promise<void>;
   private coordinatorService?:CoordinatorService;
   private coordinatorTimer?:number;
   private journalFiles?:{exists(path:string):Promise<boolean>;read(path:string):Promise<string>;write(path:string,data:string):Promise<void>;mkdir(path:string):Promise<void>;list(path:string):Promise<{files:string[];folders:string[]}>};
@@ -82,6 +88,7 @@ export default class SendToT3 extends Plugin {
   private mobileSelectionAction?:{dispose():void};
   async onload() {
     const data = await this.loadData();
+    this.lastDiskSnapshot=JSON.stringify(data);
     const local = this.app.loadLocalStorage(this.localKey);
     this.deviceId=local?.deviceId??randomId();
     this.streamId=local?.automationStreamId??randomId();
@@ -130,7 +137,10 @@ export default class SendToT3 extends Plugin {
       this.paletteChat=installPaletteChat(this.app,prompt=>this.openChat(prompt),{onError:error=>new Notice(`T3 Chat: ${message(error)}`,10000)});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined')this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>this.workflowFolders());
-      void this.startObservationJournal().catch(error=>new Notice(`T3 automation journal: ${message(error)}`,12000));
+      void this.startObservationJournal().then(()=>this.retireUnusedJournal()).catch(error=>new Notice(`T3 automation journal: ${message(error)}`,12000));
+      this.registerInterval(window.setInterval(()=>void this.retireUnusedJournal().catch(error=>new Notice(`T3 automation cleanup: ${message(error)}`,12000)),30_000));
+      this.registerInterval(window.setInterval(()=>void this.checkExternalSettings().catch(error=>new Notice(`T3 workflow settings: ${message(error)}`,12000)),5000));
+      this.registerInterval(window.setInterval(()=>void this.checkWorkflowProposals().catch(error=>new Notice(`T3 workflow setup: ${message(error)}`,12000)),5000));
     });
     this.app.workspace.onLayoutReady(()=>{if(!this.stopped){if(this.nativeAccount)void this.refreshMachines().catch(e=>{this.cloudError=message(e);this.cloudChanged?.();});void this.monitorCompletions();this.registerInterval(window.setInterval(()=>{void this.monitorCompletions();},30_000));}});
     this.app.workspace.onLayoutReady(()=>this.inlineChat?.resume());
@@ -242,6 +252,7 @@ export default class SendToT3 extends Plugin {
   private async refreshObservationCapture(){
     if(!this.journalFiles)return;
     const interest=observationInterest(this.settings.automationDrafts);
+    if(interest.active&&this.retiringJournal)await this.retiringJournal;
     const signature=JSON.stringify(this.settings.automationDrafts.filter(ir=>ir.enabled).map(ir=>({id:ir.workflowId,scope:ir.scope,trigger:ir.trigger})));
     if(signature===this.captureSignature){await this.restartCoordinator();return;}
     this.captureSignature=signature;
@@ -254,6 +265,14 @@ export default class SendToT3 extends Plugin {
     const files=this.app.vault.getMarkdownFiles().filter(file=>interest.baseline(file.path));
     await engine.initialize(await Promise.all(files.map(file=>this.readObservedNote(file))),false);
     await this.restartCoordinator();
+  }
+  private async retireUnusedJournal():Promise<void>{
+    if(this.stopped||this.settings.automationDrafts.some(ir=>ir.enabled||ir.activatedAt))return;
+    if(this.retiringJournal)return this.retiringJournal;
+    const folder=this.app.vault.getAbstractFileByPath('T3 Automation');
+    if(!(folder instanceof TFolder))return;
+    this.retiringJournal=this.app.vault.delete(folder,true).finally(()=>{this.retiringJournal=undefined;});
+    await this.retiringJournal;
   }
   private async restartCoordinator(){this.coordinatorService?.stop();this.coordinatorService=undefined;if(this.coordinatorTimer!==undefined){window.clearInterval(this.coordinatorTimer);this.coordinatorTimer=undefined;}const engine=this.observationEngine,files=this.journalFiles;if(!engine||!files||this.settings.automation.coordinatorDeviceId!==this.deviceId)return;const runtime=new DeterministicWorkflowRuntime(engine.store,{currentNote:async(noteId,path)=>{let baseline=await engine.store.getBaseline(noteId);if((!baseline||baseline.tombstone)&&path)baseline=(await engine.store.baselines()).find(item=>item.path===path&&!item.tombstone);if(!baseline||baseline.tombstone)return;const file=this.app.vault.getAbstractFileByPath(baseline.path);if(!(file instanceof TFile))return;return noteSnapshot(noteId,baseline.incarnationId,baseline.path,await this.app.vault.read(file));},environmentId:destinationId=>destinationId,now:()=>new Date(),id:()=>randomId()},this.settings.vaultId),releases=():RuntimeRelease[]=>this.settings.automationDrafts.filter(runnableFolderWorkflow).map((ir,index)=>({ir,hash:releaseHash(ir),activatedAt:ir.activatedAt??new Date(0).toISOString(),activationSequence:index+1}));const driver=new DurableExecutionDriver(engine.store,{createThread:plan=>this.sendV2Plan(plan),startTurn:async()=>{},poll:(plan,threadId)=>this.pollV2Plan(plan,threadId),apply:async()=>{throw Error('Validated note application is not available in the folder workflow editor.');},emit:async()=>{throw Error('Event emission is not available in the folder workflow editor.');},now:()=>new Date().toISOString()}),service=this.coordinatorService=new CoordinatorService({driver,canExecute:()=>observationInterest(this.settings.automationDrafts).active&&!this.stopped,vaultId:this.settings.vaultId,assignment:{destinationId:this.settings.automation.destinationId,assignmentId:this.coordinatorAssignmentId,installationId:this.deviceId,epoch:1,active:true},store:engine.store,files,runtime,releases,report:error=>new Notice(`T3 automation coordinator: ${error}`,12000)});await service.initialize();await service.scan();this.coordinatorTimer=window.setInterval(()=>void service.scan().catch(error=>new Notice(`T3 automation coordinator: ${message(error)}`,12000)),30_000);}
   openV2WorkflowSetup(folder:TFolder,workflow?:WorkflowIR){
@@ -272,6 +291,36 @@ export default class SendToT3 extends Plugin {
     if(ir.enabled&&this.settings.automation.coordinatorDeviceId!==this.deviceId)this.settings.automation={...priorAutomation,coordinatorDeviceId:this.deviceId};
     try{await this.save();await this.refreshObservationCapture();await this.coordinatorService?.scan();this.refreshFolderIndicators();}catch(error){this.settings.automationDrafts=before;this.settings.automation=priorAutomation;throw error;}
   }
+  async setupV2Workflow(folder:TFolder,link:FolderLink,intent:string,existing?:WorkflowIR,workflowId=randomId()):Promise<string>{
+    if(this.busy)throw Error('Another T3 request is in progress.');
+    if(existing?.setupRequestId&&this.settings.pending.some(request=>request.id===existing.setupRequestId))throw Error('This workflow has an unconfirmed setup request. Resolve it in settings before starting another thread.');
+    const description=intent.trim();if(!description||description.length>100_000)throw Error('Describe what the workflow should do in 100,000 characters or fewer.');
+    const project=this.projectForLink(link),readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
+    const connection=this.connection(project);
+    const rootLink=this.settings.folderLinks.find(item=>item.folderPath==='/'&&(!item.vaultId||item.vaultId===this.settings.vaultId)&&(item.connectionId===project.connectionId||item.environmentId===connection.environmentId));
+    const vaultRoot=rootLink?.workspaceRoot??this.settings.vaultLocations.find(item=>item.environmentId===connection.environmentId)?.workspaceRoot;
+    if(!vaultRoot)throw Error('Connect this vault to the selected machine before setting up a workflow.');
+    const settingsRelativePath=`${this.app.vault.configDir||'.obsidian'}/plugins/${this.manifest.id}/data.json`;
+    if(connection.transport==='direct'){
+      const session=await this.sessionFor(connection.connectionId??'');if(!session||session.expiresAt<=Date.now())throw Error('Sign in or pair this connection before creating a workflow.');
+      const remote=await connectVaultRemote(connection,session);
+      try{if(!await remote.matches(vaultRoot,settingsRelativePath,this.settings.vaultId))throw Error('The destination vault mapping no longer matches this vault. Reconnect it in settings.');}
+      finally{remote.close();}
+    }
+    const name=description.split(/\r?\n/,1)[0].replace(/\s+/g,' ').slice(0,160)||`${folder.name} workflow`;
+    const requestId=randomId();
+    const draft=folderWorkflowIR({id:existing?.workflowId??workflowId,name,folderPath:folder.path,includeSubfolders:true,events:['create','modify'],task:description,destinationId:this.settings.automation.destinationId,projectId:link.projectId,connectionId:link.connectionId,enabled:false,order:existing?.execution.batchOrder??this.settings.automationDrafts.length,existing});
+    draft.setupIntent=description;
+    draft.setupRequestId=requestId;
+    const separator=vaultRoot.includes('\\')&&!vaultRoot.includes('/')?'\\':'/';
+    const proposalPath=vaultRoot.replace(/[\\/]+$/,'')+separator+workflowSetupPath(draft).replace(/\//g,separator);
+    const prompt=workflowSetupPrompt({intent:description,folderPath:folder.path,vaultRoot,proposalPath,draft});
+    const request:Request={id:requestId,project:{...project},title:`Set up workflow: ${name}`.slice(0,160),prompt:applyOrchestration(prompt,this.settings.orchestration),connection};
+    if(request.prompt.length>120_000)throw Error('The workflow description is too long to send to T3.');
+    this.busy=true;
+    try{if(!this.settings.automation.coordinatorDeviceId)this.settings.automation={...this.settings.automation,coordinatorDeviceId:this.deviceId};await this.saveV2Workflow(draft);this.settings.pending.push(request);await this.save();return await this.dispatch(request);}
+    finally{this.busy=false;}
+  }
   async removeV2Workflow(ir:WorkflowIR){
     const before=this.settings.automationDrafts;
     this.settings.automationDrafts=before.filter(item=>item.workflowId!==ir.workflowId);
@@ -280,9 +329,44 @@ export default class SendToT3 extends Plugin {
   paletteChatStatus(){return this.paletteChat?.status??'unavailable';}
   workflowFolders(){return this.settings.automationDrafts.map(ir=>folderForWorkflow(ir)??(ir.scope.path.glob.split(/[*?]/,1)[0].replace(/\/$/,'')||'/'));}
   refreshFolderIndicators(){this.folderIndicators?.refresh();}
-  async onExternalSettingsChange(){
+  private async checkExternalSettings(){
+    if(this.stopped||this.checkingExternalSettings)return;
+    this.checkingExternalSettings=true;
+    try{await this.saving;const data=await this.loadData(),serialized=JSON.stringify(data);if(serialized!==this.lastDiskSnapshot)await this.onExternalSettingsChange(data);}
+    finally{this.checkingExternalSettings=false;}
+  }
+  private async checkWorkflowProposals(){
+    if(this.stopped||this.checkingWorkflowProposals||this.settings.automation.coordinatorDeviceId!==this.deviceId)return;
+    this.checkingWorkflowProposals=true;
+    try{
+      await this.saving;
+      const adapter=this.app.vault.adapter;
+      if(!await adapter.exists(WORKFLOW_SETUP_FOLDER))return;
+      const paths=(await adapter.list(WORKFLOW_SETUP_FOLDER)).files.filter(path=>path.endsWith('.json')).sort();
+      for(const path of paths){
+        const draft=this.settings.automationDrafts.find(ir=>ir.setupRequestId&&workflowSetupPath(ir)===path);
+        if(!draft)continue;
+        if(draft.enabled){await adapter.remove(path);this.proposalErrors.delete(path);continue;}
+        const bytes=await adapter.read(path);
+        try{
+          if(new TextEncoder().encode(bytes).byteLength>262_144)throw Error('Workflow setup proposal exceeds 256 KiB.');
+          const ir=validateWorkflowSetupProposal(JSON.parse(bytes),draft);
+          await this.saveV2Workflow(ir);
+          await adapter.remove(path);
+          this.proposalErrors.delete(path);
+          new Notice(`Workflow “${ir.name??ir.workflowId}” is active.`,10000);
+        }catch(error){
+          const detail=message(error);
+          if(this.proposalErrors.get(path)!==detail){this.proposalErrors.set(path,detail);new Notice(`T3 workflow proposal: ${detail}`,12000);}
+        }
+      }
+      if(!(await adapter.list(WORKFLOW_SETUP_FOLDER)).files.length)try{await adapter.rmdir(WORKFLOW_SETUP_FOLDER,false);}catch{/* Another proposal may be arriving. */}
+    }finally{this.checkingWorkflowProposals=false;}
+  }
+  async onExternalSettingsChange(loaded?:any){
     await this.saving;
-    const data=await this.loadData();if(this.stopped||!data)return;
+    const data=loaded??await this.loadData();if(this.stopped||!data)return;
+    this.lastDiskSnapshot=JSON.stringify(data);
     this.settings.folderLinks=loadFolderLinks(data);
     this.settings.automationDrafts=[];
     for(const candidate of Array.isArray(data.automationDrafts)?data.automationDrafts:[])try{this.settings.automationDrafts.push(validateWorkflowIR(candidate));}catch{/* Invalid definitions remain inert. */}
@@ -692,6 +776,7 @@ export default class SendToT3 extends Plugin {
       snapshot.automationDrafts=mergeWorkflowDrafts(baseline.automationDrafts??[],externalDrafts,snapshot.automationDrafts);
       if(JSON.stringify(snapshot.automation)===JSON.stringify(baseline.automation)&&current?.automation)snapshot.automation={destinationId:current.automation.destinationId??'qlo2-vps',coordinatorDeviceId:current.automation.coordinatorDeviceId??''};
       await this.saveData(snapshot);
+      this.lastDiskSnapshot=JSON.stringify(snapshot);
       if(JSON.stringify(this.settings.automationDrafts)===intendedDrafts)this.settings.automationDrafts=snapshot.automationDrafts;
       if(JSON.stringify(this.settings.automation)===intendedAutomation)this.settings.automation=snapshot.automation;
       this.sharedBaseline=JSON.stringify(snapshot);
@@ -923,21 +1008,17 @@ class V2FolderWorkflowModal extends Modal{
   onOpen(){
     const el=this.contentEl;el.empty();this.titleEl.setText(`T3 workflow for ${this.folder.name}`);
     const current=this.existing;
-    let name=current?.name??`${this.folder.name} workflow`,task=current?.actions.find(action=>action.type==='t3.startThread')?.promptTemplate??'',trigger=current?.trigger.eventTypes?.includes('note.changed')?(current.trigger.eventTypes.includes('note.created')?'both':'modify'):'create';
-    if(current&&task.startsWith('Execute this Obsidian folder workflow:\n\n'))task=task.split('\n\nEdit only the named note.')[0].replace('Execute this Obsidian folder workflow:\n\n','');
-    let includeSubfolders=current?.scope.path.glob.includes('**/')??true,enabled=current?.enabled??false,saving=false;
+    let description=current?.setupIntent??'',saving=false;
+    const workflowId=current?.workflowId??randomId();
     el.createEl('p',{text:`Destination: ${this.link.projectTitle} · ${this.link.workspaceRoot}`});
-    new Setting(el).setName('Workflow name').addText(text=>text.setValue(name).setPlaceholder('Gym note formatter').onChange(value=>name=value));
-    new Setting(el).setName('Trigger').addDropdown(dropdown=>dropdown.addOptions({create:'Note created (recommended)',both:'Note created or updated',modify:'Note updated'}).setValue(trigger).onChange(value=>trigger=value));
-    new Setting(el).setName('Include subfolders').addToggle(toggle=>toggle.setValue(includeSubfolders).onChange(value=>includeSubfolders=value));
-    new Setting(el).setName('Task').setDesc('Tell T3 how to edit the note in place.').addTextArea(text=>{text.inputEl.rows=7;text.setValue(task).setPlaceholder('Rewrite this note using my template. Preserve all facts.').onChange(value=>task=value);});
-    new Setting(el).setName('Enabled').addToggle(toggle=>toggle.setValue(enabled).onChange(value=>enabled=value));
+    el.createEl('p',{text:'Describe when this should run and what T3 should do. A T3 thread will set up the workflow.'});
+    new Setting(el).setName('Description').addTextArea(text=>{text.inputEl.rows=10;text.inputEl.cols=48;text.setValue(description).setPlaceholder('When I finish a gym note, summarize the session and update my training log.').onChange(value=>description=value);});
     const actions=new Setting(el);
     if(current)actions.addButton(button=>button.setButtonText('Delete workflow').onClick(async()=>{if(saving)return;saving=true;actions.setDisabled(true);try{await this.plugin.removeV2Workflow(current);this.close();new Notice(`Workflow “${current.name??current.workflowId}” deleted.`);}catch(error){new Notice(message(error),10000);actions.setDisabled(false);saving=false;}}));
-    actions.addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>button.setButtonText(current?'Save workflow':'Create workflow').setCta().onClick(async()=>{
+    actions.addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>button.setButtonText(current?'Update with T3':'Create workflow').setCta().onClick(async()=>{
       if(saving)return;saving=true;actions.setDisabled(true);
-      try{const events:Array<'create'|'modify'>=trigger==='both'?['create','modify']:[trigger as 'create'|'modify'];const ir=folderWorkflowIR({id:current?.workflowId??randomId(),name,folderPath:this.folder.path,includeSubfolders,events,task,destinationId:this.plugin.settings.automation.destinationId,projectId:this.link.projectId,connectionId:this.link.connectionId,enabled,order:current?.execution.batchOrder??this.plugin.settings.automationDrafts.length,existing:current});await this.plugin.saveV2Workflow(ir);this.close();new Notice(`Workflow “${name.trim()}” saved.`);}
-      catch(error){new Notice(message(error),10000);actions.setDisabled(false);saving=false;}
+      try{const threadId=await this.plugin.setupV2Workflow(this.folder,this.link,description,this.existing,workflowId);this.close();new Notice(`Workflow setup started in T3 thread ${threadId}.`,12000);}
+      catch(error){this.existing=this.plugin.settings.automationDrafts.find(ir=>ir.workflowId===workflowId)??this.existing;new Notice(message(error),12000);actions.setDisabled(false);saving=false;}
     }));
   }
 }
