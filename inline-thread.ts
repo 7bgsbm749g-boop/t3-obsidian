@@ -125,17 +125,21 @@ function closeOpenFence(text:string):string {
   return fence?`${text}\n${fence.character.repeat(fence.length)}`:text;
 }
 
+function quoteResponse(text:string):string {
+  return text.split('\n').map(line=>line?`> ${line}`:'>').join('\n');
+}
+
 export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running'):string {
   const messages=state.messages.filter(m=>m.turnId===turnId&&m.role==='assistant');
   const finalId=state.latestTurn?.turnId===turnId?state.latestTurn.assistantMessageId:undefined;
   const final=messages.find(m=>m.id===finalId)??messages.at(-1);
   const answer=(phase==='complete'?final?.text:messages.map(m=>m.text).filter(Boolean).join('\n\n'))?.replace(/\n+$/,'')??'';
-  if(phase==='complete')return answer;
+  if(phase==='complete')return answer?quoteResponse(closeOpenFence(answer)):'';
   const activity=state.activities.filter(a=>a.turnId===turnId&&/^(approval\.requested|user-input\.requested)$/.test(a.kind)).at(-1);
   const heading=`**T3 · ${phase==='running'?'Working':phase==='sending'?'Sending':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const status=activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
-  const body=answer?`\n\n${closeOpenFence(answer)}`:'';
+  const body=answer?`\n\n${quoteResponse(closeOpenFence(answer))}`:'';
   return `${heading}${spinner}${status}${body}`;
 }
 
