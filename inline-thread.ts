@@ -134,12 +134,14 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const finalId=state.latestTurn?.turnId===turnId?state.latestTurn.assistantMessageId:undefined;
   const final=messages.find(m=>m.id===finalId)??messages.at(-1);
   const answer=(phase==='complete'?final?.text:messages.map(m=>m.text).filter(Boolean).join('\n\n'))?.replace(/\n+$/,'')??'';
-  if(phase==='complete')return answer?quoteResponse(closeOpenFence(answer)):'';
+  // Separate the quote from the inline end marker. Without the blank line,
+  // Obsidian treats the marker as a lazy continuation of the last paragraph.
+  if(phase==='complete')return answer?`${quoteResponse(closeOpenFence(answer))}\n`:'';
   const activity=state.activities.filter(a=>a.turnId===turnId&&/^(approval\.requested|user-input\.requested)$/.test(a.kind)).at(-1);
   const heading=`**T3 · ${phase==='running'?'Working':phase==='sending'?'Sending':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const status=activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
-  const body=answer?`\n\n${quoteResponse(closeOpenFence(answer))}`:'';
+  const body=answer?`\n\n${quoteResponse(closeOpenFence(answer))}\n`:'';
   return `${heading}${spinner}${status}${body}`;
 }
 

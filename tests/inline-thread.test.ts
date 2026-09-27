@@ -34,7 +34,7 @@ test('stream deltas, final replacement, snapshots, status, and fence balancing r
   const event=(sequence:number,text:string,streaming:boolean)=>({kind:'event',event:{sequence,type:'thread.message-sent',payload:{messageId:'m1',role:'assistant',text,streaming,turnId:'turn'}}});
   state=applyThreadItem(state,event(1,'Here is\n',true)).state;
   state=applyThreadItem(state,event(2,'```ts\nconst x = 1;',true)).state;
-  assert.match(renderInlineTurn(state,'turn','thread'),/> const x = 1;\n> ```$/);
+  assert.match(renderInlineTurn(state,'turn','thread'),/> const x = 1;\n> ```\n$/);
   state=applyThreadItem(state,event(3,'Here is ```ts\nconst x = 2;\n```',false)).state;
   assert.equal(state.messages[0].text,'Here is ```ts\nconst x = 2;\n```');
   state=applyThreadItem(state,{kind:'event',event:{sequence:4,type:'thread.activity-appended',payload:{activity:{id:'a1',kind:'approval.requested',summary:'Review the command',turnId:'turn'}}}}).state;
@@ -58,29 +58,34 @@ test('a provider-assigned turn is matched to its dispatched user message by requ
   assert.equal(turnForMessage(state,'our-message'),'provider-turn');
   assert.equal(turnForMessage(state,'other-message'),undefined);
   assert.equal(turnForMessage({...state,latestTurn:{turnId:'other-turn',state:'completed',requestedAt:'2026-09-26T14:06:07.000Z'}},'our-message'),undefined);
-  assert.equal(renderInlineTurn(state,'provider-turn','thread','complete'),'> Answer');
+  assert.equal(renderInlineTurn(state,'provider-turn','thread','complete'),'> Answer\n');
 });
 
 test('streamed numbered Markdown is marker-safe across trailing newlines',()=>{
   const id='numbered',region=initialRegion(id),source='Question\n'+region.text+'Following paragraph';
   const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:'1. First line.\n2. Second line.\n',streaming:true}],activities:[]};
   const rendered=renderInlineTurn(state,'turn','thread');
-  assert.equal(rendered,'**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n\n> 1. First line.\n> 2. Second line.');
+  assert.equal(rendered,'**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n\n> 1. First line.\n> 2. Second line.\n');
   const change=replaceRegion(source,id,region.bodyHash,rendered);assert.ok(change);
   const updated=source.slice(0,change.from)+change.text+source.slice(change.to);
   assert.equal(regionBody(updated,id)?.body,rendered);
   assert.ok(replaceRegion(updated,id,change.hash,rendered+'\n3. Third line.'));
 });
 
-test('completed turn keeps only its final message and no status or trailing blank line',()=>{
+test('completed turn keeps only its final message and separates the quote from the end marker',()=>{
   const state={messages:[
     {id:'progress',role:'assistant',turnId:'turn',text:'I will inspect the note.',streaming:false},
     {id:'final',role:'assistant',turnId:'turn',text:'Final paragraph.\n\nSecond paragraph.\n\n',streaming:false},
     {id:'other',role:'assistant',turnId:'turn',text:'Older update delivered out of order.',streaming:false},
   ],activities:[{id:'tool',kind:'tool.started',summary:'Ran command started',turnId:'turn'}],latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'final'}} as any;
   assert.match(renderInlineTurn(state,'turn','thread'),/I will inspect the note/);
-  assert.equal(renderInlineTurn(state,'turn','thread','complete'),'> Final paragraph.\n>\n> Second paragraph.');
+  assert.equal(renderInlineTurn(state,'turn','thread','complete'),'> Final paragraph.\n>\n> Second paragraph.\n');
   assert.doesNotMatch(renderInlineTurn(state,'turn','thread','complete'),/T3|progress|Ran command/);
+  const region=initialRegion('final'),source='Question'+region.text;
+  const edit=replaceRegion(source,'final',region.bodyHash,renderInlineTurn(state,'turn','thread','complete'));assert.ok(edit);
+  const updated=source.slice(0,edit.from)+edit.text+source.slice(edit.to);
+  assert.match(updated,/> Second paragraph\.\n\n<!-- t3-inline:end:final -->/);
+  assert.doesNotMatch(updated,/>\s*\n<!-- t3-inline:end:final -->/);
 });
 
 test('live assistant events retain the final message ID through session updates',()=>{
@@ -90,5 +95,5 @@ test('live assistant events retain the final message ID through session updates'
   assert.equal(running.latestTurn?.assistantMessageId,'final');
   assert.equal(running.latestTurn?.requestedAt,'now');
   const complete=applyThreadItem(running,{kind:'event',event:{sequence:3,type:'thread.session-set',payload:{session:{status:'ready',activeTurnId:null}}}}).state;
-  assert.equal(renderInlineTurn(complete,'turn','thread','complete'),'> Answer');
+  assert.equal(renderInlineTurn(complete,'turn','thread','complete'),'> Answer\n');
 });
