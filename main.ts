@@ -21,6 +21,7 @@ import {RemoteJournalFiles} from './remote-journal';
 import {releaseHash,validateWorkflowIR,type WorkflowIR} from './automation-ir';
 import {folderWorkflowIR,folderForWorkflow,runnableFolderWorkflow} from './v2-folder-workflow';
 import {WORKFLOW_SETUP_FOLDER,workflowSetupPath,workflowSetupRequestPath,workflowSetupPrompt,workflowSetupRequest,validateWorkflowSetupProposal} from './workflow-setup-request';
+import {workflowSetupThreadId,workflowEditPath,workflowEditRequestPath,workflowEditPrompt,workflowEditDocument,validateWorkflowEditProposal,loadWorkflowEditRequests,mergeWorkflowEditRequests,type WorkflowEditRequest} from './workflow-edit-request';
 import {DurableExecutionDriver} from './execution-driver';
 import {exactHash} from './automation-protocol';
 import type {ImmutablePlan,ExecutionEntry} from './execution-journal';
@@ -37,7 +38,7 @@ const INLINE_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidia
 const THREAD_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note.';
 interface InlineStreamingSettings {askT3:boolean;sendToT3:boolean}
 interface AutomationSettings {destinationId:string;coordinatorDeviceId:string}
-interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; folderLinks:FolderLink[];vaultId:string;vaultLocations:VaultLocation[];automation:AutomationSettings;automationDrafts:WorkflowIR[] }
+interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; folderLinks:FolderLink[];vaultId:string;vaultLocations:VaultLocation[];automation:AutomationSettings;automationDrafts:WorkflowIR[];workflowEditRequests:WorkflowEditRequest[] }
 export default class SendToT3 extends Plugin {
   declare settings: Settings;
   mode: 'desktop'|'direct' = 'desktop';
@@ -104,7 +105,7 @@ export default class SendToT3 extends Plugin {
     this.nativeAccount=local?.nativeAccount??null;
     this.vaultRegistrations=local?.vaultRegistrations??{};
     const automationDrafts:WorkflowIR[]=[];for(const candidate of Array.isArray(data?.automationDrafts)?data.automationDrafts:[])try{automationDrafts.push(validateWorkflowIR(candidate));}catch{/* Invalid synced drafts stay inert. */}
-    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{askT3:data?.inlineStreaming?.askT3!==false,sendToT3:data?.inlineStreaming?.sendToT3!==false},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],folderLinks:loadFolderLinks(data),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data),automation:{destinationId:typeof data?.automation?.destinationId==='string'?data.automation.destinationId:'qlo2-vps',coordinatorDeviceId:typeof data?.automation?.coordinatorDeviceId==='string'?data.automation.coordinatorDeviceId:''},automationDrafts};
+    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{askT3:data?.inlineStreaming?.askT3!==false,sendToT3:data?.inlineStreaming?.sendToT3!==false},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],folderLinks:loadFolderLinks(data),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data),automation:{destinationId:typeof data?.automation?.destinationId==='string'?data.automation.destinationId:'qlo2-vps',coordinatorDeviceId:typeof data?.automation?.coordinatorDeviceId==='string'?data.automation.coordinatorDeviceId:''},automationDrafts,workflowEditRequests:loadWorkflowEditRequests(data?.workflowEditRequests)};
     this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id));
     if(typeof this.registerEditorExtension==='function')this.registerEditorExtension(hiddenInlineMarkerExtension());
     if(Platform.isMobile&&typeof document.addEventListener==='function'){
@@ -326,9 +327,9 @@ export default class SendToT3 extends Plugin {
     await this.saveV2Workflow({...current,folderPath:folder.path,revision:current.revision+1});
     new Notice(`Workflow “${current.name??current.workflowId}” is now attached to ${folder.path}.`,10000);
   }
-  async setupV2Workflow(folder:TFolder,link:FolderLink,intent:string,existing?:WorkflowIR,workflowId=randomId()):Promise<string>{
+  async setupV2Workflow(folder:TFolder,link:FolderLink,intent:string,workflowId=randomId()):Promise<string>{
     if(this.busy)throw Error('Another T3 request is in progress.');
-    if(existing?.setupRequestId&&this.settings.pending.some(request=>request.id===existing.setupRequestId))throw Error('This workflow has an unconfirmed setup request. Resolve it in settings before starting another thread.');
+    if(this.settings.automationDrafts.some(ir=>ir.workflowId===workflowId))throw Error('This workflow already exists. Open it to request a change.');
     const description=intent.trim();if(!description||description.length>100_000)throw Error('Describe what the workflow should do in 100,000 characters or fewer.');
     const project=this.projectForLink(link),readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
     const connection=this.connection(project);
@@ -344,7 +345,7 @@ export default class SendToT3 extends Plugin {
     }
     const name=description.split(/\r?\n/,1)[0].replace(/\s+/g,' ').slice(0,160)||`${folder.name} workflow`;
     const requestId=randomId();
-    const draft=folderWorkflowIR({id:existing?.workflowId??workflowId,name,folderPath:folder.path,includeSubfolders:true,events:['create','modify'],task:description,destinationId:this.settings.automation.destinationId,projectId:link.projectId,connectionId:link.connectionId,enabled:false,order:existing?.execution.batchOrder??this.settings.automationDrafts.length,existing});
+    const draft=folderWorkflowIR({id:workflowId,name,folderPath:folder.path,includeSubfolders:true,events:['create','modify'],task:description,destinationId:this.settings.automation.destinationId,projectId:link.projectId,connectionId:link.connectionId,enabled:false,order:this.settings.automationDrafts.length});
     draft.setupIntent=description;
     draft.setupRequestId=requestId;
     const separator=vaultRoot.includes('\\')&&!vaultRoot.includes('/')?'\\':'/';
@@ -385,12 +386,81 @@ export default class SendToT3 extends Plugin {
     }
     finally{this.busy=false;}
   }
+  async editV2Workflow(folder:TFolder,link:FolderLink,existing:WorkflowIR,change:string):Promise<string>{
+    if(this.busy)throw Error('Another T3 request is in progress.');
+    const current=this.settings.automationDrafts.find(ir=>ir.workflowId===existing.workflowId);
+    if(!current||current.revision!==existing.revision||releaseHash(current)!==releaseHash(existing))throw Error('This workflow changed. Reopen it before requesting an edit.');
+    if(!current.enabled)throw Error('Finish setting up this workflow in its T3 thread before editing it.');
+    if(current.folderPath!==folder.path)throw Error('The workflow folder changed. Reopen its folder menu.');
+    if(this.settings.workflowEditRequests.some(item=>item.workflowId===current.workflowId))throw Error('A change request is already in progress for this workflow. Finish or cancel it before sending another.');
+    const threadId=workflowSetupThreadId(current);
+    if(!threadId)throw Error('This workflow has no linked setup thread. Recreate it from the folder menu.');
+    const description=change.trim();if(!description||description.length>100_000)throw Error('Describe the workflow change in 100,000 characters or fewer.');
+    const project=this.projectForLink(link),readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
+    if(current.projectId!==project.id||current.connectionId!==project.connectionId)throw Error('The workflow destination no longer matches this folder link. Restore its link before editing.');
+    const connection=this.connection(project);
+    const rootLink=this.settings.folderLinks.find(item=>item.folderPath==='/'&&(!item.vaultId||item.vaultId===this.settings.vaultId)&&(item.connectionId===project.connectionId||item.environmentId===connection.environmentId));
+    const vaultRoot=rootLink?.workspaceRoot??this.settings.vaultLocations.find(item=>item.environmentId===connection.environmentId)?.workspaceRoot;
+    if(!vaultRoot)throw Error('Connect this vault to the selected machine before editing its workflow.');
+    if(connection.transport==='direct'){
+      const remote=await connectVaultRemote(connection,await this.sessionFor(connection.connectionId??''));
+      try{if(!await remote.matches(vaultRoot,`${this.app.vault.configDir||'.obsidian'}/plugins/${this.manifest.id}/data.json`,this.settings.vaultId))throw Error('The destination vault mapping no longer matches this vault. Reconnect it in settings.');}
+      finally{remote.close();}
+    }
+    await this.verifyWorkflowSetupThread(connection,project.id,threadId);
+    const request:WorkflowEditRequest={requestId:randomId(),workflowId:current.workflowId,baseRevision:current.revision,requestedAt:new Date().toISOString()};
+    const requestPath=workflowEditRequestPath(request),proposalPath=workflowEditPath(request);
+    const separator=vaultRoot.includes('\\')&&!vaultRoot.includes('/')?'\\':'/';
+    const absolute=(path:string)=>vaultRoot.replace(/[\\/]+$/,'')+separator+path.replace(/\//g,separator);
+    const document=workflowEditDocument({vaultRoot,folderPath:folder.path,proposalPath:absolute(proposalPath),current,request});
+    const prompt=workflowEditPrompt({change:description,folderPath:folder.path,requestPath:absolute(requestPath)});
+    const turn:Request={id:request.requestId,project:{...project},title:`Edit workflow: ${current.name??current.workflowId}`.slice(0,160),prompt:applyOrchestration(prompt,this.settings.orchestration),connection,threadId};
+    if(turn.prompt.length>120_000)throw Error('The workflow change is too long to send to T3.');
+    this.busy=true;
+    let requestWritten=false,pendingSaved=false;
+    try{
+      this.settings.workflowEditRequests.push(request);
+      try{await this.save();}catch(error){this.settings.workflowEditRequests=this.settings.workflowEditRequests.filter(item=>item!==request);throw error;}
+      const fresh=this.settings.automationDrafts.find(ir=>ir.workflowId===current.workflowId);
+      if(!fresh||releaseHash(fresh)!==releaseHash(current))throw Error('This workflow changed on another device. Reopen it before requesting an edit.');
+      if(connection.transport==='direct'){
+        const remote=await connectVaultRemote(connection,await this.sessionFor(connection.connectionId??''));
+        try{if(await remote.readFile(vaultRoot,requestPath)!==undefined)throw Error('This workflow edit request already exists.');await remote.writeFile(vaultRoot,requestPath,document);if(await remote.readFile(vaultRoot,requestPath)!==document)throw Error('The workflow edit request could not be verified on the destination.');requestWritten=true;}
+        finally{remote.close();}
+      }else{
+        const adapter=this.app.vault.adapter;
+        let parent='';for(const part of WORKFLOW_SETUP_FOLDER.split('/')){parent=parent?`${parent}/${part}`:part;if(!await adapter.exists(parent))await adapter.mkdir(parent);}
+        if(await adapter.exists(requestPath))throw Error('This workflow edit request already exists.');
+        await adapter.write(requestPath,document);requestWritten=true;
+      }
+      this.settings.pending.push(turn);
+      try{await this.save();pendingSaved=true;}catch(error){this.settings.pending=this.settings.pending.filter(item=>item!==turn);throw error;}
+      return await this.dispatch(turn,true);
+    }catch(error){
+      if(!pendingSaved){
+        this.settings.workflowEditRequests=this.settings.workflowEditRequests.filter(item=>item.requestId!==request.requestId);
+        try{await this.save();}catch(cleanupError){new Notice(`T3 workflow edit cleanup: ${message(cleanupError)}`,12000);}
+        if(requestWritten)try{
+          if(connection.transport==='direct'){const remote=await connectVaultRemote(connection,await this.sessionFor(connection.connectionId??''));try{await remote.deleteFile(vaultRoot,requestPath);}finally{remote.close();}}
+          else await this.app.vault.adapter.remove(requestPath);
+        }catch(cleanupError){new Notice(`T3 workflow edit cleanup: ${message(cleanupError)}`,12000);}
+      }
+      throw error;
+    }finally{this.busy=false;}
+  }
+  private async verifyWorkflowSetupThread(connection:Connection,projectId:string,threadId:string):Promise<void>{
+    const thread=await runBridge(connection,['read',threadId]);
+    if(thread?.id!==threadId||thread.projectId!==projectId||thread.archivedAt||thread.deletedAt)throw Error('The original setup thread is no longer available in the linked T3 project.');
+  }
   async removeV2Workflow(ir:WorkflowIR){
-    const before=this.settings.automationDrafts;
+    const before=this.settings.automationDrafts,beforeEdits=this.settings.workflowEditRequests,beforePending=this.settings.pending;
+    const edits=beforeEdits.filter(item=>item.workflowId===ir.workflowId);
     this.settings.automationDrafts=before.filter(item=>item.workflowId!==ir.workflowId);
-    try{await this.save();await this.refreshObservationCapture();this.refreshFolderIndicators();}catch(error){this.settings.automationDrafts=before;throw error;}
-    if(ir.setupRequestId){
-      const paths=[workflowSetupRequestPath(ir),workflowSetupPath(ir)];
+    this.settings.workflowEditRequests=beforeEdits.filter(item=>item.workflowId!==ir.workflowId);
+    this.settings.pending=beforePending.filter(item=>!edits.some(edit=>edit.requestId===item.id));
+    try{await this.save();await this.refreshObservationCapture();this.refreshFolderIndicators();}catch(error){this.settings.automationDrafts=before;this.settings.workflowEditRequests=beforeEdits;this.settings.pending=beforePending;throw error;}
+    if(ir.setupRequestId||edits.length){
+      const paths=[...(ir.setupRequestId?[workflowSetupRequestPath(ir),workflowSetupPath(ir)]:[]),...edits.flatMap(edit=>[workflowEditRequestPath(edit),workflowEditPath(edit)])];
       const paired=this.settings.paired.find(item=>item.id===ir.connectionId);
       const root=paired&&(this.settings.folderLinks.find(item=>item.folderPath==='/'&&(item.connectionId===paired.id||item.environmentId===paired.environmentId))?.workspaceRoot??this.settings.vaultLocations.find(item=>item.environmentId===paired.environmentId)?.workspaceRoot);
       if(paired&&root){
@@ -398,6 +468,23 @@ export default class SendToT3 extends Plugin {
         catch(error){new Notice(`Workflow removed, but its setup file could not be deleted: ${message(error)}`,12000);}
       }else for(const path of paths)try{if(await this.app.vault.adapter.exists(path))await this.app.vault.adapter.remove(path);}catch(error){new Notice(`Workflow removed, but its setup file could not be deleted: ${message(error)}`,12000);}
     }
+  }
+  async cancelV2WorkflowEdit(ir:WorkflowIR):Promise<void>{
+    const edit=this.settings.workflowEditRequests.find(item=>item.workflowId===ir.workflowId);
+    if(!edit)return;
+    const before=this.settings.workflowEditRequests,beforePending=this.settings.pending;
+    this.settings.workflowEditRequests=before.filter(item=>item.requestId!==edit.requestId);
+    this.settings.pending=beforePending.filter(item=>item.id!==edit.requestId);
+    try{await this.save();}catch(error){this.settings.workflowEditRequests=before;this.settings.pending=beforePending;throw error;}
+    const paths=[workflowEditRequestPath(edit),workflowEditPath(edit)];
+    const paired=this.settings.paired.find(item=>item.id===ir.connectionId);
+    const root=paired&&(this.settings.folderLinks.find(item=>item.folderPath==='/'&&(item.connectionId===paired.id||item.environmentId===paired.environmentId))?.workspaceRoot??this.settings.vaultLocations.find(item=>item.environmentId===paired.environmentId)?.workspaceRoot);
+    try{
+      if(paired&&root){
+        const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId,connectionId:paired.id},await this.sessionFor(paired.id));
+        try{for(const path of paths)if(await remote.readFile(root,path)!==undefined)await remote.deleteFile(root,path);}finally{remote.close();}
+      }else for(const path of paths)if(await this.app.vault.adapter.exists(path))await this.app.vault.adapter.remove(path);
+    }catch(error){new Notice(`Workflow change cancelled, but its setup file could not be deleted: ${message(error)}`,12000);}
   }
   paletteChatStatus(){return this.paletteChat?.status??'unavailable';}
   workflowFolders(){return this.settings.automationDrafts.map(ir=>folderForWorkflow(ir)??(ir.scope.path.glob.split(/[*?]/,1)[0].replace(/\/$/,'')||'/'));}
@@ -418,6 +505,28 @@ export default class SendToT3 extends Plugin {
       const paths=(await adapter.list(WORKFLOW_SETUP_FOLDER)).files.filter(path=>path.endsWith('.json')).sort();
       for(const path of paths){
         const draft=this.settings.automationDrafts.find(ir=>ir.setupRequestId&&workflowSetupPath(ir)===path);
+        const edit=this.settings.workflowEditRequests.find(request=>workflowEditPath(request)===path);
+        if(!draft&&!edit)continue;
+        if(edit){
+          try{
+            const current=this.settings.automationDrafts.find(ir=>ir.workflowId===edit.workflowId);
+            if(!current||!current.enabled||current.revision!==edit.baseRevision)throw Error('Workflow changed since this edit was requested. Cancel the old request and try again.');
+            const requestPath=workflowEditRequestPath(edit);
+            if(!await adapter.exists(requestPath))throw Error('Workflow edit instructions are missing.');
+            const context=JSON.parse(await adapter.read(requestPath));
+            if(context?.kind!=='workflow.edit'||context?.editRequestId!==edit.requestId||context?.current?.workflowId!==current.workflowId||releaseHash(validateWorkflowIR(context.current))!==releaseHash(current))throw Error('Workflow edit instructions do not match the current workflow.');
+            const bytes=await adapter.read(path);
+            if(new TextEncoder().encode(bytes).byteLength>262_144)throw Error('Workflow edit result exceeds 256 KiB.');
+            const ir=validateWorkflowEditProposal(JSON.parse(bytes),current,edit);
+            const before=this.settings.workflowEditRequests;
+            this.settings.workflowEditRequests=before.filter(item=>item.requestId!==edit.requestId);
+            try{await this.saveV2Workflow(ir);}catch(error){this.settings.workflowEditRequests=before;throw error;}
+            await adapter.remove(path);if(await adapter.exists(requestPath))await adapter.remove(requestPath);
+            this.proposalErrors.delete(path);
+            new Notice(`Workflow “${ir.name??ir.workflowId}” was updated.`,10000);
+          }catch(error){const detail=message(error);if(this.proposalErrors.get(path)!==detail){this.proposalErrors.set(path,detail);new Notice(`T3 workflow edit: ${detail}`,12000);}}
+          continue;
+        }
         if(!draft)continue;
         if(draft.enabled){await adapter.remove(path);this.proposalErrors.delete(path);continue;}
         const bytes=await adapter.read(path);
@@ -450,6 +559,7 @@ export default class SendToT3 extends Plugin {
     this.settings.automationDrafts=[];
     for(const candidate of Array.isArray(data.automationDrafts)?data.automationDrafts:[])try{this.settings.automationDrafts.push(validateWorkflowIR(candidate));}catch{/* Invalid definitions remain inert. */}
     this.settings.automation={destinationId:data?.automation?.destinationId??'qlo2-vps',coordinatorDeviceId:data?.automation?.coordinatorDeviceId??''};
+    this.settings.workflowEditRequests=loadWorkflowEditRequests(data?.workflowEditRequests);
     this.settings.vaultId=vaultIdentity(data)??this.settings.vaultId;
     this.settings.vaultLocations=loadVaultLocations(data);
     if(Array.isArray(data.paired))this.settings.paired=data.paired;
@@ -841,7 +951,7 @@ export default class SendToT3 extends Plugin {
   private sharedSnapshot(){const {pending,completionJobs,connection,...shared}=this.settings;return JSON.parse(JSON.stringify(shared));}
   save(forceShared=false) {
     this.refreshFolderIndicators();
-    const {pending,completionJobs,connection}=this.settings,snapshot=this.sharedSnapshot(),intendedDrafts=JSON.stringify(this.settings.automationDrafts),intendedAutomation=JSON.stringify(this.settings.automation);
+    const {pending,completionJobs,connection}=this.settings,snapshot=this.sharedSnapshot(),intendedDrafts=JSON.stringify(this.settings.automationDrafts),intendedAutomation=JSON.stringify(this.settings.automation),intendedEdits=JSON.stringify(this.settings.workflowEditRequests);
     const writeShared=forceShared||JSON.stringify(snapshot)!==this.sharedBaseline;
     const state=JSON.parse(JSON.stringify({pending,completionJobs}));
     this.app.saveLocalStorage(this.localKey,JSON.parse(JSON.stringify({deviceId:this.deviceId,automationStreamId:this.streamId,coordinatorAssignmentId:this.coordinatorAssignmentId,mode:this.mode,connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,vaultRegistrations:this.vaultRegistrations})));
@@ -853,11 +963,13 @@ export default class SendToT3 extends Plugin {
       const externalDrafts:WorkflowIR[]=[];
       for(const candidate of Array.isArray(current?.automationDrafts)?current.automationDrafts:[])try{externalDrafts.push(validateWorkflowIR(candidate));}catch{/* Invalid definitions stay inert. */}
       snapshot.automationDrafts=mergeWorkflowDrafts(baseline.automationDrafts??[],externalDrafts,snapshot.automationDrafts);
+      snapshot.workflowEditRequests=mergeWorkflowEditRequests(baseline.workflowEditRequests??[],loadWorkflowEditRequests(current?.workflowEditRequests),snapshot.workflowEditRequests);
       if(JSON.stringify(snapshot.automation)===JSON.stringify(baseline.automation)&&current?.automation)snapshot.automation={destinationId:current.automation.destinationId??'qlo2-vps',coordinatorDeviceId:current.automation.coordinatorDeviceId??''};
       await this.saveData(snapshot);
       this.lastDiskSnapshot=JSON.stringify(snapshot);
       if(JSON.stringify(this.settings.automationDrafts)===intendedDrafts)this.settings.automationDrafts=snapshot.automationDrafts;
       if(JSON.stringify(this.settings.automation)===intendedAutomation)this.settings.automation=snapshot.automation;
+      if(JSON.stringify(this.settings.workflowEditRequests)===intendedEdits)this.settings.workflowEditRequests=snapshot.workflowEditRequests;
       this.sharedBaseline=JSON.stringify(snapshot);
     });return this.saving;
   }
@@ -1085,19 +1197,20 @@ class FolderLinkModal extends Modal{
 class V2FolderWorkflowModal extends Modal{
   constructor(app:App,private plugin:SendToT3,private folder:TFolder,private link:FolderLink,private existing?:WorkflowIR){super(app);}
   onOpen(){
-    const el=this.contentEl;el.empty();this.titleEl.setText(`T3 workflow for ${this.folder.name}`);
+    const el=this.contentEl;el.empty();this.titleEl.setText(`${this.existing?'Edit':'Create'} T3 workflow for ${this.folder.name}`);
     const current=this.existing;
-    let description=current?.setupIntent??'',saving=false;
+    let description='',saving=false;
     const workflowId=current?.workflowId??randomId();
     el.createEl('p',{text:`Workflow folder: ${this.folder.path==='/'?'Vault root (/)':this.folder.path}`});
     el.createEl('p',{text:`Destination: ${this.link.projectTitle} · ${this.link.workspaceRoot}`});
-    el.createEl('p',{text:'Describe when this should run and what T3 should do. A T3 thread will set up the workflow.'});
-    new Setting(el).setName('Description').addTextArea(text=>{text.inputEl.rows=10;text.inputEl.cols=48;text.setValue(description).setPlaceholder('When I finish a gym note, summarize the session and update my training log.').onChange(value=>description=value);});
+    el.createEl('p',{text:current?'Ask for a change to this workflow. Your request will go to its original setup thread.':'Describe when this should run and what T3 should do. A T3 thread will set up the workflow.'});
+    new Setting(el).setName(current?'Change request':'Description').addTextArea(text=>{text.inputEl.rows=10;text.inputEl.cols=48;text.setValue('').setPlaceholder(current?'Change this workflow so that…':'When I finish a gym note, summarize the session and update my training log.').onChange(value=>description=value);});
     const actions=new Setting(el);
     if(current)actions.addButton(button=>button.setButtonText('Delete workflow').onClick(async()=>{if(saving)return;saving=true;actions.setDisabled(true);try{await this.plugin.removeV2Workflow(current);this.close();new Notice(`Workflow “${current.name??current.workflowId}” deleted.`);}catch(error){new Notice(message(error),10000);actions.setDisabled(false);saving=false;}}));
-    actions.addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>button.setButtonText(current?'Update with T3':'Create workflow').setCta().onClick(async()=>{
+    if(current&&this.plugin.settings.workflowEditRequests.some(item=>item.workflowId===current.workflowId))actions.addButton(button=>button.setButtonText('Cancel pending change').onClick(async()=>{if(saving)return;saving=true;actions.setDisabled(true);try{await this.plugin.cancelV2WorkflowEdit(current);this.close();new Notice('Pending workflow change cancelled.');}catch(error){new Notice(message(error),10000);actions.setDisabled(false);saving=false;}}));
+    actions.addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>button.setButtonText(current?'Save changes':'Create workflow').setCta().onClick(async()=>{
       if(saving)return;saving=true;actions.setDisabled(true);
-      try{const threadId=await this.plugin.setupV2Workflow(this.folder,this.link,description,this.existing,workflowId);this.close();new Notice(`Workflow setup started in T3 thread ${threadId}.`,12000);}
+      try{const threadId=current?await this.plugin.editV2Workflow(this.folder,this.link,current,description):await this.plugin.setupV2Workflow(this.folder,this.link,description,workflowId);this.close();new Notice(current?`Workflow change sent to T3 thread ${threadId}.`:`Workflow setup started in T3 thread ${threadId}.`,12000);}
       catch(error){this.existing=this.plugin.settings.automationDrafts.find(ir=>ir.workflowId===workflowId)??this.existing;new Notice(message(error),12000);actions.setDisabled(false);saving=false;}
     }));
   }

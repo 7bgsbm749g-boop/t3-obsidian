@@ -5,6 +5,7 @@ import {runInNewContext} from 'node:vm';
 import {webcrypto,randomUUID} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 import {folderWorkflowIR} from '../v2-folder-workflow';
+import {commandId} from '../direct';
 
 async function folderMenuHarness(){
   const deviceId=randomUUID();let local:any={deviceId,mode:'direct',pairedSessions:{c:{url:'https://folder.example',environmentId:'env',token:'test',expiresAt:Date.now()+600000}}};
@@ -135,6 +136,27 @@ test('v2 folder menu asks for a description and starts a setup thread',async()=>
   }finally{h.plugin.onunload();}
 });
 
+test('editing a workflow opens an empty change box and sends to the original setup thread',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const linked=await h.open();await h.button(linked,'Link').click();
+    const draft={...folderWorkflowIR({id:'workout',name:'Workout journal',folderPath:'Notes',includeSubfolders:true,events:['modify'],task:'Original workout instruction.',destinationId:'qlo2-vps',projectId:h.project.id,connectionId:'c',enabled:true,order:0}),setupIntent:'Original workout instruction.',setupRequestId:'02f7ea89-5b49-466a-b2a6-daa12a7402b3'};
+    h.plugin.settings.automationDrafts=[draft];
+    const calls:any[]=[];
+    h.plugin.editV2Workflow=async(...args:any[])=>{calls.push(args);return commandId(draft.setupRequestId,'thread');};
+    h.plugin.setupV2Workflow=async()=>{throw Error('Editing must not create a setup thread.');};
+    const entry=h.folderMenu().items.find((item:any)=>item.title==='Setup T3 workflow');
+    const existing=entry!.submenu!.items.find((item:any)=>item.title==='Workout journal');assert.ok(existing);
+    await existing!.callback();const modal=h.modals.at(-1);
+    assert.equal(h.setting(modal,'Change request').controls[0].value,'');
+    assert.ok(!modal.contentEl.settings.some((item:any)=>item.name==='Description'));
+    h.setting(modal,'Change request').controls[0].change('Only summarize weight increases.');
+    await h.button(modal,'Save changes').click();
+    assert.equal(calls.length,1);assert.equal(calls[0][2].workflowId,draft.workflowId);assert.equal(calls[0][3],'Only summarize weight increases.');
+    assert.ok(h.notices.some(text=>text.includes(commandId(draft.setupRequestId,'thread'))));
+  }finally{h.plugin.onunload();}
+});
+
 test('mobile root menu uses the recently pressed folder for workflow setup',async()=>{
   const h=await folderMenuHarness();
   try{
@@ -208,6 +230,45 @@ test('coordinator applies a matching setup proposal and removes its temporary fi
     assert.equal(h.plugin.settings.automationDrafts[0].enabled,true);
     assert.ok(h.plugin.settings.automationDrafts[0].activatedAt);
     assert.equal(h.plugin.settings.automationDrafts[0].trigger.eventTypes[0],'note.changed');
+  }finally{h.plugin.onunload();}
+});
+
+test('workflow edits send a turn to the linked thread while the active revision stays in place until approval',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    h.fileMenu('unused.md',false);
+    const linked=await h.open();await h.button(linked,'Link').click();
+    const link=h.plugin.settings.folderLinks[0];
+    h.plugin.settings.folderLinks.push({id:'root',folderPath:'/',vaultId:h.plugin.settings.vaultId,connectionId:'c',projectId:'root',projectTitle:'QLO2',workspaceRoot:'/vault',self:true});
+    const workflowId='bd2e7b80-c408-4e67-81c6-007a83388272',setupRequestId='02f7ea89-5b49-466a-b2a6-daa12a7402b3';
+    const draft={...folderWorkflowIR({id:workflowId,name:'Workout journal',folderPath:'Notes',includeSubfolders:true,events:['modify'],task:'Summarize workouts.',destinationId:'qlo2-vps',projectId:h.project.id,connectionId:'c',enabled:true,order:0}),revision:3,setupIntent:'Summarize workouts.',setupRequestId};
+    h.plugin.settings.automationDrafts=[draft];h.plugin.settings.automation.coordinatorDeviceId=h.deviceId;
+    h.plugin.projectForLink=()=>h.project;h.plugin.projectReadinessError=()=>undefined;
+    h.plugin.connection=()=>({transport:'desktop',host:'local',executable:'t3'});
+    h.plugin.verifyWorkflowSetupThread=async()=>{};
+    const files=new Map<string,string>(),folders=new Set<string>();
+    h.plugin.app.vault.adapter={exists:async(path:string)=>files.has(path)||folders.has(path),mkdir:async(path:string)=>{folders.add(path);},write:async(path:string,bytes:string)=>{files.set(path,bytes);},read:async(path:string)=>files.get(path),remove:async(path:string)=>{files.delete(path);},list:async(path:string)=>({files:[...files.keys()].filter(item=>item.startsWith(path+'/')),folders:[]}),rmdir:async()=>{}};
+    let sent:any;
+    h.plugin.dispatch=async(request:any)=>{sent=request;assert.equal(h.plugin.settings.automationDrafts[0].revision,3);assert.equal(h.plugin.settings.automationDrafts[0].enabled,true);return request.threadId;};
+    const threadId=await h.plugin.editV2Workflow({path:'Notes',name:'Notes'},link,draft,'Only summarize weight increases.');
+    assert.equal(threadId,commandId(setupRequestId,'thread'));
+    assert.equal(sent.threadId,threadId);
+    assert.equal(sent.prompt.split('Only summarize weight increases.').length-1,1);
+    const pending=h.plugin.settings.workflowEditRequests[0];assert.equal(pending.workflowId,workflowId);
+    const path=`.obsidian/t3-code/setup/${workflowId}-${pending.requestId}.json`,requestPath=path.replace(/\.json$/,'.request.json');
+    assert.equal(JSON.parse(files.get(requestPath)!).current.revision,3);
+    assert.equal(files.has(path),false);
+    files.set(path,JSON.stringify({workflowId,editRequestId:pending.requestId,ir:{...draft,revision:4,setupRequestId:'other'}}));
+    await h.plugin.checkWorkflowProposals();
+    assert.equal(h.plugin.settings.automationDrafts[0].revision,3);
+    assert.equal(h.plugin.settings.workflowEditRequests.length,1);
+    files.set(path,JSON.stringify({workflowId,editRequestId:pending.requestId,ir:{...draft,revision:4,name:'Weight increases only'}}));
+    h.plugin.saveV2Workflow=async(ir:any)=>{h.plugin.settings.automationDrafts=[ir];await h.plugin.save();};
+    await h.plugin.checkWorkflowProposals();
+    assert.equal(h.plugin.settings.automationDrafts[0].revision,4);
+    assert.equal(h.plugin.settings.automationDrafts[0].setupRequestId,setupRequestId);
+    assert.equal(h.plugin.settings.workflowEditRequests.length,0);
+    assert.equal(files.has(path),false);assert.equal(files.has(requestPath),false);
   }finally{h.plugin.onunload();}
 });
 
