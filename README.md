@@ -104,7 +104,7 @@ Manually sending a note with **Open in T3 Code** or **Send current note** append
 
 ## Ask T3 inline
 
-Select text in a Markdown editor and choose **Ask T3** from the editor menu. Choose **New thread** or **Existing thread…**. The plugin sends the selection and captured note path to T3, then inserts a tracked response below the selected line. It streams the assistant's text into that response, shows the latest tool or approval status, and marks the response complete when the T3 turn ends. The T3 agent is instructed to answer in its thread and leave the note untouched; the plugin owns the note insertion.
+Select text in a Markdown editor and choose **Ask T3** from the editor menu. Choose **New thread** or **Existing thread…**. The plugin sends the selection and captured note path to T3, then inserts a tracked response below the selected line. A working indicator animates while the reply streams. Routine tool activity stays in T3; approval and question prompts still appear in the note and through an Obsidian notice. When the turn completes, the plugin replaces progress text with only the final answer. The T3 agent is instructed to answer in its thread and leave the note untouched; the plugin owns the note insertion.
 
 With Ask T3 streaming off, the same selection and note path are sent, and T3 answers in its thread without adding a response to the note.
 
@@ -112,7 +112,7 @@ On mobile, selecting text in the Markdown editor shows a small **Ask T3** button
 
 The response is surrounded by small HTML comment markers so it can be found after edits elsewhere in the note, file/view switches, or a plugin reload. Obsidian hides these tracking lines in its editor; they remain in the raw Markdown for safe updates and may be visible in other text editors. The plugin only replaces its own response when the previous content still matches. If you edit or remove the response while it is streaming, updates stop instead of overwriting your changes. A closed note catches up when reopened. Markdown code fences in a partial answer are temporarily closed while streaming. Selecting text inside a fenced block places the response after the closing fence; an unclosed fence must be closed first.
 
-An active response offers **Stop T3 response** in the editor menu, which requests an interrupt for that T3 turn. Approval and question prompts are signaled in the note and through an Obsidian notice; respond in the T3 app. Full reasoning traces and tool payloads are not copied into the note. Inline job metadata is device-local, while the visible answer and markers sync with the note. A device without that local job will not start a second stream for the synced response.
+An active response offers **Stop T3 response** in the editor menu, which requests an interrupt for that T3 turn. Respond to approval and question prompts in the T3 app. Full reasoning traces and tool payloads are not copied into the note. Inline job metadata is device-local, while the visible answer and markers sync with the note. A device without that local job will not start a second stream for the synced response.
 
 ## Orchestration
 

@@ -3,7 +3,7 @@ import {contentHash} from './completion';
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string}
 export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null}
-export interface InlineThreadState {messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null};latestTurn?:{turnId:string;state:string;requestedAt?:string}}
+export interface InlineThreadState {messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null};latestTurn?:{turnId:string;state:string;requestedAt?:string;assistantMessageId?:string|null}}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {
   if(!text.trim()||document.slice(start,end)!==text)throw Error('The selected text changed. Select it again before asking T3.');
@@ -86,7 +86,8 @@ export function applyThreadItem(state:InlineThreadState,item:any):{state:InlineT
   if(event.type==='thread.message-sent'&&p&&typeof p.messageId==='string'&&typeof p.text==='string'&&typeof p.role==='string'){
     const old=state.messages.find(m=>m.id===p.messageId);
     const message:InlineMessage={id:p.messageId,role:p.role,turnId:p.turnId??null,streaming:p.streaming===true,text:old?(p.streaming?old.text+p.text:p.text||old.text):p.text,createdAt:old?.createdAt??p.createdAt};
-    return {state:{...state,messages:old?state.messages.map(m=>m.id===message.id?message:m):[...state.messages,message]},sequence:event.sequence};
+    const latestTurn=p.role==='assistant'&&p.turnId&&state.latestTurn&&state.latestTurn.turnId===p.turnId?{...state.latestTurn,assistantMessageId:p.messageId}:state.latestTurn;
+    return {state:{...state,latestTurn,messages:old?state.messages.map(m=>m.id===message.id?message:m):[...state.messages,message]},sequence:event.sequence};
   }
   if(event.type==='thread.activity-appended'&&validActivity(p?.activity)){
     const activities=state.activities.some(a=>a.id===p.activity.id)?state.activities:[...state.activities,p.activity];
@@ -95,7 +96,7 @@ export function applyThreadItem(state:InlineThreadState,item:any):{state:InlineT
   if(event.type==='thread.session-set'&&p?.session&&typeof p.session.status==='string'){
     const session=p.session;
     let latestTurn=state.latestTurn;
-    if(session.status==='running'&&typeof session.activeTurnId==='string')latestTurn={turnId:session.activeTurnId,state:'running'};
+    if(session.status==='running'&&typeof session.activeTurnId==='string')latestTurn={...(latestTurn?.turnId===session.activeTurnId?latestTurn:{}),turnId:session.activeTurnId,state:'running'};
     else if(latestTurn?.state==='running'&&['ready','stopped','interrupted','error'].includes(session.status))latestTurn={...latestTurn,state:session.status==='error'?'error':session.status==='interrupted'?'interrupted':'completed'};
     return {state:{...state,session,latestTurn},sequence:event.sequence};
   }
@@ -126,15 +127,16 @@ function closeOpenFence(text:string):string {
 
 export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running'):string {
   const messages=state.messages.filter(m=>m.turnId===turnId&&m.role==='assistant');
-  const answer=messages.map(m=>m.text).filter(Boolean).join('\n\n').replace(/\n+$/,'');
-  const activity=state.activities.filter(a=>a.turnId===turnId&&/^(tool\.|approval\.|user-input\.|plan\.)/.test(a.kind)).at(-1);
-  const needsResponse=activity&&/^(approval\.requested|user-input\.requested)$/.test(activity.kind);
-  const heading=phase==='complete'?'**T3 answer**':`**T3 · ${phase==='running'?'Working':phase==='sending'?'Sending':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
-  const status=phase==='complete'?'':needsResponse?'\n\n> Action needed in T3: '+safeStatus(activity.summary):activity?'\n\n> '+safeStatus(activity.summary):'';
-  // Quote every line to isolate Markdown lists from numbered replies elsewhere
-  // in a Live Preview editor. The marker owns the final newline, not the body.
-  const body=answer?`\n\n${closeOpenFence(answer).split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`:'';
-  return `${heading} · \`${threadId}\`${status}${body}`;
+  const finalId=state.latestTurn?.turnId===turnId?state.latestTurn.assistantMessageId:undefined;
+  const final=messages.find(m=>m.id===finalId)??messages.at(-1);
+  const answer=(phase==='complete'?final?.text:messages.map(m=>m.text).filter(Boolean).join('\n\n'))?.replace(/\n+$/,'')??'';
+  if(phase==='complete')return answer;
+  const activity=state.activities.filter(a=>a.turnId===turnId&&/^(approval\.requested|user-input\.requested)$/.test(a.kind)).at(-1);
+  const heading=`**T3 · ${phase==='running'?'Working':phase==='sending'?'Sending':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
+  const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
+  const status=activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
+  const body=answer?`\n\n${closeOpenFence(answer)}`:'';
+  return `${heading}${spinner}${status}${body}`;
 }
 
 export function turnPhase(state:InlineThreadState,turnId:string):'running'|'complete'|'interrupted'|'error' {

@@ -51,3 +51,23 @@
   touch-action: manipulation;
 }
 .send-to-t3-selection-action[hidden] { display: none; }
+
+.send-to-t3-inline-spinner {
+  display: inline-block;
+  width: 0.75em;
+  height: 0.75em;
+  margin-inline-start: 0.15em;
+  border: 0.12em solid var(--text-muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.05em;
+  animation: send-to-t3-inline-spin 0.8s linear infinite;
+}
+
+@keyframes send-to-t3-inline-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .send-to-t3-inline-spinner { animation: none; }
+}
