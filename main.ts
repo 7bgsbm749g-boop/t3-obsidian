@@ -480,10 +480,14 @@ export default class SendToT3 extends Plugin {
     const paired=this.settings.paired.find(item=>item.id===ir.connectionId);
     const root=paired&&(this.settings.folderLinks.find(item=>item.folderPath==='/'&&(item.connectionId===paired.id||item.environmentId===paired.environmentId))?.workspaceRoot??this.settings.vaultLocations.find(item=>item.environmentId===paired.environmentId)?.workspaceRoot);
     try{
-      if(paired&&root){
+      const adapter=this.app.vault.adapter;
+      if(await adapter.exists(paths[0])){
+        for(const path of paths)if(await adapter.exists(path))await adapter.remove(path);
+      }else if(paired&&root){
+        // T3 exposes remote writes but no file deletion. The coordinator consumes this marker.
         const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId,connectionId:paired.id},await this.sessionFor(paired.id));
-        try{for(const path of paths)if(await remote.readFile(root,path)!==undefined)await remote.deleteFile(root,path);}finally{remote.close();}
-      }else for(const path of paths)if(await this.app.vault.adapter.exists(path))await this.app.vault.adapter.remove(path);
+        try{await remote.writeFile(root,paths[0],JSON.stringify({schemaVersion:1,kind:'workflow.edit.cancelled',workflowId:edit.workflowId,editRequestId:edit.requestId}));}finally{remote.close();}
+      }
     }catch(error){new Notice(`Workflow change cancelled, but its setup file could not be deleted: ${message(error)}`,12000);}
   }
   paletteChatStatus(){return this.paletteChat?.status??'unavailable';}
@@ -503,7 +507,24 @@ export default class SendToT3 extends Plugin {
       const adapter=this.app.vault.adapter;
       if(!await adapter.exists(WORKFLOW_SETUP_FOLDER))return;
       const paths=(await adapter.list(WORKFLOW_SETUP_FOLDER)).files.filter(path=>path.endsWith('.json')).sort();
+      for(const path of paths.filter(path=>path.endsWith('.request.json'))){
+        let marker:any;
+        try{marker=JSON.parse(await adapter.read(path));}catch{continue;}
+        if(marker?.kind!=='workflow.edit.cancelled'||typeof marker.workflowId!=='string'||typeof marker.editRequestId!=='string')continue;
+        const request:WorkflowEditRequest={requestId:marker.editRequestId,workflowId:marker.workflowId,baseRevision:1,requestedAt:new Date(0).toISOString()};
+        if(!loadWorkflowEditRequests([request]).length)continue;
+        if(workflowEditRequestPath(request)!==path)continue;
+        const before=this.settings.workflowEditRequests;
+        if(before.some(item=>item.requestId===request.requestId&&item.workflowId===request.workflowId)){
+          this.settings.workflowEditRequests=before.filter(item=>item.requestId!==request.requestId||item.workflowId!==request.workflowId);
+          try{await this.save();}catch(error){this.settings.workflowEditRequests=before;throw error;}
+        }
+        const proposalPath=workflowEditPath(request);
+        if(await adapter.exists(proposalPath))await adapter.remove(proposalPath);
+        await adapter.remove(path);
+      }
       for(const path of paths){
+        if(!await adapter.exists(path))continue;
         const draft=this.settings.automationDrafts.find(ir=>ir.setupRequestId&&workflowSetupPath(ir)===path);
         const edit=this.settings.workflowEditRequests.find(request=>workflowEditPath(request)===path);
         if(!draft&&!edit)continue;

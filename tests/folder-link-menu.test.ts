@@ -272,6 +272,38 @@ test('workflow edits send a turn to the linked thread while the active revision 
   }finally{h.plugin.onunload();}
 });
 
+test('cancelling a workflow edit removes its local setup file and pending request',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const workflowId=randomUUID(),requestId=randomUUID();
+    const draft={...folderWorkflowIR({id:workflowId,name:'Workout journal',folderPath:'Notes',includeSubfolders:true,events:['modify'],task:'Summarize workouts.',destinationId:'qlo2-vps',projectId:'project',connectionId:'c',enabled:true,order:0}),setupRequestId:randomUUID()};
+    const request={requestId,workflowId,baseRevision:draft.revision,requestedAt:new Date().toISOString()};
+    h.plugin.settings.automationDrafts=[draft];h.plugin.settings.workflowEditRequests=[request];
+    const path=`.obsidian/t3-code/setup/${workflowId}-${requestId}.request.json`;
+    const files=new Map([[path,'edit context']]);
+    h.plugin.app.vault.adapter={exists:async(p:string)=>files.has(p),remove:async(p:string)=>{files.delete(p);}};
+    await h.plugin.cancelV2WorkflowEdit(draft);
+    assert.equal(h.plugin.settings.workflowEditRequests.length,0);
+    assert.equal(files.size,0);
+    assert.equal(h.plugin.settings.automationDrafts[0].revision,draft.revision);
+  }finally{h.plugin.onunload();}
+});
+
+test('coordinator consumes remote workflow edit cancellation markers',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const workflowId=randomUUID(),requestId=randomUUID();
+    h.plugin.settings.automation.coordinatorDeviceId=h.deviceId;
+    h.plugin.settings.workflowEditRequests=[{requestId,workflowId,baseRevision:3,requestedAt:new Date().toISOString()}];
+    const base=`.obsidian/t3-code/setup/${workflowId}-${requestId}`;
+    const files=new Map([[`${base}.request.json`,JSON.stringify({schemaVersion:1,kind:'workflow.edit.cancelled',workflowId,editRequestId:requestId})],[`${base}.json`,'stale proposal']]);
+    h.plugin.app.vault.adapter={exists:async(p:string)=>p==='.obsidian/t3-code/setup'||files.has(p),list:async()=>({files:[...files.keys()],folders:[]}),read:async(p:string)=>files.get(p),remove:async(p:string)=>{files.delete(p);},rmdir:async()=>{}};
+    await h.plugin.checkWorkflowProposals();
+    assert.equal(h.plugin.settings.workflowEditRequests.length,0);
+    assert.equal(files.size,0);
+  }finally{h.plugin.onunload();}
+});
+
 for(const mobile of [false,true])test(`linked note menu offers new and existing threads on ${mobile?'mobile':'desktop'}`,async()=>{
   const h=await folderMenuHarness();
   try{
