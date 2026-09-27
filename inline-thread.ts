@@ -57,7 +57,9 @@ export function startMarker(id:string){return `<!-- t3-inline:start:${id} -->`;}
 export function endMarker(id:string){return `<!-- t3-inline:end:${id} -->`;}
 export function initialRegion(id:string):{text:string;bodyHash:string} {
   const body='**T3 · Sending…**';
-  return {text:`\n${startMarker(id)}\n${body}\n${endMarker(id)}\n`,bodyHash:contentHash(body)};
+  // The final blank line also closes the quote in Obsidian Live Preview when
+  // this response is the last block in the note.
+  return {text:`\n${startMarker(id)}\n${body}\n${endMarker(id)}\n\n`,bodyHash:contentHash(body)};
 }
 
 export function regionBody(document:string,id:string):{from:number;to:number;body:string}|null {

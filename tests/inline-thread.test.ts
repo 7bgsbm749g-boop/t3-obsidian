@@ -84,7 +84,7 @@ test('completed turn keeps only its final message and separates the quote from t
   const region=initialRegion('final'),source='Question'+region.text;
   const edit=replaceRegion(source,'final',region.bodyHash,renderInlineTurn(state,'turn','thread','complete'));assert.ok(edit);
   const updated=source.slice(0,edit.from)+edit.text+source.slice(edit.to);
-  assert.match(updated,/> Second paragraph\.\n\n<!-- t3-inline:end:final -->/);
+  assert.match(updated,/> Second paragraph\.\n\n<!-- t3-inline:end:final -->\n\n$/);
   assert.doesNotMatch(updated,/>\s*\n<!-- t3-inline:end:final -->/);
 });
 
