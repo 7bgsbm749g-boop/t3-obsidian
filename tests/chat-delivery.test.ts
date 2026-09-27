@@ -296,7 +296,8 @@ test('editor selection menu streams a T3 reply into its original note for new an
     assert.ok(newThreadText.startsWith(selection));assert.match(newThreadText,/Answer in the T3 thread\. Do not edit the Obsidian note/);assert.doesNotMatch(newThreadText,/Reply in the Obsidian note itself/);
     assert.match(newThreadText,/Vault-relative note path: "Notes\/Original.md"/);assert.doesNotMatch(newThreadText,/Different.md/);
     await new Promise(resolve=>setTimeout(resolve,180));
-    assert.match(first.value,/\*\*T3 answer\*\*[\s\S]*Inline reply from T3\./);
+    assert.match(first.value,/Inline reply from T3\./);
+    assert.doesNotMatch(first.value,/\*\*T3 answer\*\*/);
 
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',updatedAt:'2026-09-19T11:00:00Z',latestTurn:{state:'completed'}}]);
     const followup='Add the selected evidence to the conclusion.';
@@ -558,8 +559,9 @@ test('manual Send to T3 streams into the source editor but disabled and automati
     const continued=await h.plugin.send(file,project,{threadId:'existing',throwOnError:true});
     assert.equal(continued.threadId,'existing');
     assert.equal((editor.value.match(/t3-inline:start/g)??[]).length,2,'An existing-thread send receives its own guarded response');
-    for(let attempt=0;attempt<40&&!editor.value.includes('**T3 answer** · `existing`');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
-    assert.match(editor.value,/\*\*T3 answer\*\* · `existing`/);
+    for(let attempt=0;attempt<40&&(editor.value.match(/Inline reply from T3\./g)??[]).length<2;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.equal((editor.value.match(/Inline reply from T3\./g)??[]).length,2);
+    assert.doesNotMatch(editor.value,/\*\*T3 answer\*\*|`existing`/);
     h.plugin.settings.inlineStreaming.sendToT3=false;
     const before=editor.value;
     h.plugin.app.vault.read=async()=> '# Manual\nPlease explain this.';
