@@ -34,7 +34,7 @@ test('stream deltas, final replacement, snapshots, status, and fence balancing r
   const event=(sequence:number,text:string,streaming:boolean)=>({kind:'event',event:{sequence,type:'thread.message-sent',payload:{messageId:'m1',role:'assistant',text,streaming,turnId:'turn'}}});
   state=applyThreadItem(state,event(1,'Here is\n',true)).state;
   state=applyThreadItem(state,event(2,'```ts\nconst x = 1;',true)).state;
-  assert.match(renderInlineTurn(state,'turn','thread'),/> const x = 1;\n> ```\n$/);
+  assert.match(renderInlineTurn(state,'turn','thread'),/```ts\nconst x = 1;\n```\n$/);
   state=applyThreadItem(state,event(3,'Here is ```ts\nconst x = 2;\n```',false)).state;
   assert.equal(state.messages[0].text,'Here is ```ts\nconst x = 2;\n```');
   state=applyThreadItem(state,{kind:'event',event:{sequence:4,type:'thread.activity-appended',payload:{activity:{id:'a1',kind:'approval.requested',summary:'Review the command',turnId:'turn'}}}}).state;
@@ -96,4 +96,31 @@ test('live assistant events retain the final message ID through session updates'
   assert.equal(running.latestTurn?.requestedAt,'now');
   const complete=applyThreadItem(running,{kind:'event',event:{sequence:3,type:'thread.session-set',payload:{session:{status:'ready',activeTurnId:null}}}}).state;
   assert.equal(renderInlineTurn(complete,'turn','thread','complete'),'> Answer\n');
+});
+
+test('tables and code fences leave the quote while surrounding prose stays quoted',()=>{
+  const answer='Before the table.\n\n| Name | Value |\n| --- | --- |\n| A | 1 |\n\nBetween blocks.\n\n```ts\nconst value = 1;\n```\n\nAfter the code.';
+  const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:answer,streaming:false}],activities:[],latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'answer'}} as any;
+  assert.equal(renderInlineTurn(state,'turn','thread','complete'),'> Before the table.\n\n| Name | Value |\n| --- | --- |\n| A | 1 |\n\n> Between blocks.\n\n```ts\nconst value = 1;\n```\n\n> After the code.\n');
+});
+
+test('a partial table stays quoted until its delimiter arrives, then reflows without losing text',()=>{
+  const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:'Intro\n\n| Name | Value |',streaming:true}],activities:[]} as any;
+  assert.match(renderInlineTurn(state,'turn','thread'),/> \| Name \| Value \|\n$/);
+  state.messages[0].text+='\n| --- | --- |\n| A | 1 |';
+  assert.match(renderInlineTurn(state,'turn','thread'),/> Intro\n\n\| Name \| Value \|\n\| --- \| --- \|\n\| A \| 1 \|\n$/);
+});
+
+test('an unfinished code fence renders outside the quote with a temporary close',()=>{
+  const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:'Intro\n\n```ts\nconst value = 1;',streaming:true}],activities:[]} as any;
+  assert.match(renderInlineTurn(state,'turn','thread'),/> Intro\n\n```ts\nconst value = 1;\n```\n$/);
+  state.messages[0].text+='\n```\n\nDone.';
+  assert.match(renderInlineTurn(state,'turn','thread'),/> Intro\n\n```ts\nconst value = 1;\n```\n\n> Done\.\n$/);
+});
+
+test('pipes inside fences, escaped pipes, and prose do not create tables',()=>{
+  const answer='A | B\n\n```md\n| Head | Cell |\n| --- | --- |\n```\n\n| Name | Value |\n| --- | --- |\n| A \\| B | 1 |\n\nEnd.';
+  const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:answer,streaming:false}],activities:[],latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'answer'}} as any;
+  const rendered=renderInlineTurn(state,'turn','thread','complete');
+  assert.match(rendered,/> A \| B\n\n```md\n\| Head \| Cell \|\n\| --- \| --- \|\n```\n\n\| Name \| Value \|\n\| --- \| --- \|\n\| A \\| B \| 1 \|\n\n> End\.\n$/);
 });

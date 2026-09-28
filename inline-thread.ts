@@ -127,8 +127,72 @@ function closeOpenFence(text:string):string {
   return fence?`${text}\n${fence.character.repeat(fence.length)}`:text;
 }
 
+function tableCells(line:string):string[]|null {
+  if(/^ {4}|^\t|^ {0,3}>/.test(line))return null;
+  const cells:string[]=[];
+  let cell='',escaped=false,backticks=0;
+  for(let index=0;index<line.length;index++){
+    const char=line[index];
+    if(escaped){cell+=char;escaped=false;continue;}
+    if(char==='\\'){cell+=char;escaped=true;continue;}
+    if(char==='`'){
+      let end=index+1;while(line[end]==='`')end++;
+      const length=end-index;
+      backticks=backticks===length?0:backticks||length;
+      cell+=line.slice(index,end);index=end-1;continue;
+    }
+    if(char==='|'&&!backticks){cells.push(cell);cell='';continue;}
+    cell+=char;
+  }
+  cells.push(cell);
+  if(cells.length<2)return null;
+  if(!cells[0].trim())cells.shift();
+  if(!cells.at(-1)?.trim())cells.pop();
+  return cells.length?cells:null;
+}
+
+function tableStart(lines:string[],index:number):boolean {
+  if(index+1>=lines.length)return false;
+  const header=tableCells(lines[index]),delimiter=tableCells(lines[index+1]);
+  return !!header&&!!delimiter&&header.length===delimiter.length&&delimiter.every(cell=>/^:?-{2,}:?$/.test(cell.trim()));
+}
+
+/** Keep prose in the visible reply quote, but render blocks that Obsidian Live
+ * Preview handles poorly inside quotes at the document's top level. */
 function quoteResponse(text:string):string {
-  return text.split('\n').map(line=>line?`> ${line}`:'>').join('\n');
+  const lines=text.split('\n'),modes:Array<'quote'|'raw'>=lines.map(()=>'quote');
+  for(let index=0;index<lines.length;){
+    const fence=/^ {0,3}(`{3,}|~{3,})(.*)$/.exec(lines[index]);
+    if(fence&&!(fence[1][0]==='`'&&fence[2].includes('`'))){
+      const character=fence[1][0],length=fence[1].length,start=index++;
+      while(index<lines.length){
+        const closing=/^ {0,3}(`{3,}|~{3,})\s*$/.exec(lines[index++]);
+        if(closing&&closing[1][0]===character&&closing[1].length>=length)break;
+      }
+      for(let line=start;line<index;line++)modes[line]='raw';
+      continue;
+    }
+    if(tableStart(lines,index)){
+      const start=index;index+=2;
+      const columns=tableCells(lines[start])!.length;
+      while(index<lines.length&&lines[index].trim()&&tableCells(lines[index])?.length===columns)index++;
+      for(let line=start;line<index;line++)modes[line]='raw';
+      continue;
+    }
+    index++;
+  }
+  const segments:Array<{mode:'quote'|'raw';lines:string[]}>=[];
+  for(let index=0;index<lines.length;index++){
+    const last=segments.at(-1);
+    if(last?.mode===modes[index])last.lines.push(lines[index]);
+    else segments.push({mode:modes[index],lines:[lines[index]]});
+  }
+  if(segments.length===1&&segments[0].mode==='quote')return lines.map(line=>line?`> ${line}`:'>').join('\n');
+  return segments.map(segment=>{
+    while(segment.lines[0]==='')segment.lines.shift();
+    while(segment.lines.at(-1)==='')segment.lines.pop();
+    return segment.mode==='quote'?segment.lines.map(line=>line?`> ${line}`:'>').join('\n'):segment.lines.join('\n');
+  }).filter(Boolean).join('\n\n');
 }
 
 export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running'):string {
