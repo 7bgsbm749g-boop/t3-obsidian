@@ -13,7 +13,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   let local:any={mode:'direct',pairedSessions:{'chat-connection':{url:'https://chat.example',environmentId:'chat-env',token:'dummy-chat-session',expiresAt:Date.now()+600_000}}};
   const localStorage=new Map<string,any>();
   const rootLink={id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true};
-  let activeNote:any;
+  let activeNote:any,activeEditorView=true;
   const initial={folderLinks:[rootLink],chatProjectKey:'old:unrelated-project',paired:[{id:'chat-connection',name:'Laptop',url:'https://chat.example',environmentId:'chat-env'}],directScanId:'chat-connection',directProjects:[project],directSelected:['chat-connection:chat-project'],completion:{action:'delete'}};
   const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[],workspaceEvents:Record<string,((...args:any[])=>void)[]>={};let threads:any[]=[],catalog:any[]=[project];
   let vaultAccesses=0;
@@ -52,7 +52,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     app={
       loadLocalStorage:(key:string)=>localStorage.get(key)??(key==='send-to-t3-code-device-v1'?local:undefined),
       saveLocalStorage:(key:string,value:any)=>{localStorage.set(key,value);if(key==='send-to-t3-code-device-v1')local=value;},
-      workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{(workspaceEvents[name]??=[]).push(callback);return {};},getActiveViewOfType:()=>activeNote?{file:activeNote}:undefined,getLeavesOfType:()=>[]},
+      workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{(workspaceEvents[name]??=[]).push(callback);return {};},getActiveViewOfType:()=>activeEditorView&&activeNote?{file:activeNote}:undefined,getActiveFile:()=>activeNote,getLeavesOfType:()=>[]},
       vault:{adapter:{},getName:()=> 'Notes',read:()=>{vaultAccesses++;throw Error('Chat must not read note contents');},readBinary:()=>{vaultAccesses++;throw Error('Chat must not read attachments');}},
     };
     async loadData(){return shared.at(-1)??initial;}
@@ -111,7 +111,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();return plugin;};
   const plugin=await start();
-  return {plugin,start,commands,shared,registered,modals,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+  return {plugin,start,commands,shared,registered,modals,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
     const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
     let value=selection+'\nTail';
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
@@ -334,6 +334,33 @@ test('palette chat can target an existing thread and labels active and idle conv
     await picker.choose(items[0]);
     assert.equal(h.commands.length,1,'Existing-thread chat must not create a thread');
     assert.equal(h.commands[0].type,'thread.turn.start');assert.equal(h.commands[0].threadId,'active');
+  }finally{h.plugin.onunload();}
+});
+
+test('existing-thread picker uses the nested folder project even when the note remembers a vault thread',async()=>{
+  const h=await chatHarness();
+  try{
+    const nested={id:'nested-project',title:'Nested project',workspaceRoot:'/projects/nested',connectionId:project.connectionId};
+    h.plugin.settings.directProjects.push(nested);
+    h.plugin.settings.folderLinks.push({id:'nested-link',folderPath:'Notes/Inner',projectId:nested.id,projectTitle:nested.title,workspaceRoot:nested.workspaceRoot,connectionId:nested.connectionId,self:false});
+    const path='Notes/Inner/Subfolder/Draft.md';
+    h.plugin.settings.noteThreads.push({notePath:path,threadId:'vault-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-28T00:00:00Z'});
+    h.setActiveNote(path);
+    h.setActiveEditorView(false);
+    h.setThreads([{id:'vault-thread',projectId:project.id,title:'Vault thread',updatedAt:'2026-09-28T01:00:00Z'},
+      {id:'nested-thread',projectId:nested.id,title:'Nested thread',updatedAt:'2026-09-28T01:00:00Z',runtimeMode:'approval-required',interactionMode:'default'}]);
+    await h.plugin.openChat('Continue in the nested project');
+    await h.modals.at(-1).choose(true);
+    const picker=h.modals.at(-1);
+    assert.equal(picker.getItems().map((thread:any)=>thread.id).join(','),'nested-thread');
+    h.plugin.settings.folderLinks.at(-1).projectId=project.id;
+    await assert.rejects(picker.choose(picker.getItems()[0]),/linked project changed/i);
+    assert.equal(h.commands.length,0);
+    h.plugin.settings.folderLinks.at(-1).projectId=nested.id;
+    await picker.choose(picker.getItems()[0]);
+    assert.equal(h.commands.length,1);
+    assert.equal(h.commands[0].threadId,'nested-thread');
+    assert.match(h.commands[0].message.text,/Vault-relative note path: "Notes\/Inner\/Subfolder\/Draft.md"/);
   }finally{h.plugin.onunload();}
 });
 

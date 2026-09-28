@@ -618,7 +618,7 @@ export default class SendToT3 extends Plugin {
     if(!this.nativeAccount)return 'Sign in to T3 on this device first. Synced project names do not sign this device in.';
   }
   private chatNote():{path:string;absolutePath?:string}|undefined {
-    const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;
+    const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file??this.app.workspace.getActiveFile();
     if(!file||file.extension.toLowerCase()!=='md')return;
     return this.noteContext(file);
   }
@@ -684,7 +684,7 @@ export default class SendToT3 extends Plugin {
       const link=folderLinkForPath(this.settings.folderLinks,file.path);
       const saved=this.noteLink(file.path);
       if(!link&&!saved)throw Error('The note’s T3 destination changed. Open the note menu again.');
-      const project=saved?this.projectForNoteLink(saved):this.projectForLink(link!);
+      const project=link?this.projectForLink(link):this.projectForNoteLink(saved!);
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
       new Notice('Loading threads…',2000);
       const threads=projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);
@@ -697,11 +697,11 @@ export default class SendToT3 extends Plugin {
       const link=folderLinkForPath(this.settings.folderLinks,file.path);
       const saved=this.noteLink(file.path);
       if(!link&&!saved)throw Error('The note’s T3 destination changed. Open the note menu again.');
-      const chosen=threadId?this.historicalNoteLink(file.path,threadId):!newThread?saved:undefined;
+      const chosen=expectedProjectKey?undefined:threadId?this.historicalNoteLink(file.path,threadId):!newThread?saved:undefined;
       const project=chosen?this.projectForNoteLink(chosen):link?this.projectForLink(link):this.projectForNoteLink(saved!);
       if(expectedProjectKey&&projectKey(project)!==expectedProjectKey)throw Error('The folder’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
-      await this.send(file,project,{threadId,newThread});
+      await this.send(file,project,{threadId,newThread,folderPicker:Boolean(expectedProjectKey)});
     }catch(error){new Notice(`Send to T3 Code: ${message(error)}`,10000);}
   }
   openChat(prompt?:string){
@@ -728,7 +728,7 @@ export default class SendToT3 extends Plugin {
     return openChatFlow(this.app,host,prompt);
   }
   private async openChatThreads(prompt:string,note?:{path:string;absolutePath?:string},inline?:EditorChatContext,answerOnly=false,remember=true){
-    const {project}=await this.chatTarget(note?.path);
+    const {project}=await this.chatTarget(note?.path,undefined,true);
     const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
     new Notice('Loading threads…',2000);
     const threads=projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);
@@ -832,8 +832,8 @@ export default class SendToT3 extends Plugin {
     this.busy=true;
     let saved=false;
     try{
-      const historical=note&&options?.threadId?this.historicalNoteLink(note.path,options.threadId):undefined;
-      let {project,link}=await this.chatTarget(note?.path,historical,options?.newThread);
+      const historical=note&&options?.threadId&&!options.expectedProjectKey?this.historicalNoteLink(note.path,options.threadId):undefined;
+      let {project,link}=await this.chatTarget(note?.path,historical,Boolean(options?.newThread||options?.expectedProjectKey));
       if(options?.expectedProjectKey&&projectKey(project)!==options.expectedProjectKey)throw Error('The note’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
       let text=prompt;
@@ -1060,7 +1060,7 @@ export default class SendToT3 extends Plugin {
       this.scanError=result.cached?(result.warning??'Destination offline. Showing saved projects; sending requires a connection.') : '';await this.save();
     } catch(e) {this.scanError = message(e); throw e;}
   }
-  async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;rememberLink?:boolean}) {
+  async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;rememberLink?:boolean;folderPicker?:boolean}) {
     if (this.busy) return;
     this.busy = true;
     let saved = false;
@@ -1069,7 +1069,7 @@ export default class SendToT3 extends Plugin {
     const completion = {...this.settings.completion};
     try {
       const linked=!options?.newThread&&!options?.threadId?this.noteLink(file.path):undefined;
-      const historical=options?.threadId?this.historicalNoteLink(file.path,options.threadId):undefined;
+      const historical=options?.threadId&&!options.folderPicker?this.historicalNoteLink(file.path,options.threadId):undefined;
       if(linked||historical)project=this.projectForNoteLink((historical??linked)!);
       const threadId=options?.threadId??linked?.threadId;
       const remember=options?.rememberLink??(this.settings.threadLinking||Boolean(linked));
