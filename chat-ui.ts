@@ -2,6 +2,7 @@ import {App, Modal, Notice, Setting} from 'obsidian';
 import {RequestDeliveryError} from './bridge';
 
 export interface ChatHost {
+  hasNote():boolean;
   getTargetDescription(): string;
   getLinkedThread():string|undefined;
   hasPreviousThreads():boolean;
@@ -35,15 +36,15 @@ class ChatPromptModal extends Modal {
     this.field.style.width = '100%';
     this.field.value = this.prompt;
     this.remember=this.host.defaultRemember();
-    if(this.host.getTargetDescription().startsWith('No note open')===false)new Setting(this.contentEl).setName('Remember this thread for this note').addToggle(toggle=>toggle.setValue(this.remember).onChange(value=>{this.remember=value;}));
+    if(this.host.hasNote())new Setting(this.contentEl).setName('Remember this thread for this note').addToggle(toggle=>toggle.setValue(this.remember).onChange(value=>{this.remember=value;}));
     this.field.addEventListener('keydown', event => {
       if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) {
         event.preventDefault();
         void this.submit();
       }
     });
+    this.contentEl.createEl('p',{text:'Choose a destination. The thread picker shows whether each conversation is active or idle.'});
     this.actions = new Setting(this.contentEl)
-      .setDesc('Choose a destination. The thread picker shows whether each conversation is active or idle.')
       .addButton(button => button.setButtonText(this.host.getLinkedThread()?'Linked thread':'New thread').setCta().onClick(() => { void this.submit('default'); }))
       .addButton(button => button.setButtonText('Existing thread…').onClick(() => { void this.submit('existing'); }));
     if(this.host.getLinkedThread())this.actions.addButton(button=>button.setButtonText('New thread').onClick(()=>{void this.submit('new');}));
@@ -82,9 +83,9 @@ class ChatDestinationModal extends Modal {
     this.titleEl.setText('Send T3 chat');this.contentEl.empty();
     this.contentEl.createEl('p',{text:this.host.getTargetDescription()});
     this.remember=this.host.defaultRemember();
-    if(this.host.getTargetDescription().startsWith('No note open')===false)new Setting(this.contentEl).setName('Remember this thread for this note').addToggle(toggle=>toggle.setValue(this.remember).onChange(value=>{this.remember=value;}));
+    if(this.host.hasNote())new Setting(this.contentEl).setName('Remember this thread for this note').addToggle(toggle=>toggle.setValue(this.remember).onChange(value=>{this.remember=value;}));
+    this.contentEl.createEl('p',{text:'Choose a destination. The thread picker shows whether each conversation is active or idle.'});
     this.actions=new Setting(this.contentEl)
-      .setDesc('Choose where to send this message. The thread picker shows whether each conversation is active or idle.')
       .addButton(button=>button.setButtonText(this.host.getLinkedThread()?'Linked thread':'New thread').setCta().onClick(()=>{void this.choose('default');}))
       .addButton(button=>button.setButtonText('Existing thread…').onClick(()=>{void this.choose('existing');}));
     if(this.host.getLinkedThread())this.actions.addButton(button=>button.setButtonText('New thread').onClick(()=>{void this.choose('new');}));

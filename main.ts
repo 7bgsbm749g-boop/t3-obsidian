@@ -714,7 +714,8 @@ export default class SendToT3 extends Plugin {
     const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
     const send=(text:string,options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string})=>inline&&note?this.sendInlineChat(text,note,inline,options):this.sendChat(answerOnly?`${text}\n\n${THREAD_REPLY_INSTRUCTION}`:text,note,options);
     const host:ChatHost={
-      getTargetDescription:()=>`${note?note.path:'No note open'} → ${this.noteLink(note?.path)?.projectId??link?.projectTitle??this.app.vault.getName()+' (vault root)'}`,
+      hasNote:()=>Boolean(note),
+      getTargetDescription:()=>{const linked=this.noteLink(note?.path),project=linked?[...this.settings.directProjects,...this.settings.projects].find(item=>item.id===linked.projectId&&sameWorkspacePath(item.workspaceRoot,linked.workspaceRoot)):undefined;return `${note?note.path:'No note open'} → ${project?.title??(linked&&link?.projectId===linked.projectId?link.projectTitle:undefined)??(linked?`T3 project ${linked.projectId.slice(0,8)}`:link?.projectTitle)??this.app.vault.getName()+' (vault root)'}`;},
       getLinkedThread:()=>this.noteLink(note?.path)?.threadId,
       hasPreviousThreads:()=>Boolean(note&&this.olderNoteThreads(note.path).length),
       defaultRemember:()=>Boolean(note&&(this.settings.threadLinking||this.noteLink(note.path))),
