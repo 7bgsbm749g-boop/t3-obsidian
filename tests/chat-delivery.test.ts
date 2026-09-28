@@ -33,6 +33,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   class Setting {
     constructor(_element:any){}
     setName(_text:string){return this;}setDesc(_text:string){return this;}setDisabled(_value:boolean){return this;}
+    addToggle(callback:(toggle:any)=>void){const toggle={setValue:()=>toggle,onChange:()=>toggle};callback(toggle);return this;}
     addButton(callback:(button:any)=>void){const button={setButtonText:()=>button,setCta:()=>button,setDisabled:()=>button,onClick:()=>button};callback(button);return this;}
     addDropdown(callback:(d:any)=>void){const d={addOption:()=>d,setValue:()=>d,setDisabled:()=>d,onChange:()=>d};callback(d);return this;}
     addText(callback:(t:any)=>void){const t={setValue:()=>t,setPlaceholder:()=>t,setDisabled:()=>t,onChange:()=>t};callback(t);return this;}
@@ -165,6 +166,61 @@ test('a locally paired session authorizes a synced managed connection without ac
     h.plugin.settings.paired[0].managed=true;
     await h.plugin.sendChat('Use the existing device session.');
     assert.equal(h.commands.at(-1).type,'thread.turn.start');
+  }finally{h.plugin.onunload();}
+});
+
+test('a confirmed note chat links its thread, routes the next question there, and survives restart',async()=>{
+  const h=await chatHarness();
+  try{
+    const note={path:'Notes/Linked.md'};
+    await h.plugin.sendChat('First question',note);
+    const firstThread=h.commands[0].threadId;
+    assert.equal(h.plugin.settings.noteThreads.length,1);
+    assert.equal(h.plugin.settings.noteThreads[0].threadId,firstThread);
+    h.setThreads([{id:firstThread,projectId:project.id,title:'First question',updatedAt:new Date().toISOString(),runtimeMode:'approval-required',interactionMode:'default'}]);
+    await h.plugin.sendChat('Follow up',note);
+    assert.equal(h.commands.length,3,'The second question starts a turn without creating another thread');
+    assert.equal(h.commands[2].threadId,firstThread);
+    h.plugin.onunload();
+    const restarted=await h.start();
+    await restarted.sendChat('After restart',note);
+    assert.equal(h.commands[3].threadId,firstThread);
+    restarted.onunload();
+  }finally{h.plugin.onunload();}
+});
+
+test('thread linking switch controls first-link creation while explicit new threads remain available',async()=>{
+  const h=await chatHarness();
+  try{
+    const note={path:'Notes/OptOut.md'};
+    h.plugin.settings.threadLinking=false;
+    await h.plugin.sendChat('One',note);
+    await h.plugin.sendChat('Two',note);
+    assert.equal(h.commands.filter(command=>command.type==='thread.create').length,2);
+    assert.equal(h.plugin.settings.noteThreads.length,0);
+    await h.plugin.sendChat('Remember this one',note,{rememberLink:true});
+    const linked=h.plugin.settings.noteThreads[0].threadId;
+    h.setThreads([{id:linked,projectId:project.id,title:'Remember this one',updatedAt:new Date().toISOString(),runtimeMode:'approval-required',interactionMode:'default'}]);
+    await h.plugin.sendChat('Use the link',note);
+    assert.equal(h.commands.at(-1).threadId,linked);
+    await h.plugin.sendChat('Separate branch',note,{newThread:true,rememberLink:false});
+    assert.equal(h.plugin.settings.noteThreads[0].threadId,linked);
+  }finally{h.plugin.onunload();}
+});
+
+test('a full-note send keeps its linked note and reuses the confirmed thread',async()=>{
+  const h=await chatHarness();
+  try{
+    (h.plugin.app.vault as any).read=async()=> 'Full note content';
+    const file={path:'Notes/Whole.md',basename:'Whole',extension:'md',stat:{ctime:123}};
+    const first=await h.plugin.send(file,project,{throwOnError:true});
+    assert.equal(first.request.completion.action,'keep','Linking must prevent configured delete cleanup');
+    assert.equal(h.plugin.settings.noteThreads[0].threadId,first.threadId);
+    h.setThreads([{id:first.threadId,projectId:project.id,title:'Whole',updatedAt:new Date().toISOString(),runtimeMode:'approval-required',interactionMode:'default'}]);
+    const second=await h.plugin.send(file,project,{throwOnError:true});
+    assert.equal(second.request.threadId,first.threadId);
+    assert.equal(second.request.completion.action,'keep');
+    assert.equal(h.commands.filter(command=>command.type==='thread.create').length,1);
   }finally{h.plugin.onunload();}
 });
 

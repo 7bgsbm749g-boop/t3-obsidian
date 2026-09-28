@@ -132,9 +132,17 @@ Folder links sync with the vault. T3 credentials remain device-local. Each expli
 
 ### Sending notes into linked projects
 
-For a note inside a linked folder, **Open in T3 Code** offers **Send to new thread** and **Send to existing thread…**. The existing-thread option loads a searchable list of that project’s unarchived threads, newest first, with each thread labelled **Active** or **Idle**. Nested links take precedence. On mobile, or when native submenus are unavailable, tapping the action opens the same two choices. A missing linked project reports an error instead of rerouting the note.
+For a note inside a linked folder, **Open in T3 Code** offers **Send to new thread** and **Send to existing thread…**. The existing-thread option loads a searchable list of that project’s unarchived threads, newest first, with each thread labelled **Active** or **Idle**. Nested links take precedence. On mobile, or when native submenus are unavailable, tapping the action opens the same choices. A missing linked project reports an error instead of rerouting the note.
 
-Both choices send the full Markdown and embedded images. Existing-thread sends preserve its model, runtime permissions and interaction mode. An idle thread starts another turn; a running thread receives input through T3’s steering behavior. Resolve pending approvals or structured input in T3 before sending another note. Retries reuse the original thread and message IDs without creating a new thread. Sending to an existing thread keeps the note and supersedes any older cleanup job for that note; archive/delete completion handling applies only to new-thread note sends.
+### Thread linking
+
+**Settings → Send to T3 Code → Chat → Thread linking** is on by default. After T3 confirms a manual note or chat send, the plugin remembers that thread for the note. **Ask T3**, command-palette chat, **Send current note**, and the Files sidebar offer the linked thread as their default destination. The chat dialog also offers **New thread**, **Existing thread…**, and **Previous threads…** when there is recorded history. **Remember this thread for this note** controls whether the choice becomes the note’s active link. Turning off the setting stops automatic first links; it does not remove or disable existing links.
+
+Link records sync in plugin settings and contain note paths, project destinations, and thread IDs, but no note body or credentials. Renaming a note moves its links; deleting it retires them. A linked thread must still exist in its original T3 project. If that project is unavailable, the plugin reports the problem instead of rerouting the send. Linked notes are kept when a turn completes, even if archive or delete is selected for other sends.
+
+Previously sent threads can be selected with **Existing thread…** and remembered. Older sends without a unique recorded note path cannot be identified reliably by title alone. The plugin recovers a previous link from a confirmed completion job when its note and project still exist.
+
+Both choices send the full Markdown and embedded images. Existing-thread sends preserve its model, runtime permissions and interaction mode. An idle thread starts another turn; a running thread receives input through T3’s steering behavior. Resolve pending approvals or structured input in T3 before sending another note. Retries reuse the original thread and message IDs without creating a new thread. Sending to an existing thread keeps the note and supersedes any older cleanup job for that note; archive/delete completion handling applies only to new-thread note sends that are not linked.
 
 ### Folder workflows
 

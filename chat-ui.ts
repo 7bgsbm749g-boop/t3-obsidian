@@ -3,8 +3,13 @@ import {RequestDeliveryError} from './bridge';
 
 export interface ChatHost {
   getTargetDescription(): string;
-  sendChat(prompt: string): Promise<void>;
-  sendToExisting(prompt: string): Promise<void>;
+  getLinkedThread():string|undefined;
+  hasPreviousThreads():boolean;
+  defaultRemember():boolean;
+  sendChat(prompt: string,remember:boolean): Promise<void>;
+  sendToNew(prompt:string,remember:boolean):Promise<void>;
+  sendToExisting(prompt: string,remember:boolean): Promise<void>;
+  sendToPrevious(prompt:string,remember:boolean):Promise<void>;
   openSettings(): void;
 }
 
@@ -16,6 +21,7 @@ class ChatPromptModal extends Modal {
   private submitting = false;
   private field!: HTMLTextAreaElement;
   private actions!: Setting;
+  private remember=false;
 
   constructor(app: App, private host: ChatHost, private prompt = '') { super(app); }
 
@@ -28,6 +34,8 @@ class ChatPromptModal extends Modal {
     });
     this.field.style.width = '100%';
     this.field.value = this.prompt;
+    this.remember=this.host.defaultRemember();
+    if(this.host.getTargetDescription().startsWith('No note open')===false)new Setting(this.contentEl).setName('Remember this thread for this note').addToggle(toggle=>toggle.setValue(this.remember).onChange(value=>{this.remember=value;}));
     this.field.addEventListener('keydown', event => {
       if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) {
         event.preventDefault();
@@ -35,20 +43,24 @@ class ChatPromptModal extends Modal {
       }
     });
     this.actions = new Setting(this.contentEl)
-      .setDesc('Choose a new thread or an existing thread. The thread picker shows whether each conversation is active or idle.')
-      .addButton(button => button.setButtonText('New thread').setCta().onClick(() => { void this.submit(false); }))
-      .addButton(button => button.setButtonText('Existing thread…').onClick(() => { void this.submit(true); }));
+      .setDesc('Choose a destination. The thread picker shows whether each conversation is active or idle.')
+      .addButton(button => button.setButtonText(this.host.getLinkedThread()?'Linked thread':'New thread').setCta().onClick(() => { void this.submit('default'); }))
+      .addButton(button => button.setButtonText('Existing thread…').onClick(() => { void this.submit('existing'); }));
+    if(this.host.getLinkedThread())this.actions.addButton(button=>button.setButtonText('New thread').onClick(()=>{void this.submit('new');}));
+    if(this.host.hasPreviousThreads())this.actions.addButton(button=>button.setButtonText('Previous threads…').onClick(()=>{void this.submit('previous');}));
     this.field.focus();
   }
 
-  private async submit(existing = false) {
+  private async submit(target:'default'|'existing'|'new'|'previous'|boolean = 'default') {
     if (this.submitting || !this.field.value.trim()) return;
     this.submitting = true;
     this.field.disabled = true;
     this.actions.setDisabled(true);
     try {
-      if(existing)await this.host.sendToExisting(this.field.value);
-      else await this.host.sendChat(this.field.value);
+      if(target===true||target==='existing')await this.host.sendToExisting(this.field.value,this.remember);
+      else if(target==='previous')await this.host.sendToPrevious(this.field.value,this.remember);
+      else if(target==='new')await this.host.sendToNew(this.field.value,this.remember);
+      else await this.host.sendChat(this.field.value,this.remember);
       this.close();
     } catch (error) {
       reportError(error);
@@ -64,18 +76,23 @@ class ChatPromptModal extends Modal {
 class ChatDestinationModal extends Modal {
   private choosing=false;
   private actions!:Setting;
+  private remember=false;
   constructor(app:App,private host:ChatHost,private prompt:string){super(app);}
   onOpen(){
     this.titleEl.setText('Send T3 chat');this.contentEl.empty();
     this.contentEl.createEl('p',{text:this.host.getTargetDescription()});
+    this.remember=this.host.defaultRemember();
+    if(this.host.getTargetDescription().startsWith('No note open')===false)new Setting(this.contentEl).setName('Remember this thread for this note').addToggle(toggle=>toggle.setValue(this.remember).onChange(value=>{this.remember=value;}));
     this.actions=new Setting(this.contentEl)
       .setDesc('Choose where to send this message. The thread picker shows whether each conversation is active or idle.')
-      .addButton(button=>button.setButtonText('New thread').setCta().onClick(()=>{void this.choose(false);}))
-      .addButton(button=>button.setButtonText('Existing thread…').onClick(()=>{void this.choose(true);}));
+      .addButton(button=>button.setButtonText(this.host.getLinkedThread()?'Linked thread':'New thread').setCta().onClick(()=>{void this.choose('default');}))
+      .addButton(button=>button.setButtonText('Existing thread…').onClick(()=>{void this.choose('existing');}));
+    if(this.host.getLinkedThread())this.actions.addButton(button=>button.setButtonText('New thread').onClick(()=>{void this.choose('new');}));
+    if(this.host.hasPreviousThreads())this.actions.addButton(button=>button.setButtonText('Previous threads…').onClick(()=>{void this.choose('previous');}));
   }
-  private async choose(existing:boolean){
+  private async choose(target:'default'|'existing'|'new'|'previous'|boolean){
     if(this.choosing)return;this.choosing=true;this.actions.setDisabled(true);
-    try{if(existing)await this.host.sendToExisting(this.prompt);else await this.host.sendChat(this.prompt);this.close();}
+    try{if(target===true||target==='existing')await this.host.sendToExisting(this.prompt,this.remember);else if(target==='previous')await this.host.sendToPrevious(this.prompt,this.remember);else if(target==='new')await this.host.sendToNew(this.prompt,this.remember);else await this.host.sendChat(this.prompt,this.remember);this.close();}
     catch(error){reportError(error);if(error instanceof RequestDeliveryError&&error.requestSaved){this.close();this.host.openSettings();}}
     finally{this.choosing=false;this.actions.setDisabled(false);}
   }
