@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applyThreadItem,endInsertionOffset,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
+import {contentHash} from '../completion';
+import {applyThreadItem,endInsertionOffset,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
 
 test('selection anchor tolerates unrelated edits, rejects ambiguity, and inserts after fenced code',()=>{
   const source='Before\n```ts\nconst x = 1;\n```\nAfter';
@@ -27,6 +28,20 @@ test('inline markers permit edits outside the response but stop on edits inside 
   document=document.replace('First paragraph','User edited the response');
   assert.equal(replaceRegion(document,id,edit.hash,'overwrite'),null);
   assert.equal(regionBody(document.replace('<!-- t3-inline:end:abc -->',''),id),null);
+});
+
+test('completed response removes only its guarded markers and preserves surrounding note text',()=>{
+  const id='finished',region=initialRegion(id),source='User paragraph\n'+region.text+'Next user paragraph';
+  const progress=replaceRegion(source,id,region.bodyHash,'**T3 · Working**\n\n> Progress.\n');assert.ok(progress);
+  const document='Earlier user edit\n'+source.slice(0,progress.from)+progress.text+source.slice(progress.to);
+  const final='> First paragraph.\n>\n> Second paragraph.\n';
+  const edit=finalizeRegion(document,id,progress.hash,final);assert.ok(edit);
+  const completed=document.slice(0,edit.from)+edit.text+document.slice(edit.to);
+  assert.equal(completed,'Earlier user edit\nUser paragraph\n\n> First paragraph.\n>\n> Second paragraph.\n\nNext user paragraph');
+  assert.doesNotMatch(completed,/t3-inline:(?:start|end)/);
+  assert.equal(finalizeRegion(document.replace('Progress.','User changed this.'),id,progress.hash,final),null);
+  const nested=document.replace('> Progress.','> Progress.\n<!-- t3-inline:start:another -->');
+  assert.equal(finalizeRegion(nested,id,contentHash(regionBody(nested,id)!.body),final),null);
 });
 
 test('stream deltas, final replacement, snapshots, status, and fence balancing render without duplicate text',()=>{

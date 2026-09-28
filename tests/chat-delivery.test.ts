@@ -556,11 +556,15 @@ test('manual Send to T3 streams into the source editor but disabled and automati
     assert.match(editor.value,/t3-inline:start/);
     for(let attempt=0;attempt<40&&!editor.value.includes('Inline reply from T3.');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.match(editor.value,/Inline reply from T3\./);
+    for(let attempt=0;attempt<40&&editor.value.includes('t3-inline:start');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.doesNotMatch(editor.value,/t3-inline:(?:start|end)/,'a finished response has no tracking lines');
     const continued=await h.plugin.send(file,project,{threadId:'existing',throwOnError:true});
     assert.equal(continued.threadId,'existing');
-    assert.equal((editor.value.match(/t3-inline:start/g)??[]).length,2,'An existing-thread send receives its own guarded response');
+    assert.equal((editor.value.match(/t3-inline:start/g)??[]).length,1,'the new response is guarded while streaming');
     for(let attempt=0;attempt<40&&(editor.value.match(/Inline reply from T3\./g)??[]).length<2;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.equal((editor.value.match(/Inline reply from T3\./g)??[]).length,2);
+    for(let attempt=0;attempt<40&&editor.value.includes('t3-inline:start');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.doesNotMatch(editor.value,/t3-inline:(?:start|end)/,'both completed responses are plain Markdown');
     assert.doesNotMatch(editor.value,/\*\*T3 answer\*\*|`existing`/);
     h.plugin.settings.inlineStreaming.sendToT3=false;
     const before=editor.value;

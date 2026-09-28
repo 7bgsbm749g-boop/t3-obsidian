@@ -76,6 +76,16 @@ export function replaceRegion(document:string,id:string,expectedHash:string,next
   return {from:found.from,to:found.to,text:next,hash:contentHash(next)};
 }
 
+/** Remove a completed reply's tracking lines with the final body in one edit. */
+export function finalizeRegion(document:string,id:string,expectedHash:string,finalBody:string):{from:number;to:number;text:string}|null {
+  const found=regionBody(document,id);
+  if(!found||contentHash(found.body)!==expectedHash||/<!-- t3-inline:(?:start|end):/.test(found.body))return null;
+  const start=startMarker(id),end=endMarker(id);
+  const from=found.from-start.length-1,endFrom=found.to+1;
+  if(document.slice(from,from+start.length)!==start||document.slice(endFrom,endFrom+end.length)!==end)return null;
+  return {from,to:endFrom+end.length,text:finalBody.replace(/\n+$/,'')};
+}
+
 export function applyThreadItem(state:InlineThreadState,item:any):{state:InlineThreadState;sequence?:number} {
   if(item?.kind==='snapshot'){
     const thread=item.snapshot?.thread;

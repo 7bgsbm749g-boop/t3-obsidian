@@ -3,7 +3,7 @@ import {Notice} from 'obsidian';
 import type {Connection,Request} from './bridge';
 import {commandId,endpoint,environmentApi,type PairedSession} from './direct';
 import {contentHash} from './completion';
-import {applyThreadItem,endInsertionOffset,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase,type InlineThreadState,type SelectionAnchor} from './inline-thread';
+import {applyThreadItem,endInsertionOffset,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase,type InlineThreadState,type SelectionAnchor} from './inline-thread';
 import {watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 
 export interface InlineJob {
@@ -114,18 +114,21 @@ export class InlineChatManager {
     return source?.info.file?.path===job.path?source.editor:undefined;
   }
   private flush(job:InlineJob){
-    if(this.stopped||!this.jobs.includes(job)||!job.threadId)return;
+    if(this.stopped||!this.jobs.includes(job)||job.finalized||!job.threadId)return;
     const editor=this.editorFor(job);if(!editor)return;
     const runtime=this.runtime(job);
     if(runtime.sequence<0&&['complete','interrupted','error'].includes(job.phase))return;
     const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase);
     const current=regionBody(editor.getValue(),job.id);
-    if(current&&current.body===next){if(['complete','interrupted','error','cancelled'].includes(job.phase)){job.finalized=true;this.persist();runtime.monitor?.stop();}return;}
-    const change=replaceRegion(editor.getValue(),job.id,job.bodyHash,next);
+    if(job.phase!=='complete'&&current&&current.body===next){if(['interrupted','error','cancelled'].includes(job.phase)){job.finalized=true;this.persist();runtime.monitor?.stop();}return;}
+    const complete=job.phase==='complete';
+    const change=complete?finalizeRegion(editor.getValue(),job.id,job.bodyHash,next):replaceRegion(editor.getValue(),job.id,job.bodyHash,next);
     if(!change){job.phase='conflict';runtime.monitor?.stop();this.persist();new Notice(`T3 stopped writing to ${job.path} because its inline response was edited or removed. The T3 thread remains available.`,12000);return;}
     editor.replaceRange(change.text,editor.offsetToPos(change.from),editor.offsetToPos(change.to),'send-to-t3-code');
-    job.bodyHash=change.hash;this.persist();
-    if(['complete','interrupted','error','cancelled'].includes(job.phase)){job.finalized=true;this.persist();runtime.monitor?.stop();}
+    if(complete)job.finalized=true;
+    else job.bodyHash=contentHash(next);
+    this.persist();
+    if(['complete','interrupted','error','cancelled'].includes(job.phase))runtime.monitor?.stop();
   }
   async stop(job:InlineJob){
     if(!job.threadId||!job.connection)return;
