@@ -165,6 +165,28 @@ test('raw input is preserved if native suggestion arguments are normalized', () 
   hook.dispose();
 });
 
+test('one draft is rewritten on each input and restored on the next palette opening', () => {
+  const {app,modal}=fixture();
+  let draft='';
+  const hook=installPaletteChat(app,()=>{}, {getDraft:()=>draft,saveDraft:value=>{draft=value;}});
+  modal.onOpen();
+  for(const value of ['H','He','Hel','Help']){
+    modal.inputEl.value=value;
+    modal.inputEl.dispatchEvent(new Event('input'));
+    assert.equal(draft,value);
+  }
+  modal.inputEl.value='';
+  modal.onOpen();
+  assert.equal(modal.inputEl.value,'Help');
+  modal.inputEl.value='';
+  modal.inputEl.dispatchEvent(new Event('input'));
+  assert.equal(draft,'');
+  hook.dispose();
+  modal.inputEl.value='after disposal';
+  modal.inputEl.dispatchEvent(new Event('input'));
+  assert.equal(draft,'');
+});
+
 test('an edit between suggestion generation and selection cannot send a stale prompt', () => {
   const { app, modal } = fixture();
   const sent: string[] = [];

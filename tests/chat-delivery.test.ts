@@ -15,7 +15,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   const rootLink={id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true};
   let activeNote:any,activeEditorView=true;
   const initial={folderLinks:[rootLink],chatProjectKey:'old:unrelated-project',paired:[{id:'chat-connection',name:'Laptop',url:'https://chat.example',environmentId:'chat-env'}],directScanId:'chat-connection',directProjects:[project],directSelected:['chat-connection:chat-project'],completion:{action:'delete'}};
-  const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[],workspaceEvents:Record<string,((...args:any[])=>void)[]>={};let threads:any[]=[],catalog:any[]=[project];
+  const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[],settingsControls:any[]=[],workspaceEvents:Record<string,((...args:any[])=>void)[]>={};let threads:any[]=[],catalog:any[]=[project];
   let vaultAccesses=0;
   class Base {}
   class Element {
@@ -31,10 +31,11 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     setPlaceholder(value:string){this.placeholder=value;}
   }
   class Setting {
-    constructor(_element:any){}
-    setName(_text:string){return this;}setDesc(_text:string){return this;}setDisabled(_value:boolean){return this;}
+    name='';buttons:any[]=[];
+    constructor(_element:any){settingsControls.push(this);}
+    setName(text:string){this.name=text;return this;}setDesc(_text:string){return this;}setDisabled(_value:boolean){return this;}
     addToggle(callback:(toggle:any)=>void){const toggle={setValue:()=>toggle,onChange:()=>toggle};callback(toggle);return this;}
-    addButton(callback:(button:any)=>void){const button={setButtonText:()=>button,setCta:()=>button,setDisabled:()=>button,onClick:()=>button};callback(button);return this;}
+    addButton(callback:(button:any)=>void){const button:any={text:'',click:()=>{},setButtonText:(text:string)=>{button.text=text;return button;},setCta:()=>button,setDisabled:()=>button,onClick:(click:()=>void)=>{button.click=click;return button;}};callback(button);this.buttons.push(button);return this;}
     addDropdown(callback:(d:any)=>void){const d={addOption:()=>d,setValue:()=>d,setDisabled:()=>d,onChange:()=>d};callback(d);return this;}
     addText(callback:(t:any)=>void){const t={setValue:()=>t,setPlaceholder:()=>t,setDisabled:()=>t,onChange:()=>t};callback(t);return this;}
   }
@@ -111,7 +112,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();return plugin;};
   const plugin=await start();
-  return {plugin,start,commands,shared,registered,modals,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+  return {plugin,start,commands,shared,registered,modals,settingsControls,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
     const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
     let value=selection+'\nTail';
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
@@ -334,6 +335,31 @@ test('palette chat can target an existing thread and labels active and idle conv
     await picker.choose(items[0]);
     assert.equal(h.commands.length,1,'Existing-thread chat must not create a thread');
     assert.equal(h.commands[0].type,'thread.turn.start');assert.equal(h.commands[0].threadId,'active');
+  }finally{h.plugin.onunload();}
+});
+
+test('project picker changes this send without reusing the note’s linked thread',async()=>{
+  const h=await chatHarness();
+  try{
+    const other={id:'other-project',title:'Other work',workspaceRoot:'/projects/other',connectionId:project.connectionId,connectionName:'Laptop'};
+    h.plugin.settings.directProjects.push(other);
+    h.setProjects([project,other]);
+    const path='Notes/Linked.md';h.setActiveNote(path);
+    h.plugin.settings.noteThreads.push({notePath:path,threadId:'old-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-28T00:00:00Z'});
+    await h.plugin.openChat('Send to other work');
+    const destination=h.modals.at(-1);
+    const change=[...h.settingsControls].reverse().find((control:any)=>control.buttons.some((button:any)=>button.text==='Change project for this send'));
+    assert.ok(change);
+    change.buttons[0].click();
+    const picker=h.modals.at(-1),choice=picker.getItems().find((item:any)=>item.key==='chat-connection:other-project');
+    assert.ok(choice);
+    picker.onChooseItem(choice);
+    assert.ok(h.settingsControls.some(control=>control.name.includes('Other work')));
+    assert.equal(destination.host.getLinkedThread(choice.key),undefined);
+    await destination.choose(false);
+    assert.equal(h.commands[0].type,'thread.create');
+    assert.equal(h.commands[0].projectId,other.id);
+    assert.notEqual(h.commands[0].threadId,'old-thread');
   }finally{h.plugin.onunload();}
 });
 

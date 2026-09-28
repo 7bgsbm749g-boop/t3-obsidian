@@ -63,6 +63,7 @@ export default class SendToT3 extends Plugin {
   private cloudGeneration=0;
   private cloudRefreshing:Promise<CloudAccount>|undefined;
   private readonly localKey = 'send-to-t3-code-device-v1';
+  private readonly chatDraftKey = 'send-to-t3-code-chat-draft-v1';
   private deviceId = '';
   private streamId = '';
   private coordinatorAssignmentId = '';
@@ -153,7 +154,7 @@ export default class SendToT3 extends Plugin {
         this.registerDomEvent(document,'pointerdown',remember,true);
         this.registerDomEvent(document,'touchstart',remember,true);
       }
-      this.paletteChat=installPaletteChat(this.app,prompt=>this.openChat(prompt),{onError:error=>new Notice(`T3 Chat: ${message(error)}`,10000)});
+      this.paletteChat=installPaletteChat(this.app,prompt=>this.openChat(prompt),{onError:error=>new Notice(`T3 Chat: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft)});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined')this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>this.workflowFolders());
       void this.startObservationJournal().then(()=>this.retireLegacyWorkflowFolders()).catch(error=>new Notice(`T3 automation journal: ${message(error)}`,12000));
@@ -712,42 +713,45 @@ export default class SendToT3 extends Plugin {
   }
   private openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false){
     const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
-    const send=(text:string,options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string})=>inline&&note?this.sendInlineChat(text,note,inline,options):this.sendChat(answerOnly?`${text}\n\n${THREAD_REPLY_INSTRUCTION}`:text,note,options);
+    const send=(text:string,options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;projectOverrideKey?:string})=>inline&&note?this.sendInlineChat(text,note,inline,options):this.sendChat(answerOnly?`${text}\n\n${THREAD_REPLY_INSTRUCTION}`:text,note,options);
     const host:ChatHost={
       hasNote:()=>Boolean(note),
-      getTargetDescription:()=>{const linked=this.noteLink(note?.path),project=linked?[...this.settings.directProjects,...this.settings.projects].find(item=>item.id===linked.projectId&&sameWorkspacePath(item.workspaceRoot,linked.workspaceRoot)):undefined;return `${note?note.path:'No note open'} → ${project?.title??(linked&&link?.projectId===linked.projectId?link.projectTitle:undefined)??(linked?`T3 project ${linked.projectId.slice(0,8)}`:link?.projectTitle)??this.app.vault.getName()+' (vault root)'}`;},
-      getLinkedThread:()=>this.noteLink(note?.path)?.threadId,
-      hasPreviousThreads:()=>Boolean(note&&this.olderNoteThreads(note.path).length),
+      getTargetDescription:key=>{const chosen=key?this.projects().find(item=>projectKey(item)===key):undefined,linked=this.noteLink(note?.path),project=chosen??(linked?[...this.settings.directProjects,...this.settings.projects].find(item=>item.id===linked.projectId&&sameWorkspacePath(item.workspaceRoot,linked.workspaceRoot)):undefined);return `${note?note.path:'No note open'} → ${project?.title??(linked&&link?.projectId===linked.projectId?link.projectTitle:undefined)??(linked?`T3 project ${linked.projectId.slice(0,8)}`:link?.projectTitle)??this.app.vault.getName()+' (vault root)'}`;},
+      getProjectChoices:()=>this.projects().map(project=>({key:projectKey(project),label:projectLabel(project)})),
+      getLinkedThread:key=>{const linked=this.noteLink(note?.path);return !key||linked&&key===`${linked.connectionId?linked.connectionId+':':''}${linked.projectId}`?linked?.threadId:undefined;},
+      hasPreviousThreads:key=>Boolean(note&&this.olderNoteThreads(note.path).some(entry=>!key||key===`${entry.connectionId?entry.connectionId+':':''}${entry.projectId}`)),
       defaultRemember:()=>Boolean(note&&(this.settings.threadLinking||this.noteLink(note.path))),
-      sendChat:(text,remember)=>send(text,{rememberLink:remember}),
-      sendToNew:(text,remember)=>send(text,{newThread:true,rememberLink:remember}),
-      sendToExisting:(text,remember)=>this.openChatThreads(text,note,inline,answerOnly,remember),
-      sendToPrevious:(text,remember)=>this.openPreviousChatThreads(text,note,inline,answerOnly,remember),
+      sendChat:(text,remember,key)=>send(text,{rememberLink:remember,projectOverrideKey:key}),
+      sendToNew:(text,remember,key)=>send(text,{newThread:true,rememberLink:remember,projectOverrideKey:key}),
+      sendToExisting:(text,remember,key)=>this.openChatThreads(text,note,inline,answerOnly,remember,key),
+      sendToPrevious:(text,remember,key)=>this.openPreviousChatThreads(text,note,inline,answerOnly,remember,key),
       openSettings:()=>this.openSettings(),
     };
     return openChatFlow(this.app,host,prompt);
   }
-  private async openChatThreads(prompt:string,note?:{path:string;absolutePath?:string},inline?:EditorChatContext,answerOnly=false,remember=true){
-    const {project}=await this.chatTarget(note?.path,undefined,true);
+  private async openChatThreads(prompt:string,note?:{path:string;absolutePath?:string},inline?:EditorChatContext,answerOnly=false,remember=true,overrideKey?:string){
+    const {project}=await this.chatTarget(note?.path,undefined,true,overrideKey);
     const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
     new Notice('Loading threads…',2000);
     const threads=projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);
     if(this.stopped)return;
-    new LinkedThreadModal(this.app,threads,thread=>inline&&note?this.sendInlineChat(prompt,note,inline,{threadId:thread.id,expectedProjectKey:projectKey(project),rememberLink:remember}):this.sendChat(answerOnly?`${prompt}\n\n${THREAD_REPLY_INSTRUCTION}`:prompt,note,{threadId:thread.id,expectedProjectKey:projectKey(project),rememberLink:remember}),'Send chat to an existing thread','No existing threads in this project. Use New thread.').open();
+    new LinkedThreadModal(this.app,threads,thread=>inline&&note?this.sendInlineChat(prompt,note,inline,{threadId:thread.id,expectedProjectKey:projectKey(project),projectOverrideKey:overrideKey,rememberLink:remember}):this.sendChat(answerOnly?`${prompt}\n\n${THREAD_REPLY_INSTRUCTION}`:prompt,note,{threadId:thread.id,expectedProjectKey:projectKey(project),projectOverrideKey:overrideKey,rememberLink:remember}),'Send chat to an existing thread','No existing threads in this project. Use New thread.').open();
   }
-  private async openPreviousChatThreads(prompt:string,note?:{path:string;absolutePath?:string},inline?:EditorChatContext,answerOnly=false,remember=true){
+  private async openPreviousChatThreads(prompt:string,note?:{path:string;absolutePath?:string},inline?:EditorChatContext,answerOnly=false,remember=true,overrideKey?:string){
     if(!note)return;
-    new PreviousNoteThreadModal(this.app,this.olderNoteThreads(note.path),entry=>inline?this.sendInlineChat(prompt,note,inline,{threadId:entry.threadId,rememberLink:remember}):this.sendChat(answerOnly?`${prompt}\n\n${THREAD_REPLY_INSTRUCTION}`:prompt,note,{threadId:entry.threadId,rememberLink:remember})).open();
+    const entries=this.olderNoteThreads(note.path).filter(entry=>!overrideKey||overrideKey===`${entry.connectionId?entry.connectionId+':':''}${entry.projectId}`);
+    new PreviousNoteThreadModal(this.app,entries,entry=>inline?this.sendInlineChat(prompt,note,inline,{threadId:entry.threadId,projectOverrideKey:overrideKey,rememberLink:remember}):this.sendChat(answerOnly?`${prompt}\n\n${THREAD_REPLY_INSTRUCTION}`:prompt,note,{threadId:entry.threadId,projectOverrideKey:overrideKey,rememberLink:remember})).open();
   }
-  private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string}){
+  private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;projectOverrideKey?:string}){
     const manager=this.inlineChat;if(!manager)throw Error('Inline T3 chat is unavailable. Reload the plugin.');
     const requestId=randomId(),job=manager.reserve(context.editor,context.view,context.anchor,requestId,note.path);
     let delivered=false;
     try{await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{...options,requestId,onPrepared:request=>manager.prepare(job,request)});delivered=true;manager.start(job);}
     catch(error){manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&error.requestSaved));throw error;}
   }
-  private async chatTarget(notePath?:string,preferred?:NoteThread,ignoreActive=false):Promise<{project:Project;link:FolderLink}> {
+  private async chatTarget(notePath?:string,preferred?:NoteThread,ignoreActive=false,overrideKey?:string):Promise<{project:Project;link:FolderLink}> {
     let link=notePath?folderLinkForPath(this.settings.folderLinks,notePath):this.settings.folderLinks.find(item=>item.folderPath==='/');
+    if(overrideKey){const project=this.projects().find(item=>projectKey(item)===overrideKey);if(!project)throw Error('The chosen T3 project is unavailable. Choose a project again.');return {project,link:link&&projectKey(project)===`${link.connectionId?link.connectionId+':':''}${link.projectId}`?link:{id:'project-override',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false}};}
     const linked=preferred??(!ignoreActive?this.noteLink(notePath):undefined);
     if(linked){const project=this.projectForNoteLink(linked);return {project,link:link??{id:'note-thread',folderPath:'/',connectionId:linked.connectionId,projectId:linked.projectId,projectTitle:project.title,workspaceRoot:linked.workspaceRoot,self:true}};}
     if(link){try{return {project:this.projectForLink(link),link};}catch(error){if(link.folderPath!=='/')throw error;}}
@@ -824,7 +828,7 @@ export default class SendToT3 extends Plugin {
     const separator=root.includes('\\')&&!root.includes('/')?'\\':'/';
     return root.replace(/[\\/]+$/,'')+separator+path.replace(/[\\/]+/g,separator);
   }
-  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;requestId?:string;onPrepared?:(request:Request)=>void}):Promise<void> {
+  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;onPrepared?:(request:Request)=>void}):Promise<void> {
     if(this.busy)throw Error('Another send is in progress. Wait for it to finish.');
     if(!prompt.trim())throw Error('Enter a message before sending.');
     if(applyOrchestration(prompt,this.settings.orchestration).length>120_000)throw Error('The message exceeds T3’s 120,000-character limit. Shorten it before sending.');
@@ -833,7 +837,7 @@ export default class SendToT3 extends Plugin {
     let saved=false;
     try{
       const historical=note&&options?.threadId&&!options.expectedProjectKey?this.historicalNoteLink(note.path,options.threadId):undefined;
-      let {project,link}=await this.chatTarget(note?.path,historical,Boolean(options?.newThread||options?.expectedProjectKey));
+      let {project,link}=await this.chatTarget(note?.path,historical,Boolean(options?.newThread||options?.expectedProjectKey),options?.projectOverrideKey);
       if(options?.expectedProjectKey&&projectKey(project)!==options.expectedProjectKey)throw Error('The note’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
       let text=prompt;
@@ -861,13 +865,16 @@ export default class SendToT3 extends Plugin {
       }
       if(this.stopped)throw Error('The plugin was disabled before sending.');
       const title=prompt.trim().split(/\r?\n/)[0].replace(/\s+/g,' ').trim().slice(0,160);
-      const threadId=options?.threadId??(!options?.newThread?this.noteLink(note?.path)?.threadId:undefined);
+      const active=this.noteLink(note?.path);
+      const threadId=options?.threadId??(!options?.newThread&&active&&project.id===active.projectId&&(project.connectionId??'')===active.connectionId?active.threadId:undefined);
       const remember=options?.rememberLink??(this.settings.threadLinking||Boolean(this.noteLink(note?.path)));
       const request:Request={id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(threadId?{threadId}:{}),...(note&&remember?{noteLink:this.linkIntent(note.path,project,connection)}:{})};
       options?.onPrepared?.(request);
       this.settings.pending.push(request);
       try{await this.save();saved=true;}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);throw e;}
       await this.dispatch(request);
+      const draft=this.app.loadLocalStorage(this.chatDraftKey);
+      if(draft===prompt||typeof draft==='string'&&prompt===`${draft}\n\n${THREAD_REPLY_INSTRUCTION}`)this.app.saveLocalStorage(this.chatDraftKey,'');
     }catch(e){throw new RequestDeliveryError(`${message(e)} ${saved?'Check Unconfirmed requests in settings before sending again.':'No thread was created.'}`,saved);}
     finally{this.busy=false;}
   }

@@ -7,6 +7,8 @@ export type PaletteChatStatus = 'active' | 'unavailable' | 'incompatible' | 'dis
 export interface PaletteChatOptions {
   onStatus?: (status: PaletteChatStatus) => void;
   onError?: (error: unknown) => void;
+  getDraft?: () => string;
+  saveDraft?: (draft: string) => void;
 }
 
 export interface PaletteChatController {
@@ -20,7 +22,7 @@ type Method = (this: PaletteModal, ...args: any[]) => any;
 const methodNames = ['getSuggestions', 'renderSuggestion', 'selectSuggestion', 'onChooseSuggestion', 'onOpen'] as const;
 type MethodName = typeof methodNames[number];
 type PaletteModal = Record<MethodName, Method> & {
-  inputEl: Pick<HTMLInputElement, 'value' | 'addEventListener' | 'removeEventListener'>;
+  inputEl: Pick<HTMLInputElement, 'value' | 'addEventListener' | 'removeEventListener' | 'dispatchEvent'>;
 };
 type ChatRow = {
   item: { id: string; name: string };
@@ -40,7 +42,8 @@ function compatible(value: unknown): value is PaletteModal {
   return methodNames.every(name => typeof modal[name] === 'function') &&
     typeof modal.inputEl?.value === 'string' &&
     typeof modal.inputEl?.addEventListener === 'function' &&
-    typeof modal.inputEl?.removeEventListener === 'function';
+    typeof modal.inputEl?.removeEventListener === 'function' &&
+    typeof modal.inputEl?.dispatchEvent === 'function';
 }
 
 export function installPaletteChat(
@@ -112,15 +115,23 @@ export function installPaletteChat(
       },
       onOpen(...args) {
         if (active) { epoch++; submitted = false; composing = false; }
-        return originals.onOpen.apply(this, args);
+        const result = originals.onOpen.apply(this, args);
+        const draft = options.getDraft?.();
+        if (active && draft && !modal.inputEl.value) {
+          modal.inputEl.value = draft;
+          modal.inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        return result;
       },
     };
     const compositionStart = () => { composing = true; };
     const compositionEnd = () => { composing = false; };
+    const input = () => { if(active)options.saveDraft?.(modal.inputEl.value); };
     const restore = () => {
       active = false;
       modal.inputEl.removeEventListener('compositionstart', compositionStart);
       modal.inputEl.removeEventListener('compositionend', compositionEnd);
+      modal.inputEl.removeEventListener('input', input);
       for (const [name, descriptor] of descriptors) {
         // Preserve a later plugin's wrapper. Our closed-over wrapper is now inert.
         if (modal[name] !== wrappers[name]) continue;
@@ -138,6 +149,7 @@ export function installPaletteChat(
       }
       modal.inputEl.addEventListener('compositionstart', compositionStart);
       modal.inputEl.addEventListener('compositionend', compositionEnd);
+      modal.inputEl.addEventListener('input', input);
     } catch (error) { restore(); throw error; }
     return restore;
   }
