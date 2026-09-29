@@ -884,7 +884,7 @@ export default class SendToT3 extends Plugin {
       try{await this.save();saved=true;}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);throw e;}
       await this.dispatch(request);
       const draft=this.app.loadLocalStorage(this.chatDraftKey);
-      if(draft===prompt||typeof draft==='string'&&prompt===`${draft}\n\n${THREAD_REPLY_INSTRUCTION}`)this.app.saveLocalStorage(this.chatDraftKey,'');
+      if(typeof draft==='string'&&draft&&(draft===prompt||[THREAD_REPLY_INSTRUCTION,INLINE_REPLY_INSTRUCTION].some(instruction=>prompt===`${draft}\n\n${instruction}`||prompt.endsWith(`\n\nQuestion:\n${draft}\n\n${instruction}`))))this.app.saveLocalStorage(this.chatDraftKey,'');
     }catch(e){throw new RequestDeliveryError(`${message(e)} ${saved?'Check Unconfirmed requests in settings before sending again.':'No thread was created.'}`,saved);}
     finally{this.busy=false;}
   }

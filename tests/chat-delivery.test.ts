@@ -343,6 +343,7 @@ test('a typed palette question sends only the question and streams at the note e
   const h=await chatHarness();
   try{
     const editor=h.attachEditor('Notes/Palette.md','# Private note\nBody not sent.');
+    h.plugin.app.saveLocalStorage('send-to-t3-code-chat-draft-v1','Why does this matter?');
     await h.plugin.openPaletteAction('Why does this matter?','');
     assert.equal(h.modals.at(-1).titleEl.text,'Ask T3 Code');
     await h.modals.at(-1).choose(false);
@@ -350,6 +351,7 @@ test('a typed palette question sends only the question and streams at the note e
     assert.match(text,/^Why does this matter\?/);
     assert.doesNotMatch(text,/Private note|Body not sent|Vault-relative note path/);
     assert.match(text,/Sent from Obsidian\.\nObsidian vault: "Notes"\nDestination note path: "\/projects\/notes\/Notes\/Palette.md"$/);
+    assert.equal(h.plugin.app.loadLocalStorage('send-to-t3-code-chat-draft-v1'),'');
     for(let attempt=0;attempt<40&&!editor.value.includes('Inline reply from T3.');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.match(editor.value,/Inline reply from T3\./);
   }finally{h.plugin.onunload();}
@@ -378,11 +380,13 @@ test('a palette question about selected text includes both parts and inserts bel
     const editor=h.attachEditor('Notes/Selected.md','Claim\nOther note text stays private.');
     editor.editor.getSelection=()=> 'Claim';
     editor.editor.getCursor=(side:string)=>editor.editor.offsetToPos(side==='from'?0:5);
+    h.plugin.app.saveLocalStorage('send-to-t3-code-chat-draft-v1','Why?');
     await h.plugin.openPaletteAction('Why?','Claim');
     await h.modals.at(-1).choose(false);
     const text=h.commands[1].message.text;
     assert.match(text,/^Selected text:\nClaim\n\nQuestion:\nWhy\?/);
     assert.doesNotMatch(text,/Other note text stays private/);
+    assert.equal(h.plugin.app.loadLocalStorage('send-to-t3-code-chat-draft-v1'),'');
     for(let attempt=0;attempt<40&&!editor.value.includes('Inline reply from T3.');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.match(editor.value,/Claim\n\n> Inline reply from T3\./);
   }finally{h.plugin.onunload();}
