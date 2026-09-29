@@ -110,7 +110,8 @@ class ChatDestinationModal extends Modal {
       .addButton(button=>button.setButtonText('Existing thread…').onClick(()=>{void this.choose('existing');}));
     if(this.host.getLinkedThread(this.projectKey))this.actions.addButton(button=>button.setButtonText('New thread').onClick(()=>{void this.choose('new');}));
     if(this.host.hasPreviousThreads(this.projectKey))this.actions.addButton(button=>button.setButtonText('Previous threads…').onClick(()=>{void this.choose('previous');}));
-    defaultButton?.focus();
+    // Obsidian focuses the first modal control after onOpen returns.
+    setTimeout(()=>{if(defaultButton?.isConnected)defaultButton.focus();},0);
   }
   private async choose(target:'default'|'existing'|'new'|'previous'|boolean){
     if(this.choosing)return;this.choosing=true;this.actions.setDisabled(true);this.close();

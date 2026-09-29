@@ -47,7 +47,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   class Modal {
     contentEl=new Element();titleEl=new Element();closed=false;emptyStateText='';placeholder='';
     constructor(public app:any){}
-    open(){this.closed=false;modals.push(this);(this as any).onOpen?.();}
+    open(){this.closed=false;modals.push(this);(this as any).onOpen?.();if(this.constructor.name==='ChatDestinationModal')focusedButton=[...settingsControls].reverse().find(setting=>setting.buttons.some((button:any)=>button.text==='Change project for this send'))?.buttons[0];}
     close(){this.closed=true;(this as any).onClose?.();}
     setPlaceholder(value:string){this.placeholder=value;}
   }
@@ -56,7 +56,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     constructor(_element:any){settingsControls.push(this);}
     setName(text:string){this.name=text;return this;}setDesc(_text:string){return this;}setDisabled(_value:boolean){return this;}
     addToggle(callback:(toggle:any)=>void){const toggle={setValue:()=>toggle,onChange:()=>toggle};callback(toggle);return this;}
-    addButton(callback:(button:any)=>void){const button:any={text:'',click:()=>{},buttonEl:{focus:()=>{focusedButton=button;}},setButtonText:(text:string)=>{button.text=text;return button;},setCta:()=>button,setDisabled:()=>button,onClick:(click:()=>void)=>{button.click=click;return button;}};callback(button);this.buttons.push(button);return this;}
+    addButton(callback:(button:any)=>void){const button:any={text:'',click:()=>{},buttonEl:{isConnected:true,focus:()=>{focusedButton=button;}},setButtonText:(text:string)=>{button.text=text;return button;},setCta:()=>button,setDisabled:()=>button,onClick:(click:()=>void)=>{button.click=click;return button;}};callback(button);this.buttons.push(button);return this;}
     addDropdown(callback:(d:any)=>void){const d={addOption:()=>d,setValue:()=>d,setDisabled:()=>d,onChange:()=>d};callback(d);return this;}
     addText(callback:(t:any)=>void){const t={setValue:()=>t,setPlaceholder:()=>t,setDisabled:()=>t,onChange:()=>t};callback(t);return this;}
   }
@@ -455,6 +455,7 @@ test('Enter on the destination dialog uses the purple new or linked thread butto
   try{
     h.setActiveNote('Notes/New.md');
     await h.plugin.openChat('Start here');
+    await new Promise(resolve=>setTimeout(resolve,0));
     assert.equal(h.focusedButton()?.text,'New thread');
     h.pressEnter();
     for(let attempt=0;attempt<40&&h.commands.length<2;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
@@ -465,6 +466,7 @@ test('Enter on the destination dialog uses the purple new or linked thread butto
     h.plugin.settings.noteThreads.push({notePath:path,threadId:'linked-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-28T00:00:00Z'});
     h.setThreads([{id:'linked-thread',projectId:project.id,title:'Linked',updatedAt:'2026-09-28T00:00:00Z',runtimeMode:'approval-required',interactionMode:'default'}]);
     await h.plugin.openChat('Continue here');
+    await new Promise(resolve=>setTimeout(resolve,0));
     assert.equal(h.focusedButton()?.text,'Linked thread');
     h.pressEnter();
     for(let attempt=0;attempt<40&&h.commands.length<3;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
