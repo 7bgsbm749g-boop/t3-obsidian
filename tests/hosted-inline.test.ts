@@ -92,3 +92,32 @@ test('a handoff acknowledgement belongs to the exact request',async()=>{
   h.files.set(h.paths.state,JSON.stringify({...h.state,requestHash:contentHash('different')}));
   await assert.rejects(handoffInline(h.io,h.request),/different response job/);
 });
+
+test('a stalled note cannot block another note, later ticks, or cause overlapping writes',async()=>{
+  const a=harness(),b=harness();a.dispatch();b.dispatch();
+  let release!:()=>void,updated!:()=>void,blockedCalls=0;
+  const stalled=new Promise<void>(resolve=>{release=resolve;});
+  const secondUpdated=new Promise<void>(resolve=>{updated=resolve;});
+  const io:HostedWriterIO={
+    requests:async()=>[a.paths.request,b.paths.request],
+    read:async path=>a.files.get(path)??b.files.get(path),
+    write:async(path,bytes)=>{(path.includes(a.request.id)?a.files:b.files).set(path,bytes);},
+    access:async()=>({origin:'https://t3.example',api:async(path,payload)=>{
+      const h=path.includes(a.request.threadId)?a:b;
+      if(h===a){blockedCalls++;await stalled;}
+      return (await h.io.access('thread-machine')).api(path,payload);
+    }}),
+    updateNote:async(path,change)=>{const h=path===a.request.notePath?a:b;return h.io.updateNote(path,change);},
+  };
+  b.request.notePath='Notes/second.md';b.files.set(b.paths.request,JSON.stringify(b.request));
+  io.updateNote=async(path,change)=>{const h=path===a.request.notePath?a:b;const result=await h.io.updateNote(path,change);if(h===b&&result?.includes('Progress A'))updated();return result;};
+  const writer=new HostedInlineWriter({vaultId:a.request.vaultId,...a.request.host},io);
+  const first=writer.tick();
+  try{
+    await secondUpdated;await new Promise<void>(resolve=>setImmediate(resolve));
+    b.answer('Progress B');await writer.tick();
+    assert.match(b.document,/Progress B/);assert.equal(blockedCalls,1);
+    assert.match(a.document,/Sending/);
+  }finally{release();await first;writer.stop();}
+  assert.match(a.document,/Progress A/);
+});

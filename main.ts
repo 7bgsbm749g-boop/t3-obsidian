@@ -30,6 +30,8 @@ import {CoordinatorService} from './coordinator-service';
 import {DeterministicWorkflowRuntime,noteSnapshot,type RuntimeRelease} from './workflow-runtime';
 import {observationInterest} from './observation-interest';
 import {mergeWorkflowDrafts} from './workflow-drafts';
+import {HostedPreviewReader} from './hosted-preview';
+import {hostedPreviewExtension} from './hosted-preview-editor';
 import {InlineChatManager,captureEditorSelection,type InlineJob} from './inline-chat';
 import {handoffInline,hostedPaths,type InlineHostTarget,type InlineFiles} from './hosted-inline';
 import {installMobileSelectionAction} from './mobile-selection-action';
@@ -96,6 +98,7 @@ export default class SendToT3 extends Plugin {
   private inlineHostKey='';
   private inlineHostRefresh?:Promise<void>;
   private inlineEnvironment?:Promise<string>;
+  private hostedPreview?:HostedPreviewReader;
   private mobileSelectionAction?:{dispose():void};
   async onload() {
     const data = await this.loadData();
@@ -122,7 +125,14 @@ export default class SendToT3 extends Plugin {
       migratedNoteThreads=true;
     }
     this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>this.stopHostedInline(job.id,job.hostTarget)});
-    if(typeof this.registerEditorExtension==='function')this.registerEditorExtension(hiddenInlineMarkerExtension());
+    if(typeof this.registerEditorExtension==='function'){
+      this.hostedPreview=new HostedPreviewReader(this.settings.vaultId,async id=>{
+        const pinned=this.inlineChat?.hostTargetFor(id);if(pinned)return pinned;
+        if(!this.settings.folderLinks.some(link=>link.folderPath==='/'))return;
+        return this.inlineHostTarget();
+      },target=>this.inlineHostFiles(target));
+      this.registerEditorExtension([hiddenInlineMarkerExtension(),hostedPreviewExtension(this.app,id=>this.hostedPreview!.read(id))]);
+    }
     if(Platform.isMobile&&typeof document.addEventListener==='function'){
       this.mobileSelectionAction=installMobileSelectionAction(this.app,()=>this.app.workspace.getActiveViewOfType(MarkdownView),path=>!this.busy&&!this.inlineChat?.activeFor(path).length,captureEditorSelection,({editor,view,text,anchor})=>this.openEditorChat(text,view.file!,{editor,view,anchor}));
     }
@@ -1280,7 +1290,7 @@ export default class SendToT3 extends Plugin {
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;this.settings.noteThreads=before.noteThreads;throw e;}
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
   }
-  onunload(){this.stopped=true;this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.remoteJournal?.close();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.stopped=true;this.hostedPreview?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.remoteJournal?.close();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;

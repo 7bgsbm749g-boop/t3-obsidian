@@ -47,7 +47,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   class Modal {
     contentEl=new Element();titleEl=new Element();closed=false;emptyStateText='';placeholder='';
     constructor(public app:any){}
-    open(){modals.push(this);(this as any).onOpen?.();}
+    open(){this.closed=false;modals.push(this);(this as any).onOpen?.();}
     close(){this.closed=true;(this as any).onClose?.();}
     setPlaceholder(value:string){this.placeholder=value;}
   }
@@ -769,5 +769,30 @@ test('manual Send to T3 streams into the source editor but disabled and automati
     h.plugin.app.vault.read=async()=> '# Automatic tag note';
     await h.plugin.send(file,project,{quiet:true,throwOnError:true});
     assert.equal(editor.value,before,'An automatic tag send cannot append an inline reply');
+  }finally{h.plugin.onunload();}
+});
+
+for(const composer of [false,true])test(`the ${composer?'composer':'destination'} closes before background delivery completes`,async()=>{
+  let release!:()=>void,entered!:()=>void;
+  const enteredTurn=new Promise<void>(resolve=>{entered=resolve;});
+  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')await new Promise<void>(resolve=>{release=resolve;entered();});});
+  try{
+    await h.plugin.openChat(composer?undefined:'Background send');
+    const modal=h.modals.at(-1);if(composer)modal.field.value='Background send';
+    const sending=composer?modal.submit():modal.choose(false);
+    assert.equal(modal.closed,true,'The editor is usable before any network response');
+    await enteredTurn;
+    assert.equal(h.plugin.settings.pending.length,1,'Retry is durable while sending');
+    release();await sending;
+    assert.equal(modal.closed,true);assert.equal(h.plugin.settings.pending.length,0);
+  }finally{release?.();h.plugin.onunload();}
+});
+
+test('a background delivery failure keeps its saved request without opening settings',async()=>{
+  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')throw Error('Disconnected');});
+  try{
+    h.plugin.openSettings=()=>assert.fail('A background send must not take over the editor');
+    await h.plugin.openChat('Keep this request');const modal=h.modals.at(-1);await modal.choose(false);
+    assert.equal(modal.closed,true);assert.equal(h.plugin.settings.pending.length,1);
   }finally{h.plugin.onunload();}
 });

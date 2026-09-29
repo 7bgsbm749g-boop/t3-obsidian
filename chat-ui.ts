@@ -72,6 +72,8 @@ class ChatPromptModal extends Modal {
     this.submitting = true;
     this.field.disabled = true;
     this.actions.setDisabled(true);
+    this.prompt=this.field.value;
+    this.close();
     try {
       if(target===true||target==='existing')await this.host.sendToExisting(this.field.value,this.remember,this.projectKey);
       else if(target==='previous')await this.host.sendToPrevious(this.field.value,this.remember,this.projectKey);
@@ -80,7 +82,7 @@ class ChatPromptModal extends Modal {
       this.close();
     } catch (error) {
       reportError(error);
-      if (error instanceof RequestDeliveryError && error.requestSaved) { this.close(); this.host.openSettings(); }
+      if (!(error instanceof RequestDeliveryError && error.requestSaved)) this.open();
     } finally {
       this.submitting = false;
       this.field.disabled = false;
@@ -109,9 +111,9 @@ class ChatDestinationModal extends Modal {
     if(this.host.hasPreviousThreads(this.projectKey))this.actions.addButton(button=>button.setButtonText('Previous threads…').onClick(()=>{void this.choose('previous');}));
   }
   private async choose(target:'default'|'existing'|'new'|'previous'|boolean){
-    if(this.choosing)return;this.choosing=true;this.actions.setDisabled(true);
+    if(this.choosing)return;this.choosing=true;this.actions.setDisabled(true);this.close();
     try{if(target===true||target==='existing')await this.host.sendToExisting(this.prompt,this.remember,this.projectKey);else if(target==='previous')await this.host.sendToPrevious(this.prompt,this.remember,this.projectKey);else if(target==='new')await this.host.sendToNew(this.prompt,this.remember,this.projectKey);else await this.host.sendChat(this.prompt,this.remember,this.projectKey);this.close();}
-    catch(error){reportError(error);if(error instanceof RequestDeliveryError&&error.requestSaved){this.close();this.host.openSettings();}}
+    catch(error){reportError(error);if(!(error instanceof RequestDeliveryError&&error.requestSaved))this.open();}
     finally{this.choosing=false;this.actions.setDisabled(false);}
   }
 }

@@ -23,7 +23,7 @@ function assetName(source:string):string {
   return name.replace(/[<>:"|?*\x00-\x1f/\\]/g,'_').slice(0,120)||'attachment';
 }
 async function boundedAsset(url:string):Promise<Uint8Array>{
-  const response=await fetch(url,{credentials:'omit',redirect:'error',cache:'no-store'});
+  const response=await fetch(url,{credentials:'omit',redirect:'error',cache:'no-store',signal:AbortSignal.timeout(30_000)});
   if(!response.ok||!response.body)throw Error(`The linked file could not be downloaded from T3 (HTTP ${response.status}).`);
   if(Number(response.headers.get('content-length')||0)>MAX_REPLY_ASSET_BYTES)throw Error('The linked file exceeds 25 MiB.');
   const chunks:Uint8Array[]=[];let size=0;const reader=response.body.getReader();
@@ -87,7 +87,8 @@ export function localInlineFiles(root:string,directory:string):InlineFiles&{requ
 
 export class DesktopInlineHost {
   private writer:HostedInlineWriter;
-  private work?:Promise<void>;
+  private work=new Set<Promise<void>>();
+  private opening=new Map<string,Promise<ThreadAccess>>();
   private stopped=false;
   private accesses=new Map<string,{access:ThreadAccess;expires:number}>();
   private constructor(private release:()=>Promise<void>,app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},files:ReturnType<typeof localInlineFiles>,access:(environmentId:string)=>Promise<ThreadAccess>){
@@ -96,8 +97,13 @@ export class DesktopInlineHost {
       access:async environmentId=>{
         const cached=this.accesses.get(environmentId);
         if(cached&&cached.expires>Date.now())return cached.access;
-        this.accesses.delete(environmentId);await cached?.access.close?.();
-        const fresh=await access(environmentId);this.accesses.set(environmentId,{access:fresh,expires:Date.now()+180_000});return fresh;
+        const pending=this.opening.get(environmentId);if(pending)return pending;
+        const work=(async()=>{
+          this.accesses.delete(environmentId);await cached?.access.close?.();
+          const fresh=await access(environmentId);this.accesses.set(environmentId,{access:fresh,expires:Date.now()+180_000});return fresh;
+        })();
+        this.opening.set(environmentId,work);
+        try{return await work;}finally{this.opening.delete(environmentId);}
       },
       importReplyAsset:(reference,request,threadAccess)=>importReplyAsset(app,reference,request,threadAccess),
       updateNote:async(path,change)=>{
@@ -105,9 +111,13 @@ export class DesktopInlineHost {
         const current=await app.vault.read(file);
         const saved=(value:string)=>app.workspace.getLeavesOfType('markdown').every(leaf=>{const view=leaf.view as any;return view.file?.path!==path||!view.editor||view.editor.getValue()===value;});
         if(this.stopped||!saved(current))return undefined;
-        let applied=false;
-        const result=await app.vault.process(file,value=>{if(this.stopped||!saved(value))return value;applied=true;return change(value);});
-        return applied?result:undefined;
+        const next=change(current);
+        // Probes and unchanged progress must not touch mtime or wake Sync.
+        if(next===current)return current;
+        return app.vault.process(file,value=>{
+          if(this.stopped||value!==current||!saved(value))throw Error('The note changed during the host update; retrying.');
+          return next;
+        });
       },
     });
   }
@@ -117,7 +127,7 @@ export class DesktopInlineHost {
     const release=await lockfile.lock(base,{realpath:true,stale:30_000,update:5000,onCompromised:()=>{host?.dispose();}});
     host=new DesktopInlineHost(release,app,identity,localInlineFiles(identity.workspaceRoot,identity.directory),access);return host;
   }
-  tick(){if(this.stopped)return Promise.resolve();if(this.work)return this.work;const work=this.writer.tick();this.work=work;void work.finally(()=>{if(this.work===work)this.work=undefined;}).catch(()=>{});return work;}
+  tick(){if(this.stopped)return Promise.resolve();const work=this.writer.tick();this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});return work;}
   renamed(before:string,after:string){this.writer.renamed(before,after);}
-  dispose(){if(this.stopped)return;this.stopped=true;this.writer.stop();void (async()=>{try{await this.work;}catch{}finally{for(const {access} of this.accesses.values())await access.close?.();this.accesses.clear();await this.release();}})().catch(()=>{});}
+  dispose(){if(this.stopped)return;this.stopped=true;this.writer.stop();void (async()=>{try{await Promise.allSettled([...this.work]);}catch{}finally{for(const {access} of this.accesses.values())await access.close?.();this.accesses.clear();await this.release();}})().catch(()=>{});}
 }

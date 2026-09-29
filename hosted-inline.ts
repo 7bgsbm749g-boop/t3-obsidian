@@ -63,28 +63,39 @@ export interface HostedWriterIO extends InlineFiles {
   importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
 
-/** One owner calls tick serially. Requests and write-ahead hashes are durable;
+/** Each request has its own serial worker. Requests and write-ahead hashes are durable;
  * no sender socket, editor tab, or synced credentials participate in writing. */
 export class HostedInlineWriter {
   private stopped=false;
+  private work=new Map<string,Promise<void>>();
+  private renameOffsets=new Map<string,number>();
   private renames:Array<{before:string;after:string}>=[];
   constructor(private identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},private io:HostedWriterIO){}
   stop(){this.stopped=true;}
   renamed(before:string,after:string){this.renames.push({before,after});}
   async tick(){
-    const renames=this.renames.splice(0);
-    for(const path of await this.io.requests()){
+    const paths=await this.io.requests();
+    const results=await Promise.allSettled(paths.map(path=>{
+      if(this.stopped||this.work.has(path))return;
+      const work=this.process(path);this.work.set(path,work);
+      return work.finally(()=>{if(this.work.get(path)===work)this.work.delete(path);});
+    }));
+    const failed=results.find(result=>result.status==='rejected');
+    if(failed?.status==='rejected')throw failed.reason;
+  }
+  private async process(path:string){
+      const renameEnd=this.renames.length,renames=this.renames.slice(this.renameOffsets.get(path)??0,renameEnd);
       if(this.stopped)return;
       let request:HostedInlineRequest;
-      try{request=validateHostedRequest(JSON.parse((await this.io.read(path))??''));}catch{continue;}
+      try{request=validateHostedRequest(JSON.parse((await this.io.read(path))??''));}catch{return;}
       const identity=this.identity;
-      if(request.vaultId!==identity.vaultId||request.host.environmentId!==identity.environmentId||!sameWorkspacePath(request.host.workspaceRoot,identity.workspaceRoot)||request.host.directory!==identity.directory||path!==hostedPaths(identity.directory,request.id).request)continue;
+      if(request.vaultId!==identity.vaultId||request.host.environmentId!==identity.environmentId||!sameWorkspacePath(request.host.workspaceRoot,identity.workspaceRoot)||request.host.directory!==identity.directory||path!==hostedPaths(identity.directory,request.id).request)return;
       const paths=hostedPaths(identity.directory,request.id),hash=hostedRequestHash(request);
       let state:HostedInlineState;
-      try{state=JSON.parse((await this.io.read(paths.state))??'null')??{requestHash:hash,accepted:false,notePath:request.notePath,status:'waiting',hashes:[request.initialHash],updatedAt:new Date().toISOString()};}catch{continue;}
-      if(state.requestHash!==hash||!Array.isArray(state.hashes)||!safeNotePath(state.notePath))continue;
-      if(['complete','interrupted','error','conflict'].includes(state.status))continue;
-      const save=async()=>{state.updatedAt=new Date().toISOString();await this.io.write(paths.state,JSON.stringify(state));};
+      try{state=JSON.parse((await this.io.read(paths.state))??'null')??{requestHash:hash,accepted:false,notePath:request.notePath,status:'waiting',hashes:[request.initialHash],updatedAt:new Date().toISOString()};}catch{return;}
+      if(state.requestHash!==hash||!Array.isArray(state.hashes)||!safeNotePath(state.notePath))return;
+      if(['complete','interrupted','error','conflict'].includes(state.status))return;
+      const save=async()=>{state.updatedAt=new Date().toISOString();await this.io.write(paths.state,JSON.stringify(state));this.renameOffsets.set(path,renameEnd);};
       try{
         for(const move of renames)if(state.notePath===move.before||state.notePath.startsWith(move.before+'/'))state.notePath=move.after+state.notePath.slice(move.before.length);
         const access=await this.io.access(request.threadEnvironmentId);
@@ -96,8 +107,8 @@ export class HostedInlineWriter {
             conflict=!!region&&contentHash(region.body)!==request.initialHash;
             return current;
           });
-          if(conflict){state.status='conflict';state.detail='The response block changed before the host accepted it.';await save();continue;}
-          if(!found){state.detail='Waiting for the response marker to reach the vault project machine.';await save();continue;}
+          if(conflict){state.status='conflict';state.detail='The response block changed before the host accepted it.';await save();return;}
+          if(!found){state.detail='Waiting for the response marker to reach the vault project machine.';await save();return;}
           state.accepted=true;delete state.detail;await save();
         }
         const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(request.threadId)}?turnLimit=20`);
@@ -105,9 +116,9 @@ export class HostedInlineWriter {
         if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
         const current=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
         // Never attach to a previous turn while the new message is in flight.
-        if(!current.messages.some(m=>m.id===request.messageId&&m.role==='user'))continue;
+        if(!current.messages.some(m=>m.id===request.messageId&&m.role==='user'))return;
         state.turnId??=turnForMessage(current,request.messageId);
-        if(!state.turnId)continue;
+        if(!state.turnId)return;
         let phase=turnPhase(current,state.turnId);
         if(await this.io.read(paths.stop)!==undefined&&phase==='running'){
           await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(request.id,'interrupt'),threadId:request.threadId,turnId:state.turnId,createdAt:request.createdAt});
@@ -157,6 +168,5 @@ export class HostedInlineWriter {
         state.detail=error instanceof Error?error.message:'The streaming host will retry.';
         await save();
       }
-    }
   }
 }
