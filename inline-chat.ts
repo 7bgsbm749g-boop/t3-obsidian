@@ -31,7 +31,6 @@ export class InlineChatManager {
   }
   resume(){for(const job of this.jobs)if(!job.hosted&&job.threadId&&job.connection&&!job.finalized&&!['conflict','cancelled'].includes(job.phase))this.start(job);this.flushAvailable();}
   dispose(){this.stopped=true;for(const runtime of this.runtimes.values()){runtime.monitor?.stop();if(runtime.timer)clearTimeout(runtime.timer);}this.runtimes.clear();}
-  hostTargetFor(id:string){return this.jobs.find(job=>job.id===id)?.hostTarget;}
   activeFor(path:string){this.reconcileHosted();return this.jobs.filter(j=>j.path===path&&!j.finalized&&!['cancelled','conflict'].includes(j.phase));}
   private reconcileHosted(){let changed=false;for(const job of this.jobs){if(!job.hosted||job.finalized)continue;const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region||!/^\*\*T3 · (?:Sending…|Working|Reconnecting)\*\*/.test(region.body)){job.finalized=true;changed=true;}}if(changed)this.persist();}
   private persist(){this.app.saveLocalStorage(this.key,this.jobs.map(j=>({...j})));}
