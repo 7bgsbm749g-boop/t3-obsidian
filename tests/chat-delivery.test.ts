@@ -418,8 +418,8 @@ test('a palette question about selected text includes both parts and inserts bel
     assert.match(text,/^Selected text:\nClaim\n\nQuestion:\nWhy\?/);
     assert.doesNotMatch(text,/Other note text stays private/);
     assert.equal(h.plugin.app.loadLocalStorage('send-to-t3-code-chat-draft-v1'),'');
-    for(let attempt=0;attempt<40&&!editor.value.includes('Inline reply from T3.');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
-    assert.match(editor.value,/Claim\n\n> Inline reply from T3\./);
+    for(let attempt=0;attempt<40&&(editor.value.includes('t3-inline:start:')||!editor.value.includes('Inline reply from T3.'));attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.match(editor.value,/Claim\n\n\n> Inline reply from T3\./);
   }finally{h.plugin.onunload();}
 });
 
