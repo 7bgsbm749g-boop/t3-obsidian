@@ -7,7 +7,7 @@ import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
 
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface HostedInlineRequest {
-  version:1;id:string;vaultId:string;host:InlineHostTarget;notePath:string;
+  version:1|2;initialOwner?:string;id:string;vaultId:string;host:InlineHostTarget;notePath:string;
   threadId:string;messageId:string;projectId:string;threadEnvironmentId:string;initialHash:string;createdAt:string;
 }
 export interface HostedInlineState {
@@ -26,7 +26,7 @@ export function safeNotePath(path:unknown):path is string {
   return typeof path==='string'&&path.endsWith('.md')&&!path.includes('\\')&&!/[\x00-\x1f:]/.test(path)&&path.split('/').every(p=>!!p&&p!=='.'&&p!=='..'&&!p.startsWith('.'));
 }
 export function validateHostedRequest(value:any):HostedInlineRequest {
-  if(value?.version!==1||![value.id,value.messageId].every(x=>typeof x==='string'&&uuid.test(x))||!safeNotePath(value.notePath)||
+  if(![1,2].includes(value?.version)||(value.version===2&&!uuid.test(value.initialOwner??''))||![value.id,value.messageId].every(x=>typeof x==='string'&&uuid.test(x))||!safeNotePath(value.notePath)||
     ![value.threadId,value.vaultId,value.projectId,value.threadEnvironmentId,value.createdAt,value.host?.environmentId,value.host?.workspaceRoot,value.host?.directory].every(x=>typeof x==='string'&&x.length>0)||
     !/^[0-9a-f]{64}$/.test(value.initialHash))throw Error('Invalid hosted response job.');
   return value;
@@ -60,6 +60,8 @@ export interface HostedWriterIO extends InlineFiles {
   // undefined means the file is missing or has unsaved editor changes. The
   // callback must execute against the latest content in an atomic vault edit.
   updateNote(path:string,change:(current:string)=>string):Promise<string|undefined>;
+  threadState?(request:HostedInlineRequest,access:ThreadAccess):Promise<import('./inline-thread').InlineThreadState|undefined>;
+  accepts?(request:HostedInlineRequest):boolean;
   importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
 
@@ -88,6 +90,7 @@ export class HostedInlineWriter {
       if(this.stopped)return;
       let request:HostedInlineRequest;
       try{request=validateHostedRequest(JSON.parse((await this.io.read(path))??''));}catch{return;}
+      if(this.io.accepts?!this.io.accepts(request):request.version!==1)return;
       const identity=this.identity;
       if(request.vaultId!==identity.vaultId||request.host.environmentId!==identity.environmentId||!sameWorkspacePath(request.host.workspaceRoot,identity.workspaceRoot)||request.host.directory!==identity.directory||path!==hostedPaths(identity.directory,request.id).request)return;
       const paths=hostedPaths(identity.directory,request.id),hash=hostedRequestHash(request);
@@ -111,10 +114,13 @@ export class HostedInlineWriter {
           if(!found){state.detail='Waiting for the response marker to reach the vault project machine.';await save();return;}
           state.accepted=true;delete state.detail;await save();
         }
-        const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(request.threadId)}?turnLimit=20`);
-        if(this.stopped)return;
-        if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
-        const current=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+        let current=await this.io.threadState?.(request,access);
+        if(!current){
+          const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(request.threadId)}?turnLimit=20`);
+          if(this.stopped)return;
+          if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
+          current=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+        }
         // Never attach to a previous turn while the new message is in flight.
         if(!current.messages.some(m=>m.id===request.messageId&&m.role==='user'))return;
         state.turnId??=turnForMessage(current,request.messageId);

@@ -30,6 +30,9 @@ import {CoordinatorService} from './coordinator-service';
 import {DeterministicWorkflowRuntime,noteSnapshot,type RuntimeRelease} from './workflow-runtime';
 import {observationInterest} from './observation-interest';
 import {mergeWorkflowDrafts} from './workflow-drafts';
+import {DeviceInlineManager} from './leased-inline';
+import {deviceNoteIO} from './inline-note-io';
+import {importReplyAsset} from './reply-import';
 import {InlineChatManager,captureEditorSelection,type InlineJob} from './inline-chat';
 import {handoffInline,hostedPaths,type InlineHostTarget,type InlineFiles} from './hosted-inline';
 import {installMobileSelectionAction} from './mobile-selection-action';
@@ -92,6 +95,9 @@ export default class SendToT3 extends Plugin {
   private journalFiles?:{exists(path:string):Promise<boolean>;read(path:string):Promise<string>;write(path:string,data:string):Promise<void>;mkdir(path:string):Promise<void>;list(path:string):Promise<{files:string[];folders:string[]}>};
   private metadataPending=new WeakSet<TFile>();
   private inlineChat?:InlineChatManager;
+  private deviceInline?:DeviceInlineManager;
+  private inlineActor=randomId();
+  private inlineTargets:InlineHostTarget[]=[];
   private inlineHostService?:import('./hosted-inline-desktop').DesktopInlineHost;
   private inlineHostKey='';
   private inlineHostRefresh?:Promise<void>;
@@ -122,6 +128,9 @@ export default class SendToT3 extends Plugin {
       migratedNoteThreads=true;
     }
     this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>this.stopHostedInline(job.id,job.hostTarget)});
+    const storedTargets=this.app.loadLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`);
+    if(Array.isArray(storedTargets))this.inlineTargets=storedTargets.filter(target=>target&&typeof target.environmentId==='string'&&typeof target.workspaceRoot==='string'&&typeof target.directory==='string');
+    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),access:environmentId=>this.inlineThreadAccess(environmentId),importReplyAsset:(reference,request,access)=>importReplyAsset(this.app,reference,request,access)},target=>this.inlineHostFiles(target));
     if(typeof this.registerEditorExtension==='function')this.registerEditorExtension(hiddenInlineMarkerExtension());
     if(Platform.isMobile&&typeof document.addEventListener==='function'){
       this.mobileSelectionAction=installMobileSelectionAction(this.app,()=>this.app.workspace.getActiveViewOfType(MarkdownView),path=>!this.busy&&!this.inlineChat?.activeFor(path).length,captureEditorSelection,({editor,view,text,anchor})=>this.openEditorChat(text,view.file!,{editor,view,anchor}));
@@ -169,6 +178,12 @@ export default class SendToT3 extends Plugin {
     });
     this.app.workspace.onLayoutReady(()=>{if(!this.stopped){if(this.nativeAccount)void this.refreshMachines().catch(e=>{this.cloudError=message(e);this.cloudChanged?.();});void this.monitorCompletions();this.registerInterval(window.setInterval(()=>{void this.monitorCompletions();},30_000));}});
     this.app.workspace.onLayoutReady(()=>this.inlineChat?.resume());
+    this.app.workspace.onLayoutReady(()=>{
+      const tick=()=>{this.deviceInline?.tick();this.deviceInline?.discover(this.inlineTargets);};
+      tick();this.registerInterval(window.setInterval(tick,150));
+      const remember=()=>{if(this.settings.folderLinks.some(link=>link.folderPath==='/'))void this.inlineHostTarget().then(target=>this.rememberInlineTarget(target)).catch(()=>{});};
+      remember();this.registerInterval(window.setInterval(remember,5000));
+    });
     if(!Platform.isMobile)this.app.workspace.onLayoutReady(()=>{
       const tick=()=>void this.refreshInlineHost().then(()=>this.inlineHostService?.tick()).catch(()=>{/* The durable job retries after the host reconnects. */});
       tick();this.registerInterval(window.setInterval(tick,1500));
@@ -177,7 +192,7 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('layout-change',()=>this.inlineChat?.flushAvailable()));
     if(typeof this.app.vault?.on==='function'){
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.inlineChat?.renamed(oldPath,file.path)));
-      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.inlineHostService?.renamed(oldPath,file.path)));
+      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{this.inlineHostService?.renamed(oldPath,file.path);this.deviceInline?.renamed(oldPath,file.path);}));
       this.registerEvent(this.app.vault.on('delete',file=>this.inlineChat?.deleted(file.path)));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void (async()=>{const moved=this.settings.noteThreads.filter(entry=>!entry.deletedAt&&(entry.notePath===oldPath||file instanceof TFolder&&entry.notePath.startsWith(oldPath+'/')));if(!moved.length)return;const stamp=new Date().toISOString();this.settings.noteThreads=mergeNoteThreads(this.settings.noteThreads,moved.map(entry=>({...entry,deletedAt:stamp})),moved.map(entry=>({...entry,notePath:file.path+entry.notePath.slice(oldPath.length)})));await this.save();})().catch(error=>new Notice(`T3 thread link: ${message(error)}`,10000));}));
       this.registerEvent(this.app.vault.on('delete',file=>{void (async()=>{const stamp=new Date().toISOString(),affected=this.settings.noteThreads.filter(entry=>entry.notePath===file.path||file instanceof TFolder&&entry.notePath.startsWith(file.path+'/'));if(!affected.length)return;this.settings.noteThreads=this.settings.noteThreads.map(entry=>affected.includes(entry)?{...entry,deletedAt:stamp}:entry);await this.save();})().catch(error=>new Notice(`T3 thread link: ${message(error)}`,10000));}));
@@ -767,6 +782,17 @@ export default class SendToT3 extends Plugin {
     try{await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{...options,requestId,onPrepared:request=>manager.prepare(job,request)});delivered=true;manager.start(job);}
     catch(error){manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&error.requestSaved));throw error;}
   }
+  private rememberInlineTarget(target:InlineHostTarget){
+    if(this.inlineTargets.some(value=>value.environmentId===target.environmentId&&sameWorkspacePath(value.workspaceRoot,target.workspaceRoot)&&value.directory===target.directory))return;
+    this.inlineTargets.push(target);this.app.saveLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`,this.inlineTargets);
+  }
+  private async inlineThreadAccess(environmentId:string){
+    if(!Platform.isMobile&&environmentId===await this.localInlineEnvironment())return (await import('./desktop')).desktopThreadAccess({...this.settings.connection,host:'local'});
+    const paired=this.settings.paired.find(connection=>connection.environmentId===environmentId);
+    if(!paired)throw Error('Connect this device to the thread machine to take over responses.');
+    const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
+    return {origin:endpoint(paired.url),api:await environmentApi(connection,await this.sessionFor(paired.id))};
+  }
   private localInlineEnvironment():Promise<string>{
     if(Platform.isMobile)return Promise.reject(Error('A phone cannot host vault responses.'));
     return this.inlineEnvironment??=import('./desktop').then(d=>d.desktopEnvironment(this.settings.connection)).catch(error=>{this.inlineEnvironment=undefined;throw error;});
@@ -808,8 +834,8 @@ export default class SendToT3 extends Plugin {
   private async prepareHostedInline(job:InlineJob,request:Request){
     const host=await this.inlineHostTarget();
     const threadEnvironmentId=request.connection.environmentId??await this.localInlineEnvironment();
-    job.hostTarget=host;
-    request.inlineHost={version:1,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt};
+    job.hostTarget=host;this.rememberInlineTarget(host);
+    request.inlineHost={version:2,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt};
   }
   private async inlineHostFiles(target:InlineHostTarget):Promise<{files:InlineFiles;close():void}>{
     const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
@@ -943,7 +969,7 @@ export default class SendToT3 extends Plugin {
         if(!session||session.expiresAt<=Date.now())throw Error('Sign in or pair this connection on this device before sending.');
         const vaultLink=this.settings.folderLinks.find(l=>l.folderPath==='/'&&l.vaultId===this.settings.vaultId&&(l.connectionId===project.connectionId||l.environmentId===connection.environmentId));
         const vaultRoot=vaultLink?.workspaceRoot??this.settings.vaultLocations.find(location=>location.environmentId===connection.environmentId)?.workspaceRoot;
-        if(note&&vaultRoot){
+        if(note&&vaultRoot&&!options?.onPrepared){
           const remote=await connectVaultRemote(connection,session);
           try{
             if(!await remote.matches(vaultRoot,`${this.app.vault.configDir||'.obsidian'}/plugins/${this.manifest?.id||'send-to-t3-code'}/data.json`,this.settings.vaultId))throw Error('The chosen vault folder no longer matches this vault. Use Change machine in settings to reconnect it.');
@@ -1267,7 +1293,10 @@ export default class SendToT3 extends Plugin {
     }
   }
   async dispatch(request:Request,quiet=false) {
-    if(request.inlineHost){
+    if(request.inlineHost?.version===2){
+      if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');
+      await this.deviceInline.register(request.inlineHost);
+    }else if(request.inlineHost){
       if(!quiet)new Notice('Handing the response to the vault project machine…');
       const opened=await this.inlineHostFiles(request.inlineHost.host);
       try{await handoffInline(opened.files,request.inlineHost,()=>!this.stopped);}finally{opened.close();}
@@ -1280,7 +1309,7 @@ export default class SendToT3 extends Plugin {
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;this.settings.noteThreads=before.noteThreads;throw e;}
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
   }
-  onunload(){this.stopped=true;this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.remoteJournal?.close();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.stopped=true;this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.remoteJournal?.close();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;

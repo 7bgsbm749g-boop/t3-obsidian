@@ -1,0 +1,144 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {InlineLeaseAuthority,InlineLeaseClient,LEASE_MS,leasePaths,type LeaseFiles,type LeaseRecord} from '../inline-lease';
+import {hostedRequestHash,type HostedInlineRequest,type HostedInlineState} from '../hosted-inline';
+import {initialRegion} from '../inline-thread';
+import {DeviceInlineManager} from '../leased-inline';
+
+function harness(){
+  let time=100_000;
+  const directory='.obsidian/t3-code/inline/v1',identity={vaultId:'vault',environmentId:'host',workspaceRoot:'/vault',directory};
+  const data=new Map<string,string>();
+  const files:LeaseFiles={read:async path=>data.get(path),write:async(path,value)=>{data.set(path,value);},remove:async path=>{data.delete(path);},list:async dir=>[...data.keys()].filter(path=>path.startsWith(dir+'/'))};
+  let authority=new InlineLeaseAuthority(identity,files,()=>time);
+  const remote={...files,read:async(path:string)=>{if(path.includes('/replies/'))await authority.tick();return files.read(path);}};
+  const actor=randomUUID(),id=randomUUID(),region=initialRegion(id);
+  const request:HostedInlineRequest={version:2,id,initialOwner:actor,vaultId:'vault',host:identity,notePath:'Note.md',threadId:'thread',messageId:randomUUID(),projectId:'project',threadEnvironmentId:'host',initialHash:region.bodyHash,createdAt:'2026-09-29T12:00:00Z'};
+  const client=(owner=actor)=>new InlineLeaseClient(owner,remote,directory,()=>time,()=>time,async()=>{await authority.tick();});
+  const record=():LeaseRecord=>JSON.parse(data.get(leasePaths(directory,id).record)!);
+  const state:HostedInlineState={requestHash:hostedRequestHash(request),accepted:true,notePath:'Note.md',status:'running',hashes:[region.bodyHash],updatedAt:''};
+  return {actor,request,region,files,remote,data,client,record,state,now:()=>time,advance:(ms:number)=>{time+=ms;},restart:()=>{authority.stop();authority=new InlineLeaseAuthority(identity,files,()=>time);return authority.tick();}};
+}
+
+test('register needs no synced note; healthy heartbeats prevent all competing claims',async()=>{
+  const h=harness(),phone=h.client(),laptop=h.client(randomUUID());
+  const registered=await phone.command({kind:'register',jobId:h.request.id,request:h.request});assert.equal(registered.ok,true);
+  for(let n=0;n<8;n++){
+    h.advance(3000);
+    assert.equal((await phone.command({kind:'heartbeat',jobId:h.request.id,epoch:1})).ok,true);
+    assert.equal((await laptop.command({kind:'claim',jobId:h.request.id})).ok,false);
+    assert.equal(h.record().owner,h.actor);assert.equal(h.record().epoch,1);
+  }
+  const before=h.record();phone.dispose();assert.deepEqual(h.record(),before,'Disposal does not release or shorten ownership');
+  assert.equal((await laptop.command({kind:'claim',jobId:h.request.id})).ok,false);
+  h.advance(LEASE_MS);
+  assert.equal((await laptop.command({kind:'claim',jobId:h.request.id})).ok,true);assert.equal(h.record().epoch,2);
+});
+
+test('simultaneous contenders receive one grant; an old epoch cannot heartbeat or checkpoint',async()=>{
+  const h=harness(),phone=h.client(),laptop=h.client(randomUUID()),vps=h.client(randomUUID());
+  await phone.command({kind:'register',jobId:h.request.id,request:h.request});h.advance(LEASE_MS+2000);
+  const replies=await Promise.all([laptop,vps].map(client=>client.command({kind:'claim',jobId:h.request.id})));
+  assert.equal(replies.filter(reply=>reply.ok).length,1);assert.equal(h.record().epoch,2);
+  assert.equal(phone.valid(h.request.id,1),false);
+  assert.equal((await phone.command({kind:'heartbeat',jobId:h.request.id,epoch:1})).ok,false);
+  assert.equal((await phone.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:0,state:h.state})).ok,false);
+  assert.equal(h.record().state,undefined);
+});
+
+test('checkpoints preserve hashes without renewing expiry and stale revisions are rejected',async()=>{
+  const h=harness(),phone=h.client();await phone.command({kind:'register',jobId:h.request.id,request:h.request});
+  const expires=h.record().expiresAt;h.advance(8000);
+  assert.equal((await phone.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:0,state:h.state})).ok,true);
+  assert.equal(h.record().expiresAt,expires);
+  assert.equal((await phone.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:0,state:{...h.state,status:'complete'}})).ok,false);
+  assert.equal(h.record().state?.status,'running');
+  h.advance(LEASE_MS);
+  const next=h.client(randomUUID());await next.command({kind:'claim',jobId:h.request.id});
+  assert.deepEqual(h.record().state?.hashes,[h.request.initialHash]);assert.equal(h.record().revision,1);
+});
+
+test('slow grants are expired on arrival and wall clock changes cannot prolong a lease',async()=>{
+  const h=harness();let monotonic=h.now();
+  const delayed={...h.remote,read:async(path:string)=>{const value=await h.remote.read(path);if(path.includes('/replies/')){h.advance(LEASE_MS+1);monotonic+=LEASE_MS+1;}return value;}};
+  const client=new InlineLeaseClient(h.actor,delayed,h.request.host.directory,h.now,()=>monotonic);
+  const response=await client.command({kind:'register',jobId:h.request.id,request:h.request});assert.equal(response.ok,true);assert.equal(client.valid(h.request.id,1),false);
+  const next=h.client(randomUUID());assert.equal((await next.command({kind:'claim',jobId:h.request.id})).ok,true);
+  // A backwards wall clock cannot restore a grant whose monotonic deadline passed.
+  h.advance(-LEASE_MS-1);assert.equal(client.valid(h.request.id,1),false);
+});
+
+test('authority restart repairs catalog after a grant/index crash; duplicate registration is immutable',async()=>{
+  const h=harness(),phone=h.client();await phone.command({kind:'register',jobId:h.request.id,request:h.request});
+  const before=h.record();h.data.delete(leasePaths(h.request.host.directory,h.request.id).catalog);
+  await h.restart();assert.equal(JSON.parse(h.data.get(leasePaths(h.request.host.directory,h.request.id).catalog)!)[0].id,h.request.id);
+  h.advance(1000);await phone.command({kind:'register',jobId:h.request.id,request:h.request});assert.deepEqual(h.record(),before);
+  assert.equal((await phone.command({kind:'register',jobId:h.request.id,request:{...h.request,notePath:'Other.md'}})).ok,false);
+});
+
+test('closed-note fallback waits briefly; completion removes discovery entry and prevents takeover',async()=>{
+  const h=harness(),phone=h.client(),vps=h.client(randomUUID());await phone.command({kind:'register',jobId:h.request.id,request:h.request});h.advance(LEASE_MS);
+  assert.equal((await vps.command({kind:'claim',jobId:h.request.id,fallback:true})).ok,false);
+  h.advance(2000);assert.equal((await vps.command({kind:'claim',jobId:h.request.id,fallback:true})).ok,true);
+  await vps.command({kind:'checkpoint',jobId:h.request.id,epoch:2,revision:0,state:{...h.state,status:'complete'}});
+  assert.deepEqual(JSON.parse(h.data.get(leasePaths(h.request.host.directory,h.request.id).catalog)!),[]);
+  h.advance(LEASE_MS);assert.equal((await phone.command({kind:'claim',jobId:h.request.id})).ok,false);
+});
+
+function devices(){
+  const h=harness(),managers:DeviceInlineManager[]=[];
+  let answer='First paragraph',complete=false;
+  const snapshot=()=>({thread:{id:h.request.threadId,projectId:h.request.projectId,messages:[
+    {id:h.request.messageId,role:'user',text:'Question',streaming:false,createdAt:h.request.createdAt},
+    {id:'answer',role:'assistant',text:answer,streaming:!complete,turnId:'turn'}],activities:[],latestTurn:{turnId:'turn',state:complete?'completed':'running',requestedAt:h.request.createdAt,assistantMessageId:'answer'},session:{status:complete?'ready':'running',activeTurnId:complete?null:'turn'}}});
+  const create=(actor:string)=>{
+    const document={value:'Outside before\n'+h.region.text+'Outside after',writes:0,hold:undefined as (()=>Promise<void>)|undefined};
+    const manager=new DeviceInlineManager(actor,h.request.vaultId,{
+      access:async()=>({origin:'https://unused.example',api:async path=>{if(path.includes('websocket-ticket'))throw Error('REST fallback fixture');return snapshot();}}),
+      isOpen:()=>true,readNote:async()=>document.value,
+      updateNote:async(_path,change,allowed)=>{assert.equal(allowed(),true);const next=change(document.value);if(next!==document.value){await document.hold?.();if(!allowed())throw Error('Expired write');document.writes++;document.value=next;}return next;},
+    },async()=>({files:h.remote,close:()=>{}}),h.now,h.now);
+    managers.push(manager);return {document,manager};
+  };
+  const drain=async(...active:DeviceInlineManager[])=>{for(let n=0;n<12;n++){for(const manager of active)manager.tick();await new Promise(resolve=>setImmediate(resolve));}};
+  return {...h,create,drain,answer:(text:string,done=false)=>{answer=text;complete=done;},dispose:()=>managers.forEach(manager=>manager.dispose())};
+}
+
+test('another device resumes a missed-heartbeat reply from a known older Sync version, preserving outside edits',async()=>{
+  const h=devices(),phone=h.create(h.actor),laptop=h.create(randomUUID());
+  try{
+    await phone.manager.register(h.request);await h.drain(phone.manager);assert.match(phone.document.value,/First paragraph/);
+    laptop.manager.discover([h.request.host]);await h.drain(laptop.manager);assert.equal(laptop.document.writes,0);
+    laptop.document.value='New outside edit\n'+laptop.document.value;
+    h.answer('Second paragraph');h.advance(LEASE_MS+1);await h.drain(laptop.manager);h.advance(200);await h.drain(laptop.manager);
+    assert.equal(h.record().epoch,2);assert.match(laptop.document.value,/Second paragraph/);assert.match(laptop.document.value,/New outside edit/);
+    const oldPhone=phone.document.value;await h.drain(phone.manager);assert.equal(phone.document.value,oldPhone,'Resumed sender must not write its stale copy');
+    h.answer('Final answer',true);h.advance(200);await h.drain(laptop.manager);
+    assert.equal(h.record().state?.status,'complete');assert.match(laptop.document.value,/Final answer/);assert.doesNotMatch(laptop.document.value,/t3-inline:/);
+  }finally{h.dispose();}
+});
+
+test('a genuine edit inside the response survives takeover and becomes a conflict',async()=>{
+  const h=devices(),phone=h.create(h.actor),laptop=h.create(randomUUID());
+  try{
+    await phone.manager.register(h.request);await h.drain(phone.manager);
+    laptop.document.value=phone.document.value.replace('First paragraph','My own correction');
+    laptop.manager.discover([h.request.host]);await h.drain(laptop.manager);
+    h.advance(LEASE_MS+1);h.answer('New answer');await h.drain(laptop.manager);h.advance(200);await h.drain(laptop.manager);
+    assert.equal(h.record().state?.status,'conflict');assert.match(laptop.document.value,/My own correction/);assert.doesNotMatch(laptop.document.value,/New answer/);
+  }finally{h.dispose();}
+});
+
+
+test('work suspended across two ownership changes cannot reuse a newer grant from the same device',async()=>{
+  const h=devices(),phone=h.create(h.actor);let release!:()=>void;
+  try{
+    await phone.manager.register(h.request);await h.drain(phone.manager);
+    phone.document.hold=()=>new Promise<void>(resolve=>{release=resolve;});
+    h.answer('Stale pending paragraph');h.advance(200);await h.drain(phone.manager);assert.ok(release);
+    h.advance(LEASE_MS);const other=h.client(randomUUID());await other.command({kind:'claim',jobId:h.request.id});assert.equal(h.record().epoch,2);
+    h.advance(LEASE_MS);await h.drain(phone.manager);assert.equal(h.record().epoch,3);
+    const before=phone.document.value;release();await h.drain();assert.equal(phone.document.value,before,'Old work remains fenced even after its device wins a later lease');
+  }finally{release?.();h.dispose();}
+});
