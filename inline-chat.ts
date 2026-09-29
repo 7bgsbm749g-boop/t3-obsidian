@@ -8,7 +8,7 @@ import {watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stre
 import type {InlineHostTarget} from './hosted-inline';
 
 export interface InlineJob {
-  id:string;path:string;requestId:string;threadId?:string;turnId?:string;messageId?:string;connection?:Connection;
+  id:string;path:string;requestId:string;threadId?:string;turnId?:string;messageId?:string;projectId?:string;connection?:Connection;
   bodyHash:string;phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'|'conflict';createdAt:string;finalized?:boolean;
   hosted?:boolean;
   hostTarget?:InlineHostTarget;
@@ -32,7 +32,14 @@ export class InlineChatManager {
   resume(){for(const job of this.jobs)if(!job.hosted&&job.threadId&&job.connection&&!job.finalized&&!['conflict','cancelled'].includes(job.phase))this.start(job);this.flushAvailable();}
   dispose(){this.stopped=true;for(const runtime of this.runtimes.values()){runtime.monitor?.stop();if(runtime.timer)clearTimeout(runtime.timer);}this.runtimes.clear();}
   activeFor(path:string){this.reconcileHosted();return this.jobs.filter(j=>j.path===path&&!j.finalized&&!['cancelled','conflict'].includes(j.phase));}
-  private reconcileHosted(){let changed=false;for(const job of this.jobs){if(!job.hosted||job.finalized)continue;const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region||!/^\*\*T3 · (?:Sending…|Working|Reconnecting)\*\*/.test(region.body)){job.finalized=true;changed=true;}}if(changed)this.persist();}
+  find(id:string){return this.jobs.find(job=>job.id===id&&!job.finalized);}
+  private reconcileHosted(){let changed=false;for(const job of this.jobs){if(!job.hosted||job.finalized)continue;const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region){job.finalized=true;changed=true;}else if(/^\*\*T3 · Error\*\*/.test(region.body)&&job.phase!=='error'){job.phase='error';changed=true;}else if(/^\*\*T3 · (?:Working|Reconnecting)\*\*/.test(region.body)&&job.phase==='error'){job.phase='running';changed=true;}}if(changed)this.persist();}
+  follow(job:InlineJob,messageId:string){
+    if(job.hosted)throw Error('Hosted responses need their owner to attach the continuation.');
+    if(job.messageId===messageId&&job.phase!=='error')return;
+    if(job.phase!=='error'||job.finalized)throw Error('This response is no longer waiting for a continuation.');
+    job.messageId=messageId;delete job.turnId;job.phase='reconnecting';this.persist();this.start(job);
+  }
   private persist(){this.app.saveLocalStorage(this.key,this.jobs.map(j=>({...j})));}
   private runtime(job:InlineJob){let runtime=this.runtimes.get(job.id);if(!runtime){runtime={state:{messages:[],activities:[]},sequence:-1};this.runtimes.set(job.id,runtime);}return runtime;}
 
@@ -54,7 +61,7 @@ export class InlineChatManager {
     return job;
   }
   async prepare(job:InlineJob,request:Request){
-    job.connection=request.connection;job.threadId=request.threadId??commandId(request.id,'thread');job.messageId=commandId(request.id,'message');this.persist();
+    job.connection=request.connection;job.projectId=request.project.id;job.threadId=request.threadId??commandId(request.id,'thread');job.messageId=commandId(request.id,'message');this.persist();
     if(this.hosted){await this.hosted.prepare(job,request);job.hosted=true;this.persist();}
   }
   deliveryFailed(job:InlineJob,uncertain:boolean){
@@ -100,9 +107,11 @@ export class InlineChatManager {
     }
     if(item.kind==='snapshot')runtime.sequence=Number.isSafeInteger(applied.sequence)?applied.sequence!:runtime.sequence;
     else if(applied.sequence!==undefined)runtime.sequence=applied.sequence;
+    if(job.phase==='error'&&job.turnId&&runtime.state.latestTurn?.turnId!==job.turnId&&runtime.state.session?.activeTurnId!==job.turnId)return;
     const activity=job.turnId&&runtime.state.activities.filter(a=>a.turnId===job.turnId&&/^(approval\.requested|user-input\.requested)$/.test(a.kind)).at(-1);
     if(activity&&activity.id!==runtime.alerted){runtime.alerted=activity.id;new Notice(`T3 needs your response in thread ${job.threadId}: ${activity.summary.slice(0,140)}`,12000);}
     const phase=job.turnId?turnPhase(runtime.state,job.turnId):'running';
+    if(job.phase==='error'&&phase==='error')return;
     job.phase=phase;this.schedule(job);
   }
   private schedule(job:InlineJob){
@@ -125,7 +134,7 @@ export class InlineChatManager {
     if(runtime.sequence<0&&['complete','interrupted','error'].includes(job.phase))return;
     const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase);
     const current=regionBody(editor.getValue(),job.id);
-    if(job.phase!=='complete'&&current&&current.body===next){if(['interrupted','error','cancelled'].includes(job.phase)){job.finalized=true;this.persist();runtime.monitor?.stop();}return;}
+    if(job.phase!=='complete'&&current&&current.body===next){if(['interrupted','cancelled'].includes(job.phase)){job.finalized=true;this.persist();runtime.monitor?.stop();}return;}
     const complete=job.phase==='complete';
     const change=complete?finalizeRegion(editor.getValue(),job.id,job.bodyHash,next):replaceRegion(editor.getValue(),job.id,job.bodyHash,next);
     if(!change){job.phase='conflict';runtime.monitor?.stop();this.persist();new Notice(`T3 stopped writing to ${job.path} because its inline response was edited or removed. The T3 thread remains available.`,12000);return;}
@@ -133,7 +142,7 @@ export class InlineChatManager {
     if(complete)job.finalized=true;
     else job.bodyHash=contentHash(next);
     this.persist();
-    if(['complete','interrupted','error','cancelled'].includes(job.phase))runtime.monitor?.stop();
+    if(['complete','interrupted','cancelled'].includes(job.phase))runtime.monitor?.stop();
   }
   async stop(job:InlineJob){
     if(job.hosted&&this.hosted){await this.hosted.stop(job);return;}

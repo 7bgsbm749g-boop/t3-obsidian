@@ -35,9 +35,10 @@ import {deviceNoteIO} from './inline-note-io';
 import {importReplyAsset} from './reply-import';
 import {InlineChatManager,captureEditorSelection,type InlineJob} from './inline-chat';
 import {handoffInline,hostedPaths,type InlineHostTarget,type InlineFiles} from './hosted-inline';
+import {leasePaths,type LeaseRecord} from './inline-lease';
 import {installMobileSelectionAction} from './mobile-selection-action';
 import {hiddenInlineMarkerExtension} from './inline-markers';
-import {activeInlineIds,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,failedInlineIds,regionBody,type SelectionAnchor} from './inline-thread';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor};
 const INLINE_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note; the Obsidian plugin will insert your reply.';
 const THREAD_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note.';
@@ -236,7 +237,11 @@ export default class SendToT3 extends Plugin {
       const file=view.file;
       if(!file||file.extension.toLowerCase()!=='md')return;
       const active=this.inlineChat?.activeFor(file.path)??[];
-      if(active.length)menu.addItem(item=>item.setTitle('Stop T3 response').setIcon('square').setDisabled(!active[0].threadId).onClick(()=>{void this.inlineChat?.stop(active[0]).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
+      const failed=active.find(job=>job.phase==='error')?.id??failedInlineIds(editor.getValue())[0];
+      if(failed){
+        menu.addItem(item=>item.setTitle('Continue T3 response…').setIcon('rotate-cw').setDisabled(this.busy).onClick(()=>new InlineRecoveryModal(this.app,text=>this.continueInline(failed,file.path,text)).open()));
+        menu.addItem(item=>item.setTitle('Attach latest T3 continuation').setIcon('link').setDisabled(this.busy).onClick(()=>{void this.attachInline(failed,file.path).catch(error=>new Notice(`T3: ${message(error)}`,12000));}));
+      }else if(active.length)menu.addItem(item=>item.setTitle('Stop T3 response').setIcon('square').setDisabled(!active[0].threadId).onClick(()=>{void this.inlineChat?.stop(active[0]).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
       else {const hostedId=activeInlineIds(editor.getValue())[0];if(hostedId)menu.addItem(item=>item.setTitle('Stop T3 response').setIcon('square').onClick(()=>{void this.stopHostedInline(hostedId).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));}
       if(!selection.trim())return;
       let anchor:SelectionAnchor;
@@ -787,6 +792,73 @@ export default class SendToT3 extends Plugin {
     try{await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{...options,requestId,onPrepared:request=>manager.prepare(job,request)});delivered=true;manager.start(job);}
     catch(error){manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&error.requestSaved));throw error;}
   }
+  private async recoveryRecord(id:string,path:string):Promise<{record:LeaseRecord;host:InlineHostTarget}|undefined>{
+    const targets=[...this.inlineTargets];
+    try{const current=await this.inlineHostTarget();if(!targets.some(target=>JSON.stringify(target)===JSON.stringify(current)))targets.push(current);}catch{}
+    for(const host of targets){
+      let opened:{files:InlineFiles;close():void};
+      try{opened=await this.inlineHostFiles(host);}catch{continue;}
+      try{
+        const raw=await opened.files.read(leasePaths(host.directory,id).record);
+        if(!raw)continue;
+        const record:LeaseRecord=JSON.parse(raw);
+        if(record.request.id!==id||record.request.vaultId!==this.settings.vaultId||record.state?.notePath!==path||record.state.status!=='error')throw Error('This response is no longer waiting for a continuation.');
+        return {record,host};
+      }finally{opened.close();}
+    }
+  }
+  private async checkRecoveryBlock(id:string,path:string,hashes:string[]){
+    const leaf=this.app.workspace.getLeavesOfType('markdown').find(leaf=>(leaf.view as MarkdownView).file?.path===path);
+    const file=this.app.vault.getFileByPath(path);
+    if(!file)throw Error('The original note is no longer available.');
+    const document=leaf?(leaf.view as MarkdownView).editor.getValue():await this.app.vault.read(file);
+    const block=regionBody(document,id);
+    if(!block||!hashes.includes(contentHash(block.body)))throw Error('The response block changed. Your edits are preserved; continue in the T3 thread instead.');
+  }
+  private async recoveryProject(projectId:string,environmentId?:string){
+    for(const project of [...this.settings.directProjects,...this.settings.projects]){
+      if(project.id!==projectId)continue;
+      try{
+        const connection=this.connection(project),selected=connection.environmentId??(!Platform.isMobile?await this.localInlineEnvironment():undefined);
+        if(!environmentId||selected===environmentId)return project;
+      }catch{}
+    }
+    throw Error('The original T3 project is unavailable on this device. Refresh projects and reconnect its machine.');
+  }
+  private async continueInline(id:string,path:string,text:string){
+    const hosted=await this.recoveryRecord(id,path),job=hosted?undefined:this.inlineChat?.find(id);
+    if(!hosted&&(!job||job.hosted||job.path!==path||job.phase!=='error'||!job.threadId||!job.projectId||!job.messageId))throw Error('The streaming host is unavailable or this response is no longer waiting for a continuation.');
+    await this.checkRecoveryBlock(id,path,hosted?.record.state?.hashes??[job!.bodyHash]);
+    const threadId=hosted?.record.request.threadId??job!.threadId!,projectId=hosted?.record.request.projectId??job!.projectId!;
+    const environmentId=hosted?.record.request.threadEnvironmentId??job!.connection?.environmentId;
+    const project=await this.recoveryProject(projectId,environmentId),previousMessageId=hosted?.record.state?.messageId??hosted?.record.request.messageId??job!.messageId!;
+    const file=this.app.vault.getFileByPath(path);
+    if(!file)throw Error('The original note is no longer available.');
+    await this.sendChat(`${text.trim()}\n\n${INLINE_REPLY_INSTRUCTION}`,this.noteContext(file),{
+      threadId,projectOverrideKey:projectKey(project),rememberLink:true,
+      onPrepared:async request=>{
+        const selectedEnvironment=request.connection.environmentId??(hosted?await this.localInlineEnvironment():undefined);
+        if(request.threadId!==threadId||request.project.id!==projectId||selectedEnvironment!==environmentId)throw Error('The continuation target changed.');
+        request.inlineFollow={jobId:id,...(hosted?{host:hosted.host}:{}),previousMessageId,messageId:commandId(request.id,'message')};
+      },
+    });
+  }
+  private async attachInline(id:string,path:string){
+    const hosted=await this.recoveryRecord(id,path),job=hosted?undefined:this.inlineChat?.find(id);
+    if(!hosted&&(!job||job.hosted||job.path!==path||job.phase!=='error'||!job.threadId||!job.messageId||!job.connection))throw Error('The streaming host is unavailable or this response is no longer waiting for a continuation.');
+    await this.checkRecoveryBlock(id,path,hosted?.record.state?.hashes??[job!.bodyHash]);
+    const threadId=hosted?.record.request.threadId??job!.threadId!,projectId=hosted?.record.request.projectId??job!.projectId!;
+    let thread:any;
+    if(hosted){const access=await this.inlineThreadAccess(hosted.record.request.threadEnvironmentId);try{thread=(await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?turnLimit=20`)).thread;}finally{await access.close?.();}}
+    else thread=await runBridge(job!.connection!,['read',threadId]);
+    const oldTurnId=hosted?.record.state?.turnId??job?.turnId;
+    const latest=thread?.latestTurn;
+    const user=thread?.messages?.find((item:any)=>item.role==='user'&&item.createdAt===latest?.requestedAt);
+    if(thread?.id!==threadId||thread.projectId!==projectId||!latest?.turnId||latest.turnId===oldTurnId||!user?.id)throw Error('No newer T3 turn is available to attach to this response. Continue the thread in T3 first.');
+    if(hosted){if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');await this.deviceInline.follow(hosted.host,id,hosted.record.state?.messageId??hosted.record.request.messageId,user.id);}
+    else this.inlineChat!.follow(job!,user.id);
+    new Notice('The latest T3 turn is attached to this response.');
+  }
   private rememberInlineTarget(target:InlineHostTarget){
     if(this.inlineTargets.some(value=>value.environmentId===target.environmentId&&sameWorkspacePath(value.workspaceRoot,target.workspaceRoot)&&value.directory===target.directory))return;
     this.inlineTargets.push(target);this.app.saveLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`,this.inlineTargets);
@@ -867,7 +939,7 @@ export default class SendToT3 extends Plugin {
   }
   private async chatTarget(notePath?:string,preferred?:NoteThread,ignoreActive=false,overrideKey?:string):Promise<{project:Project;link:FolderLink}> {
     let link=notePath?folderLinkForPath(this.settings.folderLinks,notePath):this.settings.folderLinks.find(item=>item.folderPath==='/');
-    if(overrideKey){const project=this.projects().find(item=>projectKey(item)===overrideKey);if(!project)throw Error('The chosen T3 project is unavailable. Choose a project again.');return {project,link:link&&projectKey(project)===`${link.connectionId?link.connectionId+':':''}${link.projectId}`?link:{id:'project-override',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false}};}
+    if(overrideKey){const project=[...this.projects(),...this.settings.directProjects,...this.settings.projects].find(item=>projectKey(item)===overrideKey);if(!project)throw Error('The chosen T3 project is unavailable. Choose a project again.');return {project,link:link&&projectKey(project)===`${link.connectionId?link.connectionId+':':''}${link.projectId}`?link:{id:'project-override',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false}};}
     const linked=preferred??(!ignoreActive?this.noteLink(notePath):undefined);
     if(linked){const project=this.projectForNoteLink(linked);return {project,link:link??{id:'note-thread',folderPath:'/',connectionId:linked.connectionId,projectId:linked.projectId,projectTitle:project.title,workspaceRoot:linked.workspaceRoot,self:true}};}
     if(link){try{return {project:this.projectForLink(link),link};}catch(error){if(link.folderPath!=='/')throw error;}}
@@ -1298,6 +1370,12 @@ export default class SendToT3 extends Plugin {
     }
   }
   async dispatch(request:Request,quiet=false) {
+    if(request.inlineFollow){
+      const follow=request.inlineFollow;
+      if(follow.messageId!==commandId(request.id,'message')||!request.threadId)throw Error('Invalid saved continuation request.');
+      if(follow.host){if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');await this.deviceInline.follow(follow.host,follow.jobId,follow.previousMessageId,follow.messageId);}
+      else {const job=this.inlineChat?.find(follow.jobId);if(!job||job.threadId!==request.threadId)throw Error('The original response is unavailable on this device.');this.inlineChat!.follow(job,follow.messageId);}
+    }
     if(request.inlineHost?.version===2){
       if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');
       await this.deviceInline.register(request.inlineHost);
@@ -1369,6 +1447,20 @@ export default class SendToT3 extends Plugin {
 function randomId():string {
   const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
   const hex=Buffer.from(bytes).toString('hex');return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+class InlineRecoveryModal extends Modal {
+  private sending=false;
+  constructor(app:App,private send:(text:string)=>Promise<void>){super(app);}
+  onOpen(){
+    this.titleEl.setText('Continue T3 response');this.contentEl.empty();
+    const field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Continuation message',rows:'5'}});
+    field.style.width='100%';field.value='Continue where you left off and complete the previous answer.';
+    new Setting(this.contentEl).setDesc('Sends one new turn in the same T3 thread and streams its answer into the existing response.').addButton(button=>button.setButtonText('Continue').setCta().onClick(()=>{
+      if(this.sending||!field.value.trim())return;this.sending=true;button.setDisabled(true);
+      void this.send(field.value).then(()=>this.close()).catch(error=>{new Notice(`T3: ${message(error)}`,12000);button.setDisabled(false);this.sending=false;});
+    }));
+    field.focus();field.select();
+  }
 }
 function message(e:unknown) {return e instanceof Error ? e.message : String(e);}
 function projectsUI(container:HTMLElement, plugin:SendToT3, redraw:()=>void) {

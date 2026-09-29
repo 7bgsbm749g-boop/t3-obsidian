@@ -11,7 +11,7 @@ export interface HostedInlineRequest {
   threadId:string;messageId:string;projectId:string;threadEnvironmentId:string;initialHash:string;createdAt:string;
 }
 export interface HostedInlineState {
-  requestHash:string;accepted:boolean;notePath:string;turnId?:string;
+  requestHash:string;accepted:boolean;notePath:string;turnId?:string;messageId?:string;pendingMessageId?:string;
   status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict';
   hashes:string[];body?:string;detail?:string;updatedAt:string;
   finalDocumentHash?:string;
@@ -97,7 +97,7 @@ export class HostedInlineWriter {
       let state:HostedInlineState;
       try{state=JSON.parse((await this.io.read(paths.state))??'null')??{requestHash:hash,accepted:false,notePath:request.notePath,status:'waiting',hashes:[request.initialHash],updatedAt:new Date().toISOString()};}catch{return;}
       if(state.requestHash!==hash||!Array.isArray(state.hashes)||!safeNotePath(state.notePath))return;
-      if(['complete','interrupted','error','conflict'].includes(state.status))return;
+      if(['complete','interrupted','conflict'].includes(state.status))return;
       const save=async()=>{state.updatedAt=new Date().toISOString();await this.io.write(paths.state,JSON.stringify(state));this.renameOffsets.set(path,renameEnd);};
       try{
         for(const move of renames)if(state.notePath===move.before||state.notePath.startsWith(move.before+'/'))state.notePath=move.after+state.notePath.slice(move.before.length);
@@ -121,11 +121,22 @@ export class HostedInlineWriter {
           if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
           current=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
         }
-        // Never attach to a previous turn while the new message is in flight.
-        if(!current.messages.some(m=>m.id===request.messageId&&m.role==='user'))return;
-        state.turnId??=turnForMessage(current,request.messageId);
+        // T3 may recover the same turn after a server restart. A different
+        // later turn is never adopted without an explicit follow command.
+        if(state.status==='error'&&!state.pendingMessageId&&current.latestTurn?.turnId!==state.turnId&&current.session?.activeTurnId!==state.turnId)return;
+        // A continuation is explicitly bound to a user message. Until T3
+        // projects that message and its turn, retain the failed block intact.
+        const messageId=state.pendingMessageId??state.messageId??request.messageId;
+        if(!current.messages.some(m=>m.id===messageId&&m.role==='user'))return;
+        if(state.pendingMessageId){
+          const nextTurn=turnForMessage(current,messageId);
+          if(!nextTurn||nextTurn===state.turnId)return;
+          state.messageId=messageId;state.turnId=nextTurn;delete state.pendingMessageId;
+        }
+        state.turnId??=turnForMessage(current,messageId);
         if(!state.turnId)return;
         let phase=turnPhase(current,state.turnId);
+        if(state.status==='error'&&!state.pendingMessageId&&phase==='error')return;
         if(await this.io.read(paths.stop)!==undefined&&phase==='running'){
           await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(request.id,'interrupt'),threadId:request.threadId,turnId:state.turnId,createdAt:request.createdAt});
           phase='interrupted';

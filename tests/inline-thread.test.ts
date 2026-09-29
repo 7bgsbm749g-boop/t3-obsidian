@@ -1,7 +1,17 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {contentHash} from '../completion';
-import {applyThreadItem,endInsertionOffset,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
+import {applyThreadItem,endInsertionOffset,failedInlineIds,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
+
+test('a failed turn shows its T3 reason and remains identifiable for recovery',()=>{
+  const id='f95a3b36-7393-4508-9fb3-38aa2da3590f',region=initialRegion(id);
+  const state={messages:[],activities:[],session:{status:'error',activeTurnId:null,lastError:'Codex usage limit reached. Reset in 2h.'},latestTurn:{turnId:'turn',state:'error'}} as any;
+  const body=renderInlineTurn(state,'turn','thread','error');
+  assert.match(body,/Codex usage limit reached\\\. Reset in 2h/);
+  const change=replaceRegion(region.text,id,region.bodyHash,body)!;
+  const document=region.text.slice(0,change.from)+change.text+region.text.slice(change.to);
+  assert.deepEqual(failedInlineIds(document),[id]);
+});
 
 test('selection anchor tolerates unrelated edits, rejects ambiguity, and inserts after fenced code',()=>{
   const source='Before\n```ts\nconst x = 1;\n```\nAfter';

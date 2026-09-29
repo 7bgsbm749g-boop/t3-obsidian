@@ -59,6 +59,20 @@ test('checkpoints preserve hashes without renewing expiry and stale revisions ar
   assert.deepEqual(h.record().state?.hashes,[h.request.initialHash]);assert.equal(h.record().revision,1);
 });
 
+test('a failed response accepts one durable continuation and fences stale writer checkpoints',async()=>{
+  const h=harness(),phone=h.client(),other=h.client(randomUUID());
+  await phone.command({kind:'register',jobId:h.request.id,request:h.request});
+  await phone.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:0,state:{...h.state,status:'error'}});
+  const next=randomUUID(),before=h.record();
+  assert.equal((await other.command({kind:'follow',jobId:h.request.id,previousMessageId:h.request.messageId,messageId:next})).ok,true);
+  assert.equal(h.record().state?.pendingMessageId,next);
+  assert.equal((await phone.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:before.revision,state:{...h.state,status:'running'}})).ok,false);
+  assert.equal((await other.command({kind:'follow',jobId:h.request.id,previousMessageId:h.request.messageId,messageId:next})).ok,true,'the same saved send may be retried');
+  assert.equal((await other.command({kind:'follow',jobId:h.request.id,previousMessageId:h.request.messageId,messageId:randomUUID()})).ok,false);
+  assert.equal((await phone.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:h.record().revision,state:{...h.state,status:'running',messageId:next}})).ok,true);
+  assert.equal((await other.command({kind:'follow',jobId:h.request.id,previousMessageId:h.request.messageId,messageId:next})).ok,true,'a lost dispatch reply does not break the binding');
+});
+
 test('slow grants are expired on arrival and wall clock changes cannot prolong a lease',async()=>{
   const h=harness();let monotonic=h.now();
   const delayed={...h.remote,read:async(path:string)=>{const value=await h.remote.read(path);if(path.includes('/replies/')){h.advance(LEASE_MS+1);monotonic+=LEASE_MS+1;}return value;}};

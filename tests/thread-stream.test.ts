@@ -40,3 +40,20 @@ test('a quiet subscription refreshes the current thread snapshot',async()=>{
     assert.equal(items[0]?.kind,'snapshot');assert.equal(items[0]?.snapshot.snapshotSequence,9);
   }finally{watcher.stop();}
 });
+
+test('a closed stream obtains fresh credentials and a new canonical snapshot',async()=>{
+  const sockets:Socket[]=[],items:any[]=[],errors:string[]=[];let tickets=0;
+  class Socket {
+    onopen?:()=>void;onclose?:()=>void;onmessage?:(event:{data:string})=>void;onerror?:()=>void;
+    constructor(_url:string){sockets.push(this);queueMicrotask(()=>this.onopen?.());}
+    send(raw:string){const frame=JSON.parse(raw);if(frame.tag==='orchestration.subscribeThread')queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[{kind:'snapshot',snapshot:{snapshotSequence:sockets.length,thread:{messages:[{id:'answer',role:'assistant',text:`snapshot ${sockets.length}`,streaming:false}]}}}]})}));}
+    close(){this.onclose?.();}
+  }
+  const watcher=watchThread('thread-3',async()=>({origin:'https://t3.example',api:async()=>({ticket:`ticket-${++tickets}`})}),{item:item=>items.push(item),reconnecting:error=>errors.push(error.message)},url=>new Socket(url) as unknown as WebSocket);
+  try{
+    await new Promise(resolve=>setTimeout(resolve,20));sockets[0].onclose?.();
+    await new Promise(resolve=>setTimeout(resolve,1150));
+    assert.equal(tickets,2);assert.equal(sockets.length,2);assert.equal(errors.length,1);
+    assert.equal(items.at(-1)?.snapshot.thread.messages[0].text,'snapshot 2');
+  }finally{watcher.stop();}
+});

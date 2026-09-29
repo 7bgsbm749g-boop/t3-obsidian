@@ -45,6 +45,33 @@ test('host continues after sender disappears, handles outside edits and known Sy
   const finished=h.document;await h.create().tick();assert.equal(h.document,finished);
 });
 
+test('failed hosted response keeps its marker until an explicitly bound T3 continuation appears',async()=>{
+  const h=harness(),nextMessage=randomUUID(),nextTime='2026-09-29T13:00:00Z';
+  h.dispatch();
+  h.io.threadState=async()=>({messages:[{id:h.request.messageId,role:'user',text:'Question',turnId:null,streaming:false,createdAt:h.request.createdAt}],activities:[],latestTurn:{turnId:'turn',state:'error',requestedAt:h.request.createdAt},session:{status:'error',activeTurnId:null,lastError:'Codex usage limit reached. Reset in 2h.'}});
+  await h.create().tick();
+  assert.equal(h.state.status,'error');assert.match(h.document,/Codex usage limit reached/);
+  const failed=h.document;
+  await h.create().tick();assert.equal(h.document,failed,'an unrelated later turn cannot replace the failed block');
+  h.files.set(h.paths.state,JSON.stringify({...h.state,pendingMessageId:nextMessage}));
+  await h.create().tick();assert.equal(h.document,failed,'the writer waits for the selected user message');
+  h.io.threadState=async()=>({messages:[
+    {id:h.request.messageId,role:'user',text:'Question',turnId:null,streaming:false,createdAt:h.request.createdAt},
+    {id:nextMessage,role:'user',text:'Continue',turnId:null,streaming:false,createdAt:nextTime},
+    {id:'continued',role:'assistant',text:'Recovered answer',turnId:'next-turn',streaming:false}],activities:[],latestTurn:{turnId:'next-turn',state:'completed',requestedAt:nextTime,assistantMessageId:'continued'},session:{status:'ready',activeTurnId:null}});
+  await h.create().tick();
+  assert.equal(h.state.status,'complete');assert.equal(h.state.messageId,nextMessage);
+  assert.match(h.document,/Recovered answer/);assert.doesNotMatch(h.document,/t3-inline:/);
+});
+
+test('a crashed T3 server may resume the original turn without another user message',async()=>{
+  const h=harness();h.dispatch();
+  h.io.threadState=async()=>({messages:[{id:h.request.messageId,role:'user',text:'Question',turnId:null,streaming:false,createdAt:h.request.createdAt}],activities:[],latestTurn:{turnId:'turn',state:'error',requestedAt:h.request.createdAt},session:{status:'error',activeTurnId:null,lastError:'Server restarted.'}});
+  await h.create().tick();assert.equal(h.state.status,'error');
+  h.io.threadState=async()=>({messages:[{id:h.request.messageId,role:'user',text:'Question',turnId:null,streaming:false,createdAt:h.request.createdAt},{id:'recovered',role:'assistant',turnId:'turn',text:'Recovered on the same turn',streaming:false}],activities:[],latestTurn:{turnId:'turn',state:'completed',requestedAt:h.request.createdAt,assistantMessageId:'recovered'},session:{status:'ready',activeTurnId:null}});
+  await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/Recovered on the same turn/);
+});
+
 test('final reply imports referenced files before replacing the response, then retries a failed import',async()=>{
   const h=harness();h.dispatch();h.answer('See ![plot](/tmp/plot.png) and [data](/tmp/data.pdf).',true);
   let fail=true;const sources:string[]=[];

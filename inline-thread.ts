@@ -3,7 +3,7 @@ import {contentHash} from './completion';
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string}
 export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null}
-export interface InlineThreadState {messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null};latestTurn?:{turnId:string;state:string;requestedAt?:string;assistantMessageId?:string|null}}
+export interface InlineThreadState {messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:{turnId:string;state:string;requestedAt?:string;assistantMessageId?:string|null}}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {
   if(!text.trim()||document.slice(start,end)!==text)throw Error('The selected text changed. Select it again before asking T3.');
@@ -57,6 +57,9 @@ export function startMarker(id:string){return `<!-- t3-inline:start:${id} -->`;}
 export function endMarker(id:string){return `<!-- t3-inline:end:${id} -->`;}
 export function activeInlineIds(document:string):string[]{
   return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*T3 · (?:Sending…|Working|Reconnecting)\*\*/.test(regionBody(document,id)?.body??''));
+}
+export function failedInlineIds(document:string):string[]{
+  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*T3 · Error\*\*/.test(regionBody(document,id)?.body??''));
 }
 export function initialRegion(id:string):{text:string;bodyHash:string} {
   const body='**T3 · Sending…**';
@@ -226,7 +229,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const activity=state.activities.filter(a=>a.turnId===turnId&&/^(approval\.requested|user-input\.requested)$/.test(a.kind)).at(-1);
   const heading=`**T3 · ${phase==='running'?'Working':phase==='sending'?'Sending':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
-  const status=activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
+  const status=phase==='error'&&state.session?.lastError?'\n\n'+safeStatus(state.session.lastError):activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
   const body=answer?`\n\n${quoteResponse(closeOpenFence(answer))}\n`:'';
   return `${heading}${spinner}${status}${body}`;
 }

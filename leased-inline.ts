@@ -52,6 +52,12 @@ export class DeviceInlineManager {
     if(!reply.ok||!reply.record)throw Error(reply.error??'Response registration failed.');
     this.receiveRecord(host,reply.record);const runtime=this.jobs.get(request.id);if(runtime)runtime.lastHeartbeat=this.now();this.tick();
   }
+  async follow(target:InlineHostTarget,id:string,previousMessageId:string,messageId:string){
+    if(this.stopped)throw Error('The response writer is unavailable.');
+    const host=this.host(target),reply=await host.client.command({kind:'follow',jobId:id,previousMessageId,messageId});
+    if(!reply.ok||!reply.record)throw Error(reply.error??'Could not attach the continuation.');
+    this.receiveRecord(host,reply.record);this.tick();
+  }
   discover(targets:InlineHostTarget[]){
     if(this.stopped)return;
     for(const target of targets)this.host(target);

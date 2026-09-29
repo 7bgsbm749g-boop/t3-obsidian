@@ -7,6 +7,8 @@ import {indexedDB} from 'fake-indexeddb';
 import {WAIT_FOR_OTHER_THREADS_INSTRUCTION} from '../orchestration';
 import {modelConfig} from './rpc-fixture';
 import {InlineLeaseAuthority} from '../inline-lease';
+import {initialRegion,replaceRegion} from '../inline-thread';
+import {contentHash} from '../completion';
 
 const project={id:'chat-project',title:'Personal notes',workspaceRoot:'/projects/notes',connectionId:'chat-connection',connectionName:'Laptop'};
 
@@ -140,7 +142,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();const timer=setInterval(()=>plugin.deviceInline?.tick(),20);const unload=plugin.onunload.bind(plugin);plugin.onunload=()=>{clearInterval(timer);unload();};return plugin;};
   const plugin=await start();
-  return {plugin,start,commands,shared,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+  return {plugin,start,commands,shared,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
     const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
     let value=selection+'\nTail';
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
@@ -547,6 +549,44 @@ test('editor selection menu streams a T3 reply into its original note for new an
     assert.ok(h.commands[2].message.text.startsWith(followup));assert.doesNotMatch(h.commands[2].message.text,/Reply in the Obsidian note itself/);
     await new Promise(resolve=>setTimeout(resolve,500));assert.match(second.value,/Inline reply from T3\./);
     assert.equal(h.vaultAccesses(),0,'Selection chat sends the selection and note path without reading the note body');
+  }finally{h.plugin.onunload();}
+});
+
+test('a failed editor response offers recovery and a new saved turn reuses its block and thread',async()=>{
+  const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/Recovery.md',region=initialRegion(id);
+  const body='**T3 · Error**\n\nCodex usage limit reached.',change=replaceRegion(region.text,id,region.bodyHash,body)!;
+  const document=region.text.slice(0,change.from)+change.text+region.text.slice(change.to);
+  try{
+    const opened=h.attachEditor(path,document);
+    const job={id,path,requestId:id,bodyHash:contentHash(body),phase:'error',createdAt:new Date().toISOString(),threadId:'old-thread',turnId:'old-turn',messageId:webcrypto.randomUUID(),projectId:project.id,connection:{transport:'direct',host:'direct',url:'https://chat.example',connectionId:'chat-connection',environmentId:'chat-env',executable:''}};
+    (h.plugin as any).inlineChat.jobs.push(job);
+    const menu=h.menuFor(opened.view);
+    assert.ok(menu.items.some(item=>item.title==='Continue T3 response…'));
+    assert.ok(menu.items.some(item=>item.title==='Attach latest T3 continuation'));
+    assert.ok(!menu.items.some(item=>item.title==='Stop T3 response'));
+    h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',updatedAt:new Date().toISOString(),session:{status:'error',activeTurnId:null,lastError:'Usage limit'},latestTurn:{turnId:'old-turn',state:'error'}}]);
+    await (h.plugin as any).continueInline(id,path,'Continue with a short answer.');
+    assert.equal(h.commands.length,1,'continuation creates one turn in the existing thread');
+    assert.equal(h.commands[0].threadId,'old-thread');
+    assert.match(h.commands[0].message.text,/Continue with a short answer/);
+    assert.equal(h.plugin.settings.pending.length,0);
+    assert.equal(job.messageId,h.commands[0].message.messageId);
+  }finally{h.plugin.onunload();}
+});
+
+test('an explicit T3 continuation attaches only a newer turn in the same thread',async()=>{
+  const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/Attach.md',region=initialRegion(id);
+  const body='**T3 · Error**',change=replaceRegion(region.text,id,region.bodyHash,body)!;
+  try{
+    h.attachEditor(path,region.text.slice(0,change.from)+change.text+region.text.slice(change.to));
+    const oldMessage=webcrypto.randomUUID(),newMessage=webcrypto.randomUUID(),job={id,path,requestId:id,bodyHash:contentHash(body),phase:'error',createdAt:new Date().toISOString(),threadId:'old-thread',turnId:'old-turn',messageId:oldMessage,projectId:project.id,connection:{transport:'direct',host:'direct',url:'https://chat.example',connectionId:'chat-connection',environmentId:'chat-env',executable:''}};
+    (h.plugin as any).inlineChat.jobs.push(job);
+    h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',latestTurn:{turnId:'old-turn',requestedAt:'old'},messages:[{id:oldMessage,role:'user',createdAt:'old'}]}]);
+    await assert.rejects((h.plugin as any).attachInline(id,path),/No newer T3 turn/);
+    assert.equal(job.messageId,oldMessage);
+    h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',latestTurn:{turnId:'next-turn',requestedAt:'new'},messages:[{id:oldMessage,role:'user',createdAt:'old'},{id:newMessage,role:'user',createdAt:'new'}]}]);
+    await (h.plugin as any).attachInline(id,path);
+    assert.equal(job.messageId,newMessage);assert.equal(job.phase,'reconnecting');assert.equal(h.commands.length,0,'attaching an existing turn does not send another one');
   }finally{h.plugin.onunload();}
 });
 

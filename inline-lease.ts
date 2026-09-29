@@ -6,12 +6,12 @@ export const HEARTBEAT_MS=3000;
 export const LEASE_MARGIN_MS=2000;
 export type LeaseIdentity={vaultId:string;environmentId:string;workspaceRoot:string;directory:string};
 export interface LeaseRecord {request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;state?:HostedInlineState}
-export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'register'|'claim'|'heartbeat'|'checkpoint';epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean}
+export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'register'|'claim'|'heartbeat'|'checkpoint'|'follow';epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string}
 export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;ttlMs:number;answeredAt?:number}
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export const leasePaths=(directory:string,id:string)=>({record:`${directory}/leases/${id}.json`,command:`${directory}/mailbox/${id}.json`,reply:`${directory}/replies/${id}.json`,catalog:`${directory}/lease-catalog.json`});
-export const terminalLease=(record:LeaseRecord)=>!!record.state&&['complete','interrupted','error','conflict'].includes(record.state.status);
+export const terminalLease=(record:LeaseRecord)=>!!record.state&&['complete','interrupted','conflict'].includes(record.state.status);
 
 /** The existing desktop host lock admits exactly one authority. Clients only
  * submit commands; only this serialized coordinator mutates lease records. */
@@ -70,7 +70,13 @@ export class InlineLeaseAuthority {
         await this.files.write(hostedPaths(directory,request.id).request,JSON.stringify(request));
       }else{
         if(!record)throw Error('The response is not registered.');
-        if(command.kind==='claim'){
+        if(command.kind==='follow'&&record.state?.messageId===command.messageId&&command.previousMessageId!==command.messageId)return respond(true);
+        if(command.kind==='follow'){
+          const state=record.state,previous=state?.messageId??record.request.messageId;
+          if(state?.status!=='error'||!uuid.test(command.messageId??'')||command.messageId===previous||command.previousMessageId!==previous)throw Error('This response is no longer waiting for that continuation.');
+          if(state.pendingMessageId&&state.pendingMessageId!==command.messageId)throw Error('A continuation is already waiting for its T3 turn.');
+          if(!state.pendingMessageId)record={...record,revision:record.revision+1,state:{...state,pendingMessageId:command.messageId}};
+        }else if(command.kind==='claim'){
           if(terminalLease(record))return respond(false,'The response is finished.');
           if(record.expiresAt>this.now())return respond(false,'Another writer still owns this response.');
           // Give clients with the note open a short head start over closed-note
@@ -83,7 +89,8 @@ export class InlineLeaseAuthority {
           else if(command.kind==='checkpoint'){
             if(command.revision!==record.revision)return respond(false,'Response checkpoint changed.');
             const state=command.state;
-            if(!state||state.requestHash!==hostedRequestHash(record.request)||!safeNotePath(state.notePath)||!Array.isArray(state.hashes)||state.hashes.some(hash=>!/^([0-9a-f]{64})$/.test(hash))||!['waiting','running','complete','interrupted','error','conflict'].includes(state.status))throw Error('Invalid response checkpoint.');
+            if(!state||state.requestHash!==hostedRequestHash(record.request)||!safeNotePath(state.notePath)||!Array.isArray(state.hashes)||state.hashes.some(hash=>!/^([0-9a-f]{64})$/.test(hash))||!['waiting','running','complete','interrupted','error','conflict'].includes(state.status)||state.messageId!==undefined&&!uuid.test(state.messageId)||state.pendingMessageId!==undefined&&!uuid.test(state.pendingMessageId))throw Error('Invalid response checkpoint.');
+            if(record.state?.pendingMessageId&&state.pendingMessageId!==record.state.pendingMessageId&&state.messageId!==record.state.pendingMessageId)throw Error('The pending continuation changed.');
             record={...record,revision:record.revision+1,state:{...state,hashes:[...new Set([record.request.initialHash,...record.state?.hashes??[],...state.hashes])]}};
           }else throw Error('Unknown ownership command.');
         }
