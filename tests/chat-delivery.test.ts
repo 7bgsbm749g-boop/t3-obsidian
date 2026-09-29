@@ -19,8 +19,8 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   let vaultAccesses=0;
   class Base {}
   class Element {
-    style={};value='';disabled=false;
-    empty(){} setText(_text:string){} addEventListener(){} focus(){}
+    style={};value='';text='';disabled=false;
+    empty(){} setText(value:string){this.text=value;} addEventListener(){} focus(){}
     createEl(){return new Element();}
   }
   class Modal {
@@ -344,6 +344,7 @@ test('a typed palette question sends only the question and streams at the note e
   try{
     const editor=h.attachEditor('Notes/Palette.md','# Private note\nBody not sent.');
     await h.plugin.openPaletteAction('Why does this matter?','');
+    assert.equal(h.modals.at(-1).titleEl.text,'Ask T3 Code');
     await h.modals.at(-1).choose(false);
     const text=h.commands[1].message.text;
     assert.match(text,/^Why does this matter\?/);

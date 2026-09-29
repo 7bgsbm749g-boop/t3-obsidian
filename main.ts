@@ -742,7 +742,7 @@ export default class SendToT3 extends Plugin {
     new Notice('Loading threads…',2000);
     const threads=projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);
     if(this.stopped)return;
-    new LinkedThreadModal(this.app,threads,thread=>inline&&note?this.sendInlineChat(prompt,note,inline,{threadId:thread.id,expectedProjectKey:projectKey(project),projectOverrideKey:overrideKey,rememberLink:remember}):this.sendChat(answerOnly?`${prompt}\n\n${THREAD_REPLY_INSTRUCTION}`:prompt,note,{threadId:thread.id,expectedProjectKey:projectKey(project),projectOverrideKey:overrideKey,rememberLink:remember}),'Send chat to an existing thread','No existing threads in this project. Use New thread.').open();
+    new LinkedThreadModal(this.app,threads,thread=>inline&&note?this.sendInlineChat(prompt,note,inline,{threadId:thread.id,expectedProjectKey:projectKey(project),projectOverrideKey:overrideKey,rememberLink:remember}):this.sendChat(answerOnly?`${prompt}\n\n${THREAD_REPLY_INSTRUCTION}`:prompt,note,{threadId:thread.id,expectedProjectKey:projectKey(project),projectOverrideKey:overrideKey,rememberLink:remember}),'Ask in an existing thread','No existing threads in this project. Use New thread.').open();
   }
   private async openPreviousChatThreads(prompt:string,note?:{path:string;absolutePath?:string},inline?:EditorChatContext,answerOnly=false,remember=true,overrideKey?:string){
     if(!note)return;
@@ -750,7 +750,7 @@ export default class SendToT3 extends Plugin {
     new PreviousNoteThreadModal(this.app,entries,entry=>inline?this.sendInlineChat(prompt,note,inline,{threadId:entry.threadId,projectOverrideKey:overrideKey,rememberLink:remember}):this.sendChat(answerOnly?`${prompt}\n\n${THREAD_REPLY_INSTRUCTION}`:prompt,note,{threadId:entry.threadId,projectOverrideKey:overrideKey,rememberLink:remember})).open();
   }
   private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;projectOverrideKey?:string}){
-    const manager=this.inlineChat;if(!manager)throw Error('Inline T3 chat is unavailable. Reload the plugin.');
+    const manager=this.inlineChat;if(!manager)throw Error('Inline T3 response is unavailable. Reload the plugin.');
     const requestId=randomId(),job=context.anchor?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path):manager.reserveAtEnd(context.editor,context.view,requestId,note.path);
     let delivered=false;
     try{await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{...options,requestId,onPrepared:request=>manager.prepare(job,request)});delivered=true;manager.start(job);}
@@ -1381,7 +1381,7 @@ class T3Settings extends PluginSettingTab {
     new Setting(el).setName('T3 data directory').setDesc('Usually your home directory followed by .t3. Must match the running T3 installation.').addText(t=>t.setValue(this.plugin.settings.connection.baseDir??'').onChange(async value=>{this.plugin.settings.connection.baseDir=value.trim();await this.plugin.save();}));
 
     }
-    el.createEl('h3',{text:'Chat'});
+    el.createEl('h3',{text:'Threads'});
     new Setting(el).setName('Thread linking').setDesc('Remember a note’s thread after its first confirmed send. Existing links continue to route follow-up sends when this is off. Linked notes are kept when a task finishes.').addToggle(t=>t.setValue(this.plugin.settings.threadLinking).onChange(async enabled=>{this.plugin.settings.threadLinking=enabled;await this.plugin.save();}));
     new Setting(el).setName('Command palette').setDesc(this.plugin.paletteChatStatus()==='active'?'Use the first T3 Code row to send the current note or ask a question about it.':'The live T3 Code row is unavailable in this Obsidian version or the core Command palette is disabled.');
     el.createEl('p',{text:'Sending includes the current note and its embedded images. Asking sends the question and note location. A selected passage is included with the question.'});
@@ -1408,13 +1408,13 @@ class T3Settings extends PluginSettingTab {
         if(entry.state==='delivery_unknown')row.addButton(b=>b.setButtonText('Retry same request').onClick(async()=>{try{await this.plugin.retryV2Execution(entry.runId);this.display();}catch(error){new Notice(message(error),10000);}}));
       }
     }).catch(error=>{if(runs.isConnected)runs.createEl('p',{text:`Run history unavailable: ${message(error)}`});});
-    new Setting(el).setName('When task completes').setDesc('After T3 reports the original turn completed successfully. Changed or renamed notes are kept. Applies to notes sent to new threads. Chat and sends to existing threads keep the note.').addDropdown(d=>d.addOptions({keep:'Keep note',archive:'Archive note',delete:'Delete note (vault trash)'}).setValue(this.plugin.settings.completion.action).onChange(async value=>{this.plugin.settings.completion.action=value as CompletionAction;await this.plugin.save();this.display();}));
+    new Setting(el).setName('When task completes').setDesc('After T3 reports the original turn completed successfully. Changed or renamed notes are kept. Applies to notes sent to new threads. Questions and sends to existing threads keep the note.').addDropdown(d=>d.addOptions({keep:'Keep note',archive:'Archive note',delete:'Delete note (vault trash)'}).setValue(this.plugin.settings.completion.action).onChange(async value=>{this.plugin.settings.completion.action=value as CompletionAction;await this.plugin.save();this.display();}));
     if(this.plugin.settings.completion.action==='archive') new Setting(el).setName('Archive folder').setDesc('Folder inside this vault. Original subfolders are preserved; existing notes are never overwritten.').addText(t=>t.setValue(this.plugin.settings.completion.archiveFolder).onChange(async value=>{this.plugin.settings.completion.archiveFolder=value;await this.plugin.save();}));
     el.createEl('h3',{text:'Linked folders'});
-    el.createEl('p',{text:'Folder links route chat and manual note sends. Link to self registers a local T3 project.'});
+    el.createEl('p',{text:'Folder links route questions and manual note sends. Link to self registers a local T3 project.'});
     const root=this.plugin.settings.folderLinks.find(l=>l.folderPath==='/');
     const machine=root?.connectionId?this.plugin.settings.paired.find(c=>c.id===root.connectionId)?.name:undefined;
-    new Setting(el).setName('Vault project machine').setDesc(root?`${machine??(Platform.isMobile?'Linked computer':'This computer')} · ${root.workspaceRoot}`:'Choose a computer with a synced copy of this vault. This becomes the default chat destination.').addButton(b=>b.setButtonText(root?'Change machine':'Connect vault').onClick(async()=>{try{await this.plugin.configureVaultRoot();this.display();}catch(e){if(!(e instanceof VaultSetupCancelled))new Notice(message(e),10000);}}));
+    new Setting(el).setName('Vault project machine').setDesc(root?`${machine??(Platform.isMobile?'Linked computer':'This computer')} · ${root.workspaceRoot}`:'Choose a computer with a synced copy of this vault. This becomes the default T3 destination.').addButton(b=>b.setButtonText(root?'Change machine':'Connect vault').onClick(async()=>{try{await this.plugin.configureVaultRoot();this.display();}catch(e){if(!(e instanceof VaultSetupCancelled))new Notice(message(e),10000);}}));
     if(!this.plugin.settings.folderLinks.length)el.createEl('p',{text:'No folders are linked.'});
     for(const link of this.plugin.settings.folderLinks){
       new Setting(el).setName(link.folderPath==='/'?'Vault root':link.folderPath).setDesc(`${link.self?'Self · ':''}${link.projectTitle} · ${link.workspaceRoot}`).addButton(b=>b.setButtonText('Unlink').onClick(async()=>{this.plugin.settings.folderLinks=this.plugin.settings.folderLinks.filter(item=>item!==link);for(const workflow of this.plugin.settings.automationDrafts)if(workflow.projectId===link.projectId&&workflow.connectionId===link.connectionId)workflow.enabled=false;await this.plugin.save();this.plugin.refreshFolderIndicators();this.display();}));

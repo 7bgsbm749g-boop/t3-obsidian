@@ -28,7 +28,7 @@ function projectSetting(app:App,content:HTMLElement,host:ChatHost,onChoose:(key:
 }
 
 function reportError(error: unknown) {
-  new Notice(`T3 Chat: ${error instanceof Error ? error.message : String(error)}`, 10000);
+  new Notice(`T3 Code: ${error instanceof Error ? error.message : String(error)}`, 10000);
 }
 
 class ChatPromptModal extends Modal {
@@ -42,7 +42,7 @@ class ChatPromptModal extends Modal {
   constructor(app: App, private host: ChatHost, private prompt = '') { super(app); }
 
   onOpen() {
-    this.titleEl.setText('T3 chat');
+    this.titleEl.setText('Ask T3 Code');
     this.contentEl.empty();
     projectSetting(this.app,this.contentEl,this.host,key=>{this.prompt=this.field.value;this.projectKey=key;this.onOpen();},this.projectKey);
     this.field = this.contentEl.createEl('textarea', {
@@ -97,7 +97,7 @@ class ChatDestinationModal extends Modal {
   private initialized=false;
   constructor(app:App,private host:ChatHost,private prompt:string){super(app);}
   onOpen(){
-    this.titleEl.setText('Send T3 chat');this.contentEl.empty();
+    this.titleEl.setText('Ask T3 Code');this.contentEl.empty();
     projectSetting(this.app,this.contentEl,this.host,key=>{this.projectKey=key;this.onOpen();},this.projectKey);
     if(!this.initialized){this.remember=this.host.defaultRemember();this.initialized=true;}
     if(this.host.hasNote())new Setting(this.contentEl).setName('Remember this thread for this note').addToggle(toggle=>toggle.setValue(this.remember).onChange(value=>{this.remember=value;}));

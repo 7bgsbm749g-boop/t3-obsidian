@@ -145,7 +145,7 @@ For a note inside a linked folder, **Open in T3 Code** offers **Send to new thre
 
 ### Thread linking
 
-**Settings → Send to T3 Code → Chat → Thread linking** is on by default. After T3 confirms a manual Send or Ask, the plugin remembers that thread for the note. Editor, Files sidebar, and command palette actions offer the linked thread as their default destination. The question dialog also offers **New thread**, **Existing thread…**, and **Previous threads…** when there is recorded history. **Remember this thread for this note** controls whether the choice becomes the note’s active link. Turning off the setting stops automatic first links; it does not remove or disable existing links.
+**Settings → Send to T3 Code → Threads → Thread linking** is on by default. After T3 confirms a manual Send or Ask, the plugin remembers that thread for the note. Editor, Files sidebar, and command palette actions offer the linked thread as their default destination. The question dialog also offers **New thread**, **Existing thread…**, and **Previous threads…** when there is recorded history. **Remember this thread for this note** controls whether the choice becomes the note’s active link. Turning off the setting stops automatic first links; it does not remove or disable existing links.
 
 Link records sync in plugin settings and contain note paths, project destinations, and thread IDs, but no note body or credentials. Renaming a note moves its links; deleting it retires them. A linked thread must still exist in its original T3 project. If that project is unavailable, the plugin reports the problem instead of rerouting the send. Linked notes are kept when a turn completes, even if archive or delete is selected for other sends.
 
