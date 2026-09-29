@@ -691,7 +691,12 @@ export default class SendToT3 extends Plugin {
     menu.addItem(item=>item.setTitle('Send to existing thread…').setIcon('messages-square').setDisabled(this.busy).onClick(()=>this.openLinkedThreads(file)));
   }
   openLinkedNote(file:TFile){
-    const menu=new Menu();this.linkedNoteMenu(menu,file);menu.showAtPosition({x:window.innerWidth/2,y:window.innerHeight/2});
+    new LinkedNoteDestinationModal(this.app,file.path,Boolean(this.noteLink(file.path)),this.olderNoteThreads(file.path).length>0,this.busy,{
+      linked:()=>this.sendLinkedNote(file),
+      previous:()=>this.openPreviousNoteThreads(file),
+      newThread:()=>this.sendLinkedNote(file,undefined,undefined,true),
+      existing:()=>this.openLinkedThreads(file),
+    }).open();
   }
   private openPreviousNoteThreads(file:TFile){new PreviousNoteThreadModal(this.app,this.olderNoteThreads(file.path),entry=>this.sendLinkedNote(file,entry.threadId)).open();}
   async openLinkedThreads(file:TFile){
@@ -1393,6 +1398,22 @@ class PreviousNoteThreadModal extends FuzzySuggestModal<NoteThread>{
   getItems(){return this.threads;}
   getItemText(thread:NoteThread){return `${thread.projectId} · ${thread.threadId.slice(0,8)} · ${thread.selectedAt}`;}
   onChooseItem(thread:NoteThread){void this.choose(thread);}
+}
+class LinkedNoteDestinationModal extends Modal {
+  constructor(app:App,private path:string,private linked:boolean,private previous:boolean,private busy:boolean,private choose:{linked:()=>void;previous:()=>void;newThread:()=>void;existing:()=>void|Promise<void>}){super(app);}
+  onOpen(){
+    this.titleEl.setText('Send to T3 Code');
+    this.contentEl.empty();
+    this.contentEl.createEl('p',{text:this.path});
+    let defaultButton:HTMLButtonElement|undefined;
+    const actions=new Setting(this.contentEl);
+    if(this.linked)actions.addButton(button=>{defaultButton=button.buttonEl;button.setButtonText('Linked thread').setCta().onClick(()=>{this.close();this.choose.linked();});});
+    actions.addButton(button=>{button.setButtonText('New thread');if(!defaultButton){defaultButton=button.buttonEl;button.setCta();}button.onClick(()=>{this.close();this.choose.newThread();});});
+    actions.addButton(button=>button.setButtonText('Existing thread…').onClick(()=>{this.close();return this.choose.existing();}));
+    if(this.previous)actions.addButton(button=>button.setButtonText('Previous threads…').onClick(()=>{this.close();this.choose.previous();}));
+    actions.setDisabled(this.busy);
+    setTimeout(()=>{if(defaultButton?.isConnected)defaultButton.focus();},0);
+  }
 }
 class SendProjectModal extends FuzzySuggestModal<Project> {
   constructor(app:App,private plugin:SendToT3,private file:TFile){super(app);this.setPlaceholder('Choose a T3 Code project');this.emptyStateText='No projects selected. Scan and select projects in Send to T3 Code settings.';}

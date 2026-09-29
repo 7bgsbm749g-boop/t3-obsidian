@@ -39,9 +39,9 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   };
   class Base {}
   class Element {
-    style={};value='';text='';disabled=false;
-    empty(){} setText(value:string){this.text=value;} addEventListener(){} focus(){}
-    createEl(){return new Element();}
+    style={};value='';text='';disabled=false;children:Element[]=[];
+    empty(){this.children=[];} setText(value:string){this.text=value;} addEventListener(){} focus(){}
+    createEl(_tag?:string,options?:{text?:string}){const child=new Element();child.text=options?.text??'';this.children.push(child);return child;}
   }
   class Modal {
     contentEl=new Element();titleEl=new Element();closed=false;emptyStateText='';placeholder='';
@@ -402,6 +402,26 @@ test('an empty palette action uses the full note send path',async()=>{
     assert.match(h.commands[1].message.text,/# Send this note/);
     assert.match(h.commands[1].message.text,/Sent from Obsidian\./);
     assert.doesNotMatch(h.commands[1].message.text,/Vault-relative note path/);
+  }finally{h.plugin.onunload();}
+});
+
+test('an empty palette action on a linked note opens a destination modal',async()=>{
+  const h=await chatHarness();
+  try{
+    h.setActiveNote('Notes/Linked.md');
+    h.plugin.settings.noteThreads.push(
+      {notePath:'Notes/Linked.md',threadId:'older',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-01T00:00:00Z'},
+      {notePath:'Notes/Linked.md',threadId:'current',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-02T00:00:00Z'},
+    );
+    await h.plugin.openPaletteAction('','');
+    const modal=h.modals.at(-1);
+    assert.equal(modal.constructor.name,'LinkedNoteDestinationModal');
+    assert.equal(modal.titleEl.text,'Send to T3 Code');
+    assert.equal(modal.contentEl.children[0].text,'Notes/Linked.md');
+    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Linked thread','New thread','Existing thread…','Previous threads…']);
+    assert.equal(h.commands.length,0);
+    modal.close();
+    assert.equal(h.commands.length,0,'Dismissing the destination modal must not send');
   }finally{h.plugin.onunload();}
 });
 

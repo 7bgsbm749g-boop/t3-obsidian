@@ -317,15 +317,23 @@ for(const mobile of [false,true])test(`linked note menu offers new and existing 
     const {menu,file}=h.fileMenu('Notes/Inner/note.md',mobile);
     const item=menu.items.find(item=>item.title==='Open in T3 Code');assert.ok(item);
     if(mobile)await item.callback();
-    const choices=mobile?h.shownMenu():item.submenu;assert.ok(choices);
-    assert.deepEqual(choices.items.map((i:any)=>i.title),['Send to new thread','Send to existing thread…']);
-    await choices.items[0].callback();
+    const choices=mobile?h.modals.at(-1):item.submenu;assert.ok(choices);
+    if(mobile){
+      assert.equal(choices.constructor.name,'LinkedNoteDestinationModal');
+      assert.equal(choices.titleEl.text,'Send to T3 Code');
+      assert.deepEqual(choices.contentEl.settings.flatMap((setting:any)=>setting.controls.map((control:any)=>control.text)),['New thread','Existing thread…']);
+      await h.button(choices,'New thread').click();
+    }else{
+      assert.deepEqual(choices.items.map((i:any)=>i.title),['Send to new thread','Send to existing thread…']);
+      await choices.items[0].callback();
+    }
     assert.equal(sent.length,1);assert.equal(sent[0].file,file);assert.equal(sent[0].project.id,'nested');assert.equal(sent[0].options.threadId,undefined);
     h.plugin.settings.noteThreads.push({notePath:'Notes/Inner/note.md',threadId:'previous-parent-thread',projectId:h.project.id,workspaceRoot:h.project.workspaceRoot,connectionId:'c',selectedAt:'2026-09-28T00:00:00Z'});
     h.setThreads([{id:'thread',projectId:'nested',title:'Existing',updatedAt:'2026-09-19',session:{status:'running',activeTurnId:'turn'},latestTurn:{state:'running'}},
       {id:'foreign',projectId:h.project.id,title:'Wrong project',updatedAt:'2026-09-20'},
       {id:'archived',projectId:'nested',title:'Archived',archivedAt:'2026-09-19'}]);
-    await choices.items[1].callback();
+    if(mobile){h.plugin.openLinkedNote(file);await h.button(h.modals.at(-1),'Existing thread…').click();}
+    else await choices.items[1].callback();
     const picker=h.modals.at(-1);assert.equal(picker.getItems().length,1);
     assert.equal(picker.getItems()[0].id,'thread');
     assert.match(picker.getItemText(picker.getItems()[0]),/Existing · Active/);

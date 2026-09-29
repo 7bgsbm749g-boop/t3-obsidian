@@ -151,7 +151,7 @@ Folder links sync with the vault. T3 credentials remain device-local. Each expli
 
 ### Sending notes into linked projects
 
-For a note inside a linked folder, **Open in T3 Code** offers **Send to new thread** and **Send to existing thread…**. The existing-thread option loads a searchable list of that project’s unarchived threads, newest first, with each thread labelled **Active** or **Idle**. Nested links take precedence. On mobile, or when native submenus are unavailable, tapping the action opens the same choices. A missing linked project reports an error instead of rerouting the note.
+For a note inside a linked folder, **Open in T3 Code** offers **Send to new thread** and **Send to existing thread…**. The existing-thread option loads a searchable list of that project’s unarchived threads, newest first, with each thread labelled **Active** or **Idle**. Nested links take precedence. On mobile, or when native submenus are unavailable, tapping the action opens a destination dialog. The command palette also opens this dialog for a linked note. A missing linked project reports an error instead of rerouting the note.
 
 ### Thread linking
 
