@@ -74,7 +74,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
       loadLocalStorage:(key:string)=>localStorage.get(key)??(key==='send-to-t3-code-device-v1'?local:undefined),
       saveLocalStorage:(key:string,value:any)=>{localStorage.set(key,value);if(key==='send-to-t3-code-device-v1')local=value;},
       workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{(workspaceEvents[name]??=[]).push(callback);return {};},getActiveViewOfType:()=>activeEditorView&&activeNote?(activeEditor??{file:activeNote}):undefined,getActiveFile:()=>activeNote,getLeavesOfType:()=>[...hostEditors].map(([path,editor])=>({view:{file:{path},editor}}))},
-      vault:{adapter:{},getFileByPath:()=>undefined,getName:()=> 'Notes',read:()=>{vaultAccesses++;throw Error('Chat must not read note contents');},readBinary:()=>{vaultAccesses++;throw Error('Chat must not read attachments');}},
+      vault:{adapter:{},getFileByPath:(path:string)=>hostEditors.has(path)?{path}:undefined,getName:()=> 'Notes',read:(file:any)=>{const editor=hostEditors.get(file.path);if(editor)return Promise.resolve(editor.getValue());vaultAccesses++;throw Error('Chat must not read note contents');},readBinary:()=>{vaultAccesses++;throw Error('Chat must not read attachments');}},
     };
     async loadData(){return shared.at(-1)??initial;}
     async saveData(value:any){shared.push(value);}

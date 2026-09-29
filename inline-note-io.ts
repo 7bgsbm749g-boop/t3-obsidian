@@ -1,3 +1,4 @@
+import {contentHash} from './completion';
 import type {App,Editor,MarkdownView} from 'obsidian';
 
 /** Real note writes, using the live editor when open and atomic vault edits
@@ -6,6 +7,7 @@ export function deviceNoteIO(app:App){
   const editors=(path:string)=>app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===path&&view.editor).map(view=>view.editor);
   return {
     isOpen:(path:string)=>editors(path).length>0,
+    isSaved:async(path:string,hash:string)=>{const file=app.vault.getFileByPath(path);return !!file&&contentHash(await app.vault.read(file))===hash;},
     readNote:async(path:string)=>{
       const open=editors(path);if(open.length){const value=open[0].getValue();return open.every(editor=>editor.getValue()===value)?value:undefined;}
       const file=app.vault.getFileByPath(path);return file?app.vault.read(file):undefined;

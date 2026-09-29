@@ -9,6 +9,7 @@ export interface DeviceInlineIO {
   access(environmentId:string):Promise<ThreadAccess>;
   readNote(path:string):Promise<string|undefined>;
   isOpen(path:string):boolean;
+  isSaved?(path:string,hash:string):Promise<boolean>;
   updateNote(path:string,change:(current:string)=>string,allowed:()=>boolean):Promise<string|undefined>;
   importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
@@ -88,6 +89,10 @@ export class DeviceInlineManager {
       write:async(path,value)=>{
         if(path!==paths.state||!allowed())throw Error('Writer ownership expired.');
         const state:HostedInlineState=JSON.parse(value);
+        // Editor mutations precede Obsidian's debounced disk save. Keep the
+        // recovery record active until the final Markdown is actually durable.
+        if(state.status==='complete'&&state.finalDocumentHash&&this.io.isSaved&&!await this.io.isSaved(state.notePath,state.finalDocumentHash))throw Error('Waiting for Obsidian to save the final reply.');
+        if(!allowed())throw Error('Writer ownership expired.');
         if(comparable(state)===comparable(runtime.record.state))return;
         const reply=await host.client.command({kind:'checkpoint',jobId:record.request.id,epoch:runtime.record.epoch,revision:runtime.record.revision,state});
         this.reply(runtime,reply);

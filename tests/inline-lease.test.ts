@@ -93,10 +93,10 @@ function devices(){
     {id:h.request.messageId,role:'user',text:'Question',streaming:false,createdAt:h.request.createdAt},
     {id:'answer',role:'assistant',text:answer,streaming:!complete,turnId:'turn'}],activities:[],latestTurn:{turnId:'turn',state:complete?'completed':'running',requestedAt:h.request.createdAt,assistantMessageId:'answer'},session:{status:complete?'ready':'running',activeTurnId:complete?null:'turn'}}});
   const create=(actor:string)=>{
-    const document={value:'Outside before\n'+h.region.text+'Outside after',writes:0,hold:undefined as (()=>Promise<void>)|undefined};
+    const document={value:'Outside before\n'+h.region.text+'Outside after',writes:0,saved:true,hold:undefined as (()=>Promise<void>)|undefined};
     const manager=new DeviceInlineManager(actor,h.request.vaultId,{
       access:async()=>({origin:'https://unused.example',api:async path=>{if(path.includes('websocket-ticket'))throw Error('REST fallback fixture');return snapshot();}}),
-      isOpen:()=>true,readNote:async()=>document.value,
+      isOpen:()=>true,isSaved:async()=>document.saved,readNote:async()=>document.value,
       updateNote:async(_path,change,allowed)=>{assert.equal(allowed(),true);const next=change(document.value);if(next!==document.value){await document.hold?.();if(!allowed())throw Error('Expired write');document.writes++;document.value=next;}return next;},
     },async()=>({files:h.remote,close:()=>{}}),h.now,h.now);
     managers.push(manager);return {document,manager};
@@ -141,4 +141,17 @@ test('work suspended across two ownership changes cannot reuse a newer grant fro
     h.advance(LEASE_MS);await h.drain(phone.manager);assert.equal(h.record().epoch,3);
     const before=phone.document.value;release();await h.drain();assert.equal(phone.document.value,before,'Old work remains fenced even after its device wins a later lease');
   }finally{release?.();h.dispose();}
+});
+
+
+test('finalization remains recoverable until the editor has saved its Markdown to disk',async()=>{
+  const h=devices(),phone=h.create(h.actor);
+  try{
+    await phone.manager.register(h.request);await h.drain(phone.manager);
+    phone.document.saved=false;h.answer('Final before save',true);h.advance(200);await h.drain(phone.manager);
+    assert.match(phone.document.value,/Final before save/);assert.doesNotMatch(phone.document.value,/t3-inline:/);
+    assert.equal(h.record().state?.status,'running','The catalog must still advertise recoverable work');
+    assert.equal(JSON.parse(h.data.get(leasePaths(h.request.host.directory,h.request.id).catalog)!).length,1);
+    phone.document.saved=true;h.advance(200);await h.drain(phone.manager);assert.equal(h.record().state?.status,'complete');
+  }finally{h.dispose();}
 });
