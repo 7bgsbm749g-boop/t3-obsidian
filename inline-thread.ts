@@ -183,8 +183,8 @@ function headingLine(line:string):boolean {
 
 /** Keep prose in the visible reply quote, but render blocks that Obsidian Live
  * Preview handles poorly inside quotes at the document's top level. */
-function quoteResponse(text:string):string {
-  const lines=text.split('\n'),modes:Array<'quote'|'raw'>=lines.map(()=>'quote');
+function responseModes(lines:string[]):Array<'quote'|'raw'|'table'> {
+  const modes:Array<'quote'|'raw'|'table'>=lines.map(()=>'quote');
   for(let index=0;index<lines.length;){
     const fence=/^ {0,3}(`{3,}|~{3,})(.*)$/.exec(lines[index]);
     if(fence&&!(fence[1][0]==='`'&&fence[2].includes('`'))){
@@ -200,13 +200,31 @@ function quoteResponse(text:string):string {
       const start=index;index+=2;
       const columns=tableCells(lines[start])!.length;
       while(index<lines.length&&lines[index].trim()&&tableCells(lines[index])?.length===columns)index++;
-      for(let line=start;line<index;line++)modes[line]='raw';
+      for(let line=start;line<index;line++)modes[line]='table';
       continue;
     }
     if(headingLine(lines[index])){modes[index]='raw';index++;continue;}
     index++;
   }
-  const segments:Array<{mode:'quote'|'raw';lines:string[]}>=[];
+  return modes;
+}
+
+/** The asset importer uses the same table decision as the streamed renderer,
+ * so a wiki-link alias pipe can be escaped only inside a real table cell. */
+export function tableRowAt(text:string,offset:number):boolean {
+  const lines=text.split('\n'),modes=responseModes(lines);
+  let start=0;
+  for(let index=0;index<lines.length;index++){
+    const end=start+lines[index].length;
+    if(offset>=start&&offset<=end)return modes[index]==='table';
+    start=end+1;
+  }
+  return false;
+}
+
+function quoteResponse(text:string):string {
+  const lines=text.split('\n'),modes=responseModes(lines);
+  const segments:Array<{mode:'quote'|'raw'|'table';lines:string[]}>=[];
   for(let index=0;index<lines.length;index++){
     const last=segments.at(-1);
     if(last?.mode===modes[index])last.lines.push(lines[index]);

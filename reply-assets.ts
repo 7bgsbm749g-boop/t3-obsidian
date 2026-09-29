@@ -1,6 +1,7 @@
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
 import type {Root,RootContent} from 'mdast';
+import {tableRowAt} from './inline-thread';
 
 export interface ReplyReference {source:string;original:string;image:boolean;label:string;offset:number}
 
@@ -34,8 +35,13 @@ export function replyReferences(markdown:string):ReplyReference[] {
 export async function rewriteReplyReferences(markdown:string,replace:(reference:ReplyReference)=>Promise<string|undefined>):Promise<string> {
   const changes:Array<{offset:number;length:number;text:string}>=[];
   for(const reference of replyReferences(markdown)){
-    const text=await replace(reference);
-    if(text!==undefined)changes.push({offset:reference.offset,length:reference.original.length,text});
+    let text=await replace(reference);
+    if(text!==undefined){
+      // Obsidian's wiki alias is also a Markdown table delimiter. Keep the
+      // alias while escaping its pipe when the asset occupies a table cell.
+      if(tableRowAt(markdown,reference.offset)&&/^!?\[\[[^\n]+\]\]$/.test(text))text=text.replace(/(?<!\\)\|/g,'\\|');
+      changes.push({offset:reference.offset,length:reference.original.length,text});
+    }
   }
   for(const change of changes.reverse())markdown=markdown.slice(0,change.offset)+change.text+markdown.slice(change.offset+change.length);
   return markdown;
