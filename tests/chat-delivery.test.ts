@@ -16,7 +16,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   const rootLink={id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true};
   let activeNote:any,activeEditor:any,activeEditorView=true;
   const initial={folderLinks:[rootLink],chatProjectKey:'old:unrelated-project',paired:[{id:'chat-connection',name:'Laptop',url:'https://chat.example',environmentId:'chat-env'}],directScanId:'chat-connection',directProjects:[project],directSelected:['chat-connection:chat-project'],completion:{action:'delete'}};
-  const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[],settingsControls:any[]=[],workspaceEvents:Record<string,((...args:any[])=>void)[]>={};let threads:any[]=[],catalog:any[]=[project];
+  const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[],settingsControls:any[]=[],workspaceEvents:Record<string,((...args:any[])=>void)[]>={};let threads:any[]=[],catalog:any[]=[project],focusedButton:any;
   let vaultAccesses=0;
   const hostFiles=new Map<string,string>(),hostEditors=new Map<string,any>();
   let writer:HostedInlineWriter|undefined;
@@ -56,7 +56,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     constructor(_element:any){settingsControls.push(this);}
     setName(text:string){this.name=text;return this;}setDesc(_text:string){return this;}setDisabled(_value:boolean){return this;}
     addToggle(callback:(toggle:any)=>void){const toggle={setValue:()=>toggle,onChange:()=>toggle};callback(toggle);return this;}
-    addButton(callback:(button:any)=>void){const button:any={text:'',click:()=>{},setButtonText:(text:string)=>{button.text=text;return button;},setCta:()=>button,setDisabled:()=>button,onClick:(click:()=>void)=>{button.click=click;return button;}};callback(button);this.buttons.push(button);return this;}
+    addButton(callback:(button:any)=>void){const button:any={text:'',click:()=>{},buttonEl:{focus:()=>{focusedButton=button;}},setButtonText:(text:string)=>{button.text=text;return button;},setCta:()=>button,setDisabled:()=>button,onClick:(click:()=>void)=>{button.click=click;return button;}};callback(button);this.buttons.push(button);return this;}
     addDropdown(callback:(d:any)=>void){const d={addOption:()=>d,setValue:()=>d,setDisabled:()=>d,onChange:()=>d};callback(d);return this;}
     addText(callback:(t:any)=>void){const t={setValue:()=>t,setPlaceholder:()=>t,setDisabled:()=>t,onChange:()=>t};callback(t);return this;}
   }
@@ -142,7 +142,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();return plugin;};
   const plugin=await start();
-  return {plugin,start,commands,shared,registered,modals,settingsControls,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+  return {plugin,start,commands,shared,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
     const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
     let value=selection+'\nTail';
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
@@ -447,6 +447,29 @@ test('project picker changes this send without reusing the note’s linked threa
     assert.equal(h.commands[0].type,'thread.create');
     assert.equal(h.commands[0].projectId,other.id);
     assert.notEqual(h.commands[0].threadId,'old-thread');
+  }finally{h.plugin.onunload();}
+});
+
+test('Enter on the destination dialog uses the purple new or linked thread button',async()=>{
+  const h=await chatHarness();
+  try{
+    h.setActiveNote('Notes/New.md');
+    await h.plugin.openChat('Start here');
+    assert.equal(h.focusedButton()?.text,'New thread');
+    h.pressEnter();
+    for(let attempt=0;attempt<40&&h.commands.length<2;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.equal(h.commands[0].type,'thread.create');
+
+    const path='Notes/Linked.md';
+    h.setActiveNote(path);
+    h.plugin.settings.noteThreads.push({notePath:path,threadId:'linked-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-28T00:00:00Z'});
+    h.setThreads([{id:'linked-thread',projectId:project.id,title:'Linked',updatedAt:'2026-09-28T00:00:00Z',runtimeMode:'approval-required',interactionMode:'default'}]);
+    await h.plugin.openChat('Continue here');
+    assert.equal(h.focusedButton()?.text,'Linked thread');
+    h.pressEnter();
+    for(let attempt=0;attempt<40&&h.commands.length<3;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.equal(h.commands[2].type,'thread.turn.start');
+    assert.equal(h.commands[2].threadId,'linked-thread');
   }finally{h.plugin.onunload();}
 });
 

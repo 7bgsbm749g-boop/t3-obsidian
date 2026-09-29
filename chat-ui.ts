@@ -104,11 +104,13 @@ class ChatDestinationModal extends Modal {
     if(!this.initialized){this.remember=this.host.defaultRemember();this.initialized=true;}
     if(this.host.hasNote())new Setting(this.contentEl).setName('Remember this thread for this note').addToggle(toggle=>toggle.setValue(this.remember).onChange(value=>{this.remember=value;}));
     this.contentEl.createEl('p',{text:'Choose a destination. The thread picker shows whether each conversation is active or idle.'});
+    let defaultButton:HTMLButtonElement|undefined;
     this.actions=new Setting(this.contentEl)
-      .addButton(button=>button.setButtonText(this.host.getLinkedThread(this.projectKey)?'Linked thread':'New thread').setCta().onClick(()=>{void this.choose('default');}))
+      .addButton(button=>{defaultButton=button.buttonEl;button.setButtonText(this.host.getLinkedThread(this.projectKey)?'Linked thread':'New thread').setCta().onClick(()=>{void this.choose('default');});})
       .addButton(button=>button.setButtonText('Existing thread…').onClick(()=>{void this.choose('existing');}));
     if(this.host.getLinkedThread(this.projectKey))this.actions.addButton(button=>button.setButtonText('New thread').onClick(()=>{void this.choose('new');}));
     if(this.host.hasPreviousThreads(this.projectKey))this.actions.addButton(button=>button.setButtonText('Previous threads…').onClick(()=>{void this.choose('previous');}));
+    defaultButton?.focus();
   }
   private async choose(target:'default'|'existing'|'new'|'previous'|boolean){
     if(this.choosing)return;this.choosing=true;this.actions.setDisabled(true);this.close();
