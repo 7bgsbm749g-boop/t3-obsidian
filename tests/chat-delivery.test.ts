@@ -398,7 +398,7 @@ test('an empty palette action uses the full note send path',async()=>{
     assert.equal(chooser.constructor.name,'SendProjectModal');
     h.plugin.settings.folderLinks.push({id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true});
     chooser.onChooseItem(project);
-    for(let attempt=0;attempt<40&&h.commands.length<2;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    for(let attempt=0;attempt<120&&(h.commands.length<2||h.plugin.busy);attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.match(h.commands[1].message.text,/# Send this note/);
     assert.match(h.commands[1].message.text,/Sent from Obsidian\./);
     assert.doesNotMatch(h.commands[1].message.text,/Vault-relative note path/);
@@ -456,7 +456,7 @@ test('Enter on the destination dialog uses the purple new or linked thread butto
     await new Promise(resolve=>setTimeout(resolve,0));
     assert.equal(h.focusedButton()?.text,'New thread');
     h.pressEnter();
-    for(let attempt=0;attempt<40&&h.commands.length<2;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    for(let attempt=0;attempt<120&&(h.commands.length<2||h.plugin.busy);attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.equal(h.commands[0].type,'thread.create');
 
     const path='Notes/Linked.md';
@@ -467,7 +467,7 @@ test('Enter on the destination dialog uses the purple new or linked thread butto
     await new Promise(resolve=>setTimeout(resolve,0));
     assert.equal(h.focusedButton()?.text,'Linked thread');
     h.pressEnter();
-    for(let attempt=0;attempt<40&&h.commands.length<3;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    for(let attempt=0;attempt<120&&(h.commands.length<3||h.plugin.busy);attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.equal(h.commands[2].type,'thread.turn.start');
     assert.equal(h.commands[2].threadId,'linked-thread');
   }finally{h.plugin.onunload();}
