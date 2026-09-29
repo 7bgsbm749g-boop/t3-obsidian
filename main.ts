@@ -34,10 +34,10 @@ import {InlineChatManager,captureEditorSelection} from './inline-chat';
 import {installMobileSelectionAction} from './mobile-selection-action';
 import {hiddenInlineMarkerExtension} from './inline-markers';
 import type {SelectionAnchor} from './inline-thread';
-type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor:SelectionAnchor};
+type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor};
 const INLINE_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note; the Obsidian plugin will insert your reply.';
 const THREAD_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note.';
-interface InlineStreamingSettings {askT3:boolean;sendToT3:boolean}
+interface InlineStreamingSettings {enabled:boolean}
 interface AutomationSettings {destinationId:string;coordinatorDeviceId:string}
 interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; folderLinks:FolderLink[];noteThreads:NoteThread[];threadLinking:boolean;vaultId:string;vaultLocations:VaultLocation[];automation:AutomationSettings;automationDrafts:WorkflowIR[];workflowEditRequests:WorkflowEditRequest[] }
 export default class SendToT3 extends Plugin {
@@ -107,7 +107,7 @@ export default class SendToT3 extends Plugin {
     this.nativeAccount=local?.nativeAccount??null;
     this.vaultRegistrations=local?.vaultRegistrations??{};
     const automationDrafts:WorkflowIR[]=[];for(const candidate of Array.isArray(data?.automationDrafts)?data.automationDrafts:[])try{automationDrafts.push(validateWorkflowIR(candidate));}catch{/* Invalid synced drafts stay inert. */}
-    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{askT3:data?.inlineStreaming?.askT3!==false,sendToT3:data?.inlineStreaming?.sendToT3!==false},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],folderLinks:loadFolderLinks(data),noteThreads:loadNoteThreads(data?.noteThreads),threadLinking:data?.threadLinking!==false,vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data),automation:{destinationId:typeof data?.automation?.destinationId==='string'?data.automation.destinationId:'qlo2-vps',coordinatorDeviceId:typeof data?.automation?.coordinatorDeviceId==='string'?data.automation.coordinatorDeviceId:''},automationDrafts,workflowEditRequests:loadWorkflowEditRequests(data?.workflowEditRequests)};
+    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false)},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],folderLinks:loadFolderLinks(data),noteThreads:loadNoteThreads(data?.noteThreads),threadLinking:data?.threadLinking!==false,vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data),automation:{destinationId:typeof data?.automation?.destinationId==='string'?data.automation.destinationId:'qlo2-vps',coordinatorDeviceId:typeof data?.automation?.coordinatorDeviceId==='string'?data.automation.coordinatorDeviceId:''},automationDrafts,workflowEditRequests:loadWorkflowEditRequests(data?.workflowEditRequests)};
     let migratedNoteThreads=false;
     for(const job of this.settings.threadLinking?this.settings.completionJobs:[]){
       if(this.noteLink(job.notePath)||typeof this.app.vault?.getAbstractFileByPath!=='function'||!(this.app.vault.getAbstractFileByPath(job.notePath) instanceof TFile))continue;
@@ -154,7 +154,7 @@ export default class SendToT3 extends Plugin {
         this.registerDomEvent(document,'pointerdown',remember,true);
         this.registerDomEvent(document,'touchstart',remember,true);
       }
-      this.paletteChat=installPaletteChat(this.app,prompt=>this.openChat(prompt),{onError:error=>new Notice(`T3 Chat: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft)});
+      this.paletteChat=installPaletteChat(this.app,(prompt,selection)=>this.openPaletteAction(prompt,selection),{onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),getSelection:()=>this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getSelection()??''});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined')this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>this.workflowFolders());
       void this.startObservationJournal().then(()=>this.retireLegacyWorkflowFolders()).catch(error=>new Notice(`T3 automation journal: ${message(error)}`,12000));
@@ -215,19 +215,8 @@ export default class SendToT3 extends Plugin {
       if(!selection.trim())return;
       let anchor:SelectionAnchor;
       try{anchor=captureEditorSelection(editor);}catch{return;}
-      menu.addItem(item=>item.setTitle('Ask T3').setIcon('message-circle').setDisabled(this.busy||active.length>0).onClick(()=>this.openEditorChat(selection,file,{editor,view,anchor})));
+      menu.addItem(item=>item.setTitle('Ask T3 Code').setIcon('message-circle').setDisabled(this.busy||active.length>0).onClick(()=>this.openEditorChat(selection,file,{editor,view,anchor})));
     }));
-    this.addCommand({id:'ask-selection',name:'Ask T3 about selected text',icon:'message-circle',editorCheckCallback:(checking,editor,view)=>{
-      const file=view.file,selection=editor.getSelection();
-      if(!file||file.extension.toLowerCase()!=='md'||!selection.trim()||this.busy||this.inlineChat?.activeFor(file.path).length)return false;
-      let anchor:SelectionAnchor;
-      try{anchor=captureEditorSelection(editor);}catch{return false;}
-      if(!checking)this.openEditorChat(selection,file,{editor,view,anchor});
-      return true;
-    }});
-    this.addCommand({id:'send-current-note',name:'Send current note',checkCallback:checking=>{const file=this.app.workspace.getActiveFile();if(!file || file.extension.toLowerCase()!=='md')return false;if(!checking){if(folderLinkForPath(this.settings.folderLinks,file.path)||this.noteLink(file.path))void this.openLinkedNote(file);else new SendProjectModal(this.app,this,file).open();}return true;}});
-    this.addCommand({id:'choose-projects',name:'Choose projects',callback:()=>new ProjectModal(this.app,this).open()});
-    this.addCommand({id:'new-chat',name:'New T3 chat',callback:()=>this.openChat()});
   }
   private captureSignature='';
   private factsFor(file:TFile):Record<string,unknown>{
@@ -625,7 +614,7 @@ export default class SendToT3 extends Plugin {
   }
   private noteContext(file:TFile):{path:string;absolutePath?:string} {
     const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
-    return {path:file.path,...(!Platform.isMobile&&typeof adapter.getFullPath==='function'?{absolutePath:adapter.getFullPath(file.path)}:{})};
+    return {path:file.path,...(!Platform.isMobile&&typeof adapter?.getFullPath==='function'?{absolutePath:adapter.getFullPath(file.path)}:{})};
   }
   private noteLink(path?:string){return path?activeNoteThread(this.settings.noteThreads,path):undefined;}
   private historicalNoteLink(path:string,threadId:string){return previousNoteThreads(this.settings.noteThreads,path).find(entry=>entry.threadId===threadId);}
@@ -708,8 +697,26 @@ export default class SendToT3 extends Plugin {
   openChat(prompt?:string){
     return this.openChatWithNote(this.chatNote(),prompt);
   }
+  private async openPaletteAction(prompt:string,selection:string){
+    const file=this.app.workspace.getActiveFile();
+    if(!file||file.extension.toLowerCase()!=='md')throw Error('Open a Markdown note before using T3 Code from the command palette.');
+    if(!prompt.trim()&&!selection.trim()){
+      if(folderLinkForPath(this.settings.folderLinks,file.path)||this.noteLink(file.path))return this.openLinkedNote(file);
+      return new SendProjectModal(this.app,this,file).open();
+    }
+    const active=this.app.workspace.getActiveViewOfType(MarkdownView);
+    const view=this.settings.inlineStreaming.enabled?(active?.file?.path===file.path?active:await this.editorForNoteSend(file)):active;
+    const selected=selection.trim();
+    const question=selected&&prompt.trim()?`Selected text:\n${selection}\n\nQuestion:\n${prompt}`:selected||prompt;
+    let context:EditorChatContext|undefined;
+    if(view?.file&&view.file.extension.toLowerCase()==='md'&&view.editor){
+      context={editor:view.editor,view};
+      if(selected&&view.editor.getSelection()===selection){try{context.anchor=captureEditorSelection(view.editor);}catch{/* Append when selection changed while palette was open. */}}
+    }
+    return this.openChatWithNote(this.noteContext(file),question,this.settings.inlineStreaming.enabled?context:undefined,true);
+  }
   private openEditorChat(selection:string,file:TFile,context:EditorChatContext){
-    return this.openChatWithNote(this.noteContext(file),selection,this.settings.inlineStreaming.askT3?context:undefined,true);
+    return this.openChatWithNote(this.noteContext(file),selection,this.settings.inlineStreaming.enabled?context:undefined,true);
   }
   private openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false){
     const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
@@ -744,7 +751,7 @@ export default class SendToT3 extends Plugin {
   }
   private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;projectOverrideKey?:string}){
     const manager=this.inlineChat;if(!manager)throw Error('Inline T3 chat is unavailable. Reload the plugin.');
-    const requestId=randomId(),job=manager.reserve(context.editor,context.view,context.anchor,requestId,note.path);
+    const requestId=randomId(),job=context.anchor?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path):manager.reserveAtEnd(context.editor,context.view,requestId,note.path);
     let delivered=false;
     try{await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{...options,requestId,onPrepared:request=>manager.prepare(job,request)});delivered=true;manager.start(job);}
     catch(error){manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&error.requestSaved));throw error;}
@@ -828,6 +835,9 @@ export default class SendToT3 extends Plugin {
     const separator=root.includes('\\')&&!root.includes('/')?'\\':'/';
     return root.replace(/[\\/]+$/,'')+separator+path.replace(/[\\/]+/g,separator);
   }
+  private messageFooter(destination:string):string {
+    return `\n\nSent from Obsidian.\nObsidian vault: ${JSON.stringify(this.app.vault.getName())}\nDestination note path: ${JSON.stringify(destination)}`;
+  }
   async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;onPrepared?:(request:Request)=>void}):Promise<void> {
     if(this.busy)throw Error('Another send is in progress. Wait for it to finish.');
     if(!prompt.trim())throw Error('Enter a message before sending.');
@@ -843,9 +853,9 @@ export default class SendToT3 extends Plugin {
       let text=prompt;
       if(note){
         const destination=this.destinationNotePath(note,project,link);
-        text+=`\n\nObsidian vault: ${JSON.stringify(this.app.vault.getName())}`;
-        if(destination)text+=`\nDestination note path: ${JSON.stringify(destination)}`;
-        text+=`\nVault-relative note path: ${JSON.stringify(note.path)}`;
+        text+=this.messageFooter(destination??note.absolutePath??'(unmapped on destination)');
+      }else{
+        text+=this.messageFooter('(no note open)');
       }
       text=applyOrchestration(text,this.settings.orchestration);
       if(text.length>120_000)throw Error('The message and note path exceed T3’s 120,000-character limit. Shorten the message before sending.');
@@ -1081,7 +1091,7 @@ export default class SendToT3 extends Plugin {
       const threadId=options?.threadId??linked?.threadId;
       const remember=options?.rememberLink??(this.settings.threadLinking||Boolean(linked));
       const connection=this.connection(project);
-      const inlineView=!options?.quiet&&this.settings.inlineStreaming.sendToT3?await this.editorForNoteSend(file):undefined;
+      const inlineView=!options?.quiet&&this.settings.inlineStreaming.enabled?await this.editorForNoteSend(file):undefined;
       if(!threadId&&!inlineView&&!remember&&completion.action==='archive') completion.archiveFolder=archiveFolder(completion.archiveFolder);
       const content = inlineView?inlineView.editor.getValue():await this.app.vault.read(file);
       if (!content.trim()) {new Notice('This note is empty. Add Markdown before sending.'); return;}
@@ -1101,7 +1111,9 @@ export default class SendToT3 extends Plugin {
         return {bytes:Buffer.from(await this.app.vault.readBinary(target)),name:target.name};
       });
       if(inlineView&&inlineView.editor.getValue()!==content)throw Error('The note changed while preparing the send. Try again with the current text.');
-      const request:Request = {id:options?.id??randomId(),project:{...project},title:file.basename.slice(0,160),prompt:applyOrchestration(images.markdown+(inlineView?`\n\n${INLINE_REPLY_INSTRUCTION}`:''),orchestration),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:threadId||inlineView||remember?'keep':completion.action},connection,...(remember?{noteLink:this.linkIntent(file.path,project,connection)}:{})};
+      const note=this.noteContext(file),link=folderLinkForPath(this.settings.folderLinks,file.path)??{id:'manual',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true};
+      const destination=this.destinationNotePath(note,project,link)??note.absolutePath??'(unmapped on destination)';
+      const request:Request = {id:options?.id??randomId(),project:{...project},title:file.basename.slice(0,160),prompt:applyOrchestration(images.markdown+(inlineView?`\n\n${INLINE_REPLY_INSTRUCTION}`:'')+this.messageFooter(destination),orchestration),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:threadId||inlineView||remember?'keep':completion.action},connection,...(remember?{noteLink:this.linkIntent(file.path,project,connection)}:{})};
       if(request.prompt.length>120_000) throw new Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
       if(inlineView){
         const manager=this.inlineChat;if(!manager)throw Error('Inline T3 streaming is unavailable. Reload the plugin.');
@@ -1134,7 +1146,7 @@ export default class SendToT3 extends Plugin {
       if(vaultRoot){const remote=await connectVaultRemote(connection,session);try{if(!await remote.matches(vaultRoot,`${this.app.vault.configDir||'.obsidian'}/plugins/${this.manifest?.id||'send-to-t3-code'}/data.json`,this.settings.vaultId))throw Error('The destination vault mapping no longer matches this vault. Reconnect it in settings.');await waitForVaultNote(remote,vaultRoot,file.path,()=>!this.stopped,()=>new Notice('Waiting for this workflow note to reach the selected machine through Obsidian Sync…',10000));}finally{remote.close();}}
     }
     if(exactHash(await this.app.vault.read(file))!==plan.inputHash)throw Error('The note changed while preparing the destination; no thread was started.');
-    const prompt=applyOrchestration(`${plan.prompt}\n\nObsidian vault: ${JSON.stringify(this.app.vault.getName())}\nDestination note path: ${JSON.stringify(destination)}`,this.settings.orchestration);
+    const prompt=applyOrchestration(`${plan.prompt}${this.messageFooter(destination)}`,this.settings.orchestration);
     if(prompt.length>120_000)throw Error('The workflow task and note exceed T3’s 120,000-character limit.');
     let request=this.settings.pending.find(item=>item.id===plan.requestId);
     if(request&&request.prompt!==prompt)throw Error('The saved v2 request does not match its immutable execution plan.');
@@ -1371,11 +1383,10 @@ class T3Settings extends PluginSettingTab {
     }
     el.createEl('h3',{text:'Chat'});
     new Setting(el).setName('Thread linking').setDesc('Remember a note’s thread after its first confirmed send. Existing links continue to route follow-up sends when this is off. Linked notes are kept when a task finishes.').addToggle(t=>t.setValue(this.plugin.settings.threadLinking).onChange(async enabled=>{this.plugin.settings.threadLinking=enabled;await this.plugin.save();}));
-    new Setting(el).setName('Command palette chat').setDesc(this.plugin.paletteChatStatus()==='active'?'Type a message into the command palette, then select the live T3 Chat row.':'The live row is unavailable in this Obsidian version or the core Command palette is disabled. Use the New T3 chat command.');
-    el.createEl('p',{text:'Chat sends your message and the current note’s path to its nearest linked folder project. Without a link or an open note, it uses the vault-root project. Connect the vault to a machine below, or choose one when sending your first chat.'});
+    new Setting(el).setName('Command palette').setDesc(this.plugin.paletteChatStatus()==='active'?'Use the first T3 Code row to send the current note or ask a question about it.':'The live T3 Code row is unavailable in this Obsidian version or the core Command palette is disabled.');
+    el.createEl('p',{text:'Sending includes the current note and its embedded images. Asking sends the question and note location. A selected passage is included with the question.'});
     el.createEl('h3',{text:'Inline responses'});
-    new Setting(el).setName('Stream Ask T3 into the editor').setDesc('Insert the reply below selected text. When off, Ask T3 still sends the selection and keeps the answer in the T3 thread.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.askT3).onChange(async enabled=>{this.plugin.settings.inlineStreaming.askT3=enabled;await this.plugin.save();}));
-    new Setting(el).setName('Stream Send to T3 into the editor').setDesc('Append the reply to a manually sent note, opening that note if needed. Workflows do not write replies inline. Streamed notes are kept when the turn finishes.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.sendToT3).onChange(async enabled=>{this.plugin.settings.inlineStreaming.sendToT3=enabled;await this.plugin.save();}));
+    new Setting(el).setName('Stream replies into the editor').setDesc('For every manual Send or Ask, insert the reply into the note. Selection questions appear below the selection; other replies appear at the end.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));
     el.createEl('h3',{text:'Orchestration'});
     new Setting(el).setName('Wait for other threads').setDesc('Prepend an instruction to wait for all other active T3 Code threads in the destination project to finish before starting work.').addToggle(t=>t.setValue(this.plugin.settings.orchestration.waitForOtherThreads).onChange(async enabled=>{this.plugin.settings.orchestration.waitForOtherThreads=enabled;await this.plugin.save();}));
     el.createEl('h3',{text:'Durable automation journal'});

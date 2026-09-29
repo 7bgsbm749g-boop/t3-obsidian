@@ -30,7 +30,7 @@ test('mobile Ask T3 action appears only for the active editor selection and pres
     dom.emit('selectionchange');await new Promise(resolve=>setTimeout(resolve,100));
     assert.equal(button.hidden,true,'No button without a nonempty editor selection');
     selectionText='What does this mean?';dom.emit('selectionchange');await new Promise(resolve=>setTimeout(resolve,100));
-    assert.equal(button.hidden,false);assert.equal(button.textContent,'Ask T3');assert.equal(button.style.top,'154px');
+    assert.equal(button.hidden,false);assert.equal(button.textContent,'Ask T3 Code');assert.equal(button.style.top,'154px');
     const event={preventDefault(){},stopPropagation(){}};
     button.emit('pointerdown',event);button.emit('click',event);
     assert.equal(asked.length,1,'A touch must dispatch exactly once');

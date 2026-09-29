@@ -26,11 +26,29 @@ test('query row survives unmatched text, preserves exact query, and does no work
   assert.equal(suggest(modal, 'missing').length, 1);
   const query = '  Write <b>safe</b> text “yes” 🦉\n' + 'full text '.repeat(500);
   const row = suggest(modal, query)[0];
-  assert.equal(row.item.name, `T3 Chat: “${query}”`);
+  assert.equal(row.item.name, `T3 Code: “${query}”`);
   assert.deepEqual(sent, []);
   modal.selectSuggestion(row, { type: 'click' });
   assert.deepEqual(sent, [query]);
   assert.equal(modal.closed, 1);
+  hook.dispose();
+});
+
+test('the first palette row follows selection and typed input in all four states', () => {
+  const {app,modal}=fixture();
+  let selection='';
+  const sent:{query:string;selection:string}[]=[];
+  const hook=installPaletteChat(app,(query,selectedText)=>{sent.push({query,selection:selectedText});},{getSelection:()=>selection});
+  modal.onOpen();
+  assert.equal(suggest(modal,'')[0].item.name,'Send to T3 Code');
+  selection='Selected paragraph';
+  assert.equal(suggest(modal,'')[0].item.name,'Ask T3 Code');
+  assert.equal(suggest(modal,'Why?')[0].item.name,'Ask T3 Code: “Why?”');
+  const selectedRow=suggest(modal,'Why?')[0];
+  modal.selectSuggestion(selectedRow,{});
+  assert.deepEqual(sent,[{query:'Why?',selection:'Selected paragraph'}]);
+  modal.onOpen();selection='';
+  assert.equal(suggest(modal,'Why?')[0].item.name,'T3 Code: “Why?”');
   hook.dispose();
 });
 
@@ -50,7 +68,7 @@ test('empty input has no chat row and duplicate activation submits only once per
   const { app, modal, command } = fixture();
   const sent: string[] = [];
   const hook = installPaletteChat(app, query => { sent.push(query); });
-  assert.deepEqual(suggest(modal, ' \n\t'), [command]);
+  assert.deepEqual(suggest(modal, ' \n\t').map(row=>row.item.name), ['Send to T3 Code','Ordinary command']);
   modal.onOpen();
   const first = suggest(modal, 'first')[0];
   const alsoFirst = suggest(modal, 'first')[0];
@@ -92,7 +110,7 @@ test('rendering uses literal text, while other rows use their original renderer'
   });
   const element = makeElement();
   modal.renderSuggestion(suggest(modal, '<img onerror="bad">')[0], element);
-  assert.equal(element.children[0].children[0].textContent, 'T3 Chat: “<img onerror="bad">”');
+  assert.equal(element.children[0].children[0].textContent, 'T3 Code: “<img onerror="bad">”');
   hook.dispose();
 });
 
@@ -159,7 +177,7 @@ test('raw input is preserved if native suggestion arguments are normalized', () 
   const hook = installPaletteChat(app, query => { sent.push(query); });
   modal.inputEl.value = '  keep leading and trailing spaces  ';
   const row = modal.getSuggestions(modal.inputEl.value.trim())[0];
-  assert.equal(row.item.name, 'T3 Chat: “  keep leading and trailing spaces  ”');
+  assert.equal(row.item.name, 'T3 Code: “  keep leading and trailing spaces  ”');
   modal.selectSuggestion(row, {});
   assert.deepEqual(sent, ['  keep leading and trailing spaces  ']);
   hook.dispose();

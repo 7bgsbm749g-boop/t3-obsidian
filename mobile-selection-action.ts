@@ -14,8 +14,8 @@ export function installMobileSelectionAction(app:App,activeView:()=>MarkdownView
   const button=document.createElement('button');
   button.type='button';
   button.className='send-to-t3-selection-action';
-  button.textContent='Ask T3';
-  button.setAttribute('aria-label','Ask T3 about selected text');
+  button.textContent='Ask T3 Code';
+  button.setAttribute('aria-label','Ask T3 Code about selected text');
   button.hidden=true;
   document.body.appendChild(button);
 

@@ -43,7 +43,7 @@ test('direct pairing works in mobile bundle, keeps sessions local, and resumes o
  const project={id:'p',title:'P',workspaceRoot:'/',connectionId:'c',connectionName:'Laptop'};
  class Base{};class File{path='direct.md';name='direct.md';basename='direct';extension='md';stat={ctime:123,size:50};};const file=new File();
  class Plugin{
-  app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,v:any)=>{local=v;},workspace:{onLayoutReady:()=>{},on:()=>{}},vault:{read:async()=>markdown,readBinary:async()=>Uint8Array.from(Buffer.from(png,'base64')).buffer},metadataCache:{getFirstLinkpathDest:()=>file}};
+  app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,v:any)=>{local=v;},workspace:{onLayoutReady:()=>{},on:()=>{}},vault:{read:async()=>markdown,readBinary:async()=>Uint8Array.from(Buffer.from(png,'base64')).buffer,getName:()=> 'Notes'},metadataCache:{getFirstLinkpathDest:()=>file}};
   async loadData(){return {paired:[{id:'c',name:'Laptop',url:'https://t3.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:p']};}
   async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}
  }

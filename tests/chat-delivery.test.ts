@@ -13,7 +13,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   let local:any={mode:'direct',pairedSessions:{'chat-connection':{url:'https://chat.example',environmentId:'chat-env',token:'dummy-chat-session',expiresAt:Date.now()+600_000}}};
   const localStorage=new Map<string,any>();
   const rootLink={id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true};
-  let activeNote:any,activeEditorView=true;
+  let activeNote:any,activeEditor:any,activeEditorView=true;
   const initial={folderLinks:[rootLink],chatProjectKey:'old:unrelated-project',paired:[{id:'chat-connection',name:'Laptop',url:'https://chat.example',environmentId:'chat-env'}],directScanId:'chat-connection',directProjects:[project],directSelected:['chat-connection:chat-project'],completion:{action:'delete'}};
   const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[],settingsControls:any[]=[],workspaceEvents:Record<string,((...args:any[])=>void)[]>={};let threads:any[]=[],catalog:any[]=[project];
   let vaultAccesses=0;
@@ -53,7 +53,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     app={
       loadLocalStorage:(key:string)=>localStorage.get(key)??(key==='send-to-t3-code-device-v1'?local:undefined),
       saveLocalStorage:(key:string,value:any)=>{localStorage.set(key,value);if(key==='send-to-t3-code-device-v1')local=value;},
-      workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{(workspaceEvents[name]??=[]).push(callback);return {};},getActiveViewOfType:()=>activeEditorView&&activeNote?{file:activeNote}:undefined,getActiveFile:()=>activeNote,getLeavesOfType:()=>[]},
+      workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{(workspaceEvents[name]??=[]).push(callback);return {};},getActiveViewOfType:()=>activeEditorView&&activeNote?(activeEditor??{file:activeNote}):undefined,getActiveFile:()=>activeNote,getLeavesOfType:()=>[]},
       vault:{adapter:{},getName:()=> 'Notes',read:()=>{vaultAccesses++;throw Error('Chat must not read note contents');},readBinary:()=>{vaultAccesses++;throw Error('Chat must not read attachments');}},
     };
     async loadData(){return shared.at(-1)??initial;}
@@ -112,7 +112,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();return plugin;};
   const plugin=await start();
-  return {plugin,start,commands,shared,registered,modals,settingsControls,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+  return {plugin,start,commands,shared,registered,modals,settingsControls,sockets,setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
     const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
     let value=selection+'\nTail';
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
@@ -128,6 +128,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     const leaf={view,openFile:async()=>{}};
     (plugin.app.workspace as any).getLeavesOfType=()=>[leaf];
     (plugin.app.workspace as any).getLeaf=()=>leaf;
+    activeNote=file;activeEditor=view;
     return {file,view,editor:view.editor,get value(){return value;}};
   },vaultAccesses:()=>vaultAccesses};
 }
@@ -136,7 +137,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';
   try {
-    assert.ok(h.registered.some(command=>command.id==='new-chat'),'A normal command remains available without palette internals');
+    assert.equal(h.registered.length,0,'The palette exposes one context-aware T3 action');
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands.length,2);
     assert.equal(h.commands[0].type,'thread.create');
@@ -311,7 +312,7 @@ test('palette chat sends the visible note path through its nearest link without 
     await h.modals.at(-1).choose(false);
     assert.equal(h.commands[0].projectId,project.id);
     assert.equal(h.commands[0].title,'Work on this note.');
-    assert.ok(h.commands[1].message.text.startsWith(prompt+'\n\nObsidian vault: "Notes"\nDestination note path: "/projects/notes/Notes/Inner/café \\"draft\\".md"\nVault-relative note path: "Notes/Inner/café \\"draft\\".md"'));
+    assert.ok(h.commands[1].message.text.startsWith(prompt+'\n\nSent from Obsidian.\nObsidian vault: "Notes"\nDestination note path: "/projects/notes/Notes/Inner/café \\"draft\\".md"'));
     assert.doesNotMatch(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal(h.commands[1].message.attachments.length,0);
     assert.equal(h.plugin.settings.completionJobs.length,0);
@@ -335,6 +336,54 @@ test('palette chat can target an existing thread and labels active and idle conv
     await picker.choose(items[0]);
     assert.equal(h.commands.length,1,'Existing-thread chat must not create a thread');
     assert.equal(h.commands[0].type,'thread.turn.start');assert.equal(h.commands[0].threadId,'active');
+  }finally{h.plugin.onunload();}
+});
+
+test('a typed palette question sends only the question and streams at the note end',async()=>{
+  const h=await chatHarness();
+  try{
+    const editor=h.attachEditor('Notes/Palette.md','# Private note\nBody not sent.');
+    await h.plugin.openPaletteAction('Why does this matter?','');
+    await h.modals.at(-1).choose(false);
+    const text=h.commands[1].message.text;
+    assert.match(text,/^Why does this matter\?/);
+    assert.doesNotMatch(text,/Private note|Body not sent|Vault-relative note path/);
+    assert.match(text,/Sent from Obsidian\.\nObsidian vault: "Notes"\nDestination note path: "\/projects\/notes\/Notes\/Palette.md"$/);
+    for(let attempt=0;attempt<40&&!editor.value.includes('Inline reply from T3.');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.match(editor.value,/Inline reply from T3\./);
+  }finally{h.plugin.onunload();}
+});
+
+test('an empty palette action uses the full note send path',async()=>{
+  const h=await chatHarness();
+  try{
+    h.plugin.settings.folderLinks=[];
+    const editor=h.attachEditor('Notes/Send.md','# Send this note');
+    Object.assign(editor.file,{basename:'Send',stat:{ctime:123}});
+    await h.plugin.openPaletteAction('','');
+    const chooser=h.modals.at(-1);
+    assert.equal(chooser.constructor.name,'SendProjectModal');
+    chooser.onChooseItem(project);
+    for(let attempt=0;attempt<40&&h.commands.length<2;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.match(h.commands[1].message.text,/# Send this note/);
+    assert.match(h.commands[1].message.text,/Sent from Obsidian\./);
+    assert.doesNotMatch(h.commands[1].message.text,/Vault-relative note path/);
+  }finally{h.plugin.onunload();}
+});
+
+test('a palette question about selected text includes both parts and inserts below the selection',async()=>{
+  const h=await chatHarness();
+  try{
+    const editor=h.attachEditor('Notes/Selected.md','Claim\nOther note text stays private.');
+    editor.editor.getSelection=()=> 'Claim';
+    editor.editor.getCursor=(side:string)=>editor.editor.offsetToPos(side==='from'?0:5);
+    await h.plugin.openPaletteAction('Why?','Claim');
+    await h.modals.at(-1).choose(false);
+    const text=h.commands[1].message.text;
+    assert.match(text,/^Selected text:\nClaim\n\nQuestion:\nWhy\?/);
+    assert.doesNotMatch(text,/Other note text stays private/);
+    for(let attempt=0;attempt<40&&!editor.value.includes('Inline reply from T3.');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.match(editor.value,/Claim\n\n> Inline reply from T3\./);
   }finally{h.plugin.onunload();}
 });
 
@@ -386,7 +435,7 @@ test('existing-thread picker uses the nested folder project even when the note r
     await picker.choose(picker.getItems()[0]);
     assert.equal(h.commands.length,1);
     assert.equal(h.commands[0].threadId,'nested-thread');
-    assert.match(h.commands[0].message.text,/Vault-relative note path: "Notes\/Inner\/Subfolder\/Draft.md"/);
+    assert.match(h.commands[0].message.text,/Destination note path: "\/projects\/notes\/Notes\/Inner\/Subfolder\/Draft.md"/);
   }finally{h.plugin.onunload();}
 });
 
@@ -394,23 +443,23 @@ test('editor selection menu streams a T3 reply into its original note for new an
   const h=await chatHarness();
   try{
     assert.equal(h.editorMenu('   ').menu.items.length,0,'Whitespace-only selections do not add an action');
-    assert.ok(h.editorMenu('Cross-window selection','Notes/Popout.md',true).menu.items.some(item=>item.title==='Ask T3'),'Editor menu accepts Obsidian file objects from another window realm');
+    assert.ok(h.editorMenu('Cross-window selection','Notes/Popout.md',true).menu.items.some(item=>item.title==='Ask T3 Code'),'Editor menu accepts Obsidian file objects from another window realm');
     const selection='Explain why **this claim** follows.\nKeep [[source links]].';
-    const first=h.editorMenu(selection,'Notes/Original.md');let entry=first.menu.items.find(item=>item.title==='Ask T3');assert.ok(entry);
+    const first=h.editorMenu(selection,'Notes/Original.md');let entry=first.menu.items.find(item=>item.title==='Ask T3 Code');assert.ok(entry);
     await entry!.callback();
     const destination=h.modals.at(-1);assert.equal(destination.constructor.name,'ChatDestinationModal');
     h.setActiveNote('Notes/Different.md');await destination.choose(false);
     assert.equal(h.commands[0].type,'thread.create');assert.equal(h.commands[0].title,'Explain why **this claim** follows.');
     const newThreadText=h.commands[1].message.text;
     assert.ok(newThreadText.startsWith(selection));assert.match(newThreadText,/Answer in the T3 thread\. Do not edit the Obsidian note/);assert.doesNotMatch(newThreadText,/Reply in the Obsidian note itself/);
-    assert.match(newThreadText,/Vault-relative note path: "Notes\/Original.md"/);assert.doesNotMatch(newThreadText,/Different.md/);
+    assert.match(newThreadText,/Destination note path: "\/projects\/notes\/Notes\/Original.md"/);assert.doesNotMatch(newThreadText,/Different.md/);
     await new Promise(resolve=>setTimeout(resolve,180));
     assert.match(first.value,/Inline reply from T3\./);
     assert.doesNotMatch(first.value,/\*\*T3 answer\*\*/);
 
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',updatedAt:'2026-09-19T11:00:00Z',latestTurn:{state:'completed'}}]);
     const followup='Add the selected evidence to the conclusion.';
-    const second=h.editorMenu(followup,'Notes/Original.md');entry=second.menu.items.find(item=>item.title==='Ask T3');assert.ok(entry);
+    const second=h.editorMenu(followup,'Notes/Original.md');entry=second.menu.items.find(item=>item.title==='Ask T3 Code');assert.ok(entry);
     await entry!.callback();await h.modals.at(-1).choose(true);
     const picker=h.modals.at(-1);await picker.choose(picker.getItems()[0]);
     assert.equal(h.commands[2].type,'thread.turn.start');assert.equal(h.commands[2].threadId,'old-thread');
@@ -424,7 +473,7 @@ test('Ask T3 refuses a switched editor before dispatching or inserting',async()=
   const h=await chatHarness();
   try{
     const context=h.editorMenu('What changed?','Notes/Original.md');
-    const item=context.menu.items.find(entry=>entry.title==='Ask T3');assert.ok(item);
+    const item=context.menu.items.find(entry=>entry.title==='Ask T3 Code');assert.ok(item);
     await item.callback();
     context.file.path='Notes/Another.md';
     await h.modals.at(-1).choose(false);
@@ -433,13 +482,11 @@ test('Ask T3 refuses a switched editor before dispatching or inserting',async()=
   }finally{h.plugin.onunload();}
 });
 
-test('Ask T3 selection command opens the inline chooser without changing the note',async()=>{
+test('editor Ask opens the inline chooser without changing the note',async()=>{
   const h=await chatHarness();
   try{
-    const command=h.registered.find((entry:any)=>entry.id==='ask-selection');assert.ok(command);
     const context=h.editorMenu('Explain this sentence.','Notes/Original.md');
-    assert.equal(command.editorCheckCallback(true,context.editor,{file:context.file}),true);
-    assert.equal(command.editorCheckCallback(false,context.editor,{file:context.file}),true);
+    await context.menu.items.find(item=>item.title==='Ask T3 Code')!.callback();
     assert.equal(h.modals.at(-1).constructor.name,'ChatDestinationModal');
     assert.equal(h.commands.length,0,'Opening the chooser does not dispatch or edit the note');
     assert.doesNotMatch(context.value,/t3-inline:start/);
@@ -460,15 +507,13 @@ test('unlinked and root-level notes use the root link and a self link resolves t
   }finally{h.plugin.onunload();}
 });
 
-test('a remote folder without a vault-root mapping reports vault and relative path once',async()=>{
+test('a remote folder without a vault-root mapping labels its unmapped destination',async()=>{
   const h=await chatHarness();
   try{
     h.plugin.settings.folderLinks=[{...h.plugin.settings.folderLinks[0],folderPath:'Notes',self:false}];
     await h.plugin.sendChat('Review this',{path:'Notes/Only once.md'});
-    const text=h.commands[1].message.text;
-    assert.match(text,/Obsidian vault: "Notes"/);assert.doesNotMatch(text,/Destination note path:/);
-    assert.equal(text.split('Notes/Only once.md').length-1,1);
-    assert.match(text,/Vault-relative note path: "Notes\/Only once.md"/);
+    assert.match(h.commands[1].message.text,/Destination note path: "\(unmapped on destination\)"$/);
+    assert.doesNotMatch(h.commands[1].message.text,/Vault-relative note path/);
   }finally{h.plugin.onunload();}
 });
 
@@ -595,11 +640,11 @@ test('note context counts toward the prompt limit and a synced local root can re
   }finally{h.plugin.onunload();}
 });
 
-test('the regular chat command captures the note before the composer opens',async()=>{
+test('the question composer captures the note before it opens',async()=>{
   const h=await chatHarness();
   try{
     h.setActiveNote('Original.md');
-    await h.registered.find(command=>command.id==='new-chat').callback();
+    await h.plugin.openChat();
     const modal=h.modals.at(-1);assert.ok(modal);
     assert.equal(h.commands.length,0,'Opening the composer must not send or create a project');
     h.setActiveNote('Different.md');modal.field.value='Edit the original';
@@ -620,7 +665,9 @@ test('sending a note into an existing thread retains Markdown and images and cle
     assert.equal(result.threadId,'existing');assert.equal(h.commands.length,1);
     assert.equal(h.commands[0].type,'thread.turn.start');assert.equal(h.commands[0].threadId,'existing');
     assert.match(h.commands[0].message.text,/# Note\nBefore/);assert.match(h.commands[0].message.text,/t3-context:\/\//);
-    assert.ok(h.commands[0].message.text.endsWith('\nAfter'));
+    assert.match(h.commands[0].message.text,/\nAfter\n\nSent from Obsidian\./);
+    assert.match(h.commands[0].message.text,/Obsidian vault: "Notes"\nDestination note path: "\/projects\/notes\/note.md"$/);
+    assert.doesNotMatch(h.commands[0].message.text,/Vault-relative note path/);
     assert.equal(h.commands[0].message.attachments[0].dataUrl,'data:image/png;base64,'+png);
     assert.equal(result.request.completion.action,'keep');
     assert.equal(h.plugin.settings.completionJobs.length,0);
@@ -631,12 +678,12 @@ test('sending a note into an existing thread retains Markdown and images and cle
 test('inline streaming switches default on and persist independently',async()=>{
   const h=await chatHarness();
   try{
-    assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.inlineStreaming)),{askT3:true,sendToT3:true});
-    h.plugin.settings.inlineStreaming.askT3=false;
+    assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.inlineStreaming)),{enabled:true});
+    h.plugin.settings.inlineStreaming.enabled=false;
     await h.plugin.save();
     h.plugin.onunload();
     const restarted=await h.start();
-    assert.deepEqual(JSON.parse(JSON.stringify(restarted.settings.inlineStreaming)),{askT3:false,sendToT3:true});
+    assert.deepEqual(JSON.parse(JSON.stringify(restarted.settings.inlineStreaming)),{enabled:false});
     restarted.onunload();
   }finally{h.plugin.onunload();}
 });
@@ -644,9 +691,9 @@ test('inline streaming switches default on and persist independently',async()=>{
 test('Ask T3 keeps the answer in the T3 thread when its streaming switch is off',async()=>{
   const h=await chatHarness();
   try{
-    h.plugin.settings.inlineStreaming.askT3=false;
+    h.plugin.settings.inlineStreaming.enabled=false;
     const context=h.editorMenu('Why is this here?');
-    await context.menu.items.find(item=>item.title==='Ask T3')!.callback();
+    await context.menu.items.find(item=>item.title==='Ask T3 Code')!.callback();
     await h.modals.at(-1).choose(false);
     assert.doesNotMatch(context.value,/t3-inline:start/);
     assert.match(h.commands.at(-1).message.text,/Answer in the T3 thread\. Do not edit the Obsidian note\./);
@@ -675,12 +722,12 @@ test('manual Send to T3 streams into the source editor but disabled and automati
     for(let attempt=0;attempt<40&&editor.value.includes('t3-inline:start');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.doesNotMatch(editor.value,/t3-inline:(?:start|end)/,'both completed responses are plain Markdown');
     assert.doesNotMatch(editor.value,/\*\*T3 answer\*\*|`existing`/);
-    h.plugin.settings.inlineStreaming.sendToT3=false;
+    h.plugin.settings.inlineStreaming.enabled=false;
     const before=editor.value;
     h.plugin.app.vault.read=async()=> '# Manual\nPlease explain this.';
     await h.plugin.send(file,project,{throwOnError:true});
     assert.equal(editor.value,before,'A disabled stream leaves the editor unchanged');
-    h.plugin.settings.inlineStreaming.sendToT3=true;
+    h.plugin.settings.inlineStreaming.enabled=true;
     h.plugin.app.vault.read=async()=> '# Automatic tag note';
     await h.plugin.send(file,project,{quiet:true,throwOnError:true});
     assert.equal(editor.value,before,'An automatic tag send cannot append an inline reply');

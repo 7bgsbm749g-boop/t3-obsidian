@@ -9,6 +9,7 @@ export interface PaletteChatOptions {
   onError?: (error: unknown) => void;
   getDraft?: () => string;
   saveDraft?: (draft: string) => void;
+  getSelection?: () => string;
 }
 
 export interface PaletteChatController {
@@ -48,7 +49,7 @@ function compatible(value: unknown): value is PaletteModal {
 
 export function installPaletteChat(
   app: unknown,
-  onSubmit: (query: string) => void | Promise<void>,
+  onSubmit: (query: string, selectedText: string) => void | Promise<void>,
   options: PaletteChatOptions = {},
 ): PaletteChatController {
   let status: PaletteChatStatus = 'unavailable';
@@ -64,7 +65,7 @@ export function installPaletteChat(
     let composing = false;
     let epoch = 0;
     let submitted = false;
-    const rows = new WeakMap<object, { query: string; epoch: number }>();
+    const rows = new WeakMap<object, { query: string; selection: string; epoch: number }>();
     const originals = Object.fromEntries(methodNames.map(name => [name, modal[name]])) as Record<MethodName, Method>;
     const descriptors = new Map<MethodName, PropertyDescriptor | undefined>();
     const wrappers: Record<MethodName, Method> = {
@@ -76,12 +77,16 @@ export function installPaletteChat(
         if (!active || this !== modal) return suggestions;
         // Current core versions return an array. Leave a changed contract alone.
         if (!Array.isArray(suggestions)) { setStatus('incompatible'); return suggestions; }
-        if (typeof args[0] !== 'string' || !query.trim()) return suggestions;
+        if (typeof args[0] !== 'string') return suggestions;
+        const selection=options.getSelection?.()??'';
+        const name=query.trim()
+          ? `${selection.trim()?'Ask T3 Code':'T3 Code'}: “${query}”`
+          : selection.trim()?'Ask T3 Code':'Send to T3 Code';
         const row: ChatRow = {
-          item: { id: 'send-to-t3-code:palette-query', name: `T3 Chat: “${query}”` },
+          item: { id: 'send-to-t3-code:palette-query', name },
           match: { score: 0, matches: [] },
         };
-        rows.set(row, { query, epoch });
+        rows.set(row, { query, selection, epoch });
         // Insert after core filtering/sorting, before its display limit is applied.
         return [row, ...suggestions];
       },
@@ -110,7 +115,7 @@ export function installPaletteChat(
         if (!own) return originals.onChooseSuggestion.apply(this, args);
         if (!active || own.epoch !== epoch || own.query !== modal.inputEl.value || submitted || composing || args[1]?.isComposing) return;
         submitted = true;
-        try { Promise.resolve(onSubmit(own.query)).catch(error => options.onError?.(error)); }
+        try { Promise.resolve(onSubmit(own.query,own.selection)).catch(error => options.onError?.(error)); }
         catch (error) { options.onError?.(error); }
       },
       onOpen(...args) {
