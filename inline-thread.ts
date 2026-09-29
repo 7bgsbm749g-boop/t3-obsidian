@@ -170,6 +170,10 @@ function tableStart(lines:string[],index:number):boolean {
   return !!header&&!!delimiter&&header.length===delimiter.length&&delimiter.every(cell=>/^:?-{2,}:?$/.test(cell.trim()));
 }
 
+function headingLine(line:string):boolean {
+  return /^ {0,3}#{1,6}(?:[ \t]+|$)/.test(line);
+}
+
 /** Keep prose in the visible reply quote, but render blocks that Obsidian Live
  * Preview handles poorly inside quotes at the document's top level. */
 function quoteResponse(text:string):string {
@@ -192,6 +196,7 @@ function quoteResponse(text:string):string {
       for(let line=start;line<index;line++)modes[line]='raw';
       continue;
     }
+    if(headingLine(lines[index])){modes[index]='raw';index++;continue;}
     index++;
   }
   const segments:Array<{mode:'quote'|'raw';lines:string[]}>=[];

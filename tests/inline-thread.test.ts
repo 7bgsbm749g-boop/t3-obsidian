@@ -119,6 +119,12 @@ test('tables and code fences leave the quote while surrounding prose stays quote
   assert.equal(renderInlineTurn(state,'turn','thread','complete'),'> Before the table.\n\n| Name | Value |\n| --- | --- |\n| A | 1 |\n\n> Between blocks.\n\n```ts\nconst value = 1;\n```\n\n> After the code.\n');
 });
 
+test('Markdown headings leave the quote while surrounding prose remains quoted',()=>{
+  const answer='Intro\n\n## Section\n\nBody\n\n### Detail\n\nMore body\n\n```md\n## Example only\n```';
+  const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:answer,streaming:false}],activities:[],latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'answer'}} as any;
+  assert.equal(renderInlineTurn(state,'turn','thread','complete'),'> Intro\n\n## Section\n\n> Body\n\n### Detail\n\n> More body\n\n```md\n## Example only\n```\n');
+});
+
 test('a partial table stays quoted until its delimiter arrives, then reflows without losing text',()=>{
   const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:'Intro\n\n| Name | Value |',streaming:true}],activities:[]} as any;
   assert.match(renderInlineTurn(state,'turn','thread'),/> \| Name \| Value \|\n$/);

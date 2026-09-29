@@ -45,6 +45,17 @@ test('host continues after sender disappears, handles outside edits and known Sy
   const finished=h.document;await h.create().tick();assert.equal(h.document,finished);
 });
 
+test('final reply imports referenced files before replacing the response, then retries a failed import',async()=>{
+  const h=harness();h.dispatch();h.answer('See ![plot](/tmp/plot.png) and [data](/tmp/data.pdf).',true);
+  let fail=true;const sources:string[]=[];
+  h.io.importReplyAsset=async reference=>{sources.push(reference.source);if(fail)throw Error('asset unavailable');return `${reference.image?'!':''}[[T3 Code Attachments/${reference.source.split('/').at(-1)}]]`;};
+  await h.create().tick();assert.match(h.document,/t3-inline:start/);assert.doesNotMatch(h.document,/plot\.png/);assert.match(h.state.detail!,/asset unavailable/);
+  fail=false;await h.create().tick();assert.equal(h.state.status,'complete');
+  assert.match(h.document,/!\[\[T3 Code Attachments\/plot\.png\]\]/);
+  assert.match(h.document,/\[\[T3 Code Attachments\/data\.pdf\]\]/);
+  assert.deepEqual(sources,['/tmp/plot.png','/tmp/plot.png','/tmp/data.pdf']);
+});
+
 test('editing generated text preserves the edit and stops only that writer',async()=>{
   const h=harness();h.dispatch();const writer=h.create();await writer.tick();
   h.document=h.document.replace('Progress A','My correction');h.answer('Progress B');await writer.tick();

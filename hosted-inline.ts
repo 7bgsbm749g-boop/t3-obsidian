@@ -3,6 +3,7 @@ import {commandId} from './direct';
 import {applyThreadItem,finalizeRegion,regionBody,renderInlineTurn,replaceRegion,turnForMessage,turnPhase} from './inline-thread';
 import type {ThreadAccess} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
+import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
 
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface HostedInlineRequest {
@@ -59,6 +60,7 @@ export interface HostedWriterIO extends InlineFiles {
   // undefined means the file is missing or has unsaved editor changes. The
   // callback must execute against the latest content in an atomic vault edit.
   updateNote(path:string,change:(current:string)=>string):Promise<string|undefined>;
+  importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
 
 /** One owner calls tick serially. Requests and write-ahead hashes are durable;
@@ -110,6 +112,11 @@ export class HostedInlineWriter {
         if(await this.io.read(paths.stop)!==undefined&&phase==='running'){
           await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(request.id,'interrupt'),threadId:request.threadId,turnId:state.turnId,createdAt:request.createdAt});
           phase='interrupted';
+        }
+        if(phase==='complete'&&this.io.importReplyAsset){
+          const messages=current.messages.filter(m=>m.turnId===state.turnId&&m.role==='assistant');
+          const final=messages.find(m=>m.id===current.latestTurn?.assistantMessageId)??messages.at(-1);
+          if(final)final.text=await rewriteReplyReferences(final.text,reference=>this.io.importReplyAsset!(reference,request,access));
         }
         const next=renderInlineTurn(current,state.turnId,request.threadId,phase);
         // Persist the intended version before writing it, so a crash after the
