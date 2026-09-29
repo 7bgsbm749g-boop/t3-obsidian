@@ -37,7 +37,7 @@ test('completed response removes only its guarded markers and preserves surround
   const final='> First paragraph.\n>\n> Second paragraph.\n';
   const edit=finalizeRegion(document,id,progress.hash,final);assert.ok(edit);
   const completed=document.slice(0,edit.from)+edit.text+document.slice(edit.to);
-  assert.equal(completed,'Earlier user edit\nUser paragraph\n\n> First paragraph.\n>\n> Second paragraph.\n\nNext user paragraph');
+  assert.equal(completed,'Earlier user edit\nUser paragraph\n\n\n> First paragraph.\n>\n> Second paragraph.\n\nNext user paragraph');
   assert.doesNotMatch(completed,/t3-inline:(?:start|end)/);
   assert.equal(finalizeRegion(document.replace('Progress.','User changed this.'),id,progress.hash,final),null);
   const nested=document.replace('> Progress.','> Progress.\n<!-- t3-inline:start:another -->');

@@ -86,7 +86,9 @@ export function finalizeRegion(document:string,id:string,expectedHash:string,fin
   const start=startMarker(id),end=endMarker(id);
   const from=found.from-start.length-1,endFrom=found.to+1;
   if(document.slice(from,from+start.length)!==start||document.slice(endFrom,endFrom+end.length)!==end)return null;
-  return {from,to:endFrom+end.length,text:finalBody.replace(/\n+$/,'')};
+  // The hidden start marker occupies a line in Live Preview. Keep that line
+  // empty when finalizing so the reply does not jump up after it disappears.
+  return {from,to:endFrom+end.length,text:`\n${finalBody.replace(/\n+$/,'')}`};
 }
 
 export function applyThreadItem(state:InlineThreadState,item:any):{state:InlineThreadState;sequence?:number} {
