@@ -59,7 +59,7 @@ export function parseOperation(args:string[],input:string):any {
 }
 export function requestJson(origin:string,token:string,path:string,payload?:any):Promise<any> {
  const url=new URL(origin);if(url.protocol!=='http:' || !['localhost','127.0.0.1','[::1]'].includes(url.hostname) || url.username || url.password || url.pathname!=='/' || url.search || url.hash)throw new Error('T3 runtime must use a loopback HTTP origin.');
- const apiPath=path.startsWith('/api/')?path:'/api/orchestration/'+path;
+ const apiPath=path.startsWith('/api/')||path==='/.well-known/t3/environment'?path:'/api/orchestration/'+path;
  if(apiPath.includes('..')||apiPath.includes('\\')||apiPath.includes('#'))throw new Error('Invalid T3 API path.');
  return new Promise((resolve,reject)=>{
   const data=payload===undefined?undefined:JSON.stringify(payload);
@@ -134,4 +134,12 @@ export async function desktopThreadAccess(connection:Connection):Promise<ThreadA
   if(typeof issued.token!=='string'||typeof issued.sessionId!=='string')throw Error('T3 did not issue a local stream session.');
   let closed=false;
   return {origin:runtime.origin,api:(path,payload)=>requestJson(runtime.origin,issued.token,path,payload),async close(){if(closed)return;closed=true;try{await cli(command,['auth','session','revoke','--base-dir',base,issued.sessionId]);}catch{/* Session expires after five minutes. */}}};
+}
+
+export async function desktopEnvironment(connection:Connection):Promise<string>{
+  const base=connection.baseDir||join(homedir(),'.t3');
+  const runtime=JSON.parse(await fs.readFile(join(base,'userdata','server-runtime.json'),'utf8'));
+  const descriptor=await requestJson(runtime.origin,'','/.well-known/t3/environment');
+  if(typeof descriptor?.environmentId!=='string'||descriptor.orchestrationProtocolVersion!==1)throw Error('Local T3 environment is unavailable.');
+  return descriptor.environmentId;
 }

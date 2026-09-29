@@ -55,6 +55,9 @@ function safeInsertionOffset(document:string,initialOffset:number):number {
 
 export function startMarker(id:string){return `<!-- t3-inline:start:${id} -->`;}
 export function endMarker(id:string){return `<!-- t3-inline:end:${id} -->`;}
+export function activeInlineIds(document:string):string[]{
+  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*T3 · (?:Sending…|Working|Reconnecting)\*\*/.test(regionBody(document,id)?.body??''));
+}
 export function initialRegion(id:string):{text:string;bodyHash:string} {
   const body='**T3 · Sending…**';
   // The final blank line also closes the quote in Obsidian Live Preview when

@@ -6,6 +6,7 @@ import {webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 import {WAIT_FOR_OTHER_THREADS_INSTRUCTION} from '../orchestration';
 import {modelConfig} from './rpc-fixture';
+import {HostedInlineWriter} from '../hosted-inline';
 
 const project={id:'chat-project',title:'Personal notes',workspaceRoot:'/projects/notes',connectionId:'chat-connection',connectionName:'Laptop'};
 
@@ -17,6 +18,26 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   const initial={folderLinks:[rootLink],chatProjectKey:'old:unrelated-project',paired:[{id:'chat-connection',name:'Laptop',url:'https://chat.example',environmentId:'chat-env'}],directScanId:'chat-connection',directProjects:[project],directSelected:['chat-connection:chat-project'],completion:{action:'delete'}};
   const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[],settingsControls:any[]=[],workspaceEvents:Record<string,((...args:any[])=>void)[]>={};let threads:any[]=[],catalog:any[]=[project];
   let vaultAccesses=0;
+  const hostFiles=new Map<string,string>(),hostEditors=new Map<string,any>();
+  let writer:HostedInlineWriter|undefined;
+  const hostTick=async()=>{
+    writer??=new HostedInlineWriter({vaultId:shared.at(-1).vaultId,environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1'}, {
+      read:async path=>hostFiles.get(path),write:async(path,bytes)=>{hostFiles.set(path,bytes);},
+      requests:async()=>[...hostFiles.keys()].filter(path=>path.includes('/requests/')),
+      access:async()=>({origin:'https://chat.example',api:async path=>{
+        const threadId=decodeURIComponent(path.split('/threads/')[1].split('?')[0]);
+        const turn=[...commands].reverse().find(command=>command.type==='thread.turn.start'&&command.threadId===threadId);
+        if(!turn)throw Error('Waiting for dispatch');
+        const turnId='provider-turn-'+turn.commandId;
+        return {snapshotSequence:5,thread:{id:threadId,projectId:project.id,messages:[
+          {id:turn.message.messageId,role:'user',turnId:null,text:turn.message.text,streaming:false,createdAt:turn.createdAt},
+          {id:'answer',role:'assistant',turnId,text:'Inline reply from T3.',streaming:false}],activities:[],
+          latestTurn:{turnId,state:'completed',requestedAt:turn.createdAt},session:{status:'ready',activeTurnId:null}}};
+      }}),
+      updateNote:async(path,change)=>{const editor=hostEditors.get(path);if(!editor)return undefined;const before=editor.getValue(),after=change(before);if(after!==before)editor.replaceRange(after,editor.offsetToPos(0),editor.offsetToPos(before.length));return after;},
+    });
+    await writer.tick();
+  };
   class Base {}
   class Element {
     style={};value='';text='';disabled=false;
@@ -80,6 +101,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     commands.push(command);
     if(command.type==='project.create')catalog.push({id:command.projectId,title:command.title,workspaceRoot:command.workspaceRoot});
     await onCommand?.(command);
+    if(command.type==='thread.turn.start')setTimeout(()=>void hostTick(),20);
     return response({});
   };
   const sockets:any[]=[];
@@ -88,7 +110,8 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     closed=false;
     constructor(public url:string){sockets.push(this);queueMicrotask(()=>this.onopen?.());}
     close(){this.closed=true;this.onclose?.();}
-    send(raw:string){
+    send(raw:string){void this.respond(raw);}
+    async respond(raw:string){
       const req=JSON.parse(raw);if(req._tag==='Ack'||req._tag==='Interrupt'||req._tag==='Pong')return;
       if(req.tag==='orchestration.subscribeThread'){
         const turn=commands.at(-1),turnId='provider-turn-'+turn.commandId,requestedAt=turn.createdAt;
@@ -98,6 +121,13 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
       let value:any;
       if(req.tag==='server.getConfig')value=modelConfig();
       else if(req.tag==='filesystem.browse')value={parentPath:req.payload.partialPath==='~'?'/home/person':req.payload.partialPath.replace(/\/$/,''),entries:[]};
+      else if(req.tag==='projects.writeFile'){hostFiles.set(req.payload.relativePath,req.payload.contents);value={};}
+      else if(req.tag==='projects.readFile'&&req.payload.relativePath.startsWith('.obsidian/t3-code/inline/')){
+        if(req.payload.relativePath.includes('/states/'))await hostTick();
+        const contents=hostFiles.get(req.payload.relativePath);
+        if(contents===undefined){this.onmessage?.({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'ProjectReadFileError'}}]}})});return;}
+        value={contents,truncated:false};
+      }
       else if(req.tag==='projects.readFile')value={contents:JSON.stringify(req.payload.cwd===project.workspaceRoot?{vaultId:shared.at(-1).vaultId}:{vaultId:'different-vault'}),truncated:false};
       else value={entries:[{path:'Notes/Draft.md',kind:'file'}]};
       queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Success',value}})}));
@@ -118,6 +148,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
     const posToOffset=(pos:{line:number;ch:number})=>value.split('\n').slice(0,pos.line).reduce((n,line)=>n+line.length+1,0)+pos.ch;
     const editor={getSelection:()=>selection,getValue:()=>value,getCursor:(side:string)=>offsetToPos(side==='from'?0:selection.length),posToOffset,offsetToPos,replaceRange:(text:string,from:any,to?:any)=>{value=value.slice(0,posToOffset(from))+text+value.slice(to?posToOffset(to):posToOffset(from));}};
+    hostEditors.set(path,editor);
     for(const listener of workspaceEvents['editor-menu']??[])listener(menu,editor,{file});return {menu,file,editor,get value(){return value;}};
   },attachEditor:(path:string,initial:string)=>{
     const file=new File(path),view=Object.assign(new Base(),{file,editor:null as any});
@@ -125,6 +156,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     const offsetToPos=(offset:number)=>{const lines=value.slice(0,offset).split('\n');return {line:lines.length-1,ch:lines.at(-1)!.length};};
     const posToOffset=(pos:{line:number;ch:number})=>value.split('\n').slice(0,pos.line).reduce((n,line)=>n+line.length+1,0)+pos.ch;
     view.editor={getValue:()=>value,getSelection:()=>'',getCursor:()=>offsetToPos(value.length),posToOffset,offsetToPos,replaceRange:(text:string,from:any,to?:any)=>{value=value.slice(0,posToOffset(from))+text+value.slice(to?posToOffset(to):posToOffset(from));}};
+    hostEditors.set(path,view.editor);
     const leaf={view,openFile:async()=>{}};
     (plugin.app.workspace as any).getLeavesOfType=()=>[leaf];
     (plugin.app.workspace as any).getLeaf=()=>leaf;
@@ -366,6 +398,7 @@ test('an empty palette action uses the full note send path',async()=>{
     await h.plugin.openPaletteAction('','');
     const chooser=h.modals.at(-1);
     assert.equal(chooser.constructor.name,'SendProjectModal');
+    h.plugin.settings.folderLinks.push({id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true});
     chooser.onChooseItem(project);
     for(let attempt=0;attempt<40&&h.commands.length<2;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.match(h.commands[1].message.text,/# Send this note/);

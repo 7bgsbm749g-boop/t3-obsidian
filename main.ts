@@ -1,6 +1,6 @@
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from './cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from './native-account';
-import {pair,readDirect,type PairedConnection,type PairedSession} from './direct';
+import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from './direct';
 import { App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, getAllTags, type Editor, type MarkdownFileInfo } from 'obsidian';
 import { Buffer } from 'buffer';
 import { deviceState } from './device-state';
@@ -30,10 +30,11 @@ import {CoordinatorService} from './coordinator-service';
 import {DeterministicWorkflowRuntime,noteSnapshot,type RuntimeRelease} from './workflow-runtime';
 import {observationInterest} from './observation-interest';
 import {mergeWorkflowDrafts} from './workflow-drafts';
-import {InlineChatManager,captureEditorSelection} from './inline-chat';
+import {InlineChatManager,captureEditorSelection,type InlineJob} from './inline-chat';
+import {handoffInline,hostedPaths,type InlineHostTarget,type InlineFiles} from './hosted-inline';
 import {installMobileSelectionAction} from './mobile-selection-action';
 import {hiddenInlineMarkerExtension} from './inline-markers';
-import type {SelectionAnchor} from './inline-thread';
+import {activeInlineIds,type SelectionAnchor} from './inline-thread';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor};
 const INLINE_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note; the Obsidian plugin will insert your reply.';
 const THREAD_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note.';
@@ -91,6 +92,10 @@ export default class SendToT3 extends Plugin {
   private journalFiles?:{exists(path:string):Promise<boolean>;read(path:string):Promise<string>;write(path:string,data:string):Promise<void>;mkdir(path:string):Promise<void>;list(path:string):Promise<{files:string[];folders:string[]}>};
   private metadataPending=new WeakSet<TFile>();
   private inlineChat?:InlineChatManager;
+  private inlineHostService?:import('./hosted-inline-desktop').DesktopInlineHost;
+  private inlineHostKey='';
+  private inlineHostRefresh?:Promise<void>;
+  private inlineEnvironment?:Promise<string>;
   private mobileSelectionAction?:{dispose():void};
   async onload() {
     const data = await this.loadData();
@@ -116,7 +121,7 @@ export default class SendToT3 extends Plugin {
       this.settings.noteThreads.push({notePath:job.notePath,threadId:job.threadId,projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId??'',...(job.connection.environmentId?{environmentId:job.connection.environmentId}:{}),selectedAt:new Date().toISOString()});
       migratedNoteThreads=true;
     }
-    this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id));
+    this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>this.stopHostedInline(job.id,job.hostTarget)});
     if(typeof this.registerEditorExtension==='function')this.registerEditorExtension(hiddenInlineMarkerExtension());
     if(Platform.isMobile&&typeof document.addEventListener==='function'){
       this.mobileSelectionAction=installMobileSelectionAction(this.app,()=>this.app.workspace.getActiveViewOfType(MarkdownView),path=>!this.busy&&!this.inlineChat?.activeFor(path).length,captureEditorSelection,({editor,view,text,anchor})=>this.openEditorChat(text,view.file!,{editor,view,anchor}));
@@ -164,10 +169,15 @@ export default class SendToT3 extends Plugin {
     });
     this.app.workspace.onLayoutReady(()=>{if(!this.stopped){if(this.nativeAccount)void this.refreshMachines().catch(e=>{this.cloudError=message(e);this.cloudChanged?.();});void this.monitorCompletions();this.registerInterval(window.setInterval(()=>{void this.monitorCompletions();},30_000));}});
     this.app.workspace.onLayoutReady(()=>this.inlineChat?.resume());
+    if(!Platform.isMobile)this.app.workspace.onLayoutReady(()=>{
+      const tick=()=>void this.refreshInlineHost().then(()=>this.inlineHostService?.tick()).catch(()=>{/* The durable job retries after the host reconnects. */});
+      tick();this.registerInterval(window.setInterval(tick,1500));
+    });
     this.registerEvent(this.app.workspace.on('file-open',()=>this.inlineChat?.flushAvailable()));
     this.registerEvent(this.app.workspace.on('layout-change',()=>this.inlineChat?.flushAvailable()));
     if(typeof this.app.vault?.on==='function'){
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.inlineChat?.renamed(oldPath,file.path)));
+      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.inlineHostService?.renamed(oldPath,file.path)));
       this.registerEvent(this.app.vault.on('delete',file=>this.inlineChat?.deleted(file.path)));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void (async()=>{const moved=this.settings.noteThreads.filter(entry=>!entry.deletedAt&&(entry.notePath===oldPath||file instanceof TFolder&&entry.notePath.startsWith(oldPath+'/')));if(!moved.length)return;const stamp=new Date().toISOString();this.settings.noteThreads=mergeNoteThreads(this.settings.noteThreads,moved.map(entry=>({...entry,deletedAt:stamp})),moved.map(entry=>({...entry,notePath:file.path+entry.notePath.slice(oldPath.length)})));await this.save();})().catch(error=>new Notice(`T3 thread link: ${message(error)}`,10000));}));
       this.registerEvent(this.app.vault.on('delete',file=>{void (async()=>{const stamp=new Date().toISOString(),affected=this.settings.noteThreads.filter(entry=>entry.notePath===file.path||file instanceof TFolder&&entry.notePath.startsWith(file.path+'/'));if(!affected.length)return;this.settings.noteThreads=this.settings.noteThreads.map(entry=>affected.includes(entry)?{...entry,deletedAt:stamp}:entry);await this.save();})().catch(error=>new Notice(`T3 thread link: ${message(error)}`,10000));}));
@@ -212,6 +222,7 @@ export default class SendToT3 extends Plugin {
       if(!file||file.extension.toLowerCase()!=='md')return;
       const active=this.inlineChat?.activeFor(file.path)??[];
       if(active.length)menu.addItem(item=>item.setTitle('Stop T3 response').setIcon('square').setDisabled(!active[0].threadId).onClick(()=>{void this.inlineChat?.stop(active[0]).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
+      else {const hostedId=activeInlineIds(editor.getValue())[0];if(hostedId)menu.addItem(item=>item.setTitle('Stop T3 response').setIcon('square').onClick(()=>{void this.stopHostedInline(hostedId).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));}
       if(!selection.trim())return;
       let anchor:SelectionAnchor;
       try{anchor=captureEditorSelection(editor);}catch{return;}
@@ -756,6 +767,73 @@ export default class SendToT3 extends Plugin {
     try{await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{...options,requestId,onPrepared:request=>manager.prepare(job,request)});delivered=true;manager.start(job);}
     catch(error){manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&error.requestSaved));throw error;}
   }
+  private localInlineEnvironment():Promise<string>{
+    if(Platform.isMobile)return Promise.reject(Error('A phone cannot host vault responses.'));
+    return this.inlineEnvironment??=import('./desktop').then(d=>d.desktopEnvironment(this.settings.connection)).catch(error=>{this.inlineEnvironment=undefined;throw error;});
+  }
+  private async refreshInlineHost():Promise<void>{
+    if(Platform.isMobile||this.stopped)return;
+    if(this.inlineHostRefresh)return this.inlineHostRefresh;
+    const work=(async()=>{
+      const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
+      const localRoot=adapter.getFullPath?.('');
+      // Each desktop accepts only jobs explicitly addressed to its own T3
+      // environment and vault path. A new default host does not strand jobs
+      // already handed to the old host.
+      const key=localRoot?JSON.stringify([localRoot,this.settings.vaultId,this.app.vault.configDir]):'';
+      if(this.inlineHostKey!==key){this.inlineHostService?.dispose();this.inlineHostService=undefined;this.inlineHostKey='';}
+      if(!key||!localRoot||this.inlineHostService)return;
+      const environmentId=await this.localInlineEnvironment();
+      if(this.stopped)return;
+      const {DesktopInlineHost}=await import('./hosted-inline-desktop');
+      const host=await DesktopInlineHost.open(this.app,{vaultId:this.settings.vaultId,environmentId,workspaceRoot:localRoot,directory:`${this.app.vault.configDir||'.obsidian'}/t3-code/inline/v1`},async target=>{
+        if(target===environmentId)return (await import('./desktop')).desktopThreadAccess({...this.settings.connection,host:'local'});
+        const paired=this.settings.paired.find(c=>c.environmentId===target);
+        if(!paired)throw Error('Connect the thread machine in the streaming host’s T3 settings.');
+        const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId,connectionId:paired.id};
+        return {origin:endpoint(paired.url),api:await environmentApi(connection,await this.sessionFor(paired.id))};
+      });
+      if(this.stopped){host.dispose();return;}this.inlineHostService=host;this.inlineHostKey=key;
+    })();
+    this.inlineHostRefresh=work;try{await work;}finally{if(this.inlineHostRefresh===work)this.inlineHostRefresh=undefined;}
+  }
+  private async inlineHostTarget():Promise<InlineHostTarget>{
+    let root=this.settings.folderLinks.find(link=>link.folderPath==='/');
+    if(!root){await this.configureVaultRoot();root=this.settings.folderLinks.find(link=>link.folderPath==='/');}
+    if(!root)throw Error('Choose a vault project machine before streaming replies.');
+    const environmentId=root.environmentId??this.settings.paired.find(c=>c.id===root!.connectionId)?.environmentId??(!root.connectionId?await this.localInlineEnvironment():undefined);
+    if(!environmentId)throw Error('Reconnect the vault project machine before streaming replies.');
+    return {environmentId,workspaceRoot:root.workspaceRoot,directory:`${this.app.vault.configDir||'.obsidian'}/t3-code/inline/v1`,...(root.connectionId?{connectionId:root.connectionId}:{})};
+  }
+  private async prepareHostedInline(job:InlineJob,request:Request){
+    const host=await this.inlineHostTarget();
+    const threadEnvironmentId=request.connection.environmentId??await this.localInlineEnvironment();
+    job.hostTarget=host;
+    request.inlineHost={version:1,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt};
+  }
+  private async inlineHostFiles(target:InlineHostTarget):Promise<{files:InlineFiles;close():void}>{
+    const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
+    if(!Platform.isMobile&&adapter.getFullPath&&sameWorkspacePath(adapter.getFullPath(''),target.workspaceRoot)&&await this.localInlineEnvironment()===target.environmentId){
+      await this.refreshInlineHost();
+      return {files:(await import('./hosted-inline-desktop')).localInlineFiles(target.workspaceRoot,target.directory),close:()=>{}};
+    }
+    const paired=this.settings.paired.find(c=>c.environmentId===target.environmentId&&(c.id===target.connectionId||!target.connectionId))??this.settings.paired.find(c=>c.environmentId===target.environmentId);
+    if(!paired)throw Error('Connect the vault project machine on this device before streaming replies.');
+    const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId},await this.sessionFor(paired.id));
+    try{
+      if(!await remote.matches(target.workspaceRoot,`${this.app.vault.configDir||'.obsidian'}/plugins/${this.manifest?.id||'send-to-t3-code'}/data.json`,this.settings.vaultId))throw Error('The streaming host no longer matches this vault. Reconnect the vault project machine.');
+      return {files:{read:path=>remote.readFile(target.workspaceRoot,path),write:(path,contents)=>remote.writeFile(target.workspaceRoot,path,contents)},close:()=>remote.close()};
+    }catch(error){remote.close();throw error;}
+  }
+  private async stopHostedInline(id:string,target?:InlineHostTarget){
+    const host=target??await this.inlineHostTarget(),opened=await this.inlineHostFiles(host);
+    try{
+      const paths=hostedPaths(host.directory,id);
+      if(!await opened.files.read(paths.request))throw Error('This response belongs to an older local stream. Stop it on the device that started it.');
+      await opened.files.write(paths.stop,JSON.stringify({id,requestedAt:new Date().toISOString()}));
+      new Notice('Stop requested on the vault project machine.');
+    }finally{opened.close();}
+  }
   private async chatTarget(notePath?:string,preferred?:NoteThread,ignoreActive=false,overrideKey?:string):Promise<{project:Project;link:FolderLink}> {
     let link=notePath?folderLinkForPath(this.settings.folderLinks,notePath):this.settings.folderLinks.find(item=>item.folderPath==='/');
     if(overrideKey){const project=this.projects().find(item=>projectKey(item)===overrideKey);if(!project)throw Error('The chosen T3 project is unavailable. Choose a project again.');return {project,link:link&&projectKey(project)===`${link.connectionId?link.connectionId+':':''}${link.projectId}`?link:{id:'project-override',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false}};}
@@ -838,7 +916,7 @@ export default class SendToT3 extends Plugin {
   private messageFooter(destination:string):string {
     return `\n\nSent from Obsidian.\nObsidian vault: ${JSON.stringify(this.app.vault.getName())}\nDestination note path: ${JSON.stringify(destination)}`;
   }
-  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;onPrepared?:(request:Request)=>void}):Promise<void> {
+  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;onPrepared?:(request:Request)=>void|Promise<void>}):Promise<void> {
     if(this.busy)throw Error('Another send is in progress. Wait for it to finish.');
     if(!prompt.trim())throw Error('Enter a message before sending.');
     if(applyOrchestration(prompt,this.settings.orchestration).length>120_000)throw Error('The message exceeds T3’s 120,000-character limit. Shorten it before sending.');
@@ -879,7 +957,7 @@ export default class SendToT3 extends Plugin {
       const threadId=options?.threadId??(!options?.newThread&&active&&project.id===active.projectId&&(project.connectionId??'')===active.connectionId?active.threadId:undefined);
       const remember=options?.rememberLink??(this.settings.threadLinking||Boolean(this.noteLink(note?.path)));
       const request:Request={id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(threadId?{threadId}:{}),...(note&&remember?{noteLink:this.linkIntent(note.path,project,connection)}:{})};
-      options?.onPrepared?.(request);
+      await options?.onPrepared?.(request);
       this.settings.pending.push(request);
       try{await this.save();saved=true;}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);throw e;}
       await this.dispatch(request);
@@ -1118,7 +1196,7 @@ export default class SendToT3 extends Plugin {
       if(inlineView){
         const manager=this.inlineChat;if(!manager)throw Error('Inline T3 streaming is unavailable. Reload the plugin.');
         inlineJob=manager.reserveAtEnd(inlineView.editor,inlineView,request.id,file.path);
-        manager.prepare(inlineJob,request);
+        await manager.prepare(inlineJob,request);
       }
       this.settings.pending.push(request); await this.save(); saved = true;
       const sentThreadId=await this.dispatch(request,options?.quiet);
@@ -1189,6 +1267,11 @@ export default class SendToT3 extends Plugin {
     }
   }
   async dispatch(request:Request,quiet=false) {
+    if(request.inlineHost){
+      if(!quiet)new Notice('Handing the response to the vault project machine…');
+      const opened=await this.inlineHostFiles(request.inlineHost.host);
+      try{await handoffInline(opened.files,request.inlineHost,()=>!this.stopped);}finally{opened.close();}
+    }
     if(!quiet)new Notice(`Sending to ${projectLabel(request.project)}…`);
     const result=await sendRequest(request);
     const before={jobs:this.settings.completionJobs,pending:this.settings.pending,noteThreads:this.settings.noteThreads};
@@ -1197,7 +1280,7 @@ export default class SendToT3 extends Plugin {
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;this.settings.noteThreads=before.noteThreads;throw e;}
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
   }
-  onunload(){this.stopped=true;this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.remoteJournal?.close();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.stopped=true;this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.remoteJournal?.close();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;
@@ -1414,7 +1497,7 @@ class T3Settings extends PluginSettingTab {
     el.createEl('p',{text:'Folder links route questions and manual note sends. Link to self registers a local T3 project.'});
     const root=this.plugin.settings.folderLinks.find(l=>l.folderPath==='/');
     const machine=root?.connectionId?this.plugin.settings.paired.find(c=>c.id===root.connectionId)?.name:undefined;
-    new Setting(el).setName('Vault project machine').setDesc(root?`${machine??(Platform.isMobile?'Linked computer':'This computer')} · ${root.workspaceRoot}`:'Choose a computer with a synced copy of this vault. This becomes the default T3 destination.').addButton(b=>b.setButtonText(root?'Change machine':'Connect vault').onClick(async()=>{try{await this.plugin.configureVaultRoot();this.display();}catch(e){if(!(e instanceof VaultSetupCancelled))new Notice(message(e),10000);}}));
+    new Setting(el).setName('Vault project machine').setDesc(root?`${machine??(Platform.isMobile?'Linked computer':'This computer')} · ${root.workspaceRoot} · Hosts new note responses; keep Obsidian open there.`:'Choose the default T3 destination and response-writing host. Keep Obsidian and this plugin running there.').addButton(b=>b.setButtonText(root?'Change machine':'Connect vault').onClick(async()=>{try{await this.plugin.configureVaultRoot();this.display();}catch(e){if(!(e instanceof VaultSetupCancelled))new Notice(message(e),10000);}}));
     if(!this.plugin.settings.folderLinks.length)el.createEl('p',{text:'No folders are linked.'});
     for(const link of this.plugin.settings.folderLinks){
       new Setting(el).setName(link.folderPath==='/'?'Vault root':link.folderPath).setDesc(`${link.self?'Self · ':''}${link.projectTitle} · ${link.workspaceRoot}`).addButton(b=>b.setButtonText('Unlink').onClick(async()=>{this.plugin.settings.folderLinks=this.plugin.settings.folderLinks.filter(item=>item!==link);for(const workflow of this.plugin.settings.automationDrafts)if(workflow.projectId===link.projectId&&workflow.connectionId===link.connectionId)workflow.enabled=false;await this.plugin.save();this.plugin.refreshFolderIndicators();this.display();}));
