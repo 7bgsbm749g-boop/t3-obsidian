@@ -148,7 +148,7 @@ function closeOpenFence(text:string):string {
 function tableCells(line:string):string[]|null {
   if(/^ {4}|^\t|^ {0,3}>/.test(line))return null;
   const cells:string[]=[];
-  let cell='',escaped=false,backticks=0;
+  let cell='',escaped=false,backticks=0,wikiLink=false;
   for(let index=0;index<line.length;index++){
     const char=line[index];
     if(escaped){cell+=char;escaped=false;continue;}
@@ -159,7 +159,9 @@ function tableCells(line:string):string[]|null {
       backticks=backticks===length?0:backticks||length;
       cell+=line.slice(index,end);index=end-1;continue;
     }
-    if(char==='|'&&!backticks){cells.push(cell);cell='';continue;}
+    if(!backticks&&line.slice(index,index+2)==='[['){wikiLink=true;cell+='[[';index++;continue;}
+    if(wikiLink&&line.slice(index,index+2)===']]'){wikiLink=false;cell+=']]';index++;continue;}
+    if(char==='|'&&!backticks&&!wikiLink){cells.push(cell);cell='';continue;}
     cell+=char;
   }
   cells.push(cell);

@@ -155,3 +155,9 @@ test('pipes inside fences, escaped pipes, and prose do not create tables',()=>{
   const rendered=renderInlineTurn(state,'turn','thread','complete');
   assert.match(rendered,/> A \| B\n\n```md\n\| Head \| Cell \|\n\| --- \| --- \|\n```\n\n\| Name \| Value \|\n\| --- \| --- \|\n\| A \\| B \| 1 \|\n\n> End\.\n$/);
 });
+
+test('vault image aliases remain in unquoted table rows after reply asset import',()=>{
+  const answer='Before.\n\n| Case | Smoke evidence |\n| --- | --- |\n| Normal editor stream | ![[T3 Code Attachments/job/real-stream-result.png|Completed editor stream]] |\n| Limit-like failure and restart | ![[T3 Code Attachments/job/live-simulated-limit.png|Simulated limit error]] → ![[T3 Code Attachments/job/recovery-after-continue.png|Recovered response]] |\n| Attach a newer T3 turn | [[T3 Code Attachments/job/attach-after-click.png|Attached turn]] |\n\nAfter.';
+  const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:answer,streaming:false}],activities:[],latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'answer'}} as any;
+  assert.equal(renderInlineTurn(state,'turn','thread','complete'),'> Before.\n\n'+answer.slice('Before.\n\n'.length,-'\n\nAfter.'.length)+'\n\n> After.\n');
+});
