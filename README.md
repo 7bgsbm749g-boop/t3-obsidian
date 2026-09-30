@@ -87,9 +87,9 @@ Open Obsidian’s command palette (Ctrl/⌘ + P, or your configured mobile swipe
 | Selection | Typed input | First row | Sent to T3 |
 | --- | --- | --- | --- |
 | None | None | **Send to T3 Code** | Full Markdown note and embedded images |
-| Text | None | **Ask T3 Code** | Selected text and note location |
+| Text | None | **Ask T3 Code** | Selected text, its embedded images, and note location |
 | None | Text | **T3 Code: “…”** | Typed question and note location |
-| Text | Text | **Ask T3 Code: “…”** | Selected text, typed question, and note location |
+| Text | Text | **Ask T3 Code: “…”** | Selected text, its embedded images, typed question, and note location |
 
 The palette keeps one device-local draft. A confirmed question clears it. Sending uses the same note/image packaging as **Open in T3 Code** in the Files sidebar; asking does not copy the full note. All send and ask dialogs use the same compact layout. **Previous thread** defaults to the last thread used for this note; **New thread**, **Existing thread…**, and **Previous threads…** offer alternatives. Pressing Enter chooses the purple default button. Click the note-path button to select a project for this send without changing the folder link. The button keeps the note path as its text; its tooltip shows the current project. A manual message ends with **Sent from Obsidian.**, the vault name, and the destination note path. No vault-relative path line is sent.
 
@@ -117,7 +117,7 @@ While a response is running, use **Ask T3 Code** on selected text or type a ques
 
 Steered responses retain the assistant paragraphs around your messages, including when **Keep intermediate agent responses** is off. Input positions, exact message IDs, and the transcript survive reconnects, plugin reloads, and writer handoffs. Any authenticated device can send without taking ownership of the writer. Hash checks still protect the response from manual edits. Saved delivery failures use **Unconfirmed requests → Retry** with the original IDs; the plugin never automatically resends input. If the original turn finishes after steering is reserved, a resulting new turn is explicitly attached to the same response. If the response has already finalized or is paused before reservation, the send is refused. Pending approvals and structured questions must be answered before ordinary steering.
 
-Select text in a Markdown editor and choose **Ask T3 Code** from the editor menu, or use the palette’s **Ask T3 Code** row. Choose **New thread** or **Existing thread…**. The plugin sends the selection and destination note path to T3, then inserts a tracked response below the selected line. Add text in the palette to send a specific question about the selection. A working indicator animates while the reply streams. Routine tool activity stays in T3; approval and question prompts still appear in the note and through an Obsidian notice. When the turn completes, the plugin replaces progress text with only the final answer by default. Enable **Keep intermediate agent responses** under **Inline responses** to retain the agent’s progress paragraphs alongside the final answer. This choice applies to new responses and stays with each response through reloads and device handoffs; routine tool activity and status indicators are still removed. The plugin owns the note insertion.
+Select text in a Markdown editor and choose **Ask T3 Code** from the editor menu, or use the palette’s **Ask T3 Code** row. Choose **New thread** or **Existing thread…**. The plugin sends the selection, its embedded images, and destination note path to T3, then inserts a tracked response below the selected line. Add text in the palette to send a specific question about the selection. A working indicator animates while the reply streams. Routine tool activity stays in T3; approval and question prompts still appear in the note and through an Obsidian notice. When the turn completes, the plugin replaces progress text with only the final answer by default. Enable **Keep intermediate agent responses** under **Inline responses** to retain the agent’s progress paragraphs alongside the final answer. This choice applies to new responses and stays with each response through reloads and device handoffs; routine tool activity and status indicators are still removed. The plugin owns the note insertion.
 
 When T3 asks for input, the question text and option descriptions appear beneath the streamed progress in the same purple quote. **Answer** opens an Obsidian dialog in Live Preview or Reading view; **Answer T3 question…** also appears in the editor menu and command palette. The dialog supports single choice, multiple choice, free text, and several questions in one request. Incoming questions never open it automatically. Streaming refreshes preserve the draft, focus, and text selection. Closing the dialog saves the draft without answering or dismissing. Only **Submit answer** sends a response; a preselected choice alone never sends.
 
@@ -194,6 +194,8 @@ The completion action and note fingerprint are saved when sending. Later setting
 Notes edited, replaced, renamed, or left with unsaved editor changes are kept. Archive/delete runs in the sending Obsidian vault, including when the T3 thread runs on another computer. Existing notes and previously sent threads are not automatically enrolled.
 
 ## Embedded images
+
+Full-note sends and Ask T3 questions use the same image packaging. Only images embedded in the selected passage or question are attached; unselected note content is not sent.
 
 Supported embeds: `![[image.png]]`, `![[folder/image.png|300]]`, `![alt](relative/image.png)`, reference-style Markdown images, HTTPS image URLs, and base64 image data URLs. Local links use Obsidian’s resolver relative to the source note, including attachment folders and percent-encoded paths. Images inside code blocks, inline code, frontmatter, and escaped wiki embeds are ignored.
 

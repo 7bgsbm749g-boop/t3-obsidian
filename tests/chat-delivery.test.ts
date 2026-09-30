@@ -1080,3 +1080,61 @@ test('legacy saved send requests still remember their confirmed note thread',asy
     assert.equal(h.plugin.settings.noteThreads[0].threadId,'confirmed-legacy-thread');
   }finally{h.plugin.onunload();}
 });
+
+for(const streaming of [false,true])test(`selection questions attach local images through editor and palette (streaming ${streaming})`,async()=>{
+  const h=await chatHarness();
+  try{
+    const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=','base64');
+    const resolved:any[]=[];
+    h.plugin.app.metadataCache={getFirstLinkpathDest:(link:string,source:string)=>{resolved.push({link,source});return {path:'Attachments/picture.png',name:'picture.png',stat:{size:png.length}};}};
+    h.plugin.app.vault.readBinary=async()=>png;
+    h.plugin.settings.inlineStreaming.enabled=streaming;
+    const selected='Before\n![[picture.png|300]]\n![again](picture.png)\nAfter';
+    const context=h.editorMenu(selected,'Notes/Image selection.md');
+    await context.menu.items.find(item=>item.title==='Ask T3 Code')!.callback();
+    await h.modals.at(-1).choose(false);
+    const first=h.commands.find(command=>command.type==='thread.turn.start');
+    assert.equal(first.message.attachments.length,1,'Repeated embeds share the same native attachment');
+    assert.equal(first.message.attachments[0].dataUrl,'data:image/png;base64,'+png.toString('base64'));
+    assert.equal(first.message.context.records[0].attachmentId,first.message.attachments[0].id);
+    assert.match(first.message.text,/Before\n\[.*\]\(t3-context:\/\/.*\)\n\[.*\]\(t3-context:\/\/.*\)\nAfter/);
+    assert.doesNotMatch(first.message.text,/Tail/,'Unselected text stays out of the request');
+    assert.equal(resolved[0].source,'Notes/Image selection.md');
+    if(streaming)await new Promise(resolve=>setTimeout(resolve,500));
+    h.attachEditor('Notes/Palette images.md',selected+'\nUnselected ![[outside.png]]');
+    await h.plugin.openPaletteAction('Describe it.',selected);
+    await h.modals.at(-1).choose(false);
+    const next=h.commands.filter(command=>command.type==='thread.turn.start').at(-1);
+    assert.equal(next.message.attachments.length,1);
+    assert.match(next.message.text,/Selected text:\nBefore/);
+    assert.match(next.message.text,/Question:\nDescribe it\./);
+    assert.equal(resolved.at(-1).source,'Notes/Palette images.md');
+  }finally{h.plugin.onunload();}
+});
+
+test('selection image failures stop delivery before creating a thread or saving a pending request',async()=>{
+  const h=await chatHarness();
+  try{
+    h.plugin.app.metadataCache={getFirstLinkpathDest:()=>null};
+    await assert.rejects(h.plugin.sendChat('![[missing.png]]',{path:'Notes/Image.md'}),/Embedded image not found/);
+    await assert.rejects(h.plugin.sendChat('![bad](data:image/png;base64,AAAA)',{path:'Notes/Image.md'}),/Unsupported or invalid image/);
+    assert.equal(h.commands.length,0);
+    assert.equal(h.plugin.settings.pending.length,0);
+    assert.equal(h.plugin.busy,false);
+  }finally{h.plugin.onunload();}
+});
+
+test('selected reference images resolve definitions elsewhere in the note without sending other content',async()=>{
+  const h=await chatHarness();
+  try{
+    const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=','base64');
+    h.attachEditor('Notes/Reference.md','Selected ![figure][shot]\n\nUnselected content ![[outside.png]]\n\n[shot]: picture.png');
+    h.plugin.app.metadataCache={getFirstLinkpathDest:(link:string,source:string)=>{assert.equal(link,'picture.png');assert.equal(source,'Notes/Reference.md');return {name:'picture.png',stat:{size:png.length}};}};
+    h.plugin.app.vault.readBinary=async()=>png;
+    await h.plugin.sendChat('Selected ![figure][shot]',{path:'Notes/Reference.md'},{threadId:'existing'});
+    assert.equal(h.commands[0].threadId,'existing');
+    assert.equal(h.commands[0].message.attachments.length,1);
+    assert.match(h.commands[0].message.text,/Selected \[.*\]\(t3-context:\/\//);
+    assert.doesNotMatch(h.commands[0].message.text,/Unselected|outside.png|\[shot\]:/);
+  }finally{h.plugin.onunload();}
+});

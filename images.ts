@@ -8,8 +8,17 @@ export const MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
 export interface ImageEmbed {link:string; original:string; line:number; offset:number; wiki:boolean}
 export interface ImageContext {version:1;records:{version:1;contextId:string;label:string;kind:'image';attachmentId:string;name:string;mimeType:string;sizeBytes:number}[]}
 export interface ImageAttachment {type:'image'; id:string; name:string; mimeType:string; sizeBytes:number; dataUrl:string}
-export function findImageEmbeds(markdown:string):ImageEmbed[] {
+export function imageReferenceDefinitions(markdown:string):string {
   const root=unified().use(remarkParse).parse(markdown) as Root;
+  const definitions:string[]=[];
+  function walk(node:Root|RootContent){
+    if(node.type==='definition')definitions.push(markdown.slice(node.position!.start.offset!,node.position!.end.offset!));
+    if('children' in node)for(const child of node.children)walk(child as RootContent);
+  }
+  walk(root);return definitions.join('\n');
+}
+export function findImageEmbeds(markdown:string,referenceDefinitions=''):ImageEmbed[] {
+  const root=unified().use(remarkParse).parse(markdown+(referenceDefinitions?'\n\n'+referenceDefinitions:'')) as Root;
   const definitions=new Map<string,string>();
   const output:ImageEmbed[]=[];
   const frontmatterEnd=/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)\s*(?:\r?\n|$)/.exec(markdown)?.[0].length ?? 0;
@@ -17,7 +26,7 @@ export function findImageEmbeds(markdown:string):ImageEmbed[] {
   walk(root,node=>{if(node.type==='definition' && !definitions.has(node.identifier)) definitions.set(node.identifier,node.url);});
   walk(root,node=>{
     const start=node.position?.start.offset; const end=node.position?.end.offset;
-    if(start===undefined || end===undefined || start<frontmatterEnd) return;
+    if(start===undefined || end===undefined || start<frontmatterEnd || start>=markdown.length) return;
     if(node.type==='image' || node.type==='imageReference') {
       const link=node.url ?? definitions.get(node.identifier);
       if(link) output.push({link,original:markdown.slice(start,end),line:node.position.start.line,offset:start,wiki:false});
@@ -43,8 +52,8 @@ export function imageMime(bytes:Buffer):string {
   if(bytes.subarray(0,4).toString()==='RIFF'&&bytes.subarray(8,12).toString()==='WEBP') return 'image/webp';
   throw new Error('Unsupported or invalid image. Use PNG, JPEG, GIF, or WebP.');
 }
-export async function collectImages(markdown:string, read:(embed:ImageEmbed)=>Promise<{bytes:Buffer;name:string}>):Promise<{attachments:ImageAttachment[];context:ImageContext;markdown:string}> {
-  const embeds=findImageEmbeds(markdown); const attachments:ImageAttachment[]=[];const byHash=new Map<string,ImageAttachment>();const byLink=new Map<string,ImageAttachment>();const replacements:{offset:number;length:number;text:string}[]=[];let total=0;
+export async function collectImages(markdown:string, read:(embed:ImageEmbed)=>Promise<{bytes:Buffer;name:string}>,referenceDefinitions=''):Promise<{attachments:ImageAttachment[];context:ImageContext;markdown:string}> {
+  const embeds=findImageEmbeds(markdown,referenceDefinitions); const attachments:ImageAttachment[]=[];const byHash=new Map<string,ImageAttachment>();const byLink=new Map<string,ImageAttachment>();const replacements:{offset:number;length:number;text:string}[]=[];let total=0;
   for(const embed of embeds) {
     let attachment=byLink.get(embed.link);
     if(!attachment) {

@@ -5,7 +5,7 @@ import { App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, 
 import { Buffer } from 'buffer';
 import { deviceState } from './device-state';
 import { downloadImage,nativeAccountFetch } from './network';
-import { collectImages, MAX_IMAGE_BYTES } from './images';
+import { collectImages, imageReferenceDefinitions, MAX_IMAGE_BYTES } from './images';
 import { applyOrchestration, OrchestrationSettings } from './orchestration';
 import { CompletionSettings, CompletionJob, CompletionAction, archiveFolder, contentHash, completionState, isOriginalCompletedTurn, cleanCompletedNote } from './completion';
 import { Connection, Project, Request, RequestDeliveryError, parseProjects, runBridge, sendRequest, configureBridge, retiredConnection, RETIRED_MESSAGE, projectKey, projectLabel } from './bridge';
@@ -1099,10 +1099,32 @@ export default class SendToT3 extends Plugin {
   private messageFooter(destination:string):string {
     return `\n\nSent from Obsidian.\nObsidian vault: ${JSON.stringify(this.app.vault.getName())}\nDestination note path: ${JSON.stringify(destination)}`;
   }
+  private async prepareImages(markdown:string,sourcePath:string,resolveReferences=false){
+    let definitions='';
+    if(resolveReferences&&sourcePath&&/!\[(?!\[)[^\]\n]*\](?!\()/.test(markdown)){
+      const view=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===sourcePath);
+      const file=this.app.vault.getFileByPath(sourcePath);
+      const source=view?.editor?.getValue()??(file?await this.app.vault.read(file):'');
+      definitions=imageReferenceDefinitions(source);
+    }
+    return collectImages(markdown, async embed => {
+      if (/^https?:/i.test(embed.link)) return {bytes:await downloadImage(embed.link),name:new URL(embed.link).pathname.split('/').pop() || 'remote-image'};
+      if (/^data:/i.test(embed.link)) {
+        const match=/^data:image\/(png|jpeg|gif|webp);base64,([A-Za-z0-9+/=\r\n]+)$/i.exec(embed.link);
+        if(!match || match[2].length > 14_000_000) throw new Error('Invalid or oversized inline image data.');
+        return {bytes:Buffer.from(match[2],'base64'),name:`inline.${match[1]}`};
+      }
+      if (/^[a-z][a-z0-9+.-]*:/i.test(embed.link)) throw new Error('Use a vault image, HTTPS URL, or image data URL.');
+      let link=embed.link.split('#')[0]; try{link=decodeURIComponent(link);}catch{throw new Error('Invalid percent encoding in image path.');}
+      const target=this.app.metadataCache.getFirstLinkpathDest(link,sourcePath);
+      if(!target) throw new Error(`Embedded image not found: ${link}`);
+      if(target.stat.size > MAX_IMAGE_BYTES) throw new Error('Image exceeds 10 MiB.');
+      return {bytes:Buffer.from(await this.app.vault.readBinary(target)),name:target.name};
+    },definitions);
+  }
   async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;barePrompt?:boolean;onPrepared?:(request:Request)=>void|Promise<void>}):Promise<void> {
     if(this.busy)throw Error('Another send is in progress. Wait for it to finish.');
     if(!prompt.trim())throw Error('Enter a message before sending.');
-    if(applyOrchestration(prompt,this.settings.orchestration).length>120_000)throw Error('The message exceeds T3’s 120,000-character limit. Shorten it before sending.');
     if(this.stopped)throw Error('The plugin has been disabled. Re-enable it before sending.');
     this.busy=true;
     let saved=false;
@@ -1111,7 +1133,8 @@ export default class SendToT3 extends Plugin {
       let {project,link}=await this.chatTarget(note?.path,historical,Boolean(options?.newThread||options?.expectedProjectKey),options?.projectOverrideKey);
       if(options?.expectedProjectKey&&projectKey(project)!==options.expectedProjectKey)throw Error('The note’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
-      let text=prompt;
+      const images=options?.barePrompt?undefined:await this.prepareImages(prompt,note?.path??'',true);
+      let text=images?.markdown??prompt;
       if(options?.barePrompt){
         text=prompt;
       }else if(note){
@@ -1140,7 +1163,7 @@ export default class SendToT3 extends Plugin {
       const title=prompt.trim().split(/\r?\n/)[0].replace(/\s+/g,' ').trim().slice(0,160);
       const active=this.noteThread(note?.path);
       const threadId=options?.threadId??(!options?.newThread&&active&&project.id===active.projectId&&(project.connectionId??'')===active.connectionId?active.threadId:undefined);
-      const request:Request={id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{})};
+      const request:Request={id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{})};
       await options?.onPrepared?.(request);
       this.settings.pending.push(request);
       try{await this.save();saved=true;}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);throw e;}
@@ -1357,20 +1380,7 @@ export default class SendToT3 extends Plugin {
       const content = inlineView?inlineView.editor.getValue():await this.app.vault.read(file);
       if (!content.trim()) {new Notice('This note is empty. Add Markdown before sending.'); return;}
       if(!options?.quiet)new Notice('Preparing note and embedded images…');
-      const images = await collectImages(content, async embed => {
-        if (/^https?:/i.test(embed.link)) return {bytes:await downloadImage(embed.link),name:new URL(embed.link).pathname.split('/').pop() || 'remote-image'};
-        if (/^data:/i.test(embed.link)) {
-          const match=/^data:image\/(png|jpeg|gif|webp);base64,([A-Za-z0-9+/=\r\n]+)$/i.exec(embed.link);
-          if(!match || match[2].length > 14_000_000) throw new Error('Invalid or oversized inline image data.');
-          return {bytes:Buffer.from(match[2],'base64'),name:`inline.${match[1]}`};
-        }
-        if (/^[a-z][a-z0-9+.-]*:/i.test(embed.link)) throw new Error('Use a vault image, HTTPS URL, or image data URL.');
-        let link=embed.link.split('#')[0]; try{link=decodeURIComponent(link);}catch{throw new Error('Invalid percent encoding in image path.');}
-        const target=this.app.metadataCache.getFirstLinkpathDest(link,file.path);
-        if(!target) throw new Error(`Embedded image not found: ${link}`);
-        if(target.stat.size > MAX_IMAGE_BYTES) throw new Error('Image exceeds 10 MiB.');
-        return {bytes:Buffer.from(await this.app.vault.readBinary(target)),name:target.name};
-      });
+      const images = await this.prepareImages(content,file.path);
       if(inlineView&&inlineView.editor.getValue()!==content)throw Error('The note changed while preparing the send. Try again with the current text.');
       const note=this.noteContext(file),link=folderLinkForPath(this.settings.folderLinks,file.path)??{id:'manual',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true};
       const destination=this.destinationNotePath(note,project,link)??note.absolutePath??'(unmapped on destination)';
@@ -1718,7 +1728,7 @@ class T3Settings extends PluginSettingTab {
     el.createEl('h3',{text:'Threads'});
     new Setting(el).setName('Settle completed threads').setDesc('Move Obsidian threads out of T3 Code’s active list after a successful turn and its inline reply finish. Sending to a settled thread wakes it again. Checks run while Obsidian is open.').addToggle(t=>t.setValue(this.plugin.settings.autoSettleThreads).onChange(async enabled=>{this.plugin.settings.autoSettleThreads=enabled;if(!enabled)this.plugin.settings.settlementJobs=[];await this.plugin.save();}));
     new Setting(el).setName('Command palette').setDesc(this.plugin.paletteChatStatus()==='active'?'Use the first T3 Code row to send the current note or ask a question about it.':'The live T3 Code row is unavailable in this Obsidian version or the core Command palette is disabled.');
-    el.createEl('p',{text:'Sending includes the current note and its embedded images. Asking sends the question and note location. A selected passage is included with the question.'});
+    el.createEl('p',{text:'Sending includes the current note and its embedded images. Asking sends the question and note location. A selected passage and its embedded images are included with the question.'});
     el.createEl('h3',{text:'Inline responses'});
     new Setting(el).setName('Stream replies into the editor').setDesc('For every manual Send or Ask, insert the reply into the note. Selection questions appear below the selection; other replies appear at the end.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));
     new Setting(el).setName('Keep intermediate agent responses').setDesc('Keep the agent’s progress paragraphs alongside its final answer after an editor response finishes. Off by default. Applies to new responses.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.keepIntermediate).onChange(async enabled=>{this.plugin.settings.inlineStreaming.keepIntermediate=enabled;await this.plugin.save();}));
