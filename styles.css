@@ -93,3 +93,12 @@
 }
 .callout[data-callout="t3-steering"] .callout-icon { display: none; }
 .callout[data-callout="t3-steering"] .callout-title { color: var(--text-muted); font-size: var(--font-ui-small); }
+
+.send-to-t3-note-project {
+  max-width: 100%;
+  height: auto;
+  padding: 0.6em 0.85em;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}

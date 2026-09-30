@@ -42,14 +42,14 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   };
   class Base {}
   class Element {
-    style={};value='';text='';disabled=false;children:Element[]=[];
-    empty(){this.children=[];} setText(value:string){this.text=value;} addEventListener(){} focus(){}
-    createEl(_tag?:string,options?:{text?:string}){const child=new Element();child.text=options?.text??'';this.children.push(child);return child;}
+    style={};value='';text='';disabled=false;children:Element[]=[];events:Record<string,Function>={};attr:Record<string,string>={};tag='';
+    empty(){this.children=[];} setText(value:string){this.text=value;} addEventListener(name:string,callback:Function){this.events[name]=callback;} click(){return this.events.click?.();} focus(){}
+    createEl(tag?:string,options?:{text?:string;attr?:Record<string,string>}){const child=new Element();child.tag=tag??'';child.text=options?.text??'';child.attr=options?.attr??{};this.children.push(child);return child;}
   }
   class Modal {
     contentEl=new Element();titleEl=new Element();closed=false;emptyStateText='';placeholder='';
     constructor(public app:any){}
-    open(){this.closed=false;modals.push(this);(this as any).onOpen?.();if(this.constructor.name==='ChatDestinationModal')focusedButton=[...settingsControls].reverse().find(setting=>setting.buttons.some((button:any)=>button.text==='Change project for this send'))?.buttons[0];}
+    open(){this.closed=false;modals.push(this);(this as any).onOpen?.();if(this.constructor.name==='SendDestinationModal')focusedButton=(this as any).contentEl.children[0]?.children[0];}
     close(){this.closed=true;(this as any).onClose?.();}
     setPlaceholder(value:string){this.placeholder=value;}
   }
@@ -204,7 +204,7 @@ test('a locally paired session authorizes a synced managed connection without ac
   }finally{h.plugin.onunload();}
 });
 
-test('a confirmed note chat links its thread, routes the next question there, and survives restart',async()=>{
+test('a confirmed note chat remembers its thread, routes the next question there, and survives restart',async()=>{
   const h=await chatHarness();
   try{
     const note={path:'Notes/Linked.md'};
@@ -224,32 +224,34 @@ test('a confirmed note chat links its thread, routes the next question there, an
   }finally{h.plugin.onunload();}
 });
 
-test('thread linking switch controls first-link creation while explicit new threads remain available',async()=>{
+test('every confirmed note send updates the default thread even with a legacy opt-out',async()=>{
   const h=await chatHarness();
   try{
-    const note={path:'Notes/OptOut.md'};
-    h.plugin.settings.threadLinking=false;
-    await h.plugin.sendChat('One',note);
-    await h.plugin.sendChat('Two',note);
-    assert.equal(h.commands.filter(command=>command.type==='thread.create').length,2);
-    assert.equal(h.plugin.settings.noteThreads.length,0);
-    await h.plugin.sendChat('Remember this one',note,{rememberLink:true});
-    const linked=h.plugin.settings.noteThreads[0].threadId;
-    h.setThreads([{id:linked,projectId:project.id,title:'Remember this one',updatedAt:new Date().toISOString(),runtimeMode:'approval-required',interactionMode:'default'}]);
-    await h.plugin.sendChat('Use the link',note);
-    assert.equal(h.commands.at(-1).threadId,linked);
-    await h.plugin.sendChat('Separate branch',note,{newThread:true,rememberLink:false});
-    assert.equal(h.plugin.settings.noteThreads[0].threadId,linked);
+    const note={path:'Notes/Always.md'};
+    await h.plugin.onExternalSettingsChange({...h.shared.at(-1),threadLinking:false});
+    await h.plugin.sendChat('First',note);
+    const first=h.plugin.settings.noteThreads[0].threadId;
+    h.setThreads([{id:first,projectId:project.id,title:'First',updatedAt:new Date().toISOString(),runtimeMode:'approval-required',interactionMode:'default'}]);
+    await h.plugin.sendChat('Follow up',note);
+    assert.equal(h.commands.at(-1).threadId,first);
+    await h.plugin.sendChat('Separate branch',note,{newThread:true});
+    const latest=h.commands.at(-1).threadId;
+    assert.notEqual(latest,first);
+    h.setThreads([{id:latest,projectId:project.id,title:'Separate branch',updatedAt:new Date().toISOString(),runtimeMode:'approval-required',interactionMode:'default'}]);
+    await h.plugin.sendChat('Continue the new thread',note);
+    assert.equal(h.commands.at(-1).threadId,latest);
+    assert.equal(h.plugin.settings.noteThreads.length,2);
+    assert.equal(h.shared.at(-1).threadLinking,undefined);
   }finally{h.plugin.onunload();}
 });
 
-test('a full-note send keeps its linked note and reuses the confirmed thread',async()=>{
+test('a full-note send keeps its note with a remembered thread and reuses the confirmed thread',async()=>{
   const h=await chatHarness();
   try{
     (h.plugin.app.vault as any).read=async()=> 'Full note content';
     const file={path:'Notes/Whole.md',basename:'Whole',extension:'md',stat:{ctime:123}};
     const first=await h.plugin.send(file,project,{throwOnError:true});
-    assert.equal(first.request.completion.action,'keep','Linking must prevent configured delete cleanup');
+    assert.equal(first.request.completion.action,'keep','Remembering must prevent configured delete cleanup');
     assert.equal(h.plugin.settings.noteThreads[0].threadId,first.threadId);
     h.setThreads([{id:first.threadId,projectId:project.id,title:'Whole',updatedAt:new Date().toISOString(),runtimeMode:'approval-required',interactionMode:'default'}]);
     const second=await h.plugin.send(file,project,{throwOnError:true});
@@ -378,7 +380,7 @@ test('a typed palette question sends only the question and streams at the note e
     const editor=h.attachEditor('Notes/Palette.md','# Private note\nBody not sent.');
     h.plugin.app.saveLocalStorage('send-to-t3-code-chat-draft-v1','Why does this matter?');
     await h.plugin.openPaletteAction('Why does this matter?','');
-    assert.equal(h.modals.at(-1).titleEl.text,'Ask T3 Code');
+    assert.equal(h.modals.at(-1).titleEl.text,'Send to T3 Code');
     await h.modals.at(-1).choose(false);
     const text=h.commands[1].message.text;
     assert.match(text,/^Why does this matter\?/);
@@ -398,9 +400,9 @@ test('an empty palette action uses the full note send path',async()=>{
     Object.assign(editor.file,{basename:'Send',stat:{ctime:123}});
     await h.plugin.openPaletteAction('','');
     const chooser=h.modals.at(-1);
-    assert.equal(chooser.constructor.name,'SendProjectModal');
+    assert.equal(chooser.constructor.name,'SendDestinationModal');
     h.plugin.settings.folderLinks.push({id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true});
-    chooser.onChooseItem(project);
+    await chooser.choose('new');
     for(let attempt=0;attempt<120&&(h.commands.length<2||h.plugin.busy);attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.match(h.commands[1].message.text,/# Send this note/);
     assert.match(h.commands[1].message.text,/Sent from Obsidian\./);
@@ -408,7 +410,7 @@ test('an empty palette action uses the full note send path',async()=>{
   }finally{h.plugin.onunload();}
 });
 
-test('an empty palette action on a linked note opens a destination modal',async()=>{
+test('an empty palette action on a note with history opens a destination modal',async()=>{
   const h=await chatHarness();
   try{
     h.setActiveNote('Notes/Linked.md');
@@ -418,10 +420,10 @@ test('an empty palette action on a linked note opens a destination modal',async(
     );
     await h.plugin.openPaletteAction('','');
     const modal=h.modals.at(-1);
-    assert.equal(modal.constructor.name,'LinkedNoteDestinationModal');
+    assert.equal(modal.constructor.name,'SendDestinationModal');
     assert.equal(modal.titleEl.text,'Send to T3 Code');
-    assert.equal(modal.contentEl.children[0].text,'Notes/Linked.md');
-    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Linked thread','New thread','Existing thread…','Previous threads…']);
+    assert.equal(modal.contentEl.children[0].children[0].text,'Notes/Linked.md');
+    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Previous thread','New thread','Existing thread…','Previous threads…']);
     assert.equal(h.commands.length,0);
     modal.close();
     assert.equal(h.commands.length,0,'Dismissing the destination modal must not send');
@@ -446,7 +448,7 @@ test('a palette question about selected text includes both parts and inserts bel
   }finally{h.plugin.onunload();}
 });
 
-test('project picker changes this send without reusing the note’s linked thread',async()=>{
+test('project picker changes this send without reusing the note’s last used thread',async()=>{
   const h=await chatHarness();
   try{
     const other={id:'other-project',title:'Other work',workspaceRoot:'/projects/other',connectionId:project.connectionId,connectionName:'Laptop'};
@@ -456,14 +458,14 @@ test('project picker changes this send without reusing the note’s linked threa
     h.plugin.settings.noteThreads.push({notePath:path,threadId:'old-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-28T00:00:00Z'});
     await h.plugin.openChat('Send to other work');
     const destination=h.modals.at(-1);
-    const change=[...h.settingsControls].reverse().find((control:any)=>control.buttons.some((button:any)=>button.text==='Change project for this send'));
-    assert.ok(change);
-    change.buttons[0].click();
+    const change=destination.contentEl.children[0].children[0];
+    assert.equal(change.text,path);
+    change.click();
     const picker=h.modals.at(-1),choice=picker.getItems().find((item:any)=>item.key==='chat-connection:other-project');
     assert.ok(choice);
     picker.onChooseItem(choice);
-    assert.ok(h.settingsControls.some(control=>control.name.includes('Other work')));
-    assert.equal(destination.host.getLinkedThread(choice.key),undefined);
+    assert.match(destination.contentEl.children[0].children[0].attr.title,/Other work/);
+    assert.equal(destination.host.getDefaultThread(choice.key),undefined);
     await destination.choose(false);
     assert.equal(h.commands[0].type,'thread.create');
     assert.equal(h.commands[0].projectId,other.id);
@@ -471,7 +473,7 @@ test('project picker changes this send without reusing the note’s linked threa
   }finally{h.plugin.onunload();}
 });
 
-test('Enter on the destination dialog uses the purple new or linked thread button',async()=>{
+test('Enter on the destination dialog uses the purple new or last used thread button',async()=>{
   const h=await chatHarness();
   try{
     h.setActiveNote('Notes/New.md');
@@ -484,15 +486,15 @@ test('Enter on the destination dialog uses the purple new or linked thread butto
 
     const path='Notes/Linked.md';
     h.setActiveNote(path);
-    h.plugin.settings.noteThreads.push({notePath:path,threadId:'linked-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-28T00:00:00Z'});
-    h.setThreads([{id:'linked-thread',projectId:project.id,title:'Linked',updatedAt:'2026-09-28T00:00:00Z',runtimeMode:'approval-required',interactionMode:'default'}]);
+    h.plugin.settings.noteThreads.push({notePath:path,threadId:'previous-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-28T00:00:00Z'});
+    h.setThreads([{id:'previous-thread',projectId:project.id,title:'Previous',updatedAt:'2026-09-28T00:00:00Z',runtimeMode:'approval-required',interactionMode:'default'}]);
     await h.plugin.openChat('Continue here');
     await new Promise(resolve=>setTimeout(resolve,0));
-    assert.equal(h.focusedButton()?.text,'Linked thread');
+    assert.equal(h.focusedButton()?.text,'Previous thread');
     h.pressEnter();
     for(let attempt=0;attempt<120&&(h.commands.length<3||h.plugin.busy);attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.equal(h.commands[2].type,'thread.turn.start');
-    assert.equal(h.commands[2].threadId,'linked-thread');
+    assert.equal(h.commands[2].threadId,'previous-thread');
   }finally{h.plugin.onunload();}
 });
 
@@ -531,7 +533,7 @@ test('editor selection menu streams a T3 reply into its original note for new an
     const selection='Explain why **this claim** follows.\nKeep [[source links]].';
     const first=h.editorMenu(selection,'Notes/Original.md');let entry=first.menu.items.find(item=>item.title==='Ask T3 Code');assert.ok(entry);
     await entry!.callback();
-    const destination=h.modals.at(-1);assert.equal(destination.constructor.name,'ChatDestinationModal');
+    const destination=h.modals.at(-1);assert.equal(destination.constructor.name,'SendDestinationModal');
     h.setActiveNote('Notes/Different.md');await destination.choose(false);
     assert.equal(h.commands[0].type,'thread.create');assert.equal(h.commands[0].title,'Explain why **this claim** follows.');
     const newThreadText=h.commands[1].message.text;
@@ -649,7 +651,7 @@ test('editor Ask opens the inline chooser without changing the note',async()=>{
   try{
     const context=h.editorMenu('Explain this sentence.','Notes/Original.md');
     await context.menu.items.find(item=>item.title==='Ask T3 Code')!.callback();
-    assert.equal(h.modals.at(-1).constructor.name,'ChatDestinationModal');
+    assert.equal(h.modals.at(-1).constructor.name,'SendDestinationModal');
     assert.equal(h.commands.length,0,'Opening the chooser does not dispatch or edit the note');
     assert.doesNotMatch(context.value,/t3-inline:start/);
   }finally{h.plugin.onunload();}
@@ -810,7 +812,7 @@ test('the question composer captures the note before it opens',async()=>{
     const modal=h.modals.at(-1);assert.ok(modal);
     assert.equal(h.commands.length,0,'Opening the composer must not send or create a project');
     h.setActiveNote('Different.md');modal.field.value='Edit the original';
-    await modal.submit();
+    await modal.choose();
     assert.equal(modal.closed,true);
     assert.match(h.commands[1].message.text,/Original.md/);
     assert.doesNotMatch(h.commands[1].message.text,/Different.md/);
@@ -931,7 +933,7 @@ for(const composer of [false,true])test(`the ${composer?'composer':'destination'
   try{
     await h.plugin.openChat(composer?undefined:'Background send');
     const modal=h.modals.at(-1);if(composer)modal.field.value='Background send';
-    const sending=composer?modal.submit():modal.choose(false);
+    const sending=composer?modal.choose():modal.choose(false);
     assert.equal(modal.closed,true,'The editor is usable before any network response');
     await enteredTurn;
     assert.equal(h.plugin.settings.pending.length,1,'Retry is durable while sending');
@@ -1005,5 +1007,59 @@ test('Ask remains enabled during local streaming and selection steering moves on
     assert.equal((opened.value.match(/Use a simpler approach\./g)??[]).length,1);assert.ok(!opened.value.startsWith(selected));
     assert.match(opened.value,/Earlier progress\.[\s\S]*\[!t3-steering\] You[\s\S]*Use a simpler approach\.[\s\S]*Changed approach\./);
     assert.doesNotMatch(opened.value,/t3-inline:/);assert.match(opened.value,/Tail/);
+  }finally{h.plugin.onunload();}
+});
+
+test('the full-note modal changes project for one send without reusing another project’s last thread or changing folder links',async()=>{
+  const h=await chatHarness();
+  try{
+    const other={id:'other-project',title:'Other work',workspaceRoot:'/projects/other',connectionId:project.connectionId,connectionName:'Laptop'};
+    h.plugin.settings.directProjects.push(other);h.setProjects([project,other]);
+    h.plugin.settings.inlineStreaming.enabled=false;
+    h.plugin.app.vault.read=async()=> '# Complete note\nKeep this full-note payload.';
+    const path='Notes/Whole.md',file={path,basename:'Whole',extension:'md',stat:{ctime:123}};
+    h.plugin.settings.noteThreads.push({notePath:path,threadId:'old-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-28T00:00:00Z'});
+    const links=JSON.stringify(h.plugin.settings.folderLinks);
+    h.plugin.openNoteSend(file);
+    const destination=h.modals.at(-1);
+    assert.equal(destination.constructor.name,'SendDestinationModal');
+    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Previous thread','New thread','Existing thread…']);
+    const pathButton=destination.contentEl.children[0].children[0];
+    assert.equal(pathButton.tag,'button');assert.equal(pathButton.text,path);
+    pathButton.click();
+    const picker=h.modals.at(-1);picker.onChooseItem(picker.getItems().find((item:any)=>item.key==='chat-connection:other-project'));
+    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['New thread','Existing thread…']);
+    assert.equal(destination.contentEl.children[0].children[0].text,path,'The note path remains the button text after changing project');
+    await destination.choose('new');
+    assert.equal(h.commands[0].projectId,other.id);
+    assert.notEqual(h.commands[0].threadId,'old-thread');
+    assert.match(h.commands[1].message.text,/# Complete note\nKeep this full-note payload\./);
+    assert.equal(JSON.stringify(h.plugin.settings.folderLinks),links);
+    assert.equal(h.plugin.settings.noteThreads.length,2,'Both previous and newly confirmed destinations remain in history');
+  }finally{h.plugin.onunload();}
+});
+
+test('changing project in the typed composer preserves the draft and uses the compact destination controls',async()=>{
+  const h=await chatHarness();
+  try{
+    h.setActiveNote('Notes/Draft.md');
+    await h.plugin.openChat();
+    const composer=h.modals.at(-1);
+    composer.field.value='Keep my unsent question.';
+    composer.contentEl.children[0].children[0].click();
+    const picker=h.modals.at(-1);picker.onChooseItem(picker.getItems()[0]);
+    assert.equal(composer.field.value,'Keep my unsent question.');
+    assert.equal(composer.contentEl.children[0].children[0].text,'Notes/Draft.md');
+    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['New thread','Existing thread…']);
+    assert.equal(h.commands.length,0);
+    composer.close();assert.equal(h.commands.length,0);
+  }finally{h.plugin.onunload();}
+});
+
+test('legacy saved send requests still remember their confirmed note thread',async()=>{
+  const h=await chatHarness();
+  try{
+    h.plugin.rememberStarted({id:webcrypto.randomUUID(),project,connection:{executable:'',host:'direct',connectionId:project.connectionId},title:'Old request',prompt:'Old payload',noteLink:{notePath:'Notes/Legacy.md',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId}},'confirmed-legacy-thread');
+    assert.equal(h.plugin.settings.noteThreads[0].threadId,'confirmed-legacy-thread');
   }finally{h.plugin.onunload();}
 });

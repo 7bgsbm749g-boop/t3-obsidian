@@ -3,17 +3,16 @@ import {RequestDeliveryError} from './bridge';
 
 export interface ChatHost {
   steering?:boolean;
-  hasNote():boolean;
-  getTargetDescription(projectKey?:string): string;
+  busy?:boolean;
+  getNotePath():string;
+  getTargetDescription(projectKey?:string):string;
   getProjectChoices():{key:string;label:string}[];
-  getLinkedThread(projectKey?:string):string|undefined;
+  getDefaultThread(projectKey?:string):string|undefined;
   hasPreviousThreads(projectKey?:string):boolean;
-  defaultRemember():boolean;
-  sendChat(prompt: string,remember:boolean,projectKey?:string): Promise<void>;
-  sendToNew(prompt:string,remember:boolean,projectKey?:string):Promise<void>;
-  sendToExisting(prompt: string,remember:boolean,projectKey?:string): Promise<void>;
-  sendToPrevious(prompt:string,remember:boolean,projectKey?:string):Promise<void>;
-  openSettings(): void;
+  sendChat(prompt:string,projectKey?:string):Promise<void>;
+  sendToNew(prompt:string,projectKey?:string):Promise<void>;
+  sendToExisting(prompt:string,projectKey?:string):Promise<void>;
+  sendToPrevious(prompt:string,projectKey?:string):Promise<void>;
 }
 
 class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
@@ -23,108 +22,69 @@ class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
   onChooseItem(item:{key:string;label:string}){this.choose(item.key);}
 }
 
-function projectSetting(app:App,content:HTMLElement,host:ChatHost,onChoose:(key:string)=>void,selected?:string){
-  new Setting(content).setName(host.getTargetDescription(selected))
-    .addButton(button=>button.setButtonText('Change project for this send').onClick(()=>new ChatProjectModal(app,host.getProjectChoices(),onChoose).open()));
-}
+type Destination='default'|'new'|'existing'|'previous';
 
-function reportError(error: unknown) {
-  new Notice(`T3 Code: ${error instanceof Error ? error.message : String(error)}`, 10000);
-}
-
-class ChatPromptModal extends Modal {
-  private submitting = false;
-  private field!: HTMLTextAreaElement;
-  private actions!: Setting;
-  private remember=false;
-  private projectKey?:string;
-  private initialized=false;
-
-  constructor(app: App, private host: ChatHost, private prompt = '') { super(app); }
-
-  onOpen() {
-    this.titleEl.setText('Ask T3 Code');
-    this.contentEl.empty();
-    projectSetting(this.app,this.contentEl,this.host,key=>{this.prompt=this.field.value;this.projectKey=key;this.onOpen();},this.projectKey);
-    this.field = this.contentEl.createEl('textarea', {
-      attr: {'aria-label': 'Message for T3', placeholder: 'What would you like to do?', rows: '5'},
-    });
-    this.field.style.width = '100%';
-    this.field.value = this.prompt;
-    if(!this.initialized){this.remember=this.host.defaultRemember();this.initialized=true;}
-    if(this.host.hasNote())new Setting(this.contentEl).setName('Remember this thread for this note').addToggle(toggle=>toggle.setValue(this.remember).onChange(value=>{this.remember=value;}));
-    this.field.addEventListener('keydown', event => {
-      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) {
-        event.preventDefault();
-        void this.submit();
-      }
-    });
-    this.contentEl.createEl('p',{text:'Choose a destination. The thread picker shows whether each conversation is active or idle.'});
-    this.actions = new Setting(this.contentEl)
-      .addButton(button => button.setButtonText(this.host.steering?'Send to running thread':this.host.getLinkedThread(this.projectKey)?'Linked thread':'New thread').setCta().onClick(() => { void this.submit('default'); }))
-      .addButton(button => button.setButtonText('Existing thread…').onClick(() => { void this.submit('existing'); }));
-    if(this.host.getLinkedThread(this.projectKey))this.actions.addButton(button=>button.setButtonText('New thread').onClick(()=>{void this.submit('new');}));
-    if(this.host.hasPreviousThreads(this.projectKey))this.actions.addButton(button=>button.setButtonText('Previous threads…').onClick(()=>{void this.submit('previous');}));
-    this.field.focus();
-  }
-
-  private async submit(target:'default'|'existing'|'new'|'previous'|boolean = 'default') {
-    if (this.submitting || !this.field.value.trim()) return;
-    this.submitting = true;
-    this.field.disabled = true;
-    this.actions.setDisabled(true);
-    this.prompt=this.field.value;
-    this.close();
-    try {
-      if(target===true||target==='existing')await this.host.sendToExisting(this.field.value,this.remember,this.projectKey);
-      else if(target==='previous')await this.host.sendToPrevious(this.field.value,this.remember,this.projectKey);
-      else if(target==='new')await this.host.sendToNew(this.field.value,this.remember,this.projectKey);
-      else await this.host.sendChat(this.field.value,this.remember,this.projectKey);
-      this.close();
-    } catch (error) {
-      reportError(error);
-      if (!(error instanceof RequestDeliveryError && error.requestSaved)) this.open();
-    } finally {
-      this.submitting = false;
-      this.field.disabled = false;
-      this.actions.setDisabled(false);
-    }
-  }
-}
-
-class ChatDestinationModal extends Modal {
+/** The same compact destination UI handles whole notes, selections, and typed asks. */
+class SendDestinationModal extends Modal {
   private choosing=false;
   private actions!:Setting;
-  private remember=false;
+  private field?:HTMLTextAreaElement;
   private projectKey?:string;
-  private initialized=false;
-  constructor(app:App,private host:ChatHost,private prompt:string){super(app);}
+  private composing:boolean;
+  constructor(app:App,private host:ChatHost,private prompt?:string){super(app);this.composing=prompt===undefined;}
   onOpen(){
-    this.titleEl.setText('Ask T3 Code');this.contentEl.empty();
-    projectSetting(this.app,this.contentEl,this.host,key=>{this.projectKey=key;this.onOpen();},this.projectKey);
-    if(!this.initialized){this.remember=this.host.defaultRemember();this.initialized=true;}
-    if(this.host.hasNote())new Setting(this.contentEl).setName('Remember this thread for this note').addToggle(toggle=>toggle.setValue(this.remember).onChange(value=>{this.remember=value;}));
-    this.contentEl.createEl('p',{text:'Choose a destination. The thread picker shows whether each conversation is active or idle.'});
+    this.titleEl.setText('Send to T3 Code');this.contentEl.empty();
+    const row=this.contentEl.createEl('p');
+    const projectButton=row.createEl('button',{text:this.host.getNotePath(),cls:'send-to-t3-note-project',attr:{'aria-label':`Change project for this send: ${this.host.getNotePath()}`,title:this.host.getTargetDescription(this.projectKey)}});
+    projectButton.disabled=Boolean(this.host.busy);
+    projectButton.addEventListener('click',()=>{
+      if(this.field)this.prompt=this.field.value;
+      new ChatProjectModal(this.app,this.host.getProjectChoices(),key=>{this.projectKey=key;this.onOpen();}).open();
+    });
+    if(this.composing){
+      this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Message for T3',placeholder:'What would you like to do?',rows:'5'}});
+      this.field.style.width='100%';this.field.value=this.prompt??'';
+      this.field.addEventListener('keydown',event=>{
+        if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)&&!event.isComposing){event.preventDefault();void this.choose('default');}
+      });
+    }
+    const remembered=this.host.getDefaultThread(this.projectKey);
     let defaultButton:HTMLButtonElement|undefined;
-    this.actions=new Setting(this.contentEl)
-      .addButton(button=>{defaultButton=button.buttonEl;button.setButtonText(this.host.steering?'Send to running thread':this.host.getLinkedThread(this.projectKey)?'Linked thread':'New thread').setCta().onClick(()=>{void this.choose('default');});})
-      .addButton(button=>button.setButtonText('Existing thread…').onClick(()=>{void this.choose('existing');}));
-    if(this.host.getLinkedThread(this.projectKey))this.actions.addButton(button=>button.setButtonText('New thread').onClick(()=>{void this.choose('new');}));
-    if(this.host.hasPreviousThreads(this.projectKey))this.actions.addButton(button=>button.setButtonText('Previous threads…').onClick(()=>{void this.choose('previous');}));
-    // Obsidian focuses the first modal control after onOpen returns.
-    setTimeout(()=>{if(defaultButton?.isConnected)defaultButton.focus();},0);
+    this.actions=new Setting(this.contentEl);
+    if(remembered)this.actions.addButton(button=>{defaultButton=button.buttonEl;button.setButtonText(this.host.steering?'Send to running thread':'Previous thread').setCta().onClick(()=>this.choose('default'));});
+    this.actions.addButton(button=>{
+      button.setButtonText('New thread');
+      if(!defaultButton){defaultButton=button.buttonEl;button.setCta();}
+      button.onClick(()=>this.choose('new'));
+    });
+    this.actions.addButton(button=>button.setButtonText('Existing thread…').onClick(()=>this.choose('existing')));
+    if(this.host.hasPreviousThreads(this.projectKey))this.actions.addButton(button=>button.setButtonText('Previous threads…').onClick(()=>this.choose('previous')));
+    this.actions.setDisabled(Boolean(this.host.busy));
+    if(this.field)this.field.focus();
+    else setTimeout(()=>{if(defaultButton?.isConnected)defaultButton.focus();},0);
   }
-  private async choose(target:'default'|'existing'|'new'|'previous'|boolean){
-    if(this.choosing)return;this.choosing=true;this.actions.setDisabled(true);this.close();
-    try{if(target===true||target==='existing')await this.host.sendToExisting(this.prompt,this.remember,this.projectKey);else if(target==='previous')await this.host.sendToPrevious(this.prompt,this.remember,this.projectKey);else if(target==='new')await this.host.sendToNew(this.prompt,this.remember,this.projectKey);else await this.host.sendChat(this.prompt,this.remember,this.projectKey);this.close();}
-    catch(error){reportError(error);if(!(error instanceof RequestDeliveryError&&error.requestSaved))this.open();}
-    finally{this.choosing=false;this.actions.setDisabled(false);}
+  private async choose(target:Destination|boolean='default'){
+    if(this.choosing||this.host.busy)return;
+    if(this.field){this.prompt=this.field.value;if(!this.prompt.trim())return;}
+    this.choosing=true;this.actions.setDisabled(true);this.close();
+    const prompt=this.prompt??'';
+    try{
+      if(target===true||target==='existing')await this.host.sendToExisting(prompt,this.projectKey);
+      else if(target==='previous')await this.host.sendToPrevious(prompt,this.projectKey);
+      else if(target==='new')await this.host.sendToNew(prompt,this.projectKey);
+      else await this.host.sendChat(prompt,this.projectKey);
+    }catch(error){
+      new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
+      if(!(error instanceof RequestDeliveryError&&error.requestSaved))this.open();
+    }finally{this.choosing=false;this.actions.setDisabled(Boolean(this.host.busy));}
   }
 }
 
-/** Both entry points use the note context captured when the chat was opened. */
-export async function openChatFlow(app: App, host: ChatHost, prompt?: string): Promise<void> {
-  if (prompt !== undefined && !prompt.trim()) return;
-  if (prompt === undefined) { new ChatPromptModal(app, host).open(); return; }
-  new ChatDestinationModal(app,host,prompt).open();
+/** Both entry points preserve the note captured when the send was opened. */
+export async function openChatFlow(app:App,host:ChatHost,prompt?:string):Promise<void>{
+  if(prompt!==undefined&&!prompt.trim())return;
+  new SendDestinationModal(app,host,prompt).open();
+}
+export function openNoteSendFlow(app:App,host:ChatHost):void{
+  new SendDestinationModal(app,host,'').open();
 }

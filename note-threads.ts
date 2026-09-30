@@ -1,4 +1,4 @@
-/** A confirmed T3 destination for a note. Records live in synced plugin data. */
+/** A thread used by a confirmed send from a note. Records live in synced plugin data. */
 export interface NoteThread {
   notePath:string;
   threadId:string;
@@ -32,7 +32,7 @@ export function mergeNoteThreads(...groups:NoteThread[][]):NoteThread[]{
   return [...merged.values()];
 }
 
-export function activeNoteThread(entries:NoteThread[],path:string):NoteThread|undefined{
+export function lastUsedNoteThread(entries:NoteThread[],path:string):NoteThread|undefined{
   return entries.filter(entry=>entry.notePath===path&&!entry.deletedAt).sort((a,b)=>b.selectedAt.localeCompare(a.selectedAt))[0];
 }
 

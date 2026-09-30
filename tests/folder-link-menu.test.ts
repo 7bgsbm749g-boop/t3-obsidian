@@ -17,11 +17,14 @@ async function folderMenuHarness(){
     text='';settings:any[]=[];children:Element[]=[];
     empty(){this.settings=[];this.children=[];}
     setText(value:string){this.text=value;}
+    events:Record<string,Function>={};
+    addEventListener(name:string,callback:Function){this.events[name]=callback;}
+    click(){return this.events.click?.();}
     createEl(_tag:string,options?:{text?:string}){const child=new Element();child.text=options?.text??'';this.children.push(child);return child;}
   }
   class Control {
     value:any;disabled=false;text='';handler:(value?:any)=>any=()=>{};
-    inputEl:any={rows:0};
+    inputEl:any={rows:0};buttonEl={isConnected:true,focus:()=>{}};
     setValue(value:any){this.value=value;return this;}
     setPlaceholder(_value:string){return this;}
     addOptions(_value:Record<string,string>){return this;}
@@ -304,7 +307,7 @@ test('coordinator consumes remote workflow edit cancellation markers',async()=>{
   }finally{h.plugin.onunload();}
 });
 
-for(const mobile of [false,true])test(`linked note menu offers new and existing threads on ${mobile?'mobile':'desktop'}`,async()=>{
+for(const mobile of [false,true])test(`note menu in a linked folder offers new and existing threads on ${mobile?'mobile':'desktop'}`,async()=>{
   const h=await folderMenuHarness();
   try{
     const nested={...h.project,id:'nested',title:'Nested'};
@@ -319,7 +322,7 @@ for(const mobile of [false,true])test(`linked note menu offers new and existing 
     if(mobile)await item.callback();
     const choices=mobile?h.modals.at(-1):item.submenu;assert.ok(choices);
     if(mobile){
-      assert.equal(choices.constructor.name,'LinkedNoteDestinationModal');
+      assert.equal(choices.constructor.name,'SendDestinationModal');
       assert.equal(choices.titleEl.text,'Send to T3 Code');
       assert.deepEqual(choices.contentEl.settings.flatMap((setting:any)=>setting.controls.map((control:any)=>control.text)),['New thread','Existing thread…']);
       await h.button(choices,'New thread').click();
@@ -332,15 +335,15 @@ for(const mobile of [false,true])test(`linked note menu offers new and existing 
     h.setThreads([{id:'thread',projectId:'nested',title:'Existing',updatedAt:'2026-09-19',session:{status:'running',activeTurnId:'turn'},latestTurn:{state:'running'}},
       {id:'foreign',projectId:h.project.id,title:'Wrong project',updatedAt:'2026-09-20'},
       {id:'archived',projectId:'nested',title:'Archived',archivedAt:'2026-09-19'}]);
-    if(mobile){h.plugin.openLinkedNote(file);await h.button(h.modals.at(-1),'Existing thread…').click();}
+    if(mobile){h.plugin.openNoteSend(file);await h.button(h.modals.at(-1),'Existing thread…').click();}
     else await choices.items[1].callback();
     const picker=h.modals.at(-1);assert.equal(picker.getItems().length,1);
     assert.equal(picker.getItems()[0].id,'thread');
     assert.match(picker.getItemText(picker.getItems()[0]),/Existing · Active/);
-    picker.onChooseItem(picker.getItems()[0]);
+    await picker.onChooseItem(picker.getItems()[0]);
     assert.equal(sent.length,2);assert.equal(sent[1].options.threadId,'thread');assert.equal(sent[1].project.id,'nested');
     h.plugin.settings.folderLinks[1].projectId=h.project.id;
-    picker.onChooseItem(picker.getItems()[0]);
+    await picker.onChooseItem(picker.getItems()[0]);
     assert.equal(sent.length,2,'Changing the link while choosing a thread must not send to a stale target');
     assert.match(h.notices.at(-1)!,/linked project changed/i);
   }finally{h.plugin.onunload();}
