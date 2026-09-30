@@ -59,7 +59,7 @@ def atomic_write(path: Path, value: bytes) -> None:
     os.replace(temporary, path)
 
 
-def run(command: list[str], *, cwd: Path = ROOT, capture: bool = False) -> subprocess.CompletedProcess[str]:
+def run(command: list[str], *, cwd: Path = ROOT, capture: bool = False, timeout: int = 240) -> subprocess.CompletedProcess[str]:
     print('+', ' '.join(command), flush=True)
     return subprocess.run(
         command,
@@ -67,7 +67,7 @@ def run(command: list[str], *, cwd: Path = ROOT, capture: bool = False) -> subpr
         check=True,
         text=True,
         capture_output=capture,
-        timeout=240,
+        timeout=timeout,
     )
 
 
@@ -224,7 +224,9 @@ def validate_archive(archive: Path, version: str) -> dict[str, str]:
 
 
 def sync_release() -> list[str]:
-    result = run([str(OB), 'sync', '--path', str(QLO2_PLUGIN.parents[2])], capture=True)
+    # A fresh vault scan can include a large unrelated upload backlog. Keep
+    # requiring Fully synced, but do not abort a healthy scan after four minutes.
+    result = run([str(OB), 'sync', '--path', str(QLO2_PLUGIN.parents[2])], capture=True, timeout=1800)
     lines = result.stdout.splitlines()
     if 'Fully synced' not in lines:
         raise SystemExit('Release installed, but a fresh Sync scan did not confirm Fully synced.')

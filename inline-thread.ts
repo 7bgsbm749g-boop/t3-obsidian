@@ -316,6 +316,21 @@ export function turnPhase(state:InlineThreadState,turnId:string):'running'|'comp
   }
   const known=state.turns?.[turnId];
   if(known&&['completed','interrupted','error'].includes(known.state))return known.state==='completed'?'complete':known.state as 'interrupted'|'error';
+  // Projects outside Git have no completion checkpoints. In a complete
+  // canonical transcript, a newer user-anchored primary turn establishes a
+  // boundary: finalized prose entirely before it is no longer streaming.
+  // Require timestamps and the actual newer prompt; partial windows, fan-out
+  // turns, pending blocking questions and late/streaming messages cannot seal it.
+  const boundary=state.latestTurn?.requestedAt,newer=boundary?Date.parse(boundary):NaN;
+  if(state.historyComplete&&state.latestTurn?.turnId!==turnId&&Number.isFinite(newer)&&
+    state.messages.some(m=>m.role==='user'&&m.createdAt===boundary)&&messages.length&&
+    messages.every(m=>!m.streaming&&m.createdAt&&Date.parse(m.createdAt)<newer)&&
+    !pendingQuestions(state.activities).some(q=>q.turnId===turnId&&q.responseMode!=='message')){
+    const lastMessage=Math.max(...messages.map(m=>Date.parse(m.createdAt!)));
+    const errors=state.activities.filter(a=>a.turnId===turnId&&a.kind==='runtime.error');
+    if(errors.some(a=>!a.createdAt))return 'running';
+    return errors.some(a=>Date.parse(a.createdAt!)>=lastMessage)?'error':'complete';
+  }
   // A newer session's error/ready status says nothing about this older turn.
   if(state.latestTurn&&state.latestTurn.turnId!==turnId)return 'running';
   if(messages.length&&messages.every(m=>!m.streaming)&&state.session&&['ready','stopped','interrupted','error'].includes(state.session.status))return state.session.status==='error'?'error':state.session.status==='interrupted'?'interrupted':'complete';

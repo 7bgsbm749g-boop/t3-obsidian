@@ -73,3 +73,18 @@ test('normal polling does not fetch full history for a prompt already bound to t
   await readInlineSnapshot(access,'thread','project',{messageIds:['prompt'],turnIds:['original']});
   assert.equal(paths.length,1);
 });
+
+test('projects without Git checkpoints finalize an older response at a confirmed newer primary turn',()=>{
+  const oldTime='2026-09-30T12:00:00.000Z',newTime='2026-09-30T12:01:00.000Z';
+  const state={...history(),checkpoints:[],latestTurn:{turnId:'later',state:'running',requestedAt:newTime},messages:history().messages.map(m=>({...m,createdAt:m.id==='later-prompt'||m.turnId==='later'?newTime:oldTime}))};
+  assert.equal(turnPhase(state,'original'),'complete');
+  assert.equal(turnPhase({...state,historyComplete:false},'original'),'running');
+  assert.equal(turnPhase({...state,messages:state.messages.filter(m=>m.id!=='later-prompt')},'original'),'running');
+  assert.equal(turnPhase({...state,messages:state.messages.map(m=>m.turnId==='original'?{...m,streaming:true}:m)},'original'),'running');
+  assert.equal(turnPhase({...state,messages:state.messages.map(m=>m.turnId==='original'?{...m,createdAt:newTime}:m)},'original'),'running');
+  assert.equal(turnPhase({...state,messages:state.messages.map(m=>m.turnId==='original'?{...m,createdAt:undefined}:m)},'original'),'running');
+  assert.equal(turnPhase({...state,turns:{original:{turnId:'original',state:'error'}}},'original'),'error');
+  assert.equal(turnPhase({...state,activities:[{id:'err',turnId:'original',kind:'runtime.error',summary:'Provider failed',createdAt:oldTime}]},'original'),'error');
+  assert.equal(turnPhase({...state,activities:[{id:'err',turnId:'original',kind:'runtime.error',summary:'Provider failed',createdAt:'2026-09-30T11:59:59.000Z'}]},'original'),'complete');
+  assert.equal(turnPhase({...state,activities:[{id:'question',turnId:'original',kind:'user-input.requested',summary:'Answer needed',payload:{requestId:'q',questions:[{id:'q',header:'Q',question:'Which?',options:[]}]}}]},'original'),'running');
+});

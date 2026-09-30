@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import subprocess
 from unittest.mock import patch
 
 
@@ -16,6 +17,14 @@ SPEC.loader.exec_module(release)
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    def test_large_vault_sync_keeps_a_bounded_longer_timeout_and_requires_completion(self) -> None:
+        with patch.object(release, 'run', return_value=subprocess.CompletedProcess([], 0, 'Fully synced\n')) as command:
+            self.assertEqual(release.sync_release(), [])
+            self.assertEqual(command.call_args.kwargs, {'capture': True, 'timeout': 1800})
+        with patch.object(release, 'run', return_value=subprocess.CompletedProcess([], 0, 'Uploading file other-project/file\n')):
+            with self.assertRaises(SystemExit):
+                release.sync_release()
+
     def test_json_smoke_evidence_survives_receipt_creation_and_retry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
