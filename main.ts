@@ -658,7 +658,9 @@ export default class SendToT3 extends Plugin {
     const data=loaded??await this.loadData();if(this.stopped||!data)return;
     this.lastDiskSnapshot=JSON.stringify(data);
     this.settings.folderLinks=loadFolderLinks(data);
-    this.settings.noteThreads=loadNoteThreads(data.noteThreads);
+    const remoteThreads=loadNoteThreads(data.noteThreads);
+    const mergedThreads=mergeNoteThreads(remoteThreads,this.settings.noteThreads);
+    this.settings.noteThreads=remoteThreads;
     this.settings.autoSettleThreads=data.autoSettleThreads!==false;
     if(!this.settings.autoSettleThreads&&this.settings.settlementJobs.length){this.settings.settlementJobs=[];await this.saveDeviceState();}
     this.settings.automationDrafts=[];
@@ -670,6 +672,8 @@ export default class SendToT3 extends Plugin {
     if(Array.isArray(data.paired))this.settings.paired=data.paired;
     if(Array.isArray(data.directProjects))this.settings.directProjects=data.directProjects;
     this.sharedBaseline=JSON.stringify(this.sharedSnapshot());
+    this.settings.noteThreads=mergedThreads;
+    if(JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save();
     this.refreshFolderIndicators();
     await this.refreshObservationCapture();
   }

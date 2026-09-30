@@ -245,6 +245,23 @@ test('every confirmed note send updates the default thread even with a legacy op
   }finally{h.plugin.onunload();}
 });
 
+test('stale synced settings preserve confirmed history while newer remote removals win',async()=>{
+  const h=await chatHarness();
+  try{
+    const stale=JSON.parse(JSON.stringify(h.shared.at(-1)));
+    await h.plugin.sendChat('Remember this', {path:'Notes/Sync.md'});
+    const entry={...h.plugin.settings.noteThreads[0]};
+    h.shared.push(stale);
+    await h.plugin.onExternalSettingsChange(stale);
+    assert.equal(h.plugin.settings.noteThreads[0].threadId,entry.threadId);
+    assert.equal(h.shared.at(-1).noteThreads[0].threadId,entry.threadId,'Recovered history is saved back for other devices');
+    const removed={...h.shared.at(-1),noteThreads:[{...entry,deletedAt:'2099-01-01T00:00:00.000Z'}]};
+    h.shared.push(removed);
+    await h.plugin.onExternalSettingsChange(removed);
+    assert.equal(h.plugin.settings.noteThreads[0].deletedAt,removed.noteThreads[0].deletedAt);
+  }finally{h.plugin.onunload();}
+});
+
 test('a full-note send keeps its note with a remembered thread and reuses the confirmed thread',async()=>{
   const h=await chatHarness();
   try{
