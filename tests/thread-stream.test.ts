@@ -36,7 +36,7 @@ test('a quiet subscription refreshes the current thread snapshot',async()=>{
   }}),{item:item=>items.push(item),reconnecting:error=>assert.fail(error.message)},url=>new QuietSocket(url) as unknown as WebSocket);
   try{
     await new Promise(resolve=>setTimeout(resolve,1400));
-    assert.deepEqual(paths,['/api/auth/websocket-ticket','/api/orchestration/threads/thread-2?turnLimit=1']);
+    assert.deepEqual(paths,['/api/auth/websocket-ticket','/api/orchestration/threads/thread-2?turnLimit=20']);
     assert.equal(items[0]?.kind,'snapshot');assert.equal(items[0]?.snapshot.snapshotSequence,9);
   }finally{watcher.stop();}
 });

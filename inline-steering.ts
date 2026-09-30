@@ -35,7 +35,9 @@ export function mergeProse(saved:InlineMessage[],incoming:InlineMessage[],turns:
     const index=result.findIndex(m=>m.id===message.id);
     if(index<0)result.push({...message});else result[index]={...message};
   }
-  return result;
+  // A later stream event may arrive before an earlier paragraph recovered by
+  // a snapshot. Keep T3's creation order rather than arrival order.
+  return result.sort((a,b)=>a.createdAt&&b.createdAt?a.createdAt.localeCompare(b.createdAt):0);
 }
 
 export function steeringSegments(messages:InlineMessage[],steering:InlineSteering[]):Array<{role:'assistant'|'user';text:string}> {

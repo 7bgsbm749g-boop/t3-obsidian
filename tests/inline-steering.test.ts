@@ -32,3 +32,11 @@ test('selection relocation requires original text and context rather than deleti
   assert.deepEqual(selectionRange('Outside edit\n'+source,anchor),{from:20,to:31});
   assert.equal(selectionRange('Other\nMy question\nChanged',anchor),null);
 });
+
+test('snapshot recovery places missed commentary before the already received final message',()=>{
+  const progress={...message('progress','Progress.'),createdAt:'2026-09-30T03:53:00Z'};
+  const ack={...message('ack','Acknowledged.'),createdAt:'2026-09-30T03:54:00Z'};
+  const final={...message('final','Final.'),createdAt:'2026-09-30T03:57:00Z'};
+  const prose=mergeProse([progress,final],[progress,ack,final],['turn']);
+  assert.deepEqual(prose.map(m=>m.id),['progress','ack','final']);
+});

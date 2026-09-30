@@ -34,7 +34,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       const poll=async()=>{
         if(stopped||ended||access!==ready)return;
         try{
-          const snapshot=await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?turnLimit=1`);
+          const snapshot=await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?turnLimit=20`);
           if(!stopped&&!ended&&access===ready&&snapshot?.thread)callbacks.item({kind:'snapshot',snapshot});
         }catch{/* The socket may still be healthy; the next bounded read can recover. */}
         if(!stopped&&!ended&&access===ready)pollTimer=setTimeout(()=>{void poll();},1200);
