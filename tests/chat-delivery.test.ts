@@ -18,7 +18,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   const localStorage=new Map<string,any>();
   const rootLink={id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true};
   let activeNote:any,activeEditor:any,activeEditorView=true;
-  const initial={folderLinks:[rootLink],chatProjectKey:'old:unrelated-project',paired:[{id:'chat-connection',name:'Laptop',url:'https://chat.example',environmentId:'chat-env'}],directScanId:'chat-connection',directProjects:[project],directSelected:['chat-connection:chat-project'],completion:{action:'delete'}};
+  const initial={folderLinks:[rootLink,{...rootLink,id:'notes',folderPath:'Notes',self:false}],chatProjectKey:'old:unrelated-project',paired:[{id:'chat-connection',name:'Laptop',url:'https://chat.example',environmentId:'chat-env'}],directScanId:'chat-connection',directProjects:[project],directSelected:['chat-connection:chat-project'],completion:{action:'delete'}};
   const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[],settingsControls:any[]=[],workspaceEvents:Record<string,((...args:any[])=>void)[]>={};let threads:any[]=[],catalog:any[]=[project],focusedButton:any;
   let vaultAccesses=0;
   const hostFiles=new Map<string,string>(),hostEditors=new Map<string,any>();
@@ -130,7 +130,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
         value={contents,truncated:false};
       }
       else if(req.tag==='projects.readFile')value={contents:JSON.stringify(req.payload.cwd===project.workspaceRoot?{vaultId:shared.at(-1).vaultId}:{vaultId:'different-vault'}),truncated:false};
-      else value={entries:[{path:'Notes/Draft.md',kind:'file'}]};
+      else value={entries:['Notes/Draft.md','Notes/Send.md','Unlinked/draft.md','Fresh/deep/draft.md'].map(path=>({path,kind:'file'}))};
       queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Success',value}})}));
     }
   }
@@ -419,6 +419,7 @@ test('an empty palette action uses the full note send path',async()=>{
     const chooser=h.modals.at(-1);
     assert.equal(chooser.constructor.name,'SendDestinationModal');
     h.plugin.settings.folderLinks.push({id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true});
+    h.plugin.settings.folderLinks.push({id:'notes',folderPath:'Notes',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:false});
     await chooser.choose('new');
     for(let attempt=0;attempt<120&&(h.commands.length<2||h.plugin.busy);attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.match(h.commands[1].message.text,/# Send this note/);
@@ -439,7 +440,7 @@ test('an empty palette action on a note with history opens a destination modal',
     const modal=h.modals.at(-1);
     assert.equal(modal.constructor.name,'SendDestinationModal');
     assert.equal(modal.titleEl.text,'Send to T3 Code');
-    assert.equal(modal.contentEl.children[0].children[0].text,'Notes/Linked.md');
+    assert.equal(modal.contentEl.children[0].children[0].text,project.title);
     assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Previous thread','New thread','Existing thread…','Previous threads…']);
     assert.equal(h.commands.length,0);
     modal.close();
@@ -476,7 +477,7 @@ test('project picker changes this send without reusing the note’s last used th
     await h.plugin.openChat('Send to other work');
     const destination=h.modals.at(-1);
     const change=destination.contentEl.children[0].children[0];
-    assert.equal(change.text,path);
+    assert.equal(change.text,project.title);
     change.click();
     const picker=h.modals.at(-1),choice=picker.getItems().find((item:any)=>item.key==='chat-connection:other-project');
     assert.ok(choice);
@@ -674,16 +675,28 @@ test('editor Ask opens the inline chooser without changing the note',async()=>{
   }finally{h.plugin.onunload();}
 });
 
-test('unlinked and root-level notes use the root link and a self link resolves the destination note path',async()=>{
+test('unlinked mobile notes preview a new folder project, register on send, and descendants inherit it',async()=>{
   const h=await chatHarness();
   try{
-    h.setActiveNote('Unlinked/draft.md');await h.plugin.openChat('Edit draft');await h.modals.at(-1).choose(false);
-    assert.match(h.commands[1].message.text,/Destination note path: "\/projects\/notes\/Unlinked\/draft.md"/);
-    h.setActiveNote('root.md');await h.plugin.openChat('Edit root');await h.modals.at(-1).choose(false);
-    assert.match(h.commands[3].message.text,/Destination note path: "\/projects\/notes\/root.md"/);
-    h.plugin.settings.folderLinks.push({...h.plugin.settings.folderLinks[0],id:'inner',folderPath:'Linked'});
-    h.setActiveNote('Linked/nested/task.md');await h.plugin.openChat('Edit linked');await h.modals.at(-1).choose(false);
-    assert.match(h.commands[5].message.text,/Destination note path: "\/projects\/notes\/nested\/task.md"/);
+    h.setActiveNote('Unlinked/draft.md');await h.plugin.openChat('Edit draft');
+    const modal=h.modals.at(-1);
+    assert.equal(modal.contentEl.children[0].children[0].text,'New project: Unlinked');
+    assert.equal(h.commands.length,0);
+    assert.equal(modal.host.getProjectChoices()[0].key,'folder:new');
+    assert.equal(modal.host.getProjectChoices()[1].key,'vault:root');
+    await modal.choose('new');
+    assert.deepEqual(h.commands.map(c=>c.type),['project.create','thread.create','thread.turn.start']);
+    assert.equal(h.commands[0].title,'Unlinked');
+    assert.equal(h.commands[0].workspaceRoot,'/projects/notes/Unlinked');
+    assert.equal(h.commands[1].projectId,h.commands[0].projectId);
+    assert.match(h.commands[2].message.text,/Destination note path: "\/projects\/notes\/Unlinked\/draft.md"/);
+    const link=h.plugin.settings.folderLinks.find((link:any)=>link.folderPath==='Unlinked');
+    assert.equal(link.self,true);assert.equal(link.projectTitle,'Unlinked');
+    await h.plugin.sendChat('Use the child folder',{path:'Unlinked/deeper/child.md'},{newThread:true});
+    assert.equal(h.commands.filter(c=>c.type==='project.create').length,1);
+    assert.equal(h.commands.at(-2).projectId,link.projectId);
+    h.setActiveNote('root.md');await h.plugin.openChat('Edit root');await h.modals.at(-1).choose('new');
+    assert.equal(h.commands.at(-2).projectId,project.id);
     assert.equal(h.vaultAccesses(),0);
   }finally{h.plugin.onunload();}
 });
@@ -701,6 +714,7 @@ test('a remote folder without a vault-root mapping labels its unmapped destinati
 test('an unavailable inner link cannot silently fall back to root or a remembered project',async()=>{
   const h=await chatHarness();
   try{
+    h.plugin.settings.folderLinks=h.plugin.settings.folderLinks.filter((link:any)=>link.folderPath!=='Notes');
     h.plugin.settings.folderLinks.push({...h.plugin.settings.folderLinks[0],id:'missing',folderPath:'Notes',projectId:'deleted'});
     await assert.rejects(h.plugin.sendChat('Edit',{path:'Notes/note.md'}),/linked.*unavailable/i);
     assert.equal(h.commands.length,0);assert.equal(h.plugin.settings.pending.length,0);
@@ -715,7 +729,8 @@ test('mobile missing-root setup offers machines, resumes the exact chat, and syn
     h.plugin.settings.paired.push(second);
     h.plugin.pairedSessions[second.id]={...h.plugin.pairedSessions['chat-connection'],url:second.url,environmentId:second.environmentId};
     const prompt='  Edit this note\nPreserve my message.  ';
-    const sending=h.plugin.sendChat(prompt,{path:'Notes/Draft.md'});
+    const sending=h.plugin.sendChat(prompt,{path:'Notes/Draft.md'},{projectOverrideKey:'vault:root'});
+    for(let attempt=0;attempt<20&&!h.modals.length;attempt++)await new Promise(resolve=>setTimeout(resolve,0));
     const setup=h.modals.at(-1);
     assert.equal(setup.constructor.name,'VaultSetupModal');
     assert.deepEqual(Array.from(h.plugin.vaultMachines(),(m:any)=>m.name),['Laptop','Travel laptop']);
@@ -742,6 +757,7 @@ test('mobile can register a synced folder as a remote project and keeps the bind
   try{
     h.plugin.settings.folderLinks=[];h.setProjects([]);
     const sending=h.plugin.sendChat('Start a new conversation');
+    for(let attempt=0;attempt<20&&!h.modals.length;attempt++)await new Promise(resolve=>setTimeout(resolve,0));
     const setup=h.modals.at(-1);await setup.find();
     assert.equal(setup.roots.length,0);assert.equal(h.commands.length,0);
     await setup.use(project.workspaceRoot);await sending;
@@ -777,6 +793,7 @@ test('cancelling mobile root setup preserves the original chat and creates no pr
     h.plugin.settings.folderLinks=[];
     await h.plugin.openChat('Keep this draft');
     const chat=h.modals.at(-1),sending=chat.choose(false);
+    for(let attempt=0;attempt<20&&h.modals.at(-1)===chat;attempt++)await new Promise(resolve=>setTimeout(resolve,0));
     const setup=h.modals.at(-1);assert.notEqual(chat,setup);setup.close();await sending;
     assert.equal(chat.closed,false);assert.equal(chat.prompt,'Keep this draft');
     assert.equal(h.plugin.busy,false);assert.equal(h.commands.length,0);
@@ -1042,11 +1059,11 @@ test('the full-note modal changes project for one send without reusing another p
     assert.equal(destination.constructor.name,'SendDestinationModal');
     assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Previous thread','New thread','Existing thread…']);
     const pathButton=destination.contentEl.children[0].children[0];
-    assert.equal(pathButton.tag,'button');assert.equal(pathButton.text,path);
+    assert.equal(pathButton.tag,'button');assert.equal(pathButton.text,project.title);
     pathButton.click();
     const picker=h.modals.at(-1);picker.onChooseItem(picker.getItems().find((item:any)=>item.key==='chat-connection:other-project'));
     assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['New thread','Existing thread…']);
-    assert.equal(destination.contentEl.children[0].children[0].text,path,'The note path remains the button text after changing project');
+    assert.equal(destination.contentEl.children[0].children[0].text,other.title,'The project button follows the selected destination');
     await destination.choose('new');
     assert.equal(h.commands[0].projectId,other.id);
     assert.notEqual(h.commands[0].threadId,'old-thread');
@@ -1066,7 +1083,7 @@ test('changing project in the typed composer preserves the draft and uses the co
     composer.contentEl.children[0].children[0].click();
     const picker=h.modals.at(-1);picker.onChooseItem(picker.getItems()[0]);
     assert.equal(composer.field.value,'Keep my unsent question.');
-    assert.equal(composer.contentEl.children[0].children[0].text,'Notes/Draft.md');
+    assert.equal(composer.contentEl.children[0].children[0].text,project.title);
     assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['New thread','Existing thread…']);
     assert.equal(h.commands.length,0);
     composer.close();assert.equal(h.commands.length,0);
@@ -1136,5 +1153,67 @@ test('selected reference images resolve definitions elsewhere in the note withou
     assert.equal(h.commands[0].message.attachments.length,1);
     assert.match(h.commands[0].message.text,/Selected \[.*\]\(t3-context:\/\//);
     assert.doesNotMatch(h.commands[0].message.text,/Unselected|outside.png|\[shot\]:/);
+  }finally{h.plugin.onunload();}
+});
+
+
+test('cancelling unlinked dialogs or browsing existing threads creates no project or folder link',async()=>{
+  const h=await chatHarness();
+  try{
+    h.setActiveNote('Unlinked/draft.md');
+    const before=JSON.stringify(h.plugin.settings.folderLinks);
+    await h.plugin.openChat('Keep this unsent');
+    h.modals.at(-1).close();
+    assert.equal(h.commands.length,0);
+    await h.plugin.openChat('Look for threads');await h.modals.at(-1).choose('existing');
+    assert.equal(h.modals.at(-1).getItems().length,0);
+    assert.equal(h.commands.length,0);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),before);
+  }finally{h.plugin.onunload();}
+});
+
+test('choosing the vault project sends there without linking the containing folder',async()=>{
+  const h=await chatHarness();
+  try{
+    h.setActiveNote('Unlinked/draft.md');await h.plugin.openChat('Use vault notes');
+    const modal=h.modals.at(-1);modal.contentEl.children[0].children[0].click();
+    const picker=h.modals.at(-1);picker.onChooseItem(picker.getItems()[1]);
+    assert.equal(modal.contentEl.children[0].children[0].text,project.title);
+    await modal.choose('new');
+    assert.deepEqual(h.commands.map(c=>c.type),['thread.create','thread.turn.start']);
+    assert.equal(h.commands[0].projectId,project.id);
+    assert.equal(h.plugin.settings.folderLinks.some((link:any)=>link.folderPath==='Unlinked'),false);
+  }finally{h.plugin.onunload();}
+});
+
+test('mobile reuses an existing folder project and links only after confirmed delivery',async()=>{
+  let lose=true;
+  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'&&lose){lose=false;throw Error('Lost response');}});
+  try{
+    const folder={...project,id:'existing-folder',title:'Unlinked',workspaceRoot:'/projects/notes/Unlinked'};
+    h.setProjects([project,folder]);
+    await assert.rejects(h.plugin.sendChat('Use existing project',{path:'Unlinked/draft.md'},{newThread:true}),/Unconfirmed/);
+    assert.equal(h.commands[0].projectId,folder.id);
+    assert.equal(h.commands.some(c=>c.type==='project.create'),false);
+    assert.equal(h.plugin.settings.folderLinks.some((link:any)=>link.folderPath==='Unlinked'),false);
+    const pending=h.plugin.settings.pending[0];assert.equal(pending.folderLinkIntent.projectId,folder.id);
+    await h.plugin.retry(pending);
+    assert.equal(h.plugin.settings.folderLinks.find((link:any)=>link.folderPath==='Unlinked').projectId,folder.id);
+    assert.equal(h.commands.filter(c=>c.type==='thread.create').length,1);
+  }finally{h.plugin.onunload();}
+});
+
+test('mobile manual Link to self registers the synced folder and opens link confirmation',async()=>{
+  const h=await chatHarness();
+  try{
+    let chosen:any;
+    h.plugin.linkFolder=async(folder:any,project:any,self:boolean)=>{chosen={folder,project,self};};
+    const folder={path:'Fresh/deep',name:'deep'};
+    await h.plugin.linkFolderToSelf(folder);
+    assert.deepEqual(h.commands.map(c=>c.type),['project.create']);
+    assert.equal(h.commands[0].workspaceRoot,'/projects/notes/Fresh/deep');
+    assert.equal(h.commands[0].title,'deep');assert.equal(chosen.self,true);
+    assert.equal(chosen.project.connectionId,project.connectionId);
+    assert.equal(h.plugin.settings.folderLinks.some((link:any)=>link.folderPath===folder.path),false);
+    assert.ok(h.plugin.settings.directProjects.some((p:any)=>p.id===chosen.project.id));
   }finally{h.plugin.onunload();}
 });

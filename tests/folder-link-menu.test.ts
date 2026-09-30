@@ -61,8 +61,8 @@ async function folderMenuHarness(){
   const folder=new Folder();
   class Plugin {
     app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},
-      workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{if(name==='file-menu')fileMenu=callback;}},
-      vault:{getAbstractFileByPath:(path:string)=>path===folder.path?folder:undefined},
+      workspace:{getActiveViewOfType:()=>undefined,onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{if(name==='file-menu')fileMenu=callback;}},
+      vault:{getName:()=> 'QLO2',getAbstractFileByPath:(path:string)=>path===folder.path?folder:undefined},
     };
     async loadData(){return {...(shared.at(-1)??{}),paired:[{id:'c',name:'Laptop',url:'https://folder.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:project']};}
     async saveData(data:any){if(failSave)throw Error('Simulated settings storage failure');shared.push(data);}
@@ -316,27 +316,23 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
     h.plugin.settings.folderLinks=[{id:'parent',folderPath:'Notes',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot,connectionId:'c',self:false},
       {id:'inner',folderPath:'Notes/Inner',projectId:nested.id,projectTitle:nested.title,workspaceRoot:nested.workspaceRoot,connectionId:'c',self:false}];
     h.plugin.chatReadinessError=()=>undefined;
+    h.plugin.app.vault.read=async()=> '# Test note';
     const sent:any[]=[];h.plugin.send=async(file:any,project:any,options:any)=>{sent.push({file,project,options});};
     const {menu,file}=h.fileMenu('Notes/Inner/note.md',mobile);
     const item=menu.items.find(item=>item.title==='Open in T3 Code');assert.ok(item);
-    if(mobile)await item.callback();
-    const choices=mobile?h.modals.at(-1):item.submenu;assert.ok(choices);
-    if(mobile){
-      assert.equal(choices.constructor.name,'SendDestinationModal');
-      assert.equal(choices.titleEl.text,'Send to T3 Code');
-      assert.deepEqual(choices.contentEl.settings.flatMap((setting:any)=>setting.controls.map((control:any)=>control.text)),['New thread','Existing thread…']);
-      await h.button(choices,'New thread').click();
-    }else{
-      assert.deepEqual(choices.items.map((i:any)=>i.title),['Send to new thread','Send to existing thread…']);
-      await choices.items[0].callback();
-    }
+    await item.callback();
+    const choices=h.modals.at(-1);assert.ok(choices);
+    assert.equal(choices.constructor.name,'SendDestinationModal');
+    assert.equal(choices.titleEl.text,'Send to T3 Code');
+    assert.deepEqual(choices.contentEl.settings.flatMap((setting:any)=>setting.controls.map((control:any)=>control.text)),['New thread','Existing thread…']);
+    await h.button(choices,'New thread').click();
     assert.equal(sent.length,1);assert.equal(sent[0].file,file);assert.equal(sent[0].project.id,'nested');assert.equal(sent[0].options.threadId,undefined);
     h.plugin.settings.noteThreads.push({notePath:'Notes/Inner/note.md',threadId:'previous-parent-thread',projectId:h.project.id,workspaceRoot:h.project.workspaceRoot,connectionId:'c',selectedAt:'2026-09-28T00:00:00Z'});
     h.setThreads([{id:'thread',projectId:'nested',title:'Existing',updatedAt:'2026-09-19',session:{status:'running',activeTurnId:'turn'},latestTurn:{state:'running'}},
       {id:'foreign',projectId:h.project.id,title:'Wrong project',updatedAt:'2026-09-20'},
       {id:'archived',projectId:'nested',title:'Archived',archivedAt:'2026-09-19'}]);
     if(mobile){h.plugin.openNoteSend(file);await h.button(h.modals.at(-1),'Existing thread…').click();}
-    else await choices.items[1].callback();
+    else {h.plugin.openNoteSend(file);await h.button(h.modals.at(-1),'Existing thread…').click();}
     const picker=h.modals.at(-1);assert.equal(picker.getItems().length,1);
     assert.equal(picker.getItems()[0].id,'thread');
     assert.match(picker.getItemText(picker.getItems()[0]),/Existing · Active/);
@@ -349,15 +345,26 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
   }finally{h.plugin.onunload();}
 });
 
-test('unlinked notes retain project choices and root links cover root-level notes',async()=>{
+test('unlinked and root notes open the project-name destination dialog on desktop',async()=>{
   const h=await folderMenuHarness();
   try{
-    const unlinked=h.fileMenu('Unlinked/note.md',false).menu.items[0].submenu;
-    assert.ok(unlinked?.items.some(item=>item.title==='New thread in Writing · Laptop'));
+    await h.fileMenu('Unlinked/note.md',false).menu.items[0].callback();
+    let modal=h.modals.at(-1);
+    assert.equal(modal.host.getProjectName(),'New project: Unlinked');
+    assert.equal(modal.host.getProjectChoices().slice(0,2).map((item:any)=>item.key).join(','),'folder:new,vault:root');
+    modal.close();
     h.plugin.settings.folderLinks=[{id:'root',folderPath:'/',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot,connectionId:'c',self:false}];
-    const submenu=h.fileMenu('note.md',false).menu.items[0].submenu;assert.ok(submenu);
-    assert.equal(submenu.items[0].title,'Send to new thread');
-    h.plugin.busy=true;
-    assert.ok(h.fileMenu('note.md',false).menu.items[0].submenu?.items.every(item=>item.disabled));
+    await h.fileMenu('note.md',false).menu.items[0].callback();
+    modal=h.modals.at(-1);assert.equal(modal.host.getProjectName(),h.project.title);
+    h.plugin.busy=true;assert.equal(h.fileMenu('note.md',false).menu.items[0].disabled,true);
+  }finally{h.plugin.onunload();}
+});
+
+
+test('mobile folder menu enables Link to self',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const submenu=h.folderMenu().items.find(item=>item.title==='Link to T3 Code')!.submenu!;
+    assert.equal(submenu.items.find(item=>item.title==='Link to self (create T3 project)')!.disabled,false);
   }finally{h.plugin.onunload();}
 });

@@ -5,6 +5,7 @@ export interface ChatHost {
   steering?:boolean;
   busy?:boolean;
   getNotePath():string;
+  getProjectName(projectKey?:string):string;
   getTargetDescription(projectKey?:string):string;
   getProjectChoices():{key:string;label:string}[];
   getDefaultThread(projectKey?:string):string|undefined;
@@ -35,7 +36,7 @@ class SendDestinationModal extends Modal {
   onOpen(){
     this.titleEl.setText('Send to T3 Code');this.contentEl.empty();
     const row=this.contentEl.createEl('p');
-    const projectButton=row.createEl('button',{text:this.host.getNotePath(),cls:'send-to-t3-note-project',attr:{'aria-label':`Change project for this send: ${this.host.getNotePath()}`,title:this.host.getTargetDescription(this.projectKey)}});
+    const projectButton=row.createEl('button',{text:this.host.getProjectName(this.projectKey),cls:'send-to-t3-note-project',attr:{'aria-label':`Change project for this send: ${this.host.getProjectName(this.projectKey)}`,title:this.host.getTargetDescription(this.projectKey)}});
     projectButton.disabled=Boolean(this.host.busy);
     projectButton.addEventListener('click',()=>{
       if(this.field)this.prompt=this.field.value;

@@ -26,7 +26,7 @@ if(args[0]==='auth'){
  if(args[2]==='issue')console.log(JSON.stringify({token:'test-only',sessionId:'test-session'}));
 }else if(args[0]==='project'&&args[1]==='add'){
  const projects=JSON.parse(fs.readFileSync(${JSON.stringify(catalogPath)},'utf8'));
- const project={id:${JSON.stringify(project.id)},title:args[args.indexOf('--title')+1],workspaceRoot:args.at(-1)};
+ const project={id:args.at(-1)===${JSON.stringify(vaultRoot)}?${JSON.stringify(project.id)}:require('node:crypto').randomUUID(),title:args[args.indexOf('--title')+1],workspaceRoot:args.at(-1)};
  projects.push(project);fs.writeFileSync(${JSON.stringify(catalogPath)},JSON.stringify(projects));
  console.log('Added project '+project.id);
 }else process.exitCode=1;
@@ -53,11 +53,12 @@ if(args[0]==='auth'){
   class Base{}
   class Folder {path='/';name='';}
   const root=new Folder();
+  const folders=new Map<string,Folder>();
   const api={Platform:{isMobile:false},TFolder:Folder,TFile:Base,MarkdownView:Base,Modal:Base,FuzzySuggestModal:Base,PluginSettingTab:Base,Notice:Base,
     Plugin:class {
       app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},
         workspace:{onLayoutReady:()=>{},on:()=>{},getActiveViewOfType:()=>activeFile?{file:activeFile}:undefined},
-        vault:{getRoot:()=>root,getName:()=> 'Vault café with spaces',adapter:{getFullPath:(path:string)=>join(vaultRoot,path)},
+        vault:{getAbstractFileByPath:(path:string)=>folders.get(path),getRoot:()=>root,getName:()=> 'Vault café with spaces',adapter:{getFullPath:(path:string)=>join(vaultRoot,path)},
           read:()=>assert.fail('Chat must not read Markdown'),readBinary:()=>assert.fail('Chat must not read images')},
       };
       async loadData(){return shared.at(-1)??{};}
@@ -74,6 +75,7 @@ if(args[0]==='auth'){
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();return plugin;};
   const plugin=await start();
   return {plugin,start,shared,commands,project,vaultRoot,root,
+    addFolder:async(path:string)=>{const folder=new Folder();folder.path=path;folder.name=path.split('/').at(-1)!;folders.set(path,folder);await mkdir(join(vaultRoot,path),{recursive:true});},
     setNote:(path?:string)=>{activeFile=path?{path,extension:'md'}:undefined;},
     cliCalls:async()=> (await readFile(callsPath,'utf8')).trim().split('\n').map(line=>JSON.parse(line)),
     dispose:async()=>{plugin.onunload();await new Promise<void>(resolve=>server.close(()=>resolve()));await rm(dir,{recursive:true,force:true});},
@@ -83,11 +85,11 @@ if(args[0]==='auth'){
 for(const existing of [false,true])test(`desktop chat ${existing?'reuses':'creates'} the vault-root project and persists its link`,{timeout:20_000},async()=>{
   const h=await harness(existing);
   try{
-    h.setNote('Unlinked/draft.md');await h.plugin.sendChat('Edit this note',{path:'Unlinked/draft.md',absolutePath:join(h.vaultRoot,'Unlinked/draft.md')});
+    h.setNote('draft.md');await h.plugin.sendChat('Edit this note',{path:'draft.md',absolutePath:join(h.vaultRoot,'draft.md')});
     assert.equal(h.commands[0].projectId,h.project.id);
     assert.equal(h.commands[0].title,'Edit this note');
-    assert.match(h.commands[1].message.text,/Unlinked\/draft.md/);
-    assert.ok(h.commands[1].message.text.includes(JSON.stringify(join(h.vaultRoot,'Unlinked/draft.md'))));
+    assert.match(h.commands[1].message.text,/draft.md/);
+    assert.ok(h.commands[1].message.text.includes(JSON.stringify(join(h.vaultRoot,'draft.md'))));
     assert.equal(h.commands[1].message.attachments.length,0);
     assert.equal(h.shared.at(-1).folderLinks[0].folderPath,'/');
     assert.equal(h.shared.at(-1).folderLinks[0].workspaceRoot,h.vaultRoot);
@@ -112,5 +114,21 @@ test('desktop root fallback works while the user has T3 Connect mode selected',{
     await h.plugin.sendChat('Use the vault');
     assert.equal(h.commands.length,2);assert.equal(h.commands[0].projectId,h.project.id);
     assert.equal(h.plugin.mode,'direct','Automatic local routing must preserve the selected connection mode');
+  }finally{await h.dispose();}
+});
+
+
+test('desktop unlinked notes create a containing-folder project and persist the link only after delivery',{timeout:20_000},async()=>{
+  const h=await harness(true);
+  try{
+    await h.addFolder('Fresh/deep');
+    await h.plugin.sendChat('Reply only OK',{path:'Fresh/deep/note.md',absolutePath:join(h.vaultRoot,'Fresh/deep/note.md')});
+    const link=h.plugin.settings.folderLinks.find((link:any)=>link.folderPath==='Fresh/deep');
+    assert.equal(link.projectTitle,'deep');assert.equal(link.self,true);
+    assert.equal(link.workspaceRoot,join(h.vaultRoot,'Fresh/deep'));
+    assert.equal(h.commands[0].projectId,link.projectId);
+    await h.plugin.sendChat('Another note',{path:'Fresh/deep/child/note.md',absolutePath:join(h.vaultRoot,'Fresh/deep/child/note.md')},{newThread:true});
+    assert.equal(h.commands[2].projectId,link.projectId);
+    assert.equal((await h.cliCalls()).filter(args=>args[0]==='project').length,1);
   }finally{await h.dispose();}
 });

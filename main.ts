@@ -47,7 +47,10 @@ import {settlementState,type ThreadSettlementJob} from './thread-settlement';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor};
 const INLINE_REPLY_INSTRUCTION='Answer in the T3 thread. The Obsidian plugin will insert your reply.';
 const THREAD_REPLY_INSTRUCTION='Answer in the T3 thread.';
+const NEW_FOLDER_PROJECT='folder:new';
+const VAULT_PROJECT='vault:root';
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean}
+type PreparedNote={content:string;images:Awaited<ReturnType<typeof collectImages>>};
 interface AutomationSettings {destinationId:string;coordinatorDeviceId:string}
 interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[];automation:AutomationSettings;automationDrafts:WorkflowIR[];workflowEditRequests:WorkflowEditRequest[] }
 export default class SendToT3 extends Plugin {
@@ -229,7 +232,7 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
         const folder=this.folderForMenu(file);
-        menu.addItem(item=>{item.setTitle('Link to T3 Code').setIcon('link');const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,folder).open());return;}const selected=this.projects().filter(p=>this.selected().includes(projectKey(p)));for(const project of selected)submenu.addItem(i=>i.setTitle(`Link to ${projectLabel(project)}`).onClick(()=>void this.linkFolder(folder,project,false)));submenu.addSeparator();submenu.addItem(i=>i.setTitle('Link to self (create T3 project)').setDisabled(Platform.isMobile).onClick(()=>void this.linkFolderToSelf(folder)));if(!selected.length&&Platform.isMobile)submenu.addItem(i=>i.setTitle('Select a project in settings').setDisabled(true));});
+        menu.addItem(item=>{item.setTitle('Link to T3 Code').setIcon('link');const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,folder).open());return;}const selected=this.projects().filter(p=>this.selected().includes(projectKey(p)));for(const project of selected)submenu.addItem(i=>i.setTitle(`Link to ${projectLabel(project)}`).onClick(()=>void this.linkFolder(folder,project,false)));submenu.addSeparator();submenu.addItem(i=>i.setTitle('Link to self (create T3 project)').onClick(()=>void this.linkFolderToSelf(folder)));if(!selected.length&&Platform.isMobile)submenu.addItem(i=>i.setTitle('Select a project in settings').setDisabled(true));});
         menu.addItem(item=>{
           item.setTitle('Setup T3 workflow').setIcon('workflow');
           const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();
@@ -244,20 +247,7 @@ export default class SendToT3 extends Plugin {
       if (!(file instanceof TFile) || file.extension.toLowerCase() !== 'md' || (!Platform.isMobile && source !== 'file-explorer-context-menu')) return;
       menu.addItem(item => {
         item.setTitle('Open in T3 Code').setIcon('send');
-        if(folderLinkForPath(this.settings.folderLinks,file.path)||this.noteThread(file.path)){
-          if(Platform.isMobile){item.setDisabled(this.busy).onClick(()=>this.openNoteSend(file));return;}
-          const linkedMenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();
-          if(linkedMenu)this.noteSendMenu(linkedMenu,file);else item.setDisabled(this.busy).onClick(()=>this.openNoteSend(file));
-          return;
-        }
-        if(Platform.isMobile){item.onClick(()=>this.openNoteSend(file));return;}
-        const submenu = (item as MenuItem & {setSubmenu?:()=>Menu}).setSubmenu?.();
-        if (!submenu) {item.onClick(()=>this.openNoteSend(file)); return;}
-        const selected = this.projects().filter(p=>this.selected().includes(projectKey(p)));
-        if (!selected.length) submenu.addItem(i=>i.setTitle('No projects selected — choose in settings').setDisabled(true));
-        for (const project of selected) submenu.addItem(i=>i.setTitle(`New thread in ${projectLabel(project)}`).setIcon('message-square-plus').setDisabled(this.busy).onClick(()=>this.send(file,project)));
-        submenu.addSeparator();
-        submenu.addItem(i=>i.setTitle('Choose projects…').onClick(()=>new ProjectModal(this.app,this).open()));
+        item.setDisabled(this.busy).onClick(()=>this.openNoteSend(file));
       });
     }));
     this.registerEvent(this.app.workspace.on('editor-menu',(menu,editor,view)=>{
@@ -760,7 +750,9 @@ export default class SendToT3 extends Plugin {
   async openNoteThreads(file:TFile,overrideKey?:string){
     if(this.busy)return;
     try{
-      const {project}=await this.chatTarget(file.path,undefined,true,overrideKey);
+      const target=await this.existingTarget(file.path,overrideKey);
+      if(!target){new ExistingThreadModal(this.app,[],async()=>{},'Existing threads','No project exists for this folder yet. Use New thread.').open();return;}
+      const {project}=target;
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
       new Notice('Loading threads…',2000);
       const threads=projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);
@@ -769,13 +761,19 @@ export default class SendToT3 extends Plugin {
     }catch(error){new Notice(`Send to T3 Code: ${message(error)}`,10000);}
   }
   async sendNote(file:TFile,threadId?:string,expectedProjectKey?:string,newThread=false,overrideKey?:string){
+    if(this.busy)return;
     try{
+      const active=this.app.workspace.getActiveViewOfType(MarkdownView);
+      const content=active?.file?.path===file.path&&active.editor?active.editor.getValue():await this.app.vault.read(file);
+      if(!content.trim()){new Notice('This note is empty. Add Markdown before sending.');return;}
+      const images=await this.prepareImages(content,file.path);
+      if(images.markdown.length+this.messageFooter(this.noteContext(file).absolutePath??file.path).length+(this.settings.inlineStreaming.enabled?INLINE_REPLY_INSTRUCTION.length+2:0)>120_000)throw Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
       const saved=this.noteThread(file.path);
       const chosen=expectedProjectKey?undefined:threadId?this.previousNoteThread(file.path,threadId):!newThread?saved:undefined;
-      const {project}=await this.chatTarget(file.path,chosen,Boolean(newThread||expectedProjectKey),overrideKey);
+      const {project,link}=await this.chatTarget(file.path,chosen,Boolean(newThread||expectedProjectKey),overrideKey);
       if(expectedProjectKey&&projectKey(project)!==expectedProjectKey)throw Error('The folder’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
-      await this.send(file,project,{threadId,newThread,projectOverrideKey:overrideKey,folderPicker:Boolean(expectedProjectKey)});
+      await this.send(file,project,{threadId,newThread,projectOverrideKey:overrideKey,folderPicker:Boolean(expectedProjectKey),folderLink:link,prepared:{content,images}});
     }catch(error){new Notice(`Send to T3 Code: ${message(error)}`,10000);}
   }
   openChat(prompt?:string){
@@ -801,13 +799,28 @@ export default class SendToT3 extends Plugin {
   private openEditorChat(selection:string,file:TFile,context:EditorChatContext){
     return this.openChatWithNote(this.noteContext(file),selection,this.settings.inlineStreaming.enabled?context:undefined,true);
   }
-  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'steering'|'getNotePath'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'hasPreviousThreads'>{
-    const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
+  private needsFolderProject(notePath?:string):boolean {
+    return Boolean(notePath?.includes('/')&&!folderLinkForPath(this.settings.folderLinks.filter(link=>link.folderPath!=='/'),notePath));
+  }
+  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'steering'|'getNotePath'|'getProjectName'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'hasPreviousThreads'>{
+    const projectName=(key?:string)=>{
+      const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
+      if(key===VAULT_PROJECT)return this.settings.folderLinks.find(item=>item.folderPath==='/')?.projectTitle??this.app.vault.getName();
+      if(key===NEW_FOLDER_PROJECT)return `New project: ${note!.path.split('/').at(-2)}`;
+      if(key)return [...this.projects(),...this.settings.directProjects,...this.settings.projects].find(project=>projectKey(project)===key)?.title??'Unavailable project';
+      const remembered=this.noteThread(note?.path);
+      if(remembered)return [...this.settings.directProjects,...this.settings.projects].find(project=>project.id===remembered.projectId&&sameWorkspacePath(project.workspaceRoot,remembered.workspaceRoot))?.title??`T3 project ${remembered.projectId.slice(0,8)}`;
+      return this.needsFolderProject(note?.path)?`New project: ${note!.path.split('/').at(-2)}`:link?.projectTitle??this.app.vault.getName();
+    };
     return {
       steering:!!inline&&activeInlineIds(inline.editor.getValue()).length>0,
       getNotePath:()=>note?.path??'No note open',
-      getTargetDescription:key=>{const chosen=key?this.projects().find(item=>projectKey(item)===key):undefined,remembered=this.noteThread(note?.path),project=chosen??(remembered?[...this.settings.directProjects,...this.settings.projects].find(item=>item.id===remembered.projectId&&sameWorkspacePath(item.workspaceRoot,remembered.workspaceRoot)):undefined);return `${note?note.path:'No note open'} → ${project?.title??(remembered&&link?.projectId===remembered.projectId?link.projectTitle:undefined)??(remembered?`T3 project ${remembered.projectId.slice(0,8)}`:link?.projectTitle)??this.app.vault.getName()+' (vault root)'}`;},
-      getProjectChoices:()=>this.projects().map(project=>({key:projectKey(project),label:projectLabel(project)})),
+      getProjectName:projectName,
+      getTargetDescription:key=>`${note?.path??'No note open'} → ${projectName(key)}`,
+      getProjectChoices:()=>{
+        const root=this.settings.folderLinks.find(item=>item.folderPath==='/');
+        return [...(this.needsFolderProject(note?.path)?[{key:NEW_FOLDER_PROJECT,label:`New project: ${note!.path.split('/').at(-2)}`}]:[]),{key:VAULT_PROJECT,label:`Vault project: ${root?.projectTitle??this.app.vault.getName()}`},...this.projects().filter(project=>!root||project.id!==root.projectId||!sameWorkspacePath(project.workspaceRoot,root.workspaceRoot)).map(project=>({key:projectKey(project),label:projectLabel(project)}))];
+      },
       getDefaultThread:key=>{const remembered=this.noteThread(note?.path),job=note?this.inlineChat?.activeFor(note.path).find(job=>job.threadId&&['sending','running','reconnecting'].includes(job.phase)):undefined;return !key||remembered&&key===`${remembered.connectionId?remembered.connectionId+':':''}${remembered.projectId}`?job?.threadId??remembered?.threadId:undefined;},
       hasPreviousThreads:key=>Boolean(note&&this.olderNoteThreads(note.path).some(entry=>!key||key===`${entry.connectionId?entry.connectionId+':':''}${entry.projectId}`)),
     };
@@ -823,7 +836,9 @@ export default class SendToT3 extends Plugin {
     return openChatFlow(this.app,host,prompt);
   }
   private async openChatThreads(prompt:string,note?:{path:string;absolutePath?:string},inline?:EditorChatContext,answerOnly=false,overrideKey?:string){
-    const {project}=await this.chatTarget(note?.path,undefined,true,overrideKey);
+    const target=await this.existingTarget(note?.path,overrideKey);
+    if(!target){new ExistingThreadModal(this.app,[],async()=>{},'Existing threads','No project exists for this folder yet. Use New thread.').open();return;}
+    const {project}=target;
     const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
     new Notice('Loading threads…',2000);
     const threads=projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);
@@ -1018,11 +1033,19 @@ export default class SendToT3 extends Plugin {
     }finally{opened.close();}
   }
   private async chatTarget(notePath?:string,preferred?:NoteThread,ignorePreviousThread=false,overrideKey?:string):Promise<{project:Project;link:FolderLink}> {
+    if(overrideKey===VAULT_PROJECT)return this.vaultTarget();
+    if(overrideKey===NEW_FOLDER_PROJECT){if(!notePath?.includes('/'))throw Error('Choose a note inside a folder.');return (await this.folderTarget(notePath,true))!;}
     let link=notePath?folderLinkForPath(this.settings.folderLinks,notePath):this.settings.folderLinks.find(item=>item.folderPath==='/');
     if(overrideKey){const project=[...this.projects(),...this.settings.directProjects,...this.settings.projects].find(item=>projectKey(item)===overrideKey);if(!project)throw Error('The chosen T3 project is unavailable. Choose a project again.');return {project,link:link&&projectKey(project)===`${link.connectionId?link.connectionId+':':''}${link.projectId}`?link:{id:'project-override',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false}};}
     const remembered=preferred??(!ignorePreviousThread?this.noteThread(notePath):undefined);
     if(remembered){const project=this.projectForNoteThread(remembered);return {project,link:link??{id:'note-thread',folderPath:'/',connectionId:remembered.connectionId,projectId:remembered.projectId,projectTitle:project.title,workspaceRoot:remembered.workspaceRoot,self:true}};}
+    if(this.needsFolderProject(notePath))return (await this.folderTarget(notePath!,true))!;
     if(link){try{return {project:this.projectForLink(link),link};}catch(error){if(link.folderPath!=='/')throw error;}}
+    return this.vaultTarget();
+  }
+  private async vaultTarget():Promise<{project:Project;link:FolderLink}>{
+    let link=this.settings.folderLinks.find(item=>item.folderPath==='/');
+    if(link){try{return {project:this.projectForLink(link),link};}catch{/* Reconnect a stale root. */}}
     if(Platform.isMobile||this.settings.paired.length||this.nativeAccount){
       const project=await this.configureVaultRoot();
       link=this.settings.folderLinks.find(item=>item.folderPath==='/');
@@ -1035,6 +1058,53 @@ export default class SendToT3 extends Plugin {
     this.settings.folderLinks=upsertFolderLink(previous,link);
     try{await this.save();this.folderIndicators?.refresh();}catch(error){this.settings.folderLinks=previous;throw error;}
     return {project,link};
+  }
+  private async folderTarget(notePath:string,create:boolean,fromNote=true):Promise<{project:Project;link:FolderLink}|undefined>{
+    const folderPath=notePath.slice(0,notePath.lastIndexOf('/'));
+    const existing=this.settings.folderLinks.find(link=>link.folderPath===folderPath);
+    if(existing&&fromNote)return {project:this.projectForLink(existing),link:existing};
+    const root=await this.vaultTarget(),connection=this.connection(root.project);
+    let project:Project|undefined;
+    if(connection.transport==='direct'){
+      const remote=await connectVaultRemote(connection,await this.sessionFor(connection.connectionId??''));
+      try{
+        if(!await remote.matches(root.project.workspaceRoot,`${this.app.vault.configDir||'.obsidian'}/plugins/${this.manifest?.id||'send-to-t3-code'}/data.json`,this.settings.vaultId))throw Error('The vault project machine no longer matches this vault. Reconnect it in settings.');
+        const separator=root.project.workspaceRoot.includes('\\')&&!root.project.workspaceRoot.includes('/')?'\\':'/';
+        const workspaceRoot=root.project.workspaceRoot.replace(/[\\/]+$/,'')+separator+folderPath.replace(/\//g,separator);
+        const directory=(await remote.browse(workspaceRoot)).parentPath;
+        if(!sameWorkspacePath(directory,workspaceRoot))throw Error('This folder has not reached the vault project machine yet. Let Obsidian Sync finish, then try again.');
+        project=(await remote.projects()).find(item=>sameWorkspacePath(item.workspaceRoot,workspaceRoot));
+        if(!project&&create){
+          if(fromNote)await waitForVaultNote(remote,root.project.workspaceRoot,notePath,()=>!this.stopped,()=>new Notice('Waiting for this note to reach the vault project machine…',10000));
+          const proposed=vaultRegistration(connection.environmentId!,workspaceRoot,this.settings.vaultId+':'+folderPath,folderPath.split('/').at(-1)!);
+          const registration=this.vaultRegistrations[proposed.commandId]??proposed;
+          this.vaultRegistrations[proposed.commandId]=registration;await this.save();
+          project=await remote.ensureProject(registration);
+        }
+        if(project)project={...project,connectionId:root.project.connectionId,connectionName:root.project.connectionName};
+      }finally{remote.close();}
+    }else{
+      const folder=this.app.vault.getAbstractFileByPath(folderPath);
+      if(!(folder instanceof TFolder))throw Error('This folder no longer exists. Choose a note again.');
+      if(create)project=await this.localFolderProject(folder);
+      else{
+        const workspaceRoot=(this.app.vault.adapter as unknown as {getFullPath:(path:string)=>string}).getFullPath(folderPath);
+        project=parseProjects(await runBridge(connection,['projects'])).find(item=>sameWorkspacePath(item.workspaceRoot,workspaceRoot));
+      }
+    }
+    if(!project)return;
+    if(this.stopped)throw Error('The plugin was disabled before linking the folder.');
+    const link:FolderLink={id:randomId(),folderPath,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true,vaultId:this.settings.vaultId,...(connection.environmentId?{environmentId:connection.environmentId}:{})};
+    if(project.connectionId)this.settings.directProjects=[...this.settings.directProjects.filter(item=>projectKey(item)!==projectKey(project!)),project];
+    return {project,link};
+  }
+  private folderLinkIntent(link:FolderLink):{folderLinkIntent?:FolderLink}{
+    return link.self&&link.folderPath!=='/'&&!this.settings.folderLinks.some(item=>item.folderPath===link.folderPath)?{folderLinkIntent:link}:{};
+  }
+  private async existingTarget(notePath?:string,overrideKey?:string){
+    if(this.needsFolderProject(notePath)&&(!overrideKey||overrideKey===NEW_FOLDER_PROJECT)&&!this.settings.folderLinks.some(link=>link.folderPath==='/'))return;
+    if(notePath&&(overrideKey===NEW_FOLDER_PROJECT||!overrideKey&&this.needsFolderProject(notePath)))return this.folderTarget(notePath,false);
+    return this.chatTarget(notePath,undefined,true,overrideKey);
   }
   vaultMachines():VaultMachine[]{
     const remote=this.settings.paired.filter((c,index,list)=>list.findIndex(other=>other.environmentId===c.environmentId)===index).map(c=>({id:c.id,name:c.name,detail:this.machineErrors[c.environmentId]?'Unavailable — retry connection':undefined}));
@@ -1129,11 +1199,12 @@ export default class SendToT3 extends Plugin {
     this.busy=true;
     let saved=false;
     try{
+      const images=options?.barePrompt?undefined:await this.prepareImages(prompt,note?.path??'',true);
+      if((images?.markdown??prompt).length+(options?.barePrompt?0:this.messageFooter(note?.absolutePath??note?.path??'(no note open)').length)>120_000)throw Error('The message and note path exceed T3’s 120,000-character limit. Shorten the message before sending.');
       const historical=note&&options?.threadId&&!options.expectedProjectKey?this.previousNoteThread(note.path,options.threadId):undefined;
       let {project,link}=await this.chatTarget(note?.path,historical,Boolean(options?.newThread||options?.expectedProjectKey),options?.projectOverrideKey);
       if(options?.expectedProjectKey&&projectKey(project)!==options.expectedProjectKey)throw Error('The note’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
-      const images=options?.barePrompt?undefined:await this.prepareImages(prompt,note?.path??'',true);
       let text=images?.markdown??prompt;
       if(options?.barePrompt){
         text=prompt;
@@ -1163,7 +1234,7 @@ export default class SendToT3 extends Plugin {
       const title=prompt.trim().split(/\r?\n/)[0].replace(/\s+/g,' ').trim().slice(0,160);
       const active=this.noteThread(note?.path);
       const threadId=options?.threadId??(!options?.newThread&&active&&project.id===active.projectId&&(project.connectionId??'')===active.connectionId?active.threadId:undefined);
-      const request:Request={id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{})};
+      const request:Request={id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
       await options?.onPrepared?.(request);
       this.settings.pending.push(request);
       try{await this.save();saved=true;}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);throw e;}
@@ -1306,7 +1377,7 @@ export default class SendToT3 extends Plugin {
     return project;
   }
   async linkFolderToSelf(folder:TFolder){
-    try{await this.linkFolder(folder,await this.localFolderProject(folder),true);}
+    try{const target=folder.path==='/'?await this.vaultTarget():await this.folderTarget(`${folder.path}/placeholder.md`,true,false);await this.linkFolder(folder,target!.project,true);}
     catch(e){new Notice(`Send to T3 Code: ${message(e)}`,12000);}
   }
   async signOutCloud(){
@@ -1362,7 +1433,7 @@ export default class SendToT3 extends Plugin {
       this.scanError=result.cached?(result.warning??'Destination offline. Showing saved projects; sending requires a connection.') : '';await this.save();
     } catch(e) {this.scanError = message(e); throw e;}
   }
-  async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean}) {
+  async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote}) {
     if (this.busy) return;
     this.busy = true;
     let saved = false;
@@ -1380,11 +1451,12 @@ export default class SendToT3 extends Plugin {
       const content = inlineView?inlineView.editor.getValue():await this.app.vault.read(file);
       if (!content.trim()) {new Notice('This note is empty. Add Markdown before sending.'); return;}
       if(!options?.quiet)new Notice('Preparing note and embedded images…');
-      const images = await this.prepareImages(content,file.path);
+      if(options?.prepared&&options.prepared.content!==content)throw Error('The note changed while preparing its project. Try again with the current text.');
+      const images = options?.prepared?.images??await this.prepareImages(content,file.path);
       if(inlineView&&inlineView.editor.getValue()!==content)throw Error('The note changed while preparing the send. Try again with the current text.');
-      const note=this.noteContext(file),link=folderLinkForPath(this.settings.folderLinks,file.path)??{id:'manual',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true};
+      const note=this.noteContext(file),link=options?.folderLink??folderLinkForPath(this.settings.folderLinks,file.path)??{id:'manual',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true};
       const destination=this.destinationNotePath(note,project,link)??note.absolutePath??'(unmapped on destination)';
-      const request:Request = {id:options?.id??randomId(),project:{...project},title:file.basename.slice(0,160),prompt:applyOrchestration(images.markdown+(inlineView?`\n\n${INLINE_REPLY_INSTRUCTION}`:'')+this.messageFooter(destination),orchestration),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection)};
+      const request:Request = {id:options?.id??randomId(),project:{...project},title:file.basename.slice(0,160),prompt:applyOrchestration(images.markdown+(inlineView?`\n\n${INLINE_REPLY_INSTRUCTION}`:'')+this.messageFooter(destination),orchestration),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
       if(request.prompt.length>120_000) throw new Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
       if(inlineView){
         const manager=this.inlineChat;if(!manager)throw Error('Inline T3 streaming is unavailable. Reload the plugin.');
@@ -1460,6 +1532,7 @@ export default class SendToT3 extends Plugin {
       ...(inlineJobId?{inlineJobId}:{}),...(inlineHost?{inlineHost,inlineVersion:(request.inlineHost?.version??2) as 1|2}:{})});
   }
   rememberStarted(request:Request,threadId:string) {
+    if(request.folderLinkIntent&&!this.settings.folderLinks.some(link=>link.folderPath===request.folderLinkIntent!.folderPath))this.settings.folderLinks=upsertFolderLink(this.settings.folderLinks,request.folderLinkIntent);
     const remembered=request.noteThread??request.noteLink; // Resume requests saved before the terminology change.
     if(remembered){
       const entry:NoteThread={...remembered,threadId,selectedAt:new Date().toISOString()};
@@ -1494,10 +1567,10 @@ export default class SendToT3 extends Plugin {
     }
     if(!quiet)new Notice(`Sending to ${projectLabel(request.project)}…`);
     const result=await sendRequest(request);
-    const before={jobs:this.settings.completionJobs,settlementJobs:this.settings.settlementJobs,pending:this.settings.pending,noteThreads:this.settings.noteThreads};
+    const before={jobs:this.settings.completionJobs,settlementJobs:this.settings.settlementJobs,pending:this.settings.pending,noteThreads:this.settings.noteThreads,folderLinks:this.settings.folderLinks};
     this.rememberStarted(request,result.threadId);
     this.settings.pending=this.settings.pending.filter(r=>r.id!==request.id);
-    try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;this.settings.settlementJobs=before.settlementJobs;this.settings.noteThreads=before.noteThreads;throw e;}
+    try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;this.settings.settlementJobs=before.settlementJobs;this.settings.noteThreads=before.noteThreads;this.settings.folderLinks=before.folderLinks;throw e;}
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
   }
   onunload(){this.stopped=true;this.questionModal?.close();this.questions?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.remoteJournal?.close();this.cancelCloudLogin();this.cloudChanged=undefined;}
@@ -1635,7 +1708,7 @@ class PreviousNoteThreadModal extends FuzzySuggestModal<NoteThread>{
 type FolderLinkChoice=Project|{self:true;title:string};
 class FolderLinkProjectModal extends FuzzySuggestModal<FolderLinkChoice>{
   constructor(app:App,private plugin:SendToT3,private folder:TFolder){super(app);this.setPlaceholder('Choose a T3 Code project');}
-  getItems(){return [...this.plugin.projects().filter(p=>this.plugin.selected().includes(projectKey(p))),...(!Platform.isMobile?[{self:true as const,title:'Self (create this folder as a T3 project)'}]:[])];}
+  getItems(){return [...this.plugin.projects().filter(p=>this.plugin.selected().includes(projectKey(p))),{self:true as const,title:'Self (create this folder as a T3 project)'}];}
   getItemText(choice:FolderLinkChoice){return 'self' in choice?choice.title:`Link to ${projectLabel(choice)}`;}
   onChooseItem(choice:FolderLinkChoice){if('self' in choice)void this.plugin.linkFolderToSelf(this.folder);else void this.plugin.linkFolder(this.folder,choice,false);}
 }
