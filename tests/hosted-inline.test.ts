@@ -216,3 +216,23 @@ test('steering never removes a selection changed before its T3 delivery is confi
   h.io.threadState=async()=>({messages:[{id:h.request.messageId,role:'user',text:'Original',turnId:null,streaming:false,createdAt:h.request.createdAt},{id,role:'user',text:'User introduction',turnId:null,streaming:false},{id:'answer',role:'assistant',text:'After steering',turnId:'turn',streaming:true}],activities:[],latestTurn:{turnId:'turn',state:'running',requestedAt:h.request.createdAt},session:{status:'running',activeTurnId:'turn'}});
   await h.create().tick();assert.match(h.document,/My updated introduction/);assert.match(h.document,/\[!t3-steering\] You/);assert.equal(h.state.status,'running');
 });
+
+test('completion refresh includes the final message when session-ready overtakes its stream event',async()=>{
+  const h=harness();h.dispatch();await h.create().tick();
+  const id=randomUUID();
+  h.files.set(h.paths.state,JSON.stringify({...h.state,steering:[{messageId:id,text:'Finish',before:h.state.prose}]}));
+  let refreshed=false;
+  h.io.threadState=async(_request,_access,refresh)=>{
+    refreshed=refresh===true;
+    return {messages:[
+      {id:h.request.messageId,role:'user',turnId:null,text:'Question',streaming:false,createdAt:h.request.createdAt},
+      {id:'answer',role:'assistant',text:'Progress A',streaming:false,turnId:'turn'},
+      {id,role:'user',turnId:null,text:'Finish',streaming:false},
+      ...(refresh?[{id:'final',role:'assistant',text:'Final after steering',streaming:false,turnId:'turn'}]:[]),
+    ],activities:[],latestTurn:{turnId:'turn',state:'completed',requestedAt:h.request.createdAt,assistantMessageId:refresh?'final':'answer'},session:{status:'ready',activeTurnId:null}};
+  };
+  await h.create().tick();
+  assert.equal(refreshed,true);assert.equal(h.state.status,'complete');
+  assert.match(h.document,/Progress A[\s\S]*Finish[\s\S]*Final after steering/);
+  assert.doesNotMatch(h.document,/t3-inline:/);
+});

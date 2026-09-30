@@ -113,7 +113,12 @@ export class DeviceInlineManager {
         if(!reply.ok||!allowed())throw Error(reply.error??'Writer ownership expired.');
       },
       access:environmentId=>this.access(environmentId),
-      threadState:async()=>runtime.state,
+      threadState:async(request,access,refresh)=>{
+        if(!refresh)return runtime.state;
+        const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(request.threadId)}?turnLimit=20`);
+        if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
+        return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+      },
       updateNote:(path,change)=>this.io.updateNote(path,change,allowed),
       importReplyAsset:this.io.importReplyAsset?(reference,request,access)=>this.io.importReplyAsset!(reference,{...request,notePath:runtime.record.state?.notePath??request.notePath},access):undefined,
     });

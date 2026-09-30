@@ -65,7 +65,7 @@ export interface HostedWriterIO extends InlineFiles {
   // undefined means the file is missing or has unsaved editor changes. The
   // callback must execute against the latest content in an atomic vault edit.
   updateNote(path:string,change:(current:string)=>string):Promise<string|undefined>;
-  threadState?(request:HostedInlineRequest,access:ThreadAccess):Promise<import('./inline-thread').InlineThreadState|undefined>;
+  threadState?(request:HostedInlineRequest,access:ThreadAccess,refresh?:boolean):Promise<import('./inline-thread').InlineThreadState|undefined>;
   accepts?(request:HostedInlineRequest):boolean;
   /** Only the still-open editor that paused this response may resume it. */
   canResume?(path:string):boolean;
@@ -165,6 +165,13 @@ export class HostedInlineWriter {
         state.prose=mergeProse(state.prose??[],current.messages,state.turnIds);
         let phase=turnPhase(current,state.turnId);
         if(state.steering?.some(input=>!input.confirmed))phase='running';
+        // Session-ready events can precede the final message in the stream.
+        // Resolve completion from a fresh canonical snapshot before sealing it.
+        if(phase==='complete'&&this.io.threadState){
+          current=await this.io.threadState(request,access,true)??current;
+          state.prose=mergeProse(state.prose,current.messages,state.turnIds);
+          phase=turnPhase(current,state.turnId);
+        }
         if(state.status==='error'&&!state.pendingMessageId&&phase==='error')return;
         if(await this.io.read(paths.stop)!==undefined&&phase==='running'){
           await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(request.id,'interrupt'),threadId:request.threadId,turnId:state.turnId,createdAt:request.createdAt});

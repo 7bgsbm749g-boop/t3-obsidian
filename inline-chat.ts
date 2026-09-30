@@ -21,7 +21,7 @@ export interface InlineJob {
   steering?:InlineSteering[];prose?:InlineMessage[];turnIds?:string[];
 }
 interface EditorSource {editor:Editor;info:MarkdownView|MarkdownFileInfo}
-interface Runtime {state:InlineThreadState;sequence:number;monitor?:{stop():void};source?:EditorSource;timer?:ReturnType<typeof setTimeout>;alerted?:string}
+interface Runtime {state:InlineThreadState;sequence:number;monitor?:{stop():void};source?:EditorSource;timer?:ReturnType<typeof setTimeout>;alerted?:string;refreshing?:boolean;completionChecked?:boolean}
 
 export class InlineChatManager {
   private jobs:InlineJob[]=[];
@@ -128,6 +128,7 @@ export class InlineChatManager {
     if(item.kind==='snapshot'&&Number.isSafeInteger(item.snapshot?.snapshotSequence)&&item.snapshot.snapshotSequence<runtime.sequence)return;
     if(item.kind==='event'&&Number.isSafeInteger(item.event?.sequence)&&item.event.sequence<=runtime.sequence)return;
     const applied=applyThreadItem(runtime.state,item);runtime.state=applied.state;
+    runtime.completionChecked=item.kind==='snapshot';
     if(!job.turnId&&job.messageId){
       const turnId=turnForMessage(runtime.state,job.messageId);
       if(turnId){job.turnId=turnId;this.persist();}
@@ -172,6 +173,20 @@ export class InlineChatManager {
     const editor=this.editorFor(job);if(!editor)return;
     const runtime=this.runtime(job);
     if(runtime.sequence<0&&['complete','interrupted','error'].includes(job.phase))return;
+    if(job.phase==='complete'&&job.connection&&!runtime.completionChecked){
+      if(runtime.refreshing)return;
+      runtime.refreshing=true;
+      void (async()=>{
+        let access:ThreadAccess|undefined;
+        try{
+          access=await this.access(job.connection!);
+          const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(job.threadId!)}?turnLimit=20`);
+          this.receive(job,{kind:'snapshot',snapshot});
+        }catch{this.schedule(job);}
+        finally{runtime.refreshing=false;await access?.close?.();}
+      })();
+      return;
+    }
     const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true,job.connection?.environmentId,job.steering?.length?{messages:job.prose??[],steering:job.steering}:undefined);
     const original=editor.getValue();let document=original;
     const current=regionBody(document,job.id);
