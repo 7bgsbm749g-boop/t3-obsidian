@@ -98,7 +98,7 @@ export class DeviceInlineManager {
         const state:HostedInlineState=JSON.parse(value);
         // Editor mutations precede Obsidian's debounced disk save. Keep the
         // recovery record active until the final Markdown is actually durable.
-        if(state.status==='complete'&&state.finalDocumentHash&&this.io.isSaved&&!await this.io.isSaved(state.notePath,state.finalDocumentHash))throw Error('Waiting for Obsidian to save the final reply.');
+        if(['complete','interrupted'].includes(state.status)&&state.finalDocumentHash&&this.io.isSaved&&!await this.io.isSaved(state.notePath,state.finalDocumentHash))throw Error('Waiting for Obsidian to save the final reply.');
         if(!allowed())throw Error('Writer ownership expired.');
         if(comparable(state)===comparable(runtime.record.state))return;
         const reply=await host.client.command({kind:'checkpoint',jobId:record.request.id,epoch:runtime.record.epoch,revision:runtime.record.revision,state});

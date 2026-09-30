@@ -101,7 +101,17 @@ test('remote Stop interrupts the bound turn with one stable command and writes i
   const h=harness();h.dispatch();const writer=h.create();await writer.tick();
   h.files.set(h.paths.stop,'{}');await writer.tick();await writer.tick();
   assert.equal(h.state.status,'interrupted');assert.match(h.document,/T3 · Interrupted/);
+  assert.match(h.document,/Progress A/);assert.doesNotMatch(h.document,/t3-inline:(?:start|end)/);
   const interrupts=h.calls.filter(call=>call.type==='thread.turn.interrupt');assert.equal(interrupts.length,1);assert.equal(interrupts[0].turnId,'turn');assert.equal(interrupts[0].commandId,commandId(h.request.id,'interrupt'));
+});
+
+test('stopped response cleanup survives a crash between tag removal and its terminal checkpoint',async()=>{
+  const h=harness();h.dispatch();await h.create().tick();
+  h.files.set(h.paths.stop,'{}');h.crash(true);
+  await assert.rejects(h.create().tick(),/disk unavailable/);
+  assert.doesNotMatch(h.document,/t3-inline:(?:start|end)/);
+  h.crash(false);await h.create().tick();
+  assert.equal(h.state.status,'interrupted');assert.match(h.document,/Progress A/);
 });
 
 test('handoff is immutable and the wrong machine cannot claim a synced request',async()=>{

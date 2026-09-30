@@ -1,5 +1,6 @@
 import {contentHash} from './completion';
 import type {App,Editor,MarkdownView} from 'obsidian';
+import {replaceInlineEditorText} from './inline-editor';
 
 /** Real note writes, using the live editor when open and atomic vault edits
  * otherwise. Ownership is checked immediately before each actual mutation. */
@@ -36,5 +37,5 @@ export function deviceNoteIO(app:App){
 function replaceChangedText(editor:Editor,before:string,after:string){
   let start=0;while(start<before.length&&start<after.length&&before[start]===after[start])start++;
   let oldEnd=before.length,newEnd=after.length;while(oldEnd>start&&newEnd>start&&before[oldEnd-1]===after[newEnd-1]){oldEnd--;newEnd--;}
-  editor.replaceRange(after.slice(start,newEnd),editor.offsetToPos(start),editor.offsetToPos(oldEnd),'send-to-t3-code');
+  replaceInlineEditorText(editor,after.slice(start,newEnd),start,oldEnd);
 }

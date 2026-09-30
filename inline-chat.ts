@@ -6,6 +6,7 @@ import {contentHash} from './completion';
 import {activeInlineIds,applyThreadItem,endInsertionOffset,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase,type InlineThreadState,type SelectionAnchor} from './inline-thread';
 import {watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {InlineHostTarget} from './hosted-inline';
+import {replaceInlineEditorText} from './inline-editor';
 
 export interface InlineJob {
   id:string;path:string;requestId:string;threadId?:string;turnId?:string;messageId?:string;projectId?:string;connection?:Connection;
@@ -63,7 +64,7 @@ export class InlineChatManager {
     const id=requestId,region=initialRegion(id);
     const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt:new Date().toISOString(),keepIntermediate:this.keepIntermediate()===true};
     this.jobs.push(job);this.runtime(job).source={editor,info};
-    try{this.persist();editor.replaceRange(region.text,editor.offsetToPos(offset),undefined,'send-to-t3-code');}
+    try{this.persist();replaceInlineEditorText(editor,region.text,offset);}
     catch(error){this.jobs=this.jobs.filter(item=>item!==job);this.runtimes.delete(job.id);try{this.persist();}catch{/* Original storage error remains primary. */}throw error;}
     return job;
   }
@@ -77,7 +78,7 @@ export class InlineChatManager {
       if(editor&&found&&contentHash(found.body)===job.bodyHash){
         const start=editor.getValue().indexOf(`<!-- t3-inline:start:${job.id} -->`);
         const end=editor.getValue().indexOf(`<!-- t3-inline:end:${job.id} -->`,found.to);
-        if(start>=0&&end>=0)editor.replaceRange('',editor.offsetToPos(start-1),editor.offsetToPos(end+`<!-- t3-inline:end:${job.id} -->`.length+1),'send-to-t3-code');
+        if(start>=0&&end>=0)replaceInlineEditorText(editor,'',start-1,end+`<!-- t3-inline:end:${job.id} -->`.length+1);
       }
       this.jobs=this.jobs.filter(j=>j!==job);this.runtimes.delete(job.id);this.persist();return;
     }
@@ -141,12 +142,12 @@ export class InlineChatManager {
     if(runtime.sequence<0&&['complete','interrupted','error'].includes(job.phase))return;
     const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true);
     const current=regionBody(editor.getValue(),job.id);
-    if(job.phase!=='complete'&&current&&current.body===next){if(['interrupted','cancelled'].includes(job.phase)){job.finalized=true;this.persist();runtime.monitor?.stop();}return;}
-    const complete=job.phase==='complete';
-    const change=complete?finalizeRegion(editor.getValue(),job.id,job.bodyHash,next):replaceRegion(editor.getValue(),job.id,job.bodyHash,next);
+    const terminal=['complete','interrupted','cancelled'].includes(job.phase);
+    if(!terminal&&current&&current.body===next)return;
+    const change=terminal?finalizeRegion(editor.getValue(),job.id,job.bodyHash,next):replaceRegion(editor.getValue(),job.id,job.bodyHash,next);
     if(!change){job.phase='conflict';runtime.monitor?.stop();this.persist();new Notice(`T3 stopped writing to ${job.path} because its inline response was edited or removed. The T3 thread remains available.`,12000);return;}
-    editor.replaceRange(change.text,editor.offsetToPos(change.from),editor.offsetToPos(change.to),'send-to-t3-code');
-    if(complete)job.finalized=true;
+    replaceInlineEditorText(editor,change.text,change.from,change.to);
+    if(terminal)job.finalized=true;
     else job.bodyHash=contentHash(next);
     this.persist();
     if(['complete','interrupted','cancelled'].includes(job.phase))runtime.monitor?.stop();

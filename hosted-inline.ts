@@ -163,6 +163,7 @@ export class HostedInlineWriter {
           }
         }
         const next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true);
+        const terminal=phase==='complete'||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the
         // vault edit cannot turn our own output into an apparent user edit.
         const nextHash=contentHash(next);
@@ -173,9 +174,9 @@ export class HostedInlineWriter {
         let finalBefore:string|undefined,finalAfter:string|undefined;
         await this.io.updateNote(state.notePath,document=>{
           const region=regionBody(document,request.id);
-          if(phase==='complete'&&!region&&state.finalDocumentHash===contentHash(document)){applied=true;return document;}
+          if(terminal&&!region&&state.finalDocumentHash===contentHash(document)){applied=true;return document;}
           if(!region||!state.hashes.includes(contentHash(region.body))){conflict=true;return document;}
-          if(phase==='complete'){
+          if(terminal){
             const change=finalizeRegion(document,request.id,contentHash(region.body),next);
             if(!change){conflict=true;return document;}
             finalBefore=document;finalAfter=document.slice(0,change.from)+change.text+document.slice(change.to);

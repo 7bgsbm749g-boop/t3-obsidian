@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {InlineLeaseAuthority,InlineLeaseClient,LEASE_MS,leasePaths,type LeaseFiles,type LeaseRecord} from '../inline-lease';
-import {hostedRequestHash,type HostedInlineRequest,type HostedInlineState} from '../hosted-inline';
+import {hostedPaths,hostedRequestHash,type HostedInlineRequest,type HostedInlineState} from '../hosted-inline';
 import {initialRegion} from '../inline-thread';
 import {DeviceInlineManager} from '../leased-inline';
 
@@ -195,14 +195,16 @@ test('work suspended across two ownership changes cannot reuse a newer grant fro
 });
 
 
-test('finalization remains recoverable until the editor has saved its Markdown to disk',async()=>{
+for(const stopped of [false,true])test(`${stopped?'stopped':'completed'} finalization remains recoverable until the editor has saved its Markdown to disk`,async()=>{
   const h=devices(),phone=h.create(h.actor);
   try{
     await phone.manager.register(h.request);await h.drain(phone.manager);
-    phone.document.saved=false;h.answer('Final before save',true);h.advance(200);await h.drain(phone.manager);
+    phone.document.saved=false;
+    if(stopped)h.data.set(hostedPaths(h.request.host.directory,h.request.id).stop,'{}');
+    h.answer('Final before save',!stopped);h.advance(200);await h.drain(phone.manager);
     assert.match(phone.document.value,/Final before save/);assert.doesNotMatch(phone.document.value,/t3-inline:/);
     assert.equal(h.record().state?.status,'running','The catalog must still advertise recoverable work');
     assert.equal(JSON.parse(h.data.get(leasePaths(h.request.host.directory,h.request.id).catalog)!).length,1);
-    phone.document.saved=true;h.advance(200);await h.drain(phone.manager);assert.equal(h.record().state?.status,'complete');
+    phone.document.saved=true;h.advance(200);await h.drain(phone.manager);assert.equal(h.record().state?.status,stopped?'interrupted':'complete');
   }finally{h.dispose();}
 });

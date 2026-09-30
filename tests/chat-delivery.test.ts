@@ -557,6 +557,27 @@ test('editor selection menu streams a T3 reply into its original note for new an
   }finally{h.plugin.onunload();}
 });
 
+test('stopping a local editor response removes both tracking tags and the Stop menu action',async()=>{
+  const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/Stop.md',region=initialRegion(id);
+  try{
+    const opened=h.attachEditor(path,'Before'+region.text+'After');
+    const job={id,path,requestId:id,bodyHash:region.bodyHash,phase:'running',createdAt:new Date().toISOString(),threadId:'old-thread',turnId:'old-turn',messageId:webcrypto.randomUUID(),projectId:project.id,connection:{transport:'direct',host:'direct',url:'https://chat.example',connectionId:'chat-connection',environmentId:'chat-env',executable:''}};
+    const manager=(h.plugin as any).inlineChat;
+    manager.jobs.push(job);
+    const runtime=manager.runtime(job);runtime.sequence=1;
+    runtime.state={messages:[{id:'partial',role:'assistant',turnId:'old-turn',text:'Partial answer',streaming:true}],activities:[]};
+    assert.ok(h.menuFor(opened.view).items.some(item=>item.title==='Stop T3 response'));
+    await h.menuFor(opened.view).items.find(item=>item.title==='Stop T3 response')!.callback();
+    for(let n=0;n<20&&opened.value.includes('t3-inline:');n++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.doesNotMatch(opened.value,/t3-inline:(?:start|end)/);
+    assert.match(opened.value,/T3 · Stopped/);assert.match(opened.value,/Partial answer/);
+    assert.match(opened.value,/Before/);assert.match(opened.value,/After/);
+    assert.equal(manager.activeFor(path).length,0);
+    assert.ok(!h.menuFor(opened.view).items.some(item=>item.title==='Stop T3 response'));
+    assert.equal(h.commands.filter(command=>command.type==='thread.turn.interrupt').length,1);
+  }finally{h.plugin.onunload();}
+});
+
 test('a failed editor response offers recovery and a new saved turn reuses its block and thread',async()=>{
   const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/Recovery.md',region=initialRegion(id);
   const body='**T3 · Error**\n\nCodex usage limit reached.',change=replaceRegion(region.text,id,region.bodyHash,body)!;
