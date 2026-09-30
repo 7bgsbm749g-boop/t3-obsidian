@@ -170,7 +170,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';
   try {
-    assert.equal(h.registered.length,0,'The palette exposes one context-aware T3 action');
+    assert.deepEqual(h.registered.map(command=>command.id),['answer-t3-question'],'Question answering has its own palette command');
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands.length,2);
     assert.equal(h.commands[0].type,'thread.create');

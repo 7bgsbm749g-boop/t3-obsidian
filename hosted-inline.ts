@@ -162,7 +162,7 @@ export class HostedInlineWriter {
             message.text=await rewriteReplyReferences(message.text,reference=>this.io.importReplyAsset!(reference,request,access));
           }
         }
-        const next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true);
+        const next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true,request.threadEnvironmentId);
         const terminal=phase==='complete'||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the
         // vault edit cannot turn our own output into an apparent user edit.

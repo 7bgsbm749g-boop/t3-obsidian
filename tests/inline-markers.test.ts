@@ -28,3 +28,8 @@ test('only complete T3 tracking lines are hidden, including markers inserted aft
   const updated=transaction.state.doc.toString();
   assert.deepEqual(ranges().map(([from,to])=>updated.slice(from,to)),[start,end,start]);
 });
+
+test('question metadata is hidden without hiding ordinary note comments',()=>{
+  const regex=inlineMarkerRegex();assert.equal(regex.test('<!-- t3-question:start:%7B%22environmentId%22%3A%22environment%22%7D -->'),true);
+  regex.lastIndex=0;assert.equal(regex.test('<!-- t3-question:start:ordinary user text -->'),false);
+});

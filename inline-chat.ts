@@ -7,6 +7,7 @@ import {activeInlineIds,applyThreadItem,endInsertionOffset,finalizeRegion,initia
 import {watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {InlineHostTarget} from './hosted-inline';
 import {replaceInlineEditorText} from './inline-editor';
+import {pendingQuestions} from './questions';
 
 export interface InlineJob {
   id:string;path:string;requestId:string;threadId?:string;turnId?:string;messageId?:string;projectId?:string;connection?:Connection;
@@ -88,14 +89,17 @@ export class InlineChatManager {
   start(job:InlineJob){
     if(this.stopped||job.hosted||!job.threadId||!job.connection)return;
     const runtime=this.runtime(job);runtime.monitor?.stop();
-    const access=()=>this.access(job.connection!);
+    const access=async()=>{
+      if(!job.connection!.environmentId&&job.connection!.transport!=='direct'){job.connection!.environmentId=await (await import('./desktop')).desktopEnvironment(job.connection!);this.persist();}
+      return this.access(job.connection!);
+    };
     runtime.monitor=watchThread(job.threadId,access,{
       item:item=>this.receive(job,item),
       reconnecting:()=>{if(this.stopped||job.phase==='complete'||job.phase==='conflict')return;job.phase='reconnecting';this.schedule(job);},
     });
     if(!['reconnecting','complete','interrupted','error'].includes(job.phase))job.phase='running';this.persist();this.schedule(job);
   }
-  private async access(connection:Connection):Promise<ThreadAccess>{
+  async access(connection:Connection):Promise<ThreadAccess>{
     if(connection.transport==='direct'){
       const session=await this.sessionFor(connection.connectionId??'');
       const api=await environmentApi(connection,session);
@@ -116,7 +120,9 @@ export class InlineChatManager {
     if(item.kind==='snapshot')runtime.sequence=Number.isSafeInteger(applied.sequence)?applied.sequence!:runtime.sequence;
     else if(applied.sequence!==undefined)runtime.sequence=applied.sequence;
     if(job.phase==='error'&&job.turnId&&runtime.state.latestTurn?.turnId!==job.turnId&&runtime.state.session?.activeTurnId!==job.turnId)return;
-    const activity=job.turnId&&runtime.state.activities.filter(a=>a.turnId===job.turnId&&/^(approval\.requested|user-input\.requested)$/.test(a.kind)).at(-1);
+    const activity=job.turnId&&runtime.state.activities.filter(a=>a.turnId===job.turnId&&a.kind==='approval.requested').at(-1);
+    const question=pendingQuestions(runtime.state.activities).find(q=>q.turnId===job.turnId);
+    if(question&&question.requestId!==runtime.alerted){runtime.alerted=question.requestId;new Notice('T3 has a question. Use Answer in the note when you are ready.',8000);}
     if(activity&&activity.id!==runtime.alerted){runtime.alerted=activity.id;new Notice(`T3 needs your response in thread ${job.threadId}: ${activity.summary.slice(0,140)}`,12000);}
     const phase=job.turnId?turnPhase(runtime.state,job.turnId):'running';
     if(job.phase==='error'&&phase==='error')return;
@@ -140,7 +146,7 @@ export class InlineChatManager {
     const editor=this.editorFor(job);if(!editor)return;
     const runtime=this.runtime(job);
     if(runtime.sequence<0&&['complete','interrupted','error'].includes(job.phase))return;
-    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true);
+    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true,job.connection?.environmentId);
     const current=regionBody(editor.getValue(),job.id);
     const terminal=['complete','interrupted','cancelled'].includes(job.phase);
     if(!terminal&&current&&current.body===next)return;

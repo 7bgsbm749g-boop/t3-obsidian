@@ -183,3 +183,10 @@ for(const keepIntermediate of [undefined,false,true])test(`hosted response prefe
 test('hosted preference rejects a non-boolean value',()=>{
   const h=harness();assert.throws(()=>validateHostedRequest({...h.request,keepIntermediate:'true'}),/preference/);
 });
+
+test('leased and older hosted writers retain an async question after final response cleanup',async()=>{
+  const h=harness();h.dispatch();h.answer('Final prose',true);
+  const activity={id:'question',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'async-request',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Which option?',options:[{label:'First',description:'Description'}]}]}};
+  h.io.threadState=async()=>({messages:[{id:h.request.messageId,role:'user',turnId:null,text:'Question',streaming:false,createdAt:h.request.createdAt},{id:'answer',role:'assistant',text:'Final prose',turnId:'turn',streaming:false}],activities:[activity],latestTurn:{turnId:'turn',state:'completed',requestedAt:h.request.createdAt,assistantMessageId:'answer'},session:{status:'ready',activeTurnId:null}});
+  await h.create().tick();assert.equal(h.state.status,'complete');assert.doesNotMatch(h.document,/t3-inline:/);assert.match(h.document,/Question pending/);assert.match(h.document,/t3-question:/);assert.match(h.document,/> Final prose/);
+});

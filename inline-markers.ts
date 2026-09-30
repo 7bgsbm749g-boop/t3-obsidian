@@ -3,7 +3,7 @@ import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
 
 /** Match only the plugin's complete tracking lines, never other HTML comments. */
 export function inlineMarkerRegex():RegExp {
-  return /^<!-- t3-inline:(?:start|end):[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12} -->$/g;
+  return /^<!-- (?:t3-inline:(?:start|end):[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|t3-question:(?:start|end):%7B[A-Za-z0-9%_.~-]+%7D) -->$/g;
 }
 
 export function hiddenInlineMarkerExtension():Extension {
