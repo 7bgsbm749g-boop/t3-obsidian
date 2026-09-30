@@ -33,6 +33,12 @@ export class InlineChatManager {
   dispose(){this.stopped=true;for(const runtime of this.runtimes.values()){runtime.monitor?.stop();if(runtime.timer)clearTimeout(runtime.timer);}this.runtimes.clear();}
   activeFor(path:string){this.reconcileHosted();return this.jobs.filter(j=>j.path===path&&!j.finalized&&!['cancelled','conflict'].includes(j.phase));}
   find(id:string){return this.jobs.find(job=>job.id===id&&!job.finalized);}
+  settlementStatus(id:string):'wait'|'ready'|'discard'{
+    const job=this.jobs.find(item=>item.id===id);
+    if(!job)return 'wait';
+    if(['conflict','interrupted','error','cancelled'].includes(job.phase))return 'discard';
+    return job.phase==='complete'&&job.finalized?'ready':'wait';
+  }
   private reconcileHosted(){let changed=false;for(const job of this.jobs){if(!job.hosted||job.finalized)continue;const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region){job.finalized=true;changed=true;}else if(/^\*\*T3 · Error\*\*/.test(region.body)&&job.phase!=='error'){job.phase='error';changed=true;}else if(/^\*\*T3 · (?:Working|Reconnecting)\*\*/.test(region.body)&&job.phase==='error'){job.phase='running';changed=true;}}if(changed)this.persist();}
   follow(job:InlineJob,messageId:string){
     if(job.hosted)throw Error('Hosted responses need their owner to attach the continuation.');

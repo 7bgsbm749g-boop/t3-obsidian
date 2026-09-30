@@ -165,6 +165,8 @@ Previously sent threads can be selected with **Existing thread…** and remember
 
 Both choices send the full Markdown and embedded images. Existing-thread sends preserve its model, runtime permissions and interaction mode. An idle thread starts another turn; a running thread receives input through T3’s steering behavior. Resolve pending approvals or structured input in T3 before sending another note. Retries reuse the original thread and message IDs without creating a new thread. Sending to an existing thread keeps the note and supersedes any older cleanup job for that note; archive/delete completion handling applies only to new-thread note sends that are not linked.
 
+**Settings → Send to T3 Code → Threads → Settle completed threads** is on by default. After a successful Obsidian turn, the plugin moves its T3 thread from the active list to the Settled shelf. A streamed answer must finish saving into its note first. Checks run every 30 seconds while the sending Obsidian client is open and resume after a restart. Pending approval, requested input, live background work, failed or interrupted turns, and turns superseded by later activity do not trigger settlement. Only threads sent by this plugin are affected. A later send to the same settled thread automatically wakes it and preserves the note link. Turning the setting off cancels pending settle checks; later sends remain active. Settling does not archive or delete the thread.
+
 ### Folder workflows
 
 Right-click or long press a linked folder and choose **Setup T3 workflow**. The submenu lists workflows in that folder and offers **Setup new workflow…**. See [Folder workflows and event capture](#folder-workflows-and-event-capture) for capture and execution behavior.

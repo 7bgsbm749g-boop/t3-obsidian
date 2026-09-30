@@ -38,7 +38,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     return {snapshotSequence:5,thread:{id:threadId,projectId:project.id,messages:[
       {id:turn.message.messageId,role:'user',turnId:null,text:turn.message.text,streaming:false,createdAt:turn.createdAt},
       {id:'answer',role:'assistant',turnId,text:'Inline reply from T3.',streaming:false}],activities:[],
-      latestTurn:{turnId,state:'completed',requestedAt:turn.createdAt},session:{status:'ready',activeTurnId:null}}};
+      latestTurn:{turnId,state:'completed',requestedAt:turn.createdAt,assistantMessageId:'answer'},session:{status:'ready',activeTurnId:null},hasPendingApprovals:false,hasPendingUserInput:false}};
   };
   class Base {}
   class Element {
@@ -540,14 +540,18 @@ test('editor selection menu streams a T3 reply into its original note for new an
     await new Promise(resolve=>setTimeout(resolve,500));
     assert.match(first.value,/Inline reply from T3\./);
     assert.doesNotMatch(first.value,/\*\*T3 answer\*\*/);
+    h.setThreads([{id:h.commands[1].threadId,projectId:project.id,title:'Selection reply',updatedAt:new Date().toISOString()}]);
+    await h.plugin.monitorCompletions();
+    assert.equal(h.commands.at(-1).type,'thread.settle','The response is settled after the final note insertion');
 
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',updatedAt:'2026-09-19T11:00:00Z',latestTurn:{state:'completed'}}]);
     const followup='Add the selected evidence to the conclusion.';
     const second=h.editorMenu(followup,'Notes/Original.md');entry=second.menu.items.find(item=>item.title==='Ask T3 Code');assert.ok(entry);
     await entry!.callback();await h.modals.at(-1).choose(true);
     const picker=h.modals.at(-1);await picker.choose(picker.getItems()[0]);
-    assert.equal(h.commands[2].type,'thread.turn.start');assert.equal(h.commands[2].threadId,'old-thread');
-    assert.ok(h.commands[2].message.text.startsWith(followup));assert.doesNotMatch(h.commands[2].message.text,/Reply in the Obsidian note itself/);
+    const secondTurn=h.commands.filter(command=>command.type==='thread.turn.start').at(-1);
+    assert.equal(secondTurn.type,'thread.turn.start');assert.equal(secondTurn.threadId,'old-thread');
+    assert.ok(secondTurn.message.text.startsWith(followup));assert.doesNotMatch(secondTurn.message.text,/Reply in the Obsidian note itself/);
     await new Promise(resolve=>setTimeout(resolve,500));assert.match(second.value,/Inline reply from T3\./);
     assert.equal(h.vaultAccesses(),0,'Selection chat sends the selection and note path without reading the note body');
   }finally{h.plugin.onunload();}
@@ -823,6 +827,31 @@ test('inline streaming switches default on and persist independently',async()=>{
     assert.deepEqual(JSON.parse(JSON.stringify(restarted.settings.inlineStreaming)),{enabled:false});
     restarted.onunload();
   }finally{h.plugin.onunload();}
+});
+
+test('completed Obsidian turns settle, and a later note question reuses the same thread',async()=>{
+  const h=await chatHarness();
+  let restarted:any;
+  try{
+    h.plugin.settings.inlineStreaming.enabled=false;
+    await h.plugin.sendChat('First question',{path:'Notes/Q.md'});
+    const first=h.commands.find(command=>command.type==='thread.turn.start');
+    assert.equal(h.plugin.settings.settlementJobs.length,1);
+    h.setThreads([{id:first.threadId,projectId:project.id,title:'First question',updatedAt:new Date().toISOString()}]);
+    h.plugin.onunload();
+    restarted=await h.start();
+    assert.equal(restarted.settings.settlementJobs.length,1,'The settle check survives an Obsidian restart');
+    await restarted.monitorCompletions();
+    assert.equal(h.commands.at(-1).type,'thread.settle');
+    assert.equal(h.commands.at(-1).threadId,first.threadId);
+    assert.equal(restarted.settings.settlementJobs.length,0);
+    h.setThreads([{id:first.threadId,projectId:project.id,title:'First question',updatedAt:new Date().toISOString(),settledOverride:'settled'}]);
+    await restarted.sendChat('Follow up',{path:'Notes/Q.md'});
+    const turns=h.commands.filter(command=>command.type==='thread.turn.start');
+    assert.equal(turns.length,2);
+    assert.equal(turns[1].threadId,first.threadId,'A settled thread remains the note’s destination');
+    assert.equal(restarted.settings.settlementJobs.length,1);
+  }finally{restarted?.onunload();h.plugin.onunload();}
 });
 
 test('Ask T3 keeps the answer in the T3 thread when its streaming switch is off',async()=>{

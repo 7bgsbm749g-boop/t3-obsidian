@@ -39,12 +39,13 @@ import {leasePaths,type LeaseRecord} from './inline-lease';
 import {installMobileSelectionAction} from './mobile-selection-action';
 import {hiddenInlineMarkerExtension} from './inline-markers';
 import {activeInlineIds,failedInlineIds,regionBody,type SelectionAnchor} from './inline-thread';
+import {settlementState,type ThreadSettlementJob} from './thread-settlement';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor};
 const INLINE_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note; the Obsidian plugin will insert your reply.';
 const THREAD_REPLY_INSTRUCTION='Answer in the T3 thread. Do not edit the Obsidian note.';
 interface InlineStreamingSettings {enabled:boolean}
 interface AutomationSettings {destinationId:string;coordinatorDeviceId:string}
-interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; folderLinks:FolderLink[];noteThreads:NoteThread[];threadLinking:boolean;vaultId:string;vaultLocations:VaultLocation[];automation:AutomationSettings;automationDrafts:WorkflowIR[];workflowEditRequests:WorkflowEditRequest[] }
+interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];noteThreads:NoteThread[];threadLinking:boolean;vaultId:string;vaultLocations:VaultLocation[];automation:AutomationSettings;automationDrafts:WorkflowIR[];workflowEditRequests:WorkflowEditRequest[] }
 export default class SendToT3 extends Plugin {
   declare settings: Settings;
   mode: 'desktop'|'direct' = 'desktop';
@@ -119,7 +120,7 @@ export default class SendToT3 extends Plugin {
     this.nativeAccount=local?.nativeAccount??null;
     this.vaultRegistrations=local?.vaultRegistrations??{};
     const automationDrafts:WorkflowIR[]=[];for(const candidate of Array.isArray(data?.automationDrafts)?data.automationDrafts:[])try{automationDrafts.push(validateWorkflowIR(candidate));}catch{/* Invalid synced drafts stay inert. */}
-    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false)},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],folderLinks:loadFolderLinks(data),noteThreads:loadNoteThreads(data?.noteThreads),threadLinking:data?.threadLinking!==false,vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data),automation:{destinationId:typeof data?.automation?.destinationId==='string'?data.automation.destinationId:'qlo2-vps',coordinatorDeviceId:typeof data?.automation?.coordinatorDeviceId==='string'?data.automation.coordinatorDeviceId:''},automationDrafts,workflowEditRequests:loadWorkflowEditRequests(data?.workflowEditRequests)};
+    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false)},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),noteThreads:loadNoteThreads(data?.noteThreads),threadLinking:data?.threadLinking!==false,vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data),automation:{destinationId:typeof data?.automation?.destinationId==='string'?data.automation.destinationId:'qlo2-vps',coordinatorDeviceId:typeof data?.automation?.coordinatorDeviceId==='string'?data.automation.coordinatorDeviceId:''},automationDrafts,workflowEditRequests:loadWorkflowEditRequests(data?.workflowEditRequests)};
     let migratedNoteThreads=false;
     for(const job of this.settings.threadLinking?this.settings.completionJobs:[]){
       if(this.noteLink(job.notePath)||typeof this.app.vault?.getAbstractFileByPath!=='function'||!(this.app.vault.getAbstractFileByPath(job.notePath) instanceof TFile))continue;
@@ -151,6 +152,7 @@ export default class SendToT3 extends Plugin {
     const migrateConnection=(c:Connection):Connection=>!retiredConnection(c)&&c.transport!=='direct'&&!c.native?{...this.settings.connection,host:'local',transport:'desktop'}:c;
     for(const request of this.settings.pending)request.connection=migrateConnection(request.connection);
     for(const job of this.settings.completionJobs){job.connection=migrateConnection(job.connection);if(retiredConnection(job.connection)&&job.status==='watching'){job.status='kept';job.detail='Kept note: the companion mode was removed. Check the original thread in T3.';}}
+    this.settings.settlementJobs=this.settings.settlementJobs.filter(job=>job&&typeof job.requestId==='string'&&typeof job.messageId==='string'&&typeof job.threadId==='string'&&typeof job.projectId==='string'&&job.connection&&!retiredConnection(job.connection)).map(job=>({...job,connection:migrateConnection(job.connection)}));
     configureBridge({mobile:Platform.isMobile,pairedSession:id=>this.sessionFor(id),saveRequest:async request=>{if(!this.settings.pending.includes(request))throw Error('Saved request is missing. Nothing was sent.');await this.save();}});
     // Migrate unfinished desktop requests once, but do not rewrite the shared
     // settings file merely because this device started. Credentials and jobs
@@ -612,6 +614,8 @@ export default class SendToT3 extends Plugin {
     this.settings.folderLinks=loadFolderLinks(data);
     this.settings.noteThreads=loadNoteThreads(data.noteThreads);
     this.settings.threadLinking=data.threadLinking!==false;
+    this.settings.autoSettleThreads=data.autoSettleThreads!==false;
+    if(!this.settings.autoSettleThreads&&this.settings.settlementJobs.length){this.settings.settlementJobs=[];await this.saveDeviceState();}
     this.settings.automationDrafts=[];
     for(const candidate of Array.isArray(data.automationDrafts)?data.automationDrafts:[])try{this.settings.automationDrafts.push(validateWorkflowIR(candidate));}catch{/* Invalid definitions remain inert. */}
     this.settings.automation={destinationId:data?.automation?.destinationId??'qlo2-vps',coordinatorDeviceId:data?.automation?.coordinatorDeviceId??''};
@@ -1221,19 +1225,19 @@ export default class SendToT3 extends Plugin {
   }
   async forgetPairing(id:string){delete this.pairedSessions[id];await this.save();}
   async removeConnection(id:string){
-    if(this.settings.pending.some(r=>r.connection.connectionId===id)||this.settings.completionJobs.some(j=>j.connection.connectionId===id&&j.status==='watching'))throw Error('This connection has an unconfirmed request or completion check. Resolve or stop it before removing the connection.');
+    if(this.settings.pending.some(r=>r.connection.connectionId===id)||this.settings.completionJobs.some(j=>j.connection.connectionId===id&&j.status==='watching')||this.settings.settlementJobs.some(j=>j.connection.connectionId===id))throw Error('This connection has an unconfirmed request or completion check. Resolve or stop it before removing the connection.');
     this.settings.paired=this.settings.paired.filter(c=>c.id!==id);this.settings.directProjects=this.settings.directProjects.filter(p=>p.connectionId!==id);this.settings.directSelected=this.settings.directSelected.filter(k=>!k.startsWith(id+':'));delete this.pairedSessions[id];if(this.settings.directScanId===id)this.settings.directScanId=this.settings.paired[0]?.id??'';await this.save();
   }
   private saveDeviceState(state?:unknown) {
     this.app.saveLocalStorage(this.localKey,JSON.parse(JSON.stringify({deviceId:this.deviceId,automationStreamId:this.streamId,coordinatorAssignmentId:this.coordinatorAssignmentId,mode:this.mode,connection:this.settings.connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,vaultRegistrations:this.vaultRegistrations})));
-    return deviceState(this.deviceId,state??JSON.parse(JSON.stringify({pending:this.settings.pending,completionJobs:this.settings.completionJobs})));
+    return deviceState(this.deviceId,state??JSON.parse(JSON.stringify({pending:this.settings.pending,completionJobs:this.settings.completionJobs,settlementJobs:this.settings.settlementJobs})));
   }
-  private sharedSnapshot(){const {pending,completionJobs,connection,...shared}=this.settings;return JSON.parse(JSON.stringify(shared));}
+  private sharedSnapshot(){const {pending,completionJobs,settlementJobs,connection,...shared}=this.settings;return JSON.parse(JSON.stringify(shared));}
   save(forceShared=false) {
     this.refreshFolderIndicators();
-    const {pending,completionJobs,connection}=this.settings,snapshot=this.sharedSnapshot(),intendedDrafts=JSON.stringify(this.settings.automationDrafts),intendedAutomation=JSON.stringify(this.settings.automation),intendedEdits=JSON.stringify(this.settings.workflowEditRequests),intendedThreads=JSON.stringify(this.settings.noteThreads);
+    const {pending,completionJobs,settlementJobs,connection}=this.settings,snapshot=this.sharedSnapshot(),intendedDrafts=JSON.stringify(this.settings.automationDrafts),intendedAutomation=JSON.stringify(this.settings.automation),intendedEdits=JSON.stringify(this.settings.workflowEditRequests),intendedThreads=JSON.stringify(this.settings.noteThreads);
     const writeShared=forceShared||JSON.stringify(snapshot)!==this.sharedBaseline;
-    const state=JSON.parse(JSON.stringify({pending,completionJobs}));
+    const state=JSON.parse(JSON.stringify({pending,completionJobs,settlementJobs}));
     this.app.saveLocalStorage(this.localKey,JSON.parse(JSON.stringify({deviceId:this.deviceId,automationStreamId:this.streamId,coordinatorAssignmentId:this.coordinatorAssignmentId,mode:this.mode,connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,vaultRegistrations:this.vaultRegistrations})));
     this.saving=this.saving.catch(()=>{}).then(async()=>{
       await deviceState(this.deviceId,state);
@@ -1341,7 +1345,9 @@ export default class SendToT3 extends Plugin {
     if(request&&request.prompt!==prompt)throw Error('The saved v2 request does not match its immutable execution plan.');
     if(!request){request={id:plan.requestId,project:{...project},title:plan.title,prompt,connection};this.settings.pending.push(request);await this.save();}
     const result=await sendRequest(request);
-    this.settings.pending=this.settings.pending.filter(item=>item.id!==request!.id);await this.save();
+    this.settings.pending=this.settings.pending.filter(item=>item.id!==request!.id);
+    this.rememberSettlement(request,result.threadId);
+    await this.save();
     return result.threadId;
   }
   private async pollV2Plan(plan:ImmutablePlan,threadId:string):Promise<{state:'wait'|'complete'|'failed';result?:unknown;detail?:string}>{
@@ -1367,7 +1373,14 @@ export default class SendToT3 extends Plugin {
     await store.putExecution({...entry,state:'planned',detail:'Manually retried with the original request ID.',updatedAt:new Date().toISOString()});
     await this.coordinatorService?.scan();
   }
-  rememberStarted(request:Pick<Request,'id'|'project'|'connection'|'completion'|'noteLink'>,threadId:string) {
+  private rememberSettlement(request:Request,threadId:string){
+    this.settings.settlementJobs=this.settings.settlementJobs.filter(job=>job.threadId!==threadId||job.connection.environmentId!==request.connection.environmentId||job.connection.host!==request.connection.host);
+    if(!this.settings.autoSettleThreads)return;
+    const inlineJobId=request.inlineFollow?.jobId??(request.inlineHost||this.inlineChat?.find(request.id)?request.id:undefined);
+    this.settings.settlementJobs.push({requestId:request.id,messageId:commandId(request.id,'message'),threadId,projectId:request.project.id,connection:{...request.connection},
+      ...(inlineJobId?{inlineJobId}:{}),...(request.inlineFollow?.host||request.inlineHost?.host?{inlineHost:request.inlineFollow?.host??request.inlineHost?.host,inlineVersion:(request.inlineHost?.version??2) as 1|2}:{})});
+  }
+  rememberStarted(request:Request,threadId:string) {
     if(request.noteLink){
       const entry:NoteThread={...request.noteLink,threadId,selectedAt:new Date().toISOString()};
       this.settings.noteThreads=mergeNoteThreads(this.settings.noteThreads,[entry]);
@@ -1376,6 +1389,7 @@ export default class SendToT3 extends Plugin {
       this.settings.completionJobs=this.settings.completionJobs.filter(j=>j.notePath!==request.completion!.notePath);
       if(request.completion.action!=='keep')this.settings.completionJobs.push({...request.completion,requestId:request.id,threadId,projectId:request.project.id,connection:{...request.connection},status:'watching'});
     }
+    this.rememberSettlement(request,threadId);
   }
   async dispatch(request:Request,quiet=false) {
     if(request.inlineFollow){
@@ -1394,10 +1408,10 @@ export default class SendToT3 extends Plugin {
     }
     if(!quiet)new Notice(`Sending to ${projectLabel(request.project)}…`);
     const result=await sendRequest(request);
-    const before={jobs:this.settings.completionJobs,pending:this.settings.pending,noteThreads:this.settings.noteThreads};
+    const before={jobs:this.settings.completionJobs,settlementJobs:this.settings.settlementJobs,pending:this.settings.pending,noteThreads:this.settings.noteThreads};
     this.rememberStarted(request,result.threadId);
     this.settings.pending=this.settings.pending.filter(r=>r.id!==request.id);
-    try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;this.settings.noteThreads=before.noteThreads;throw e;}
+    try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;this.settings.settlementJobs=before.settlementJobs;this.settings.noteThreads=before.noteThreads;throw e;}
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
   }
   onunload(){this.stopped=true;this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.remoteJournal?.close();this.cancelCloudLogin();this.cloudChanged=undefined;}
@@ -1444,7 +1458,54 @@ export default class SendToT3 extends Plugin {
           new Notice(`Send to T3 Code: ${detail}`,10000);
         }catch(e){if(!this.stopped && job.detail!==message(e)){job.detail=message(e);try{await this.save();}catch{ /* Try again next poll. */ }}}
       }
+      await this.monitorSettlements();
     } finally {this.monitoring=false;}
+  }
+  private async inlineSettlementStatus(job:ThreadSettlementJob):Promise<'wait'|'ready'|'discard'>{
+    if(!job.inlineJobId)return 'ready';
+    if(!job.inlineHost)return this.inlineChat?.settlementStatus(job.inlineJobId)??'wait';
+    const opened=await this.inlineHostFiles(job.inlineHost);
+    try{
+      const path=job.inlineVersion===1?hostedPaths(job.inlineHost.directory,job.inlineJobId).state:leasePaths(job.inlineHost.directory,job.inlineJobId).record;
+      const raw=await opened.files.read(path);
+      if(!raw)return 'wait';
+      const stored=JSON.parse(raw),state=job.inlineVersion===1?stored:stored.state;
+      if(['conflict','interrupted','error'].includes(state?.status))return 'discard';
+      if(state?.status!=='complete'||!state.finalDocumentHash)return 'wait';
+      if(state.messageId&&state.messageId!==job.messageId)return 'discard';
+      return 'ready';
+    }finally{opened.close();}
+  }
+  private async monitorSettlements(){
+    if(!this.settings.autoSettleThreads||!this.settings.settlementJobs.length)return;
+    for(const job of [...this.settings.settlementJobs]){
+      if(this.stopped||this.busy)return;
+      if(!this.settings.settlementJobs.includes(job))continue;
+      try{
+        if(this.settings.pending.some(request=>request.threadId===job.threadId&&request.connection.environmentId===job.connection.environmentId))continue;
+        const shell=await runBridge(job.connection,['threads','--project',job.projectId]);
+        const summary=shell?.threads?.find((thread:any)=>thread.id===job.threadId);
+        if(!summary)continue;
+        const full=await runBridge(job.connection,['read',job.threadId]);
+        if(this.stopped||this.busy)continue;
+        if(!this.settings.autoSettleThreads||!this.settings.settlementJobs.includes(job))continue;
+        const state=settlementState({...full,backgroundLiveness:summary.backgroundLiveness??full.backgroundLiveness,hasPendingApprovals:summary.hasPendingApprovals??full.hasPendingApprovals,hasPendingUserInput:summary.hasPendingUserInput??full.hasPendingUserInput,settledOverride:summary.settledOverride??full.settledOverride,archivedAt:summary.archivedAt??full.archivedAt,deletedAt:summary.deletedAt??full.deletedAt},job);
+        if(state==='wait')continue;
+        if(state==='settle'){
+          const inline=await this.inlineSettlementStatus(job);
+          if(inline==='wait')continue;
+          if(inline==='ready'&&this.settings.autoSettleThreads&&this.settings.settlementJobs.includes(job)){
+            const access=job.connection.transport==='direct'
+              ?{api:await environmentApi(job.connection,await this.sessionFor(job.connection.connectionId??'')),close:()=>{}}
+              :await (await import('./desktop')).desktopThreadAccess(job.connection);
+            try{await access.api('/api/orchestration/dispatch',{type:'thread.settle',commandId:commandId(job.requestId,'settle'),threadId:job.threadId});}
+            finally{await access.close?.();}
+          }
+        }
+        this.settings.settlementJobs=this.settings.settlementJobs.filter(item=>item!==job);
+        await this.save();
+      }catch{/* Keep the job for a later check after the connection or client recovers. */}
+    }
   }
   async retry(request:Request) {
     if (this.busy) return;
@@ -1602,6 +1663,7 @@ class T3Settings extends PluginSettingTab {
     }
     el.createEl('h3',{text:'Threads'});
     new Setting(el).setName('Thread linking').setDesc('Remember a note’s thread after its first confirmed send. Existing links continue to route follow-up sends when this is off. Linked notes are kept when a task finishes.').addToggle(t=>t.setValue(this.plugin.settings.threadLinking).onChange(async enabled=>{this.plugin.settings.threadLinking=enabled;await this.plugin.save();}));
+    new Setting(el).setName('Settle completed threads').setDesc('Move Obsidian threads out of T3 Code’s active list after a successful turn and its inline reply finish. Sending to a settled thread wakes it again. Checks run while Obsidian is open.').addToggle(t=>t.setValue(this.plugin.settings.autoSettleThreads).onChange(async enabled=>{this.plugin.settings.autoSettleThreads=enabled;if(!enabled)this.plugin.settings.settlementJobs=[];await this.plugin.save();}));
     new Setting(el).setName('Command palette').setDesc(this.plugin.paletteChatStatus()==='active'?'Use the first T3 Code row to send the current note or ask a question about it.':'The live T3 Code row is unavailable in this Obsidian version or the core Command palette is disabled.');
     el.createEl('p',{text:'Sending includes the current note and its embedded images. Asking sends the question and note location. A selected passage is included with the question.'});
     el.createEl('h3',{text:'Inline responses'});
