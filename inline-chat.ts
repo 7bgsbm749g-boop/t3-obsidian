@@ -11,6 +11,7 @@ export interface InlineJob {
   id:string;path:string;requestId:string;threadId?:string;turnId?:string;messageId?:string;projectId?:string;connection?:Connection;
   bodyHash:string;phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'|'conflict';createdAt:string;finalized?:boolean;
   hosted?:boolean;
+  keepIntermediate?:boolean;
   hostTarget?:InlineHostTarget;
 }
 interface EditorSource {editor:Editor;info:MarkdownView|MarkdownFileInfo}
@@ -20,7 +21,7 @@ export class InlineChatManager {
   private jobs:InlineJob[]=[];
   private runtimes=new Map<string,Runtime>();
   private stopped=false;
-  constructor(private app:App,private key:string,private sessionFor:(id:string)=>Promise<PairedSession|undefined>,private hosted?:{prepare(job:InlineJob,request:Request):Promise<void>;stop(job:InlineJob):Promise<void>}) {
+  constructor(private app:App,private key:string,private sessionFor:(id:string)=>Promise<PairedSession|undefined>,private hosted?:{prepare(job:InlineJob,request:Request):Promise<void>;stop(job:InlineJob):Promise<void>},private keepIntermediate:()=>boolean=()=>false) {
     const saved=this.app.loadLocalStorage(key);
     if(Array.isArray(saved))this.jobs=saved.filter(validJob).map(job=>{
       // 2.12.6 mistook the client command ID for T3's provider-assigned turn ID.
@@ -60,7 +61,7 @@ export class InlineChatManager {
     const file=info.file;if(!file||file.path!==expectedPath||file.extension.toLowerCase()!=='md')throw Error('The original Markdown note is no longer open. Reopen it and ask T3 again.');
     if(this.activeFor(file.path).length||activeInlineIds(editor.getValue()).length)throw Error('This note already has an active T3 response. Wait for it or stop it first.');
     const id=requestId,region=initialRegion(id);
-    const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt:new Date().toISOString()};
+    const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt:new Date().toISOString(),keepIntermediate:this.keepIntermediate()===true};
     this.jobs.push(job);this.runtime(job).source={editor,info};
     try{this.persist();editor.replaceRange(region.text,editor.offsetToPos(offset),undefined,'send-to-t3-code');}
     catch(error){this.jobs=this.jobs.filter(item=>item!==job);this.runtimes.delete(job.id);try{this.persist();}catch{/* Original storage error remains primary. */}throw error;}
@@ -138,7 +139,7 @@ export class InlineChatManager {
     const editor=this.editorFor(job);if(!editor)return;
     const runtime=this.runtime(job);
     if(runtime.sequence<0&&['complete','interrupted','error'].includes(job.phase))return;
-    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase);
+    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true);
     const current=regionBody(editor.getValue(),job.id);
     if(job.phase!=='complete'&&current&&current.body===next){if(['interrupted','cancelled'].includes(job.phase)){job.finalized=true;this.persist();runtime.monitor?.stop();}return;}
     const complete=job.phase==='complete';

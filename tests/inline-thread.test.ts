@@ -161,3 +161,18 @@ test('vault image aliases remain in unquoted table rows after reply asset import
   const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:answer,streaming:false}],activities:[],latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'answer'}} as any;
   assert.equal(renderInlineTurn(state,'turn','thread','complete'),'> Before.\n\n'+answer.slice('Before.\n\n'.length,-'\n\nAfter.'.length)+'\n\n> After.\n');
 });
+
+
+test('keeping intermediate responses retains only assistant prose for the selected turn',()=>{
+  const state={messages:[
+    {id:'old',role:'assistant',turnId:'old-turn',text:'Old answer',streaming:false},
+    {id:'user',role:'user',turnId:'turn',text:'Question',streaming:false},
+    {id:'progress',role:'assistant',turnId:'turn',text:'I will inspect it.\n\n',streaming:false},
+    {id:'empty',role:'assistant',turnId:'turn',text:'',streaming:false},
+    {id:'final',role:'assistant',turnId:'turn',text:'Final answer.',streaming:false},
+  ],activities:[{id:'tool',kind:'tool.started',summary:'Tool details',turnId:'turn'}],latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'final'}};
+  assert.equal(renderInlineTurn(state,'turn','thread','complete',true),'> I will inspect it.\n>\n> Final answer.\n');
+  assert.equal(renderInlineTurn(state,'turn','thread','complete',false),'> Final answer.\n');
+  assert.equal(renderInlineTurn(state,'turn','thread','complete'),'> Final answer.\n');
+  assert.equal(renderInlineTurn(state,'turn','thread','running',true),renderInlineTurn(state,'turn','thread','running',false));
+});

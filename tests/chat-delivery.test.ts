@@ -819,12 +819,13 @@ test('sending a note into an existing thread retains Markdown and images and cle
 test('inline streaming switches default on and persist independently',async()=>{
   const h=await chatHarness();
   try{
-    assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.inlineStreaming)),{enabled:true});
+    assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.inlineStreaming)),{enabled:true,keepIntermediate:false});
     h.plugin.settings.inlineStreaming.enabled=false;
+    h.plugin.settings.inlineStreaming.keepIntermediate=true;
     await h.plugin.save();
     h.plugin.onunload();
     const restarted=await h.start();
-    assert.deepEqual(JSON.parse(JSON.stringify(restarted.settings.inlineStreaming)),{enabled:false});
+    assert.deepEqual(JSON.parse(JSON.stringify(restarted.settings.inlineStreaming)),{enabled:false,keepIntermediate:true});
     restarted.onunload();
   }finally{h.plugin.onunload();}
 });
@@ -922,5 +923,23 @@ test('a background delivery failure keeps its saved request without opening sett
     h.plugin.openSettings=()=>assert.fail('A background send must not take over the editor');
     await h.plugin.openChat('Keep this request');const modal=h.modals.at(-1);await modal.choose(false);
     assert.equal(modal.closed,true);assert.equal(h.plugin.settings.pending.length,1);
+  }finally{h.plugin.onunload();}
+});
+
+
+test('new inline responses capture the retention setting in their immutable hosted request',async()=>{
+  const h=await chatHarness();
+  try{
+    h.plugin.settings.inlineStreaming.keepIntermediate=true;
+    h.attachEditor('Notes/Retention.md','Question');
+    await h.plugin.openPaletteAction('Explain this.','');
+    await h.modals.at(-1).choose(false);
+    // The durable handoff is created before dispatch and retains its preference.
+    const job=h.plugin.inlineChat.activeFor('Notes/Retention.md')[0]??h.plugin.inlineChat.jobs.at(-1);
+    assert.equal(job.keepIntermediate,true);
+    const record=JSON.parse(h.hostFiles.get(leasePaths(job.hostTarget.directory,job.id).record)!);
+    assert.equal(record.request.keepIntermediate,true);
+    h.plugin.settings.inlineStreaming.keepIntermediate=false;
+    assert.equal(job.keepIntermediate,true);
   }finally{h.plugin.onunload();}
 });

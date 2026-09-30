@@ -1,12 +1,13 @@
 import {contentHash} from './completion';
 import {commandId} from './direct';
-import {applyThreadItem,finalizeRegion,regionBody,renderInlineTurn,replaceRegion,turnForMessage,turnPhase} from './inline-thread';
+import {applyThreadItem,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,turnForMessage,turnPhase} from './inline-thread';
 import type {ThreadAccess} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
 
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface HostedInlineRequest {
+  keepIntermediate?:boolean;
   version:1|2;initialOwner?:string;id:string;vaultId:string;host:InlineHostTarget;notePath:string;
   threadId:string;messageId:string;projectId:string;threadEnvironmentId:string;initialHash:string;createdAt:string;
 }
@@ -26,6 +27,7 @@ export function safeNotePath(path:unknown):path is string {
   return typeof path==='string'&&path.endsWith('.md')&&!path.includes('\\')&&!/[\x00-\x1f:]/.test(path)&&path.split('/').every(p=>!!p&&p!=='.'&&p!=='..'&&!p.startsWith('.'));
 }
 export function validateHostedRequest(value:any):HostedInlineRequest {
+  if(value?.keepIntermediate!==undefined&&typeof value.keepIntermediate!=='boolean')throw Error('Invalid hosted response preference.');
   if(![1,2].includes(value?.version)||(value.version===2&&!uuid.test(value.initialOwner??''))||![value.id,value.messageId].every(x=>typeof x==='string'&&uuid.test(x))||!safeNotePath(value.notePath)||
     ![value.threadId,value.vaultId,value.projectId,value.threadEnvironmentId,value.createdAt,value.host?.environmentId,value.host?.workspaceRoot,value.host?.directory].every(x=>typeof x==='string'&&x.length>0)||
     !/^[0-9a-f]{64}$/.test(value.initialHash))throw Error('Invalid hosted response job.');
@@ -156,11 +158,11 @@ export class HostedInlineWriter {
           phase='interrupted';
         }
         if(phase==='complete'&&this.io.importReplyAsset){
-          const messages=current.messages.filter(m=>m.turnId===state.turnId&&m.role==='assistant');
-          const final=messages.find(m=>m.id===current.latestTurn?.assistantMessageId)??messages.at(-1);
-          if(final)final.text=await rewriteReplyReferences(final.text,reference=>this.io.importReplyAsset!(reference,request,access));
+          for(const message of inlineTurnMessages(current,state.turnId,request.keepIntermediate===true)){
+            message.text=await rewriteReplyReferences(message.text,reference=>this.io.importReplyAsset!(reference,request,access));
+          }
         }
-        const next=renderInlineTurn(current,state.turnId,request.threadId,phase);
+        const next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true);
         // Persist the intended version before writing it, so a crash after the
         // vault edit cannot turn our own output into an apparent user edit.
         const nextHash=contentHash(next);

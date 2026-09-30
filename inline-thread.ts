@@ -238,11 +238,17 @@ function quoteResponse(text:string):string {
   }).filter(Boolean).join('\n\n');
 }
 
-export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running'):string {
+/** Select the completed turn's prose consistently for rendering and assets. */
+export function inlineTurnMessages(state:InlineThreadState,turnId:string,keepIntermediate=false):InlineMessage[] {
   const messages=state.messages.filter(m=>m.turnId===turnId&&m.role==='assistant');
   const finalId=state.latestTurn?.turnId===turnId?state.latestTurn.assistantMessageId:undefined;
   const final=messages.find(m=>m.id===finalId)??messages.at(-1);
-  const answer=(phase==='complete'?final?.text:messages.map(m=>m.text).filter(Boolean).join('\n\n'))?.replace(/\n+$/,'')??'';
+  return keepIntermediate?messages:final?[final]:[];
+}
+
+export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate=false):string {
+  const messages=inlineTurnMessages(state,turnId,phase!=='complete'||keepIntermediate);
+  const answer=messages.map(m=>m.text.replace(/\n+$/,'')).filter(Boolean).join('\n\n');
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   if(phase==='complete')return answer?`${quoteResponse(closeOpenFence(answer))}\n`:'';

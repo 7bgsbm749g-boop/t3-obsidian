@@ -148,3 +148,28 @@ test('a stalled note cannot block another note, later ticks, or cause overlappin
   }finally{release();await first;writer.stop();}
   assert.match(a.document,/Progress A/);
 });
+
+
+for(const keepIntermediate of [undefined,false,true])test(`hosted response preference ${keepIntermediate} survives writer restart and imports retained assets`,async()=>{
+  const h=harness();
+  if(keepIntermediate!==undefined)h.request.keepIntermediate=keepIntermediate;
+  h.files.set(h.paths.request,JSON.stringify(h.request));
+  let complete=false;
+  const thread=()=>({messages:[
+    {id:h.request.messageId,role:'user',text:'Question',turnId:null,streaming:false,createdAt:h.request.createdAt},
+    {id:'progress',role:'assistant',text:'I checked [data](/tmp/data.txt).',turnId:'turn',streaming:false},
+    {id:'final',role:'assistant',text:'Final answer.',turnId:'turn',streaming:!complete},
+  ],activities:[],latestTurn:{turnId:'turn',state:complete?'completed':'running',requestedAt:h.request.createdAt,assistantMessageId:'final'},session:{status:complete?'ready':'running',activeTurnId:complete?null:'turn'}});
+  h.io.threadState=async()=>thread();
+  const sources:string[]=[];
+  h.io.importReplyAsset=async reference=>{sources.push(reference.source);return '[[T3 Code Attachments/data.txt]]';};
+  await h.create().tick();assert.match(h.document,/I checked/);
+  complete=true;await h.create().tick();
+  assert.equal(h.state.status,'complete');assert.match(h.document,/Final answer/);assert.doesNotMatch(h.document,/t3-inline:|T3 · Working/);
+  if(keepIntermediate){assert.match(h.document,/I checked \[\[T3 Code Attachments\/data.txt\]\]/);assert.deepEqual(sources,['/tmp/data.txt']);}
+  else {assert.doesNotMatch(h.document,/I checked|data.txt/);assert.deepEqual(sources,[]);}
+});
+
+test('hosted preference rejects a non-boolean value',()=>{
+  const h=harness();assert.throws(()=>validateHostedRequest({...h.request,keepIntermediate:'true'}),/preference/);
+});
