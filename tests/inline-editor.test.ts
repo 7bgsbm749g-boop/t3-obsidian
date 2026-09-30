@@ -24,3 +24,18 @@ test('public editor fallback restores both scroll axes after the editor scrolls 
   replaceInlineEditorText(editor as any,'new reply',7,12);
   assert.equal(value,'Before new reply after');assert.deepEqual(scroll,{top:920,left:18});
 });
+
+test('removing a visible question anchors the unchanged paragraph below it after layout',()=>{
+  let state=EditorState.create({doc:'Intro\nQuestion\n<!-- t3-inline:end:job -->\n\nReading here\nTail'}),updated=false;
+  const scrollDOM={scrollTop:500,getBoundingClientRect:()=>({top:60,bottom:760})};
+  const cm={get state(){return state;},scrollDOM,
+    coordsAtPos:(position:number)=>{assert.equal(state.doc.sliceString(position).split('\n')[0],'Reading here');return {top:300,bottom:320};},
+    dispatch:(spec:any)=>{state=state.update(spec).state;updated=true;},
+    requestMeasure:(measure:any)=>{
+      assert.equal(updated,true);
+      const view={state,scrollDOM,coordsAtPos:(position:number)=>{assert.equal(state.doc.sliceString(position).split('\n')[0],'Reading here');return {top:180,bottom:200};}};
+      measure.write(measure.read(view),view);
+    }};
+  replaceInlineEditorText({cm} as any,'Final',6,14);
+  assert.equal(scrollDOM.scrollTop,380,'compensate for the paragraph moving up 120 pixels');
+});
