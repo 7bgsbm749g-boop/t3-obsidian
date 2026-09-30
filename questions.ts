@@ -49,7 +49,7 @@ export function questionTargets(document:string):QuestionTarget[]{
 const markdownText=(value:string)=>value.replace(/[\\`*_{}\[\]()#+.!>|<>]/g,'\\$&').split(/\r?\n/).join('\n> ');
 export function renderQuestion(request:PendingQuestion,target:QuestionTarget):string {
   const token=questionToken(target);
-  return [`<!-- t3-question:start:${token} -->`,request.responseMode==='message'?'> **T3 · Question pending**':'> **T3 · Answer needed**',...request.questions.flatMap(q=>['>',`> **${markdownText(q.header)}**`, `> ${markdownText(q.question)}`,...q.options.map(o=>`> - ${markdownText(o.label)}${o.description?`: ${markdownText(o.description)}`:''}`)]),'>',`> [Answer](${questionUrl(target)})`,`<!-- t3-question:end:${token} -->`].join('\n');
+  return [`<!-- t3-question:start:${token} -->`,request.responseMode==='message'?'> **T3 · Question pending**':'> **T3 · Answer needed**',...request.questions.flatMap(q=>['>',`> **${markdownText(q.header)}**`, `> ${markdownText(q.question)}`,...(q.options.length?['>']:[]),...q.options.map(o=>`> - ${markdownText(o.label)}${o.description?`: ${markdownText(o.description)}`:''}`)]),'>',`> [Answer](${questionUrl(target)})`,`<!-- t3-question:end:${token} -->`].join('\n');
 }
 /** Only remove a resolved question outside a live response. Never invalidate a writer hash. */
 export function clearResolvedQuestion(document:string,target:QuestionTarget):string {

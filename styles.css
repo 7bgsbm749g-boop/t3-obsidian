@@ -78,3 +78,5 @@
 .send-to-t3-question-option small { grid-column: 2; color: var(--text-muted); }
 .send-to-t3-question-dialog textarea { width: 100%; min-height: 5em; margin-top: 0.6em; }
 .send-to-t3-question-actions { display: flex; flex-wrap: wrap; gap: 0.7em; justify-content: flex-end; }
+/* Obsidian's button display rules override the browser's default hidden rule. */
+.send-to-t3-question-actions button[hidden] { display: none !important; }
