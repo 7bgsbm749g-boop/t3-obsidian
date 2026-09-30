@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name('release-qlo2.py')
@@ -15,6 +16,33 @@ SPEC.loader.exec_module(release)
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    def test_json_smoke_evidence_survives_receipt_creation_and_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plugin = root / 'plugin'
+            plugin.mkdir()
+            (plugin / 'manifest.json').write_text('{"version":"3.4.5"}')
+            (plugin / 'main.js').write_bytes(b'bundle')
+            receipts = root / 'releases'
+            deployed = receipts / '3.4.5'
+            deployed.mkdir(parents=True)
+            (deployed / 'deployment.json').write_text('{"version":"3.4.5","status":"awaiting-live-smoke"}')
+            evidence = root / 'live.json'
+            original = b'{"realClient":"QLO2","verified":true}'
+            evidence.write_bytes(original)
+            with patch.object(release, 'canonical_root_required'), patch.object(release, 'RECEIPTS', receipts), patch.object(release, 'QLO2_PLUGIN', plugin):
+                release.complete_smoke('3.4.5', 'vps', evidence, 'Verified real client')
+                receipt_path = deployed / 'smoke-vps.json'
+                receipt = json.loads(receipt_path.read_text())
+                copied = Path(receipt['evidence'])
+                self.assertNotEqual(copied, receipt_path)
+                self.assertEqual(copied.read_bytes(), original)
+                self.assertEqual(release.sha256_file(copied), receipt['evidenceSha256'])
+                manifest = {path.name: path.read_bytes() for path in deployed.iterdir()}
+                with self.assertRaises(SystemExit):
+                    release.complete_smoke('3.4.5', 'vps', evidence, 'Retry')
+                self.assertEqual({path.name: path.read_bytes() for path in deployed.iterdir()}, manifest)
+
     def test_semver_bumps_are_strict(self) -> None:
         self.assertEqual(release.bump_version('2.12.1', 'patch'), '2.12.2')
         self.assertEqual(release.bump_version('2.12.1', 'minor'), '2.13.0')

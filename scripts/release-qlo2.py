@@ -365,7 +365,7 @@ def complete_smoke(version: str, device: str, evidence: Path, notes: str) -> Non
     smoke = directory / f'smoke-{device}.json'
     if smoke.exists():
         raise SystemExit(f'Immutable smoke receipt already exists: {smoke}')
-    evidence_copy = directory / f'smoke-{device}{evidence.suffix.lower()}'
+    evidence_copy = directory / f'smoke-{device}-evidence{evidence.suffix.lower()}'
     if evidence_copy.exists():
         raise SystemExit(f'Smoke evidence destination already exists: {evidence_copy}')
     shutil.copy2(evidence, evidence_copy)
