@@ -239,7 +239,7 @@ export default class SendToT3 extends Plugin {
       const active=this.inlineChat?.activeFor(file.path)??[];
       const failed=active.find(job=>job.phase==='error')?.id??failedInlineIds(editor.getValue())[0];
       if(failed){
-        menu.addItem(item=>item.setTitle('Continue T3 response…').setIcon('rotate-cw').setDisabled(this.busy).onClick(()=>new InlineRecoveryModal(this.app,text=>this.continueInline(failed,file.path,text)).open()));
+        menu.addItem(item=>item.setTitle('Continue T3 response').setIcon('rotate-cw').setDisabled(this.busy).onClick(()=>this.continueInline(failed,file.path).catch(error=>new Notice(`T3: ${message(error)}`,12000))));
         menu.addItem(item=>item.setTitle('Attach latest T3 continuation').setIcon('link').setDisabled(this.busy).onClick(()=>{void this.attachInline(failed,file.path).catch(error=>new Notice(`T3: ${message(error)}`,12000));}));
       }else if(active.length)menu.addItem(item=>item.setTitle('Stop T3 response').setIcon('square').setDisabled(!active[0].threadId).onClick(()=>{void this.inlineChat?.stop(active[0]).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
       else {const hostedId=activeInlineIds(editor.getValue())[0];if(hostedId)menu.addItem(item=>item.setTitle('Stop T3 response').setIcon('square').onClick(()=>{void this.stopHostedInline(hostedId).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));}
@@ -802,7 +802,13 @@ export default class SendToT3 extends Plugin {
         const raw=await opened.files.read(leasePaths(host.directory,id).record);
         if(!raw)continue;
         const record:LeaseRecord=JSON.parse(raw);
-        if(record.request.id!==id||record.request.vaultId!==this.settings.vaultId||record.state?.notePath!==path||record.state.status!=='error')throw Error('This response is no longer waiting for a continuation.');
+        if(record.request.id!==id||record.request.vaultId!==this.settings.vaultId)throw Error('This response belongs to another vault.');
+        if(record.state?.status!=='error')throw Error('This response is no longer waiting for a continuation.');
+        if(record.state.pendingMessageId)throw Error('A continuation is already attached and waiting for its T3 turn.');
+        if(record.state.notePath!==path){
+          if(this.app.vault.getFileByPath(record.state.notePath))throw Error('The original response note still exists at its previous path. Resolve the duplicate before continuing.');
+          await this.checkRecoveryBlock(id,path,record.state.hashes);
+        }
         return {record,host};
       }finally{opened.close();}
     }
@@ -825,7 +831,7 @@ export default class SendToT3 extends Plugin {
     }
     throw Error('The original T3 project is unavailable on this device. Refresh projects and reconnect its machine.');
   }
-  private async continueInline(id:string,path:string,text:string){
+  private async continueInline(id:string,path:string){
     const hosted=await this.recoveryRecord(id,path),job=hosted?undefined:this.inlineChat?.find(id);
     if(!hosted&&(!job||job.hosted||job.path!==path||job.phase!=='error'||!job.threadId||!job.projectId||!job.messageId))throw Error('The streaming host is unavailable or this response is no longer waiting for a continuation.');
     await this.checkRecoveryBlock(id,path,hosted?.record.state?.hashes??[job!.bodyHash]);
@@ -834,12 +840,12 @@ export default class SendToT3 extends Plugin {
     const project=await this.recoveryProject(projectId,environmentId),previousMessageId=hosted?.record.state?.messageId??hosted?.record.request.messageId??job!.messageId!;
     const file=this.app.vault.getFileByPath(path);
     if(!file)throw Error('The original note is no longer available.');
-    await this.sendChat(`${text.trim()}\n\n${INLINE_REPLY_INSTRUCTION}`,this.noteContext(file),{
-      threadId,projectOverrideKey:projectKey(project),rememberLink:true,
+    await this.sendChat('Continue.',this.noteContext(file),{
+      threadId,projectOverrideKey:projectKey(project),rememberLink:true,barePrompt:true,
       onPrepared:async request=>{
         const selectedEnvironment=request.connection.environmentId??(hosted?await this.localInlineEnvironment():undefined);
         if(request.threadId!==threadId||request.project.id!==projectId||selectedEnvironment!==environmentId)throw Error('The continuation target changed.');
-        request.inlineFollow={jobId:id,...(hosted?{host:hosted.host}:{}),previousMessageId,messageId:commandId(request.id,'message')};
+        request.inlineFollow={jobId:id,...(hosted?{host:hosted.host, notePath:path}:{}),previousMessageId,messageId:commandId(request.id,'message')};
       },
     });
   }
@@ -855,7 +861,7 @@ export default class SendToT3 extends Plugin {
     const latest=thread?.latestTurn;
     const user=thread?.messages?.find((item:any)=>item.role==='user'&&item.createdAt===latest?.requestedAt);
     if(thread?.id!==threadId||thread.projectId!==projectId||!latest?.turnId||latest.turnId===oldTurnId||!user?.id)throw Error('No newer T3 turn is available to attach to this response. Continue the thread in T3 first.');
-    if(hosted){if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');await this.deviceInline.follow(hosted.host,id,hosted.record.state?.messageId??hosted.record.request.messageId,user.id);}
+    if(hosted){if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');await this.deviceInline.follow(hosted.host,id,hosted.record.state?.messageId??hosted.record.request.messageId,user.id,path);}
     else this.inlineChat!.follow(job!,user.id);
     new Notice('The latest T3 turn is attached to this response.');
   }
@@ -1019,7 +1025,7 @@ export default class SendToT3 extends Plugin {
   private messageFooter(destination:string):string {
     return `\n\nSent from Obsidian.\nObsidian vault: ${JSON.stringify(this.app.vault.getName())}\nDestination note path: ${JSON.stringify(destination)}`;
   }
-  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;onPrepared?:(request:Request)=>void|Promise<void>}):Promise<void> {
+  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;barePrompt?:boolean;onPrepared?:(request:Request)=>void|Promise<void>}):Promise<void> {
     if(this.busy)throw Error('Another send is in progress. Wait for it to finish.');
     if(!prompt.trim())throw Error('Enter a message before sending.');
     if(applyOrchestration(prompt,this.settings.orchestration).length>120_000)throw Error('The message exceeds T3’s 120,000-character limit. Shorten it before sending.');
@@ -1032,13 +1038,15 @@ export default class SendToT3 extends Plugin {
       if(options?.expectedProjectKey&&projectKey(project)!==options.expectedProjectKey)throw Error('The note’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
       let text=prompt;
-      if(note){
+      if(options?.barePrompt){
+        text=prompt;
+      }else if(note){
         const destination=this.destinationNotePath(note,project,link);
         text+=this.messageFooter(destination??note.absolutePath??'(unmapped on destination)');
       }else{
         text+=this.messageFooter('(no note open)');
       }
-      text=applyOrchestration(text,this.settings.orchestration);
+      if(!options?.barePrompt)text=applyOrchestration(text,this.settings.orchestration);
       if(text.length>120_000)throw Error('The message and note path exceed T3’s 120,000-character limit. Shorten the message before sending.');
       const connection=this.connection(project);
       if(connection.transport==='direct'){
@@ -1373,7 +1381,7 @@ export default class SendToT3 extends Plugin {
     if(request.inlineFollow){
       const follow=request.inlineFollow;
       if(follow.messageId!==commandId(request.id,'message')||!request.threadId)throw Error('Invalid saved continuation request.');
-      if(follow.host){if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');await this.deviceInline.follow(follow.host,follow.jobId,follow.previousMessageId,follow.messageId);}
+      if(follow.host){if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');await this.deviceInline.follow(follow.host,follow.jobId,follow.previousMessageId,follow.messageId,follow.notePath);}
       else {const job=this.inlineChat?.find(follow.jobId);if(!job||job.threadId!==request.threadId)throw Error('The original response is unavailable on this device.');this.inlineChat!.follow(job,follow.messageId);}
     }
     if(request.inlineHost?.version===2){
@@ -1447,20 +1455,6 @@ export default class SendToT3 extends Plugin {
 function randomId():string {
   const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
   const hex=Buffer.from(bytes).toString('hex');return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
-}
-class InlineRecoveryModal extends Modal {
-  private sending=false;
-  constructor(app:App,private send:(text:string)=>Promise<void>){super(app);}
-  onOpen(){
-    this.titleEl.setText('Continue T3 response');this.contentEl.empty();
-    const field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Continuation message',rows:'5'}});
-    field.style.width='100%';field.value='Continue where you left off and complete the previous answer.';
-    new Setting(this.contentEl).setDesc('Sends one new turn in the same T3 thread and streams its answer into the existing response.').addButton(button=>button.setButtonText('Continue').setCta().onClick(()=>{
-      if(this.sending||!field.value.trim())return;this.sending=true;button.setDisabled(true);
-      void this.send(field.value).then(()=>this.close()).catch(error=>{new Notice(`T3: ${message(error)}`,12000);button.setDisabled(false);this.sending=false;});
-    }));
-    field.focus();field.select();
-  }
 }
 function message(e:unknown) {return e instanceof Error ? e.message : String(e);}
 function projectsUI(container:HTMLElement, plugin:SendToT3, redraw:()=>void) {

@@ -6,7 +6,8 @@ import {webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 import {WAIT_FOR_OTHER_THREADS_INSTRUCTION} from '../orchestration';
 import {modelConfig} from './rpc-fixture';
-import {InlineLeaseAuthority} from '../inline-lease';
+import {InlineLeaseAuthority,leasePaths} from '../inline-lease';
+import {hostedRequestHash} from '../hosted-inline';
 import {initialRegion,replaceRegion} from '../inline-thread';
 import {contentHash} from '../completion';
 
@@ -142,7 +143,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();const timer=setInterval(()=>plugin.deviceInline?.tick(),20);const unload=plugin.onunload.bind(plugin);plugin.onunload=()=>{clearInterval(timer);unload();};return plugin;};
   const plugin=await start();
-  return {plugin,start,commands,shared,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+  return {plugin,start,commands,shared,hostFiles,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
     const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
     let value=selection+'\nTail';
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
@@ -561,14 +562,15 @@ test('a failed editor response offers recovery and a new saved turn reuses its b
     const job={id,path,requestId:id,bodyHash:contentHash(body),phase:'error',createdAt:new Date().toISOString(),threadId:'old-thread',turnId:'old-turn',messageId:webcrypto.randomUUID(),projectId:project.id,connection:{transport:'direct',host:'direct',url:'https://chat.example',connectionId:'chat-connection',environmentId:'chat-env',executable:''}};
     (h.plugin as any).inlineChat.jobs.push(job);
     const menu=h.menuFor(opened.view);
-    assert.ok(menu.items.some(item=>item.title==='Continue T3 response…'));
+    assert.ok(menu.items.some(item=>item.title==='Continue T3 response'));
     assert.ok(menu.items.some(item=>item.title==='Attach latest T3 continuation'));
     assert.ok(!menu.items.some(item=>item.title==='Stop T3 response'));
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',updatedAt:new Date().toISOString(),session:{status:'error',activeTurnId:null,lastError:'Usage limit'},latestTurn:{turnId:'old-turn',state:'error'}}]);
-    await (h.plugin as any).continueInline(id,path,'Continue with a short answer.');
+    await menu.items.find(item=>item.title==='Continue T3 response')!.callback();
     assert.equal(h.commands.length,1,'continuation creates one turn in the existing thread');
     assert.equal(h.commands[0].threadId,'old-thread');
-    assert.match(h.commands[0].message.text,/Continue with a short answer/);
+    assert.equal(h.commands[0].message.text,'Continue.');
+    assert.equal(h.modals.length,0,'a single menu click dispatches without opening a modal');
     assert.equal(h.plugin.settings.pending.length,0);
     assert.equal(job.messageId,h.commands[0].message.messageId);
   }finally{h.plugin.onunload();}
@@ -587,6 +589,20 @@ test('an explicit T3 continuation attaches only a newer turn in the same thread'
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',latestTurn:{turnId:'next-turn',requestedAt:'new'},messages:[{id:oldMessage,role:'user',createdAt:'old'},{id:newMessage,role:'user',createdAt:'new'}]}]);
     await (h.plugin as any).attachInline(id,path);
     assert.equal(job.messageId,newMessage);assert.equal(job.phase,'reconnecting');assert.equal(h.commands.length,0,'attaching an existing turn does not send another one');
+  }finally{h.plugin.onunload();}
+});
+
+test('a failed response in a moved note reaches the newer-turn check',async()=>{
+  const h=await chatHarness(),id=webcrypto.randomUUID(),oldPath='Notes/Old.md',path='Notes/Moved.md',region=initialRegion(id);
+  const body='**T3 · Error**',change=replaceRegion(region.text,id,region.bodyHash,body)!;
+  try{
+    h.attachEditor(path,region.text.slice(0,change.from)+change.text+region.text.slice(change.to));
+    const host={environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1',connectionId:'chat-connection'};
+    const messageId=webcrypto.randomUUID(),request={version:2 as const,initialOwner:webcrypto.randomUUID(),id,vaultId:h.plugin.settings.vaultId,host,notePath:oldPath,threadId:'old-thread',messageId,projectId:project.id,threadEnvironmentId:'chat-env',initialHash:region.bodyHash,createdAt:new Date().toISOString()};
+    h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,owner:request.initialOwner,epoch:1,revision:1,expiresAt:Date.now()+15_000,state:{requestHash:hostedRequestHash(request),accepted:true,notePath:oldPath,status:'error',hashes:[region.bodyHash,contentHash(body)],turnId:'old-turn',updatedAt:new Date().toISOString()}}));
+    h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',latestTurn:{turnId:'old-turn',requestedAt:'old'},messages:[{id:messageId,role:'user',createdAt:'old'}]}]);
+    await assert.rejects((h.plugin as any).attachInline(id,path),/No newer T3 turn/);
+    assert.equal(h.commands.length,0);
   }finally{h.plugin.onunload();}
 });
 

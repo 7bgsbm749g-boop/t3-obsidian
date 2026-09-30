@@ -6,7 +6,7 @@ export const HEARTBEAT_MS=3000;
 export const LEASE_MARGIN_MS=2000;
 export type LeaseIdentity={vaultId:string;environmentId:string;workspaceRoot:string;directory:string};
 export interface LeaseRecord {request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;state?:HostedInlineState}
-export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'register'|'claim'|'heartbeat'|'checkpoint'|'follow';epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string}
+export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'register'|'claim'|'heartbeat'|'checkpoint'|'follow';epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string}
 export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;ttlMs:number;answeredAt?:number}
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -74,8 +74,10 @@ export class InlineLeaseAuthority {
         if(command.kind==='follow'){
           const state=record.state,previous=state?.messageId??record.request.messageId;
           if(state?.status!=='error'||!uuid.test(command.messageId??'')||command.messageId===previous||command.previousMessageId!==previous)throw Error('This response is no longer waiting for that continuation.');
+          if(command.notePath!==undefined&&!safeNotePath(command.notePath))throw Error('Invalid continuation note path.');
           if(state.pendingMessageId&&state.pendingMessageId!==command.messageId)throw Error('A continuation is already waiting for its T3 turn.');
-          if(!state.pendingMessageId)record={...record,revision:record.revision+1,state:{...state,pendingMessageId:command.messageId}};
+          if(state.pendingMessageId&&command.notePath&&command.notePath!==state.notePath)throw Error('The continuation note changed after it was attached.');
+          if(!state.pendingMessageId)record={...record,revision:record.revision+1,state:{...state,pendingMessageId:command.messageId,notePath:command.notePath??state.notePath}};
         }else if(command.kind==='claim'){
           if(terminalLease(record))return respond(false,'The response is finished.');
           if(record.state?.status==='paused'&&record.owner!==command.actor)return respond(false,'The changed response is paused in its original editor.');

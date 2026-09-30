@@ -73,6 +73,19 @@ test('a failed response accepts one durable continuation and fences stale writer
   assert.equal((await other.command({kind:'follow',jobId:h.request.id,previousMessageId:h.request.messageId,messageId:next})).ok,true,'a lost dispatch reply does not break the binding');
 });
 
+test('a failed response can attach a continuation after its note moves',async()=>{
+  const h=harness(),owner=h.client(),sender=h.client(randomUUID());
+  await owner.command({kind:'register',jobId:h.request.id,request:h.request});
+  await owner.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:0,state:{...h.state,status:'error'}});
+  const messageId=randomUUID(),path='Moved/Note.md';
+  assert.equal((await sender.command({kind:'follow',jobId:h.request.id,previousMessageId:h.request.messageId,messageId,notePath:'../Other.md'})).ok,false);
+  assert.equal((await sender.command({kind:'follow',jobId:h.request.id,previousMessageId:h.request.messageId,messageId,notePath:path})).ok,true);
+  assert.equal(h.record().state?.notePath,path);
+  assert.equal(h.record().state?.pendingMessageId,messageId);
+  assert.equal((await sender.command({kind:'follow',jobId:h.request.id,previousMessageId:h.request.messageId,messageId,notePath:path})).ok,true,'retry keeps the same moved path');
+  assert.equal((await sender.command({kind:'follow',jobId:h.request.id,previousMessageId:h.request.messageId,messageId,notePath:'Another.md'})).ok,false);
+});
+
 test('slow grants are expired on arrival and wall clock changes cannot prolong a lease',async()=>{
   const h=harness();let monotonic=h.now();
   const delayed={...h.remote,read:async(path:string)=>{const value=await h.remote.read(path);if(path.includes('/replies/')){h.advance(LEASE_MS+1);monotonic+=LEASE_MS+1;}return value;}};
