@@ -135,6 +135,7 @@ export class InlineChatManager {
     }
     if(job.turnId){
       job.turnIds??=[job.turnId];
+      if(!job.turnIds.includes(job.turnId))job.turnIds.push(job.turnId);
       for(const input of job.steering??[]){
         if(!runtime.state.messages.some(m=>m.role==='user'&&m.id===input.messageId))continue;
         input.confirmed=true;
@@ -187,7 +188,8 @@ export class InlineChatManager {
       })();
       return;
     }
-    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true,job.connection?.environmentId,job.steering?.length?{messages:job.prose??[],steering:job.steering}:undefined);
+    const conversation=(job.turnIds?.length??0)>1||job.steering?.length?{messages:job.prose??[],steering:job.steering??[]}:undefined;
+    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true,job.connection?.environmentId,conversation);
     const original=editor.getValue();let document=original;
     const current=regionBody(document,job.id);
     const terminal=['complete','interrupted','cancelled'].includes(job.phase);

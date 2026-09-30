@@ -1,0 +1,31 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {build} from 'esbuild';
+import {runInNewContext} from 'node:vm';
+import {createRequire} from 'node:module';
+import {randomUUID} from 'node:crypto';
+import {initialRegion} from '../inline-thread';
+
+test('older device-local jobs retain progress across follow, reload and completion',async()=>{
+  const result=await build({entryPoints:['inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+  const module={exports:{} as any},realRequire=createRequire(import.meta.url);
+  runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Notice:class{}}:realRequire(id),console,setTimeout,clearTimeout,TextEncoder,Uint8Array});
+  const id=randomUUID(),initial=initialRegion(id),oldTime='2026-09-30T04:00:00Z',nextTime='2026-09-30T04:01:00Z';
+  let value='User text\n'+initial.text,saved:any[]=[];
+  const editor={getValue:()=>value,offsetToPos:(offset:number)=>offset,replaceRange:(text:string,from:number,to:number)=>{value=value.slice(0,from)+text+value.slice(to);}};
+  const app={loadLocalStorage:()=>saved,saveLocalStorage:(_key:string,jobs:any[])=>{saved=JSON.parse(JSON.stringify(jobs));},workspace:{getLeavesOfType:()=>[{view:{file:{path:'Note.md'},editor}}]}};
+  saved=[{id,path:'Note.md',requestId:id,threadId:'thread',messageId:'original',bodyHash:initial.bodyHash,phase:'running',createdAt:oldTime,keepIntermediate:true}];
+  const create=()=>{const manager=new module.exports.InlineChatManager(app,'jobs',async()=>undefined);manager.schedule=()=>{};manager.start=()=>{};return manager;};
+  let manager=create(),job=manager.find(id);
+  const old={id:'old',role:'assistant',text:'Old progress.',turnId:'old-turn',streaming:false,createdAt:oldTime};
+  const snapshot=(messages:any[],turnId:string,state:string,requestedAt:string,sequence:number)=>({kind:'snapshot',snapshot:{snapshotSequence:sequence,thread:{messages,activities:[],latestTurn:{turnId,state,requestedAt,assistantMessageId:messages.at(-1).id},session:{status:state==='running'?'running':state==='error'?'error':'ready',activeTurnId:state==='running'?turnId:null}}}});
+  const original={id:'original',role:'user',text:'Begin',turnId:null,streaming:false,createdAt:oldTime};
+  manager.receive(job,snapshot([original,old],'old-turn','error',oldTime,1));manager.flush(job);assert.match(value,/Old progress/);
+  manager.follow(job,'continue');manager.dispose();manager=create();job=manager.find(id);
+  const continued={id:'continue',role:'user',text:'Continue',turnId:null,streaming:false,createdAt:nextTime},next={id:'next',role:'assistant',text:'New progress.',turnId:'next-turn',streaming:false,createdAt:nextTime};
+  manager.receive(job,snapshot([original,old,continued,next],'next-turn','running',nextTime,2));manager.flush(job);
+  assert.deepEqual(Array.from(job.turnIds),['old-turn','next-turn']);assert.match(value,/> Old progress\.\n>\n> New progress\./);
+  const final={...next,id:'final',text:'Final answer.'};
+  manager.receive(job,snapshot([original,old,continued,next,final],'next-turn','completed',nextTime,3));manager.flush(job);
+  assert.match(value,/> Old progress\.\n>\n> New progress\.\n>\n> Final answer\./);assert.doesNotMatch(value,/t3-inline:/);assert.equal(job.finalized,true);manager.dispose();
+});

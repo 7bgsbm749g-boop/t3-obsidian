@@ -5,6 +5,8 @@ import {HostedInlineWriter,handoffInline,hostedPaths,hostedRequestHash,validateH
 import {initialRegion,regionBody} from '../inline-thread';
 import {contentHash} from '../completion';
 import {commandId} from '../direct';
+import {QuestionController} from '../question-controller';
+import type {InlineThreadState} from '../inline-thread';
 
 function harness(){
   const id=randomUUID(),initial=initialRegion(id),host={environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'};
@@ -21,6 +23,42 @@ function harness(){
   return {request,paths,files,io,create,calls,get document(){return document!;},set document(value:string){document=value;},get state():HostedInlineState{return JSON.parse(files.get(paths.state)!);},
     dispatch:()=>{dispatched=true;},answer:(text:string,complete=false)=>{answer=text;phase=complete?'completed':'running';},missing:()=>{document=undefined;},unsaved:(value:boolean)=>{unsaved=value;},access:(value:boolean)=>{accessible=value;},crash:(value:boolean)=>{crashAfterEdit=value;if(!value)failState=false;}};
 }
+
+test('progress, failure, continue, reload repair, steer, answer and final cleanup preserve one transcript',async()=>{
+  const h=harness();h.request.keepIntermediate=true;h.files.set(h.paths.request,JSON.stringify(h.request));
+  const oldTime=h.request.createdAt,nextTime=new Date(Date.parse(oldTime)+1000).toISOString(),nextMessage=randomUUID(),steerMessage=randomUUID();
+  const old={id:'old',role:'assistant',text:'Original progress.',streaming:false,turnId:'old-turn',createdAt:oldTime};
+  const next={id:'new',role:'assistant',text:'Continued progress.',streaming:false,turnId:'next-turn',createdAt:nextTime};
+  let current:InlineThreadState={messages:[{id:h.request.messageId,role:'user',text:'Begin',streaming:false,turnId:null,createdAt:oldTime},old],activities:[],latestTurn:{turnId:'old-turn',state:'running',requestedAt:oldTime},session:{status:'running',activeTurnId:'old-turn'}};
+  h.io.threadState=async()=>current;
+  await h.create().tick();assert.match(h.document,/> Original progress\./);
+  current={...current,latestTurn:{...current.latestTurn!,state:'error'},session:{status:'error',activeTurnId:null,lastError:'Routing timed out'}};
+  await h.create().tick();assert.equal(h.state.status,'error');assert.match(h.document,/Original progress/);
+  h.files.set(h.paths.state,JSON.stringify({...h.state,pendingMessageId:nextMessage}));
+  current={...current,messages:[...current.messages,{id:nextMessage,role:'user',text:'Continue',streaming:false,turnId:null,createdAt:nextTime},next],latestTurn:{turnId:'next-turn',state:'running',requestedAt:nextTime},session:{status:'running',activeTurnId:'next-turn'}};
+  await h.create().tick();assert.deepEqual(h.state.turnIds,['old-turn','next-turn']);
+  assert.match(h.document,/> Original progress\.\n>\n> Continued progress\./,'continuation preserves prose before steering exists');
+  // Model a checkpoint produced by the broken release, then reload the writer.
+  h.files.set(h.paths.state,JSON.stringify({...h.state,turnIds:['old-turn'],prose:[old],steering:[{messageId:steerMessage,text:'Ask me a question',before:[old,next]}]}));
+  current.messages.push({id:steerMessage,role:'user',text:'Ask me a question',streaming:false,turnId:null,createdAt:new Date(Date.parse(nextTime)+1000).toISOString()});
+  const requested={id:'request',kind:'user-input.requested',summary:'Question',turnId:'next-turn',payload:{requestId:'request',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Which result?',options:[{label:'OK',description:'Continue with OK',value:'native-ok'}]}]}};
+  current.activities.push(requested);
+  await h.create().tick();assert.deepEqual(h.state.turnIds,['old-turn','next-turn']);assert.match(h.document,/Original progress[\s\S]*Continued progress[\s\S]*Ask me a question[\s\S]*Question pending/);
+  const target={environmentId:h.request.threadEnvironmentId,threadId:h.request.threadId,requestId:'request'};
+  let command:any;
+  const controller=new QuestionController(async environment=>{
+    assert.equal(environment,target.environmentId);
+    return {origin:'https://t3.example',api:async(_path,payload)=>{if(payload){command=payload;current.activities.push({id:'resolved',kind:'user-input.resolved',summary:'Answered',turnId:'next-turn',payload:{requestId:'request',answers:payload.answers}});return {};}return {thread:{id:h.request.threadId,...current}};}};
+  },{load:()=>[],save:()=>{}},()=>randomUUID());
+  controller.draft(target,'choice',{selected:['native-ok']});await controller.submit(target);
+  assert.equal(controller.view(target).status,'resolved');assert.equal(command.threadId,h.request.threadId);assert.deepEqual(command.answers,{choice:'native-ok'});
+  current.messages.push({id:'after',role:'assistant',text:'Progress after answering.',streaming:false,turnId:'next-turn',createdAt:new Date(Date.parse(nextTime)+2000).toISOString()});
+  await h.create().tick();assert.match(h.document,/Ask me a question[\s\S]*Progress after answering/);assert.doesNotMatch(h.document,/t3-question:/);
+  current.messages.push({id:'final',role:'assistant',text:'Final answer.',streaming:false,turnId:'next-turn',createdAt:new Date(Date.parse(nextTime)+3000).toISOString()});
+  current.latestTurn={...current.latestTurn!,state:'completed',assistantMessageId:'final'};current.session={status:'ready',activeTurnId:null};
+  await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/Original progress[\s\S]*Continued progress[\s\S]*Ask me a question[\s\S]*Progress after answering\.\n>\n> Final answer\./);assert.doesNotMatch(h.document,/t3-inline:|t3-question:/);
+  const finished=h.document;await h.create().tick();assert.equal(h.document,finished);controller.dispose();
+});
 
 test('handoff waits for a saved synced anchor and host-owned access before dispatch',async()=>{
   const h=harness(),writer=h.create();h.unsaved(true);

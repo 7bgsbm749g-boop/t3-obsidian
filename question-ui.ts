@@ -19,8 +19,10 @@ export class QuestionModal extends Modal {
   private submitButton?:HTMLButtonElement;
   private dismissButton?:HTMLButtonElement;
   private signature='';
+  private opened=false;
   constructor(app:App,private controller:QuestionController,readonly target:QuestionTarget){super(app);}
   onOpen(){
+    this.opened=true;
     this.signature='';
     this.contentEl.addClass('send-to-t3-question-dialog');this.contentEl.createEl('h2',{text:'Answer T3 question'});
     this.status=this.contentEl.createEl('p',{attr:{'aria-live':'polite'}});this.form=this.contentEl.createDiv();
@@ -32,8 +34,10 @@ export class QuestionModal extends Modal {
   }
   private send(dismiss:boolean){void this.controller.submit(this.target,dismiss).catch(error=>{new Notice(error instanceof Error?error.message:'Cannot submit the answer.',8000);this.update();});}
   private update(){
+    if(!this.opened)return;
     const view=this.controller.view(this.target),record=this.controller.record(this.target);
-    this.status!.textContent=view.status==='resolved'?'Answered in T3.':view.status==='submitting'?'Submitting… Waiting for T3 to confirm.':view.detail??(view.request?.responseMode==='message'?'Question pending. T3 can keep working while you answer.':view.request?'T3 is waiting for your answer.':'Loading question…');
+    if(view.status==='resolved'){this.close();new Notice('T3 question resolved.');return;}
+    this.status!.textContent=view.status==='submitting'?'Submitting… Waiting for T3 to confirm.':view.detail??(view.request?.responseMode==='message'?'Question pending. T3 can keep working while you answer.':view.request?'T3 is waiting for your answer.':'Loading question…');
     const signature=JSON.stringify(view.request?.questions??[]);
     // Streaming refreshes update status only. Keep DOM, focus, selection, and drafts intact.
     if(signature!==this.signature){
@@ -54,13 +58,13 @@ export class QuestionModal extends Modal {
         if(textarea){textarea.value=draft.text??'';textarea.oninput=()=>{draft={text:textarea.value,selected:[]};for(const input of inputs)input.checked=false;this.controller.draft(this.target,question.id,draft);};}
       }
     }
-    const locked=!!record.command||!view.request||view.status==='resolved';
+    const locked=!!record.command||!view.request;
     for(const input of Array.from(this.form!.querySelectorAll<HTMLInputElement|HTMLTextAreaElement>('input,textarea')))input.disabled=locked;
     this.submitButton!.disabled=!view.request||['loading','resolved','unavailable','submitting'].includes(view.status);
     this.submitButton!.textContent=view.status==='submitting'?'Submitting…':record.command?'Retry saved answer':'Submit answer';
     this.dismissButton!.hidden=view.request?.responseMode!=='message';this.dismissButton!.disabled=locked;
   }
-  onClose(){this.unsubscribe?.();this.contentEl.empty();}
+  onClose(){this.opened=false;this.unsubscribe?.();this.contentEl.empty();}
 }
 
 /** Replace the readable Markdown answer link with a real Live Preview button. */

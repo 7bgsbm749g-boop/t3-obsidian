@@ -251,7 +251,18 @@ export function inlineTurnMessages(state:InlineThreadState,turnId:string,keepInt
 export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[]}):string {
   const messages=inlineTurnMessages(state,turnId,phase!=='complete'||keepIntermediate);
   const answer=messages.map(m=>m.text.replace(/\n+$/,'')).filter(Boolean).join('\n\n');
-  const prose=conversation?steeringSegments(conversation.messages,conversation.steering.filter(input=>input.confirmed)).map(segment=>segment.role==='user'?`> [!t3-steering] You\n${segment.text.split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`:quoteResponse(closeOpenFence(segment.text.trim()))).join('\n\n'):answer?quoteResponse(closeOpenFence(answer)):'';
+  // A continuation uses the same transcript as steering, even before the first
+  // steer. Keep the final-only preference for unsteered completed responses.
+  const transcript=conversation&&(phase!=='complete'||keepIntermediate||conversation.steering.length)?conversation:undefined;
+  const segments=transcript?steeringSegments(transcript.messages,transcript.steering.filter(input=>input.confirmed)):[];
+  let previousRole:string|undefined;
+  const prose=transcript?segments.reduce((body,segment)=>{
+    const rendered=segment.role==='user'?`> [!t3-steering] You\n${segment.text.split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`:quoteResponse(closeOpenFence(segment.text.trim()));
+    // Only adjacent assistant quote blocks share a quoted blank line. Callouts
+    // and raw Markdown blocks need a real boundary to avoid swallowing prose.
+    const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
+    previousRole=segment.role;return body?body+separator+rendered:rendered;
+  },''):answer?quoteResponse(closeOpenFence(answer)):'';
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';

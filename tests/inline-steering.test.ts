@@ -40,3 +40,11 @@ test('snapshot recovery places missed commentary before the already received fin
   const prose=mergeProse([progress,final],[progress,ack,final],['turn']);
   assert.deepEqual(prose.map(m=>m.id),['progress','ack','final']);
 });
+
+test('continued prose quotes its paragraph gaps and respects final-only preference without steering',()=>{
+  const prose=[message('old','Old progress.'),message('next','New progress.',false,'next'),message('final','Final.',false,'next')];
+  const state={messages:prose,activities:[],latestTurn:{turnId:'next',state:'completed',assistantMessageId:'final'}};
+  const conversation={messages:prose,steering:[]};
+  assert.equal(renderInlineTurn(state,'next','thread','complete',true,undefined,conversation),'> Old progress.\n>\n> New progress.\n>\n> Final.\n');
+  assert.equal(renderInlineTurn(state,'next','thread','complete',false,undefined,conversation),'> Final.\n');
+});

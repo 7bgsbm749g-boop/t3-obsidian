@@ -155,6 +155,9 @@ export class HostedInlineWriter {
         state.turnId??=turnForMessage(current,messageId);
         if(!state.turnId)return;
         state.turnIds??=[state.turnId];
+        // Follow changes turnId independently of steering. Repair old checkpoints
+        // too, before filtering incoming prose by the explicitly adopted turns.
+        if(!state.turnIds.includes(state.turnId))state.turnIds.push(state.turnId);
         for(const input of state.steering??[]){
           if(!current.messages.some(m=>m.role==='user'&&m.id===input.messageId))continue;
           input.confirmed=true;
@@ -177,13 +180,14 @@ export class HostedInlineWriter {
           await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(request.id,'interrupt'),threadId:request.threadId,turnId:state.turnId,createdAt:request.createdAt});
           phase='interrupted';
         }
-        if(phase==='complete'&&this.io.importReplyAsset&&!state.steering?.length){
+        const conversation=state.turnIds.length>1||state.steering?.length?{messages:state.prose,steering:state.steering??[]}:undefined;
+        if(phase==='complete'&&this.io.importReplyAsset&&!conversation){
           for(const message of inlineTurnMessages(current,state.turnId,request.keepIntermediate===true)){
             message.text=await rewriteReplyReferences(message.text,reference=>this.io.importReplyAsset!(reference,request,access));
           }
         }
-        let next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true,request.threadEnvironmentId,state.steering?.length?{messages:state.prose,steering:state.steering}:undefined);
-        if(phase==='complete'&&state.steering?.length&&this.io.importReplyAsset)next=await rewriteReplyReferences(next,reference=>this.io.importReplyAsset!(reference,request,access));
+        let next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true,request.threadEnvironmentId,conversation);
+        if(phase==='complete'&&conversation&&this.io.importReplyAsset)next=await rewriteReplyReferences(next,reference=>this.io.importReplyAsset!(reference,request,access));
         const terminal=phase==='complete'||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the
         // vault edit cannot turn our own output into an apparent user edit.
