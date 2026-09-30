@@ -2,6 +2,7 @@ import {App, FuzzySuggestModal, Modal, Notice, Setting} from 'obsidian';
 import {RequestDeliveryError} from './bridge';
 
 export interface ChatHost {
+  steering?:boolean;
   hasNote():boolean;
   getTargetDescription(projectKey?:string): string;
   getProjectChoices():{key:string;label:string}[];
@@ -60,7 +61,7 @@ class ChatPromptModal extends Modal {
     });
     this.contentEl.createEl('p',{text:'Choose a destination. The thread picker shows whether each conversation is active or idle.'});
     this.actions = new Setting(this.contentEl)
-      .addButton(button => button.setButtonText(this.host.getLinkedThread(this.projectKey)?'Linked thread':'New thread').setCta().onClick(() => { void this.submit('default'); }))
+      .addButton(button => button.setButtonText(this.host.steering?'Send to running thread':this.host.getLinkedThread(this.projectKey)?'Linked thread':'New thread').setCta().onClick(() => { void this.submit('default'); }))
       .addButton(button => button.setButtonText('Existing thread…').onClick(() => { void this.submit('existing'); }));
     if(this.host.getLinkedThread(this.projectKey))this.actions.addButton(button=>button.setButtonText('New thread').onClick(()=>{void this.submit('new');}));
     if(this.host.hasPreviousThreads(this.projectKey))this.actions.addButton(button=>button.setButtonText('Previous threads…').onClick(()=>{void this.submit('previous');}));
@@ -106,7 +107,7 @@ class ChatDestinationModal extends Modal {
     this.contentEl.createEl('p',{text:'Choose a destination. The thread picker shows whether each conversation is active or idle.'});
     let defaultButton:HTMLButtonElement|undefined;
     this.actions=new Setting(this.contentEl)
-      .addButton(button=>{defaultButton=button.buttonEl;button.setButtonText(this.host.getLinkedThread(this.projectKey)?'Linked thread':'New thread').setCta().onClick(()=>{void this.choose('default');});})
+      .addButton(button=>{defaultButton=button.buttonEl;button.setButtonText(this.host.steering?'Send to running thread':this.host.getLinkedThread(this.projectKey)?'Linked thread':'New thread').setCta().onClick(()=>{void this.choose('default');});})
       .addButton(button=>button.setButtonText('Existing thread…').onClick(()=>{void this.choose('existing');}));
     if(this.host.getLinkedThread(this.projectKey))this.actions.addButton(button=>button.setButtonText('New thread').onClick(()=>{void this.choose('new');}));
     if(this.host.hasPreviousThreads(this.projectKey))this.actions.addButton(button=>button.setButtonText('Previous threads…').onClick(()=>{void this.choose('previous');}));

@@ -190,3 +190,29 @@ test('leased and older hosted writers retain an async question after final respo
   h.io.threadState=async()=>({messages:[{id:h.request.messageId,role:'user',turnId:null,text:'Question',streaming:false,createdAt:h.request.createdAt},{id:'answer',role:'assistant',text:'Final prose',turnId:'turn',streaming:false}],activities:[activity],latestTurn:{turnId:'turn',state:'completed',requestedAt:h.request.createdAt,assistantMessageId:'answer'},session:{status:'ready',activeTurnId:null}});
   await h.create().tick();assert.equal(h.state.status,'complete');assert.doesNotMatch(h.document,/t3-inline:/);assert.match(h.document,/Question pending/);assert.match(h.document,/t3-question:/);assert.match(h.document,/> Final prose/);
 });
+
+test('steering holds finalization until delivery, follows a completion-race turn, and moves selection atomically',async()=>{
+  const h=harness();h.dispatch();await h.create().tick();
+  const id=randomUUID(),selected='My steering request',before='User introduction\n';
+  h.document=before+selected+'\n'+h.document.slice(before.length);
+  const {selectionAnchor}=await import('../inline-thread');
+  const anchor=selectionAnchor(h.document,selected,before.length,before.length+selected.length);
+  h.files.set(h.paths.state,JSON.stringify({...h.state,steering:[{messageId:id,text:selected,before:h.state.prose,selection:anchor}]}));
+  h.answer('Original final',true);await h.create().tick();
+  assert.equal(h.state.status,'running');assert.match(h.document,/t3-inline:start/);assert.match(h.document,/My steering request/);
+  h.io.threadState=async()=>({messages:[{id,role:'user',text:selected,turnId:null,streaming:false,createdAt:'next-time'},{id:'next-answer',role:'assistant',text:'Steered final',turnId:'next-turn',streaming:false}],activities:[],latestTurn:{turnId:'next-turn',state:'completed',requestedAt:'next-time',assistantMessageId:'next-answer'},session:{status:'ready',activeTurnId:null}});
+  await h.create().tick();assert.equal(h.state.status,'complete');assert.equal(h.state.turnId,'next-turn');
+  assert.equal((h.document.match(/My steering request/g)??[]).length,1);
+  assert.match(h.document,/Progress A[\s\S]*\[!t3-steering\] You[\s\S]*My steering request[\s\S]*Steered final/);
+  assert.doesNotMatch(h.document,/t3-inline:/);assert.match(h.document,/User tail/);
+});
+
+test('steering never removes a selection changed before its T3 delivery is confirmed',async()=>{
+  const h=harness();h.dispatch();await h.create().tick();const id=randomUUID();
+  const {selectionAnchor}=await import('../inline-thread');
+  const anchor=selectionAnchor(h.document,'User introduction',0,17);
+  h.files.set(h.paths.state,JSON.stringify({...h.state,steering:[{messageId:id,text:'User introduction',before:h.state.prose,selection:anchor}]}));
+  h.document=h.document.replace('User introduction','My updated introduction');
+  h.io.threadState=async()=>({messages:[{id:h.request.messageId,role:'user',text:'Original',turnId:null,streaming:false,createdAt:h.request.createdAt},{id,role:'user',text:'User introduction',turnId:null,streaming:false},{id:'answer',role:'assistant',text:'After steering',turnId:'turn',streaming:true}],activities:[],latestTurn:{turnId:'turn',state:'running',requestedAt:h.request.createdAt},session:{status:'running',activeTurnId:'turn'}});
+  await h.create().tick();assert.match(h.document,/My updated introduction/);assert.match(h.document,/\[!t3-steering\] You/);assert.equal(h.state.status,'running');
+});

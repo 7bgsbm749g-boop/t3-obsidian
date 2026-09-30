@@ -3,11 +3,12 @@ import type { ImageAttachment, ImageContext } from './images';
 import type { NoteCompletion } from './completion';
 import type { NoteThread } from './note-threads';
 import type {HostedInlineRequest} from './hosted-inline';
+import type {SteeringInput} from './inline-steering';
 export interface Project { id: string; title: string; workspaceRoot: string; connectionId?:string; connectionName?:string }
 export function projectKey(project:Project){return project.connectionId?`${project.connectionId}:${project.id}`:project.id;}
 export function projectLabel(project:Project){return project.title+(project.connectionName?` · ${project.connectionName}`:'');}
 export interface Connection { executable: string; host: string; scriptPath?: string; transport?: 'desktop'|'https'|'direct'; url?: string; native?:boolean; baseDir?:string; stateDir?:string;connectionId?:string;environmentId?:string }
-export interface Request { id: string; project: Project; title: string; prompt: string; connection: Connection; threadId?:string; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion; noteLink?:Omit<NoteThread,'threadId'|'selectedAt'>;directPlan?:DirectPlan;inlineHost?:HostedInlineRequest;inlineFollow?:{jobId:string;host?:HostedInlineRequest['host'];notePath?:string;previousMessageId:string;messageId:string} }
+export interface Request { id: string; project: Project; title: string; prompt: string; connection: Connection; threadId?:string; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion; noteLink?:Omit<NoteThread,'threadId'|'selectedAt'>;directPlan?:DirectPlan;inlineHost?:HostedInlineRequest;inlineSteering?:{jobId:string;host?:HostedInlineRequest['host'];input:SteeringInput};inlineFollow?:{jobId:string;host?:HostedInlineRequest['host'];notePath?:string;previousMessageId:string;messageId:string} }
 export class RequestDeliveryError extends Error {
   constructor(message:string,readonly requestSaved:boolean){super(message);}
 }

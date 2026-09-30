@@ -1,5 +1,6 @@
 import {contentHash} from './completion';
 import {pendingQuestions,renderQuestion} from './questions';
+import {steeringSegments,type InlineSteering} from './inline-steering';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string}
@@ -247,18 +248,19 @@ export function inlineTurnMessages(state:InlineThreadState,turnId:string,keepInt
   return keepIntermediate?messages:final?[final]:[];
 }
 
-export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate=false,environmentId?:string):string {
+export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[]}):string {
   const messages=inlineTurnMessages(state,turnId,phase!=='complete'||keepIntermediate);
   const answer=messages.map(m=>m.text.replace(/\n+$/,'')).filter(Boolean).join('\n\n');
+  const prose=conversation?steeringSegments(conversation.messages,conversation.steering.filter(input=>input.confirmed)).map(segment=>segment.role==='user'?`> [!t3-steering] You\n${segment.text.split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`:quoteResponse(closeOpenFence(segment.text.trim()))).join('\n\n'):answer?quoteResponse(closeOpenFence(answer)):'';
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
-  if(phase==='complete')return (answer?`${quoteResponse(closeOpenFence(answer))}\n`:'')+(questions?`\n${questions}\n`:'');
+  if(phase==='complete')return (prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
   const activity=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
   const heading=`**T3 · ${phase==='running'?'Working':phase==='sending'?'Sending':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const status=phase==='error'&&state.session?.lastError?'\n\n'+safeStatus(state.session.lastError):activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
-  const body=answer?`\n\n${quoteResponse(closeOpenFence(answer))}\n`:'';
+  const body=prose?`\n\n${prose}\n`:'';
   return `${heading}${spinner}${status}${body}${questions?`\n\n${questions}\n`:''}`;
 }
 

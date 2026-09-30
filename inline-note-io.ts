@@ -34,7 +34,7 @@ export function deviceNoteIO(app:App){
     },
   };
 }
-function replaceChangedText(editor:Editor,before:string,after:string){
+export function replaceChangedText(editor:Editor,before:string,after:string){
   let start=0;while(start<before.length&&start<after.length&&before[start]===after[start])start++;
   let oldEnd=before.length,newEnd=after.length;while(oldEnd>start&&newEnd>start&&before[oldEnd-1]===after[newEnd-1]){oldEnd--;newEnd--;}
   replaceInlineEditorText(editor,after.slice(start,newEnd),start,oldEnd);

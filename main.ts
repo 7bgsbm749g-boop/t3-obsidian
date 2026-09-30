@@ -12,6 +12,7 @@ import { Connection, Project, Request, RequestDeliveryError, parseProjects, runB
 import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from './folder-link';
 import {installPaletteChat,type PaletteChatController} from './palette-chat';
 import {openChatFlow,type ChatHost} from './chat-ui';
+import {selectionRange} from './inline-steering';
 import {projectThreads,type ThreadChoice} from './thread-target';
 import {activeNoteThread,loadNoteThreads,mergeNoteThreads,previousNoteThreads,type NoteThread} from './note-threads';
 import {installFolderIndicators,type FolderIndicatorController} from './folder-indicator';
@@ -38,7 +39,7 @@ import {handoffInline,hostedPaths,type InlineHostTarget,type InlineFiles} from '
 import {leasePaths,type LeaseRecord} from './inline-lease';
 import {installMobileSelectionAction} from './mobile-selection-action';
 import {hiddenInlineMarkerExtension} from './inline-markers';
-import {activeInlineIds,failedInlineIds,regionBody,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,endMarker,failedInlineIds,regionBody,startMarker,type SelectionAnchor} from './inline-thread';
 import {QuestionController} from './question-controller';
 import {QuestionModal,questionButton,questionEditorExtension} from './question-ui';
 import {questionTargets,parseQuestionToken,clearResolvedQuestion,type QuestionTarget} from './questions';
@@ -158,7 +159,7 @@ export default class SendToT3 extends Plugin {
     }});
     this.app.workspace.onLayoutReady(()=>{void this.refreshQuestions();this.registerInterval(window.setInterval(()=>void this.refreshQuestions(),1500));});
     if(Platform.isMobile&&typeof document.addEventListener==='function'){
-      this.mobileSelectionAction=installMobileSelectionAction(this.app,()=>this.app.workspace.getActiveViewOfType(MarkdownView),path=>!this.busy&&!this.inlineChat?.activeFor(path).length,captureEditorSelection,({editor,view,text,anchor})=>this.openEditorChat(text,view.file!,{editor,view,anchor}));
+      this.mobileSelectionAction=installMobileSelectionAction(this.app,()=>this.app.workspace.getActiveViewOfType(MarkdownView),()=>!this.busy,captureEditorSelection,({editor,view,text,anchor})=>this.openEditorChat(text,view.file!,{editor,view,anchor}));
     }
     this.sharedBaseline=JSON.stringify(this.sharedSnapshot());
     if(!Platform.isMobile && !this.settings.connection.native){
@@ -275,7 +276,7 @@ export default class SendToT3 extends Plugin {
       if(!selection.trim())return;
       let anchor:SelectionAnchor;
       try{anchor=captureEditorSelection(editor);}catch{return;}
-      menu.addItem(item=>item.setTitle('Ask T3 Code').setIcon('message-circle').setDisabled(this.busy||active.length>0).onClick(()=>this.openEditorChat(selection,file,{editor,view,anchor})));
+      menu.addItem(item=>item.setTitle('Ask T3 Code').setIcon('message-circle').setDisabled(this.busy).onClick(()=>this.openEditorChat(selection,file,{editor,view,anchor})));
     }));
   }
   private openQuestion(target:QuestionTarget){
@@ -807,10 +808,11 @@ export default class SendToT3 extends Plugin {
     const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
     const send=(text:string,options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;projectOverrideKey?:string})=>inline&&note?this.sendInlineChat(text,note,inline,options):this.sendChat(answerOnly?`${text}\n\n${THREAD_REPLY_INSTRUCTION}`:text,note,options);
     const host:ChatHost={
+      steering:!!inline&&activeInlineIds(inline.editor.getValue()).length>0,
       hasNote:()=>Boolean(note),
       getTargetDescription:key=>{const chosen=key?this.projects().find(item=>projectKey(item)===key):undefined,linked=this.noteLink(note?.path),project=chosen??(linked?[...this.settings.directProjects,...this.settings.projects].find(item=>item.id===linked.projectId&&sameWorkspacePath(item.workspaceRoot,linked.workspaceRoot)):undefined);return `${note?note.path:'No note open'} → ${project?.title??(linked&&link?.projectId===linked.projectId?link.projectTitle:undefined)??(linked?`T3 project ${linked.projectId.slice(0,8)}`:link?.projectTitle)??this.app.vault.getName()+' (vault root)'}`;},
       getProjectChoices:()=>this.projects().map(project=>({key:projectKey(project),label:projectLabel(project)})),
-      getLinkedThread:key=>{const linked=this.noteLink(note?.path);return !key||linked&&key===`${linked.connectionId?linked.connectionId+':':''}${linked.projectId}`?linked?.threadId:undefined;},
+      getLinkedThread:key=>{const linked=this.noteLink(note?.path),job=note?this.inlineChat?.activeFor(note.path).find(job=>job.threadId&&['sending','running','reconnecting'].includes(job.phase)):undefined;return !key||linked&&key===`${linked.connectionId?linked.connectionId+':':''}${linked.projectId}`?job?.threadId??linked?.threadId:undefined;},
       hasPreviousThreads:key=>Boolean(note&&this.olderNoteThreads(note.path).some(entry=>!key||key===`${entry.connectionId?entry.connectionId+':':''}${entry.projectId}`)),
       defaultRemember:()=>Boolean(note&&(this.settings.threadLinking||this.noteLink(note.path))),
       sendChat:(text,remember,key)=>send(text,{rememberLink:remember,projectOverrideKey:key}),
@@ -836,10 +838,34 @@ export default class SendToT3 extends Plugin {
   }
   private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;newThread?:boolean;rememberLink?:boolean;expectedProjectKey?:string;projectOverrideKey?:string}){
     const manager=this.inlineChat;if(!manager)throw Error('Inline T3 response is unavailable. Reload the plugin.');
+    if(context.view.file?.path!==note.path)throw Error('The original note is no longer open. Reopen it before asking T3.');
+    const activeId=activeInlineIds(context.editor.getValue())[0];
+    if(activeId&&!options?.newThread)return this.sendInlineSteering(activeId,prompt,note,context,options);
     const requestId=randomId(),job=context.anchor?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path):manager.reserveAtEnd(context.editor,context.view,requestId,note.path);
     let delivered=false;
     try{await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{...options,requestId,onPrepared:request=>manager.prepare(job,request)});delivered=true;manager.start(job);}
     catch(error){manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&error.requestSaved));throw error;}
+  }
+  private async sendInlineSteering(id:string,prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;expectedProjectKey?:string;projectOverrideKey?:string;rememberLink?:boolean}){
+    const job=this.inlineChat?.find(id);let hosted:{record:LeaseRecord;host:InlineHostTarget}|undefined;
+    const targets=[job?.hostTarget,...this.inlineTargets].filter((value):value is InlineHostTarget=>!!value);
+    if(!job||job.hosted)try{const current=await this.inlineHostTarget();if(!targets.some(target=>JSON.stringify(target)===JSON.stringify(current)))targets.push(current);}catch{}
+    for(const host of targets){
+      let opened:{files:InlineFiles;close():void};try{opened=await this.inlineHostFiles(host);}catch{continue;}
+      try{const raw=await opened.files.read(leasePaths(host.directory,id).record);if(raw){const record:LeaseRecord=JSON.parse(raw);if(record.request.id===id&&record.request.vaultId===this.settings.vaultId){hosted={record,host};break;}}}finally{opened.close();}
+    }
+    if(job?.hosted&&!hosted||!hosted&&!job)throw Error('The active response is unavailable. Reconnect its vault project machine.');
+    const threadId=hosted?.record.request.threadId??job?.threadId,projectId=hosted?.record.request.projectId??job?.projectId,environmentId=hosted?.record.request.threadEnvironmentId??job?.connection?.environmentId;
+    if(!threadId||!projectId)throw Error('Wait for the first message to reach T3 before steering.');
+    if(options?.threadId&&options.threadId!==threadId)throw Error('This note has a running response in another thread. Finish or stop it first.');
+    if(hosted&&(hosted.record.state?.notePath??hosted.record.request.notePath)!==note.path)throw Error('The response note moved. Wait for the writer to catch up.');
+    await this.checkRecoveryBlock(id,note.path,hosted?.record.state?.hashes??[job!.bodyHash]);
+    if(context.anchor){const range=selectionRange(context.editor.getValue(),context.anchor),region=regionBody(context.editor.getValue(),id)!;if(!range)throw Error('The selected text changed. Select it again.');if(range.to>region.from-startMarker(id).length-1&&range.from<region.to+endMarker(id).length+1)throw Error('Select your message outside the running response, or type it in the palette.');}
+    const project=await this.recoveryProject(projectId,environmentId),key=projectKey(project);
+    if(options?.expectedProjectKey&&options.expectedProjectKey!==key||options?.projectOverrideKey&&options.projectOverrideKey!==key)throw Error('Steering must use the running thread’s project.');
+    await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{threadId,projectOverrideKey:key,rememberLink:options?.rememberLink,onPrepared:request=>{
+      request.inlineSteering={jobId:id,...(hosted?{host:hosted.host}:{}),input:{messageId:commandId(request.id,'message'),text:prompt,...(context.anchor?{selection:context.anchor}:{})}};
+    }});
   }
   private async recoveryRecord(id:string,path:string):Promise<{record:LeaseRecord;host:InlineHostTarget}|undefined>{
     const targets=[...this.inlineTargets];
@@ -1421,9 +1447,10 @@ export default class SendToT3 extends Plugin {
   private rememberSettlement(request:Request,threadId:string){
     this.settings.settlementJobs=this.settings.settlementJobs.filter(job=>job.threadId!==threadId||job.connection.environmentId!==request.connection.environmentId||job.connection.host!==request.connection.host);
     if(!this.settings.autoSettleThreads)return;
-    const inlineJobId=request.inlineFollow?.jobId??(request.inlineHost||this.inlineChat?.find(request.id)?request.id:undefined);
+    const inlineJobId=request.inlineSteering?.jobId??request.inlineFollow?.jobId??(request.inlineHost||this.inlineChat?.find(request.id)?request.id:undefined);
+    const inlineHost=request.inlineSteering?.host??request.inlineFollow?.host??request.inlineHost?.host;
     this.settings.settlementJobs.push({requestId:request.id,messageId:commandId(request.id,'message'),threadId,projectId:request.project.id,connection:{...request.connection},
-      ...(inlineJobId?{inlineJobId}:{}),...(request.inlineFollow?.host||request.inlineHost?.host?{inlineHost:request.inlineFollow?.host??request.inlineHost?.host,inlineVersion:(request.inlineHost?.version??2) as 1|2}:{})});
+      ...(inlineJobId?{inlineJobId}:{}),...(inlineHost?{inlineHost,inlineVersion:(request.inlineHost?.version??2) as 1|2}:{})});
   }
   rememberStarted(request:Request,threadId:string) {
     if(request.noteLink){
@@ -1437,6 +1464,12 @@ export default class SendToT3 extends Plugin {
     this.rememberSettlement(request,threadId);
   }
   async dispatch(request:Request,quiet=false) {
+    if(request.inlineSteering){
+      const steering=request.inlineSteering;
+      if(steering.input.messageId!==commandId(request.id,'message')||!request.threadId)throw Error('Invalid saved steering request.');
+      if(steering.host){if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');await this.deviceInline.steer(steering.host,steering.jobId,steering.input);}
+      else {const job=this.inlineChat?.find(steering.jobId)??this.inlineChat?.steeringJob(steering.jobId,steering.input.messageId);if(!job||job.threadId!==request.threadId)throw Error('The original response is unavailable on this device.');this.inlineChat!.steer(job,steering.input);}
+    }
     if(request.inlineFollow){
       const follow=request.inlineFollow;
       if(follow.messageId!==commandId(request.id,'message')||!request.threadId)throw Error('Invalid saved continuation request.');

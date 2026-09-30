@@ -966,3 +966,44 @@ test('new inline responses capture the retention setting in their immutable host
     assert.equal(job.keepIntermediate,true);
   }finally{h.plugin.onunload();}
 });
+
+test('a synced running response accepts palette steering without a new block and retains its transcript',async()=>{
+  const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/Steering.md',region=initialRegion(id);
+  try{
+    const body='**T3 · Working**\n\n> Earlier progress.\n',edit=replaceRegion(region.text,id,region.bodyHash,body)!;
+    const opened=h.attachEditor(path,'Before'+region.text.slice(0,edit.from)+edit.text+region.text.slice(edit.to)+'After');
+    const host={environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1',connectionId:'chat-connection'};
+    const initialMessage=webcrypto.randomUUID(),request={version:2 as const,initialOwner:webcrypto.randomUUID(),id,vaultId:h.plugin.settings.vaultId,host,notePath:path,threadId:'old-thread',messageId:initialMessage,projectId:project.id,threadEnvironmentId:'chat-env',initialHash:region.bodyHash,createdAt:'original-time'};
+    h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,owner:request.initialOwner,epoch:1,revision:1,expiresAt:Date.now()+15_000,state:{requestHash:hostedRequestHash(request),accepted:true,notePath:path,status:'running',hashes:[region.bodyHash,contentHash(body)],turnId:'old-turn',prose:[{id:'old-progress',role:'assistant',text:'Earlier progress.',turnId:'old-turn',streaming:false}],updatedAt:''}}));
+    h.setThreads([{id:'old-thread',projectId:project.id,title:'Working',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running',requestedAt:'original-time'},messages:[{id:initialMessage,role:'user',createdAt:'original-time'}]}]);
+    await (h.plugin as any).sendInlineChat('Change the approach.',{path},{editor:opened.editor,view:opened.view});
+    assert.equal(h.commands.length,1);assert.equal(h.commands[0].threadId,'old-thread');assert.equal(h.commands[0].type,'thread.turn.start');
+    assert.equal((opened.value.match(/t3-inline:start:/g)??[]).length,1);
+    const record=JSON.parse(h.hostFiles.get(leasePaths(host.directory,id).record)!);
+    assert.equal(record.state.steering.length,1);assert.equal(record.state.steering[0].text,'Change the approach.');
+    assert.equal(record.owner,request.initialOwner,'another device can send without preempting the writer');
+    const settlement=h.plugin.settings.settlementJobs[0];assert.equal(settlement.inlineJobId,id);assert.deepEqual(JSON.parse(JSON.stringify(settlement.inlineHost)),host);
+  }finally{h.plugin.onunload();}
+});
+
+test('Ask remains enabled during local streaming and selection steering moves only the captured text',async()=>{
+  const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/SelectedSteering.md',region=initialRegion(id);
+  try{
+    const selected='Use a simpler approach.',opened=h.attachEditor(path,selected+'\n'+region.text+'Tail');
+    opened.editor.getSelection=()=>selected;
+    opened.editor.getCursor=(side:string)=>opened.editor.offsetToPos(side==='from'?0:selected.length);
+    const job={id,path,requestId:id,bodyHash:region.bodyHash,phase:'running',createdAt:'original-time',threadId:'old-thread',turnId:'old-turn',messageId:webcrypto.randomUUID(),projectId:project.id,connection:{transport:'direct',host:'direct',url:'https://chat.example',connectionId:'chat-connection',environmentId:'chat-env',executable:''}};
+    const manager=(h.plugin as any).inlineChat;manager.jobs.push(job);
+    const runtime=manager.runtime(job);runtime.sequence=1;runtime.state={messages:[{id:'progress',role:'assistant',turnId:'old-turn',text:'Earlier progress.',streaming:false}],activities:[]};
+    const ask=h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code');assert.ok(ask);assert.equal(ask.disabled,false);
+    h.setThreads([{id:'old-thread',projectId:project.id,title:'Working',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running',requestedAt:'original-time'}}]);
+    await ask.callback();await h.modals.at(-1).choose(false);
+    assert.equal(h.commands.length,1);assert.ok(opened.value.startsWith(selected),'text remains until T3 confirms its message');
+    const command=h.commands[0];
+    manager.receive(job,{kind:'snapshot',snapshot:{snapshotSequence:3,thread:{messages:[{id:command.message.messageId,role:'user',text:command.message.text,streaming:false,createdAt:command.createdAt},{id:'final',role:'assistant',turnId:'next-turn',text:'Changed approach.',streaming:false}],activities:[],latestTurn:{turnId:'next-turn',state:'completed',requestedAt:command.createdAt,assistantMessageId:'final'},session:{status:'ready',activeTurnId:null}}}});
+    manager.flush(job);
+    assert.equal((opened.value.match(/Use a simpler approach\./g)??[]).length,1);assert.ok(!opened.value.startsWith(selected));
+    assert.match(opened.value,/Earlier progress\.[\s\S]*\[!t3-steering\] You[\s\S]*Use a simpler approach\.[\s\S]*Changed approach\./);
+    assert.doesNotMatch(opened.value,/t3-inline:/);assert.match(opened.value,/Tail/);
+  }finally{h.plugin.onunload();}
+});

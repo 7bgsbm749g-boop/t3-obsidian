@@ -1,9 +1,11 @@
 import {contentHash} from './completion';
 import {commandId} from './direct';
-import {applyThreadItem,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,turnForMessage,turnPhase} from './inline-thread';
+import {applyThreadItem,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
 import type {ThreadAccess} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
+import {mergeProse,selectionRange,type InlineSteering} from './inline-steering';
+import type {InlineMessage} from './inline-thread';
 
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface HostedInlineRequest {
@@ -16,6 +18,7 @@ export interface HostedInlineState {
   status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict'|'paused';
   hashes:string[];body?:string;detail?:string;updatedAt:string;
   finalDocumentHash?:string;
+  prose?:InlineMessage[];turnIds?:string[];steering?:InlineSteering[];
 }
 export interface InlineFiles {
   read(path:string):Promise<string|undefined>;
@@ -139,11 +142,11 @@ export class HostedInlineWriter {
         }
         // T3 may recover the same turn after a server restart. A different
         // later turn is never adopted without an explicit follow command.
-        if(state.status==='error'&&!state.pendingMessageId&&current.latestTurn?.turnId!==state.turnId&&current.session?.activeTurnId!==state.turnId)return;
+        if(state.status==='error'&&!state.pendingMessageId&&!state.steering?.some(input=>!input.confirmed)&&current.latestTurn?.turnId!==state.turnId&&current.session?.activeTurnId!==state.turnId)return;
         // A continuation is explicitly bound to a user message. Until T3
         // projects that message and its turn, retain the failed block intact.
         const messageId=state.pendingMessageId??state.messageId??request.messageId;
-        if(!current.messages.some(m=>m.id===messageId&&m.role==='user'))return;
+        if((!state.turnId||state.pendingMessageId)&&!current.messages.some(m=>m.id===messageId&&m.role==='user'))return;
         if(state.pendingMessageId){
           const nextTurn=turnForMessage(current,messageId);
           if(!nextTurn||nextTurn===state.turnId)return;
@@ -151,18 +154,29 @@ export class HostedInlineWriter {
         }
         state.turnId??=turnForMessage(current,messageId);
         if(!state.turnId)return;
+        state.turnIds??=[state.turnId];
+        for(const input of state.steering??[]){
+          if(!current.messages.some(m=>m.role==='user'&&m.id===input.messageId))continue;
+          input.confirmed=true;
+          state.messageId=input.messageId;
+          const nextTurn=turnForMessage(current,input.messageId);
+          if(nextTurn){state.turnId=nextTurn;if(!state.turnIds.includes(nextTurn))state.turnIds.push(nextTurn);}
+        }
+        state.prose=mergeProse(state.prose??[],current.messages,state.turnIds);
         let phase=turnPhase(current,state.turnId);
+        if(state.steering?.some(input=>!input.confirmed))phase='running';
         if(state.status==='error'&&!state.pendingMessageId&&phase==='error')return;
         if(await this.io.read(paths.stop)!==undefined&&phase==='running'){
           await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(request.id,'interrupt'),threadId:request.threadId,turnId:state.turnId,createdAt:request.createdAt});
           phase='interrupted';
         }
-        if(phase==='complete'&&this.io.importReplyAsset){
+        if(phase==='complete'&&this.io.importReplyAsset&&!state.steering?.length){
           for(const message of inlineTurnMessages(current,state.turnId,request.keepIntermediate===true)){
             message.text=await rewriteReplyReferences(message.text,reference=>this.io.importReplyAsset!(reference,request,access));
           }
         }
-        const next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true,request.threadEnvironmentId);
+        let next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true,request.threadEnvironmentId,state.steering?.length?{messages:state.prose,steering:state.steering}:undefined);
+        if(phase==='complete'&&state.steering?.length&&this.io.importReplyAsset)next=await rewriteReplyReferences(next,reference=>this.io.importReplyAsset!(reference,request,access));
         const terminal=phase==='complete'||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the
         // vault edit cannot turn our own output into an apparent user edit.
@@ -173,14 +187,25 @@ export class HostedInlineWriter {
         let conflict=false,applied=false;
         let finalBefore:string|undefined,finalAfter:string|undefined;
         await this.io.updateNote(state.notePath,document=>{
-          const region=regionBody(document,request.id);
+          const originalDocument=document;
+          let region=regionBody(document,request.id);
           if(terminal&&!region&&state.finalDocumentHash===contentHash(document)){applied=true;return document;}
           if(!region||!state.hashes.includes(contentHash(region.body))){conflict=true;return document;}
+          for(const input of state.steering??[]){
+            if(!input.confirmed||!input.selection||input.selectionApplied)continue;
+            const range=selectionRange(document,input.selection);
+            // A changed selection is preserved; never remove matching text elsewhere.
+            if(range&&(range.to<=region.from-startMarker(request.id).length-1||range.from>=region.to+endMarker(request.id).length+1)){
+              document=document.slice(0,range.from)+document.slice(range.to);
+              region=regionBody(document,request.id)!;
+            }
+            input.selectionApplied=true;
+          }
           if(terminal){
             const change=finalizeRegion(document,request.id,contentHash(region.body),next);
             if(!change){conflict=true;return document;}
-            finalBefore=document;finalAfter=document.slice(0,change.from)+change.text+document.slice(change.to);
-            return document;
+            finalBefore=originalDocument;finalAfter=document.slice(0,change.from)+change.text+document.slice(change.to);
+            return originalDocument;
           }
           applied=true;
           const change=replaceRegion(document,request.id,contentHash(region.body),next)!;

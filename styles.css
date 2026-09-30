@@ -80,3 +80,16 @@
 .send-to-t3-question-actions { display: flex; flex-wrap: wrap; gap: 0.7em; justify-content: flex-end; }
 /* Obsidian's button display rules override the browser's default hidden rule. */
 .send-to-t3-question-actions button[hidden] { display: none !important; }
+
+/* User input stays a neutral indented quote in Live Preview and Reading view. */
+.callout[data-callout="t3-steering"] {
+  --callout-color: 140, 140, 140;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid var(--text-muted);
+  border-radius: 0;
+  color: var(--text-normal);
+  padding: 0.4em 1em;
+}
+.callout[data-callout="t3-steering"] .callout-icon { display: none; }
+.callout[data-callout="t3-steering"] .callout-title { color: var(--text-muted); font-size: var(--font-ui-small); }

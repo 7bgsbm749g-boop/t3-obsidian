@@ -4,6 +4,7 @@ import {InlineLeaseClient,HEARTBEAT_MS,leasePaths,terminalLease,type LeaseRecord
 import {applyThreadItem,regionBody,type InlineThreadState} from './inline-thread';
 import {watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {ReplyReference} from './reply-assets';
+import type {SteeringInput} from './inline-steering';
 
 export interface DeviceInlineIO {
   access(environmentId:string):Promise<ThreadAccess>;
@@ -56,6 +57,12 @@ export class DeviceInlineManager {
     if(this.stopped)throw Error('The response writer is unavailable.');
     const host=this.host(target),reply=await host.client.command({kind:'follow',jobId:id,previousMessageId,messageId,notePath});
     if(!reply.ok||!reply.record)throw Error(reply.error??'Could not attach the continuation.');
+    this.receiveRecord(host,reply.record);this.tick();
+  }
+  async steer(target:InlineHostTarget,id:string,steering:SteeringInput){
+    if(this.stopped)throw Error('The response writer is unavailable.');
+    const host=this.host(target),reply=await host.client.command({kind:'steer',jobId:id,steering});
+    if(!reply.ok||!reply.record)throw Error(reply.error??'Could not attach the steering message.');
     this.receiveRecord(host,reply.record);this.tick();
   }
   discover(targets:InlineHostTarget[]){

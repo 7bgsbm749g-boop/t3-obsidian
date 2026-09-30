@@ -208,3 +208,22 @@ for(const stopped of [false,true])test(`${stopped?'stopped':'completed'} finaliz
     phone.document.saved=true;h.advance(200);await h.drain(phone.manager);assert.equal(h.record().state?.status,stopped?'interrupted':'complete');
   }finally{h.dispose();}
 });
+
+test('steering from another device is durable, idempotent, and fences stale completion checkpoints',async()=>{
+  const h=harness(),owner=h.client(),sender=h.client(randomUUID());
+  await owner.command({kind:'register',jobId:h.request.id,request:h.request});
+  const prose=[{id:'progress',role:'assistant',text:'Before steering.',streaming:false,turnId:'turn'}];
+  await owner.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:0,state:{...h.state,turnId:'turn',prose}});
+  const before=h.record(),input={messageId:randomUUID(),text:'Use the other approach.'};
+  assert.equal((await sender.command({kind:'steer',jobId:h.request.id,steering:input})).ok,true);
+  assert.equal(h.record().owner,h.actor,'sending does not steal writer ownership');
+  assert.equal(h.record().state?.steering?.[0].before[0].text,'Before steering.');
+  assert.equal((await owner.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:before.revision,state:{...h.state,status:'complete'}})).ok,false);
+  assert.equal((await sender.command({kind:'steer',jobId:h.request.id,steering:input})).ok,true);
+  assert.equal(h.record().state?.steering?.length,1);
+  assert.equal((await sender.command({kind:'steer',jobId:h.request.id,steering:{...input,text:'Changed'}})).ok,false);
+  assert.equal((await owner.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:h.record().revision,state:{...h.record().state!,steering:[]}})).ok,false);
+  await owner.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:h.record().revision,state:{...h.record().state!,status:'complete',steering:h.record().state!.steering!.map(input=>({...input,confirmed:true}))}});
+  assert.equal((await sender.command({kind:'steer',jobId:h.request.id,steering:input})).ok,true,'lost acknowledgement may be retried after completion');
+  assert.equal((await sender.command({kind:'steer',jobId:h.request.id,steering:{messageId:randomUUID(),text:'Too late'}})).ok,false);
+});

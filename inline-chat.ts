@@ -3,11 +3,14 @@ import {Notice} from 'obsidian';
 import type {Connection,Request} from './bridge';
 import {commandId,endpoint,environmentApi,type PairedSession} from './direct';
 import {contentHash} from './completion';
-import {activeInlineIds,applyThreadItem,endInsertionOffset,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase,type InlineThreadState,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,applyThreadItem,endInsertionOffset,endMarker,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InlineThreadState,type SelectionAnchor} from './inline-thread';
 import {watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {InlineHostTarget} from './hosted-inline';
 import {replaceInlineEditorText} from './inline-editor';
 import {pendingQuestions} from './questions';
+import {mergeProse,selectionRange,steeringBoundary,validSteeringInput,type InlineSteering,type SteeringInput} from './inline-steering';
+import type {InlineMessage} from './inline-thread';
+import {replaceChangedText} from './inline-note-io';
 
 export interface InlineJob {
   id:string;path:string;requestId:string;threadId?:string;turnId?:string;messageId?:string;projectId?:string;connection?:Connection;
@@ -15,6 +18,7 @@ export interface InlineJob {
   hosted?:boolean;
   keepIntermediate?:boolean;
   hostTarget?:InlineHostTarget;
+  steering?:InlineSteering[];prose?:InlineMessage[];turnIds?:string[];
 }
 interface EditorSource {editor:Editor;info:MarkdownView|MarkdownFileInfo}
 interface Runtime {state:InlineThreadState;sequence:number;monitor?:{stop():void};source?:EditorSource;timer?:ReturnType<typeof setTimeout>;alerted?:string}
@@ -36,6 +40,7 @@ export class InlineChatManager {
   dispose(){this.stopped=true;for(const runtime of this.runtimes.values()){runtime.monitor?.stop();if(runtime.timer)clearTimeout(runtime.timer);}this.runtimes.clear();}
   activeFor(path:string){this.reconcileHosted();return this.jobs.filter(j=>j.path===path&&!j.finalized&&!['cancelled','conflict'].includes(j.phase));}
   find(id:string){return this.jobs.find(job=>job.id===id&&!job.finalized);}
+  steeringJob(id:string,messageId:string){return this.jobs.find(job=>job.id===id&&job.steering?.some(input=>input.messageId===messageId&&input.confirmed));}
   settlementStatus(id:string):'wait'|'ready'|'discard'{
     const job=this.jobs.find(item=>item.id===id);
     if(!job)return 'wait';
@@ -48,6 +53,16 @@ export class InlineChatManager {
     if(job.messageId===messageId&&job.phase!=='error')return;
     if(job.phase!=='error'||job.finalized)throw Error('This response is no longer waiting for a continuation.');
     job.messageId=messageId;delete job.turnId;job.phase='reconnecting';this.persist();this.start(job);
+  }
+  steer(job:InlineJob,input:SteeringInput){
+    if(!validSteeringInput(input))throw Error('Invalid steering message.');
+    const existing=job.steering?.find(item=>item.messageId===input.messageId);
+    if(existing){if(existing.text!==input.text||JSON.stringify(existing.selection)!==JSON.stringify(input.selection))throw Error('This steering ID already belongs to another message.');return;}
+    if(job.hosted||job.finalized||!job.turnId||!['running','reconnecting'].includes(job.phase))throw Error('Wait for a running response before steering.');
+    const editor=this.editorFor(job),region=editor&&regionBody(editor.getValue(),job.id);
+    if(!region||contentHash(region.body)!==job.bodyHash)throw Error('The response block changed. Your edits are preserved.');
+    job.steering=[...job.steering??[],{...input,before:steeringBoundary(job.prose??this.runtime(job).state.messages.filter(m=>m.role==='assistant'&&m.turnId===job.turnId))}];
+    this.persist();
   }
   private persist(){this.app.saveLocalStorage(this.key,this.jobs.map(j=>({...j})));}
   private runtime(job:InlineJob){let runtime=this.runtimes.get(job.id);if(!runtime){runtime={state:{messages:[],activities:[]},sequence:-1};this.runtimes.set(job.id,runtime);}return runtime;}
@@ -117,6 +132,17 @@ export class InlineChatManager {
       const turnId=turnForMessage(runtime.state,job.messageId);
       if(turnId){job.turnId=turnId;this.persist();}
     }
+    if(job.turnId){
+      job.turnIds??=[job.turnId];
+      for(const input of job.steering??[]){
+        if(!runtime.state.messages.some(m=>m.role==='user'&&m.id===input.messageId))continue;
+        input.confirmed=true;
+        job.messageId=input.messageId;
+        const turn=turnForMessage(runtime.state,input.messageId);
+        if(turn){job.turnId=turn;if(!job.turnIds.includes(turn))job.turnIds.push(turn);}
+      }
+      job.prose=mergeProse(job.prose??[],runtime.state.messages,job.turnIds);
+    }
     if(item.kind==='snapshot')runtime.sequence=Number.isSafeInteger(applied.sequence)?applied.sequence!:runtime.sequence;
     else if(applied.sequence!==undefined)runtime.sequence=applied.sequence;
     if(job.phase==='error'&&job.turnId&&runtime.state.latestTurn?.turnId!==job.turnId&&runtime.state.session?.activeTurnId!==job.turnId)return;
@@ -126,7 +152,7 @@ export class InlineChatManager {
     if(activity&&activity.id!==runtime.alerted){runtime.alerted=activity.id;new Notice(`T3 needs your response in thread ${job.threadId}: ${activity.summary.slice(0,140)}`,12000);}
     const phase=job.turnId?turnPhase(runtime.state,job.turnId):'running';
     if(job.phase==='error'&&phase==='error')return;
-    job.phase=phase;this.schedule(job);
+    job.phase=job.steering?.some(input=>!input.confirmed)?'running':phase;this.schedule(job);
   }
   private schedule(job:InlineJob){
     const runtime=this.runtime(job);if(runtime.timer)clearTimeout(runtime.timer);
@@ -146,13 +172,20 @@ export class InlineChatManager {
     const editor=this.editorFor(job);if(!editor)return;
     const runtime=this.runtime(job);
     if(runtime.sequence<0&&['complete','interrupted','error'].includes(job.phase))return;
-    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true,job.connection?.environmentId);
-    const current=regionBody(editor.getValue(),job.id);
+    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true,job.connection?.environmentId,job.steering?.length?{messages:job.prose??[],steering:job.steering}:undefined);
+    const original=editor.getValue();let document=original;
+    const current=regionBody(document,job.id);
     const terminal=['complete','interrupted','cancelled'].includes(job.phase);
-    if(!terminal&&current&&current.body===next)return;
-    const change=terminal?finalizeRegion(editor.getValue(),job.id,job.bodyHash,next):replaceRegion(editor.getValue(),job.id,job.bodyHash,next);
+    if(!terminal&&current&&current.body===next&&!job.steering?.some(input=>input.confirmed&&input.selection&&!input.selectionApplied))return;
+    if(current&&contentHash(current.body)===job.bodyHash)for(const input of job.steering??[]){
+      if(!input.confirmed||!input.selection||input.selectionApplied)continue;
+      const range=selectionRange(document,input.selection),region=regionBody(document,job.id)!;
+      if(range&&(range.to<=region.from-startMarker(job.id).length-1||range.from>=region.to+endMarker(job.id).length+1))document=document.slice(0,range.from)+document.slice(range.to);
+      input.selectionApplied=true;
+    }
+    const change=terminal?finalizeRegion(document,job.id,job.bodyHash,next):replaceRegion(document,job.id,job.bodyHash,next);
     if(!change){job.phase='conflict';runtime.monitor?.stop();this.persist();new Notice(`T3 stopped writing to ${job.path} because its inline response was edited or removed. The T3 thread remains available.`,12000);return;}
-    replaceInlineEditorText(editor,change.text,change.from,change.to);
+    replaceChangedText(editor,original,document.slice(0,change.from)+change.text+document.slice(change.to));
     if(terminal)job.finalized=true;
     else job.bodyHash=contentHash(next);
     this.persist();
