@@ -91,6 +91,7 @@ export class DeviceInlineManager {
     const allowed=()=>!this.stopped&&runtime.writeEpoch===runtime.record.epoch&&runtime.record.owner===this.actor&&host.client.valid(record.request.id,runtime.record.epoch);
     runtime.writer=new HostedInlineWriter({vaultId:this.vaultId,...host.target},{
       requests:async()=>[paths.request],accepts:request=>request.version===2&&allowed(),
+      canResume:path=>this.io.isOpen(path),
       read:async path=>path===paths.request?JSON.stringify(runtime.record.request):path===paths.state?(runtime.record.state?JSON.stringify(runtime.record.state):undefined):host.files.read(path),
       write:async(path,value)=>{
         if(path!==paths.state||!allowed())throw Error('Writer ownership expired.');

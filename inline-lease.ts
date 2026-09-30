@@ -78,6 +78,7 @@ export class InlineLeaseAuthority {
           if(!state.pendingMessageId)record={...record,revision:record.revision+1,state:{...state,pendingMessageId:command.messageId}};
         }else if(command.kind==='claim'){
           if(terminalLease(record))return respond(false,'The response is finished.');
+          if(record.state?.status==='paused'&&record.owner!==command.actor)return respond(false,'The changed response is paused in its original editor.');
           if(record.expiresAt>this.now())return respond(false,'Another writer still owns this response.');
           // Give clients with the note open a short head start over closed-note
           // fallback writers. Healthy ownership is never preempted.
@@ -89,7 +90,7 @@ export class InlineLeaseAuthority {
           else if(command.kind==='checkpoint'){
             if(command.revision!==record.revision)return respond(false,'Response checkpoint changed.');
             const state=command.state;
-            if(!state||state.requestHash!==hostedRequestHash(record.request)||!safeNotePath(state.notePath)||!Array.isArray(state.hashes)||state.hashes.some(hash=>!/^([0-9a-f]{64})$/.test(hash))||!['waiting','running','complete','interrupted','error','conflict'].includes(state.status)||state.messageId!==undefined&&!uuid.test(state.messageId)||state.pendingMessageId!==undefined&&!uuid.test(state.pendingMessageId))throw Error('Invalid response checkpoint.');
+            if(!state||state.requestHash!==hostedRequestHash(record.request)||!safeNotePath(state.notePath)||!Array.isArray(state.hashes)||state.hashes.some(hash=>!/^([0-9a-f]{64})$/.test(hash))||!['waiting','running','complete','interrupted','error','conflict','paused'].includes(state.status)||state.messageId!==undefined&&!uuid.test(state.messageId)||state.pendingMessageId!==undefined&&!uuid.test(state.pendingMessageId))throw Error('Invalid response checkpoint.');
             if(record.state?.pendingMessageId&&state.pendingMessageId!==record.state.pendingMessageId&&state.messageId!==record.state.pendingMessageId)throw Error('The pending continuation changed.');
             record={...record,revision:record.revision+1,state:{...state,hashes:[...new Set([record.request.initialHash,...record.state?.hashes??[],...state.hashes])]}};
           }else throw Error('Unknown ownership command.');
@@ -104,9 +105,10 @@ export class InlineLeaseAuthority {
   private async publishCatalog(record:LeaseRecord){
     const path=leasePaths(this.identity.directory,record.request.id).catalog;
     const raw=await this.files.read(path),catalog:HostedInlineRequest[]=raw?JSON.parse(raw):[];
-    if(!terminalLease(record)&&catalog.some(item=>item.id===record.request.id))return;
+    const discoverable=!terminalLease(record)&&record.state?.status!=='paused';
+    if(discoverable&&catalog.some(item=>item.id===record.request.id))return;
     const next=catalog.filter(item=>item.id!==record.request.id);
-    if(!terminalLease(record))next.push(record.request);
+    if(discoverable)next.push(record.request);
     if(JSON.stringify(next)!==JSON.stringify(catalog))await this.files.write(path,JSON.stringify(next));
   }
 }

@@ -133,7 +133,7 @@ The vault project machine must keep Obsidian and this plugin running to grant ow
 
 The send modal closes immediately while delivery continues in the background. Validation failures reopen the draft; saved delivery failures show a notice without taking over the editor. If registration fails, the request stays in **Unconfirmed requests** for explicit retry with the same IDs. Install/reload the updated plugin on the vault project machine and each device that should participate. Changing the default machine affects new jobs; existing jobs retain their original coordinator.
 
-The editor menu can request **Stop T3 response** from a synced device. Existing jobs created by older plugin versions keep their original device-local writer and must be stopped there. Responses with unknown edits are preserved; remove the abandoned response markers/block before starting another inline response in that note.
+The editor menu can request **Stop T3 response** from a synced device. Existing jobs created by older plugin versions keep their original device-local writer and must be stopped there. If you edit an actively streamed response in its open editor, that editor pauses writes. Undoing until both tracking markers and the response body match any version the plugin wrote lets the same editor catch up automatically from T3; edits elsewhere in the note are preserved. An unmatched response is never overwritten. This undo behavior does not make a paused response available for device takeover or restore it after the plugin restarts. Remove abandoned response markers/block before starting another inline response in that note.
 
 ## Orchestration
 

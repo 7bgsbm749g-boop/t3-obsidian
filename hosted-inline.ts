@@ -12,7 +12,7 @@ export interface HostedInlineRequest {
 }
 export interface HostedInlineState {
   requestHash:string;accepted:boolean;notePath:string;turnId?:string;messageId?:string;pendingMessageId?:string;
-  status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict';
+  status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict'|'paused';
   hashes:string[];body?:string;detail?:string;updatedAt:string;
   finalDocumentHash?:string;
 }
@@ -62,6 +62,8 @@ export interface HostedWriterIO extends InlineFiles {
   updateNote(path:string,change:(current:string)=>string):Promise<string|undefined>;
   threadState?(request:HostedInlineRequest,access:ThreadAccess):Promise<import('./inline-thread').InlineThreadState|undefined>;
   accepts?(request:HostedInlineRequest):boolean;
+  /** Only the still-open editor that paused this response may resume it. */
+  canResume?(path:string):boolean;
   importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
 
@@ -101,6 +103,16 @@ export class HostedInlineWriter {
       const save=async()=>{state.updatedAt=new Date().toISOString();await this.io.write(paths.state,JSON.stringify(state));this.renameOffsets.set(path,renameEnd);};
       try{
         for(const move of renames)if(state.notePath===move.before||state.notePath.startsWith(move.before+'/'))state.notePath=move.after+state.notePath.slice(move.before.length);
+        let restored=false;
+        if(state.status==='paused'){
+          if(!this.io.canResume?.(state.notePath))return;
+          await this.io.updateNote(state.notePath,document=>{
+            const region=regionBody(document,request.id);
+            restored=!!region&&state.hashes.includes(contentHash(region.body));
+            return document;
+          });
+          if(!restored)return;
+        }
         const access=await this.io.access(request.threadEnvironmentId);
         if(this.stopped)return;
         if(!state.accepted){
@@ -110,11 +122,13 @@ export class HostedInlineWriter {
             conflict=!!region&&contentHash(region.body)!==request.initialHash;
             return current;
           });
-          if(conflict){state.status='conflict';state.detail='The response block changed before the host accepted it.';await save();return;}
+          if(conflict){state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='The response block changed before the host accepted it.';await save();return;}
           if(!found){state.detail='Waiting for the response marker to reach the vault project machine.';await save();return;}
           state.accepted=true;delete state.detail;await save();
         }
-        let current=await this.io.threadState?.(request,access);
+        // An undo may restore an older body while T3 has moved on. Reconcile
+        // from the canonical thread before replacing that restored body.
+        let current=restored?undefined:await this.io.threadState?.(request,access);
         if(!current){
           const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(request.threadId)}?turnLimit=20`);
           if(this.stopped)return;
@@ -177,7 +191,7 @@ export class HostedInlineWriter {
             applied=true;return finalAfter!;
           });
         }
-        if(conflict){state.status='conflict';state.detail='Response edited or removed. Your changes were preserved; the answer remains in T3.';}
+        if(conflict){state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='Response edited or removed. Undo until the original response block is intact to resume streaming.';}
         else if(applied)state.status=phase;
         else state.detail='Waiting for the note to become available and saved on the host.';
         await save();

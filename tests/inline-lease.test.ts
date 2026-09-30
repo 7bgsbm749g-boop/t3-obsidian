@@ -133,15 +133,39 @@ test('another device resumes a missed-heartbeat reply from a known older Sync ve
   }finally{h.dispose();}
 });
 
-test('a genuine edit inside the response survives takeover and becomes a conflict',async()=>{
+test('a genuine edit inside the response survives takeover and pauses that editor',async()=>{
   const h=devices(),phone=h.create(h.actor),laptop=h.create(randomUUID());
   try{
     await phone.manager.register(h.request);await h.drain(phone.manager);
     laptop.document.value=phone.document.value.replace('First paragraph','My own correction');
     laptop.manager.discover([h.request.host]);await h.drain(laptop.manager);
     h.advance(LEASE_MS+1);h.answer('New answer');await h.drain(laptop.manager);h.advance(200);await h.drain(laptop.manager);
-    assert.equal(h.record().state?.status,'conflict');assert.match(laptop.document.value,/My own correction/);assert.doesNotMatch(laptop.document.value,/New answer/);
+    assert.equal(h.record().state?.status,'paused');assert.match(laptop.document.value,/My own correction/);assert.doesNotMatch(laptop.document.value,/New answer/);
+    assert.deepEqual(JSON.parse(h.data.get(leasePaths(h.request.host.directory,h.request.id).catalog)!),[],'A paused editor is not a device takeover job');
+    h.advance(LEASE_MS);assert.equal((await h.client(randomUUID()).command({kind:'claim',jobId:h.request.id})).ok,false);
   }finally{h.dispose();}
+});
+
+test('undoing an edited or deleted response marker to a known body resumes the same open editor',async()=>{
+  for(const damage of [(text:string)=>text.replace('First paragraph','My correction'),(text:string)=>text.replace(`<!-- t3-inline:start:`, '<!-- removed:start:')]){
+    const h=devices(),editor=h.create(h.actor);
+    try{
+      await editor.manager.register(h.request);await h.drain(editor.manager);
+      const intact=editor.document.value;
+      editor.document.value=damage(intact);h.answer('New paragraph');h.advance(200);await h.drain(editor.manager);
+      assert.equal(h.record().state?.status,'paused');assert.equal(editor.document.value,damage(intact));
+      h.advance(200);await h.drain(editor.manager);assert.equal(editor.document.value,damage(intact),'No changed text is overwritten while paused');
+      h.advance(LEASE_MS+1);await h.drain(editor.manager);
+      assert.equal(h.record().state?.status,'paused','A long undo delay does not finish the response');
+      editor.document.value='Outside edit\n'+intact;
+      h.answer('Final answer',true);h.advance(3000);await h.drain(editor.manager);h.advance(200);await h.drain(editor.manager);
+      await (editor.manager as any).jobs.get(h.request.id)?.work;
+      for(let attempt=0;attempt<8&&h.record().state?.status!=='complete';attempt++){h.advance(200);await h.drain(editor.manager);}
+      assert.equal(h.record().state?.status,'complete');
+      assert.match(editor.document.value,/Outside edit/);assert.match(editor.document.value,/Final answer/);
+      assert.doesNotMatch(editor.document.value,/My correction|removed:start|t3-inline:/);
+    }finally{h.dispose();}
+  }
 });
 
 
