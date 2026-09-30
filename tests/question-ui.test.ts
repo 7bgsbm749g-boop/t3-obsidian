@@ -18,7 +18,7 @@ const target={environmentId:'environment',threadId:'thread',requestId:'request'}
 async function harness(){
   const result=await build({stdin:{contents:"export * from './question-ui'; export * from './question-controller';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian','@codemirror/state','@codemirror/view']});
   const module={exports:{} as any},realRequire=createRequire(import.meta.url),notices:string[]=[];
-  class Modal {contentEl=new Element();isOpen=false;closeCount=0;constructor(public app:any){}open(){this.isOpen=true;(this as any).onOpen();}close(){this.isOpen=false;this.closeCount++;(this as any).onClose();}}
+  class Modal {contentEl=new Element();isOpen=false;closeCount=0;constructor(public app:any){}open(){this.isOpen=true;(this as any).onOpen();}close(){this.app.restoreFocus?.();this.isOpen=false;this.closeCount++;(this as any).onClose();}}
   runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal,Notice:class{constructor(text:string){notices.push(text);}}}:realRequire(id),document:{createElement:(tag:string)=>new Element(tag)},console});
   const activities:any[]=[{id:'opened',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'request',responseMode:'message',questions:[
     {id:'choice',header:'Choice',question:'Which one?',options:[{label:'First',description:'First description',value:'native-first'},{label:'Second',description:'Second description'}]},
@@ -62,4 +62,12 @@ test('Live Preview replaces only question links with answer controls and leaves 
   const instance=plugin.create(view(true));const ranges:string[]=[];instance.decorations.between(0,text.length,(from:number,to:number)=>{ranges.push(text.slice(from,to));});
   assert.deepEqual(ranges,[`[Answer](${questionUrl(target)})`]);assert.equal(plugin.create(view(false)).decorations.size,0);
   h.modal.close();h.controller.dispose();
+});
+
+test('closing a resolved dialog preserves editor scroll while Obsidian restores focus',async()=>{
+  const h=await harness();let scroll={top:800,left:12};
+  h.modal.app.workspace={getLeavesOfType:()=>[{view:{editor:{getScrollInfo:()=>({...scroll}),scrollTo:(left:number,top:number)=>{scroll={left,top};}}}}]};
+  h.modal.app.restoreFocus=()=>{scroll={top:0,left:0};};
+  h.activities.push({id:'resolved',kind:'user-input.resolved',payload:{requestId:'request'}});
+  await h.controller.refresh([target]);assert.equal(h.modal.isOpen,false);assert.deepEqual(scroll,{top:800,left:12});h.controller.dispose();
 });

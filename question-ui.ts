@@ -64,6 +64,15 @@ export class QuestionModal extends Modal {
     this.submitButton!.textContent=view.status==='submitting'?'Submitting…':record.command?'Retry saved answer':'Submit answer';
     this.dismissButton!.hidden=view.request?.responseMode!=='message';this.dismissButton!.disabled=locked;
   }
+  close(){
+    // Obsidian restores keyboard focus to the editor on modal close. Its
+    // retained cursor may be above the reader's viewport, so prevent that
+    // focus restoration from scrolling the note before streaming resumes.
+    const editors=this.app.workspace?.getLeavesOfType('markdown').map(leaf=>(leaf.view as any).editor).filter(Boolean)??[];
+    const positions=editors.map(editor=>({editor,scroll:editor.getScrollInfo?.()}));
+    super.close();
+    for(const {editor,scroll} of positions)if(scroll)editor.scrollTo(scroll.left,scroll.top);
+  }
   onClose(){this.opened=false;this.unsubscribe?.();this.contentEl.empty();}
 }
 

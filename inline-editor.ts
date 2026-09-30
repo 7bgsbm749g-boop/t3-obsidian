@@ -15,8 +15,7 @@ export function replaceInlineEditorText(editor:Editor,text:string,from:number,to
       for(let number=doc.lineAt(to).number+1;number<=doc.lines;number++){
         const line=doc.line(number);if(!line.text.trim()||/^<!-- t3-(?:inline|question):/.test(line.text))continue;
         const coords=cm.coordsAtPos(line.from);
-        if(coords&&coords.top>=bounds.top&&coords.bottom<=bounds.bottom){anchor=line.from;top=coords.top;}
-        break;
+        if(coords&&coords.top>=bounds.top&&coords.bottom<=bounds.bottom){anchor=line.from;top=coords.top;break;}
       }
     }
     cm.dispatch({changes:{from,to,insert:text},scrollIntoView:false,userEvent:'send-to-t3-code'});

@@ -39,3 +39,14 @@ test('removing a visible question anchors the unchanged paragraph below it after
   replaceInlineEditorText({cm} as any,'Final',6,14);
   assert.equal(scrollDOM.scrollTop,380,'compensate for the paragraph moving up 120 pixels');
 });
+
+test('skip unchanged offscreen response lines when finding a visible anchor',()=>{
+  let state=EditorState.create({doc:'Intro\nQuestion\nRetained response\n\nReading here\nTail'});
+  const scrollDOM={scrollTop:500,getBoundingClientRect:()=>({top:60,bottom:760})};
+  const cm={get state(){return state;},scrollDOM,
+    coordsAtPos:(position:number)=>state.doc.sliceString(position).startsWith('Reading here')?{top:300,bottom:320}:{top:-100,bottom:-80},
+    dispatch:(spec:any)=>{state=state.update(spec).state;},
+    requestMeasure:(measure:any)=>{const view={state,scrollDOM,coordsAtPos:(position:number)=>{assert.equal(state.doc.sliceString(position).split('\n')[0],'Reading here');return {top:180,bottom:200};}};measure.write(measure.read(view),view);}};
+  replaceInlineEditorText({cm} as any,'Final',6,14);
+  assert.equal(scrollDOM.scrollTop,380);
+});
