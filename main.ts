@@ -959,8 +959,10 @@ export default class SendToT3 extends Plugin {
     this.inlineTargets.push(target);this.app.saveLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`,this.inlineTargets);
   }
   private async inlineThreadAccess(environmentId:string){
-    if(!Platform.isMobile&&environmentId===await this.localInlineEnvironment())return (await import('./desktop')).desktopThreadAccess({...this.settings.connection,host:'local'});
     const paired=this.settings.paired.find(connection=>connection.environmentId===environmentId);
+    // A known connection is sufficient, even when this desktop's T3 server
+    // is stopped. Local discovery is only needed for an unpaired local thread.
+    if(!paired&&!Platform.isMobile&&environmentId===await this.localInlineEnvironment())return (await import('./desktop')).desktopThreadAccess({...this.settings.connection,host:'local'});
     if(!paired)throw Error('Connect this device to the thread machine to take over responses.');
     const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
     return {origin:endpoint(paired.url),api:await environmentApi(connection,await this.sessionFor(paired.id))};
