@@ -1,3 +1,4 @@
+import {escapeReplyHtml} from './reply-html';
 import {contentHash} from './completion';
 import {pendingQuestions,renderQuestion} from './questions';
 import {steeringSegments,type InlineSteering} from './inline-steering';
@@ -225,7 +226,7 @@ export function tableRowAt(text:string,offset:number):boolean {
 }
 
 function quoteResponse(text:string):string {
-  const lines=text.split('\n'),modes=responseModes(lines);
+  const lines=escapeReplyHtml(text).split('\n'),modes=responseModes(lines);
   const segments:Array<{mode:'quote'|'raw'|'table';lines:string[]}>=[];
   for(let index=0;index<lines.length;index++){
     const last=segments.at(-1);

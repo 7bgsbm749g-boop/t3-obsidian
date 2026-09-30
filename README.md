@@ -266,3 +266,5 @@ Version 2.9.2 fixes new threads inheriting a recent conversation's model and rea
 Version 2.12.0 adds the durable event/coordinator/runtime foundation and the explicit Workflows v1/v2 selector. Only the selected version runs or exposes controls. Switching versions disables and remembers the outgoing version's enabled definitions and restores the selected version's saved set. Both engines now receive events exclusively through the common durable observation pipeline.
 
 Version 2.12.1 makes workflow settings safe across devices. Established vaults no longer rewrite synced settings on startup, device-only state never touches `data.json`, every shared write merges the latest workflow records first, and workflow revisions plus deletion tombstones prevent a stale device from restoring a deleted workflow.
+
+Assistant response HTML outside code is displayed literally so tag-like placeholders cannot disrupt Obsidian Live Preview. Markdown paragraph quotes, inline and fenced code, and URL/email autolinks retain their formatting. This is renderer-side processing; agent prompts are unchanged.
