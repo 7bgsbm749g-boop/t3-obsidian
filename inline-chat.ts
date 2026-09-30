@@ -4,7 +4,7 @@ import type {Connection,Request} from './bridge';
 import {commandId,endpoint,environmentApi,type PairedSession} from './direct';
 import {contentHash} from './completion';
 import {activeInlineIds,applyThreadItem,endInsertionOffset,endMarker,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InlineThreadState,type SelectionAnchor} from './inline-thread';
-import {watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
+import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {InlineHostTarget} from './hosted-inline';
 import {replaceInlineEditorText} from './inline-editor';
 import {pendingQuestions} from './questions';
@@ -111,7 +111,7 @@ export class InlineChatManager {
     runtime.monitor=watchThread(job.threadId,access,{
       item:item=>this.receive(job,item),
       reconnecting:()=>{if(this.stopped||job.phase==='complete'||job.phase==='conflict')return;job.phase='reconnecting';this.schedule(job);},
-    });
+    },undefined,()=>({messageIds:job.messageId?[job.messageId]:[],turnIds:job.turnIds??(job.turnId?[job.turnId]:[])}));
     if(!['reconnecting','complete','interrupted','error'].includes(job.phase))job.phase='running';this.persist();this.schedule(job);
   }
   async access(connection:Connection):Promise<ThreadAccess>{
@@ -147,12 +147,12 @@ export class InlineChatManager {
     }
     if(item.kind==='snapshot')runtime.sequence=Number.isSafeInteger(applied.sequence)?applied.sequence!:runtime.sequence;
     else if(applied.sequence!==undefined)runtime.sequence=applied.sequence;
-    if(job.phase==='error'&&job.turnId&&runtime.state.latestTurn?.turnId!==job.turnId&&runtime.state.session?.activeTurnId!==job.turnId)return;
     const activity=job.turnId&&runtime.state.activities.filter(a=>a.turnId===job.turnId&&a.kind==='approval.requested').at(-1);
     const question=pendingQuestions(runtime.state.activities).find(q=>q.turnId===job.turnId);
     if(question&&question.requestId!==runtime.alerted){runtime.alerted=question.requestId;new Notice('T3 has a question. Use Answer in the note when you are ready.',8000);}
     if(activity&&activity.id!==runtime.alerted){runtime.alerted=activity.id;new Notice(`T3 needs your response in thread ${job.threadId}: ${activity.summary.slice(0,140)}`,12000);}
     const phase=job.turnId?turnPhase(runtime.state,job.turnId):'running';
+    if(job.phase==='error'&&phase==='running'&&runtime.state.latestTurn?.turnId!==job.turnId&&runtime.state.session?.activeTurnId!==job.turnId)return;
     if(job.phase==='error'&&phase==='error')return;
     job.phase=job.steering?.some(input=>!input.confirmed)?'running':phase;this.schedule(job);
   }
@@ -181,7 +181,7 @@ export class InlineChatManager {
         let access:ThreadAccess|undefined;
         try{
           access=await this.access(job.connection!);
-          const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(job.threadId!)}?turnLimit=20`);
+          const snapshot=await readInlineSnapshot(access,job.threadId!,undefined,{messageIds:job.messageId?[job.messageId]:[],turnIds:job.turnIds??(job.turnId?[job.turnId]:[])});
           this.receive(job,{kind:'snapshot',snapshot});
         }catch{this.schedule(job);}
         finally{runtime.refreshing=false;await access?.close?.();}

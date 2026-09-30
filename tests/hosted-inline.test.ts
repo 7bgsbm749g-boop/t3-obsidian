@@ -24,6 +24,66 @@ function harness(){
     dispatch:()=>{dispatched=true;},answer:(text:string,complete=false)=>{answer=text;phase=complete?'completed':'running';},missing:()=>{document=undefined;},unsaved:(value:boolean)=>{unsaved=value;},access:(value:boolean)=>{accessible=value;},crash:(value:boolean)=>{crashAfterEdit=value;if(!value)failState=false;}};
 }
 
+function stranded(h:ReturnType<typeof harness>){
+  const original:InlineThreadState={historyComplete:true,messages:[
+    {id:h.request.messageId,role:'user',text:'Original question',turnId:null,streaming:false,createdAt:h.request.createdAt},
+    {id:'original-final',role:'assistant',text:'Recovered original answer',turnId:'original-turn',streaming:false},
+    {id:'later-user',role:'user',text:'Later unrelated question',turnId:null,streaming:false},
+    {id:'later-answer',role:'assistant',text:'Unrelated answer',turnId:'later-turn',streaming:true}],
+    activities:[],latestTurn:{turnId:'later-turn',state:'running'},session:{status:'running',activeTurnId:'later-turn'},
+    checkpoints:[{turnId:'original-turn',status:'ready',checkpointRef:'refs/t3/checkpoints/thread/turn/1',assistantMessageId:'original-final'}]};
+  const recent={...original,historyComplete:false,messages:original.messages.slice(2)};
+  let online=false,reads=0;
+  h.io.threadState=async(_request,_access,refresh)=>refresh?original:recent;
+  h.io.access=async()=>{
+    if(!online)throw Error('Server unavailable');
+    return {origin:'https://t3.example',api:async(path,payload)=>{
+      assert.equal(payload,undefined,'recovery must never dispatch or resend');
+      assert.equal(path,`/api/orchestration/threads/${h.request.threadId}`);
+      reads++;
+      return {snapshotSequence:100,thread:{id:h.request.threadId,projectId:h.request.projectId,...original}};
+    }};
+  };
+  return {original,recent,online:()=>{online=true;},get reads(){return reads;}};
+}
+
+test('an unbound response automatically recovers after an outage, reload, and later T3 chat',async()=>{
+  const h=harness(),s=stranded(h);
+  await h.create().tick();assert.equal(h.state.turnId,undefined);assert.match(h.state.detail!,/Server unavailable/);
+  const duringOutage=h.document;
+  s.online();await h.create().tick();
+  assert.notEqual(h.document,duringOutage);
+  assert.equal(h.state.turnId,'original-turn');assert.equal(h.state.status,'complete');
+  assert.match(h.document,/Recovered original answer/);assert.doesNotMatch(h.document,/Unrelated answer|t3-inline:|Working/);
+  assert.equal(s.reads,1);
+  const completed=h.document;await h.create().tick();assert.equal(h.document,completed);
+});
+
+test('a previously bound writer recovers old history after restart without adopting the latest turn',async()=>{
+  const h=harness();h.dispatch();await h.create().tick();
+  // The checkpoint belongs to the originally observed provider turn.
+  const s=stranded(h);s.original.messages=s.original.messages.map(m=>m.turnId==='original-turn'?{...m,turnId:'turn'}:m);
+  s.original.checkpoints![0].turnId='turn';s.online();
+  h.document='Outside edit\n'+h.document;
+  await h.create().tick();
+  assert.equal(h.state.turnId,'turn');assert.equal(h.state.status,'complete');assert.match(h.document,/^Outside edit/);
+  assert.match(h.document,/Recovered original answer/);assert.doesNotMatch(h.document,/Unrelated answer|t3-inline:/);
+});
+
+test('automatic outage recovery preserves a response edited while disconnected',async()=>{
+  const h=harness(),s=stranded(h);await h.create().tick();
+  h.document=h.document.replace('**T3 · Sending…**','My replacement text');s.online();
+  const edited=h.document;await h.create().tick();
+  assert.equal(h.document,edited);assert.equal(h.state.status,'conflict');
+});
+
+test('ambiguous recovered history remains tracked and retries without dispatching',async()=>{
+  const h=harness(),s=stranded(h);s.online();
+  s.original.messages.splice(2,0,{id:'ambiguous',role:'assistant',text:'Fan-out',turnId:'other-turn',streaming:false});
+  const writer=h.create(),before=h.document;await writer.tick();await writer.tick();
+  assert.equal(h.state.turnId,undefined);assert.equal(h.document,before);assert.equal(s.reads,1,'history retry is throttled');
+});
+
 test('progress, failure, continue, reload repair, steer, answer and final cleanup preserve one transcript',async()=>{
   const h=harness();h.request.keepIntermediate=true;h.files.set(h.paths.request,JSON.stringify(h.request));
   const oldTime=h.request.createdAt,nextTime=new Date(Date.parse(oldTime)+1000).toISOString(),nextMessage=randomUUID(),steerMessage=randomUUID();

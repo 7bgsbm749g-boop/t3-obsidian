@@ -82,7 +82,8 @@ test('a provider-assigned turn is matched to its dispatched user message by requ
   const state=applyThreadItem({messages:[],activities:[]},snapshot).state;
   assert.equal(turnForMessage(state,'our-message'),'provider-turn');
   assert.equal(turnForMessage(state,'other-message'),undefined);
-  assert.equal(turnForMessage({...state,latestTurn:{turnId:'other-turn',state:'completed',requestedAt:'2026-09-26T14:06:07.000Z'}},'our-message'),undefined);
+  assert.equal(turnForMessage({...state,latestTurn:{turnId:'other-turn',state:'completed',requestedAt:'2026-09-26T14:06:07.000Z'}},'our-message'),'provider-turn');
+  assert.equal(turnForMessage({...state,turns:{},latestTurn:{turnId:'other-turn',state:'completed',requestedAt:'2026-09-26T14:06:07.000Z'}},'our-message'),undefined);
   assert.equal(renderInlineTurn(state,'provider-turn','thread','complete'),'> Answer\n');
 });
 

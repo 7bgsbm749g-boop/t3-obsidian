@@ -2,7 +2,7 @@ import {contentHash} from './completion';
 import {HostedInlineWriter,hostedPaths,validateHostedRequest,type HostedInlineRequest,type HostedInlineState,type InlineFiles,type InlineHostTarget} from './hosted-inline';
 import {InlineLeaseClient,HEARTBEAT_MS,leasePaths,terminalLease,type LeaseRecord,type LeaseReply} from './inline-lease';
 import {applyThreadItem,regionBody,type InlineThreadState} from './inline-thread';
-import {watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
+import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {ReplyReference} from './reply-assets';
 import type {SteeringInput} from './inline-steering';
 
@@ -115,7 +115,8 @@ export class DeviceInlineManager {
       access:environmentId=>this.access(environmentId),
       threadState:async(request,access,refresh)=>{
         if(!refresh)return runtime.state;
-        const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(request.threadId)}?turnLimit=20`);
+        const state=runtime.record.state;
+        const snapshot=await readInlineSnapshot(access,request.threadId,request.projectId,{messageIds:[state?.pendingMessageId??state?.messageId??request.messageId],turnIds:state?.turnIds??(state?.turnId?[state.turnId]:[])});
         if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
         return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
       },

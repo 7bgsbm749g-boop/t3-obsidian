@@ -1,13 +1,32 @@
 import {Buffer} from 'buffer';
+import {applyThreadItem,turnForMessage,type InlineThreadState} from './inline-thread';
 
 export interface ThreadAccess {origin:string;api:(path:string,payload?:any)=>Promise<any>;close?:()=>Promise<void>|void}
 export type ThreadAccessFactory=()=>Promise<ThreadAccess>;
 export type ThreadStreamItem={kind:'snapshot';snapshot:any}|{kind:'event';event:any}|{kind:'synchronized'};
 export interface ThreadStreamCallbacks {item:(item:ThreadStreamItem)=>void;reconnecting:(error:Error)=>void}
+export interface InlineHistoryTargets {messageIds:string[];turnIds:string[]}
+
+export function needsInlineHistory(state:InlineThreadState,targets:InlineHistoryTargets):boolean {
+  return state.historyComplete===false&&(targets.messageIds.some(id=>!turnForMessage(state,id))||targets.turnIds.some(id=>id!==state.latestTurn?.turnId));
+}
+
+/** Recent polling stays small. A stranded response can request the complete
+ * canonical transcript, including prompts older than the polling window. */
+export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets,full=false):Promise<any> {
+  const read=async(all:boolean)=>{
+    const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}${all?'':'?turnLimit=20'}`);
+    if(snapshot?.thread?.id!==threadId||projectId&&snapshot.thread.projectId!==projectId)throw Error('Waiting for the requested T3 thread.');
+    return snapshot;
+  };
+  const snapshot=await read(full);
+  if(!full&&targets&&needsInlineHistory(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state,targets))return read(true);
+  return snapshot;
+}
 
 /** The Effect RPC stream stays open until stopped. Every reconnect asks for a
  * fresh snapshot, so lost deltas cannot duplicate text or leave a gap. */
-export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url)) {
+export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets) {
   let stopped=false,socket:WebSocket|undefined,timer:ReturnType<typeof setTimeout>|undefined,rotation:ReturnType<typeof setTimeout>|undefined,pollTimer:ReturnType<typeof setTimeout>|undefined,attempt=0;
   let access:ThreadAccess|undefined;
   const closeAccess=()=>{if(pollTimer)clearTimeout(pollTimer);pollTimer=undefined;const old=access;access=undefined;if(old?.close)void Promise.resolve(old.close()).catch(()=>{});};
@@ -34,7 +53,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       const poll=async()=>{
         if(stopped||ended||access!==ready)return;
         try{
-          const snapshot=await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?turnLimit=20`);
+          const snapshot=historyTargets?await readInlineSnapshot(ready,threadId,undefined,historyTargets()):await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?turnLimit=20`);
           if(!stopped&&!ended&&access===ready&&snapshot?.thread)callbacks.item({kind:'snapshot',snapshot});
         }catch{/* The socket may still be healthy; the next bounded read can recover. */}
         if(!stopped&&!ended&&access===ready)pollTimer=setTimeout(()=>{void poll();},1200);

@@ -1,7 +1,7 @@
 import {contentHash} from './completion';
 import {commandId} from './direct';
 import {applyThreadItem,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
-import type {ThreadAccess} from './thread-stream';
+import {needsInlineHistory,readInlineSnapshot,type ThreadAccess} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
 import {mergeProse,selectionRange,type InlineSteering} from './inline-steering';
@@ -79,6 +79,7 @@ export class HostedInlineWriter {
   private work=new Map<string,Promise<void>>();
   private renameOffsets=new Map<string,number>();
   private renames:Array<{before:string;after:string}>=[];
+  private history=new Map<string,{key:string;expires:number;state:import('./inline-thread').InlineThreadState}>();
   constructor(private identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},private io:HostedWriterIO){}
   stop(){this.stopped=true;}
   renamed(before:string,after:string){this.renames.push({before,after});}
@@ -135,17 +136,25 @@ export class HostedInlineWriter {
         // from the canonical thread before replacing that restored body.
         let current=restored?undefined:await this.io.threadState?.(request,access);
         if(!current){
-          const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(request.threadId)}?turnLimit=20`);
+          const snapshot=await readInlineSnapshot(access,request.threadId,request.projectId);
           if(this.stopped)return;
           if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
           current=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
         }
-        // T3 may recover the same turn after a server restart. A different
-        // later turn is never adopted without an explicit follow command.
-        if(state.status==='error'&&!state.pendingMessageId&&!state.steering?.some(input=>!input.confirmed)&&current.latestTurn?.turnId!==state.turnId&&current.session?.activeTurnId!==state.turnId)return;
         // A continuation is explicitly bound to a user message. Until T3
         // projects that message and its turn, retain the failed block intact.
         const messageId=state.pendingMessageId??state.messageId??request.messageId;
+        const targets={messageIds:[messageId,...(state.steering??[]).filter(input=>!input.confirmed).map(input=>input.messageId)],turnIds:state.turnIds??(state.turnId?[state.turnId]:[])};
+        if(needsInlineHistory(current,targets)){
+          const key=JSON.stringify(targets),cached=this.history.get(path);
+          if(cached?.key===key&&cached.expires>Date.now())current=cached.state;
+          else{
+            const snapshot=await readInlineSnapshot(access,request.threadId,request.projectId,undefined,true);
+            if(this.stopped)return;
+            current=applyThreadItem(current,{kind:'snapshot',snapshot}).state;
+            this.history.set(path,{key,expires:Date.now()+3000,state:current});
+          }
+        }
         if((!state.turnId||state.pendingMessageId)&&!current.messages.some(m=>m.id===messageId&&m.role==='user'))return;
         if(state.pendingMessageId){
           const nextTurn=turnForMessage(current,messageId);
@@ -171,10 +180,12 @@ export class HostedInlineWriter {
         // Session-ready events can precede the final message in the stream.
         // Resolve completion from a fresh canonical snapshot before sealing it.
         if(phase==='complete'&&this.io.threadState){
-          current=await this.io.threadState(request,access,true)??current;
+          const refreshed=await this.io.threadState(request,access,true);
+          if(refreshed)current={...refreshed,turns:{...current.turns,...refreshed.turns}};
           state.prose=mergeProse(state.prose,current.messages,state.turnIds);
           phase=turnPhase(current,state.turnId);
         }
+        if(state.status==='error'&&phase==='running'&&current.latestTurn?.turnId!==state.turnId&&current.session?.activeTurnId!==state.turnId)return;
         if(state.status==='error'&&!state.pendingMessageId&&phase==='error')return;
         if(await this.io.read(paths.stop)!==undefined&&phase==='running'){
           await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(request.id,'interrupt'),threadId:request.threadId,turnId:state.turnId,createdAt:request.createdAt});

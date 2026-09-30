@@ -6,7 +6,8 @@ import {steeringSegments,type InlineSteering} from './inline-steering';
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string}
 export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null;createdAt?:string;payload?:Record<string,any>}
-export interface InlineThreadState {messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:{turnId:string;state:string;requestedAt?:string;assistantMessageId?:string|null}}
+export interface InlineTurn {turnId:string;state:string;requestedAt?:string;assistantMessageId?:string|null}
+export interface InlineThreadState {messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {
   if(!text.trim()||document.slice(start,end)!==text)throw Error('The selected text changed. Select it again before asking T3.');
@@ -101,7 +102,10 @@ export function applyThreadItem(state:InlineThreadState,item:any):{state:InlineT
   if(item?.kind==='snapshot'){
     const thread=item.snapshot?.thread;
     if(!thread||!Array.isArray(thread.messages))throw Error('T3 returned an invalid thread snapshot.');
-    return {state:{messages:thread.messages.filter(validMessage),activities:Array.isArray(thread.activities)?thread.activities.filter(validActivity):[],session:thread.session??undefined,latestTurn:thread.latestTurn??undefined},sequence:item.snapshot.snapshotSequence};
+    const turns={...state.turns};
+    if(state.latestTurn)turns[state.latestTurn.turnId]=state.latestTurn;
+    if(thread.latestTurn)turns[thread.latestTurn.turnId]=thread.latestTurn;
+    return {state:{messages:thread.messages.filter(validMessage),activities:Array.isArray(thread.activities)?thread.activities.filter(validActivity):[],session:thread.session??undefined,latestTurn:thread.latestTurn??undefined,turns,historyComplete:!item.snapshot.page?.hasMore,checkpoints:Array.isArray(thread.checkpoints)?thread.checkpoints:[]},sequence:item.snapshot.snapshotSequence};
   }
   if(item?.kind!=='event')return {state};
   const event=item.event,p=event?.payload;
@@ -121,7 +125,10 @@ export function applyThreadItem(state:InlineThreadState,item:any):{state:InlineT
     let latestTurn=state.latestTurn;
     if(session.status==='running'&&typeof session.activeTurnId==='string')latestTurn={...(latestTurn?.turnId===session.activeTurnId?latestTurn:{}),turnId:session.activeTurnId,state:'running'};
     else if(latestTurn?.state==='running'&&['ready','stopped','interrupted','error'].includes(session.status))latestTurn={...latestTurn,state:session.status==='error'?'error':session.status==='interrupted'?'interrupted':'completed'};
-    return {state:{...state,session,latestTurn},sequence:event.sequence};
+    const turns={...state.turns};
+    if(state.latestTurn)turns[state.latestTurn.turnId]=state.latestTurn;
+    if(latestTurn)turns[latestTurn.turnId]=latestTurn;
+    return {state:{...state,session,latestTurn,turns},sequence:event.sequence};
   }
   return {state,sequence:event.sequence};
 }
@@ -131,9 +138,27 @@ function validActivity(value:any):value is InlineActivity{return value&&typeof v
 /** T3 assigns turn IDs when the provider starts; the dispatch command ID is
  * unrelated. The pending user message and projected turn share requestedAt. */
 export function turnForMessage(state:InlineThreadState,messageId:string):string|undefined {
-  const message=state.messages.find(m=>m.id===messageId&&m.role==='user');
+  const index=state.messages.findIndex(m=>m.id===messageId&&m.role==='user'),message=state.messages[index];
+  if(!message)return;
+  if(message.turnId)return message.turnId;
   const turn=state.latestTurn;
-  return message?.createdAt&&turn?.requestedAt===message.createdAt?turn.turnId:undefined;
+  if(message.createdAt&&turn?.requestedAt===message.createdAt)return turn.turnId;
+  const known=Object.values(state.turns??{}).filter(t=>message.createdAt&&t.requestedAt===message.createdAt);
+  if(known.length===1)return known[0].turnId;
+  // Only a complete canonical history can prove this interval. Never adopt
+  // the latest turn or a previous turn whose late messages crossed our prompt.
+  if(!state.historyComplete)return;
+  const next=state.messages.findIndex((m,i)=>i>index&&m.role==='user');
+  if(next<0)return;
+  const candidates=new Set(state.messages.slice(index+1,next).filter(m=>m.role==='assistant'&&m.turnId).map(m=>m.turnId!));
+  if(candidates.size!==1)return;
+  const candidate=[...candidates][0];
+  if(state.messages.slice(0,index).some(m=>m.turnId===candidate))return;
+  const requestedAt=state.turns?.[candidate]?.requestedAt??(turn?.turnId===candidate?turn.requestedAt:undefined);
+  if(requestedAt&&message.createdAt&&requestedAt!==message.createdAt)return;
+  const completedAt=state.checkpoints?.find(c=>c.turnId===candidate)?.completedAt;
+  if(completedAt&&message.createdAt&&Date.parse(completedAt)<Date.parse(message.createdAt))return;
+  return candidate;
 }
 
 function safeStatus(value:string){return value.replace(/[\r\n\t]+/g,' ').replace(/[\\`*_{}\[\]()#+.!>|]/g,'\\$&').slice(0,180);}
@@ -244,7 +269,7 @@ function quoteResponse(text:string):string {
 /** Select the completed turn's prose consistently for rendering and assets. */
 export function inlineTurnMessages(state:InlineThreadState,turnId:string,keepIntermediate=false):InlineMessage[] {
   const messages=state.messages.filter(m=>m.turnId===turnId&&m.role==='assistant');
-  const finalId=state.latestTurn?.turnId===turnId?state.latestTurn.assistantMessageId:undefined;
+  const finalId=state.latestTurn?.turnId===turnId?state.latestTurn.assistantMessageId:state.checkpoints?.find(c=>c.turnId===turnId&&c.checkpointRef?.startsWith('refs/t3/checkpoints/'))?.assistantMessageId??state.turns?.[turnId]?.assistantMessageId;
   const final=messages.find(m=>m.id===finalId)??messages.at(-1);
   return keepIntermediate?messages:final?[final]:[];
 }
@@ -271,7 +296,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const activity=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
   const heading=`**T3 · ${phase==='running'?'Working':phase==='sending'?'Sending':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
-  const status=phase==='error'&&state.session?.lastError?'\n\n'+safeStatus(state.session.lastError):activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
+  const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
   const body=prose?`\n\n${prose}\n`:'';
   return `${heading}${spinner}${status}${body}${questions?`\n\n${questions}\n`:''}`;
 }
@@ -280,6 +305,19 @@ export function turnPhase(state:InlineThreadState,turnId:string):'running'|'comp
   if(state.latestTurn?.turnId===turnId&&['completed','interrupted','error'].includes(state.latestTurn.state))return state.latestTurn.state==='completed'?'complete':state.latestTurn.state as 'interrupted'|'error';
   if(state.session?.activeTurnId===turnId)return 'running';
   const messages=state.messages.filter(m=>m.turnId===turnId&&m.role==='assistant');
+  // Real completion checkpoints survive later turns; provider-diff placeholders
+  // can be emitted mid-turn and are deliberately excluded. Checkpoints also
+  // preserve the final message ID when later messages arrived out of order.
+  const checkpoint=state.checkpoints?.find(c=>c.turnId===turnId&&c.checkpointRef?.startsWith('refs/t3/checkpoints/'));
+  if(checkpoint&&state.latestTurn?.turnId!==turnId){
+    if(checkpoint.status==='error')return 'error';
+    if(checkpoint.status==='missing')return 'interrupted';
+    if(checkpoint.status==='ready')return messages.length&&messages.every(m=>!m.streaming)&&messages.some(m=>m.id===checkpoint.assistantMessageId)?'complete':'running';
+  }
+  const known=state.turns?.[turnId];
+  if(known&&['completed','interrupted','error'].includes(known.state))return known.state==='completed'?'complete':known.state as 'interrupted'|'error';
+  // A newer session's error/ready status says nothing about this older turn.
+  if(state.latestTurn&&state.latestTurn.turnId!==turnId)return 'running';
   if(messages.length&&messages.every(m=>!m.streaming)&&state.session&&['ready','stopped','interrupted','error'].includes(state.session.status))return state.session.status==='error'?'error':state.session.status==='interrupted'?'interrupted':'complete';
   return 'running';
 }
