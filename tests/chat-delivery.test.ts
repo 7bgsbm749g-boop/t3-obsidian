@@ -535,7 +535,7 @@ test('editor selection menu streams a T3 reply into its original note for new an
     h.setActiveNote('Notes/Different.md');await destination.choose(false);
     assert.equal(h.commands[0].type,'thread.create');assert.equal(h.commands[0].title,'Explain why **this claim** follows.');
     const newThreadText=h.commands[1].message.text;
-    assert.ok(newThreadText.startsWith(selection));assert.match(newThreadText,/Answer in the T3 thread\. Do not edit the Obsidian note/);assert.doesNotMatch(newThreadText,/Reply in the Obsidian note itself/);
+    assert.ok(newThreadText.startsWith(selection));assert.match(newThreadText,/Answer in the T3 thread\. The Obsidian plugin will insert your reply\./);assert.doesNotMatch(newThreadText,/Do not edit the Obsidian note|Reply in the Obsidian note itself/);
     assert.match(newThreadText,/Destination note path: "\/projects\/notes\/Notes\/Original.md"/);assert.doesNotMatch(newThreadText,/Different.md/);
     await new Promise(resolve=>setTimeout(resolve,500));
     assert.match(first.value,/Inline reply from T3\./);
@@ -863,7 +863,8 @@ test('Ask T3 keeps the answer in the T3 thread when its streaming switch is off'
     await context.menu.items.find(item=>item.title==='Ask T3 Code')!.callback();
     await h.modals.at(-1).choose(false);
     assert.doesNotMatch(context.value,/t3-inline:start/);
-    assert.match(h.commands.at(-1).message.text,/Answer in the T3 thread\. Do not edit the Obsidian note\./);
+    assert.match(h.commands.at(-1).message.text,/Answer in the T3 thread\./);
+    assert.doesNotMatch(h.commands.at(-1).message.text,/Do not edit the Obsidian note/);
   }finally{h.plugin.onunload();}
 });
 
@@ -874,7 +875,8 @@ test('manual Send to T3 streams into the source editor but disabled and automati
     const file=Object.assign(editor.file,{basename:'Manual',stat:{ctime:123}});
     const first=await h.plugin.send(file,project,{throwOnError:true});
     assert.equal(first.request.completion.action,'keep');
-    assert.match(first.request.prompt,/Answer in the T3 thread\. Do not edit the Obsidian note; the Obsidian plugin will insert your reply\./);
+    assert.match(first.request.prompt,/Answer in the T3 thread\. The Obsidian plugin will insert your reply\./);
+    assert.doesNotMatch(first.request.prompt,/Do not edit the Obsidian note/);
     assert.doesNotMatch(first.request.prompt,/t3-inline:start/);
     assert.match(editor.value,/t3-inline:start/);
     for(let attempt=0;attempt<40&&!editor.value.includes('Inline reply from T3.');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
