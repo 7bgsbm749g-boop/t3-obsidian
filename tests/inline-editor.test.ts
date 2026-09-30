@@ -25,28 +25,14 @@ test('public editor fallback restores both scroll axes after the editor scrolls 
   assert.equal(value,'Before new reply after');assert.deepEqual(scroll,{top:920,left:18});
 });
 
-test('removing a visible question anchors the unchanged paragraph below it after layout',()=>{
-  let state=EditorState.create({doc:'Intro\nQuestion\n<!-- t3-inline:end:job -->\n\nReading here\nTail'}),updated=false;
-  const scrollDOM={scrollTop:500,getBoundingClientRect:()=>({top:60,bottom:760})};
-  const cm={get state(){return state;},scrollDOM,
-    coordsAtPos:(position:number)=>{assert.equal(state.doc.sliceString(position).split('\n')[0],'Reading here');return {top:300,bottom:320};},
-    dispatch:(spec:any)=>{state=state.update(spec).state;updated=true;},
-    requestMeasure:(measure:any)=>{
-      assert.equal(updated,true);
-      const view={state,scrollDOM,coordsAtPos:(position:number)=>{assert.equal(state.doc.sliceString(position).split('\n')[0],'Reading here');return {top:180,bottom:200};}};
-      measure.write(measure.read(view),view);
-    }};
-  replaceInlineEditorText({cm} as any,'Final',6,14);
-  assert.equal(scrollDOM.scrollTop,380,'compensate for the paragraph moving up 120 pixels');
-});
 
-test('skip unchanged offscreen response lines when finding a visible anchor',()=>{
-  let state=EditorState.create({doc:'Intro\nQuestion\nRetained response\n\nReading here\nTail'});
+test('question removal preserves a visible unchanged paragraph through CodeMirror scrolling',()=>{
+  let state=EditorState.create({doc:'Intro\nQuestion\n<!-- t3-inline:end:job -->\nRetained response\n\nReading here\nTail'}),target:any;
   const scrollDOM={scrollTop:500,getBoundingClientRect:()=>({top:60,bottom:760})};
   const cm={get state(){return state;},scrollDOM,
     coordsAtPos:(position:number)=>state.doc.sliceString(position).startsWith('Reading here')?{top:300,bottom:320}:{top:-100,bottom:-80},
-    dispatch:(spec:any)=>{state=state.update(spec).state;},
-    requestMeasure:(measure:any)=>{const view={state,scrollDOM,coordsAtPos:(position:number)=>{assert.equal(state.doc.sliceString(position).split('\n')[0],'Reading here');return {top:180,bottom:200};}};measure.write(measure.read(view),view);}};
+    dispatch:(spec:any)=>{const transaction=state.update(spec);state=transaction.state;target=transaction.effects[0].value;assert.equal(state.doc.sliceString(target.range.head).split('\n')[0],'Reading here');assert.equal(target.y,'start');assert.equal(target.yMargin,240);assert.equal(spec.scrollIntoView,false);}};
   replaceInlineEditorText({cm} as any,'Final',6,14);
-  assert.equal(scrollDOM.scrollTop,380);
+  const next=state.update({changes:{from:0,insert:'More progress\n'}});
+  const mapped=target.map(next.changes);assert.equal(next.state.doc.sliceString(mapped.range.head).split('\n')[0],'Reading here');
 });
