@@ -385,7 +385,7 @@ def complete_smoke(version: str, device: str, evidence: Path, notes: str) -> Non
     print(json.dumps(receipt, indent=2))
 
 
-def new_release(bump: str, allow_dirty: bool) -> None:
+def new_release(bump: str | None, allow_dirty: bool, requested_version: str | None = None) -> None:
     canonical_root_required()
     commit, dirty = git_state()
     if dirty and not allow_dirty:
@@ -394,7 +394,11 @@ def new_release(bump: str, allow_dirty: bool) -> None:
             'authorized deploying the reviewed dirty worktree.'
         )
     current = read_json(ROOT / 'manifest.json')['version']
-    version = bump_version(current, bump)
+    version = requested_version or bump_version(current, bump)
+    if parse_version(version) <= parse_version(current):
+        raise SystemExit('The requested release must be strictly newer than the source version.')
+    if (QLO2_PLUGIN / 'manifest.json').exists() and parse_version(version) <= parse_version(read_json(QLO2_PLUGIN / 'manifest.json')['version']):
+        raise SystemExit('The requested release must be strictly newer than the QLO2 installation.')
     if release_receipt_dir(version).exists() or archive_path(version).exists():
         raise SystemExit(f'Immutable release {version} already exists; choose a newer version.')
 
@@ -436,6 +440,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     action = result.add_mutually_exclusive_group(required=True)
     action.add_argument('--bump', choices=('patch', 'minor', 'major'))
+    action.add_argument('--version', metavar='VERSION', help='Create a strictly newer exact version.')
     action.add_argument('--resume', metavar='VERSION')
     action.add_argument('--complete-smoke', metavar='VERSION')
     result.add_argument('--allow-dirty', action='store_true')
@@ -459,7 +464,7 @@ def main() -> None:
     if args.resume:
         resume_release(args.resume, args.allow_dirty)
         return
-    new_release(args.bump, args.allow_dirty)
+    new_release(args.bump, args.allow_dirty, args.version)
 
 
 if __name__ == '__main__':

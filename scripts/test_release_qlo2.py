@@ -61,6 +61,15 @@ class ReleasePipelineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             release.parse_version('v2.12.1')
 
+    def test_exact_version_option_and_old_version_preflight(self) -> None:
+        args = release.parser().parse_args(['--version', '2.28.1'])
+        self.assertEqual(args.version, '2.28.1')
+        with patch.object(release, 'canonical_root_required'), patch.object(release, 'git_state', return_value=('commit', False)), patch.object(release, 'read_json', return_value={'version': '2.18.0'}), patch.object(release, 'set_version') as mutate:
+            for version in ['2.18.0', '2.17.9', 'v2.28.1']:
+                with self.assertRaises((SystemExit, ValueError)):
+                    release.new_release(None, False, version)
+            mutate.assert_not_called()
+
     def test_archive_is_exact_and_immutable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

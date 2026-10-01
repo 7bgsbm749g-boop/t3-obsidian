@@ -88,6 +88,8 @@ export default class SendToT3 extends Plugin {
   private vaultSetupModal?:VaultSetupModal;
   private vaultRegistrations:Record<string,VaultRegistration>={};
   private eventSubscriptions?:EventSubscriptions;
+  private eventHostServer?:import('./event-host-desktop').EventHostServer;
+  private eventHostOpening?:Promise<void>;
   private eventRecording=false;
   private inlineChat?:InlineChatManager;
   private questions?:QuestionController;
@@ -101,6 +103,7 @@ export default class SendToT3 extends Plugin {
   private inlineHostKey='';
   private inlineHostRefresh?:Promise<void>;
   private inlineEnvironment?:Promise<string>;
+  private eventLocalEnvironmentId?:string;
   private mobileSelectionAction?:{dispose():void};
   diagnostics?:EventJournal;
   async onload() {
@@ -157,10 +160,11 @@ export default class SendToT3 extends Plugin {
     this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),access:environmentId=>this.inlineThreadAccess(environmentId),importReplyAsset:(reference,request,access)=>importReplyAsset(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
     if(!Platform.isMobile)this.app.workspace.onLayoutReady(()=>{
       const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
-      if(root)void import('./note-command-desktop').then(module=>module.NoteCommandServer.open(root,this.app.vault.configDir||'.obsidian',command=>this.executeAgentCommand(command),()=>!this.stopped&&!this.busy&&Boolean(this.eventSubscriptions),()=>this.eventSubscriptions?.stop())).then(async server=>{
+      if(root)void import('./note-command-desktop').then(module=>module.NoteCommandServer.open(root,this.app.vault.configDir||'.obsidian',command=>this.executeAgentCommand(command),()=>!this.stopped&&!this.busy)).then(async server=>{
         if(this.stopped){await server.dispose();return;}this.noteCommandServer=server;
-        try{await this.startEventSubscriptions();}catch(error){await server.dispose();throw error;}
+        try{await this.refreshEventHost();}catch(error){new Notice(`T3 subscriptions: ${message(error)}`,10000);}
       }).catch(error=>new Notice(`T3 note commands: ${message(error)}`,10000));
+      this.registerInlineInterval(()=>void this.refreshEventHost().catch(()=>{}),5000);
     });
     this.addCommand({id:'send-note-to-multiple-notes',name:'Send note with streaming destinations…',checkCallback:checking=>{
       const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;if(!file||this.busy)return false;
@@ -318,11 +322,59 @@ export default class SendToT3 extends Plugin {
       return thread;
     }finally{await access.close?.();}
   }
-  private async startEventSubscriptions(){
+  private async eventHostTarget(){
+    const root=this.settings.folderLinks.find(link=>link.folderPath==='/');
+    if(!root)throw Error('Choose a vault project machine before creating subscriptions.');
+    const localRoot=!Platform.isMobile?(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.(''):undefined;
+    const environmentId=root.environmentId??this.settings.paired.find(c=>c.id===root.connectionId)?.environmentId??(!root.connectionId&&localRoot&&sameWorkspacePath(localRoot,root.workspaceRoot)?await this.localInlineEnvironment():undefined);
+    if(!environmentId)throw Error('Reconnect the vault project machine before creating subscriptions.');
+    return {host:{vaultId:this.settings.vaultId,environmentId,workspaceRoot:root.workspaceRoot,directory:`${this.app.vault.configDir||'.obsidian'}/t3-code/events/v1`},connectionId:root.connectionId};
+  }
+  private eventHostCurrent(host:import('./event-host').EventHostIdentity){
+    const root=this.settings.folderLinks.find(link=>link.folderPath==='/');
+    const environmentId=root?.environmentId??this.settings.paired.find(c=>c.id===root?.connectionId)?.environmentId??this.eventLocalEnvironmentId;
+    return !this.stopped&&host.vaultId===this.settings.vaultId&&environmentId===host.environmentId&&Boolean(root&&sameWorkspacePath(root.workspaceRoot,host.workspaceRoot));
+  }
+  private refreshEventHost():Promise<void>{
+    if(this.eventHostOpening)return this.eventHostOpening;
+    const work=this.openEventHost();this.eventHostOpening=work;void work.finally(()=>{this.eventHostOpening=undefined;}).catch(()=>{});return work;
+  }
+  private async openEventHost(){
+    if(this.stopped||Platform.isMobile)return;
+    if(this.eventHostServer&&!this.eventHostCurrent(this.eventHostServer.identity)){
+      const server=this.eventHostServer;this.eventHostServer=undefined;await server.dispose();
+    }
+    if(this.eventHostServer)return;
+    const {host}=await this.eventHostTarget();
+    const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
+    if(!root||!sameWorkspacePath(root,host.workspaceRoot))return;
+    this.eventLocalEnvironmentId=await this.localInlineEnvironment();
+    if(this.eventLocalEnvironmentId!==host.environmentId)return;
+    const {EventHostServer}=await import('./event-host-desktop');
+    const server=await EventHostServer.open(host,command=>{
+      if(!this.eventSubscriptions||!this.eventHostCurrent(host))throw Error('Subscription host is not ready.');
+      return this.eventSubscriptions.command(command);
+    },()=>this.eventHostCurrent(host),()=>{this.eventSubscriptions?.stop();this.eventSubscriptions=undefined;this.eventHostServer=undefined;});
+    this.eventHostServer=server;
+    try{await this.startEventSubscriptions(server);server.activate();}catch(error){this.eventHostServer=undefined;await server.dispose();throw error;}
+  }
+  private async eventHostFiles(route:{host:import('./event-host').EventHostIdentity;connectionId?:string}):Promise<{files:import('./event-host').EventHostFiles;close():void}>{
+    const {host}=route;
+    const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
+    if(!Platform.isMobile&&root&&sameWorkspacePath(root,host.workspaceRoot)&&await this.localInlineEnvironment()===host.environmentId)return {files:(await import('./hosted-inline-desktop')).localInlineFiles(host.workspaceRoot,host.directory),close:()=>{}};
+    const paired=this.settings.paired.find(c=>c.environmentId===host.environmentId&&c.id===route.connectionId)??this.settings.paired.find(c=>c.environmentId===host.environmentId);
+    if(!paired)throw Error('Connect the vault project machine before managing subscriptions.');
+    const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId},await this.sessionFor(paired.id));
+    try{
+      if(!await remote.matches(host.workspaceRoot,`${this.app.vault.configDir||'.obsidian'}/plugins/${this.manifest.id}/data.json`,host.vaultId))throw Error('The subscription host no longer matches this vault.');
+      return {files:{read:path=>remote.readFile(host.workspaceRoot,path),write:(path,value)=>remote.writeFile(host.workspaceRoot,path,value),remove:path=>remote.deleteFile(host.workspaceRoot,path)},close:()=>remote.close()};
+    }catch(error){remote.close();throw error;}
+  }
+  private async startEventSubscriptions(server:import('./event-host-desktop').EventHostServer){
     if(this.eventSubscriptions||this.stopped||Platform.isMobile)return;
     const key=`events:${this.settings.vaultId}:${this.deviceId}`;
     const service=new EventSubscriptions({
-      load:()=>deviceState(key),save:state=>deviceState(key,state),now:()=>Date.now(),id:randomId,
+      load:async()=>{const saved=await server.load();if(saved)return saved;return await deviceState(key);},save:state=>server.save(state),now:()=>Date.now(),id:randomId,
       notes:async scope=>{
         const files=this.app.vault.getMarkdownFiles().filter(file=>inEventScope(scope,file.path));
         return Promise.all(files.map(async file=>this.eventSnapshot(file.path,await this.app.vault.read(file))));
@@ -331,29 +383,31 @@ export default class SendToT3 extends Plugin {
       isBusy:async target=>threadIsActive(await this.eventThread(target)),
       prepare:async notification=>existingThreadTurn(await this.eventThread(notification.target),notification.target,commandId(notification.id,'turn'),{messageId:commandId(notification.id,'message'),role:'user',text:notificationPrompt(notification,this.app.vault.getName()),attachments:[]}),
       deliver:async notification=>{
+        if(!this.eventHostCurrent(server.identity))throw Error('Subscription host ownership changed.');
         const thread=await this.eventThread(notification.target);
         if(thread.messages?.some((entry:any)=>entry.id===commandId(notification.id,'message')&&entry.role==='user'))return 'delivered';
         if(threadIsActive(thread))return 'busy';
         const access=await this.inlineThreadAccess(notification.target.environmentId);
-        try{await access.api('/api/orchestration/dispatch',notification.command);return 'delivered';}finally{await access.close?.();}
+        try{if(!this.eventHostCurrent(server.identity))throw Error('Subscription host ownership changed.');await access.api('/api/orchestration/dispatch',notification.command);return 'delivered';}finally{await access.close?.();}
       },
       recording:active=>{this.eventRecording=active;configureDiagnostics(active?this.diagnostics:undefined);},
     });
-    await service.initialize();if(this.stopped){service.stop();return;}this.eventSubscriptions=service;
+    try{await service.initialize();await server.save(service.snapshot);}catch(error){service.stop();throw error;}if(this.stopped||!this.eventHostCurrent(server.identity)){service.stop();return;}this.eventSubscriptions=service;
     let captureWork=Promise.resolve();
     const observe=(kind:'create'|'modify'|'rename'|'delete',file:TAbstractFile,oldPath?:string)=>{
+      if(this.eventSubscriptions!==service||!this.eventHostCurrent(server.identity))return;
       if(file instanceof TFolder){
         if(kind==='rename')captureWork=captureWork.catch(()=>{}).then(()=>this.renameEventFolder(file,oldPath!,service));
         if(kind==='delete')captureWork=captureWork.catch(()=>{}).then(()=>service.deleteFolder(file.path)).then(()=>{});
         void captureWork.catch(error=>new Notice(`T3 events: ${message(error)}`,10000));return;
       }
       if(!(file instanceof TFile)||!service.interested(file.path,oldPath))return;
-      const path=file.path;captureWork=captureWork.catch(()=>{}).then(async()=>{if(this.stopped)return;const note=kind==='delete'?undefined:this.eventSnapshot(path,await this.app.vault.read(file));await service.observe(kind,path,note,oldPath);});
+      const path=file.path;captureWork=captureWork.catch(()=>{}).then(async()=>{if(this.stopped||this.eventSubscriptions!==service||!this.eventHostCurrent(server.identity))return;const note=kind==='delete'?undefined:this.eventSnapshot(path,await this.app.vault.read(file));await service.observe(kind,path,note,oldPath);});
       void captureWork.catch(error=>new Notice(`T3 events: ${message(error)}`,10000));
     };
     for(const kind of ['create','modify','rename','delete'] as const)this.registerEvent(this.app.vault.on(kind as any,(file:TAbstractFile,oldPath?:string)=>observe(kind,file,oldPath)));
     // Node timers continue polling in background desktop windows.
-    this.registerInlineInterval(()=>{if(service.active)void service.tick().catch(error=>new Notice(`T3 event delivery: ${message(error)}`,10000));},1000);
+    this.registerInlineInterval(()=>{if(this.eventSubscriptions===service&&this.eventHostCurrent(server.identity)&&service.active)void service.tick().catch(error=>new Notice(`T3 event delivery: ${message(error)}`,10000));},1000);
   }
   private async renameEventFolder(folder:TFolder,oldPath:string,service:EventSubscriptions){
     if(!service.interestedFolder(folder.path,oldPath))return;
@@ -362,8 +416,17 @@ export default class SendToT3 extends Plugin {
   }
   async executeAgentCommand(input:import('./note-command').AgentCommand){
     if(isEventCommand(input)){
-      if(!this.eventSubscriptions)throw Error('Open this vault in a desktop Obsidian client to manage subscriptions.');
-      return this.eventSubscriptions.command(input);
+      const {forwardEventCommand,eventCanonical}=await import('./event-host');
+      const key=`event-route:${this.settings.vaultId}:${input.id}`;
+      const previous=await deviceState(key) as {input:string;host:import('./event-host').EventHostIdentity;connectionId?:string}|undefined;
+      if(previous&&previous.input!==eventCanonical(input))throw Error('This request ID already belongs to different input.');
+      const route=previous??{input:eventCanonical(input),...await this.eventHostTarget()};
+      if(!previous)await deviceState(key,route);
+      const current=await this.eventHostTarget();
+      if(eventCanonical(current.host)!==eventCanonical(route.host))throw Error('This command belongs to the previous vault project machine. Restore that host to retry, or use a new request ID.');
+      await this.refreshEventHost();
+      const opened=await this.eventHostFiles(route);
+      try{return await forwardEventCommand(route.host,input,opened.files,async ms=>(await import('./desktop-timers')).desktopPause(ms));}finally{opened.close();}
     }
     return this.executeNoteCommand(input);
   }
@@ -1336,7 +1399,7 @@ export default class SendToT3 extends Plugin {
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
     }catch(error){logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});throw error;}
   }
-  onunload(){logEvent('plugin.unloading');configureDiagnostics();if(this.eventRecording)void this.diagnostics?.close().catch(()=>{});this.stopped=true;this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){logEvent('plugin.unloading');configureDiagnostics();if(this.eventRecording)void this.diagnostics?.close().catch(()=>{});this.stopped=true;this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;

@@ -11,7 +11,7 @@ Use the running Obsidian plugin's command interface for note-driven T3 work. Loa
 
 - The CLI is `/home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py`.
 - The usual local vault is `/home/ubuntu/vaults/QLO2`; honor another requested vault.
-- That vault must be open in a real Obsidian desktop client with Send to T3 Code 2.18.0 or newer for subscriptions (2.17.0 or newer for note sends) enabled. Its authenticated T3 connection and streaming coordinator must be reachable.
+- That vault must be open in a real Obsidian desktop client with Send to T3 Code 2.28.1 or newer for subscriptions (2.17.0 or newer for note sends) enabled. Its authenticated T3 connection and streaming coordinator must be reachable.
 - This is a local filesystem command bridge, not an MCP tool. Run it on the machine where that desktop vault is open.
 - Source and destination notes must already exist. Pass vault-relative `.md` paths. Absolute paths, traversal, hidden paths, backslashes, and control characters are rejected. At most 32 unique streaming destinations are supported.
 - `--config-dir` defaults to `.obsidian`; specify it for a vault using a different configuration directory.
@@ -86,7 +86,7 @@ For a combined flow, send note A to destinations X and Y, then send note B to th
 
 Creating a subscription authorizes future messages to its originating thread. Use it when the user asks for continuing work whenever a note or folder changes; do not register watchers merely to investigate a note. The plugin stores what to watch and where to notify; keep the task instructions in this thread.
 
-Use this thread's real `threadId`, `projectId`, and T3 machine `environmentId`, from its runtime/session or verified existing thread records. Validate ambiguous identities before registering. Never invent IDs, target another conversation by default, or spin up a thread per event. Subscriptions live on the desktop client whose local mailbox processes the registration; that Obsidian vault must stay open. Mobile edits reach it through Sync. Offline intermediate changes are not replayed.
+Use this thread's real `threadId`, `projectId`, and T3 machine `environmentId`, from its runtime/session or verified existing thread records. Validate ambiguous identities before registering. Never invent IDs, target another conversation by default, or spin up a thread per event. The sole watcher is the vault project machine selected by the vault-root project link. Its Obsidian vault must stay open. The local mailbox forwards subscription commands through authenticated T3 file access, regardless of where this agent runs. Results include `host` (vault identity, environment, workspace, private directory). `--environment-id` identifies the receiving thread’s machine, not the watcher. Laptop and mobile edits reach the watcher through Sync. Offline intermediate changes are not replayed. Subscription state and pending notifications remain in the host’s private `.obsidian/t3-code/events/v1` store and do not travel through Sync. If that host is unavailable, retry the original UUID with `--retry`. Changing the vault project machine stops the old watcher without automatically transferring its state. Only the designated host imports its own legacy local subscriptions; legacy subscriptions on other desktops require explicit recreation after those clients have been updated.
 
 ```bash
 python3 /home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py \

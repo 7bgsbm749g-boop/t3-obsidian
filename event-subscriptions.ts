@@ -12,7 +12,7 @@ export interface EventSubscriptionCommand {
   version:1;id:string;kind:'subscribe'|'subscriptions'|'update-subscription'|'pause-subscription'|'resume-subscription'|'cancel-subscription';
   subscriptionId?:string;target?:EventTarget;scope?:EventScope;filter?:EventFilter;
 }
-export interface EventCommandResult {id:string;ok:boolean;subscriptionId?:string;subscriptions?:EventSubscription[];monitoring?:boolean;notifications?:Array<Pick<EventNotification,'id'|'subscriptionId'|'status'|'count'|'attempts'|'error'>>;error?:string}
+export interface EventCommandResult {host?:import('./event-host').EventHostIdentity;id:string;ok:boolean;subscriptionId?:string;subscriptions?:EventSubscription[];monitoring?:boolean;notifications?:Array<Pick<EventNotification,'id'|'subscriptionId'|'status'|'count'|'attempts'|'error'>>;error?:string}
 export interface NoteEventSnapshot {path:string;content:string;properties:Record<string,unknown>|null}
 export interface NoteEvent {kind:EventKind;path:string;oldPath?:string;at:string;beforeHash?:string;afterHash?:string;property?:string;before?:unknown;after?:unknown}
 export interface EventNotification {id:string;subscriptionId:string;target:EventTarget;events:NoteEvent[];count:number;firstAt:number;dueAt:number;status:'pending'|'prepared'|'delivered'|'cancelled';command?:unknown;attempts:number;retryAt?:number;error?:string}
