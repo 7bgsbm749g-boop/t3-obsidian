@@ -84,6 +84,8 @@ The obsolete companion service is no longer part of the plugin. Its operator can
 
 Open Obsidian’s command palette (Ctrl/⌘ + P, or your configured mobile swipe-down action). Its first T3 Code row changes with the editor selection and palette input:
 
+For a keyboard shortcut, assign **Send to T3 Code: Send to T3 Code** under **Settings → Hotkeys**. One command handles both modes: with no selected text it sends the full note; with selected text it asks about that selection. It opens the same project/thread chooser and follows the same editor streaming switch. It ignores saved command-palette drafts. No default shortcut is assigned. The command is available in Markdown editors, including mobile with a keyboard, and remains available in the ordinary palette if the dynamic T3 row is unavailable.
+
 | Selection | Typed input | First row | Sent to T3 |
 | --- | --- | --- | --- |
 | None | None | **Send to T3 Code** | Full Markdown note and embedded images |

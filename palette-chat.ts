@@ -88,7 +88,9 @@ export function installPaletteChat(
         };
         rows.set(row, { query, selection, epoch });
         // Insert after core filtering/sorting, before its display limit is applied.
-        return [row, ...suggestions];
+        // The registered command is the hotkey/fallback surface. While this
+        // dynamic row is available, show only one manual T3 action.
+        return [row, ...suggestions.filter(suggestion=>suggestion?.item?.id!=='send-to-t3-code:send-or-ask')];
       },
       renderSuggestion(...args) {
         const row = args[0];

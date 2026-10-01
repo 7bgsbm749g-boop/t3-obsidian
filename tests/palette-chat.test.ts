@@ -221,3 +221,14 @@ test('an edit between suggestion generation and selection cannot send a stale pr
   assert.equal(modal.closed, 1);
   hook.dispose();
 });
+
+
+test('the dynamic row hides only the registered manual command and disposal restores it',()=>{
+  const {app,modal,command}=fixture();
+  const manual={item:{id:'send-to-t3-code:send-or-ask',name:'Send to T3 Code'},match:{score:1}};
+  modal.getSuggestions=()=>[manual,command];
+  const hook=installPaletteChat(app,()=>{});
+  assert.deepEqual(suggest(modal,'').map(row=>row.item.id),['send-to-t3-code:palette-query','ordinary']);
+  hook.dispose();
+  assert.deepEqual(suggest(modal,'').map(row=>row.item.id),['send-to-t3-code:send-or-ask','ordinary']);
+});

@@ -148,6 +148,12 @@ export default class SendToT3 extends Plugin {
     if(typeof window!=='undefined'&&typeof this.registerInterval==='function')this.registerInterval(window.setInterval(()=>void this.diagnostics?.tick(this.diagnosticPreferences.automatic).catch(()=>{}),2000));
     this.addCommand({id:'export-diagnostics',name:'Export plugin diagnostics…',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
     this.addCommand({id:'report-plugin-problem',name:'Send plugin diagnostics to a new T3 thread',callback:()=>{logFailure('plugin.problem.reported',new Error('User requested investigation of a potential plugin problem.'));void this.diagnostics?.tick(true).catch(()=>{});}});
+    this.addCommand({id:'send-or-ask',name:'Send to T3 Code',editorCheckCallback:(checking,editor,view)=>{
+      const file=view.file;
+      if(this.stopped||this.busy||!file||file.extension.toLowerCase()!=='md')return false;
+      if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view}).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
+      return true;
+    }});
     if(typeof document!=='undefined'&&typeof document.addEventListener==='function'&&typeof this.registerDomEvent==='function'){
       this.registerDomEvent(document,'visibilitychange',()=>{logEvent('app.visibility',{state:document.visibilityState});void this.diagnostics?.flush().catch(()=>{});});
       this.registerDomEvent(window,'online',()=>logEvent('network.online'));
@@ -801,17 +807,21 @@ export default class SendToT3 extends Plugin {
   private async openPaletteAction(prompt:string,selection:string){
     const file=this.app.workspace.getActiveFile();
     if(!file||file.extension.toLowerCase()!=='md')throw Error('Open a Markdown note before using T3 Code from the command palette.');
+    return this.openManualAction(file,prompt,selection);
+  }
+  private async openManualAction(file:TFile,prompt:string,selection:string,captured?:EditorChatContext){
     if(!prompt.trim()&&!selection.trim()){
       return this.openNoteSend(file);
     }
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
-    const view=this.settings.inlineStreaming.enabled?(active?.file?.path===file.path?active:await this.editorForNoteSend(file)):active;
+    const view=captured?.view??(active?.file?.path===file.path?active:this.settings.inlineStreaming.enabled?await this.editorForNoteSend(file):undefined);
+    const editor=captured?.editor??view?.editor;
     const selected=selection.trim();
     const question=selected&&prompt.trim()?`Selected text:\n${selection}\n\nQuestion:\n${prompt}`:selected||prompt;
     let context:EditorChatContext|undefined;
-    if(view?.file&&view.file.extension.toLowerCase()==='md'&&view.editor){
-      context={editor:view.editor,view,...(prompt.trim()?{initialQuestion:prompt}:{})};
-      if(selected&&view.editor.getSelection()===selection){try{context.anchor=captureEditorSelection(view.editor);}catch{/* Append when selection changed while palette was open. */}}
+    if(view?.file?.path===file.path&&editor){
+      context={...captured,editor,view,...(prompt.trim()?{initialQuestion:prompt}:{})};
+      if(selected&&!context.anchor&&editor.getSelection()===selection){try{context.anchor=captureEditorSelection(editor);}catch(error){if(captured)throw error;/* Append when selection changed while palette was open. */}}
     }
     return this.openChatWithNote(this.noteContext(file),question,this.settings.inlineStreaming.enabled?context:undefined,true);
   }

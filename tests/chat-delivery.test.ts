@@ -171,7 +171,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';
   try {
-    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','report-plugin-problem','answer-t3-question'],'Diagnostics and question answering have palette commands');
+    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','report-plugin-problem','send-or-ask','answer-t3-question'],'One manual action is registered alongside diagnostics and question answering');
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands.length,2);
     assert.equal(h.commands[0].type,'thread.create');
@@ -389,6 +389,55 @@ test('palette chat can target an existing thread and labels active and idle conv
     await picker.choose(items[0]);
     assert.equal(h.commands.length,1,'Existing-thread chat must not create a thread');
     assert.equal(h.commands[0].type,'thread.turn.start');assert.equal(h.commands[0].threadId,'active');
+  }finally{h.plugin.onunload();}
+});
+
+test('the manual hotkey checks availability without opening a dialog and cancellation sends nothing',async()=>{
+  const h=await chatHarness();
+  try{
+    const command=h.registered.find(command=>command.id==='send-or-ask');
+    const opened=h.attachEditor('Notes/Hotkey.md','Full note');
+    const before=h.modals.length;
+    assert.equal(command.editorCheckCallback(true,opened.editor,opened.view),true);
+    assert.equal(h.modals.length,before);
+    assert.equal(command.editorCheckCallback(true,opened.editor,{file:null}),false);
+    assert.equal(command.editorCheckCallback(true,opened.editor,{file:{extension:'png'}}),false);
+    h.plugin.busy=true;
+    assert.equal(command.editorCheckCallback(false,opened.editor,opened.view),false);
+    h.plugin.busy=false;
+    command.editorCheckCallback(false,opened.editor,opened.view);
+    h.modals.at(-1).close();
+    assert.equal(h.commands.length,0);
+    assert.equal(opened.value,'Full note');
+  }finally{h.plugin.onunload();}
+});
+
+for(const streaming of [false,true])for(const selected of [false,true])test(`one hotkey routes ${selected?'Ask':'Send'} with streaming ${streaming} and ignores palette drafts`,async()=>{
+  const h=await chatHarness();
+  try{
+    h.plugin.settings.inlineStreaming.enabled=streaming;
+    const opened=h.attachEditor('Notes/Hotkey.md','Selected question\nPrivate remainder');
+    Object.assign(opened.file,{basename:'Hotkey',stat:{ctime:123}});
+    opened.editor.getSelection=()=>selected?'Selected question':'';
+    opened.editor.getCursor=(side:string)=>opened.editor.offsetToPos(side==='from'?0:17);
+    h.plugin.app.saveLocalStorage('send-to-t3-code-chat-draft-v1','Unrelated palette draft');
+    h.registered.find(command=>command.id==='send-or-ask').editorCheckCallback(false,opened.editor,opened.view);
+    assert.equal(h.commands.length,0,'The hotkey opens the chooser before delivery');
+    if(selected)h.setActiveNote('Notes/Different.md');
+    await h.modals.at(-1).choose('new');
+    const sent=h.commands.find(command=>command.type==='thread.turn.start');
+    assert.ok(sent);
+    assert.match(sent.message.text,/^Selected question/);
+    if(selected)assert.doesNotMatch(sent.message.text,/Private remainder/);
+    else assert.match(sent.message.text,/Private remainder/);
+    assert.match(sent.message.text,/Destination note path: "\/projects\/notes\/Notes\/Hotkey.md"$/);
+    assert.doesNotMatch(sent.message.text,/Different.md|Unrelated palette draft/);
+    assert.equal(h.plugin.app.loadLocalStorage('send-to-t3-code-chat-draft-v1'),'Unrelated palette draft');
+    if(streaming){
+      for(let attempt=0;attempt<80&&!opened.value.includes('Inline reply from T3.');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+      assert.match(opened.value,/Inline reply from T3\./);
+      assert.equal(opened.value.indexOf('Inline reply from T3.')<opened.value.indexOf('Private remainder'),selected);
+    }else assert.equal(opened.value,'Selected question\nPrivate remainder');
   }finally{h.plugin.onunload();}
 });
 
@@ -1027,7 +1076,7 @@ test('a synced running response accepts palette steering without a new block and
   }finally{h.plugin.onunload();}
 });
 
-test('Ask remains enabled during local streaming and selection steering moves only the captured text',async()=>{
+for(const surface of ['editor','hotkey'])test(`Ask via ${surface} remains enabled during local streaming and moves only the captured text`,async()=>{
   const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/SelectedSteering.md',region=initialRegion(id);
   try{
     const selected='Use a simpler approach.',opened=h.attachEditor(path,selected+'\n'+region.text+'Tail');
@@ -1038,7 +1087,9 @@ test('Ask remains enabled during local streaming and selection steering moves on
     const runtime=manager.runtime(job);runtime.sequence=1;runtime.state={messages:[{id:'progress',role:'assistant',turnId:'old-turn',text:'Earlier progress.',streaming:false}],activities:[]};
     const ask=h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code');assert.ok(ask);assert.equal(ask.disabled,false);
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Working',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running',requestedAt:'original-time'}}]);
-    await ask.callback();await h.modals.at(-1).choose(false);
+    if(surface==='editor')await ask.callback();
+    else h.registered.find(command=>command.id==='send-or-ask').editorCheckCallback(false,opened.editor,opened.view);
+    await h.modals.at(-1).choose(false);
     assert.equal(h.commands.length,1);assert.ok(opened.value.startsWith(selected),'text remains until T3 confirms its message');
     const command=h.commands[0];
     manager.receive(job,{kind:'snapshot',snapshot:{snapshotSequence:3,thread:{messages:[{id:command.message.messageId,role:'user',text:command.message.text,streaming:false,createdAt:command.createdAt},{id:'final',role:'assistant',turnId:'next-turn',text:'Changed approach.',streaming:false}],activities:[],latestTurn:{turnId:'next-turn',state:'completed',requestedAt:command.createdAt,assistantMessageId:'final'},session:{status:'ready',activeTurnId:null}}}});
@@ -1131,6 +1182,17 @@ for(const streaming of [false,true])test(`selection questions attach local image
     assert.match(next.message.text,/Selected text:\nBefore/);
     assert.match(next.message.text,/Question:\nDescribe it\./);
     assert.equal(resolved.at(-1).source,'Notes/Palette images.md');
+    if(streaming)await new Promise(resolve=>setTimeout(resolve,500));
+    const hotkey=h.attachEditor('Notes/Hotkey images.md',selected+'\nUnselected ![[outside.png]]');
+    hotkey.editor.getSelection=()=>selected;
+    hotkey.editor.getCursor=(side:string)=>hotkey.editor.offsetToPos(side==='from'?0:selected.length);
+    h.registered.find(command=>command.id==='send-or-ask').editorCheckCallback(false,hotkey.editor,hotkey.view);
+    await h.modals.at(-1).choose('new');
+    const last=h.commands.filter(command=>command.type==='thread.turn.start').at(-1);
+    assert.equal(last.message.attachments.length,1);
+    assert.match(last.message.text,/^Before/);
+    assert.doesNotMatch(last.message.text,/Unselected|outside.png/);
+    assert.equal(resolved.at(-1).source,'Notes/Hotkey images.md');
   }finally{h.plugin.onunload();}
 });
 
