@@ -66,7 +66,7 @@ export function failedInlineIds(document:string):string[]{
   return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*T3 · Error\*\*/.test(regionBody(document,id)?.body??''));
 }
 export function initialRegion(id:string):{text:string;bodyHash:string} {
-  const body='**T3 · Working**';
+  const body='**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>';
   // The final blank line also closes the quote in Obsidian Live Preview when
   // this response is the last block in the note.
   return {text:`\n${startMarker(id)}\n${body}\n${endMarker(id)}\n\n`,bodyHash:contentHash(body)};
