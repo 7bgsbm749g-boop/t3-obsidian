@@ -1,3 +1,4 @@
+import {logEvent,logFailure} from './diagnostics';
 import {readDirect,sendDirect,type PairedSession,type DirectPlan} from './direct';
 import type { ImageAttachment, ImageContext } from './images';
 import type { NoteCompletion } from './completion';
@@ -9,7 +10,7 @@ export interface Project { id: string; title: string; workspaceRoot: string; con
 export function projectKey(project:Project){return project.connectionId?`${project.connectionId}:${project.id}`:project.id;}
 export function projectLabel(project:Project){return project.title+(project.connectionName?` · ${project.connectionName}`:'');}
 export interface Connection { executable: string; host: string; scriptPath?: string; transport?: 'desktop'|'https'|'direct'; url?: string; native?:boolean; baseDir?:string; stateDir?:string;connectionId?:string;environmentId?:string }
-export interface Request { id: string; project: Project; title: string; prompt: string; connection: Connection; threadId?:string; folderLinkIntent?:FolderLink; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion; noteThread?:Omit<NoteThread,'threadId'|'selectedAt'>;/** Legacy saved request field; only read when resuming old requests. */noteLink?:Omit<NoteThread,'threadId'|'selectedAt'>;directPlan?:DirectPlan;inlineHost?:HostedInlineRequest;inlineSteering?:{jobId:string;host?:HostedInlineRequest['host'];input:SteeringInput};inlineFollow?:{jobId:string;host?:HostedInlineRequest['host'];notePath?:string;previousMessageId:string;messageId:string} }
+export interface Request { diagnosticIncidentId?:string; id: string; project: Project; title: string; prompt: string; connection: Connection; threadId?:string; folderLinkIntent?:FolderLink; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion; noteThread?:Omit<NoteThread,'threadId'|'selectedAt'>;/** Legacy saved request field; only read when resuming old requests. */noteLink?:Omit<NoteThread,'threadId'|'selectedAt'>;directPlan?:DirectPlan;inlineHost?:HostedInlineRequest;inlineSteering?:{jobId:string;host?:HostedInlineRequest['host'];input:SteeringInput};inlineFollow?:{jobId:string;host?:HostedInlineRequest['host'];notePath?:string;previousMessageId:string;messageId:string} }
 export class RequestDeliveryError extends Error {
   constructor(message:string,readonly requestSaved:boolean){super(message);}
 }
@@ -33,10 +34,13 @@ export async function withTimeout<T>(promise:Promise<T>, milliseconds:number):Pr
   finally{clearTimeout(timer);}
 }
 export async function runBridge(connection:Connection,args:string[],input=''):Promise<any> {
-  if(connection.transport==='direct')return readDirect(connection,args,await runtime?.pairedSession?.(connection.connectionId??''));
+  const operation=args[0];logEvent('transport.operation.started',{operation,transport:connection.transport??'desktop',environmentId:connection.environmentId});
+  try{
+  if(connection.transport==='direct')return await readDirect(connection,args,await runtime?.pairedSession?.(connection.connectionId??''));
   if(retiredConnection(connection))throw new Error(RETIRED_MESSAGE);
   if(runtime?.mobile)throw new Error('This saved request uses the local T3 connection. Retry it on the desktop where it was sent. On mobile, create new sends using Direct T3 pairing.');
-  return (await import('./desktop')).runDesktop(connection,args,input);
+  return await (await import('./desktop')).runDesktop(connection,args,input);
+  }catch(error){logFailure('transport.operation.failed',error,{operation,transport:connection.transport??'desktop',environmentId:connection.environmentId},false);throw error;}
 }
 export async function sendRequest(request: Request) {
   if(request.connection.transport==='direct'){if(!runtime?.saveRequest)throw Error('Direct request storage is unavailable.');return sendDirect(request,await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request));}

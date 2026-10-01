@@ -1,3 +1,4 @@
+import {logEvent,logFailure} from './diagnostics';
 import {pendingQuestions,questionAnswers,questionKey,staleQuestionFailure,type PendingQuestion,type QuestionTarget,type QuestionDrafts} from './questions';
 import type {InlineActivity} from './inline-thread';
 import type {ThreadAccess} from './thread-stream';
@@ -51,7 +52,7 @@ export class QuestionController {
         const related=activities.filter(a=>a.payload?.requestId===target.requestId);
         const terminal=related.some(a=>a.kind==='user-input.resolved'||staleQuestionFailure(a));
         const failure=related.find(a=>a.kind==='provider.user-input.respond.failed'&&!staleQuestionFailure(a)&&record.command&&!record.failureIds?.includes(a.id));
-        if(terminal||record.resolved){record.resolved=true;delete record.command;delete record.failureIds;delete record.uncertain;record.drafts=Object.create(null);this.views.set(key,{status:'resolved',fresh:true});}
+        if(terminal||record.resolved){if(!record.resolved)logEvent('question.resolved',{...target});record.resolved=true;delete record.command;delete record.failureIds;delete record.uncertain;record.drafts=Object.create(null);this.views.set(key,{status:'resolved',fresh:true});}
         else if(failure){delete record.command;delete record.failureIds;delete record.uncertain;this.views.set(key,{request,status:'error',fresh:true,detail:String(failure.payload?.detail??'T3 could not submit the answer. Your draft is saved.')});}
         else this.views.set(key,{request,fresh:true,status:request?(record.command?(record.uncertain&&!this.sends.has(key)?'error':'submitting'):'pending'):'unavailable',...(record.uncertain?{detail:'Connection lost during submission. Your answer is saved; retry safely.'}:!request?{detail:'This question is unavailable. Refresh the thread in T3.'}:{})});
       }
@@ -61,6 +62,7 @@ export class QuestionController {
   }
   submit(target:QuestionTarget,dismiss=false):Promise<void>{
     const key=questionKey(target),old=this.sends.get(key);if(old)return old;
+    logEvent('question.submit.requested',{...target,dismiss});
     const work=this.send(target,dismiss);this.sends.set(key,work);
     void work.finally(()=>{if(this.sends.get(key)===work)this.sends.delete(key);}).catch(()=>{});return work;
   }
@@ -88,8 +90,8 @@ export class QuestionController {
     if(this.stopped)return;
     this.views.set(questionKey(target),{request:view.request,status:'submitting'});this.notify();
     let access:ThreadAccess|undefined;
-    try{access=await this.access(target.environmentId);await access.api('/api/orchestration/dispatch',record.command);delete record.uncertain;this.persist();}
-    catch(error){record.uncertain=true;try{this.persist();}catch{/* Keep the original write-ahead command. */}this.views.set(questionKey(target),{request:view.request,status:'error',detail:`${error instanceof Error?error.message:'Submission failed.'} Your answer is saved; retry safely.`});this.notify();throw error;}
+    try{access=await this.access(target.environmentId);await access.api('/api/orchestration/dispatch',record.command);logEvent('question.submit.acknowledged',{...target,commandId:record.command?.commandId});delete record.uncertain;this.persist();}
+    catch(error){logFailure('question.submit.failed',error,{...target,commandId:record.command?.commandId});record.uncertain=true;try{this.persist();}catch{/* Keep the original write-ahead command. */}this.views.set(questionKey(target),{request:view.request,status:'error',detail:`${error instanceof Error?error.message:'Submission failed.'} Your answer is saved; retry safely.`});this.notify();throw error;}
     finally{await access?.close?.();}
     await this.refresh([target]);
   }

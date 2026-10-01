@@ -1,3 +1,4 @@
+import {logEvent} from './diagnostics';
 import {contentHash} from './completion';
 import type {App,Editor,MarkdownView} from 'obsidian';
 import {replaceInlineEditorText} from './inline-editor';
@@ -20,17 +21,18 @@ export function deviceNoteIO(app:App){
         const editor=open[0],current=editor.getValue();if(!open.every(editor=>editor.getValue()===current))return;
         const next=change(current);
         if(!allowed())throw Error('Writer ownership expired.');
-        if(next!==current)replaceChangedText(editor,current,next);
+        if(next!==current){logEvent('note.write.editor',{notePath:path,fromHash:contentHash(current),toHash:contentHash(next)});replaceChangedText(editor,current,next);}
         return next;
       }
       const file=app.vault.getFileByPath(path);if(!file)return;
       const current=await app.vault.read(file);
       if(!allowed()||editors(path).length)throw Error('The note or its ownership changed; retrying.');
       const next=change(current);if(next===current)return current;
-      return app.vault.process(file,value=>{
+      const written=await app.vault.process(file,value=>{
         if(!allowed()||value!==current||editors(path).length)throw Error('The note or its ownership changed; retrying.');
         return next;
       });
+      logEvent('note.write.saved',{notePath:path,fromHash:contentHash(current),toHash:contentHash(written)});return written;
     },
   };
 }

@@ -274,3 +274,54 @@ Version 2.12.0 adds the durable event/coordinator/runtime foundation and the exp
 Version 2.12.1 makes workflow settings safe across devices. Established vaults no longer rewrite synced settings on startup, device-only state never touches `data.json`, every shared write merges the latest workflow records first, and workflow revisions plus deletion tombstones prevent a stale device from restoring a deleted workflow.
 
 Assistant response HTML outside code is displayed literally so tag-like placeholders cannot disrupt Obsidian Live Preview. Markdown paragraph quotes, inline and fenced code, and URL/email autolinks retain their formatting. This is renderer-side processing; agent prompts are unchanged.
+
+### Persistent diagnostics and potential-error threads
+
+Each installation now keeps a device-local diagnostic timeline in IndexedDB,
+separate from synced settings and notes. It records operation boundaries and
+outcomes; destination dialog choices; request preparation, persistence,
+dispatch and acknowledgement; steering reservation and canonical confirmation;
+stream connections, chunks, reconnects and recovery failures; ownership commands
+and checkpoint revisions; note events and plugin write hashes; question delivery;
+and workflow execution states. Correlation IDs connect requests, jobs, messages,
+threads and turns. Note events identify an observed change, not its origin:
+Obsidian Sync activity cannot be inferred from a modify callback.
+
+Logging is always active. Retention is bounded to seven days, 10,000 events, or
+roughly 8 MB of serialized event data, whichever limit is reached first. Events
+flush every two seconds and at app background/unload. The last unflushed events
+can be lost if the process crashes. Exports and automatic reports exclude note
+bodies, prompts, selections, attachments, credentials, authentication addresses
+and question drafts. Paths, IDs, hashes and sanitized error stacks remain and may
+still be private. Download **Export plugin diagnostics…** from the command
+palette, or **Export JSON** in plugin settings. Official Obsidian Sync logs are
+not captured through unsupported private APIs; attach their matching time window
+separately when diagnosing a sync problem.
+
+**Automatically investigate potential errors** is enabled by default and can be
+turned off on each device. Reportable delivery, persistence, note-write conflict,
+question and workflow failures create a potential-error incident. Ordinary user
+validation refusals and transient polling/ownership retries are logged without
+immediately creating threads. Steering reserved but not canonically confirmed,
+or a disconnected stream not restored, becomes a potential incident after two
+minutes; this is a diagnostic deadline, not proof the request failed.
+
+A diagnostic report opens a separate new T3 thread with the failure, environment
+and up to 120 recent events, bounded to five minutes before the incident and one
+minute after it. The thread is instructed to investigate read-only and treat
+logged values as untrusted evidence. It does not become a note's remembered
+thread, write into a note, or perform completion cleanup. **Diagnostic destination**
+can be chosen in settings; Automatic prefers a discovered `send-to-t3-code` source
+project, then the already linked vault project. It never creates a project or
+changes a folder link. With no connected destination the incident stays queued.
+
+Identical incident fingerprints are grouped for 24 hours. At most three automatic
+delivery attempts per hour are allowed per device, including uncertain attempts.
+Reservations are saved before dispatch. After a lost acknowledgement or process
+restart, a potentially escaped diagnostic request is never automatically resent;
+use **Unconfirmed requests → Retry** with its original ID after checking T3.
+Failures in diagnostic reporting cannot recursively create diagnostic threads.
+If diagnostic storage fails, automatic reporting pauses until durable storage
+recovers. Settings show recent incident states and confirmed T3 thread IDs.
+**Send plugin diagnostics to a new T3 thread** also allows a manual report with
+the same duplicate and rate limits.

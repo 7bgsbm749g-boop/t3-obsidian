@@ -1,3 +1,4 @@
+import {logEvent,logFailure,settleWatch} from './diagnostics';
 import {contentHash} from './completion';
 import {commandId} from './direct';
 import {applyThreadItem,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
@@ -130,7 +131,7 @@ export class HostedInlineWriter {
             conflict=!!region&&contentHash(region.body)!==request.initialHash;
             return current;
           });
-          if(conflict){state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='The response block changed before the host accepted it.';await save();return;}
+          if(conflict){if(!['paused','conflict'].includes(state.status))logFailure('note.write.conflict',new Error('Response block was edited or removed.'),{jobId:request.id,notePath:state.notePath,knownHashes:state.hashes.slice(-5)});state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='The response block changed before the host accepted it.';await save();return;}
           if(!found){state.detail='Waiting for the response marker to reach the vault project machine.';await save();return;}
           state.accepted=true;delete state.detail;await save();
         }
@@ -171,7 +172,8 @@ export class HostedInlineWriter {
         if(!state.turnIds.includes(state.turnId))state.turnIds.push(state.turnId);
         for(const input of state.steering??[]){
           if(!current.messages.some(m=>m.role==='user'&&m.id===input.messageId))continue;
-          input.confirmed=true;
+          if(!input.confirmed)logEvent('steering.confirmed',{jobId:request.id,messageId:input.messageId,threadId:request.threadId,turnId:turnForMessage(current,input.messageId)});
+          settleWatch(`steering:${input.messageId}`);input.confirmed=true;
           state.messageId=input.messageId;
           const nextTurn=turnForMessage(current,input.messageId);
           if(nextTurn){state.turnId=nextTurn;if(!state.turnIds.includes(nextTurn))state.turnIds.push(nextTurn);}
@@ -243,11 +245,12 @@ export class HostedInlineWriter {
             applied=true;return finalAfter!;
           });
         }
-        if(conflict){state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='Response edited or removed. Undo until the original response block is intact to resume streaming.';}
+        if(conflict){if(!['paused','conflict'].includes(state.status))logFailure('note.write.conflict',new Error('Response block was edited or removed.'),{jobId:request.id,notePath:state.notePath,knownHashes:state.hashes.slice(-5)});state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='Response edited or removed. Undo until the original response block is intact to resume streaming.';}
         else if(applied)state.status=phase;
         else state.detail='Waiting for the note to become available and saved on the host.';
         await save();
       }catch(error){
+        logFailure('response.writer.retry',error,{jobId:request.id,notePath:state.notePath,threadId:request.threadId},false);
         state.detail=error instanceof Error?error.message:'The streaming host will retry.';
         await save();
       }

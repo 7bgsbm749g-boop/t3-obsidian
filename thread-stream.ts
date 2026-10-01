@@ -1,3 +1,4 @@
+import {logEvent,logFailure,watchEvent,settleWatch} from './diagnostics';
 import {Buffer} from 'buffer';
 import {applyThreadItem,turnForMessage,type InlineThreadState} from './inline-thread';
 
@@ -33,6 +34,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
   const retry=(error:Error)=>{
     if(stopped)return;
     if(rotation)clearTimeout(rotation);
+    logFailure('stream.reconnecting',error,{threadId,attempt},false);watchEvent(`stream:${threadId}`,'stream.disconnected',{threadId});
     callbacks.reconnecting(error);closeAccess();
     const delay=Math.min(30_000,1000*2**Math.min(attempt++,5));
     timer=setTimeout(()=>{void connect();},delay);
@@ -55,13 +57,13 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         try{
           const snapshot=historyTargets?await readInlineSnapshot(ready,threadId,undefined,historyTargets()):await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?turnLimit=20`);
           if(!stopped&&!ended&&access===ready&&snapshot?.thread)callbacks.item({kind:'snapshot',snapshot});
-        }catch{/* The socket may still be healthy; the next bounded read can recover. */}
+        }catch(error){logFailure('stream.poll.failed',error,{threadId},false);}
         if(!stopped&&!ended&&access===ready)pollTimer=setTimeout(()=>{void poll();},1200);
       };
       const opening=setTimeout(()=>fail(Error('T3 thread stream did not connect.')),15_000);
       ws.onopen=()=>{
         clearTimeout(opening);if(stopped){ws.close();return;}
-        attempt=0;
+        logEvent('stream.connected',{threadId});settleWatch(`stream:${threadId}`);attempt=0;
         rotation=setTimeout(()=>fail(Error('Refreshing the T3 stream session.')),4*60_000);
         ws.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId},headers:[]}));
         pollTimer=setTimeout(()=>{void poll();},1200);
@@ -76,6 +78,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
             if(String(frame.requestId)!=='1')continue;
             if(frame._tag==='Chunk'){
               if(!Array.isArray(frame.values))throw Error('T3 returned an invalid stream chunk.');
+              logEvent('stream.chunk',{threadId,count:frame.values.length,sequence:frame.values.at(-1)?.event?.sequence??frame.values.at(-1)?.snapshot?.snapshotSequence});
               for(const value of frame.values)callbacks.item(value);
               ws.send(JSON.stringify({_tag:'Ack',requestId:'1'}));
             }else if(frame._tag==='Exit'){
@@ -89,5 +92,5 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
     }catch(error){retry(error instanceof Error?error:Error('Cannot open T3 thread stream.'));}
   };
   void connect();
-  return {stop(){stopped=true;if(timer)clearTimeout(timer);if(rotation)clearTimeout(rotation);if(socket){try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{/* Connection is already gone. */}socket.close();}closeAccess();}};
+  return {stop(){logEvent('stream.stopped',{threadId});settleWatch(`stream:${threadId}`);stopped=true;if(timer)clearTimeout(timer);if(rotation)clearTimeout(rotation);if(socket){try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{/* Connection is already gone. */}socket.close();}closeAccess();}};
 }

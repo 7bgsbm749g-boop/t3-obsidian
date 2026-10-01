@@ -1,3 +1,4 @@
+import {logEvent,logFailure} from './diagnostics';
 import {hostedPaths,hostedRequestHash,safeNotePath,validateHostedRequest,type HostedInlineRequest,type HostedInlineState,type InlineFiles} from './hosted-inline';
 import {sameWorkspacePath} from './folder-link';
 import {steeringBoundary,validSteeringInput,type SteeringInput} from './inline-steering';
@@ -140,6 +141,9 @@ export class InlineLeaseClient {
   async command(input:Omit<LeaseCommand,'id'|'actor'>){
     if(this.stopped)throw Error('Response writer stopped.');
     const command:LeaseCommand={...input,id:crypto.randomUUID(),actor:this.actor},paths=leasePaths(this.directory,command.id),wall=this.now(),monotonic=this.monotonic();
+    const fields={jobId:input.jobId,commandId:command.id,kind:input.kind,epoch:input.epoch,revision:input.revision,messageId:input.steering?.messageId};
+    if(input.kind!=='heartbeat')logEvent('ownership.command.started',fields);
+    try{
     await this.files.write(paths.command,JSON.stringify(command));
     for(let attempt=0;attempt<50&&!this.stopped;attempt++){
       const raw=await this.files.read(paths.reply);
@@ -154,10 +158,12 @@ export class InlineLeaseClient {
           const previous=this.grants.get(input.jobId);
           if(!previous||record.epoch>previous.epoch||record.epoch===previous.epoch&&wall+duration>previous.wall)this.grants.set(input.jobId,{epoch:record.epoch,wall:wall+duration,monotonic:monotonic+duration});
         }else if(record?.owner!==this.actor||record.epoch!==input.epoch||reply.ttlMs===0)this.grants.delete(input.jobId);
+        if(input.kind!=='heartbeat'||!reply.ok)logEvent('ownership.command.completed',{...fields,ok:reply.ok,error:reply.error,owner:record?.owner,epoch:record?.epoch,revision:record?.revision,status:record?.state?.status},reply.ok?'info':'warning');
         return reply;
       }
       await this.pause(100);
     }
     throw Error('The ownership coordinator did not answer. The saved request can be retried.');
+    }catch(error){logFailure('ownership.command.failed',error,fields,false);throw error;}
   }
 }

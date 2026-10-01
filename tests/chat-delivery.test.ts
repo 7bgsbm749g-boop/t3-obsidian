@@ -171,7 +171,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';
   try {
-    assert.deepEqual(h.registered.map(command=>command.id),['answer-t3-question'],'Question answering has its own palette command');
+    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','report-plugin-problem','answer-t3-question'],'Diagnostics and question answering have palette commands');
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands.length,2);
     assert.equal(h.commands[0].type,'thread.create');
@@ -1220,5 +1220,31 @@ test('mobile manual Link to self registers the synced folder and opens link conf
     assert.equal(chosen.project.connectionId,project.connectionId);
     assert.equal(h.plugin.settings.folderLinks.some((link:any)=>link.folderPath===folder.path),false);
     assert.ok(h.plugin.settings.directProjects.some((p:any)=>p.id===chosen.project.id));
+  }finally{h.plugin.onunload();}
+});
+
+
+test('automatic diagnostic report creates a separate durable thread without enrolling a note',async()=>{
+  const h=await chatHarness();
+  try{
+    h.plugin.diagnostics.record('request.dispatch.failed',{requestId:'broken',error:Error('delivery failure'),prompt:'private note'},'error',true);
+    await h.plugin.diagnostics.tick(true);
+    const incident=h.plugin.diagnostics.incidents()[0];
+    assert.equal(incident.status,'sent');assert.ok(incident.threadId);
+    assert.equal(h.commands[0].type,'thread.create');assert.equal(h.commands[1].type,'thread.turn.start');
+    assert.match(h.commands[1].message.text,/potential Send to T3 Code/);assert.match(h.commands[1].message.text,/Work read-only/);
+    assert.doesNotMatch(h.commands[1].message.text,/private note/);
+    assert.equal(h.plugin.settings.pending.length,0);assert.equal(h.plugin.settings.noteThreads.length,0);assert.equal(h.plugin.settings.completionJobs.length,0);
+    await h.plugin.diagnostics.tick(true);assert.equal(h.commands.length,2);
+  }finally{h.plugin.onunload();}
+});
+
+test('uncertain diagnostic dispatch keeps the exact saved request and does not auto-resend',async()=>{
+  let failed=false;const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'){failed=true;throw Error('connection lost');}});
+  try{
+    h.plugin.diagnostics.record('request.dispatch.failed',{error:Error('bad')},'error',true);await h.plugin.diagnostics.tick(true);
+    assert.ok(failed);const incident=h.plugin.diagnostics.incidents()[0];assert.equal(incident.status,'unknown');
+    const request=h.plugin.settings.pending[0];assert.equal(request.id,incident.id);assert.equal(request.diagnosticIncidentId,incident.id);
+    const count=h.commands.length;await h.plugin.diagnostics.tick(true);assert.equal(h.commands.length,count);
   }finally{h.plugin.onunload();}
 });

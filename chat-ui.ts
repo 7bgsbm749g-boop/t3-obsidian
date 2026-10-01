@@ -1,3 +1,4 @@
+import {logEvent,logFailure} from './diagnostics';
 import {App, FuzzySuggestModal, Modal, Notice, Setting} from 'obsidian';
 import {RequestDeliveryError} from './bridge';
 
@@ -32,13 +33,14 @@ class SendDestinationModal extends Modal {
   private composing:boolean;
   constructor(app:App,private host:ChatHost,private prompt?:string){super(app);this.composing=prompt===undefined;}
   onOpen(){
+    logEvent('ui.destination.opened',{notePath:this.host.getNotePath(),steering:this.host.steering,composing:this.composing,projectKey:this.projectKey});
     this.titleEl.setText('Send to T3 Code');this.contentEl.empty();
     const row=this.contentEl.createEl('p');
     const projectButton=row.createEl('button',{text:this.host.getProjectName(this.projectKey),cls:'send-to-t3-note-project',attr:{'aria-label':`Change project for this send: ${this.host.getProjectName(this.projectKey)}`,title:this.host.getTargetDescription(this.projectKey)}});
     projectButton.disabled=Boolean(this.host.busy);
     projectButton.addEventListener('click',()=>{
       if(this.field)this.prompt=this.field.value;
-      new ChatProjectModal(this.app,this.host.getProjectChoices(),key=>{this.projectKey=key;this.onOpen();}).open();
+      new ChatProjectModal(this.app,this.host.getProjectChoices(),key=>{logEvent('ui.destination.project-selected',{projectKey:key});this.projectKey=key;this.onOpen();}).open();
     });
     if(this.composing){
       this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Message for T3',placeholder:'What would you like to do?',rows:'5'}});
@@ -61,9 +63,11 @@ class SendDestinationModal extends Modal {
     if(this.field)this.field.focus();
     else setTimeout(()=>{if(defaultButton?.isConnected)defaultButton.focus();},0);
   }
+  onClose(){logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
   private async choose(target:Destination|boolean='default'){
     if(this.choosing||this.host.busy)return;
     if(this.field){this.prompt=this.field.value;if(!this.prompt.trim())return;}
+    logEvent('ui.destination.submitted',{notePath:this.host.getNotePath(),target,projectKey:this.projectKey,steering:this.host.steering});
     this.choosing=true;this.actions.setDisabled(true);this.close();
     const prompt=this.prompt??'';
     try{
@@ -71,6 +75,7 @@ class SendDestinationModal extends Modal {
       else if(target==='new')await this.host.sendToNew(prompt,this.projectKey);
       else await this.host.sendChat(prompt,this.projectKey);
     }catch(error){
+      logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target},false);
       new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
       if(!(error instanceof RequestDeliveryError&&error.requestSaved))this.open();
     }finally{this.choosing=false;this.actions.setDisabled(Boolean(this.host.busy));}

@@ -1,3 +1,4 @@
+import {logEvent,logFailure,settleWatch} from './diagnostics';
 import type {App,Editor,MarkdownFileInfo,MarkdownView} from 'obsidian';
 import {Notice} from 'obsidian';
 import type {Connection,Request} from './bridge';
@@ -126,7 +127,7 @@ export class InlineChatManager {
   private receive(job:InlineJob,item:ThreadStreamItem){
     if(this.stopped||!this.jobs.includes(job))return;
     const runtime=this.runtime(job);
-    if(item.kind==='snapshot'&&Number.isSafeInteger(item.snapshot?.snapshotSequence)&&item.snapshot.snapshotSequence<runtime.sequence)return;
+    if(item.kind==='snapshot'&&Number.isSafeInteger(item.snapshot?.snapshotSequence)&&item.snapshot.snapshotSequence<runtime.sequence){logEvent('stream.snapshot.stale',{jobId:job.id,sequence:item.snapshot.snapshotSequence,lastSequence:runtime.sequence});return;}
     if(item.kind==='event'&&Number.isSafeInteger(item.event?.sequence)&&item.event.sequence<=runtime.sequence)return;
     const applied=applyThreadItem(runtime.state,item);runtime.state=applied.state;
     runtime.completionChecked=item.kind==='snapshot';
@@ -139,7 +140,8 @@ export class InlineChatManager {
       if(!job.turnIds.includes(job.turnId))job.turnIds.push(job.turnId);
       for(const input of job.steering??[]){
         if(!runtime.state.messages.some(m=>m.role==='user'&&m.id===input.messageId))continue;
-        input.confirmed=true;
+        if(!input.confirmed)logEvent('steering.confirmed',{jobId:job.id,messageId:input.messageId,threadId:job.threadId,turnId:turnForMessage(runtime.state,input.messageId)});
+        settleWatch(`steering:${input.messageId}`);input.confirmed=true;
         job.messageId=input.messageId;
         const turn=turnForMessage(runtime.state,input.messageId);
         if(turn){job.turnId=turn;if(!job.turnIds.includes(turn))job.turnIds.push(turn);}
@@ -155,7 +157,9 @@ export class InlineChatManager {
     const phase=job.turnId?turnPhase(runtime.state,job.turnId):'running';
     if(job.phase==='error'&&phase==='running'&&runtime.state.latestTurn?.turnId!==job.turnId&&runtime.state.session?.activeTurnId!==job.turnId)return;
     if(job.phase==='error'&&phase==='error')return;
-    job.phase=job.steering?.some(input=>!input.confirmed)?'running':phase;this.schedule(job);
+    const nextPhase=job.steering?.some(input=>!input.confirmed)?'running':phase;
+    if(job.phase!==nextPhase)logEvent('response.phase.changed',{jobId:job.id,threadId:job.threadId,turnId:job.turnId,from:job.phase,to:nextPhase});
+    job.phase=nextPhase;this.schedule(job);
   }
   private schedule(job:InlineJob){
     const runtime=this.runtime(job);if(runtime.timer)clearTimeout(runtime.timer);
@@ -184,7 +188,7 @@ export class InlineChatManager {
           access=await this.access(job.connection!);
           const snapshot=await readInlineSnapshot(access,job.threadId!,undefined,{messageIds:job.messageId?[job.messageId]:[],turnIds:job.turnIds??(job.turnId?[job.turnId]:[])});
           this.receive(job,{kind:'snapshot',snapshot});
-        }catch{this.schedule(job);}
+        }catch(error){logFailure('response.final-snapshot.failed',error,{jobId:job.id,threadId:job.threadId},false);this.schedule(job);}
         finally{runtime.refreshing=false;await access?.close?.();}
       })();
       return;
@@ -202,7 +206,8 @@ export class InlineChatManager {
       input.selectionApplied=true;
     }
     const change=terminal?finalizeRegion(document,job.id,job.bodyHash,next):replaceRegion(document,job.id,job.bodyHash,next);
-    if(!change){job.phase='conflict';runtime.monitor?.stop();this.persist();new Notice(`T3 stopped writing to ${job.path} because its inline response was edited or removed. The T3 thread remains available.`,12000);return;}
+    if(!change){logFailure('note.write.conflict',new Error('Response block was edited or removed.'),{jobId:job.id,notePath:job.path,expectedHash:job.bodyHash,actualHash:current?contentHash(current.body):undefined});job.phase='conflict';runtime.monitor?.stop();this.persist();new Notice(`T3 stopped writing to ${job.path} because its inline response was edited or removed. The T3 thread remains available.`,12000);return;}
+    logEvent('note.response.write',{jobId:job.id,notePath:job.path,fromHash:contentHash(original),toHash:contentHash(document.slice(0,change.from)+change.text+document.slice(change.to)),terminal});
     replaceChangedText(editor,original,document.slice(0,change.from)+change.text+document.slice(change.to));
     if(terminal)job.finalized=true;
     else job.bodyHash=contentHash(next);

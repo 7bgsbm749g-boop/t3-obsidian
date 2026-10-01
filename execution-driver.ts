@@ -1,3 +1,4 @@
+import {logEvent,logFailure} from './diagnostics';
 import {AutomationStore} from './automation-store';
 import {recoverableAction,transition,type ExecutionEntry,type ImmutablePlan} from './execution-journal';
 
@@ -21,7 +22,7 @@ export class DurableExecutionDriver {
     if(entry.state==='thread_created'){entry=await this.save(transition(entry,'turn_attempted',this.host.now()));try{await this.host.startTurn(entry.plan,entry.threadId!);entry=await this.save({...entry,state:'running',updatedAt:this.host.now()});}catch(error){await this.unknown(entry,error);return;}}
     if(entry.state==='running'||entry.state==='awaiting_result'){try{const status=await this.host.poll(entry.plan,entry.threadId!);if(status.state==='wait'){if(entry.state==='running')await this.save({...entry,state:'awaiting_result',updatedAt:this.host.now()});return;}await this.save({...entry,state:status.state==='complete'?'succeeded':'failed',result:status.result,detail:status.detail,updatedAt:this.host.now()});}catch(error){await this.fail(entry,error);}}
   }
-  private async save<T extends ExecutionEntry>(entry:T):Promise<T>{await this.store.putExecution(entry);return entry;}
-  private async unknown(entry:ExecutionEntry,error:unknown){await this.save({...entry,state:'delivery_unknown',detail:error instanceof Error?error.message:String(error),updatedAt:this.host.now()});}
-  private async fail(entry:ExecutionEntry,error:unknown){await this.save({...entry,state:'failed',detail:error instanceof Error?error.message:String(error),updatedAt:this.host.now()});}
+  private async save<T extends ExecutionEntry>(entry:T):Promise<T>{await this.store.putExecution(entry);logEvent('workflow.execution.state',{runId:entry.runId,requestId:entry.plan.requestId,workflowId:entry.plan.workflowId,threadId:entry.threadId,state:entry.state,attempts:entry.attempts},['failed','conflicted','delivery_unknown'].includes(entry.state)?'warning':'info');return entry;}
+  private async unknown(entry:ExecutionEntry,error:unknown){logFailure('workflow.delivery.unknown',error,{runId:entry.runId,requestId:entry.plan.requestId});await this.save({...entry,state:'delivery_unknown',detail:error instanceof Error?error.message:String(error),updatedAt:this.host.now()});}
+  private async fail(entry:ExecutionEntry,error:unknown){logFailure('workflow.execution.failed',error,{runId:entry.runId,requestId:entry.plan.requestId});await this.save({...entry,state:'failed',detail:error instanceof Error?error.message:String(error),updatedAt:this.host.now()});}
 }
