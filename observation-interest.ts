@@ -1,3 +1,4 @@
+import {isLogPath} from './synced-event-logs';
 import {globMatches,type WorkflowIR} from './automation-ir';
 import type {ObservationSource} from './automation-protocol';
 import {runnableFolderWorkflow} from './v2-folder-workflow';
@@ -16,7 +17,7 @@ function eventTypes(ir:WorkflowIR):string[]{
 }
 
 function inScope(ir:WorkflowIR,path:string):boolean{
-  return globMatches(ir.scope.path.glob,path,ir.scope.path.case)
+  return !isLogPath(path) && globMatches(ir.scope.path.glob,path,ir.scope.path.case)
     && !ir.scope.exclude.some(glob=>globMatches(glob,path,ir.scope.path.case));
 }
 

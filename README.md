@@ -277,57 +277,33 @@ Version 2.12.1 makes workflow settings safe across devices. Established vaults n
 
 Assistant response HTML outside code is displayed literally so tag-like placeholders cannot disrupt Obsidian Live Preview. Markdown paragraph quotes, inline and fenced code, and URL/email autolinks retain their formatting. This is renderer-side processing; agent prompts are unchanged.
 
-### Persistent diagnostics and potential-error threads
+### Synced plugin event logging
 
-Each installation now keeps a device-local diagnostic timeline in IndexedDB,
-separate from synced settings and notes. It records operation boundaries and
-outcomes; destination dialog choices; request preparation, persistence,
-dispatch and acknowledgement; steering reservation and canonical confirmation;
-stream connections, chunks, reconnects and recovery failures; ownership commands
-and checkpoint revisions; note events and plugin write hashes; question delivery;
-and workflow execution states. Correlation IDs connect requests, jobs, messages,
-threads and turns. Note events identify an observed change, not its origin:
-Obsidian Sync activity cannot be inferred from a modify callback.
+The plugin records operation boundaries, delivery and steering acknowledgements,
+stream state, ownership, note writes, observed vault changes, and failures. Errors
+only enter the timeline: no automatic diagnostic threads, reporting commands,
+reporting settings, destinations, incidents, or watchdog reports are created.
 
-Logging is always active. Retention is bounded to seven days, 10,000 events, or
-roughly 8 MB of serialized event data, whichever limit is reached first. Events
-flush every two seconds and at app background/unload. The last unflushed events
-can be lost if the process crashes. Exports and automatic reports exclude note
-bodies, prompts, selections, attachments, credentials, authentication addresses
-and question drafts. Paths, IDs, hashes and sanitized error stacks remain and may
-still be private. Download **Export plugin diagnostics…** from the command
-palette, or **Export JSON** in plugin settings. Official Obsidian Sync logs are
-not captured through unsupported private APIs; attach their matching time window
-separately when diagnosing a sync problem.
+Events remain in a device-local IndexedDB buffer and are copied every 30 seconds
+(and on unload/export) to `T3 Code Logs/<device-id>/<session-id>.md` in the vault.
+These ordinary Markdown files sync through Obsidian Sync like notes. Each device
+writes only its own session files, so devices do not overwrite each other's logs.
+Sync must be enabled and this folder must not be excluded on receiving devices.
+The log folder is excluded from plugin observation and workflow capture to avoid
+logging loops or automatic sends. Sync's own internal logs are separate.
 
-**Automatically investigate potential errors** is enabled by default and can be
-turned off on each device. Reportable delivery, persistence, note-write conflict,
-question and workflow failures create a potential-error incident. Ordinary user
-validation refusals and transient polling/ownership retries are logged without
-immediately creating threads. Steering reserved but not canonically confirmed,
-or a disconnected stream not restored, becomes a potential incident after two
-minutes; this is a diagnostic deadline, not proof the request failed.
+The command palette's **Export plugin diagnostics…** produces JSON combining the
+local timeline with available synced device timelines, deduplicated by device,
+session, and sequence. Unreceived/offline device logs appear after Sync delivers
+them. The local timeline/export is bounded to 10,000 events; local storage also
+has an 8 MB size limit. Each device expires its own session files after seven days.
+Publication failures preserve local events and retry on later flushes.
 
-A diagnostic report opens a separate new T3 thread with the failure, environment
-and up to 120 recent events, bounded to five minutes before the incident and one
-minute after it. The thread is instructed to investigate read-only and treat
-logged values as untrusted evidence. It does not become a note's remembered
-thread, write into a note, or perform completion cleanup. **Diagnostic destination**
-can be chosen in settings; Automatic prefers a discovered `send-to-t3-code` source
-project, then the already linked vault project. It never creates a project or
-changes a folder link. With no connected destination the incident stays queued.
-
-Identical incident fingerprints are grouped for 24 hours. At most three automatic
-delivery attempts per hour are allowed per device, including uncertain attempts.
-Reservations are saved before dispatch. After a lost acknowledgement or process
-restart, a potentially escaped diagnostic request is never automatically resent;
-use **Unconfirmed requests → Retry** with its original ID after checking T3.
-Failures in diagnostic reporting cannot recursively create diagnostic threads.
-If diagnostic storage fails, automatic reporting pauses until durable storage
-recovers. Settings show recent incident states and confirmed T3 thread IDs.
-**Send plugin diagnostics to a new T3 thread** also allows a manual report with
-the same duplicate and rate limits.
-
+Raw note bodies, prompts, selections, attachments, credentials, and connection
+URLs are redacted. Metadata includes note paths, device/session IDs, hashes,
+lengths, times, operation IDs, and sanitized errors. Log files inherit the vault's
+sharing and Sync access. Older device-local timelines migrate; obsolete reporting
+state and preferences are ignored. Upgrade every device to remove reporting there.
 
 ## Multiple streaming destinations and agent commands
 

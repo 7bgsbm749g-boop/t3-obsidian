@@ -172,7 +172,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';
   try {
-    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','report-plugin-problem','send-or-ask','send-note-to-multiple-notes','answer-t3-question'],'Manual send and multi-destination commands are available');
+    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','send-or-ask','send-note-to-multiple-notes','answer-t3-question'],'Manual send and multi-destination commands are available');
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands.length,2);
     assert.equal(h.commands[0].type,'thread.create');
@@ -1302,28 +1302,13 @@ test('mobile project creation uses the chosen external location and reuses its p
 });
 
 
-test('automatic diagnostic report creates a separate durable thread without enrolling a note',async()=>{
-  const h=await chatHarness();
-  try{
-    h.plugin.diagnostics.record('request.dispatch.failed',{requestId:'broken',error:Error('delivery failure'),prompt:'private note'},'error',true);
-    await h.plugin.diagnostics.tick(true);
-    const incident=h.plugin.diagnostics.incidents()[0];
-    assert.equal(incident.status,'sent');assert.ok(incident.threadId);
-    assert.equal(h.commands[0].type,'thread.create');assert.equal(h.commands[1].type,'thread.turn.start');
-    assert.match(h.commands[1].message.text,/potential Send to T3 Code/);assert.match(h.commands[1].message.text,/Work read-only/);
-    assert.doesNotMatch(h.commands[1].message.text,/private note/);
-    assert.equal(h.plugin.settings.pending.length,0);assert.equal(h.plugin.settings.noteThreads.length,0);assert.equal(h.plugin.settings.completionJobs.length,0);
-    await h.plugin.diagnostics.tick(true);assert.equal(h.commands.length,2);
-  }finally{h.plugin.onunload();}
-});
-
-test('uncertain diagnostic dispatch keeps the exact saved request and does not auto-resend',async()=>{
-  let failed=false;const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'){failed=true;throw Error('connection lost');}});
-  try{
-    h.plugin.diagnostics.record('request.dispatch.failed',{error:Error('bad')},'error',true);await h.plugin.diagnostics.tick(true);
-    assert.ok(failed);const incident=h.plugin.diagnostics.incidents()[0];assert.equal(incident.status,'unknown');
-    const request=h.plugin.settings.pending[0];assert.equal(request.id,incident.id);assert.equal(request.diagnosticIncidentId,incident.id);
-    const count=h.commands.length;await h.plugin.diagnostics.tick(true);assert.equal(h.commands.length,count);
+test('plugin errors only log and never create diagnostic threads',async()=>{
+  const h=await chatHarness();try{
+    h.plugin.diagnostics.record('request.dispatch.failed',{error:Error('bad')},'error');
+    await h.plugin.diagnostics.tick();await h.plugin.diagnostics.tick();
+    assert.equal(h.commands.length,0);assert.equal(h.plugin.settings.pending.length,0);
+    assert.equal(h.registered.some(command=>command.id==='report-plugin-problem'),false);
+    assert.equal(h.plugin.sendDiagnosticIncident,undefined);assert.equal(h.plugin.diagnosticPreferences,undefined);
   }finally{h.plugin.onunload();}
 });
 

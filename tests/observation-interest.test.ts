@@ -33,3 +33,11 @@ test('enabled subscriptions admit only their event types and folder scopes',()=>
   assert.equal(interest.accepts('vault.delete','Inbox/A.md'),false);
   assert.equal(interest.accepts('vault.modify','Archive/A.md'),false);
 });
+
+test('vault-wide workflows never capture generated log Markdown',()=>{
+  const interest=observationInterest([workflow('all','/',['create','modify'])]);
+  assert.equal(interest.baseline('T3 Code Logs/device/session.md'),false);
+  assert.equal(interest.accepts('vault.create','T3 Code Logs/device/session.md'),false);
+  assert.equal(interest.accepts('vault.modify','T3 Code Logs/device/session.md'),false);
+  assert.equal(interest.baseline('Notes/Real.md'),true);
+});

@@ -1,6 +1,6 @@
 import {questionTargets} from './questions';
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,type InlineQuestionFollow} from './inline-questions';
-import {logEvent,logFailure,settleWatch} from './diagnostics';
+import {logEvent,logFailure} from './diagnostics';
 import {contentHash} from './completion';
 import {commandId} from './direct';
 import {applyThreadItem,completionProof,hasCompletionProof,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
@@ -197,7 +197,7 @@ export class HostedInlineWriter {
         for(const input of state.steering??[]){
           if(!current.messages.some(m=>m.role==='user'&&m.id===input.messageId))continue;
           if(!input.confirmed)logEvent('steering.confirmed',{jobId:request.id,messageId:input.messageId,threadId:request.threadId,turnId:turnForMessage(current,input.messageId)});
-          settleWatch(`steering:${input.messageId}`);input.confirmed=true;
+          input.confirmed=true;
           state.messageId=input.messageId;
           const nextTurn=turnForMessage(current,input.messageId);
           if(nextTurn){state.turnId=nextTurn;if(!state.turnIds.includes(nextTurn))state.turnIds.push(nextTurn);}
@@ -281,7 +281,7 @@ export class HostedInlineWriter {
         if(applied)for(const input of selectionsApplied)input.selectionApplied=true;
         await save();
       }catch(error){
-        logFailure('response.writer.retry',error,{jobId:request.id,notePath:state.notePath,threadId:request.threadId},false);
+        logFailure('response.writer.retry',error,{jobId:request.id,notePath:state.notePath,threadId:request.threadId});
         state.detail=error instanceof Error?error.message:'The streaming host will retry.';
         await save();
       }

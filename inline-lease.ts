@@ -174,6 +174,6 @@ export class InlineLeaseClient {
       await this.pause(100);
     }
     throw Error('The ownership coordinator did not answer. The saved request can be retried.');
-    }catch(error){logFailure('ownership.command.failed',error,fields,false);throw error;}
+    }catch(error){logFailure('ownership.command.failed',error,fields);throw error;}
   }
 }

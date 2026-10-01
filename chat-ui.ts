@@ -75,7 +75,7 @@ class SendDestinationModal extends Modal {
       else if(target==='new')await this.host.sendToNew(prompt,this.projectKey);
       else await this.host.sendChat(prompt,this.projectKey);
     }catch(error){
-      logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target},false);
+      logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});
       new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
       if(!(error instanceof RequestDeliveryError&&error.requestSaved))this.open();
     }finally{this.choosing=false;this.actions.setDisabled(Boolean(this.host.busy));}

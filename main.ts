@@ -1,6 +1,7 @@
 import {editorStream} from './editor-stream';
 import {validateNoteCommand,type NoteCommand,type NoteCommandResult} from './note-command';
-import {EventJournal,DiagnosticDeferred,configureDiagnostics,diagnosticPrompt,logEvent,logFailure,watchEvent,settleWatch,type Incident,type DiagnosticEvent} from './diagnostics';
+import {EventJournal,configureDiagnostics,logEvent,logFailure} from './diagnostics';
+import {SyncedEventLogs,isLogPath} from './synced-event-logs';
 import {instrumentOperations} from './diagnostic-operations';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from './cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from './native-account';
@@ -123,8 +124,6 @@ export default class SendToT3 extends Plugin {
   private inlineEnvironment?:Promise<string>;
   private mobileSelectionAction?:{dispose():void};
   diagnostics?:EventJournal;
-  diagnosticPreferences={automatic:true,projectKey:''};
-  private diagnosticPreferenceKey='';
   async onload() {
     const data = await this.loadData();
     this.lastDiskSnapshot=JSON.stringify(data);
@@ -141,17 +140,15 @@ export default class SendToT3 extends Plugin {
     this.vaultRegistrations=local?.vaultRegistrations??{};
     const automationDrafts:WorkflowIR[]=[];for(const candidate of Array.isArray(data?.automationDrafts)?data.automationDrafts:[])try{automationDrafts.push(validateWorkflowIR(candidate));}catch{/* Invalid synced drafts stay inert. */}
     this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data),automation:{destinationId:typeof data?.automation?.destinationId==='string'?data.automation.destinationId:'qlo2-vps',coordinatorDeviceId:typeof data?.automation?.coordinatorDeviceId==='string'?data.automation.coordinatorDeviceId:''},automationDrafts,workflowEditRequests:loadWorkflowEditRequests(data?.workflowEditRequests)};
-    this.diagnosticPreferenceKey=`${this.localKey}-diagnostics-preferences-${this.settings.vaultId}`;
-    const preferences=this.app.loadLocalStorage(this.diagnosticPreferenceKey);
-    this.diagnosticPreferences={automatic:preferences?.automatic!==false,projectKey:typeof preferences?.projectKey==='string'?preferences.projectKey:''};
     const diagnosticContext={deviceId:this.deviceId,vaultId:this.settings.vaultId,pluginVersion:this.manifest?.version??'unknown',platform:Platform.isMobile?'mobile':'desktop'};
-    this.diagnostics=new EventJournal({id:randomId,context:diagnosticContext,load:()=>deviceState(`diagnostics:${this.settings.vaultId}:${this.deviceId}`),save:state=>deviceState(`diagnostics:${this.settings.vaultId}:${this.deviceId}`,state),report:(incident,timeline)=>this.sendDiagnosticIncident(incident,timeline)});
+    const adapter=this.app.vault?.adapter;
+    const syncedLogs=adapter&&typeof adapter.mkdir==='function'&&typeof adapter.write==='function'?new SyncedEventLogs(adapter,this.deviceId,()=>this.app.vault.getMarkdownFiles().map(file=>file.path)):undefined;
+    this.diagnostics=new EventJournal({id:randomId,context:diagnosticContext,load:()=>deviceState(`diagnostics:${this.settings.vaultId}:${this.deviceId}`),save:state=>deviceState(`diagnostics:${this.settings.vaultId}:${this.deviceId}`,state),...(syncedLogs?{publish:(events:import('./diagnostics').DiagnosticEvent[])=>syncedLogs.publish(events),readSynced:()=>syncedLogs.read()}:{})});
     await this.diagnostics.load();configureDiagnostics(this.diagnostics);
     logEvent('plugin.loaded',diagnosticContext);
-    this.register?.(instrumentOperations(this,['sendChat','send','dispatch','sendInlineChat','sendInlineSteering','continueInline','stopHostedInline','openEditorChat','openPaletteAction','openQuestion','save','scan','refreshMachines','pairConnection','startEmailSignIn','finishEmailSignIn','signOutCloud','saveFolderLink','linkFolder','createFolderProject','startObservationJournal','checkExternalSettings','checkWorkflowProposals','saveV2Workflow','retryV2Execution'],['save','startObservationJournal','checkExternalSettings','checkWorkflowProposals']));
-    if(typeof window!=='undefined'&&typeof this.registerInterval==='function')this.registerInterval(window.setInterval(()=>void this.diagnostics?.tick(this.diagnosticPreferences.automatic).catch(()=>{}),2000));
+    this.register?.(instrumentOperations(this,['sendChat','send','dispatch','sendInlineChat','sendInlineSteering','continueInline','stopHostedInline','openEditorChat','openPaletteAction','openQuestion','save','scan','refreshMachines','pairConnection','startEmailSignIn','finishEmailSignIn','signOutCloud','saveFolderLink','linkFolder','createFolderProject','startObservationJournal','checkExternalSettings','checkWorkflowProposals','saveV2Workflow','retryV2Execution']));
+    if(typeof window!=='undefined'&&typeof this.registerInterval==='function')this.registerInterval(window.setInterval(()=>void this.diagnostics?.tick().catch(()=>{}),2000));
     this.addCommand({id:'export-diagnostics',name:'Export plugin diagnostics…',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
-    this.addCommand({id:'report-plugin-problem',name:'Send plugin diagnostics to a new T3 thread',callback:()=>{logFailure('plugin.problem.reported',new Error('User requested investigation of a potential plugin problem.'));void this.diagnostics?.tick(true).catch(()=>{});}});
     this.addCommand({id:'send-or-ask',name:'Send to T3 Code',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;
       if(this.stopped||this.busy||!file||file.extension.toLowerCase()!=='md')return false;
@@ -166,7 +163,7 @@ export default class SendToT3 extends Plugin {
       this.registerDomEvent(window,'error',event=>{if(/send-to-t3-code/.test(event.error?.stack??event.filename??''))logFailure('plugin.uncaught-error',event.error??new Error(event.message));});
     }
     if(typeof this.app.vault?.on==='function')for(const name of ['create','modify','delete','rename'] as const)this.registerEvent(this.app.vault.on(name as any,(file:TAbstractFile,oldPath?:string)=>{
-      if(!file?.path||file.path.startsWith(`${this.app.vault.configDir}/`))return;
+      if(!file?.path||isLogPath(file.path)||file.path.startsWith(`${this.app.vault.configDir}/`))return;
       logEvent(`vault.${name}`,{notePath:file.path,oldPath,size:file instanceof TFile?file.stat.size:undefined,mtime:file instanceof TFile?file.stat.mtime:undefined,source:'observed; origin unknown'});
     }));
     this.registerEvent(this.app.workspace.on('file-open',file=>logEvent('editor.file-open',{notePath:file?.path})));
@@ -1296,36 +1293,12 @@ export default class SendToT3 extends Plugin {
     }catch(e){throw new RequestDeliveryError(`${message(e)} ${saved?'Check Unconfirmed requests in settings before sending again.':'No thread was created.'}`,saved);}
     finally{this.busy=false;}
   }
-  setDiagnosticPreferences(change:Partial<typeof this.diagnosticPreferences>){
-    Object.assign(this.diagnosticPreferences,change);this.app.saveLocalStorage(this.diagnosticPreferenceKey,this.diagnosticPreferences);
-    logEvent('diagnostics.preferences.changed',{automatic:this.diagnosticPreferences.automatic,projectKey:this.diagnosticPreferences.projectKey});
-  }
   async exportDiagnostics(){
     if(!this.diagnostics)throw Error('Diagnostics are still starting.');
     await this.diagnostics.flush();
-    const blob=new Blob([this.diagnostics.export()],{type:'application/json'}),url=URL.createObjectURL(blob);
+    const blob=new Blob([await this.diagnostics.exportSynced()],{type:'application/json'}),url=URL.createObjectURL(blob);
     const link=document.createElement('a');link.href=url;link.download=`t3-diagnostics-${this.deviceId}-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),30_000);
-    new Notice('Exported device-local plugin diagnostics. Official Sync logs can be attached separately.');
-  }
-  private async sendDiagnosticIncident(incident:Incident,timeline:DiagnosticEvent[]):Promise<string>{
-    if(this.stopped||this.busy)throw new DiagnosticDeferred('Waiting for the current plugin operation to finish.');
-    const projects=this.projects();
-    const root=this.settings.folderLinks.find(link=>link.folderPath==='/');
-    const project=this.diagnosticPreferences.projectKey?projects.find(item=>projectKey(item)===this.diagnosticPreferences.projectKey):projects.find(item=>/[\\/]send-to-t3-code[\\/]?$/.test(item.workspaceRoot))??projects.find(item=>item.id===root?.projectId&&(item.connectionId??'')===(root?.connectionId??''));
-    if(!project)throw new DiagnosticDeferred('Choose a diagnostic destination project in plugin settings, or connect the vault project.');
-    if(this.projectReadinessError(project))throw new DiagnosticDeferred('The diagnostic destination is not connected.');
-    if(this.settings.pending.some(item=>item.id===incident.id))throw Error('A diagnostic request with this ID is already saved. Check Unconfirmed requests before retrying.');
-    const request:Request={id:incident.id,diagnosticIncidentId:incident.id,project:{...project},connection:this.connection(project),title:`Potential plugin error: ${incident.event.event}`,prompt:diagnosticPrompt(incident,timeline,{deviceId:this.deviceId,vaultId:this.settings.vaultId,pluginVersion:this.manifest?.version??'unknown',platform:Platform.isMobile?'mobile':'desktop'})};
-    this.settings.pending.push(request);
-    await this.save();
-    // Use the normal durable transport, but do not insert the report in a note,
-    // change remembered threads, or attach it to a user's running conversation.
-    if(this.stopped)throw new DiagnosticDeferred('The plugin was disabled before diagnostic dispatch.');
-    const result=await sendRequest(request);
-    this.diagnostics?.confirm(incident.id,result.threadId);
-    const pending=this.settings.pending;this.settings.pending=pending.filter(item=>item!==request);
-    try{await this.save();}catch(error){this.settings.pending=pending;throw error;}
-    new Notice(`Potential plugin error sent to T3: ${result.threadId}`,12_000);return result.threadId;
+    new Notice('Exported plugin diagnostics from this device and synced devices. Official Sync logs can be attached separately.');
   }
   projects(){return this.mode==='direct'?this.settings.directProjects:this.settings.projects;}
   selected(){return this.mode==='direct'?this.settings.directSelected:this.settings.selected;}
@@ -1547,7 +1520,7 @@ export default class SendToT3 extends Plugin {
       if(connection.transport==='direct'){const c=this.settings.paired.find(c=>c.id===connection.connectionId)!;this.settings.directProjects=[...this.settings.directProjects.filter(p=>p.connectionId!==c.id),...projects.map(p=>({...p,connectionId:c.id,connectionName:c.name}))];}
       else this.settings.projects=projects;
       this.scanError=result.cached?(result.warning??'Destination offline. Showing saved projects; sending requires a connection.') : '';await this.save();
-    } catch(e) {logFailure('projects.scan.failed',e,{},false);this.scanError = message(e); throw e;}
+    } catch(e) {logFailure('projects.scan.failed',e,{});this.scanError = message(e); throw e;}
   }
   async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote;streamReply?:boolean;destinations?:string[];onPrepared?:(request:Request)=>Promise<void>}) {
     if (this.busy) {if(options?.throwOnError)throw Error('Obsidian is sending another request. Retry shortly.');return;}
@@ -1706,8 +1679,7 @@ export default class SendToT3 extends Plugin {
     this.rememberSettlement(request,threadId);
   }
   async dispatch(request:Request,quiet=false) {
-    const report=!request.diagnosticIncidentId;
-    logEvent('request.dispatch.started',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,jobId:request.inlineSteering?.jobId,kind:request.diagnosticIncidentId?'diagnostic':request.inlineSteering?'steering':request.inlineFollow?'continuation':'send'});
+    logEvent('request.dispatch.started',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,jobId:request.inlineSteering?.jobId,kind:request.inlineSteering?'steering':request.inlineFollow?'continuation':'send'});
     try{
     if(request.inlineSteering){
       const steering=request.inlineSteering;
@@ -1715,7 +1687,7 @@ export default class SendToT3 extends Plugin {
       if(steering.host){if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');await this.deviceInline.steer(steering.host,steering.jobId,steering.input);}
       else {const job=this.inlineChat?.find(steering.jobId)??this.inlineChat?.steeringJob(steering.jobId,steering.input.messageId);if(!job||job.threadId!==request.threadId)throw Error('The original response is unavailable on this device.');this.inlineChat!.steer(job,steering.input);}
     }
-    if(request.inlineSteering)watchEvent(`steering:${request.inlineSteering.input.messageId}`,'steering.reserved',{requestId:request.id,jobId:request.inlineSteering.jobId,messageId:request.inlineSteering.input.messageId,threadId:request.threadId});
+    if(request.inlineSteering)logEvent('steering.reserved',{requestId:request.id,jobId:request.inlineSteering.jobId,messageId:request.inlineSteering.input.messageId,threadId:request.threadId});
     if(request.inlineFollow){
       const follow=request.inlineFollow;
       if(follow.messageId!==commandId(request.id,'message')||!request.threadId)throw Error('Invalid saved continuation request.');
@@ -1734,13 +1706,12 @@ export default class SendToT3 extends Plugin {
     const result=await sendRequest(request);
     this.persistAgentCommand(request,result.threadId);
     logEvent('request.dispatch.acknowledged',{requestId:request.id,threadId:result.threadId,jobId:request.inlineSteering?.jobId,messageId:commandId(request.id,'message')});
-    if(request.diagnosticIncidentId)this.diagnostics?.confirm(request.diagnosticIncidentId,result.threadId);
     const before={jobs:this.settings.completionJobs,settlementJobs:this.settings.settlementJobs,pending:this.settings.pending,noteThreads:this.settings.noteThreads,folderLinks:this.settings.folderLinks};
     this.rememberStarted(request,result.threadId);
     this.settings.pending=this.settings.pending.filter(r=>r.id!==request.id);
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;this.settings.settlementJobs=before.settlementJobs;this.settings.noteThreads=before.noteThreads;this.settings.folderLinks=before.folderLinks;throw e;}
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
-    }catch(error){logFailure(report?'request.dispatch.failed':'diagnostics.request.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId},report);throw error;}
+    }catch(error){logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});throw error;}
   }
   onunload(){logEvent('plugin.unloading');configureDiagnostics();void this.diagnostics?.close().catch(()=>{});this.stopped=true;this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.coordinatorService?.stop();if(this.coordinatorTimer!==undefined)window.clearInterval(this.coordinatorTimer);this.observationEngine?.stop();this.remoteJournal?.close();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
@@ -1940,13 +1911,6 @@ class T3Settings extends PluginSettingTab {
   display(){
     const el=this.containerEl; el.empty();
     el.createEl('p',{text:'Send full Markdown notes and embedded images to your T3 projects. Sending starts a turn using the project’s model and permission defaults.'});
-    el.createEl('h3',{text:'Plugin diagnostics'});
-    el.createEl('p',{text:'A persistent device-local timeline records plugin operations, steering, stream state and note changes. Note bodies, prompts and credentials are excluded. Official Obsidian Sync logs must be exported separately.'});
-    new Setting(el).setName('Automatically investigate potential errors').setDesc('Create a new T3 diagnostic thread for actionable failures or unconfirmed steering after two minutes. Repeated incidents are grouped for 24 hours; at most three automatic delivery attempts per hour on this device. Diagnostic threads receive metadata and a recent timeline and are instructed to investigate read-only.').addToggle(t=>t.setValue(this.plugin.diagnosticPreferences.automatic).onChange(value=>this.plugin.setDiagnosticPreferences({automatic:value})));
-    new Setting(el).setName('Diagnostic destination').setDesc('Automatic uses the Send to T3 Code source project if discovered, otherwise the linked vault project.').addDropdown(d=>{d.addOption('','Automatic');for(const project of this.plugin.projects())d.addOption(projectKey(project),projectLabel(project));if(this.plugin.diagnosticPreferences.projectKey&&!this.plugin.projects().some(p=>projectKey(p)===this.plugin.diagnosticPreferences.projectKey))d.addOption(this.plugin.diagnosticPreferences.projectKey,'Unavailable saved destination');d.setValue(this.plugin.diagnosticPreferences.projectKey).onChange(value=>this.plugin.setDiagnosticPreferences({projectKey:value}));});
-    new Setting(el).setName('Diagnostic timeline').addButton(b=>b.setButtonText('Export JSON').onClick(()=>void this.plugin.exportDiagnostics().catch(error=>new Notice(message(error))))).addButton(b=>b.setButtonText('Send to T3').onClick(()=>{logFailure('plugin.problem.reported',new Error('User requested investigation of a potential plugin problem.'));void this.plugin.diagnostics?.tick(true).catch(()=>{});}));
-    for(const incident of this.plugin.diagnostics?.incidents().slice(-5).reverse()??[])new Setting(el).setName(incident.event.event).setDesc(`${incident.createdAt} · ${incident.status}${incident.threadId?` · T3 thread ${incident.threadId}`:''}${incident.detail?` · ${incident.detail}`:''}`);
-    if(this.plugin.diagnostics?.storageError)el.createEl('p',{text:'Diagnostic storage is unavailable. Automatic reports are paused until storage recovers.',cls:'t3-error'});
     new Setting(el).setName('Connection on this device').setDesc('T3 Connect works on desktop and mobile. This computer only is available for local desktop use.').addDropdown(d=>{d.addOptions({...(!Platform.isMobile?{desktop:'This computer only (advanced)'}:{}),direct:'T3 Connect (recommended)'});d.setValue(this.plugin.mode).onChange(async value=>{this.plugin.mode=value as 'desktop'|'direct';this.plugin.scanError='';await this.plugin.save();this.display();});});
     if(this.plugin.mode==='direct'){
       this.cloudUI(el);

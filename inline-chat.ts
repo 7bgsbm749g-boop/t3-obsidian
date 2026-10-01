@@ -1,5 +1,5 @@
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,type InlineQuestionFollow} from './inline-questions';
-import {logEvent,logFailure,settleWatch} from './diagnostics';
+import {logEvent,logFailure} from './diagnostics';
 import type {App,Editor,MarkdownFileInfo,MarkdownView} from 'obsidian';
 import {Notice} from 'obsidian';
 import type {Connection,Request} from './bridge';
@@ -141,7 +141,7 @@ export class InlineChatManager {
       for(const input of job.steering??[]){
         if(!runtime.state.messages.some(m=>m.role==='user'&&m.id===input.messageId))continue;
         if(!input.confirmed)logEvent('steering.confirmed',{jobId:job.id,messageId:input.messageId,threadId:job.threadId,turnId:turnForMessage(runtime.state,input.messageId)});
-        settleWatch(`steering:${input.messageId}`);input.confirmed=true;
+        input.confirmed=true;
         job.messageId=input.messageId;
         const turn=turnForMessage(runtime.state,input.messageId);
         if(turn){job.turnId=turn;if(!job.turnIds.includes(turn))job.turnIds.push(turn);}
@@ -190,7 +190,7 @@ export class InlineChatManager {
           access=await this.access(job.connection!);
           const snapshot=await readInlineSnapshot(access,job.threadId!,undefined,{messageIds:job.messageId?[job.messageId]:[],turnIds:job.turnIds??(job.turnId?[job.turnId]:[])});
           this.receive(job,{kind:'snapshot',snapshot});
-        }catch(error){logFailure('response.final-snapshot.failed',error,{jobId:job.id,threadId:job.threadId},false);this.schedule(job);}
+        }catch(error){logFailure('response.final-snapshot.failed',error,{jobId:job.id,threadId:job.threadId});this.schedule(job);}
         finally{runtime.refreshing=false;await access?.close?.();}
       })();
       return;
