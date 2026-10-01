@@ -36,6 +36,11 @@ export async function addDesktopProject(connection:Connection,workspaceRoot:stri
  const output=await cli(findCli(connection),['project','add','--base-dir',connection.baseDir||join(homedir(),'.t3'),'--title',title,workspaceRoot]);
  const match=/Added project ([0-9a-f-]{36})\b/i.exec(output);if(!match)throw Error('T3 did not confirm the new project.');return match[1];
 }
+export async function browseDesktopFolder(path:string){
+ const root=await fs.realpath(path==='~'?homedir():path);
+ const entries=(await fs.readdir(root,{withFileTypes:true})).filter(entry=>entry.isDirectory()).sort((a,b)=>a.name.localeCompare(b.name));
+ return {parentPath:root,entries:entries.map(entry=>({name:entry.name,fullPath:join(root,entry.name)}))};
+}
 export function uuid5(id:string,name:string):string {
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))throw new Error('Invalid request ID.');
  const b=createHash('sha1').update(Buffer.from(id.replace(/-/g,''),'hex')).update(name).digest().subarray(0,16);b[6]=(b[6]&15)|80;b[8]=(b[8]&63)|128;

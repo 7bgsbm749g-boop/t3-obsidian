@@ -1284,19 +1284,20 @@ test('mobile reuses an existing folder project and links only after confirmed de
   }finally{h.plugin.onunload();}
 });
 
-test('mobile manual Link to self registers the synced folder and opens link confirmation',async()=>{
+test('mobile project creation uses the chosen external location and reuses its project',async()=>{
   const h=await chatHarness();
   try{
-    let chosen:any;
-    h.plugin.linkFolder=async(folder:any,project:any,self:boolean)=>{chosen={folder,project,self};};
-    const folder={path:'Fresh/deep',name:'deep'};
-    await h.plugin.linkFolderToSelf(folder);
-    assert.deepEqual(h.commands.map(c=>c.type),['project.create']);
-    assert.equal(h.commands[0].workspaceRoot,'/projects/notes/Fresh/deep');
-    assert.equal(h.commands[0].title,'deep');assert.equal(chosen.self,true);
-    assert.equal(chosen.project.connectionId,project.connectionId);
-    assert.equal(h.plugin.settings.folderLinks.some((link:any)=>link.folderPath===folder.path),false);
-    assert.ok(h.plugin.settings.directProjects.some((p:any)=>p.id===chosen.project.id));
+    const location=await h.plugin.projectLocation({id:project.connectionId,name:'Laptop'});
+    try{
+      assert.equal((await location.browse('/workspaces/app')).parentPath,'/workspaces/app');
+      const created=await location.create('/workspaces/app','App');
+      assert.deepEqual(h.commands.map(c=>c.type),['project.create']);
+      assert.equal(h.commands[0].workspaceRoot,'/workspaces/app');
+      assert.equal(h.commands[0].title,'App');assert.equal(created.connectionId,project.connectionId);
+      assert.equal((await location.create('/workspaces/app','App')).id,created.id);
+      assert.equal(h.commands.length,1);
+      assert.equal(h.plugin.settings.folderLinks.some((link:any)=>link.workspaceRoot==='/workspaces/app'),false);
+    }finally{location.close();}
   }finally{h.plugin.onunload();}
 });
 

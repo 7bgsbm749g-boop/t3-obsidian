@@ -21,6 +21,7 @@ import {projectThreads,type ThreadChoice} from './thread-target';
 import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,previousNoteThreads,type NoteThread} from './note-threads';
 import {installFolderIndicators,type FolderIndicatorController} from './folder-indicator';
 import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,waitForVaultNote,type VaultLocation,type VaultRegistration} from './vault-connection';
+import {ProjectCreateModal,type ProjectLocation} from './project-create-ui';
 import {VaultSetupModal,VaultSetupCancelled,type VaultMachine} from './vault-setup-ui';
 import {ObservationEngine,type ObservedNote} from './observation-engine';
 import {RemoteJournalFiles} from './remote-journal';
@@ -147,7 +148,7 @@ export default class SendToT3 extends Plugin {
     this.diagnostics=new EventJournal({id:randomId,context:diagnosticContext,load:()=>deviceState(`diagnostics:${this.settings.vaultId}:${this.deviceId}`),save:state=>deviceState(`diagnostics:${this.settings.vaultId}:${this.deviceId}`,state),report:(incident,timeline)=>this.sendDiagnosticIncident(incident,timeline)});
     await this.diagnostics.load();configureDiagnostics(this.diagnostics);
     logEvent('plugin.loaded',diagnosticContext);
-    this.register?.(instrumentOperations(this,['sendChat','send','dispatch','sendInlineChat','sendInlineSteering','continueInline','stopHostedInline','openEditorChat','openPaletteAction','openQuestion','save','scan','refreshMachines','pairConnection','startEmailSignIn','finishEmailSignIn','signOutCloud','saveFolderLink','linkFolder','linkFolderToSelf','startObservationJournal','checkExternalSettings','checkWorkflowProposals','saveV2Workflow','retryV2Execution'],['save','startObservationJournal','checkExternalSettings','checkWorkflowProposals']));
+    this.register?.(instrumentOperations(this,['sendChat','send','dispatch','sendInlineChat','sendInlineSteering','continueInline','stopHostedInline','openEditorChat','openPaletteAction','openQuestion','save','scan','refreshMachines','pairConnection','startEmailSignIn','finishEmailSignIn','signOutCloud','saveFolderLink','linkFolder','createFolderProject','startObservationJournal','checkExternalSettings','checkWorkflowProposals','saveV2Workflow','retryV2Execution'],['save','startObservationJournal','checkExternalSettings','checkWorkflowProposals']));
     if(typeof window!=='undefined'&&typeof this.registerInterval==='function')this.registerInterval(window.setInterval(()=>void this.diagnostics?.tick(this.diagnosticPreferences.automatic).catch(()=>{}),2000));
     this.addCommand({id:'export-diagnostics',name:'Export plugin diagnostics…',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
     this.addCommand({id:'report-plugin-problem',name:'Send plugin diagnostics to a new T3 thread',callback:()=>{logFailure('plugin.problem.reported',new Error('User requested investigation of a potential plugin problem.'));void this.diagnostics?.tick(true).catch(()=>{});}});
@@ -277,7 +278,7 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
         const folder=this.folderForMenu(file);
-        menu.addItem(item=>{item.setTitle('Link to T3 Code').setIcon('link');const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,folder).open());return;}const selected=this.projects().filter(p=>this.selected().includes(projectKey(p)));for(const project of selected)submenu.addItem(i=>i.setTitle(`Link to ${projectLabel(project)}`).onClick(()=>void this.linkFolder(folder,project,false)));submenu.addSeparator();submenu.addItem(i=>i.setTitle('Link to self (create T3 project)').onClick(()=>void this.linkFolderToSelf(folder)));if(!selected.length&&Platform.isMobile)submenu.addItem(i=>i.setTitle('Select a project in settings').setDisabled(true));});
+        menu.addItem(item=>{item.setTitle('Link to T3 Code').setIcon('link');const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,folder).open());return;}const selected=this.projects().filter(p=>this.selected().includes(projectKey(p)));for(const project of selected)submenu.addItem(i=>i.setTitle(`Link to ${projectLabel(project)}`).onClick(()=>void this.linkFolder(folder,project,false)));submenu.addSeparator();submenu.addItem(i=>i.setTitle('Create T3 project…').onClick(()=>void this.createFolderProject(folder)));if(!selected.length&&Platform.isMobile)submenu.addItem(i=>i.setTitle('Select a project in settings').setDisabled(true));});
         menu.addItem(item=>{
           item.setTitle('Setup T3 workflow').setIcon('workflow');
           const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();
@@ -1458,9 +1459,42 @@ export default class SendToT3 extends Plugin {
     if(!this.settings.selected.includes(project.id))this.settings.selected.push(project.id);
     return project;
   }
-  async linkFolderToSelf(folder:TFolder){
-    try{const target=folder.path==='/'?await this.vaultTarget():await this.folderTarget(`${folder.path}/placeholder.md`,true,false);await this.linkFolder(folder,target!.project,true);}
-    catch(e){new Notice(`Send to T3 Code: ${message(e)}`,12000);}
+  createFolderProject(folder:TFolder){
+    new ProjectCreateModal(this.app,folder.path==='/'?this.app.vault.getName():folder.name,{
+      machines:()=>this.vaultMachines(),
+      connect:machine=>this.projectLocation(machine),
+      link:async project=>{
+        if(this.stopped)throw Error('The plugin was disabled before linking the folder.');
+        if(project.connectionId)this.settings.directProjects=[...this.settings.directProjects.filter(p=>projectKey(p)!==projectKey(project)),project];
+        else this.settings.projects=[...this.settings.projects.filter(p=>p.id!==project.id),project];
+        await this.saveFolderLink(folder,project,false);
+      },
+    }).open();
+  }
+  async projectLocation(machine:VaultMachine):Promise<ProjectLocation>{
+    if(machine.local){
+      const desktop=await import('./desktop');
+      const connection={...this.settings.connection,host:'local',transport:'desktop' as const};
+      return {
+        browse:desktop.browseDesktopFolder,
+        create:async(root,title)=>{
+          let project=parseProjects(await runBridge(connection,['projects'])).find(p=>sameWorkspacePath(p.workspaceRoot,root));
+          if(!project){const id=await desktop.addDesktopProject(connection,root,title);project=parseProjects(await runBridge(connection,['projects'])).find(p=>p.id===id);}
+          if(!project)throw Error('T3 created the project, but discovery has not returned it yet. Try again.');
+          return project;
+        },close:()=>{},
+      };
+    }
+    if(machine.id.startsWith('environment:')){const cloud=this.cloudMachines.find(m=>'environment:'+m.environmentId===machine.id);if(cloud)await this.connectAccountMachine(cloud);}
+    const c=this.settings.paired.find(c=>c.id===machine.id||'environment:'+c.environmentId===machine.id);
+    if(!c)throw Error('This machine connection changed. Open the dialog again.');
+    const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:c.url,environmentId:c.environmentId,connectionId:c.id},await this.sessionFor(c.id));
+    return {browse:path=>remote.browse(path),close:()=>remote.close(),create:async(root,title)=>{
+      const proposed=vaultRegistration(c.environmentId,root,this.settings.vaultId+':workspace',title);
+      const registration=this.vaultRegistrations[proposed.commandId]??proposed;
+      this.vaultRegistrations[proposed.commandId]=registration;await this.save();
+      return {...await remote.ensureProject(registration),connectionId:c.id,connectionName:c.name};
+    }};
   }
   async signOutCloud(){
     const old=this.nativeAccount;this.cancelCloudLogin();this.nativeAccount=null;this.nativeToken=undefined;this.nativeRefreshing=undefined;this.sessionRefreshing.clear();
@@ -1835,12 +1869,12 @@ class ExistingThreadModal extends FuzzySuggestModal<ThreadChoice>{
   getItemText(thread:ThreadChoice){return `${thread.title} · ${thread.status} · ${thread.id.slice(0,8)}`;}
   onChooseItem(thread:ThreadChoice){return this.choose(thread);}
 }
-type FolderLinkChoice=Project|{self:true;title:string};
+type FolderLinkChoice=Project|{create:true;title:string};
 class FolderLinkProjectModal extends FuzzySuggestModal<FolderLinkChoice>{
   constructor(app:App,private plugin:SendToT3,private folder:TFolder){super(app);this.setPlaceholder('Choose a T3 Code project');}
-  getItems(){return [...this.plugin.projects().filter(p=>this.plugin.selected().includes(projectKey(p))),{self:true as const,title:'Self (create this folder as a T3 project)'}];}
-  getItemText(choice:FolderLinkChoice){return 'self' in choice?choice.title:`Link to ${projectLabel(choice)}`;}
-  onChooseItem(choice:FolderLinkChoice){if('self' in choice)void this.plugin.linkFolderToSelf(this.folder);else void this.plugin.linkFolder(this.folder,choice,false);}
+  getItems(){return [...this.plugin.projects().filter(p=>this.plugin.selected().includes(projectKey(p))),{create:true as const,title:'Create T3 project…'}];}
+  getItemText(choice:FolderLinkChoice){return 'create' in choice?choice.title:`Link to ${projectLabel(choice)}`;}
+  onChooseItem(choice:FolderLinkChoice){if('create' in choice)void this.plugin.createFolderProject(this.folder);else void this.plugin.linkFolder(this.folder,choice,false);}
 }
 class FolderLinkModal extends Modal{
   constructor(app:App,private plugin:SendToT3,private folder:TFolder,private project:Project,private self:boolean){super(app);}
@@ -1966,7 +2000,7 @@ class T3Settings extends PluginSettingTab {
     new Setting(el).setName('When task completes').setDesc('After T3 reports the original turn completed successfully. Changed or renamed notes are kept. Applies to notes sent to new threads. Questions and sends to existing threads keep the note.').addDropdown(d=>d.addOptions({keep:'Keep note',archive:'Archive note',delete:'Delete note (vault trash)'}).setValue(this.plugin.settings.completion.action).onChange(async value=>{this.plugin.settings.completion.action=value as CompletionAction;await this.plugin.save();this.display();}));
     if(this.plugin.settings.completion.action==='archive') new Setting(el).setName('Archive folder').setDesc('Folder inside this vault. Original subfolders are preserved; existing notes are never overwritten.').addText(t=>t.setValue(this.plugin.settings.completion.archiveFolder).onChange(async value=>{this.plugin.settings.completion.archiveFolder=value;await this.plugin.save();}));
     el.createEl('h3',{text:'Linked folders'});
-    el.createEl('p',{text:'Folder links route questions and manual note sends. Link to self registers a local T3 project.'});
+    el.createEl('p',{text:'Folder links route questions and manual note sends. Create T3 project lets you choose its workspace location.'});
     const root=this.plugin.settings.folderLinks.find(l=>l.folderPath==='/');
     const machine=root?.connectionId?this.plugin.settings.paired.find(c=>c.id===root.connectionId)?.name:undefined;
     new Setting(el).setName('Vault project machine').setDesc(root?`${machine??(Platform.isMobile?'Linked computer':'This computer')} · ${root.workspaceRoot} · Hosts new note responses; keep Obsidian open there.`:'Choose the default T3 destination and response-writing host. Keep Obsidian and this plugin running there.').addButton(b=>b.setButtonText(root?'Change machine':'Connect vault').onClick(async()=>{try{await this.plugin.configureVaultRoot();this.display();}catch(e){if(!(e instanceof VaultSetupCancelled))new Notice(message(e),10000);}}));

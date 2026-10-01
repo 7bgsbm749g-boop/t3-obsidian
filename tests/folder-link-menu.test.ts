@@ -28,6 +28,8 @@ async function folderMenuHarness(){
     setValue(value:any){this.value=value;return this;}
     setPlaceholder(_value:string){return this;}
     addOptions(_value:Record<string,string>){return this;}
+    addOption(_key:string,_value:string){return this;}
+    setDisabled(value:boolean){this.disabled=value;return this;}
     setButtonText(text:string){this.text=text;return this;}
     setCta(){return this;}
     onChange(handler:(value:any)=>any){this.handler=handler;return this;}
@@ -53,7 +55,7 @@ async function folderMenuHarness(){
     contentEl=new Element();titleEl=new Element();closed=false;
     constructor(public app:any){}
     open(){modals.push(this);(this as any).onOpen?.();}
-    close(){this.closed=true;}
+    close(){this.closed=true;(this as any).onClose?.();}
     setPlaceholder(_value:string){return this;}
   }
   class Base {}
@@ -362,10 +364,77 @@ test('unlinked and root notes open the project-name destination dialog on deskto
 });
 
 
-test('mobile folder menu enables Link to self',async()=>{
+test('mobile folder menu enables Create T3 project',async()=>{
   const h=await folderMenuHarness();
   try{
     const submenu=h.folderMenu().items.find(item=>item.title==='Link to T3 Code')!.submenu!;
-    assert.equal(submenu.items.find(item=>item.title==='Link to self (create T3 project)')!.disabled,false);
+    assert.equal(submenu.items.find(item=>item.title==='Create T3 project…')!.disabled,false);
+  }finally{h.plugin.onunload();}
+});
+
+
+test('Create T3 project browses outside the vault and only links on confirmation',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const calls:any[]=[];
+    h.plugin.projectLocation=async(machine:any)=>({
+      browse:async(path:string)=>{calls.push(['browse',machine.id,path]);return {parentPath:path==='~'?'/home/person':path,entries:[]};},
+      create:async(path:string,title:string)=>{calls.push(['create',path,title]);return {...h.project,workspaceRoot:path};},
+      close:()=>calls.push(['close']),
+    });
+    const entry=h.folderMenu().items.find(item=>item.title==='Link to T3 Code')!.submenu!.items.find(item=>item.title==='Create T3 project…')!;
+    await entry.callback();let modal=h.modals.at(-1);
+    assert.equal(modal.titleEl.text,'Create T3 project');assert.equal(calls.length,0);
+    assert.equal(h.setting(modal,'Project name').controls[0].value,'Notes');
+    await h.button(modal,'Home').click();assert.equal(calls.filter(c=>c[0]==='create').length,0);
+    await h.button(modal,'Cancel').click();assert.equal(h.plugin.settings.folderLinks.length,0);
+    h.plugin.createFolderProject(h.plugin.app.vault.getAbstractFileByPath('Notes'));modal=h.modals.at(-1);
+    h.setting(modal,'Workspace location').controls[0].change('/workspaces/app');
+    await h.button(modal,'Create and link').click();
+    assert.equal(modal.closed,true);
+    assert.deepEqual(calls.find(c=>c[0]==='create'),['create','/workspaces/app','Notes']);
+    assert.equal(h.plugin.settings.folderLinks[0].folderPath,'Notes');
+    assert.equal(h.plugin.settings.folderLinks[0].workspaceRoot,'/workspaces/app');
+    assert.equal(h.plugin.settings.folderLinks[0].self,false);
+  }finally{h.plugin.onunload();}
+});
+
+test('project location errors leave the dialog open without linking',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    let creates=0;
+    h.plugin.projectLocation=async()=>({browse:async()=>{throw Error('Folder does not exist');},create:async()=>{creates++;},close:()=>{}});
+    h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);
+    h.setting(modal,'Workspace location').controls[0].change('/missing');
+    await h.button(modal,'Create and link').click();
+    assert.equal(modal.closed,false);assert.equal(creates,0);assert.equal(h.plugin.settings.folderLinks.length,0);
+    assert.ok(modal.contentEl.children.some((el:any)=>el.text==='Cannot create this project. Try again.'));
+    await h.button(modal,'Cancel').click();
+  }finally{h.plugin.onunload();}
+});
+
+test('project creation refuses a browser result that falls back to a parent folder',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    let creates=0;
+    h.plugin.projectLocation=async()=>({browse:async()=>({parentPath:'/workspaces',entries:[]}),create:async()=>{creates++;},close:()=>{}});
+    h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);
+    h.setting(modal,'Workspace location').controls[0].change('/workspaces/missing');
+    await h.button(modal,'Create and link').click();
+    assert.equal(creates,0);assert.equal(modal.closed,false);assert.equal(h.plugin.settings.folderLinks.length,0);
+    await h.button(modal,'Cancel').click();
+  }finally{h.plugin.onunload();}
+});
+
+test('closing project creation during connection never creates or links',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    let connect!:(value:any)=>void,creates=0,closes=0;
+    h.plugin.projectLocation=()=>new Promise(resolve=>{connect=resolve;});
+    h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);
+    h.setting(modal,'Workspace location').controls[0].change('/workspaces/app');
+    const pending=h.button(modal,'Create and link').click();
+    modal.close();connect({browse:async()=>({parentPath:'/workspaces/app',entries:[]}),create:async()=>{creates++;},close:()=>{closes++;}});
+    await pending;assert.equal(creates,0);assert.equal(closes,1);assert.equal(h.plugin.settings.folderLinks.length,0);
   }finally{h.plugin.onunload();}
 });
