@@ -240,6 +240,7 @@ export class HostedInlineWriter {
         state.body=next;state.status='running';delete state.detail;await save();
         if(this.stopped)return;
         let conflict=false,applied=false;
+        const selectionsApplied:InlineSteering[]=[];
         let finalBefore:string|undefined,finalAfter:string|undefined;
         await this.io.updateNote(state.notePath,document=>{
           const originalDocument=document;
@@ -247,14 +248,14 @@ export class HostedInlineWriter {
           if(terminal&&!region&&(state.finalDocumentHash===contentHash(document)||state.finalBody!==undefined&&hasCompletionProof(document,request.id,state.finalBody))){applied=true;return document;}
           if(!region||!state.hashes.includes(contentHash(region.body))){conflict=true;return document;}
           for(const input of state.steering??[]){
-            if(!input.confirmed||!input.selection||input.selectionApplied)continue;
-            const range=selectionRange(document,input.selection);
+            if(!input.confirmed||!input.selection)continue;
+            const range=selectionRange(document,input.selection,{from:region.from-startMarker(request.id).length-1,to:region.to+endMarker(request.id).length+1});
             // A changed selection is preserved; never remove matching text elsewhere.
             if(range&&(range.to<=region.from-startMarker(request.id).length-1||range.from>=region.to+endMarker(request.id).length+1)){
               document=document.slice(0,range.from)+document.slice(range.to);
               region=regionBody(document,request.id)!;
             }
-            input.selectionApplied=true;
+            selectionsApplied.push(input);
           }
           if(terminal){
             const change=finalizeRegion(document,request.id,contentHash(region.body),request.independent?completionProof(request.id,next):next);
@@ -277,6 +278,7 @@ export class HostedInlineWriter {
         if(conflict){if(!['paused','conflict'].includes(state.status))logFailure('note.write.conflict',new Error('Response block was edited or removed.'),{jobId:request.id,notePath:state.notePath,knownHashes:state.hashes.slice(-5)});state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='Response edited or removed. Undo until the original response block is intact to resume streaming.';}
         else if(applied)state.status=phase==='complete'&&questions.waiting?'waiting':phase;
         else state.detail='Waiting for the note to become available and saved on the host.';
+        if(applied)for(const input of selectionsApplied)input.selectionApplied=true;
         await save();
       }catch(error){
         logFailure('response.writer.retry',error,{jobId:request.id,notePath:state.notePath,threadId:request.threadId},false);

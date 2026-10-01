@@ -305,6 +305,26 @@ test('steering holds finalization until delivery, follows a completion-race turn
   assert.doesNotMatch(h.document,/t3-inline:/);assert.match(h.document,/User tail/);
 });
 
+test('steering retries a rejected note write and removes a restored outside selection after restart',async()=>{
+  const h=harness();h.dispatch();await h.create().tick();
+  const id=randomUUID(),text='Move this steering message';
+  h.document+='\n\n'+text;
+  const {selectionAnchor}=await import('../inline-thread');
+  const anchor=selectionAnchor(h.document,text,h.document.length-text.length,h.document.length);
+  h.files.set(h.paths.state,JSON.stringify({...h.state,steering:[{messageId:id,text,before:h.state.prose,selection:anchor}]}));
+  h.io.threadState=async()=>({messages:[{id:h.request.messageId,role:'user',text:'Original',turnId:null,streaming:false,createdAt:h.request.createdAt},{id,role:'user',text,turnId:'turn',streaming:false},{id:'answer',role:'assistant',text:'Progress after steering',turnId:'turn',streaming:true}],activities:[],latestTurn:{turnId:'turn',state:'running',requestedAt:h.request.createdAt},session:{status:'running',activeTurnId:'turn'}});
+  const update=h.io.updateNote,original=h.document;
+  h.io.updateNote=async(_path,change)=>{change(h.document);throw Error('Note changed before write');};
+  await h.create().tick();assert.equal(h.document,original);assert.equal(h.state.steering![0].selectionApplied,undefined);
+  h.io.updateNote=update;
+  await h.create().tick();assert.equal(h.state.steering![0].selectionApplied,true);assert.equal(h.document.split(text).length-1,1);
+  // Simulate a delayed synced editor save restoring just the outside text.
+  h.document+=text;
+  await h.create().tick();assert.equal(h.document.split(text).length-1,1);assert.match(h.document,/> Move this steering message/);
+  h.document+='My edited steering message';
+  await h.create().tick();assert.match(h.document,/My edited steering message$/);
+});
+
 test('steering never removes a selection changed before its T3 delivery is confirmed',async()=>{
   const h=harness();h.dispatch();await h.create().tick();const id=randomUUID();
   const {selectionAnchor}=await import('../inline-thread');
@@ -372,14 +392,18 @@ for(const version of [1,2] as const)for(const dismiss of [false,true])test(`host
   current.activities.push({id:'resolved',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',payload:{requestId:'late',responseMode:'message',...(!dismiss?{answers:{choice:'Yes'}}:{})}});
   await h.create().tick();
   if(dismiss){assert.equal(h.state.status,'complete');assert.doesNotMatch(h.document,/t3-inline:|t3-question:/);return;}
-  assert.equal(h.state.status,'waiting','resolution alone must not seal before the new turn is projected');
+  assert.equal(h.state.status,'running','accepted late answer must show working before the new turn is projected');
+  assert.match(h.document,/First final[\s\S]*> Yes[\s\S]*\*\*T3 · Working\*\* <span class="send-to-t3-inline-spinner"/);
   current.messages.push({id:'async-answer:late',role:'user',text:'Continue? Yes',turnId:null,streaming:false,createdAt:time},{id:'continued',role:'assistant',text:'Follow-up progress.',turnId:'answer-turn',streaming:true});
   current.latestTurn={turnId:'answer-turn',state:'running',requestedAt:time};current.session={status:'running',activeTurnId:'answer-turn'};
   await h.create().tick();assert.equal(h.state.status,'running');assert.equal(h.state.turnId,'answer-turn');assert.match(h.document,/First final[\s\S]*> \[!t3-steering\] You\n> Yes[\s\S]*Follow-up progress/);assert.equal(h.document.split('> Yes').length-1,1);assert.doesNotMatch(h.document,/Unrelated result/);
+  assert.match(h.document,/> Yes[\s\S]*\*\*T3 · Working\*\*[\s\S]*Follow-up progress/);
+  assert.equal(h.document.split('· Working').length-1,1);
   current.messages.at(-1)!.streaming=false;current.messages.push({id:'last',role:'assistant',text:'Follow-up final.',turnId:'answer-turn',streaming:false});
   current.latestTurn={...current.latestTurn,state:'completed',assistantMessageId:'last'};current.session={status:'ready',activeTurnId:null};
   await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/First final[\s\S]*> \[!t3-steering\] You\n> Yes[\s\S]*Follow-up final/);assert.equal(h.document.split('> Yes').length-1,1);assert.doesNotMatch(h.document,/t3-inline:|t3-question:/);
   const finished=h.document;await h.create().tick();assert.equal(h.document,finished);
+  assert.doesNotMatch(finished,/· Working|send-to-t3-inline-spinner/);
 });
 
 test('upgrade reopens an older finalized async question only from byte-identical output',async()=>{

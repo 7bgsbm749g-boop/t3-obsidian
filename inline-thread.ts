@@ -290,26 +290,31 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // steer. Keep the final-only preference for unsteered completed responses.
   const transcript=conversation&&(phase!=='complete'||keepIntermediate||conversation.steering.length||conversation.preserveHistory)?conversation:undefined;
   const segments=transcript?steeringSegments(transcript.messages,transcript.steering.filter(input=>input.confirmed)):[];
+  const label=inlineThreadLabel(state.title??threadTitle);
+  const heading=`**${label} · ${phase==='running'||phase==='sending'?'Working':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
+  const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
+  // A late answer resumes below the completed transcript. Keep its indicator
+  // beside the most recent input, including before any follow-up prose arrives.
+  const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
   let previousRole:string|undefined;
-  const prose=transcript?segments.reduce((body,segment)=>{
+  const prose=transcript?segments.reduce((body,segment,index)=>{
     const rendered=segment.role==='user'?renderInlineInput(segment.text):quoteResponse(closeOpenFence(segment.text.trim()));
     // Only adjacent assistant quote blocks share a quoted blank line. Callouts
     // and raw Markdown blocks need a real boundary to avoid swallowing prose.
     const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
-    previousRole=segment.role;return body?body+separator+rendered:rendered;
+    previousRole=segment.role;
+    const next=body?body+separator+rendered:rendered;
+    return index===followupIndex?`${next}\n\n${heading}${spinner}`:next;
   },''):answer?quoteResponse(closeOpenFence(answer)):'';
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null||conversation?.messages.some(m=>m.turnId===request.turnId)).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
   const input=initialInput?`${renderInlineInput(initialInput.text)}\n\n`:'';
-  const label=inlineThreadLabel(state.title??threadTitle);
   if(phase==='complete')return input+(prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
   const activity=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
-  const heading=`**${label} · ${phase==='running'||phase==='sending'?'Working':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
-  const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
   const body=prose?`\n\n${prose}\n`:'';
-  return `${input}${heading}${spinner}${status}${body}${questions?`\n\n${questions}\n`:''}`;
+  return `${input}${followupIndex<0?heading+spinner:''}${status}${body}${questions?`\n\n${questions}\n`:''}`;
 }
 
 export function turnPhase(state:InlineThreadState,turnId:string):'running'|'complete'|'interrupted'|'error' {

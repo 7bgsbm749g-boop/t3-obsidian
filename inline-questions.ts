@@ -34,11 +34,18 @@ export function followInlineQuestions(state:InlineThreadState,turnIds:string[],s
     if(item.replyTurnId&&!turns.includes(item.replyTurnId))turns.push(item.replyTurnId);
   }
   if(turns.length>turnIds.length)return followInlineQuestions(state,turns,follows,prose);
-  return {follows,turnIds:turns,turnId:turns.at(-1),waiting:follows.some(item=>!item.dismissed&&item.responseMode!=='native'&&!item.replyTurnId),continued:follows.some(item=>item.replyTurnId&&item.replyTurnId!==item.turnId)};
+  return {follows,turnIds:turns,turnId:turns.at(-1),waiting:follows.some(item=>!item.dismissed&&item.responseMode!=='native'&&!item.replyTurnId),continued:follows.some(item=>item.replyTurnId&&item.replyTurnId!==item.turnId||pendingQuestionReply(item))};
+}
+function pendingQuestionReply(item:InlineQuestionFollow):boolean {
+  return !!(item.completed&&item.answered&&!item.dismissed&&item.responseMode==='message'&&!item.replyTurnId);
 }
 export function inlineQuestionPhase(state:InlineThreadState,turnId:string,follows:InlineQuestionFollow[]=[]){
-  const phase=turnPhase(state,turnId);
-  return phase==='running'&&state.session?.activeTurnId!==turnId&&follows.some(item=>item.turnId===turnId&&item.completed)?'complete':phase;
+  const observed=turnPhase(state,turnId);
+  const phase=observed==='running'&&state.session?.activeTurnId!==turnId&&follows.some(item=>item.turnId===turnId&&item.completed)?'complete':observed;
+  // Resolution precedes projection of the new async-answer turn. Show that
+  // accepted follow-up as working while retaining the exact-message binding.
+  if(phase==='complete'&&follows.some(item=>item.turnId===turnId&&pendingQuestionReply(item)))return 'running';
+  return phase;
 }
 
 /** Question quotes share the steering renderer but retain their native identities.

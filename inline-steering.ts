@@ -54,8 +54,15 @@ export function steeringSegments(messages:InlineMessage[],steering:InlineSteerin
   append(messages);return result;
 }
 
-export function selectionRange(document:string,anchor:SelectionAnchor):{from:number;to:number}|null {
+export function selectionRange(document:string,anchor:SelectionAnchor,exclude?:{from:number;to:number}):{from:number;to:number}|null {
   const at=(start:number)=>document.slice(start,start+anchor.text.length)===anchor.text&&document.slice(Math.max(0,start-anchor.before.length),start).endsWith(anchor.before)&&document.slice(start+anchor.text.length).startsWith(anchor.after);
+  if(exclude){
+    // The confirmed You quote is a second copy of the text, not a candidate
+    // selection. Recheck the unchanged outside anchor if Sync restores it.
+    const matches:number[]=[];
+    for(let start=document.indexOf(anchor.text);start>=0;start=document.indexOf(anchor.text,start+1))if((start+anchor.text.length<=exclude.from||start>=exclude.to)&&at(start))matches.push(start);
+    return matches.length===1?{from:matches[0],to:matches[0]+anchor.text.length}:null;
+  }
   if(at(anchor.start))return {from:anchor.start,to:anchor.start+anchor.text.length};
   const start=document.indexOf(anchor.text);
   return start>=0&&document.indexOf(anchor.text,start+1)<0&&at(start)?{from:start,to:start+anchor.text.length}:null;
