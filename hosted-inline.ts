@@ -1,5 +1,5 @@
 import {questionTargets} from './questions';
-import {followInlineQuestions,inlineQuestionPhase,type InlineQuestionFollow} from './inline-questions';
+import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,type InlineQuestionFollow} from './inline-questions';
 import {logEvent,logFailure,settleWatch} from './diagnostics';
 import {contentHash} from './completion';
 import {commandId} from './direct';
@@ -197,7 +197,7 @@ export class HostedInlineWriter {
           const nextTurn=turnForMessage(current,input.messageId);
           if(nextTurn){state.turnId=nextTurn;if(!state.turnIds.includes(nextTurn))state.turnIds.push(nextTurn);}
         }
-        let questions=followInlineQuestions(current,state.turnIds,state.questionFollows);
+        let questions=followInlineQuestions(current,state.turnIds,state.questionFollows,state.prose);
         state.questionFollows=questions.follows;state.turnIds=questions.turnIds;state.turnId=questions.turnId!;
         state.prose=mergeProse(state.prose??[],current.messages,state.turnIds);
         let phase=inlineQuestionPhase(current,state.turnId,state.questionFollows);
@@ -207,7 +207,7 @@ export class HostedInlineWriter {
         if(phase==='complete'&&this.io.threadState){
           const refreshed=await this.io.threadState(request,access,true);
           if(refreshed)current={...refreshed,turns:{...current.turns,...refreshed.turns}};
-          questions=followInlineQuestions(current,state.turnIds,state.questionFollows);
+          questions=followInlineQuestions(current,state.turnIds,state.questionFollows,state.prose);
           state.questionFollows=questions.follows;state.turnIds=questions.turnIds;state.turnId=questions.turnId!;
           state.prose=mergeProse(state.prose,current.messages,state.turnIds);
           phase=inlineQuestionPhase(current,state.turnId,state.questionFollows);
@@ -218,7 +218,8 @@ export class HostedInlineWriter {
           await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(request.id,'interrupt'),threadId:request.threadId,turnId:state.turnId,createdAt:request.createdAt});
           phase='interrupted';
         }
-        const conversation=state.turnIds.length>1||state.steering?.length?{messages:state.prose,steering:state.steering??[],preserveHistory:questions.continued}:undefined;
+        const inputs=questionConversationInputs(current,state.steering??[],state.questionFollows,state.prose);
+        const conversation=state.turnIds.length>1||inputs.length?{messages:state.prose,steering:inputs,preserveHistory:questions.continued}:undefined;
         if(phase==='complete'&&this.io.importReplyAsset&&!conversation){
           for(const message of inlineTurnMessages(current,state.turnId,request.keepIntermediate===true)){
             message.text=await rewriteReplyReferences(message.text,reference=>this.io.importReplyAsset!(reference,request,access));

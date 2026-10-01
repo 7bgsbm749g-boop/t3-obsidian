@@ -375,10 +375,10 @@ for(const version of [1,2] as const)for(const dismiss of [false,true])test(`host
   assert.equal(h.state.status,'waiting','resolution alone must not seal before the new turn is projected');
   current.messages.push({id:'async-answer:late',role:'user',text:'Continue? Yes',turnId:null,streaming:false,createdAt:time},{id:'continued',role:'assistant',text:'Follow-up progress.',turnId:'answer-turn',streaming:true});
   current.latestTurn={turnId:'answer-turn',state:'running',requestedAt:time};current.session={status:'running',activeTurnId:'answer-turn'};
-  await h.create().tick();assert.equal(h.state.status,'running');assert.equal(h.state.turnId,'answer-turn');assert.match(h.document,/First final[\s\S]*Follow-up progress/);assert.doesNotMatch(h.document,/Unrelated result/);
+  await h.create().tick();assert.equal(h.state.status,'running');assert.equal(h.state.turnId,'answer-turn');assert.match(h.document,/First final[\s\S]*> \[!t3-steering\] You\n> Yes[\s\S]*Follow-up progress/);assert.equal(h.document.split('> Yes').length-1,1);assert.doesNotMatch(h.document,/Unrelated result/);
   current.messages.at(-1)!.streaming=false;current.messages.push({id:'last',role:'assistant',text:'Follow-up final.',turnId:'answer-turn',streaming:false});
   current.latestTurn={...current.latestTurn,state:'completed',assistantMessageId:'last'};current.session={status:'ready',activeTurnId:null};
-  await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/First final[\s\S]*Follow-up final/);assert.doesNotMatch(h.document,/t3-inline:|t3-question:/);
+  await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/First final[\s\S]*> \[!t3-steering\] You\n> Yes[\s\S]*Follow-up final/);assert.equal(h.document.split('> Yes').length-1,1);assert.doesNotMatch(h.document,/t3-inline:|t3-question:/);
   const finished=h.document;await h.create().tick();assert.equal(h.document,finished);
 });
 

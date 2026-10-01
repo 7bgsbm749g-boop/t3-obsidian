@@ -53,6 +53,6 @@ for(const dismiss of [false,true])test(`local async ${dismiss?'dismissal':'answe
     thread.latestTurn={turnId:'next-turn',state:'completed',requestedAt:'2026-10-01T19:01:00Z',assistantMessageId:'next'};
   }
   receive();assert.equal(job.finalized,true);assert.doesNotMatch(value,/t3-inline:|t3-question:/);
-  if(!dismiss)assert.match(value,/First final[\s\S]*Follow-up final/);
+  if(!dismiss){assert.match(value,/First final[\s\S]*> \[!t3-steering\] You\n> Yes[\s\S]*Follow-up final/);assert.equal(value.split('> Yes').length-1,1);}
   manager.dispose();
 });

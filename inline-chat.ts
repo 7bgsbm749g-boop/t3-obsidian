@@ -1,4 +1,4 @@
-import {followInlineQuestions,inlineQuestionPhase,type InlineQuestionFollow} from './inline-questions';
+import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,type InlineQuestionFollow} from './inline-questions';
 import {logEvent,logFailure,settleWatch} from './diagnostics';
 import type {App,Editor,MarkdownFileInfo,MarkdownView} from 'obsidian';
 import {Notice} from 'obsidian';
@@ -147,7 +147,7 @@ export class InlineChatManager {
         const turn=turnForMessage(runtime.state,input.messageId);
         if(turn){job.turnId=turn;if(!job.turnIds.includes(turn))job.turnIds.push(turn);}
       }
-      const questions=followInlineQuestions(runtime.state,job.turnIds,job.questionFollows);
+      const questions=followInlineQuestions(runtime.state,job.turnIds,job.questionFollows,job.prose);
       job.questionFollows=questions.follows;job.turnIds=questions.turnIds;job.turnId=questions.turnId;
       job.prose=mergeProse(job.prose??[],runtime.state.messages,job.turnIds);
     }
@@ -196,8 +196,9 @@ export class InlineChatManager {
       })();
       return;
     }
-    const questions=followInlineQuestions(runtime.state,job.turnIds??[],job.questionFollows);
-    const conversation=(job.turnIds?.length??0)>1||job.steering?.length?{messages:job.prose??[],steering:job.steering??[],preserveHistory:questions.continued}:undefined;
+    const questions=followInlineQuestions(runtime.state,job.turnIds??[],job.questionFollows,job.prose);
+    const inputs=questionConversationInputs(runtime.state,job.steering??[],questions.follows,job.prose??[]);
+    const conversation=(job.turnIds?.length??0)>1||inputs.length?{messages:job.prose??[],steering:inputs,preserveHistory:questions.continued}:undefined;
     const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true,job.connection?.environmentId,conversation,job.initialInput);
     const original=editor.getValue();let document=original;
     const current=regionBody(document,job.id);
