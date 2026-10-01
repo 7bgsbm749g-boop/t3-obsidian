@@ -3,7 +3,7 @@ import {Notice} from 'obsidian';
 import type {Connection,Request} from './bridge';
 import {commandId,endpoint,environmentApi,type PairedSession} from './direct';
 import {contentHash} from './completion';
-import {activeInlineIds,applyThreadItem,endInsertionOffset,endMarker,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InlineThreadState,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,applyThreadItem,endInsertionOffset,endMarker,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type SelectionAnchor} from './inline-thread';
 import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {InlineHostTarget} from './hosted-inline';
 import {replaceInlineEditorText} from './inline-editor';
@@ -18,6 +18,7 @@ export interface InlineJob {
   hosted?:boolean;
   keepIntermediate?:boolean;
   hostTarget?:InlineHostTarget;
+  initialInput?:InitialInlineInput;
   steering?:InlineSteering[];prose?:InlineMessage[];turnIds?:string[];
 }
 interface EditorSource {editor:Editor;info:MarkdownView|MarkdownFileInfo}
@@ -47,7 +48,7 @@ export class InlineChatManager {
     if(['conflict','interrupted','error','cancelled'].includes(job.phase))return 'discard';
     return job.phase==='complete'&&job.finalized?'ready':'wait';
   }
-  private reconcileHosted(){let changed=false;for(const job of this.jobs){if(!job.hosted||job.finalized)continue;const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region){job.finalized=true;changed=true;}else if(/^\*\*T3 · Error\*\*/.test(region.body)&&job.phase!=='error'){job.phase='error';changed=true;}else if(/^\*\*T3 · (?:Working|Reconnecting)\*\*/.test(region.body)&&job.phase==='error'){job.phase='running';changed=true;}}if(changed)this.persist();}
+  private reconcileHosted(){let changed=false;for(const job of this.jobs){if(!job.hosted||job.finalized)continue;const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region){job.finalized=true;changed=true;}else if(/^\*\*T3 · Error\*\*/m.test(region.body)&&job.phase!=='error'){job.phase='error';changed=true;}else if(/^\*\*T3 · (?:Working|Reconnecting)\*\*/m.test(region.body)&&job.phase==='error'){job.phase='running';changed=true;}}if(changed)this.persist();}
   follow(job:InlineJob,messageId:string){
     if(job.hosted)throw Error('Hosted responses need their owner to attach the continuation.');
     if(job.messageId===messageId&&job.phase!=='error')return;
@@ -67,18 +68,18 @@ export class InlineChatManager {
   private persist(){this.app.saveLocalStorage(this.key,this.jobs.map(j=>({...j})));}
   private runtime(job:InlineJob){let runtime=this.runtimes.get(job.id);if(!runtime){runtime={state:{messages:[],activities:[]},sequence:-1};this.runtimes.set(job.id,runtime);}return runtime;}
 
-  reserve(editor:Editor,info:MarkdownView|MarkdownFileInfo,anchor:SelectionAnchor,requestId:string,expectedPath:string):InlineJob {
-    return this.reserveAt(editor,info,insertionOffset(editor.getValue(),anchor),requestId,expectedPath);
+  reserve(editor:Editor,info:MarkdownView|MarkdownFileInfo,anchor:SelectionAnchor,requestId:string,expectedPath:string,initialInput?:InitialInlineInput):InlineJob {
+    return this.reserveAt(editor,info,insertionOffset(editor.getValue(),anchor),requestId,expectedPath,initialInput);
   }
-  reserveAtEnd(editor:Editor,info:MarkdownView|MarkdownFileInfo,requestId:string,expectedPath:string):InlineJob {
-    return this.reserveAt(editor,info,endInsertionOffset(editor.getValue()),requestId,expectedPath);
+  reserveAtEnd(editor:Editor,info:MarkdownView|MarkdownFileInfo,requestId:string,expectedPath:string,initialInput?:InitialInlineInput):InlineJob {
+    return this.reserveAt(editor,info,endInsertionOffset(editor.getValue()),requestId,expectedPath,initialInput);
   }
-  private reserveAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,offset:number,requestId:string,expectedPath:string):InlineJob {
+  private reserveAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,offset:number,requestId:string,expectedPath:string,initialInput?:InitialInlineInput):InlineJob {
     if(this.stopped)throw Error('The plugin was disabled.');
     const file=info.file;if(!file||file.path!==expectedPath||file.extension.toLowerCase()!=='md')throw Error('The original Markdown note is no longer open. Reopen it and ask T3 again.');
     if(this.activeFor(file.path).length||activeInlineIds(editor.getValue()).length)throw Error('This note already has an active T3 response. Wait for it or stop it first.');
-    const id=requestId,region=initialRegion(id);
-    const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt:new Date().toISOString(),keepIntermediate:this.keepIntermediate()===true};
+    const id=requestId,region=initialRegion(id,initialInput);
+    const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt:new Date().toISOString(),keepIntermediate:this.keepIntermediate()===true,...(initialInput?{initialInput}:{})};
     this.jobs.push(job);this.runtime(job).source={editor,info};
     try{this.persist();replaceInlineEditorText(editor,region.text,offset);}
     catch(error){this.jobs=this.jobs.filter(item=>item!==job);this.runtimes.delete(job.id);try{this.persist();}catch{/* Original storage error remains primary. */}throw error;}
@@ -189,7 +190,7 @@ export class InlineChatManager {
       return;
     }
     const conversation=(job.turnIds?.length??0)>1||job.steering?.length?{messages:job.prose??[],steering:job.steering??[]}:undefined;
-    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true,job.connection?.environmentId,conversation);
+    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true,job.connection?.environmentId,conversation,job.initialInput);
     const original=editor.getValue();let document=original;
     const current=regionBody(document,job.id);
     const terminal=['complete','interrupted','cancelled'].includes(job.phase);

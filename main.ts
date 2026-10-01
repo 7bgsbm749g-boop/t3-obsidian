@@ -44,7 +44,7 @@ import {QuestionController} from './question-controller';
 import {QuestionModal,questionButton,questionEditorExtension} from './question-ui';
 import {questionTargets,parseQuestionToken,clearResolvedQuestion,type QuestionTarget} from './questions';
 import {settlementState,type ThreadSettlementJob} from './thread-settlement';
-type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor};
+type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;initialQuestion?:string};
 const INLINE_REPLY_INSTRUCTION='Answer in the T3 thread. The Obsidian plugin will insert your reply.';
 const THREAD_REPLY_INSTRUCTION='Answer in the T3 thread.';
 const NEW_FOLDER_PROJECT='folder:new';
@@ -782,7 +782,7 @@ export default class SendToT3 extends Plugin {
     const question=selected&&prompt.trim()?`Selected text:\n${selection}\n\nQuestion:\n${prompt}`:selected||prompt;
     let context:EditorChatContext|undefined;
     if(view?.file&&view.file.extension.toLowerCase()==='md'&&view.editor){
-      context={editor:view.editor,view};
+      context={editor:view.editor,view,...(prompt.trim()?{initialQuestion:prompt}:{})};
       if(selected&&view.editor.getSelection()===selection){try{context.anchor=captureEditorSelection(view.editor);}catch{/* Append when selection changed while palette was open. */}}
     }
     return this.openChatWithNote(this.noteContext(file),question,this.settings.inlineStreaming.enabled?context:undefined,true);
@@ -839,7 +839,8 @@ export default class SendToT3 extends Plugin {
     if(context.view.file?.path!==note.path)throw Error('The original note is no longer open. Reopen it before asking T3.');
     const activeId=activeInlineIds(context.editor.getValue())[0];
     if(activeId&&!options?.newThread)return this.sendInlineSteering(activeId,prompt,note,context,options);
-    const requestId=randomId(),job=context.anchor?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path):manager.reserveAtEnd(context.editor,context.view,requestId,note.path);
+    const requestId=randomId(),initialInput=context.initialQuestion?{messageId:commandId(requestId,'message'),text:context.initialQuestion}:undefined;
+    const job=context.anchor?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput);
     let delivered=false;
     try{await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{...options,requestId,onPrepared:request=>manager.prepare(job,request)});delivered=true;manager.start(job);}
     catch(error){manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&error.requestSaved));throw error;}
@@ -999,7 +1000,7 @@ export default class SendToT3 extends Plugin {
     const host=await this.inlineHostTarget();
     const threadEnvironmentId=request.connection.environmentId??await this.localInlineEnvironment();
     job.hostTarget=host;this.rememberInlineTarget(host);
-    request.inlineHost={version:2,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true};
+    request.inlineHost={version:2,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,...(job.initialInput?{initialInput:job.initialInput}:{})};
   }
   private async inlineHostFiles(target:InlineHostTarget):Promise<{files:InlineFiles;close():void}>{
     const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};

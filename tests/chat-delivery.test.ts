@@ -400,13 +400,15 @@ test('a typed palette question sends only the question and streams at the note e
     await h.plugin.openPaletteAction('Why does this matter?','');
     assert.equal(h.modals.at(-1).titleEl.text,'Send to T3 Code');
     await h.modals.at(-1).choose(false);
+    assert.match(editor.value,/> \[!t3-steering\] You\n> Why does this matter\?/);
     const text=h.commands[1].message.text;
     assert.match(text,/^Why does this matter\?/);
     assert.doesNotMatch(text,/Private note|Body not sent|Vault-relative note path/);
     assert.match(text,/Sent from Obsidian\.\nObsidian vault: "Notes"\nDestination note path: "\/projects\/notes\/Notes\/Palette.md"$/);
     assert.equal(h.plugin.app.loadLocalStorage('send-to-t3-code-chat-draft-v1'),'');
     for(let attempt=0;attempt<40&&!editor.value.includes('Inline reply from T3.');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
-    assert.match(editor.value,/Inline reply from T3\./);
+    assert.match(editor.value,/> Why does this matter\?[\s\S]*> Inline reply from T3\./);
+    assert.equal(editor.value.split('> Why does this matter?').length-1,1);
   }finally{h.plugin.onunload();}
 });
 
@@ -463,7 +465,9 @@ test('a palette question about selected text includes both parts and inserts bel
     assert.doesNotMatch(text,/Other note text stays private/);
     assert.equal(h.plugin.app.loadLocalStorage('send-to-t3-code-chat-draft-v1'),'');
     for(let attempt=0;attempt<40&&(editor.value.includes('t3-inline:start:')||!editor.value.includes('Inline reply from T3.'));attempt++)await new Promise(resolve=>setTimeout(resolve,25));
-    assert.match(editor.value,/Claim\n\n\n> Inline reply from T3\./);
+    assert.match(editor.value,/Claim\n\n\n> \[!t3-steering\] You\n> Why\?\n\n> Inline reply from T3\./);
+    assert.equal(editor.value.split('> Why?').length-1,1);
+    assert.doesNotMatch(editor.value,/> Selected text:|> Question:|> Sent from Obsidian/);
   }finally{h.plugin.onunload();}
 });
 

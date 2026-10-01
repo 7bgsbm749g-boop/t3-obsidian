@@ -8,9 +8,9 @@ import {commandId} from '../direct';
 import {QuestionController} from '../question-controller';
 import type {InlineThreadState} from '../inline-thread';
 
-function harness(){
-  const id=randomUUID(),initial=initialRegion(id),host={environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'};
-  const request:HostedInlineRequest={version:1,id,vaultId:'vault',host,notePath:'Notes/test.md',threadId:randomUUID(),messageId:commandId(id,'message'),projectId:'project',threadEnvironmentId:'thread-machine',initialHash:initial.bodyHash,createdAt:new Date().toISOString()};
+function harness(input?:string){
+  const id=randomUUID(),initialInput=input?{messageId:commandId(id,'message'),text:input}:undefined,initial=initialRegion(id,initialInput),host={environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'};
+  const request:HostedInlineRequest={version:1,...(initialInput?{initialInput}:{}),id,vaultId:'vault',host,notePath:'Notes/test.md',threadId:randomUUID(),messageId:commandId(id,'message'),projectId:'project',threadEnvironmentId:'thread-machine',initialHash:initial.bodyHash,createdAt:new Date().toISOString()};
   const paths=hostedPaths(host.directory,id),files=new Map<string,string>([[paths.request,JSON.stringify(request)]]);
   let document:string|undefined='User introduction\n'+initial.text+'User tail',answer='Progress A',phase='running',dispatched=false,unsaved=false,crashAfterEdit=false,failState=false,accessible=true;
   const calls:any[]=[];
@@ -333,4 +333,26 @@ test('completion refresh includes the final message when session-ready overtakes
   assert.equal(refreshed,true);assert.equal(h.state.status,'complete');
   assert.match(h.document,/Progress A[\s\S]*Finish[\s\S]*Final after steering/);
   assert.doesNotMatch(h.document,/t3-inline:/);
+});
+
+for(const version of [1,2] as const)test(`initial question survives hosted v${version} writer restart and final-only completion`,async()=>{
+  const h=harness('Explain **this**.\n\nKeep it brief.');
+  h.request.version=version;
+  if(version===2){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===2;}
+  h.files.set(h.paths.request,JSON.stringify(h.request));
+  assert.match(h.document,/> Keep it brief\.[\s\S]*T3 · Working/);
+  h.dispatch();let writer=h.create();await writer.tick();writer.stop();
+  assert.match(h.document,/> Keep it brief\.[\s\S]*> Progress A/);
+  writer=h.create();h.answer('Final answer.',true);await writer.tick();writer.stop();
+  assert.match(h.document,/> \[!t3-steering\] You\n> Explain \*\*this\*\*\.\n>\n> Keep it brief\.\n\n> Final answer\./);
+  assert.equal(h.document.split('[!t3-steering]').length-1,1);
+  assert.doesNotMatch(h.document,/T3 · Working|Progress A|t3-inline:/);
+});
+
+test('hosted initial input validates bounded text and binds the original message identity',()=>{
+  const h=harness('Question');
+  for(const initialInput of [null,{messageId:randomUUID(),text:'Question'},{messageId:h.request.messageId,text:''},{messageId:h.request.messageId,text:'a'.repeat(120_001)}]){
+    assert.throws(()=>validateHostedRequest({...h.request,initialInput}),/initial response input/);
+  }
+  assert.equal(validateHostedRequest(h.request).initialInput?.text,'Question');
 });

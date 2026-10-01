@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {contentHash} from '../completion';
-import {applyThreadItem,endInsertionOffset,failedInlineIds,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
+import {activeInlineIds,applyThreadItem,endInsertionOffset,failedInlineIds,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
 
 test('a failed turn shows its T3 reason and remains identifiable for recovery',()=>{
   const id='f95a3b36-7393-4508-9fb3-38aa2da3590f',region=initialRegion(id);
@@ -176,4 +176,19 @@ test('keeping intermediate responses retains only assistant prose for the select
   assert.equal(renderInlineTurn(state,'turn','thread','complete',false),'> Final answer.\n');
   assert.equal(renderInlineTurn(state,'turn','thread','complete'),'> Final answer.\n');
   assert.equal(renderInlineTurn(state,'turn','thread','running',true),renderInlineTurn(state,'turn','thread','running',false));
+});
+
+test('initial question stays first through streaming, final-only completion, errors and steering',()=>{
+  const id='f95a3b36-7393-4508-9fb3-38aa2da3590f',input={messageId:'question',text:'Why?\n\n**T3 · Error**'};
+  const initial=initialRegion(id,input);
+  assert.deepEqual(activeInlineIds(initial.text),[id]);
+  assert.deepEqual(failedInlineIds(initial.text),[],'quoted user text cannot impersonate status');
+  const state={messages:[{id:'progress',role:'assistant' as const,text:'Progress.',turnId:'turn',streaming:false},{id:'final',role:'assistant' as const,text:'Final.',turnId:'turn',streaming:false}],activities:[],latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'final'}};
+  const final=renderInlineTurn(state,'turn','thread','complete',false,undefined,undefined,input);
+  assert.match(final,/^> \[!t3-steering\] You[\s\S]*> Final\./);
+  assert.doesNotMatch(final,/Progress\.|T3 · Working/);
+  const error=renderInlineTurn(state,'turn','thread','error',false,undefined,undefined,input);
+  assert.deepEqual(failedInlineIds(initial.text.replace(regionBody(initial.text,id)!.body,error)),[id]);
+  const steered=renderInlineTurn(state,'turn','thread','complete',false,undefined,{messages:state.messages,steering:[{messageId:'steer',text:'More detail.',before:[state.messages[0]],confirmed:true}]},input);
+  assert.match(steered,/> Why\?[\s\S]*> Progress\.[\s\S]*> More detail\.[\s\S]*> Final\./);
 });

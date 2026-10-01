@@ -6,15 +6,15 @@ import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
 import {initialRegion} from '../inline-thread';
 
-test('older device-local jobs retain progress across follow, reload and completion',async()=>{
+for(const text of [undefined,'Explain the selection.'])test(`device-local jobs retain progress and ${text?'initial input':'legacy behavior'} across follow, reload and completion`,async()=>{
   const result=await build({entryPoints:['inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
   const module={exports:{} as any},realRequire=createRequire(import.meta.url);
   runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Notice:class{}}:realRequire(id),console,setTimeout,clearTimeout,TextEncoder,Uint8Array});
-  const id=randomUUID(),initial=initialRegion(id),oldTime='2026-09-30T04:00:00Z',nextTime='2026-09-30T04:01:00Z';
+  const id=randomUUID(),initialInput=text?{messageId:randomUUID(),text}:undefined,initial=initialRegion(id,initialInput),oldTime='2026-09-30T04:00:00Z',nextTime='2026-09-30T04:01:00Z';
   let value='User text\n'+initial.text,saved:any[]=[];
   const editor={getValue:()=>value,offsetToPos:(offset:number)=>offset,replaceRange:(text:string,from:number,to:number)=>{value=value.slice(0,from)+text+value.slice(to);}};
   const app={loadLocalStorage:()=>saved,saveLocalStorage:(_key:string,jobs:any[])=>{saved=JSON.parse(JSON.stringify(jobs));},workspace:{getLeavesOfType:()=>[{view:{file:{path:'Note.md'},editor}}]}};
-  saved=[{id,path:'Note.md',requestId:id,threadId:'thread',messageId:'original',bodyHash:initial.bodyHash,phase:'running',createdAt:oldTime,keepIntermediate:true}];
+  saved=[{id,path:'Note.md',requestId:id,threadId:'thread',messageId:'original',bodyHash:initial.bodyHash,phase:'running',createdAt:oldTime,keepIntermediate:true,...(initialInput?{initialInput}:{})}];
   const create=()=>{const manager=new module.exports.InlineChatManager(app,'jobs',async()=>undefined);manager.schedule=()=>{};manager.start=()=>{};return manager;};
   let manager=create(),job=manager.find(id);
   const old={id:'old',role:'assistant',text:'Old progress.',turnId:'old-turn',streaming:false,createdAt:oldTime};
@@ -27,5 +27,7 @@ test('older device-local jobs retain progress across follow, reload and completi
   assert.deepEqual(Array.from(job.turnIds),['old-turn','next-turn']);assert.match(value,/> Old progress\.\n>\n> New progress\./);
   const final={...next,id:'final',text:'Final answer.'};
   manager.receive(job,snapshot([original,old,continued,next,final],'next-turn','completed',nextTime,3));manager.flush(job);
-  assert.match(value,/> Old progress\.\n>\n> New progress\.\n>\n> Final answer\./);assert.doesNotMatch(value,/t3-inline:/);assert.equal(job.finalized,true);manager.dispose();
+  assert.match(value,/> Old progress\.\n>\n> New progress\.\n>\n> Final answer\./);assert.doesNotMatch(value,/t3-inline:/);assert.equal(job.finalized,true);
+  if(text){assert.match(value,/> Explain the selection\.[\s\S]*> Old progress\./);assert.equal(value.split('> Explain the selection.').length-1,1);}
+  manager.dispose();
 });

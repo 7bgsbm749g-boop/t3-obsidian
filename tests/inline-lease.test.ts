@@ -227,3 +227,18 @@ test('steering from another device is durable, idempotent, and fences stale comp
   assert.equal((await sender.command({kind:'steer',jobId:h.request.id,steering:input})).ok,true,'lost acknowledgement may be retried after completion');
   assert.equal((await sender.command({kind:'steer',jobId:h.request.id,steering:{messageId:randomUUID(),text:'Too late'}})).ok,false);
 });
+
+test('initial question is immutable across register retries, authority restart and writer handoff',async()=>{
+  const h=harness(),input={messageId:h.request.messageId,text:'Explain this selection.'};
+  h.request.initialInput=input;
+  h.request.initialHash=initialRegion(h.request.id,input).bodyHash;
+  const owner=h.client(),next=h.client(randomUUID());
+  assert.equal((await owner.command({kind:'register',jobId:h.request.id,request:h.request})).ok,true);
+  assert.equal((await owner.command({kind:'register',jobId:h.request.id,request:h.request})).ok,true);
+  assert.equal((await owner.command({kind:'register',jobId:h.request.id,request:{...h.request,initialInput:{...input,text:'Different question'}}})).ok,false);
+  await h.restart();h.advance(LEASE_MS+1);
+  assert.equal((await next.command({kind:'claim',jobId:h.request.id})).ok,true);
+  assert.deepEqual(h.record().request.initialInput,input);
+  assert.equal(h.record().request.initialHash,h.request.initialHash);
+  owner.dispose();next.dispose();
+});

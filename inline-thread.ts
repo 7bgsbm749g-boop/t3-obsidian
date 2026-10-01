@@ -60,13 +60,21 @@ function safeInsertionOffset(document:string,initialOffset:number):number {
 export function startMarker(id:string){return `<!-- t3-inline:start:${id} -->`;}
 export function endMarker(id:string){return `<!-- t3-inline:end:${id} -->`;}
 export function activeInlineIds(document:string):string[]{
-  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*T3 · (?:Sending…|Working|Reconnecting)\*\*/.test(regionBody(document,id)?.body??''));
+  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*T3 · (?:Sending…|Working|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
 }
 export function failedInlineIds(document:string):string[]{
-  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*T3 · Error\*\*/.test(regionBody(document,id)?.body??''));
+  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*T3 · Error\*\*/m.test(regionBody(document,id)?.body??''));
 }
-export function initialRegion(id:string):{text:string;bodyHash:string} {
-  const body='**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>';
+export interface InitialInlineInput {messageId:string;text:string}
+
+/** The same neutral user quote is used for initial questions and steering. */
+export function renderInlineInput(text:string):string {
+  return `> [!t3-steering] You\n${text.split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
+}
+
+export function initialRegion(id:string,initialInput?:InitialInlineInput):{text:string;bodyHash:string} {
+  const status='**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>';
+  const body=initialInput?`${renderInlineInput(initialInput.text)}\n\n${status}`:status;
   // The final blank line also closes the quote in Obsidian Live Preview when
   // this response is the last block in the note.
   return {text:`\n${startMarker(id)}\n${body}\n${endMarker(id)}\n\n`,bodyHash:contentHash(body)};
@@ -274,7 +282,7 @@ export function inlineTurnMessages(state:InlineThreadState,turnId:string,keepInt
   return keepIntermediate?messages:final?[final]:[];
 }
 
-export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[]}):string {
+export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[]},initialInput?:InitialInlineInput):string {
   const messages=inlineTurnMessages(state,turnId,phase!=='complete'||keepIntermediate);
   const answer=messages.map(m=>m.text.replace(/\n+$/,'')).filter(Boolean).join('\n\n');
   // A continuation uses the same transcript as steering, even before the first
@@ -283,7 +291,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const segments=transcript?steeringSegments(transcript.messages,transcript.steering.filter(input=>input.confirmed)):[];
   let previousRole:string|undefined;
   const prose=transcript?segments.reduce((body,segment)=>{
-    const rendered=segment.role==='user'?`> [!t3-steering] You\n${segment.text.split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`:quoteResponse(closeOpenFence(segment.text.trim()));
+    const rendered=segment.role==='user'?renderInlineInput(segment.text):quoteResponse(closeOpenFence(segment.text.trim()));
     // Only adjacent assistant quote blocks share a quoted blank line. Callouts
     // and raw Markdown blocks need a real boundary to avoid swallowing prose.
     const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
@@ -292,13 +300,14 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
-  if(phase==='complete')return (prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
+  const input=initialInput?`${renderInlineInput(initialInput.text)}\n\n`:'';
+  if(phase==='complete')return input+(prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
   const activity=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
   const heading=`**T3 · ${phase==='running'||phase==='sending'?'Working':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
   const body=prose?`\n\n${prose}\n`:'';
-  return `${heading}${spinner}${status}${body}${questions?`\n\n${questions}\n`:''}`;
+  return `${input}${heading}${spinner}${status}${body}${questions?`\n\n${questions}\n`:''}`;
 }
 
 export function turnPhase(state:InlineThreadState,turnId:string):'running'|'complete'|'interrupted'|'error' {
