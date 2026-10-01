@@ -31,14 +31,15 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     });
     await authority.tick();
   };
+  let streaming=false;
   const snapshot=(threadId:string)=>{
     const turn=[...commands].reverse().find(command=>command.type==='thread.turn.start'&&command.threadId===threadId);
     if(!turn)return {thread:{id:threadId,projectId:project.id,messages:[],activities:[]}};
     const turnId='provider-turn-'+turn.commandId;
     return {snapshotSequence:5,thread:{id:threadId,projectId:project.id,messages:[
       {id:turn.message.messageId,role:'user',turnId:null,text:turn.message.text,streaming:false,createdAt:turn.createdAt},
-      {id:'answer',role:'assistant',turnId,text:'Inline reply from T3.',streaming:false}],activities:[],
-      latestTurn:{turnId,state:'completed',requestedAt:turn.createdAt,assistantMessageId:'answer'},session:{status:'ready',activeTurnId:null},hasPendingApprovals:false,hasPendingUserInput:false}};
+      {id:'answer',role:'assistant',turnId,text:'Inline reply from T3.',streaming}],activities:[],
+      latestTurn:{turnId,state:streaming?'running':'completed',requestedAt:turn.createdAt,assistantMessageId:'answer'},session:{status:streaming?'running':'ready',activeTurnId:streaming?turnId:null},hasPendingApprovals:false,hasPendingUserInput:false}};
   };
   class Base {}
   class Element {
@@ -144,7 +145,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();const timer=setInterval(()=>plugin.deviceInline?.tick(),20);const unload=plugin.onunload.bind(plugin);plugin.onunload=()=>{clearInterval(timer);unload();};return plugin;};
   const plugin=await start();
-  return {plugin,start,commands,shared,hostFiles,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+  return {setStreaming:(value:boolean)=>{streaming=value;},plugin,start,commands,shared,hostFiles,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
     const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
     let value=selection+'\nTail';
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
@@ -171,7 +172,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';
   try {
-    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','report-plugin-problem','send-or-ask','answer-t3-question'],'One manual action is registered alongside diagnostics and question answering');
+    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','report-plugin-problem','send-or-ask','send-note-to-multiple-notes','answer-t3-question'],'Manual send and multi-destination commands are available');
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands.length,2);
     assert.equal(h.commands[0].type,'thread.create');
@@ -514,7 +515,7 @@ test('a palette question about selected text includes both parts and inserts bel
     assert.doesNotMatch(text,/Other note text stays private/);
     assert.equal(h.plugin.app.loadLocalStorage('send-to-t3-code-chat-draft-v1'),'');
     for(let attempt=0;attempt<40&&(editor.value.includes('t3-inline:start:')||!editor.value.includes('Inline reply from T3.'));attempt++)await new Promise(resolve=>setTimeout(resolve,25));
-    assert.match(editor.value,/Claim\n\n\n> \[!t3-steering\] You\n> Why\?\n\n> Inline reply from T3\./);
+    assert.match(editor.value.replace(/<!-- t3-response:(?:start|end):[0-9a-f-]+ -->\n/g,''),/Claim\n\n\n> \[!t3-steering\] You\n> Why\?\n\n> Inline reply from T3\./);
     assert.equal(editor.value.split('> Why?').length-1,1);
     assert.doesNotMatch(editor.value,/> Selected text:|> Question:|> Sent from Obsidian/);
   }finally{h.plugin.onunload();}
@@ -1066,7 +1067,7 @@ test('a synced running response accepts palette steering without a new block and
     const initialMessage=webcrypto.randomUUID(),request={version:2 as const,initialOwner:webcrypto.randomUUID(),id,vaultId:h.plugin.settings.vaultId,host,notePath:path,threadId:'old-thread',messageId:initialMessage,projectId:project.id,threadEnvironmentId:'chat-env',initialHash:region.bodyHash,createdAt:'original-time'};
     h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,owner:request.initialOwner,epoch:1,revision:1,expiresAt:Date.now()+15_000,state:{requestHash:hostedRequestHash(request),accepted:true,notePath:path,status:'running',hashes:[region.bodyHash,contentHash(body)],turnId:'old-turn',prose:[{id:'old-progress',role:'assistant',text:'Earlier progress.',turnId:'old-turn',streaming:false}],updatedAt:''}}));
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Working',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running',requestedAt:'original-time'},messages:[{id:initialMessage,role:'user',createdAt:'original-time'}]}]);
-    await (h.plugin as any).sendInlineChat('Change the approach.',{path},{editor:opened.editor,view:opened.view});
+    await (h.plugin as any).sendInlineChat('Change the approach.',{path},{editor:opened.editor,view:opened.view,responseId:id});
     assert.equal(h.commands.length,1);assert.equal(h.commands[0].threadId,'old-thread');assert.equal(h.commands[0].type,'thread.turn.start');
     assert.equal((opened.value.match(/t3-inline:start:/g)??[]).length,1);
     const record=JSON.parse(h.hostFiles.get(leasePaths(host.directory,id).record)!);
@@ -1076,7 +1077,7 @@ test('a synced running response accepts palette steering without a new block and
   }finally{h.plugin.onunload();}
 });
 
-for(const surface of ['editor','hotkey'])test(`Ask via ${surface} remains enabled during local streaming and moves only the captured text`,async()=>{
+for(const surface of ['editor','explicit-target'])test(`Targeted Ask via ${surface} remains enabled during local streaming and moves only the captured text`,async()=>{
   const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/SelectedSteering.md',region=initialRegion(id);
   try{
     const selected='Use a simpler approach.',opened=h.attachEditor(path,selected+'\n'+region.text+'Tail');
@@ -1085,10 +1086,10 @@ for(const surface of ['editor','hotkey'])test(`Ask via ${surface} remains enable
     const job={id,path,requestId:id,bodyHash:region.bodyHash,phase:'running',createdAt:'original-time',threadId:'old-thread',turnId:'old-turn',messageId:webcrypto.randomUUID(),projectId:project.id,connection:{transport:'direct',host:'direct',url:'https://chat.example',connectionId:'chat-connection',environmentId:'chat-env',executable:''}};
     const manager=(h.plugin as any).inlineChat;manager.jobs.push(job);
     const runtime=manager.runtime(job);runtime.sequence=1;runtime.state={messages:[{id:'progress',role:'assistant',turnId:'old-turn',text:'Earlier progress.',streaming:false}],activities:[]};
-    const ask=h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code');assert.ok(ask);assert.equal(ask.disabled,false);
+    const ask=h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 in this response');assert.ok(ask);assert.equal(ask.disabled,false);
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Working',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running',requestedAt:'original-time'}}]);
     if(surface==='editor')await ask.callback();
-    else h.registered.find(command=>command.id==='send-or-ask').editorCheckCallback(false,opened.editor,opened.view);
+    else h.plugin.openEditorChat(selected,opened.file,{editor:opened.editor,view:opened.view,anchor:{text:selected,start:0,end:selected.length,before:'',after:'\n'+region.text.slice(0,23)},responseId:id});
     await h.modals.at(-1).choose(false);
     assert.equal(h.commands.length,1);assert.ok(opened.value.startsWith(selected),'text remains until T3 confirms its message');
     const command=h.commands[0];
@@ -1309,4 +1310,68 @@ test('uncertain diagnostic dispatch keeps the exact saved request and does not a
     const request=h.plugin.settings.pending[0];assert.equal(request.id,incident.id);assert.equal(request.diagnosticIncidentId,incident.id);
     const count=h.commands.length;await h.plugin.diagnostics.tick(true);assert.equal(h.commands.length,count);
   }finally{h.plugin.onunload();}
+});
+
+test('agent note commands combine many threads per note, mirrored responses, attachment, and idempotent replay',{timeout:15000},async()=>{
+  const h=await chatHarness();
+  try{
+    h.setStreaming(true);
+    const a=h.attachEditor('Notes/Combined-A.md','Source A: explain alpha.\n');
+    const b=h.attachEditor('Notes/Combined-B.md','Source B: explain beta.\n');
+    h.plugin.app.workspace.getLeavesOfType=()=>[{view:a.view},{view:b.view}];
+    Object.assign(a.file,{basename:'Combined-A',extension:'md',stat:{ctime:123}});
+    Object.assign(b.file,{basename:'Combined-B',extension:'md',stat:{ctime:124}});
+    h.plugin.app.vault.getFileByPath=(path:string)=>path===a.file.path?a.file:path===b.file.path?b.file:undefined;
+    const first={version:1,id:webcrypto.randomUUID(),kind:'send-note',notePath:a.file.path,destinations:[a.file.path,b.file.path],streamReply:true};
+    const x=await h.plugin.executeNoteCommand(first);
+    assert.equal(x.ok,true);assert.equal(x.bindingIds.length,2);
+    const y=await h.plugin.executeNoteCommand({...first,id:webcrypto.randomUUID(),notePath:b.file.path});
+    assert.notEqual(x.threadId,y.threadId);assert.equal(y.bindingIds.length,2);
+    await new Promise(resolve=>setTimeout(resolve,250));
+    assert.equal((a.value.match(/t3-inline:start:/g)??[]).length,2);
+    assert.equal((b.value.match(/t3-inline:start:/g)??[]).length,2);
+    const turns=h.commands.filter(command=>command.type==='thread.turn.start');
+    assert.equal(turns.length,2,'Four destinations dispatch exactly two prompts');
+    assert.ok(turns[0].message.text.startsWith('Source A: explain alpha.'));
+    assert.ok(turns[1].message.text.startsWith('Source B: explain beta.'));
+    const count=h.commands.length;
+    assert.deepEqual(JSON.parse(JSON.stringify(await h.plugin.executeNoteCommand(first))),JSON.parse(JSON.stringify(x)));
+    assert.equal(h.commands.length,count,'Replay creates no additional turns or blocks');
+    await assert.rejects(h.plugin.executeNoteCommand({...first,notePath:b.file.path}),/different input/);
+    // Attach the first response again, using its exact original user message.
+    const attached=await h.plugin.executeNoteCommand({version:1,id:webcrypto.randomUUID(),kind:'attach-response',notePath:a.file.path,destinations:[a.file.path],threadId:x.threadId,messageId:x.messageId,streamReply:true});
+    assert.equal(attached.bindingIds.length,1);assert.equal(h.commands.length,count,'Attachment never sends a prompt');
+    assert.equal((a.value.match(/t3-inline:start:/g)??[]).length,3);
+    h.setStreaming(false);
+    await new Promise(resolve=>setTimeout(resolve,2200));
+    assert.equal((a.value.match(/t3-response:start:/g)??[]).length,3);
+    assert.equal((b.value.match(/t3-response:start:/g)??[]).length,2);
+    assert.doesNotMatch(a.value,/t3-inline:start:|T3 · Working/);
+    assert.doesNotMatch(b.value,/t3-inline:start:|T3 · Working/);
+    assert.ok(a.value.startsWith('Source A: explain alpha.'));
+    assert.ok(b.value.startsWith('Source B: explain beta.'));
+    const jobs=h.plugin.settings.settlementJobs;
+    assert.equal(jobs.length,2);
+    for(const job of jobs)assert.equal(await h.plugin.inlineSettlementStatus(job),'ready');
+  }finally{h.plugin.onunload();}
+});
+
+test('an agent send retries a lost delivery acknowledgement with the exact durable commands',{timeout:10000},async()=>{
+  let fail=true,restarted:any;
+  const h=await chatHarness(async command=>{if(fail&&command.type==='thread.turn.start'){fail=false;throw Error('lost acknowledgement');}});
+  try{
+    const note=h.attachEditor('Notes/AgentRetry.md','Retry this exact source.');
+    Object.assign(note.file,{basename:'AgentRetry',stat:{ctime:123}});
+    h.plugin.app.vault.getFileByPath=()=>note.file;
+    const command={version:1,id:webcrypto.randomUUID(),kind:'send-note',notePath:note.file.path,destinations:[note.file.path],streamReply:true};
+    await assert.rejects(h.plugin.executeNoteCommand(command),/lost acknowledgement|retry|Cannot reach T3/i);
+    const original=h.commands.filter(item=>item.type==='thread.turn.start')[0];assert.ok(original);
+    h.plugin.onunload();restarted=await h.start();
+    const result=await restarted.executeNoteCommand(command);
+    assert.equal(result.ok,true);
+    const repeated=h.commands.filter(item=>item.type==='thread.turn.start');assert.equal(repeated.length,2);
+    assert.deepEqual(JSON.parse(JSON.stringify(repeated[1])),JSON.parse(JSON.stringify(original)),'Replay includes original timestamps, prompt and command IDs');
+    assert.equal((note.value.match(/t3-inline:start:/g)??[]).length,1);
+    assert.equal(h.commands.filter(item=>item.type==='thread.create').length,1,'An acknowledged thread creation is not repeated');
+  }finally{restarted?.onunload();h.plugin.onunload();}
 });

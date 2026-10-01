@@ -7,7 +7,7 @@ export interface SelectionAnchor {text:string;start:number;end:number;before:str
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string}
 export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null;createdAt?:string;payload?:Record<string,any>}
 export interface InlineTurn {turnId:string;state:string;requestedAt?:string;assistantMessageId?:string|null}
-export interface InlineThreadState {messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
+export interface InlineThreadState {title?:string;messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {
   if(!text.trim()||document.slice(start,end)!==text)throw Error('The selected text changed. Select it again before asking T3.');
@@ -60,10 +60,10 @@ function safeInsertionOffset(document:string,initialOffset:number):number {
 export function startMarker(id:string){return `<!-- t3-inline:start:${id} -->`;}
 export function endMarker(id:string){return `<!-- t3-inline:end:${id} -->`;}
 export function activeInlineIds(document:string):string[]{
-  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*T3 · (?:Sending…|Working|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
+  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*[^\n]+ · (?:Sending…|Working|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
 }
 export function failedInlineIds(document:string):string[]{
-  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*T3 · Error\*\*/m.test(regionBody(document,id)?.body??''));
+  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*[^\n]+ · Error\*\*/m.test(regionBody(document,id)?.body??''));
 }
 export interface InitialInlineInput {messageId:string;text:string}
 
@@ -72,8 +72,8 @@ export function renderInlineInput(text:string):string {
   return `> [!t3-steering] You\n${text.split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
 }
 
-export function initialRegion(id:string,initialInput?:InitialInlineInput):{text:string;bodyHash:string} {
-  const status='**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>';
+export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string):{text:string;bodyHash:string} {
+  const status=`**${inlineThreadLabel(threadTitle)} · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
   const body=initialInput?`${renderInlineInput(initialInput.text)}\n\n${status}`:status;
   // The final blank line also closes the quote in Obsidian Live Preview when
   // this response is the last block in the note.
@@ -113,11 +113,12 @@ export function applyThreadItem(state:InlineThreadState,item:any):{state:InlineT
     const turns={...state.turns};
     if(state.latestTurn)turns[state.latestTurn.turnId]=state.latestTurn;
     if(thread.latestTurn)turns[thread.latestTurn.turnId]=thread.latestTurn;
-    return {state:{messages:thread.messages.filter(validMessage),activities:Array.isArray(thread.activities)?thread.activities.filter(validActivity):[],session:thread.session??undefined,latestTurn:thread.latestTurn??undefined,turns,historyComplete:!item.snapshot.page?.hasMore,checkpoints:Array.isArray(thread.checkpoints)?thread.checkpoints:[]},sequence:item.snapshot.snapshotSequence};
+    return {state:{title:typeof thread.title==='string'?thread.title:state.title,messages:thread.messages.filter(validMessage),activities:Array.isArray(thread.activities)?thread.activities.filter(validActivity):[],session:thread.session??undefined,latestTurn:thread.latestTurn??undefined,turns,historyComplete:!item.snapshot.page?.hasMore,checkpoints:Array.isArray(thread.checkpoints)?thread.checkpoints:[]},sequence:item.snapshot.snapshotSequence};
   }
   if(item?.kind!=='event')return {state};
   const event=item.event,p=event?.payload;
   if(!Number.isSafeInteger(event?.sequence)||event.sequence<0)return {state};
+  if(event.type==='thread.metadata-updated'&&typeof p?.title==='string')return {state:{...state,title:p.title},sequence:event.sequence};
   if(event.type==='thread.message-sent'&&p&&typeof p.messageId==='string'&&typeof p.text==='string'&&typeof p.role==='string'){
     const old=state.messages.find(m=>m.id===p.messageId);
     const message:InlineMessage={id:p.messageId,role:p.role,turnId:p.turnId??null,streaming:p.streaming===true,text:old?(p.streaming?old.text+p.text:p.text||old.text):p.text,createdAt:old?.createdAt??p.createdAt};
@@ -282,7 +283,7 @@ export function inlineTurnMessages(state:InlineThreadState,turnId:string,keepInt
   return keepIntermediate?messages:final?[final]:[];
 }
 
-export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[];preserveHistory?:boolean},initialInput?:InitialInlineInput):string {
+export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[];preserveHistory?:boolean},initialInput?:InitialInlineInput,threadTitle?:string):string {
   const messages=inlineTurnMessages(state,turnId,phase!=='complete'||keepIntermediate);
   const answer=messages.map(m=>m.text.replace(/\n+$/,'')).filter(Boolean).join('\n\n');
   // A continuation uses the same transcript as steering, even before the first
@@ -301,9 +302,10 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null||conversation?.messages.some(m=>m.turnId===request.turnId)).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
   const input=initialInput?`${renderInlineInput(initialInput.text)}\n\n`:'';
-  if(phase==='complete')return input+(prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
+  const label=inlineThreadLabel(state.title??threadTitle);
+  if(phase==='complete')return (state.title?`**${label}**\n\n`:'')+input+(prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
   const activity=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
-  const heading=`**T3 · ${phase==='running'||phase==='sending'?'Working':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
+  const heading=`**${label} · ${phase==='running'||phase==='sending'?'Working':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
   const body=prose?`\n\n${prose}\n`:'';
@@ -344,4 +346,18 @@ export function turnPhase(state:InlineThreadState,turnId:string):'running'|'comp
   if(state.latestTurn&&state.latestTurn.turnId!==turnId)return 'running';
   if(messages.length&&messages.every(m=>!m.streaming)&&state.session&&['ready','stopped','interrupted','error'].includes(state.session.status))return state.session.status==='error'?'error':state.session.status==='interrupted'?'interrupted':'complete';
   return 'running';
+}
+
+/** Actions only steer the response containing the cursor/selection. */
+export function inlineTargetAt(document:string,offset:number):string|undefined {
+  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)]
+    .map(match=>match[1]).find(id=>{const region=regionBody(document,id);return region&&offset>=region.from&&offset<=region.to;});
+}
+export function completionProof(id:string,body:string){return `<!-- t3-response:start:${id} -->\n${body}\n<!-- t3-response:end:${id} -->`;}
+export function hasCompletionProof(document:string,id:string,body:string){return document.includes(completionProof(id,body));}
+
+/** Thread titles are plain display text, never executable Markdown or HTML. */
+export function inlineThreadLabel(title?:string){
+  const text=(title??'').replace(/[\r\n\t]+/g,' ').trim().slice(0,160);
+  return text?text.replace(/[\\`*_{}\[\]()#!|]/g,'\\$&').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):'T3';
 }

@@ -192,3 +192,16 @@ test('initial question stays first through streaming, final-only completion, err
   const steered=renderInlineTurn(state,'turn','thread','complete',false,undefined,{messages:state.messages,steering:[{messageId:'steer',text:'More detail.',before:[state.messages[0]],confirmed:true}]},input);
   assert.match(steered,/> Why\?[\s\S]*> Progress\.[\s\S]*> More detail\.[\s\S]*> Final\./);
 });
+
+test('canonical thread names label active and completed replies and still support controls',()=>{
+  const id='f95a3b36-7393-4508-9fb3-38aa2da3590f',region=initialRegion(id);
+  const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:{title:'Alpha **plan** <script>',messages:[],activities:[]}}}).state;
+  const progress=renderInlineTurn(state,'turn','thread');
+  assert.match(progress,/Alpha \\\*\\\*plan\\\*\\\* &lt;script&gt; · Working/);assert.doesNotMatch(progress,/<script>/);
+  const change=replaceRegion(region.text,id,region.bodyHash,progress)!;
+  const document=region.text.slice(0,change.from)+change.text+region.text.slice(change.to);
+  assert.deepEqual(activeInlineIds(document),[id]);
+  assert.match(renderInlineTurn(state,'turn','thread','complete'),/^\*\*Alpha/);
+  const updated=applyThreadItem(state,{kind:'snapshot',snapshot:{thread:{title:'Beta',messages:[],activities:[]}}}).state;
+  assert.match(renderInlineTurn(updated,'turn','thread'),/^\*\*Beta · Working/);
+});

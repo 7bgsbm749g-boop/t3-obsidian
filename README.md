@@ -115,11 +115,11 @@ Manually sending a note with **Open in T3 Code** or palette **Send to T3 Code** 
 
 ## Ask T3 inline
 
-While a response is running, use **Ask T3 Code** on selected text or type a question in the command palette and choose **Send to running thread**. The plugin sends it to that response’s existing T3 thread and keeps writing in the same response block. Your input appears as a neutral indented **You** quote between the agent’s paragraphs. Selected text moves from its original location only after T3 confirms the message; typed palette input is inserted directly. If the selection changed in the meantime, its edited source text is preserved. Select your input outside the running response, or type it in the palette.
+While a response is running, place the cursor inside its block and use **Ask T3 Code** or type a question in the command palette and choose **Send to running thread**. For a selection elsewhere in the note, use **Ask T3 in this response** to explicitly choose the destination block. The plugin sends it to that response’s existing T3 thread and keeps writing in the same response block. Your input appears as a neutral indented **You** quote between the agent’s paragraphs. Selected text moves from its original location only after T3 confirms the message; typed palette input is inserted directly. If the selection changed in the meantime, its edited source text is preserved. Select your input outside the running response, or type it in the palette.
 
 Steered responses retain the assistant paragraphs around your messages, including when **Keep intermediate agent responses** is off. Input positions, exact message IDs, and the transcript survive reconnects, plugin reloads, and writer handoffs. Any authenticated device can send without taking ownership of the writer. Hash checks still protect the response from manual edits. Saved delivery failures use **Unconfirmed requests → Retry** with the original IDs; the plugin never automatically resends input. If the original turn finishes after steering is reserved, a resulting new turn is explicitly attached to the same response. If the response has already finalized or is paused before reservation, the send is refused. Pending approvals and structured questions must be answered before ordinary steering.
 
-Select text in a Markdown editor and choose **Ask T3 Code** from the editor menu, or use the palette’s **Ask T3 Code** row. Choose **New thread** or **Existing thread…**. The plugin sends the selection, its embedded images, and destination note path to T3, then inserts a tracked response below the selected line. Add text in the palette to send a specific question about the selection. Typed palette questions appear immediately at the top of the response block in the same neutral **You** quote as steering messages. Only the typed question is displayed; selected context stays in its original location. The quote remains with the final answer, independently of **Keep intermediate agent responses**, and survives retries, reloads, and writer handoffs. The response shows **T3 · Working** from initial submission through streaming, without a separate sending label. The loading spinner is visible from the initial response insertion and continues animating while the reply streams. Routine tool activity stays in T3; approval and question prompts still appear in the note and through an Obsidian notice. When the turn completes, the plugin replaces progress text with only the final answer by default. Enable **Keep intermediate agent responses** under **Inline responses** to retain the agent’s progress paragraphs alongside the final answer. This choice applies to new responses and stays with each response through reloads and device handoffs; routine tool activity and status indicators are still removed. The plugin owns the note insertion.
+Select text in a Markdown editor and choose **Ask T3 Code** from the editor menu, or use the palette’s **Ask T3 Code** row. Choose **New thread** or **Existing thread…**. The plugin sends the selection, its embedded images, and destination note path to T3, then inserts a tracked response below the selected line. Add text in the palette to send a specific question about the selection. Typed palette questions appear immediately at the top of the response block in the same neutral **You** quote as steering messages. Only the typed question is displayed; selected context stays in its original location. The quote remains with the final answer, independently of **Keep intermediate agent responses**, and survives retries, reloads, and writer handoffs. The response shows **Thread name · Working** from initial submission through streaming, without a separate sending label. The loading spinner is visible from the initial response insertion and continues animating while the reply streams. Routine tool activity stays in T3; approval and question prompts still appear in the note and through an Obsidian notice. When the turn completes, the plugin replaces progress text with only the final answer by default. Enable **Keep intermediate agent responses** under **Inline responses** to retain the agent’s progress paragraphs alongside the final answer. This choice applies to new responses and stays with each response through reloads and device handoffs; routine tool activity and status indicators are still removed. The plugin owns the note insertion.
 
 When T3 asks for input, the question text and option descriptions appear beneath the streamed progress in the same purple quote. **Answer** opens an Obsidian dialog in Live Preview or Reading view; **Answer T3 question…** also appears in the editor menu and command palette. The dialog supports single choice, multiple choice, free text, and several questions in one request. Incoming questions never open it automatically. Streaming refreshes preserve the draft, focus, and text selection. Closing the dialog saves the draft without answering or dismissing. Only **Submit answer** sends a response; a preselected choice alone never sends.
 
@@ -153,7 +153,7 @@ The send modal closes immediately while delivery continues in the background. Va
 
 On desktop, reply registration, writer heartbeats, and the coordinator lock use Node timers so backgrounding Obsidian does not delay delivery or expire healthy ownership. Mobile writers still hand off when their app is suspended.
 
-The editor menu can request **Stop T3 response** from a synced device. Existing jobs created by older plugin versions keep their original device-local writer and must be stopped there. If you edit an actively streamed response in its open editor, that editor pauses writes. Undoing until both tracking markers and the response body match any version the plugin wrote lets the same editor catch up automatically from T3; edits elsewhere in the note are preserved. An unmatched response is never overwritten. This undo behavior does not make a paused response available for device takeover or restore it after the plugin restarts. Remove abandoned response markers/block before starting another inline response in that note.
+The editor menu can request **Stop T3 response** from a synced device. Existing jobs created by older plugin versions keep their original device-local writer and must be stopped there. If you edit an actively streamed response in its open editor, that editor pauses writes. Undoing until both tracking markers and the response body match any version the plugin wrote lets the same editor catch up automatically from T3; edits elsewhere in the note are preserved. An unmatched response is never overwritten. This undo behavior does not make a paused response available for device takeover or restore it after the plugin restarts. Remove abandoned response markers/blocks when they are no longer needed; independent responses can coexist.
 
 ## Orchestration
 
@@ -327,3 +327,40 @@ If diagnostic storage fails, automatic reporting pauses until durable storage
 recovers. Settings show recent incident states and confirmed T3 thread IDs.
 **Send plugin diagnostics to a new T3 thread** also allows a manual report with
 the same duplicate and rate limits.
+
+
+## Multiple streaming destinations and agent commands
+
+Several T3 threads can stream into separate response blocks in the same note. One response can also stream into several notes. Each binding has its own ID and destination; mirroring does not send another prompt. Choose **Send note with streaming destinations…** in the command palette and enter existing vault-relative Markdown paths, one per line. This creates one new thread from the current note and mirrors its response into those destinations.
+
+Ask from outside a running response creates an independent response block. Ask from inside a running block steers that response; **New thread** always creates an independent block. To send selected text from elsewhere to an existing block, choose **Ask T3 in this response** in the editor menu. With several responses, menu entries identify each block by its short response ID; clicking inside a block scopes its controls. **Stop T3 response** interrupts the underlying T3 turn, so every mirror observes the interruption. Removing one block stops writing to that destination and preserves other destinations.
+
+New completed responses retain hidden `t3-response` boundary comments as durable per-block completion evidence. These let one reply finish while another continues changing the note, without relying on a whole-note hash. The comments are hidden in Obsidian and remain in raw Markdown. The vault coordinator keeps active bindings in each note on one writing device, and existing atomic note writes protect surrounding blocks and edits. All destinations belonging to a send must finish saving before its automatic settlement can run. Existing responses and retry records retain their original format and behavior.
+
+Agents with local filesystem access can use the source-checkout CLI while the desktop vault is open in Obsidian:
+
+```sh
+python3 /home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py \
+  --vault /home/ubuntu/vaults/QLO2 \
+  send-note 'Projects/Task.md' \
+  --destination 'Projects/Task.md' \
+  --destination 'Projects/Summary.md'
+```
+
+The running plugin reads the note and embedded images, resolves its linked T3 project, registers each stream, and sends the prompt once. It returns JSON containing `threadId`, `messageId`, and `bindingIds`; acknowledgement confirms delivery, not completion of the agent’s work. Omit destinations to stream into the source note. `--no-stream` sends without inserting a response. `--thread-id ID` continues a thread instead of creating one. This uses the plugin’s existing authenticated T3 connection, without personal-fleet dispatch.
+
+To attach an existing response without sending a prompt:
+
+```sh
+python3 /home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py \
+  --vault /home/ubuntu/vaults/QLO2 \
+  attach-response 'Projects/Task.md' \
+  --thread-id THREAD_ID --message-id USER_MESSAGE_ID \
+  --destination 'Projects/Another.md'
+```
+
+The source thread and exact user message must belong to the source note’s linked project. Attachment catches up from canonical history, including completed replies. Existing notes are required; absolute paths, hidden paths and traversal are rejected. Up to 32 destinations are accepted per command.
+
+Commands use a private local mailbox under `<configDir>/t3-code/commands/v1/`, not Obsidian Sync or a new network port. Keep the returned command `id`: use `--request-id ID` with identical arguments after a timeout to retrieve the same result. For a failed command, add `--retry` to retry its original saved prepared request. The prompt, attachment bytes and binding IDs are reused; a retry never creates a replacement turn. Pending commands resume when the plugin reopens. Request IDs cannot be reused for different arguments. Mailbox requests and results contain note paths and IDs; prepared prompt/attachment snapshots remain in Obsidian device-local storage for recovery.
+
+Streaming headers display the thread name, such as **Alpha plan · Working**, and update from the canonical thread title. Named completed replies retain the name above their answer. Titles are escaped as plain text. Before the thread is available, the prepared send title labels its block. Multi-response controls show the name and short block ID.

@@ -1,7 +1,7 @@
 import {contentHash} from './completion';
 import {HostedInlineWriter,hostedPaths,validateHostedRequest,type HostedInlineRequest,type HostedInlineState,type InlineFiles,type InlineHostTarget} from './hosted-inline';
 import {InlineLeaseClient,HEARTBEAT_MS,leasePaths,terminalLease,type LeaseRecord,type LeaseReply} from './inline-lease';
-import {applyThreadItem,regionBody,type InlineThreadState} from './inline-thread';
+import {applyThreadItem,hasCompletionProof,regionBody,type InlineThreadState} from './inline-thread';
 import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {ReplyReference} from './reply-assets';
 import type {SteeringInput} from './inline-steering';
@@ -10,7 +10,7 @@ export interface DeviceInlineIO {
   access(environmentId:string):Promise<ThreadAccess>;
   readNote(path:string):Promise<string|undefined>;
   isOpen(path:string):boolean;
-  isSaved?(path:string,hash:string):Promise<boolean>;
+  isSaved?(path:string,hash:string,proof?:{id:string;body:string}):Promise<boolean>;
   updateNote(path:string,change:(current:string)=>string,allowed:()=>boolean):Promise<string|undefined>;
   importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
@@ -80,7 +80,7 @@ export class DeviceInlineManager {
           const bytes=await host.files.read(leasePaths(host.target.directory,request.id).record);if(!bytes||this.stopped)return;
           const record:LeaseRecord=JSON.parse(bytes);
           const path=record.state?.notePath??request.notePath,document=await this.io.readNote(path);
-          if(document===undefined||!regionBody(document,request.id)&&contentHash(document)!==record.state?.finalDocumentHash)return;
+          if(document===undefined||!regionBody(document,request.id)&&contentHash(document)!==record.state?.finalDocumentHash&&!(record.state?.finalBody!==undefined&&hasCompletionProof(document,request.id,record.state.finalBody)))return;
           this.receiveRecord(host,record);
         }));
         this.tick();
@@ -105,7 +105,7 @@ export class DeviceInlineManager {
         const state:HostedInlineState=JSON.parse(value);
         // Editor mutations precede Obsidian's debounced disk save. Keep the
         // recovery record active until the final Markdown is actually durable.
-        if(['complete','interrupted'].includes(state.status)&&state.finalDocumentHash&&this.io.isSaved&&!await this.io.isSaved(state.notePath,state.finalDocumentHash))throw Error('Waiting for Obsidian to save the final reply.');
+        if(['complete','interrupted'].includes(state.status)&&state.finalDocumentHash&&this.io.isSaved&&!await this.io.isSaved(state.notePath,state.finalDocumentHash,state.finalBody!==undefined?{id:record.request.id,body:state.finalBody}:undefined))throw Error('Waiting for Obsidian to save the final reply.');
         if(!allowed())throw Error('Writer ownership expired.');
         if(comparable(state)===comparable(runtime.record.state))return;
         const reply=await host.client.command({kind:'checkpoint',jobId:record.request.id,epoch:runtime.record.epoch,revision:runtime.record.revision,state});
@@ -158,7 +158,7 @@ export class DeviceInlineManager {
     if(terminalLease(record))return;
     const path=record.state?.notePath??record.request.notePath;
     const document=await this.io.readNote(path);
-    if(document===undefined||!regionBody(document,record.request.id)&&contentHash(document)!==record.state?.finalDocumentHash)return;
+    if(document===undefined||!regionBody(document,record.request.id)&&contentHash(document)!==record.state?.finalDocumentHash&&!(record.state?.finalBody!==undefined&&hasCompletionProof(document,record.request.id,record.state.finalBody)))return;
     const renewing=record.owner===this.actor&&host.client.valid(record.request.id,record.epoch);
     const reply=await host.client.command({kind:renewing?'heartbeat':'claim',jobId:record.request.id,epoch:record.epoch,fallback:!this.io.isOpen(path)});
     this.reply(runtime,reply);

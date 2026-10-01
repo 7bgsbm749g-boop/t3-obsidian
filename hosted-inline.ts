@@ -3,7 +3,7 @@ import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,typ
 import {logEvent,logFailure,settleWatch} from './diagnostics';
 import {contentHash} from './completion';
 import {commandId} from './direct';
-import {applyThreadItem,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
+import {applyThreadItem,completionProof,hasCompletionProof,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
 import {needsInlineHistory,readInlineSnapshot,type ThreadAccess} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
@@ -14,6 +14,8 @@ export interface InlineHostTarget {environmentId:string;workspaceRoot:string;dir
 export interface HostedInlineRequest {
   keepIntermediate?:boolean;
   initialInput?:InitialInlineInput;
+  independent?:boolean;
+  threadTitle?:string;
   version:1|2;initialOwner?:string;id:string;vaultId:string;host:InlineHostTarget;notePath:string;
   threadId:string;messageId:string;projectId:string;threadEnvironmentId:string;initialHash:string;createdAt:string;
 }
@@ -22,6 +24,7 @@ export interface HostedInlineState {
   status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict'|'paused';
   hashes:string[];body?:string;detail?:string;updatedAt:string;
   finalDocumentHash?:string;
+  finalBody?:string;
   prose?:InlineMessage[];turnIds?:string[];steering?:InlineSteering[];questionFollows?:InlineQuestionFollow[];
 }
 export interface InlineFiles {
@@ -36,6 +39,8 @@ export function safeNotePath(path:unknown):path is string {
 }
 export function validateHostedRequest(value:any):HostedInlineRequest {
   if(value?.initialInput!==undefined&&(!uuid.test(value.initialInput?.messageId??'')||value.initialInput.messageId!==value.messageId||typeof value.initialInput.text!=='string'||!value.initialInput.text.trim()||value.initialInput.text.length>120_000))throw Error('Invalid initial response input.');
+  if(value?.threadTitle!==undefined&&(typeof value.threadTitle!=='string'||value.threadTitle.length>200))throw Error('Invalid thread title.');
+  if(value?.independent!==undefined&&typeof value.independent!=='boolean')throw Error('Invalid binding preference.');
   if(value?.keepIntermediate!==undefined&&typeof value.keepIntermediate!=='boolean')throw Error('Invalid hosted response preference.');
   if(![1,2].includes(value?.version)||(value.version===2&&!uuid.test(value.initialOwner??''))||![value.id,value.messageId].every(x=>typeof x==='string'&&uuid.test(x))||!safeNotePath(value.notePath)||
     ![value.threadId,value.vaultId,value.projectId,value.threadEnvironmentId,value.createdAt,value.host?.environmentId,value.host?.workspaceRoot,value.host?.directory].every(x=>typeof x==='string'&&x.length>0)||
@@ -225,7 +230,7 @@ export class HostedInlineWriter {
             message.text=await rewriteReplyReferences(message.text,reference=>this.io.importReplyAsset!(reference,request,access));
           }
         }
-        let next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true,request.threadEnvironmentId,conversation,request.initialInput);
+        let next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true,request.threadEnvironmentId,conversation,request.initialInput,request.threadTitle);
         if(phase==='complete'&&conversation&&this.io.importReplyAsset)next=await rewriteReplyReferences(next,reference=>this.io.importReplyAsset!(reference,request,access));
         const terminal=phase==='complete'&&!questions.waiting||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the
@@ -239,7 +244,7 @@ export class HostedInlineWriter {
         await this.io.updateNote(state.notePath,document=>{
           const originalDocument=document;
           let region=regionBody(document,request.id);
-          if(terminal&&!region&&state.finalDocumentHash===contentHash(document)){applied=true;return document;}
+          if(terminal&&!region&&(state.finalDocumentHash===contentHash(document)||state.finalBody!==undefined&&hasCompletionProof(document,request.id,state.finalBody))){applied=true;return document;}
           if(!region||!state.hashes.includes(contentHash(region.body))){conflict=true;return document;}
           for(const input of state.steering??[]){
             if(!input.confirmed||!input.selection||input.selectionApplied)continue;
@@ -252,7 +257,7 @@ export class HostedInlineWriter {
             input.selectionApplied=true;
           }
           if(terminal){
-            const change=finalizeRegion(document,request.id,contentHash(region.body),next);
+            const change=finalizeRegion(document,request.id,contentHash(region.body),request.independent?completionProof(request.id,next):next);
             if(!change){conflict=true;return document;}
             finalBefore=originalDocument;finalAfter=document.slice(0,change.from)+change.text+document.slice(change.to);
             return originalDocument;
@@ -262,7 +267,7 @@ export class HostedInlineWriter {
           return document.slice(0,change.from)+change.text+document.slice(change.to);
         });
         if(finalBefore!==undefined&&finalAfter!==undefined){
-          state.finalDocumentHash=contentHash(finalAfter);await save();
+          state.finalDocumentHash=contentHash(finalAfter);if(request.independent)state.finalBody=next;await save();
           if(this.stopped)return;
           await this.io.updateNote(state.notePath,document=>{
             if(document!==finalBefore)return document;

@@ -68,7 +68,8 @@ export class InlineLeaseAuthority {
         if(request.version!==2||request.id!==command.jobId||request.vaultId!==this.identity.vaultId||request.host.environmentId!==this.identity.environmentId||!sameWorkspacePath(request.host.workspaceRoot,this.identity.workspaceRoot)||request.host.directory!==directory)throw Error('The response belongs to another host or vault.');
         if(record){if(hostedRequestHash(record.request)!==hostedRequestHash(request))throw Error('This response ID already belongs to another request.');await this.publishCatalog(record);return respond(true);}
         if(command.actor!==request.initialOwner)throw Error('Only the sending instance can register a response.');
-        record={request,owner:command.actor,epoch:1,expiresAt:this.now()+LEASE_MS,revision:0};
+        const writer=await this.noteWriter(request.notePath,request.id);
+        record={request,owner:writer??command.actor,epoch:1,expiresAt:this.now()+LEASE_MS,revision:0};
         await this.files.write(hostedPaths(directory,request.id).request,JSON.stringify(request));
       }else{
         if(!record)throw Error('The response is not registered.');
@@ -94,6 +95,8 @@ export class InlineLeaseAuthority {
           // Give clients with the note open a short head start over closed-note
           // fallback writers. Healthy ownership is never preempted.
           if(command.fallback&&record.expiresAt+2000>this.now())return respond(false,'Waiting for an open-note writer.');
+          const writer=await this.noteWriter(record.state?.notePath??record.request.notePath,record.request.id);
+          if(writer&&writer!==command.actor)return respond(false,'Another device owns a response in this note.');
           record={...record,owner:command.actor,epoch:record.epoch+1,expiresAt:this.now()+LEASE_MS};
         }else{
           if(record.owner!==command.actor||record.epoch!==command.epoch||record.expiresAt<=this.now())return respond(false,'Writer ownership expired.');
@@ -118,6 +121,13 @@ export class InlineLeaseAuthority {
       await this.publishCatalog(record);
       return respond(true);
     }catch(error){return respond(false,error instanceof Error?error.message:'Ownership command failed.');}
+  }
+  private async noteWriter(notePath:string,except:string):Promise<string|undefined>{
+    for(const path of await this.files.list(`${this.identity.directory}/leases`)){
+      const raw=await this.files.read(path);if(!raw)continue;
+      const record:LeaseRecord=JSON.parse(raw);
+      if(record.request.id!==except&&!terminalLease(record)&&record.expiresAt>this.now()&&(record.state?.notePath??record.request.notePath)===notePath)return record.owner;
+    }
   }
   private async publishCatalog(record:LeaseRecord){
     const path=leasePaths(this.identity.directory,record.request.id).catalog;

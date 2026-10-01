@@ -242,3 +242,21 @@ test('initial question is immutable across register retries, authority restart a
   assert.equal(h.record().request.initialHash,h.request.initialHash);
   owner.dispose();next.dispose();
 });
+
+test('different bindings in one note use the same writing device, including registration and takeover',async()=>{
+  const h=harness(),sender=h.client(),otherActor=randomUUID(),other=h.client(otherActor);
+  await sender.command({kind:'register',jobId:h.request.id,request:h.request});
+  const next={...h.request,id:randomUUID(),messageId:randomUUID(),threadId:'second-thread',initialOwner:otherActor};
+  const reply=await other.command({kind:'register',jobId:next.id,request:next});
+  assert.equal(reply.ok,true);assert.equal(reply.record!.owner,h.actor);
+  assert.equal(other.valid(next.id,1),false);
+  assert.equal((await sender.command({kind:'heartbeat',jobId:next.id,epoch:1})).ok,true,'The existing note writer acquires a fresh grant for the adopted binding');
+  assert.equal(sender.valid(next.id,1),true);
+  // Expiry of one block is insufficient to take over while another is healthy.
+  h.advance(8000);await sender.command({kind:'heartbeat',jobId:h.request.id,epoch:1});h.advance(8000);
+  assert.equal((await other.command({kind:'claim',jobId:next.id})).ok,false);
+  h.advance(LEASE_MS);
+  assert.equal((await other.command({kind:'claim',jobId:next.id})).ok,true);
+  assert.equal((await sender.command({kind:'claim',jobId:h.request.id})).ok,false);
+  assert.equal((await other.command({kind:'claim',jobId:h.request.id})).ok,true);
+});
