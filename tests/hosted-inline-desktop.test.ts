@@ -8,6 +8,45 @@ import {DesktopInlineHost,localInlineFiles} from '../hosted-inline-desktop';
 import {hostedPaths,type HostedInlineRequest} from '../hosted-inline';
 import {initialRegion} from '../inline-thread';
 import {commandId} from '../direct';
+import {build} from 'esbuild';
+import {builtinModules,createRequire} from 'node:module';
+import * as timers from 'node:timers';
+import {setTimeout as pause} from 'node:timers/promises';
+import {runInNewContext} from 'node:vm';
+import {desktopTimersPlugin} from '../esbuild.config.mjs';
+import {leasePaths} from '../inline-lease';
+
+test('bundled desktop registers and renews replies when renderer timers are suspended',async()=>{
+  const bundle=await build({stdin:{contents:"export {DesktopInlineHost,localInlineFiles} from './hosted-inline-desktop'; export {DeviceInlineManager} from './leased-inline'; export {desktopInterval,desktopPause} from './desktop-timers';",resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,platform:'browser',format:'cjs',target:'es2022',external:['node:*',...builtinModules.filter(name=>name!=='buffer')],plugins:[desktopTimersPlugin()]});
+  const nativeRequire=createRequire(import.meta.url),lockDelays:number[]=[],module={exports:{} as any};
+  let rendererIntervals=0;
+  runInNewContext(bundle.outputFiles[0].text,{
+    module,exports:module.exports,process,console,crypto:globalThis.crypto,performance,URL,TextEncoder,TextDecoder,Buffer,global:{},document:{createElement:()=>({})},
+    require:(name:string)=>name==='node:timers'?{...timers,setTimeout:(callback:()=>void,delay:number)=>{lockDelays.push(delay);return timers.setTimeout(callback,delay);}}:nativeRequire(name),
+    setInterval:()=>{rendererIntervals++;return 1;},clearInterval:()=>{},
+    setTimeout:()=>1,clearTimeout:()=>{},setImmediate,
+  });
+  const {DesktopInlineHost:Host,localInlineFiles:localFiles,DeviceInlineManager:Manager,desktopInterval,desktopPause}=module.exports;
+  const root=await mkdtemp(join(tmpdir(),'t3-background-')),directory='.obsidian/t3-code/inline/v1';
+  const actor=randomUUID(),id=randomUUID(),region=initialRegion(id),identity={workspaceRoot:root,directory,environmentId:'env',vaultId:'vault'};
+  const request:HostedInlineRequest={version:2,initialOwner:actor,id,vaultId:identity.vaultId,host:{workspaceRoot:root,directory,environmentId:identity.environmentId},notePath:'Note.md',threadId:randomUUID(),messageId:commandId(id,'message'),projectId:'p',threadEnvironmentId:identity.environmentId,initialHash:region.bodyHash,createdAt:new Date().toISOString()};
+  const files=localFiles(root,directory),app:any={workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:()=>undefined}};
+  const host=await Host.open(app,identity,async()=>{throw Error('No turn has been sent yet.');});
+  const manager=new Manager(actor,identity.vaultId,{access:async()=>{throw Error('No turn has been sent yet.');},readNote:async()=>region.text,isOpen:()=>true,updateNote:async()=>undefined},async()=>({files,close:()=>{}}),undefined,undefined,desktopPause);
+  const stop=desktopInterval(()=>manager.tick(),150);
+  try{
+    const started=Date.now();
+    await Promise.race([manager.register(request),pause(2000).then(()=>{throw Error('Registration waited for a suspended renderer timer.');})]);
+    assert.ok(Date.now()-started<2000,'Registration finishes within the send deadline');
+    const path=leasePaths(directory,id).record,initial=JSON.parse((await files.read(path))!);
+    await pause(3400);
+    const renewed=JSON.parse((await files.read(path))!);
+    assert.equal(renewed.owner,actor);assert.equal(renewed.epoch,initial.epoch);
+    assert.ok(renewed.expiresAt>initial.expiresAt,'Background ownership is renewed');
+    assert.ok(lockDelays.includes(5000),'The coordinator lock schedules its renewal on Node timers');
+    assert.equal(rendererIntervals,0,'Coordinator and heartbeat intervals do not use browser timers');
+  }finally{stop();manager.dispose();host.dispose();await pause(100);await rm(root,{recursive:true,force:true});}
+});
 
 test('one desktop host owns a vault and writes closed notes while deferring unsaved editors',async()=>{
   const root=await mkdtemp(join(tmpdir(),'t3-hosted-')),directory='.obsidian/t3-code/inline/v1',environmentId='env',vaultId='vault';

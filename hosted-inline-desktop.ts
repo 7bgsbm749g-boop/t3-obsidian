@@ -3,6 +3,7 @@
 import {promises as fs} from 'node:fs';
 import {join,resolve,dirname} from 'node:path';
 import lockfile from 'proper-lockfile';
+import {desktopInterval} from './desktop-timers';
 import type {App} from 'obsidian';
 import {InlineLeaseAuthority,type LeaseFiles} from './inline-lease';
 import {importReplyAsset} from './reply-import';
@@ -28,14 +29,14 @@ export function localInlineFiles(root:string,directory:string):LeaseFiles&{reque
 export class DesktopInlineHost {
   private writer:HostedInlineWriter;
   private authority:InlineLeaseAuthority;
-  private authorityTimer:ReturnType<typeof setInterval>;
+  private stopAuthorityTimer:()=>void;
   private work=new Set<Promise<void>>();
   private opening=new Map<string,Promise<ThreadAccess>>();
   private stopped=false;
   private accesses=new Map<string,{access:ThreadAccess;expires:number}>();
   private constructor(private release:()=>Promise<void>,app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},files:ReturnType<typeof localInlineFiles>,access:(environmentId:string)=>Promise<ThreadAccess>){
     this.authority=new InlineLeaseAuthority(identity,files);
-    this.authorityTimer=setInterval(()=>void this.authority.tick().catch(()=>{}),100);
+    this.stopAuthorityTimer=desktopInterval(()=>void this.authority.tick().catch(()=>{}),100);
     this.writer=new HostedInlineWriter(identity,{
       ...files,
       access:async environmentId=>{
@@ -73,5 +74,5 @@ export class DesktopInlineHost {
   }
   tick(){if(this.stopped)return Promise.resolve();const work=this.writer.tick();this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});return work;}
   renamed(before:string,after:string){this.writer.renamed(before,after);}
-  dispose(){if(this.stopped)return;this.stopped=true;clearInterval(this.authorityTimer);this.authority.stop();this.writer.stop();void (async()=>{try{await Promise.allSettled([...this.work,this.authority.tick()]);}catch{}finally{for(const {access} of this.accesses.values())await access.close?.();this.accesses.clear();await this.release();}})().catch(()=>{});}
+  dispose(){if(this.stopped)return;this.stopped=true;this.stopAuthorityTimer();this.authority.stop();this.writer.stop();void (async()=>{try{await Promise.allSettled([...this.work,this.authority.tick()]);}catch{}finally{for(const {access} of this.accesses.values())await access.close?.();this.accesses.clear();await this.release();}})().catch(()=>{});}
 }

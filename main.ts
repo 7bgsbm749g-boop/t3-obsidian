@@ -143,7 +143,7 @@ export default class SendToT3 extends Plugin {
     this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>this.stopHostedInline(job.id,job.hostTarget)},()=>this.settings.inlineStreaming.keepIntermediate);
     const storedTargets=this.app.loadLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`);
     if(Array.isArray(storedTargets))this.inlineTargets=storedTargets.filter(target=>target&&typeof target.environmentId==='string'&&typeof target.workspaceRoot==='string'&&typeof target.directory==='string');
-    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),access:environmentId=>this.inlineThreadAccess(environmentId),importReplyAsset:(reference,request,access)=>importReplyAsset(this.app,reference,request,access)},target=>this.inlineHostFiles(target));
+    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),access:environmentId=>this.inlineThreadAccess(environmentId),importReplyAsset:(reference,request,access)=>importReplyAsset(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
     const questionStorage=`${this.localKey}-questions-${this.settings.vaultId}`;
     this.questions=new QuestionController(environmentId=>this.inlineThreadAccess(environmentId),{load:()=>{const saved=this.app.loadLocalStorage(questionStorage);return Array.isArray(saved)?saved:[];},save:records=>this.app.saveLocalStorage(questionStorage,records)},randomId);
     const questionPaths=this.app.loadLocalStorage(`${questionStorage}-paths`);if(Array.isArray(questionPaths))for(const path of questionPaths)if(typeof path==='string')this.questionPaths.add(path);
@@ -210,13 +210,13 @@ export default class SendToT3 extends Plugin {
     this.app.workspace.onLayoutReady(()=>this.inlineChat?.resume());
     this.app.workspace.onLayoutReady(()=>{
       const tick=()=>{this.deviceInline?.tick();this.deviceInline?.discover(this.inlineTargets);};
-      tick();this.registerInterval(window.setInterval(tick,150));
+      tick();this.registerInlineInterval(tick,150);
       const remember=()=>{if(this.settings.folderLinks.some(link=>link.folderPath==='/'))void this.inlineHostTarget().then(target=>this.rememberInlineTarget(target)).catch(()=>{});};
       remember();this.registerInterval(window.setInterval(remember,5000));
     });
     if(!Platform.isMobile)this.app.workspace.onLayoutReady(()=>{
       const tick=()=>void this.refreshInlineHost().then(()=>this.inlineHostService?.tick()).catch(()=>{/* The durable job retries after the host reconnects. */});
-      tick();this.registerInterval(window.setInterval(tick,1500));
+      tick();this.registerInlineInterval(tick,1500);
     });
     this.registerEvent(this.app.workspace.on('file-open',()=>this.inlineChat?.flushAvailable()));
     this.registerEvent(this.app.workspace.on('layout-change',()=>this.inlineChat?.flushAvailable()));
@@ -954,6 +954,12 @@ export default class SendToT3 extends Plugin {
   private localInlineEnvironment():Promise<string>{
     if(Platform.isMobile)return Promise.reject(Error('A phone cannot host vault responses.'));
     return this.inlineEnvironment??=import('./desktop').then(d=>d.desktopEnvironment(this.settings.connection)).catch(error=>{this.inlineEnvironment=undefined;throw error;});
+  }
+  private registerInlineInterval(callback:()=>void,milliseconds:number){
+    if(Platform.isMobile){this.registerInterval(window.setInterval(callback,milliseconds));return;}
+    void import('./desktop-timers').then(({desktopInterval})=>{
+      if(!this.stopped)this.register(desktopInterval(callback,milliseconds));
+    });
   }
   private async refreshInlineHost():Promise<void>{
     if(Platform.isMobile||this.stopped)return;

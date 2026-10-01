@@ -26,7 +26,7 @@ export class DeviceInlineManager {
   private hosts=new Map<string,Host>();
   private jobs=new Map<string,Runtime>();
   private accesses=new Map<string,{value:Promise<ThreadAccess>;expires:number}>();
-  constructor(readonly actor:string,private vaultId:string,private io:DeviceInlineIO,private open:(target:InlineHostTarget)=>Promise<{files:InlineFiles;close():void}>,private now=()=>Date.now(),private monotonic=()=>performance.now()){}
+  constructor(readonly actor:string,private vaultId:string,private io:DeviceInlineIO,private open:(target:InlineHostTarget)=>Promise<{files:InlineFiles;close():void}>,private now=()=>Date.now(),private monotonic=()=>performance.now(),private pause?:(milliseconds:number)=>Promise<void>){}
   private host(target:InlineHostTarget){
     const key=hostKey(target),existing=this.hosts.get(key);if(existing)return existing;
     let connection:Promise<{files:InlineFiles;close():void}>|undefined;
@@ -35,7 +35,7 @@ export class DeviceInlineManager {
       try{return await fn((await opened).files);}catch(error){if(connection===opened)connection=undefined;void opened.then(value=>value.close()).catch(()=>{});throw error;}
     };
     const files:InlineFiles={read:path=>perform(io=>io.read(path)),write:(path,value)=>perform(io=>io.write(path,value))};
-    const host:Host={target,files,client:new InlineLeaseClient(this.actor,files,target.directory,this.now,this.monotonic),lastDiscovery:0,close:()=>{host.client.dispose();void connection?.then(value=>value.close()).catch(()=>{});}};
+    const host:Host={target,files,client:new InlineLeaseClient(this.actor,files,target.directory,this.now,this.monotonic,this.pause),lastDiscovery:0,close:()=>{host.client.dispose();void connection?.then(value=>value.close()).catch(()=>{});}};
     this.hosts.set(key,host);return host;
   }
   private access(environmentId:string){
