@@ -72,7 +72,7 @@ test('a previously bound writer recovers old history after restart without adopt
 
 test('automatic outage recovery preserves a response edited while disconnected',async()=>{
   const h=harness(),s=stranded(h);await h.create().tick();
-  h.document=h.document.replace('**T3 · Sending…**','My replacement text');s.online();
+  h.document=h.document.replace('**T3 · Working**','My replacement text');s.online();
   const edited=h.document;await h.create().tick();
   assert.equal(h.document,edited);assert.equal(h.state.status,'conflict');
 });
@@ -128,7 +128,7 @@ test('handoff waits for a saved synced anchor and host-owned access before dispa
   await handoffInline(h.io,h.request,()=>true,async()=>writer.tick());
   assert.equal(h.state.accepted,true);assert.equal(h.state.status,'waiting');
   assert.equal(h.calls.at(-1).access,'thread-machine');
-  assert.equal(regionBody(h.document,h.request.id)?.body,'**T3 · Sending…**');
+  assert.equal(regionBody(h.document,h.request.id)?.body,'**T3 · Working**');
 });
 
 test('host continues after sender disappears, handles outside edits and known Sync rollbacks, and finalizes a closed note',async()=>{
@@ -252,7 +252,7 @@ test('a stalled note cannot block another note, later ticks, or cause overlappin
     await secondUpdated;await new Promise<void>(resolve=>setImmediate(resolve));
     b.answer('Progress B');await writer.tick();
     assert.match(b.document,/Progress B/);assert.equal(blockedCalls,1);
-    assert.match(a.document,/Sending/);
+    assert.match(a.document,/T3 · Working/);
   }finally{release();await first;writer.stop();}
   assert.match(a.document,/Progress A/);
 });

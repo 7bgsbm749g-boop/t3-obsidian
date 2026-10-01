@@ -1567,7 +1567,7 @@ export default class SendToT3 extends Plugin {
       const opened=await this.inlineHostFiles(request.inlineHost.host);
       try{await handoffInline(opened.files,request.inlineHost,()=>!this.stopped);}finally{opened.close();}
     }
-    if(!quiet)new Notice(`Sending to ${projectLabel(request.project)}…`);
+    if(!quiet)new Notice(`Working in ${projectLabel(request.project)}…`);
     const result=await sendRequest(request);
     const before={jobs:this.settings.completionJobs,settlementJobs:this.settings.settlementJobs,pending:this.settings.pending,noteThreads:this.settings.noteThreads,folderLinks:this.settings.folderLinks};
     this.rememberStarted(request,result.threadId);
