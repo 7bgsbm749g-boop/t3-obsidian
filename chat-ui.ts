@@ -9,11 +9,9 @@ export interface ChatHost {
   getTargetDescription(projectKey?:string):string;
   getProjectChoices():{key:string;label:string}[];
   getDefaultThread(projectKey?:string):string|undefined;
-  hasPreviousThreads(projectKey?:string):boolean;
   sendChat(prompt:string,projectKey?:string):Promise<void>;
   sendToNew(prompt:string,projectKey?:string):Promise<void>;
   sendToExisting(prompt:string,projectKey?:string):Promise<void>;
-  sendToPrevious(prompt:string,projectKey?:string):Promise<void>;
 }
 
 class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
@@ -23,7 +21,7 @@ class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
   onChooseItem(item:{key:string;label:string}){this.choose(item.key);}
 }
 
-type Destination='default'|'new'|'existing'|'previous';
+type Destination='default'|'new'|'existing';
 
 /** The same compact destination UI handles whole notes, selections, and typed asks. */
 class SendDestinationModal extends Modal {
@@ -51,7 +49,7 @@ class SendDestinationModal extends Modal {
     }
     const remembered=this.host.getDefaultThread(this.projectKey);
     let defaultButton:HTMLButtonElement|undefined;
-    this.actions=new Setting(this.contentEl);
+    this.actions=new Setting(this.contentEl).setClass('send-to-t3-destination-actions');
     if(remembered)this.actions.addButton(button=>{defaultButton=button.buttonEl;button.setButtonText(this.host.steering?'Send to running thread':'Previous thread').setCta().onClick(()=>this.choose('default'));});
     this.actions.addButton(button=>{
       button.setButtonText('New thread');
@@ -59,7 +57,6 @@ class SendDestinationModal extends Modal {
       button.onClick(()=>this.choose('new'));
     });
     this.actions.addButton(button=>button.setButtonText('Existing thread…').onClick(()=>this.choose('existing')));
-    if(this.host.hasPreviousThreads(this.projectKey))this.actions.addButton(button=>button.setButtonText('Previous threads…').onClick(()=>this.choose('previous')));
     this.actions.setDisabled(Boolean(this.host.busy));
     if(this.field)this.field.focus();
     else setTimeout(()=>{if(defaultButton?.isConnected)defaultButton.focus();},0);
@@ -71,7 +68,6 @@ class SendDestinationModal extends Modal {
     const prompt=this.prompt??'';
     try{
       if(target===true||target==='existing')await this.host.sendToExisting(prompt,this.projectKey);
-      else if(target==='previous')await this.host.sendToPrevious(prompt,this.projectKey);
       else if(target==='new')await this.host.sendToNew(prompt,this.projectKey);
       else await this.host.sendChat(prompt,this.projectKey);
     }catch(error){

@@ -56,6 +56,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   class Setting {
     name='';buttons:any[]=[];
     constructor(_element:any){settingsControls.push(this);}
+    setClass(_value:string){return this;}
     setName(text:string){this.name=text;return this;}setDesc(_text:string){return this;}setDisabled(_value:boolean){return this;}
     addToggle(callback:(toggle:any)=>void){const toggle={setValue:()=>toggle,onChange:()=>toggle};callback(toggle);return this;}
     addButton(callback:(button:any)=>void){const button:any={text:'',click:()=>{},buttonEl:{isConnected:true,focus:()=>{focusedButton=button;}},setButtonText:(text:string)=>{button.text=text;return button;},setCta:()=>button,setDisabled:()=>button,onClick:(click:()=>void)=>{button.click=click;return button;}};callback(button);this.buttons.push(button);return this;}
@@ -441,7 +442,7 @@ test('an empty palette action on a note with history opens a destination modal',
     assert.equal(modal.constructor.name,'SendDestinationModal');
     assert.equal(modal.titleEl.text,'Send to T3 Code');
     assert.equal(modal.contentEl.children[0].children[0].text,project.title);
-    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Previous thread','New thread','Existing thread…','Previous threads…']);
+    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Previous thread','New thread','Existing thread…']);
     assert.equal(h.commands.length,0);
     modal.close();
     assert.equal(h.commands.length,0,'Dismissing the destination modal must not send');

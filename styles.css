@@ -102,3 +102,15 @@
   overflow-wrap: anywhere;
   text-align: left;
 }
+
+.send-to-t3-destination-actions .setting-item-info { display: none; }
+.send-to-t3-destination-actions .setting-item-control {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.send-to-t3-destination-actions button {
+  max-width: 100%;
+  white-space: normal;
+  height: auto;
+  min-height: var(--input-height);
+}

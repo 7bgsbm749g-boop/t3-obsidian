@@ -38,6 +38,7 @@ async function folderMenuHarness(){
   class Setting {
     name='';description='';disabled=false;controls:Control[]=[];
     constructor(element:Element){element.settings.push(this);}
+    setClass(_value:string){return this;}
     setName(name:string){this.name=name;return this;}
     setDesc(value:string){this.description=value;return this;}
     setDisabled(value:boolean){this.disabled=value;for(const control of this.controls)control.disabled=value;return this;}

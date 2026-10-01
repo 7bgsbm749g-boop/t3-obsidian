@@ -692,7 +692,6 @@ export default class SendToT3 extends Plugin {
   }
   private noteThread(path?:string){return path?lastUsedNoteThread(this.settings.noteThreads,path):undefined;}
   private previousNoteThread(path:string,threadId:string){return previousNoteThreads(this.settings.noteThreads,path).find(entry=>entry.threadId===threadId);}
-  private olderNoteThreads(path:string){const active=this.noteThread(path);return previousNoteThreads(this.settings.noteThreads,path).filter(entry=>entry.threadId!==active?.threadId);}
   private projectForNoteThread(entry:NoteThread):Project{
     const candidates=[...this.settings.directProjects,...this.settings.projects].filter(item=>item.id===entry.projectId&&sameWorkspacePath(item.workspaceRoot,entry.workspaceRoot)&&(!Platform.isMobile||Boolean(item.connectionId)));
     const sameConnection=candidates.find(item=>(item.connectionId??'')===entry.connectionId);
@@ -731,22 +730,14 @@ export default class SendToT3 extends Plugin {
     if(!project.connectionId)return Platform.isMobile?'This folder is linked to a local desktop project. Link it to a connected computer first.':undefined;
     return this.chatReadinessError();
   }
-  private noteSendMenu(menu:Menu,file:TFile){
-    if(this.noteThread(file.path))menu.addItem(item=>item.setTitle('Send to previous thread').setIcon('history').setDisabled(this.busy).onClick(()=>this.sendNote(file)));
-    if(this.olderNoteThreads(file.path).length)menu.addItem(item=>item.setTitle('Previous threads…').setIcon('history').setDisabled(this.busy).onClick(()=>this.openPreviousNoteThreads(file)));
-    menu.addItem(item=>item.setTitle('Send to new thread').setIcon('message-square-plus').setDisabled(this.busy).onClick(()=>this.sendNote(file,undefined,undefined,true)));
-    menu.addItem(item=>item.setTitle('Send to existing thread…').setIcon('messages-square').setDisabled(this.busy).onClick(()=>this.openNoteThreads(file)));
-  }
   openNoteSend(file:TFile){
     const host:ChatHost={...this.destinationContext(this.noteContext(file)),busy:this.busy,
       sendChat:(_text,key)=>this.sendNote(file,undefined,undefined,false,key),
       sendToNew:(_text,key)=>this.sendNote(file,undefined,undefined,true,key),
       sendToExisting:(_text,key)=>this.openNoteThreads(file,key),
-      sendToPrevious:async(_text,key)=>{this.openPreviousNoteThreads(file,key);},
     };
     openNoteSendFlow(this.app,host);
   }
-  private openPreviousNoteThreads(file:TFile,overrideKey?:string){new PreviousNoteThreadModal(this.app,this.olderNoteThreads(file.path).filter(entry=>!overrideKey||overrideKey===`${entry.connectionId?entry.connectionId+':':''}${entry.projectId}`),entry=>this.sendNote(file,entry.threadId,undefined,false,overrideKey)).open();}
   async openNoteThreads(file:TFile,overrideKey?:string){
     if(this.busy)return;
     try{
@@ -802,7 +793,7 @@ export default class SendToT3 extends Plugin {
   private needsFolderProject(notePath?:string):boolean {
     return Boolean(notePath?.includes('/')&&!folderLinkForPath(this.settings.folderLinks.filter(link=>link.folderPath!=='/'),notePath));
   }
-  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'steering'|'getNotePath'|'getProjectName'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'hasPreviousThreads'>{
+  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'steering'|'getNotePath'|'getProjectName'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'>{
     const projectName=(key?:string)=>{
       const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
       if(key===VAULT_PROJECT)return this.settings.folderLinks.find(item=>item.folderPath==='/')?.projectTitle??this.app.vault.getName();
@@ -822,7 +813,6 @@ export default class SendToT3 extends Plugin {
         return [...(this.needsFolderProject(note?.path)?[{key:NEW_FOLDER_PROJECT,label:`New project: ${note!.path.split('/').at(-2)}`}]:[]),{key:VAULT_PROJECT,label:`Vault project: ${root?.projectTitle??this.app.vault.getName()}`},...this.projects().filter(project=>!root||project.id!==root.projectId||!sameWorkspacePath(project.workspaceRoot,root.workspaceRoot)).map(project=>({key:projectKey(project),label:projectLabel(project)}))];
       },
       getDefaultThread:key=>{const remembered=this.noteThread(note?.path),job=note?this.inlineChat?.activeFor(note.path).find(job=>job.threadId&&['sending','running','reconnecting'].includes(job.phase)):undefined;return !key||remembered&&key===`${remembered.connectionId?remembered.connectionId+':':''}${remembered.projectId}`?job?.threadId??remembered?.threadId:undefined;},
-      hasPreviousThreads:key=>Boolean(note&&this.olderNoteThreads(note.path).some(entry=>!key||key===`${entry.connectionId?entry.connectionId+':':''}${entry.projectId}`)),
     };
   }
   private openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false){
@@ -831,7 +821,6 @@ export default class SendToT3 extends Plugin {
       sendChat:(text,key)=>send(text,{projectOverrideKey:key}),
       sendToNew:(text,key)=>send(text,{newThread:true,projectOverrideKey:key}),
       sendToExisting:(text,key)=>this.openChatThreads(text,note,inline,answerOnly,key),
-      sendToPrevious:(text,key)=>this.openPreviousChatThreads(text,note,inline,answerOnly,key),
     };
     return openChatFlow(this.app,host,prompt);
   }
@@ -844,11 +833,6 @@ export default class SendToT3 extends Plugin {
     const threads=projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);
     if(this.stopped)return;
     new ExistingThreadModal(this.app,threads,thread=>inline&&note?this.sendInlineChat(prompt,note,inline,{threadId:thread.id,expectedProjectKey:projectKey(project),projectOverrideKey:overrideKey}):this.sendChat(answerOnly?`${prompt}\n\n${THREAD_REPLY_INSTRUCTION}`:prompt,note,{threadId:thread.id,expectedProjectKey:projectKey(project),projectOverrideKey:overrideKey}),'Ask in an existing thread','No existing threads in this project. Use New thread.').open();
-  }
-  private async openPreviousChatThreads(prompt:string,note?:{path:string;absolutePath?:string},inline?:EditorChatContext,answerOnly=false,overrideKey?:string){
-    if(!note)return;
-    const entries=this.olderNoteThreads(note.path).filter(entry=>!overrideKey||overrideKey===`${entry.connectionId?entry.connectionId+':':''}${entry.projectId}`);
-    new PreviousNoteThreadModal(this.app,entries,entry=>inline?this.sendInlineChat(prompt,note,inline,{threadId:entry.threadId,projectOverrideKey:overrideKey}):this.sendChat(answerOnly?`${prompt}\n\n${THREAD_REPLY_INSTRUCTION}`:prompt,note,{threadId:entry.threadId,projectOverrideKey:overrideKey})).open();
   }
   private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string}){
     const manager=this.inlineChat;if(!manager)throw Error('Inline T3 response is unavailable. Reload the plugin.');
@@ -1700,12 +1684,6 @@ class ExistingThreadModal extends FuzzySuggestModal<ThreadChoice>{
   getItems(){return this.threads;}
   getItemText(thread:ThreadChoice){return `${thread.title} · ${thread.status} · ${thread.id.slice(0,8)}`;}
   onChooseItem(thread:ThreadChoice){return this.choose(thread);}
-}
-class PreviousNoteThreadModal extends FuzzySuggestModal<NoteThread>{
-  constructor(app:App,private threads:NoteThread[],private choose:(thread:NoteThread)=>Promise<void>){super(app);this.setPlaceholder('Send to a previous thread for this note');this.emptyStateText='No recorded threads for this note.';}
-  getItems(){return this.threads;}
-  getItemText(thread:NoteThread){return `${thread.projectId} · ${thread.threadId.slice(0,8)} · ${thread.selectedAt}`;}
-  onChooseItem(thread:NoteThread){void this.choose(thread);}
 }
 type FolderLinkChoice=Project|{self:true;title:string};
 class FolderLinkProjectModal extends FuzzySuggestModal<FolderLinkChoice>{
