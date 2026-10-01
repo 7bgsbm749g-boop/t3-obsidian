@@ -52,7 +52,7 @@ class SendDestinationModal extends Modal {
     const remembered=this.host.getDefaultThread(this.projectKey);
     let defaultButton:HTMLButtonElement|undefined;
     this.actions=new Setting(this.contentEl).setClass('send-to-t3-destination-actions');
-    if(remembered)this.actions.addButton(button=>{defaultButton=button.buttonEl;button.setButtonText(this.host.steering?'Send to running thread':'Previous thread').setCta().onClick(()=>this.choose('default'));});
+    if(remembered||this.host.steering)this.actions.addButton(button=>{defaultButton=button.buttonEl;button.setButtonText(this.host.steering?'Send to running thread':'Previous thread').setCta().onClick(()=>this.choose('default'));});
     this.actions.addButton(button=>{
       button.setButtonText('New thread');
       if(!defaultButton){defaultButton=button.buttonEl;button.setCta();}

@@ -1,7 +1,23 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {contentHash} from '../completion';
-import {activeInlineIds,applyThreadItem,endInsertionOffset,failedInlineIds,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
+import {activeInlineIds,applyThreadItem,endInsertionOffset,failedInlineIds,finalizeRegion,initialRegion,insertionOffset,inlineSteeringTarget,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
+
+test('follow-up steering targets the sole running reply outside its block and scopes multiple replies explicitly',()=>{
+  const a='f95a3b36-7393-4508-9fb3-38aa2da3590f',b='915e8577-9bbc-463c-88c6-e6c2d3e24c3b';
+  const single='Follow-up before\n'+initialRegion(a).text+'Follow-up after';
+  assert.equal(inlineSteeringTarget(single,0),a);
+  assert.equal(inlineSteeringTarget(single,single.length),a);
+  const multiple=single+initialRegion(b).text+'Tail';
+  assert.equal(inlineSteeringTarget(multiple,multiple.length),undefined);
+  assert.equal(inlineSteeringTarget(multiple,regionBody(multiple,b)!.from),b);
+  assert.equal(inlineSteeringTarget(multiple,0,b),b);
+  const second=regionBody(multiple,b)!;
+  const failed=multiple.slice(0,second.from)+'**T3 · Error**'+multiple.slice(second.to);
+  assert.equal(inlineSteeringTarget(failed,regionBody(failed,b)!.from),undefined);
+  assert.equal(inlineSteeringTarget(failed,failed.length),a);
+  assert.equal(inlineSteeringTarget('Completed reply',0),undefined);
+});
 
 test('a failed turn shows its T3 reason and remains identifiable for recovery',()=>{
   const id='f95a3b36-7393-4508-9fb3-38aa2da3590f',region=initialRegion(id);

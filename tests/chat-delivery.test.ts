@@ -1058,7 +1058,7 @@ test('new inline responses capture the retention setting in their immutable host
   }finally{h.plugin.onunload();}
 });
 
-test('a synced running response accepts palette steering without a new block and retains its transcript',async()=>{
+for(const destination of ['default','new'])test(`a synced running response accepts palette ${destination} with no local thread history`,async()=>{
   const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/Steering.md',region=initialRegion(id);
   try{
     const body='**T3 · Working**\n\n> Earlier progress.\n',edit=replaceRegion(region.text,id,region.bodyHash,body)!;
@@ -1067,7 +1067,18 @@ test('a synced running response accepts palette steering without a new block and
     const initialMessage=webcrypto.randomUUID(),request={version:2 as const,initialOwner:webcrypto.randomUUID(),id,vaultId:h.plugin.settings.vaultId,host,notePath:path,threadId:'old-thread',messageId:initialMessage,projectId:project.id,threadEnvironmentId:'chat-env',initialHash:region.bodyHash,createdAt:'original-time'};
     h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,owner:request.initialOwner,epoch:1,revision:1,expiresAt:Date.now()+15_000,state:{requestHash:hostedRequestHash(request),accepted:true,notePath:path,status:'running',hashes:[region.bodyHash,contentHash(body)],turnId:'old-turn',prose:[{id:'old-progress',role:'assistant',text:'Earlier progress.',turnId:'old-turn',streaming:false}],updatedAt:''}}));
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Working',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running',requestedAt:'original-time'},messages:[{id:initialMessage,role:'user',createdAt:'original-time'}]}]);
-    await (h.plugin as any).sendInlineChat('Change the approach.',{path},{editor:opened.editor,view:opened.view,responseId:id});
+    await h.plugin.openPaletteAction('Change the approach.','');
+    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Send to running thread','New thread','Existing thread…']);
+    if(destination==='new')h.setStreaming(true);
+    await h.modals.at(-1).choose(destination);
+    if(destination==='new'){
+      assert.equal(h.commands[0].type,'thread.create');
+      assert.notEqual(h.commands[0].threadId,'old-thread');
+      assert.equal(h.commands[1].threadId,h.commands[0].threadId);
+      assert.equal((opened.value.match(/t3-inline:start:/g)??[]).length,2);
+      assert.equal(JSON.parse(h.hostFiles.get(leasePaths(host.directory,id).record)!).state.steering,undefined);
+      return;
+    }
     assert.equal(h.commands.length,1);assert.equal(h.commands[0].threadId,'old-thread');assert.equal(h.commands[0].type,'thread.turn.start');
     assert.equal((opened.value.match(/t3-inline:start:/g)??[]).length,1);
     const record=JSON.parse(h.hostFiles.get(leasePaths(host.directory,id).record)!);
@@ -1077,7 +1088,7 @@ test('a synced running response accepts palette steering without a new block and
   }finally{h.plugin.onunload();}
 });
 
-for(const surface of ['editor','explicit-target'])test(`Targeted Ask via ${surface} remains enabled during local streaming and moves only the captured text`,async()=>{
+for(const surface of ['editor','ordinary-ask','palette','explicit-target'])test(`Targeted Ask via ${surface} remains enabled during local streaming and moves only the captured text`,async()=>{
   const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/SelectedSteering.md',region=initialRegion(id);
   try{
     const selected='Use a simpler approach.',opened=h.attachEditor(path,selected+'\n'+region.text+'Tail');
@@ -1089,7 +1100,10 @@ for(const surface of ['editor','explicit-target'])test(`Targeted Ask via ${surfa
     const ask=h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 in this response');assert.ok(ask);assert.equal(ask.disabled,false);
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Working',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running',requestedAt:'original-time'}}]);
     if(surface==='editor')await ask.callback();
+    else if(surface==='ordinary-ask')await h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code')!.callback();
+    else if(surface==='palette')await h.plugin.openPaletteAction('',selected);
     else h.plugin.openEditorChat(selected,opened.file,{editor:opened.editor,view:opened.view,anchor:{text:selected,start:0,end:selected.length,before:'',after:'\n'+region.text.slice(0,23)},responseId:id});
+    assert.equal(h.settingsControls.at(-1).buttons[0].text,'Send to running thread');
     await h.modals.at(-1).choose(false);
     assert.equal(h.commands.length,1);assert.ok(opened.value.startsWith(selected),'text remains until T3 confirms its message');
     const command=h.commands[0];

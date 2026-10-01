@@ -348,10 +348,19 @@ export function turnPhase(state:InlineThreadState,turnId:string):'running'|'comp
   return 'running';
 }
 
-/** Actions only steer the response containing the cursor/selection. */
+/** Find the response containing the cursor/selection. */
 export function inlineTargetAt(document:string,offset:number):string|undefined {
   return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)]
     .map(match=>match[1]).find(id=>{const region=regionBody(document,id);return region&&offset>=region.from&&offset<=region.to;});
+}
+
+/** Preserve ordinary follow-up steering when the note has one running reply.
+ * Several replies need a cursor-scoped or explicit target. */
+export function inlineSteeringTarget(document:string,offset:number,responseId?:string):string|undefined {
+  if(responseId)return responseId;
+  const active=activeInlineIds(document),cursor=inlineTargetAt(document,offset);
+  if(cursor)return active.includes(cursor)?cursor:undefined;
+  return active.length===1?active[0]:undefined;
 }
 export function completionProof(id:string,body:string){return `<!-- t3-response:start:${id} -->\n${body}\n<!-- t3-response:end:${id} -->`;}
 export function hasCompletionProof(document:string,id:string,body:string){return document.includes(completionProof(id,body));}

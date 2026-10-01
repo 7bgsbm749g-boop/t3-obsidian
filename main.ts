@@ -43,7 +43,7 @@ import {handoffInline,hostedPaths,type HostedInlineRequest,type InlineHostTarget
 import {leasePaths,type LeaseRecord} from './inline-lease';
 import {installMobileSelectionAction} from './mobile-selection-action';
 import {hiddenInlineMarkerExtension} from './inline-markers';
-import {activeInlineIds,inlineTargetAt,initialRegion,endInsertionOffset,endMarker,failedInlineIds,regionBody,startMarker,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,initialRegion,endInsertionOffset,endMarker,failedInlineIds,regionBody,startMarker,type SelectionAnchor} from './inline-thread';
 import {QuestionController} from './question-controller';
 import {QuestionModal,questionButton,questionEditorExtension} from './question-ui';
 import {questionTargets,parseQuestionToken,clearResolvedQuestion,type QuestionTarget} from './questions';
@@ -859,7 +859,7 @@ export default class SendToT3 extends Plugin {
       return this.needsFolderProject(note?.path)?`New project: ${note!.path.split('/').at(-2)}`:link?.projectTitle??this.app.vault.getName();
     };
     return {
-      steering:!!inline&&!!inlineTargetAt(inline.editor.getValue(),inline.editor.posToOffset(inline.editor.getCursor())),
+      steering:!!inline&&!!inlineSteeringTarget(inline.editor.getValue(),inline.editor.posToOffset(inline.editor.getCursor()),inline.responseId),
       getNotePath:()=>note?.path??'No note open',
       getProjectName:projectName,
       getTargetDescription:key=>`${note?.path??'No note open'} → ${projectName(key)}`,
@@ -892,7 +892,7 @@ export default class SendToT3 extends Plugin {
   private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string}){
     const manager=this.inlineChat;if(!manager)throw Error('Inline T3 response is unavailable. Reload the plugin.');
     if(context.view.file?.path!==note.path)throw Error('The original note is no longer open. Reopen it before asking T3.');
-    const activeId=context.responseId??inlineTargetAt(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()));
+    const activeId=inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId);
     if(activeId&&!options?.newThread)return this.sendInlineSteering(activeId,prompt,note,context,options);
     const requestId=randomId(),initialInput=context.initialQuestion?{messageId:commandId(requestId,'message'),text:context.initialQuestion}:undefined;
     const job=context.anchor&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,prompt.trim().split(/\r?\n/)[0].slice(0,160)):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,prompt.trim().split(/\r?\n/)[0].slice(0,160));
