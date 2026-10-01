@@ -1,7 +1,0 @@
-import {test} from 'node:test';
-import assert from 'node:assert/strict';
-import {exactHash} from '../automation-protocol';
-import {applyValidatedReplacement,type ApplyHost} from '../validated-apply';
-const result=(markdown='after')=>({contractVersion:1 as const,type:'proposedNoteReplacement' as const,noteId:'n',incarnationId:'i',path:'A.md',expectedInputHash:exactHash('before'),markdown});
-test('validated application persists intent before conditional mutation and receipt after',async()=>{let content='before';const order:string[]=[];const host:ApplyHost={hasUnsavedChanges:()=>false,recordIntent:async()=>{order.push('intent');},process:async(_,fn)=>{order.push('process');content=fn(content);return content;},recordApplied:async()=>{order.push('applied');}};const intent=await applyValidatedReplacement(result(),'run','operation',host);assert.equal(content,'after');assert.equal(intent.expectedOutputHash,exactHash('after'));assert.deepEqual(order,['intent','process','applied']);});
-test('unsaved or mismatched input cannot be overwritten',async()=>{const unsaved:ApplyHost={hasUnsavedChanges:()=>true,recordIntent:async()=>{},process:async()=>'',recordApplied:async()=>{}};await assert.rejects(applyValidatedReplacement(result(),'r','o',unsaved),/unsaved/);let applied=false;const changed:ApplyHost={hasUnsavedChanges:()=>false,recordIntent:async()=>{},process:async(_,fn)=>{fn('newer');return'';},recordApplied:async()=>{applied=true;}};await assert.rejects(applyValidatedReplacement(result(),'r','o',changed),/changed/);assert.equal(applied,false);});

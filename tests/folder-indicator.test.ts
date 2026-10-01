@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {decorateLinkedFolders,WORKFLOW_FOLDER_ATTRIBUTE} from '../folder-indicator';
+import {decorateLinkedFolders} from '../folder-indicator';
 
 class FakeElement{
   className='';textContent='';title='';parent?:FakeElement;children:FakeElement[]=[];attrs=new Map<string,string>();
@@ -26,18 +26,11 @@ test('file explorer badges mark exact linked folders, update labels, and never d
   assert.equal(logo.getAttribute('aria-hidden'),'true');
   assert.equal(name.textContent,'App project');
   assert.equal(linked.children[0].title,'Linked to T3 Code project: App project');
-  assert.equal(badge.getAttribute(WORKFLOW_FOLDER_ATTRIBUTE),'false');
   assert.equal(descendant.children.length,0);assert.equal(other.children.length,0);
-  decorateLinkedFolders(root as any,[{...link,projectTitle:'Renamed project'}],['Projects/App']);
+  decorateLinkedFolders(root as any,[{...link,projectTitle:'Renamed project'}]);
   assert.equal(name.textContent,'Renamed project');
   assert.equal(badge.children[0],logo);
-  assert.equal(badge.getAttribute(WORKFLOW_FOLDER_ATTRIBUTE),'true');
-  assert.equal(linked.children[0].title,'Linked to T3 Code project: Renamed project; folder workflows configured');
-  decorateLinkedFolders(root as any,[link],[]);assert.equal(badge.getAttribute(WORKFLOW_FOLDER_ATTRIBUTE),'false','removing the last workflow removes the glow state');
-  decorateLinkedFolders(root as any,[link],['Projects/App/Nested']);
-  assert.equal(descendant.children.length,1,'a workflow folder inherits its parent link badge');assert.equal(descendant.children[0].getAttribute(WORKFLOW_FOLDER_ATTRIBUTE),'true');
-  assert.equal(descendant.children[0].children[1].textContent,'','an inherited workflow badge must not show the parent project name');
-  assert.equal(descendant.children[0].title,'T3 Code folder workflows configured');
+  assert.equal(linked.children[0].title,'Linked to T3 Code project: Renamed project');
   decorateLinkedFolders(root as any,[]);assert.equal(linked.children.length,0);
   assert.equal(descendant.children.length,0);
 });

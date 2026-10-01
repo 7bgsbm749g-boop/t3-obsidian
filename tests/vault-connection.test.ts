@@ -1,7 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {connectVaultRemote,discoverVaultRoots,vaultRegistration,vaultIdentity,waitForVaultNote,type VaultRemote} from '../vault-connection';
-import {RemoteJournalFiles} from '../remote-journal';
 import {randomUUID} from 'node:crypto';
 
 function harness(){
@@ -93,19 +92,4 @@ test('remote vault access refuses credentials from another environment before op
   const h=harness();let calls=0;
   await assert.rejects(connectVaultRemote(h.c,{...h.session,environmentId:'other'},async()=>{calls++;return new Response('{}');},()=>{throw Error('must not open');}),/Pair this connection/);
   assert.equal(calls,0);
-});
-
-test('paired workflow JSON writes into hidden coordinator storage and verifies exact bytes',async()=>{
-  const h=harness(),journal=new RemoteJournalFiles('/vault',h.connect);
-  const path='.obsidian/t3-code/automation/observations/phone/stream/0001-record.json';
-  try{
-    assert.equal(await journal.exists(path),false);
-    await journal.mkdir('.obsidian/t3-code/automation/observations/phone/stream');
-    await journal.write(path,'{"record":"one"}');
-    assert.equal(await journal.exists(path),true);
-    assert.equal(await journal.read(path),'{"record":"one"}');
-    assert.equal(h.files.get(path),'{"record":"one"}');
-    assert.ok(h.rpc.some(call=>call.tag==='projects.writeFile'&&call.payload.cwd==='/vault'&&call.payload.relativePath===path));
-    assert.equal(h.rpc.filter(call=>call.tag==='projects.writeFile').length,1);
-  }finally{journal.close();}
 });

@@ -1,18 +1,48 @@
 # Send to T3 Code
 
-One Obsidian plugin for desktop and mobile. Chat from the command palette, send a Markdown note to a T3 project, or create a folder workflow. Linked folders choose the destination for notes below them. Manual sends preserve Markdown and embedded images.
+One Obsidian plugin for desktop and mobile. Chat from the command palette, send a Markdown note to a T3 project, or ask a thread to watch a note or folder. Linked folders choose the destination for notes below them. Manual sends preserve Markdown and embedded images.
 
-## Folder workflows and event capture
+## Thread event subscriptions
 
-Link a folder to a T3 project, then long press or right-click it and choose **Setup T3 workflow → Setup new workflow…**. Describe when the workflow should run and what it should do. Creating it starts a T3 thread showing your description and a short pointer to temporary setup instructions under `.obsidian/t3-code/setup/`. The agent reads those instructions and writes a JSON setup result there; the coordinator validates its trigger, scope, and task, saves the enabled workflow, and removes both temporary files. Keep the coordinator's Obsidian client open for setup and workflow execution.
+The plugin notices changes; the subscribing T3 thread decides what to do. There is no workflow builder, stored task definition, setup thread, or new thread for each change. An agent registers a subscription through the same private command mailbox used for note sends. A subscription contains only a note/folder scope, selected change types, and the originating thread, project, and machine IDs.
 
-To change an existing workflow, open it from the same folder menu. The edit box starts empty. **Save changes** sends your request as a new turn in the original setup thread; normal workflow runs continue in their own threads. The current workflow remains active until the coordinator validates and activates the proposed revision. If a change request is unresolved, cancel it from the edit dialog before sending another.
+With no enabled subscriptions, note monitoring and automatic activity logging are off. The command listener stays available so the next agent can register a subscription. Pausing or cancelling the last subscription stops recording; historical records remain untouched. Old folder-workflow definitions are ignored and do not migrate or run. The retired menus, badges, settings, setup compiler, event journals, coordinator, and execution engine have been removed.
 
-With no enabled workflows, the plugin does not record or publish observations. It removes the old visible `T3 Automation` and `T3 Workflow Setup` folders after loading, including copies returned through Sync. Each enabled workflow subscribes to only its selected event types and folder scope. The engine seeds note baselines silently so a later update has a known previous state. Pausing or removing the last workflow stops capture. Changing subscriptions starts a new stream, so old unpublished observations cannot be released later.
+A subscription watches future saved Markdown changes from its registration. It supports creation, text modification, rename, deletion, or a named frontmatter property changing (optionally to an exact JSON value). Property values are compared by type, so `true` differs from `"true"`. Invalid YAML does not count as a property transition. Folder scopes may include subfolders; `/` watches the vault. Hidden paths and plugin log notes cannot be watched. Explicit note/folder scopes follow renames; a folder subscription continues watching its path after deletion, so a later recreated folder is covered.
 
-For captured saved revisions, immutable JSON records under `.obsidian/t3-code/automation/` include exact line changes and relevant metadata. These files stay outside the visible vault tree and Obsidian Sync; paired mobile clients send them directly to the coordinator through the authenticated T3 connection. Records can contain private note text. The coordinator validates the records, runs matching workflows, and answers bounded event-history queries. A workflow action receives query instructions only when its definition requests history access. That agent may request history for the event types and paths a workflow records; events outside those subscriptions do not exist in the journal.
+Rapid changes to the same note are grouped after 1.5 seconds of quiet, with a maximum 30-second wait and the last 32 transitions retained. Notifications contain paths, change types, timestamps, text hashes, and bounded property before/after values. They do not archive full note bodies. The thread can read the current note itself. A busy thread's notification waits in the saved queue. The exact T3 message and command IDs and bytes are saved before dispatch and reused after interrupted delivery. Delivery never creates a new thread or changes the existing thread's model or permissions. `subscriptions` reports active scopes and pending deliveries, including retry errors.
 
-Workflows start paused by default. Enabling one does not run it against existing notes. The coordinator records matching future events, waits through the debounce period, persists a run plan, and sends it to the linked T3 project. Recent run states and uncertain delivery retries appear in settings. A changed input note or folder destination stops delivery for review.
+Streamed and completed plugin response blocks are excluded from text changes. During a notification turn, other changes in that thread's subscribed scopes are also suppressed until it becomes idle and the plugin refreshes its baseline. This includes user edits in those scopes during that turn: the plugin cannot reliably distinguish their author. Ordinary user-started busy turns do **not** suppress queued events. Avoid subscribing threads to each other's output in a cycle; arbitrary agent-to-agent cycles and delayed Sync echoes cannot be identified perfectly.
+
+Subscriptions and the delivery queue live in device-local storage on the desktop where they are registered. A mailbox lock gives one Obsidian client delivery authority for that vault; loss of the lock stops capture and delivery. Keep that QLO2 client open and connected to the receiving T3 computer. Changes from mobile or another computer are observed when Obsidian Sync delivers them to this host. No observer is installed on every device, and no intermediate changes are reconstructed while the host is closed. On reopening or resuming a subscription, existing notes become a silent baseline; saved pending notifications still resume. Updating, pausing, or cancelling a subscription cancels its unsent queue; an already accepted message cannot be recalled.
+
+### Register and manage subscriptions
+
+Use the real originating T3 thread, project, and environment IDs; the plugin validates that the thread exists on that machine in that project. Do not substitute another thread or create a new one to receive each event.
+
+```sh
+python3 scripts/obsidian-command.py --vault /home/ubuntu/vaults/QLO2 \
+  --request-id REQUEST_UUID subscribe \
+  --scope Gym --scope-kind folder \
+  --event property --property completed --equals true \
+  --thread-id THREAD_ID --project-id PROJECT_ID --environment-id ENVIRONMENT_ID
+```
+
+The returned `subscriptionId` is the registration UUID. Omit the property options and use `--event modify` for any saved text change. Repeat `--event` to watch several of `create`, `modify`, `rename`, and `delete`; property filters are separate subscriptions. Use `--scope-kind note --scope 'Gym/Session.md'` for one note, or `--no-subfolders` for direct children only.
+
+```sh
+python3 scripts/obsidian-command.py --vault /home/ubuntu/vaults/QLO2 subscriptions
+python3 scripts/obsidian-command.py --vault /home/ubuntu/vaults/QLO2 \
+  update-subscription --subscription-id SUBSCRIPTION_UUID --event modify
+python3 scripts/obsidian-command.py --vault /home/ubuntu/vaults/QLO2 \
+  pause-subscription --subscription-id SUBSCRIPTION_UUID
+python3 scripts/obsidian-command.py --vault /home/ubuntu/vaults/QLO2 \
+  resume-subscription --subscription-id SUBSCRIPTION_UUID
+python3 scripts/obsidian-command.py --vault /home/ubuntu/vaults/QLO2 \
+  cancel-subscription --subscription-id SUBSCRIPTION_UUID
+```
+
+Updates may replace a scope or filter, but cannot change the receiving thread. After a timeout, reuse the exact request UUID and arguments. After a failed command, fix the cause and use `--retry` with the same UUID and input. A fresh `subscriptions` command uses a fresh request UUID to get the current state. The agent instructions are maintained in [the Obsidian T3 skill](docs/obsidian-t3-SKILL.md).
 
 ## Setup: desktop and mobile
 
@@ -111,7 +141,7 @@ Questions retain the optional wait instruction, 120,000-character limit (includi
 
 Under **Settings → Send to T3 Code → Inline responses**, **Stream replies into the editor** is on by default for all manual Send and Ask actions. The sending device writes new replies directly into its local note. The **Vault project machine** coordinates exclusive ownership, even when a folder link sends the T3 thread to a different machine. Turning streaming off keeps answers in T3 threads.
 
-Manually sending a note with **Open in T3 Code** or palette **Send to T3 Code** appends a streamed reply at the end of that note. A typed palette question also appends its reply at the end. The plugin opens the note in a Markdown tab if needed. A full-note send captures its content before inserting the response and sends that content and its images to T3. A streamed note stays in place even if archive or delete is selected under **When task completes**. Folder workflows do not stream into the editor. Changing the switch affects new sends; an already active response continues to completion or until stopped.
+Manually sending a note with **Open in T3 Code** or palette **Send to T3 Code** appends a streamed reply at the end of that note. A typed palette question also appends its reply at the end. The plugin opens the note in a Markdown tab if needed. A full-note send captures its content before inserting the response and sends that content and its images to T3. A streamed note stays in place even if archive or delete is selected under **When task completes**. Changing the switch affects new sends; an already active response continues to completion or until stopped.
 
 ## Ask T3 inline
 
@@ -169,7 +199,7 @@ Right-click a folder and choose **Link to T3 Code → Link to <project>**. Confi
 
 **Create T3 project…** replaces Link to self on desktop and mobile. Choose a machine, browse to an existing workspace folder (or type its path), and select **Create and link**. The project name defaults to the Obsidian folder name. The plugin reuses any T3 project already registered at that location and saves the folder link. Browsing or cancelling does not create a project or change the link. The workspace can be outside the vault; existing links and remembered threads are not migrated. Automatic **New project** sends from unlinked folders still create projects in the synced vault folder.
 
-Folder links sync with the vault. T3 credentials remain device-local. Each explicitly linked folder shows the **T3 logo followed by its linked project name** beside the folder name in the Files explorer on desktop and mobile. A folder with configured workflows but no explicit folder link shows only the T3 logo—never the inherited vault/project name. Any folder with workflows gives its logo a subtle turquoise glow. Other descendants remain unmarked. Long project names truncate to fit the sidebar, with the full name available in the tooltip and accessibility label. The indicator updates when links or workflows are added, removed, renamed, or synced.
+Folder links sync with the vault. T3 credentials remain device-local. Each explicitly linked folder shows the **T3 logo followed by its linked project name** beside the folder name in the Files explorer on desktop and mobile. Other descendants remain unmarked. Long project names truncate to fit the sidebar, with the full name available in the tooltip and accessibility label. The indicator updates when links are added, removed, renamed, or synced.
 
 ### Sending notes into linked projects
 
@@ -186,10 +216,6 @@ Existing history and requests saved under the former note-thread-link terminolog
 Both choices send the full Markdown and embedded images. Existing-thread sends preserve its model, runtime permissions and interaction mode. An idle thread starts another turn; a running thread receives input through T3’s steering behavior. Resolve pending approvals or structured input in T3 before sending another note. Retries reuse the original thread and message IDs without creating a new thread. Every confirmed manual note send keeps the note and supersedes any older cleanup job for it.
 
 **Settings → Send to T3 Code → Threads → Settle completed threads** is on by default. After a successful Obsidian turn, the plugin moves its T3 thread from the active list to the Settled shelf. A streamed answer must finish saving into its note first. Checks run every 30 seconds while the sending Obsidian client is open and resume after a restart. Pending approval, requested input, live background work, failed or interrupted turns, and turns superseded by later activity do not trigger settlement. Only threads sent by this plugin are affected. A later send to the same settled thread automatically wakes it and preserves the note’s remembered destination. Turning the setting off cancels pending settle checks; later sends remain active. Settling does not archive or delete the thread.
-
-### Folder workflows
-
-Right-click or long press a linked folder and choose **Setup T3 workflow**. The submenu lists workflows in that folder and offers **Setup new workflow…**. See [Folder workflows and event capture](#folder-workflows-and-event-capture) for capture and execution behavior.
 
 ## When task completes
 
@@ -255,9 +281,7 @@ Release 2.3 passes 32 automated tests covering native email verification, wrong-
 
 Live 2.3 validation in QLO2: one email verification connected both laptop and VPS, plugin reload preserved sign-in, and Files-pane right-click sends to both hosts completed with two correctly recognized images. Original user settings were restored and test notes removed.
 
-Live 2.7 desktop validation: the real command-palette row submitted the exact typed prompt and received a completed T3 response. A linked folder sent nothing with its trigger disabled, sent one tagged note after enabling, and created no duplicates after repeated edits and a rename. Build and all 66 automated tests passed, including mobile-compatible bundle delivery, palette lifecycle, event parsing, folder renames and retry durability. Test notes were removed and original development-vault settings restored.
 
-Version 2.7.1 restores the folder-link dialog with an optional tag switch. Live desktop testing verified Files-menu selection, the inactive default, enabling a tag and explicit persistence. All 69 automated tests pass, including cancel, reopen, ownership preservation and storage-error recovery.
 
 Version 2.8.1 adds the new/existing-thread choice to command-palette chat and labels existing-thread choices **Active** or **Idle**. Active threads remain selectable and use T3's steering behavior. All 87 automated tests pass.
 
@@ -271,25 +295,23 @@ Version 2.9.1 replaces the colored folder badges with the T3 logo and linked pro
 
 Version 2.9.2 fixes new threads inheriting a recent conversation's model and reasoning effort. Desktop and mobile now read the selected machine's current T3 settings through its authenticated connection, respecting project overrides and automatic model selection. This applies to command-palette chat, note-menu sends, and tag sends. Existing threads and saved retries retain their original selections.
 
-Version 2.12.0 adds the durable event/coordinator/runtime foundation and the explicit Workflows v1/v2 selector. Only the selected version runs or exposes controls. Switching versions disables and remembers the outgoing version's enabled definitions and restores the selected version's saved set. Both engines now receive events exclusively through the common durable observation pipeline.
 
-Version 2.12.1 makes workflow settings safe across devices. Established vaults no longer rewrite synced settings on startup, device-only state never touches `data.json`, every shared write merges the latest workflow records first, and workflow revisions plus deletion tombstones prevent a stale device from restoring a deleted workflow.
 
 Assistant response HTML outside code is displayed literally so tag-like placeholders cannot disrupt Obsidian Live Preview. Markdown paragraph quotes, inline and fenced code, and URL/email autolinks retain their formatting. This is renderer-side processing; agent prompts are unchanged.
 
-### Synced plugin event logging
+### Activity logging while subscriptions are active
 
-The plugin records operation boundaries, delivery and steering acknowledgements,
+While this desktop has enabled event subscriptions, the plugin records operation boundaries, delivery and steering acknowledgements,
 stream state, ownership, note writes, observed vault changes, and failures. Errors
 only enter the timeline: no automatic diagnostic threads, reporting commands,
 reporting settings, destinations, incidents, or watchdog reports are created.
 
-Events remain in a device-local IndexedDB buffer and are copied every 30 seconds
+With zero enabled subscriptions, no new activity is recorded or automatically published. Export remains an explicit read of available historical logs. While subscriptions are active, events remain in a device-local IndexedDB buffer and are copied every 30 seconds
 (and on unload/export) to `T3 Code Logs/<device-id>/<session-id>.md` in the vault.
 These ordinary Markdown files sync through Obsidian Sync like notes. Each device
 writes only its own session files, so devices do not overwrite each other's logs.
 Sync must be enabled and this folder must not be excluded on receiving devices.
-The log folder is excluded from plugin observation and workflow capture to avoid
+The log folder is excluded from plugin observation and subscription capture to avoid
 logging loops or automatic sends. Sync's own internal logs are separate.
 
 The command palette's **Export plugin diagnostics…** produces JSON combining the

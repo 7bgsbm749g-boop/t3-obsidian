@@ -1,3 +1,4 @@
+import {validateEventCommand,type EventSubscriptionCommand,type EventCommandResult} from './event-subscriptions';
 import {safeNotePath} from './hosted-inline';
 export interface NoteCommand {
   version:1;id:string;kind:'send-note'|'attach-response';notePath:string;
@@ -11,3 +12,8 @@ export function validateNoteCommand(value:any):NoteCommand {
   if(!value.streamReply&&value.destinations.length)throw Error('Destinations require editor streaming.');
   return value;
 }
+
+export type AgentCommand=NoteCommand|EventSubscriptionCommand;
+export type AgentCommandResult=NoteCommandResult|EventCommandResult;
+export function isEventCommand(value:{kind:string}):value is EventSubscriptionCommand{return ['subscribe','subscriptions','update-subscription','pause-subscription','resume-subscription','cancel-subscription'].includes(value.kind);}
+export function validateAgentCommand(value:any):AgentCommand{return isEventCommand(value??{})?validateEventCommand(value):validateNoteCommand(value);}

@@ -21,10 +21,7 @@
   width: 20px;
 }
 
-.send-to-t3-linked-folder-badge[data-t3-folder-workflows="true"] .send-to-t3-linked-folder-logo {
-  color: #67ddd8;
-  filter: drop-shadow(0 0 2px rgba(103, 221, 216, 0.75)) drop-shadow(0 0 5px rgba(80, 200, 220, 0.38));
-}
+
 
 .send-to-t3-linked-folder-project {
   min-width: 0;

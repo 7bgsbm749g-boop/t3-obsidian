@@ -21,3 +21,25 @@ test('agent CLI reaches the running plugin mailbox once, replays results, and re
     await server.tick();const rejected=JSON.parse(await readFile(join(root,'.obsidian/t3-code/commands/v1/results',bad+'.json'),'utf8'));assert.equal(rejected.ok,false);assert.equal(calls,1);
   }finally{await server.dispose();await rm(root,{recursive:true,force:true});}
 });
+
+test('subscription CLI shares the private mailbox and preserves typed property filters',{timeout:10000},async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3-subscription-command-'));const received:any[]=[];
+  const server=await NoteCommandServer.open(root,'.obsidian',async command=>{received.push(command);return {id:command.id,ok:true,monitoring:command.kind==='subscribe'};},()=>true);
+  try{
+    const id=randomUUID();const args=['--vault',root,'--request-id',id,'subscribe','--scope','Gym','--scope-kind','folder','--event','property','--property','completed','--equals','true','--thread-id','thread','--project-id','project','--environment-id','machine'];
+    assert.equal((await run(args)).code,0);assert.equal(received.length,1);assert.deepEqual(received[0].filter,{events:['property'],property:'completed',equals:true});assert.deepEqual(received[0].scope,{path:'Gym',kind:'folder',recursive:true});
+    assert.equal((await run(args)).code,0);assert.equal(received.length,1);
+    assert.equal((await run(['--vault',root,'subscriptions'])).code,0);
+    assert.equal((await run(['--vault',root,'pause-subscription','--subscription-id',id])).code,0);
+    assert.equal((await run(['--vault',root,'update-subscription','--subscription-id',id,'--scope','Gym/A.md','--scope-kind','note'])).code,0);
+    const bad=await run(['--vault',root,'subscribe','--scope','../secret','--scope-kind','folder','--thread-id','thread','--project-id','project','--environment-id','machine']);assert.equal(bad.code,1);assert.match(bad.out,/vault-relative/);
+    const ambiguous=await run(['--vault',root,'subscribe','--scope','Gym','--scope-kind','folder','--event','property','--thread-id','thread','--project-id','project','--environment-id','machine']);assert.equal(ambiguous.code,1);assert.match(ambiguous.out,/property name/);
+  }finally{await server.dispose();await rm(root,{recursive:true,force:true});}
+});
+
+test('a second mailbox consumer cannot acquire authority and stop callbacks revoke delivery',{timeout:10000},async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3-event-authority-'));let stopped=false;
+  const server=await NoteCommandServer.open(root,'.obsidian',async command=>({id:command.id,ok:true}),()=>true,()=>{stopped=true;});
+  try{await assert.rejects(NoteCommandServer.open(root,'.obsidian',async command=>({id:command.id,ok:true}),()=>true),/lock/i);await server.dispose();assert.equal(stopped,true);}
+  finally{await server.dispose();await rm(root,{recursive:true,force:true});}
+});
