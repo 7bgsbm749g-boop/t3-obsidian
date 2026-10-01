@@ -303,7 +303,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null||conversation?.messages.some(m=>m.turnId===request.turnId)).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
   const input=initialInput?`${renderInlineInput(initialInput.text)}\n\n`:'';
   const label=inlineThreadLabel(state.title??threadTitle);
-  if(phase==='complete')return (state.title?`**${label}**\n\n`:'')+input+(prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
+  if(phase==='complete')return input+(prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
   const activity=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
   const heading=`**${label} · ${phase==='running'||phase==='sending'?'Working':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
