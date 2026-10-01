@@ -108,7 +108,7 @@ test('progress, failure, continue, reload repair, steer, answer and final cleanu
   let command:any;
   const controller=new QuestionController(async environment=>{
     assert.equal(environment,target.environmentId);
-    return {origin:'https://t3.example',api:async(_path,payload)=>{if(payload){command=payload;current.activities.push({id:'resolved',kind:'user-input.resolved',summary:'Answered',turnId:'next-turn',payload:{requestId:'request',answers:payload.answers}});return {};}return {thread:{id:h.request.threadId,...current}};}};
+    return {origin:'https://t3.example',api:async(_path,payload)=>{if(payload){command=payload;current.activities.push({id:'resolved',kind:'user-input.resolved',summary:'Answered',turnId:'next-turn',payload:{requestId:'request',answers:payload.answers}});current.messages.push({id:'async-answer:request',role:'user',text:'native-ok',turnId:'next-turn',streaming:false});return {};}return {thread:{id:h.request.threadId,...current}};}};
   },{load:()=>[],save:()=>{}},()=>randomUUID());
   controller.draft(target,'choice',{selected:['native-ok']});await controller.submit(target);
   assert.equal(controller.view(target).status,'resolved');assert.equal(command.threadId,h.request.threadId);assert.deepEqual(command.answers,{choice:'native-ok'});
@@ -282,11 +282,11 @@ test('hosted preference rejects a non-boolean value',()=>{
   const h=harness();assert.throws(()=>validateHostedRequest({...h.request,keepIntermediate:'true'}),/preference/);
 });
 
-test('leased and older hosted writers retain an async question after final response cleanup',async()=>{
+test('leased and older hosted writers keep tracking an async question after the turn completes',async()=>{
   const h=harness();h.dispatch();h.answer('Final prose',true);
   const activity={id:'question',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'async-request',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Which option?',options:[{label:'First',description:'Description'}]}]}};
   h.io.threadState=async()=>({messages:[{id:h.request.messageId,role:'user',turnId:null,text:'Question',streaming:false,createdAt:h.request.createdAt},{id:'answer',role:'assistant',text:'Final prose',turnId:'turn',streaming:false}],activities:[activity],latestTurn:{turnId:'turn',state:'completed',requestedAt:h.request.createdAt,assistantMessageId:'answer'},session:{status:'ready',activeTurnId:null}});
-  await h.create().tick();assert.equal(h.state.status,'complete');assert.doesNotMatch(h.document,/t3-inline:/);assert.match(h.document,/Question pending/);assert.match(h.document,/t3-question:/);assert.match(h.document,/> Final prose/);
+  await h.create().tick();assert.equal(h.state.status,'waiting');assert.match(h.document,/t3-inline:/);assert.doesNotMatch(h.document,/T3 · Working/);assert.match(h.document,/Question pending/);assert.match(h.document,/t3-question:/);assert.match(h.document,/> Final prose/);
 });
 
 test('steering holds finalization until delivery, follows a completion-race turn, and moves selection atomically',async()=>{
@@ -355,4 +355,48 @@ test('hosted initial input validates bounded text and binds the original message
     assert.throws(()=>validateHostedRequest({...h.request,initialInput}),/initial response input/);
   }
   assert.equal(validateHostedRequest(h.request).initialInput?.text,'Question');
+});
+
+for(const version of [1,2] as const)for(const dismiss of [false,true])test(`hosted v${version} follows a late async ${dismiss?'dismissal':'answer'} across restart`,async()=>{
+  const h=harness();h.request.version=version;
+  if(version===2){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===2;}
+  h.files.set(h.paths.request,JSON.stringify(h.request));h.dispatch();
+  const time='2026-10-01T18:00:00Z';
+  const requested={id:'question',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'late',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Continue?',options:[{label:'Yes',description:''}]}]}};
+  let current:InlineThreadState={messages:[{id:h.request.messageId,role:'user',text:'Begin',turnId:null,streaming:false,createdAt:h.request.createdAt},{id:'first',role:'assistant',text:'First final.',turnId:'turn',streaming:false}],activities:[requested],latestTurn:{turnId:'turn',state:'completed',requestedAt:h.request.createdAt,assistantMessageId:'first'},session:{status:'ready',activeTurnId:null}};
+  h.io.threadState=async()=>current;
+  await h.create().tick();assert.equal(h.state.status,'waiting');assert.match(h.document,/First final/);assert.doesNotMatch(h.document,/T3 · Working/);
+  const waiting=h.document;
+  current={...current,latestTurn:{turnId:'unrelated',state:'completed',requestedAt:time},messages:[...current.messages,{id:'other',role:'user',text:'Other work',turnId:'unrelated',streaming:false},{id:'other-final',role:'assistant',text:'Unrelated result',turnId:'unrelated',streaming:false}]};
+  await h.create().tick();assert.equal(h.document,waiting);assert.equal(h.state.turnId,'turn');
+  current.activities.push({id:'resolved',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',payload:{requestId:'late',responseMode:'message',...(!dismiss?{answers:{choice:'Yes'}}:{})}});
+  await h.create().tick();
+  if(dismiss){assert.equal(h.state.status,'complete');assert.doesNotMatch(h.document,/t3-inline:|t3-question:/);return;}
+  assert.equal(h.state.status,'waiting','resolution alone must not seal before the new turn is projected');
+  current.messages.push({id:'async-answer:late',role:'user',text:'Continue? Yes',turnId:null,streaming:false,createdAt:time},{id:'continued',role:'assistant',text:'Follow-up progress.',turnId:'answer-turn',streaming:true});
+  current.latestTurn={turnId:'answer-turn',state:'running',requestedAt:time};current.session={status:'running',activeTurnId:'answer-turn'};
+  await h.create().tick();assert.equal(h.state.status,'running');assert.equal(h.state.turnId,'answer-turn');assert.match(h.document,/First final[\s\S]*Follow-up progress/);assert.doesNotMatch(h.document,/Unrelated result/);
+  current.messages.at(-1)!.streaming=false;current.messages.push({id:'last',role:'assistant',text:'Follow-up final.',turnId:'answer-turn',streaming:false});
+  current.latestTurn={...current.latestTurn,state:'completed',assistantMessageId:'last'};current.session={status:'ready',activeTurnId:null};
+  await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/First final[\s\S]*Follow-up final/);assert.doesNotMatch(h.document,/t3-inline:|t3-question:/);
+  const finished=h.document;await h.create().tick();assert.equal(h.document,finished);
+});
+
+test('upgrade reopens an older finalized async question only from byte-identical output',async()=>{
+  for(const edited of [false,true]){
+    const h=harness();h.dispatch();
+    const requested={id:'q',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'upgrade',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Continue?',options:[{label:'Yes',description:''}]}]}};
+    h.io.threadState=async()=>({messages:[{id:h.request.messageId,role:'user',text:'Begin',turnId:null,streaming:false,createdAt:h.request.createdAt},{id:'final',role:'assistant',text:'Old final.',turnId:'turn',streaming:false}],activities:[requested],latestTurn:{turnId:'turn',state:'completed',requestedAt:h.request.createdAt,assistantMessageId:'final'},session:{status:'ready',activeTurnId:null}});
+    await h.create().tick();
+    const {finalizeRegion}=await import('../inline-thread');
+    const region=regionBody(h.document,h.request.id)!,change=finalizeRegion(h.document,h.request.id,contentHash(region.body),h.state.body!)!;
+    h.document=h.document.slice(0,change.from)+change.text+h.document.slice(change.to);
+    const legacy={...h.state,status:'complete',finalDocumentHash:contentHash(h.document)};delete legacy.questionFollows;
+    h.files.set(h.paths.state,JSON.stringify(legacy));
+    if(edited)h.document=h.document.replace('Old final.','My edited answer.');
+    const before=h.document;
+    await h.create().tick();
+    if(edited){assert.equal(h.document,before);assert.equal(h.state.status,'complete');}
+    else {assert.equal(h.state.status,'waiting');assert.match(h.document,/t3-inline:start/);assert.match(h.document,/Old final/);}
+  }
 });

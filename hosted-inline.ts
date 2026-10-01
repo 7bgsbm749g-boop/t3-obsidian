@@ -1,3 +1,5 @@
+import {questionTargets} from './questions';
+import {followInlineQuestions,inlineQuestionPhase,type InlineQuestionFollow} from './inline-questions';
 import {logEvent,logFailure,settleWatch} from './diagnostics';
 import {contentHash} from './completion';
 import {commandId} from './direct';
@@ -20,13 +22,14 @@ export interface HostedInlineState {
   status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict'|'paused';
   hashes:string[];body?:string;detail?:string;updatedAt:string;
   finalDocumentHash?:string;
-  prose?:InlineMessage[];turnIds?:string[];steering?:InlineSteering[];
+  prose?:InlineMessage[];turnIds?:string[];steering?:InlineSteering[];questionFollows?:InlineQuestionFollow[];
 }
 export interface InlineFiles {
   read(path:string):Promise<string|undefined>;
   write(path:string,contents:string):Promise<void>;
 }
 export const hostedPaths=(directory:string,id:string)=>({request:`${directory}/requests/${id}.json`,state:`${directory}/states/${id}.json`,stop:`${directory}/stops/${id}.json`});
+export const legacyQuestionReply=(state:HostedInlineState|undefined)=>state?.status==='complete'&&state.questionFollows===undefined&&!!state.body?.includes('> **T3 · Question pending**')&&questionTargets(state.body).length>0;
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export function safeNotePath(path:unknown):path is string {
   return typeof path==='string'&&path.endsWith('.md')&&!path.includes('\\')&&!/[\x00-\x1f:]/.test(path)&&path.split('/').every(p=>!!p&&p!=='.'&&p!=='..'&&!p.startsWith('.'));
@@ -108,10 +111,26 @@ export class HostedInlineWriter {
       let state:HostedInlineState;
       try{state=JSON.parse((await this.io.read(paths.state))??'null')??{requestHash:hash,accepted:false,notePath:request.notePath,status:'waiting',hashes:[request.initialHash],updatedAt:new Date().toISOString()};}catch{return;}
       if(state.requestHash!==hash||!Array.isArray(state.hashes)||!safeNotePath(state.notePath))return;
-      if(['complete','interrupted','conflict'].includes(state.status))return;
+      if(['complete','interrupted','conflict'].includes(state.status)&&!legacyQuestionReply(state))return;
       const save=async()=>{state.updatedAt=new Date().toISOString();await this.io.write(paths.state,JSON.stringify(state));this.renameOffsets.set(path,renameEnd);};
       try{
         for(const move of renames)if(state.notePath===move.before||state.notePath.startsWith(move.before+'/'))state.notePath=move.after+state.notePath.slice(move.before.length);
+        if(legacyQuestionReply(state)){
+          // Older releases sealed pending questions. Reopen only byte-identical
+          // final output; never reconstruct over an edited or moved response.
+          let reopened=false;
+          await this.io.updateNote(state.notePath,document=>{
+            if(regionBody(document,request.id)){reopened=true;return document;}
+            if(contentHash(document)!==state.finalDocumentHash)return document;
+            const body=state.body!.replace(/\n+$/,''),from=document.indexOf(body);
+            if(from<0||document.indexOf(body,from+body.length)>=0)return document;
+            reopened=true;
+            return document.slice(0,from)+startMarker(request.id)+'\n'+state.body+'\n'+endMarker(request.id)+document.slice(from+body.length);
+          });
+          if(!reopened)return;
+          state.questionFollows=questionTargets(state.body!).map(target=>({requestId:target.requestId,turnId:state.turnId??null,completed:true}));
+          state.status='waiting';delete state.finalDocumentHash;await save();
+        }
         let restored=false;
         if(state.status==='paused'){
           if(!this.io.canResume?.(state.notePath))return;
@@ -178,16 +197,20 @@ export class HostedInlineWriter {
           const nextTurn=turnForMessage(current,input.messageId);
           if(nextTurn){state.turnId=nextTurn;if(!state.turnIds.includes(nextTurn))state.turnIds.push(nextTurn);}
         }
+        let questions=followInlineQuestions(current,state.turnIds,state.questionFollows);
+        state.questionFollows=questions.follows;state.turnIds=questions.turnIds;state.turnId=questions.turnId!;
         state.prose=mergeProse(state.prose??[],current.messages,state.turnIds);
-        let phase=turnPhase(current,state.turnId);
+        let phase=inlineQuestionPhase(current,state.turnId,state.questionFollows);
         if(state.steering?.some(input=>!input.confirmed))phase='running';
         // Session-ready events can precede the final message in the stream.
         // Resolve completion from a fresh canonical snapshot before sealing it.
         if(phase==='complete'&&this.io.threadState){
           const refreshed=await this.io.threadState(request,access,true);
           if(refreshed)current={...refreshed,turns:{...current.turns,...refreshed.turns}};
+          questions=followInlineQuestions(current,state.turnIds,state.questionFollows);
+          state.questionFollows=questions.follows;state.turnIds=questions.turnIds;state.turnId=questions.turnId!;
           state.prose=mergeProse(state.prose,current.messages,state.turnIds);
-          phase=turnPhase(current,state.turnId);
+          phase=inlineQuestionPhase(current,state.turnId,state.questionFollows);
         }
         if(state.status==='error'&&phase==='running'&&current.latestTurn?.turnId!==state.turnId&&current.session?.activeTurnId!==state.turnId)return;
         if(state.status==='error'&&!state.pendingMessageId&&phase==='error')return;
@@ -195,7 +218,7 @@ export class HostedInlineWriter {
           await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(request.id,'interrupt'),threadId:request.threadId,turnId:state.turnId,createdAt:request.createdAt});
           phase='interrupted';
         }
-        const conversation=state.turnIds.length>1||state.steering?.length?{messages:state.prose,steering:state.steering??[]}:undefined;
+        const conversation=state.turnIds.length>1||state.steering?.length?{messages:state.prose,steering:state.steering??[],preserveHistory:questions.continued}:undefined;
         if(phase==='complete'&&this.io.importReplyAsset&&!conversation){
           for(const message of inlineTurnMessages(current,state.turnId,request.keepIntermediate===true)){
             message.text=await rewriteReplyReferences(message.text,reference=>this.io.importReplyAsset!(reference,request,access));
@@ -203,7 +226,7 @@ export class HostedInlineWriter {
         }
         let next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true,request.threadEnvironmentId,conversation,request.initialInput);
         if(phase==='complete'&&conversation&&this.io.importReplyAsset)next=await rewriteReplyReferences(next,reference=>this.io.importReplyAsset!(reference,request,access));
-        const terminal=phase==='complete'||phase==='interrupted';
+        const terminal=phase==='complete'&&!questions.waiting||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the
         // vault edit cannot turn our own output into an apparent user edit.
         const nextHash=contentHash(next);
@@ -246,7 +269,7 @@ export class HostedInlineWriter {
           });
         }
         if(conflict){if(!['paused','conflict'].includes(state.status))logFailure('note.write.conflict',new Error('Response block was edited or removed.'),{jobId:request.id,notePath:state.notePath,knownHashes:state.hashes.slice(-5)});state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='Response edited or removed. Undo until the original response block is intact to resume streaming.';}
-        else if(applied)state.status=phase;
+        else if(applied)state.status=phase==='complete'&&questions.waiting?'waiting':phase;
         else state.detail='Waiting for the note to become available and saved on the host.';
         await save();
       }catch(error){

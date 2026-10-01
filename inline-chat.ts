@@ -1,3 +1,4 @@
+import {followInlineQuestions,inlineQuestionPhase,type InlineQuestionFollow} from './inline-questions';
 import {logEvent,logFailure,settleWatch} from './diagnostics';
 import type {App,Editor,MarkdownFileInfo,MarkdownView} from 'obsidian';
 import {Notice} from 'obsidian';
@@ -20,7 +21,7 @@ export interface InlineJob {
   keepIntermediate?:boolean;
   hostTarget?:InlineHostTarget;
   initialInput?:InitialInlineInput;
-  steering?:InlineSteering[];prose?:InlineMessage[];turnIds?:string[];
+  steering?:InlineSteering[];prose?:InlineMessage[];turnIds?:string[];questionFollows?:InlineQuestionFollow[];
 }
 interface EditorSource {editor:Editor;info:MarkdownView|MarkdownFileInfo}
 interface Runtime {state:InlineThreadState;sequence:number;monitor?:{stop():void};source?:EditorSource;timer?:ReturnType<typeof setTimeout>;alerted?:string;refreshing?:boolean;completionChecked?:boolean}
@@ -146,6 +147,8 @@ export class InlineChatManager {
         const turn=turnForMessage(runtime.state,input.messageId);
         if(turn){job.turnId=turn;if(!job.turnIds.includes(turn))job.turnIds.push(turn);}
       }
+      const questions=followInlineQuestions(runtime.state,job.turnIds,job.questionFollows);
+      job.questionFollows=questions.follows;job.turnIds=questions.turnIds;job.turnId=questions.turnId;
       job.prose=mergeProse(job.prose??[],runtime.state.messages,job.turnIds);
     }
     if(item.kind==='snapshot')runtime.sequence=Number.isSafeInteger(applied.sequence)?applied.sequence!:runtime.sequence;
@@ -154,7 +157,7 @@ export class InlineChatManager {
     const question=pendingQuestions(runtime.state.activities).find(q=>q.turnId===job.turnId);
     if(question&&question.requestId!==runtime.alerted){runtime.alerted=question.requestId;new Notice('T3 has a question. Use Answer in the note when you are ready.',8000);}
     if(activity&&activity.id!==runtime.alerted){runtime.alerted=activity.id;new Notice(`T3 needs your response in thread ${job.threadId}: ${activity.summary.slice(0,140)}`,12000);}
-    const phase=job.turnId?turnPhase(runtime.state,job.turnId):'running';
+    const phase=job.turnId?inlineQuestionPhase(runtime.state,job.turnId,job.questionFollows):'running';
     if(job.phase==='error'&&phase==='running'&&runtime.state.latestTurn?.turnId!==job.turnId&&runtime.state.session?.activeTurnId!==job.turnId)return;
     if(job.phase==='error'&&phase==='error')return;
     const nextPhase=job.steering?.some(input=>!input.confirmed)?'running':phase;
@@ -193,11 +196,12 @@ export class InlineChatManager {
       })();
       return;
     }
-    const conversation=(job.turnIds?.length??0)>1||job.steering?.length?{messages:job.prose??[],steering:job.steering??[]}:undefined;
+    const questions=followInlineQuestions(runtime.state,job.turnIds??[],job.questionFollows);
+    const conversation=(job.turnIds?.length??0)>1||job.steering?.length?{messages:job.prose??[],steering:job.steering??[],preserveHistory:questions.continued}:undefined;
     const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true,job.connection?.environmentId,conversation,job.initialInput);
     const original=editor.getValue();let document=original;
     const current=regionBody(document,job.id);
-    const terminal=['complete','interrupted','cancelled'].includes(job.phase);
+    const terminal=job.phase==='complete'&&!questions.waiting||['interrupted','cancelled'].includes(job.phase);
     if(!terminal&&current&&current.body===next&&!job.steering?.some(input=>input.confirmed&&input.selection&&!input.selectionApplied))return;
     if(current&&contentHash(current.body)===job.bodyHash)for(const input of job.steering??[]){
       if(!input.confirmed||!input.selection||input.selectionApplied)continue;
@@ -212,7 +216,7 @@ export class InlineChatManager {
     if(terminal)job.finalized=true;
     else job.bodyHash=contentHash(next);
     this.persist();
-    if(['complete','interrupted','cancelled'].includes(job.phase))runtime.monitor?.stop();
+    if(terminal)runtime.monitor?.stop();
   }
   async stop(job:InlineJob){
     if(job.hosted&&this.hosted){await this.hosted.stop(job);return;}

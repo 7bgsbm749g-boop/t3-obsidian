@@ -31,3 +31,28 @@ for(const text of [undefined,'Explain the selection.'])test(`device-local jobs r
   if(text){assert.match(value,/> Explain the selection\.[\s\S]*> Old progress\./);assert.equal(value.split('> Explain the selection.').length-1,1);}
   manager.dispose();
 });
+
+for(const dismiss of [false,true])test(`local async ${dismiss?'dismissal':'answer'} after completion keeps watching through reload`,async()=>{
+  const result=await build({entryPoints:['inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+  const module={exports:{} as any},realRequire=createRequire(import.meta.url);
+  runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Notice:class{}}:realRequire(id),console,setTimeout,clearTimeout,TextEncoder,Uint8Array});
+  const id=randomUUID(),initial=initialRegion(id),time='2026-10-01T19:00:00Z';
+  let value=initial.text,saved:any[]=[{id,path:'Note.md',requestId:id,threadId:'thread',messageId:'original',bodyHash:initial.bodyHash,phase:'running',createdAt:time}];
+  const editor={getValue:()=>value,offsetToPos:(offset:number)=>offset,replaceRange:(text:string,from:number,to:number)=>{value=value.slice(0,from)+text+value.slice(to);}};
+  const app={loadLocalStorage:()=>saved,saveLocalStorage:(_key:string,jobs:any[])=>{saved=JSON.parse(JSON.stringify(jobs));},workspace:{getLeavesOfType:()=>[{view:{file:{path:'Note.md'},editor}}]}};
+  const create=()=>{const manager=new module.exports.InlineChatManager(app,'jobs',async()=>undefined);manager.schedule=()=>{};manager.start=()=>{};return manager;};
+  let manager=create(),job=manager.find(id);
+  const thread:any={messages:[{id:'original',role:'user',turnId:null,text:'Begin',streaming:false,createdAt:time},{id:'first',role:'assistant',turnId:'first-turn',text:'First final.',streaming:false}],activities:[{id:'asked',kind:'user-input.requested',summary:'Question',turnId:'first-turn',payload:{requestId:'late',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Continue?',options:[{label:'Yes',description:''}]}]}}],latestTurn:{turnId:'first-turn',state:'completed',requestedAt:time,assistantMessageId:'first'},session:{status:'ready',activeTurnId:null}};
+  const receive=()=>{manager.receive(job,{kind:'snapshot',snapshot:{thread,snapshotSequence:1}});manager.flush(job);};
+  receive();assert.equal(job.finalized,undefined);assert.match(value,/First final/);assert.doesNotMatch(value,/T3 · Working/);
+  manager.dispose();manager=create();job=manager.find(id);
+  thread.activities.push({id:'resolved',kind:'user-input.resolved',summary:'Resolved',turnId:'first-turn',payload:{requestId:'late',...(!dismiss?{answers:{choice:'Yes'}}:{})}});
+  if(!dismiss){
+    receive();assert.equal(job.finalized,undefined);
+    thread.messages.push({id:'async-answer:late',role:'user',turnId:null,text:'Yes',streaming:false,createdAt:'2026-10-01T19:01:00Z'},{id:'next',role:'assistant',turnId:'next-turn',text:'Follow-up final.',streaming:false});
+    thread.latestTurn={turnId:'next-turn',state:'completed',requestedAt:'2026-10-01T19:01:00Z',assistantMessageId:'next'};
+  }
+  receive();assert.equal(job.finalized,true);assert.doesNotMatch(value,/t3-inline:|t3-question:/);
+  if(!dismiss)assert.match(value,/First final[\s\S]*Follow-up final/);
+  manager.dispose();
+});

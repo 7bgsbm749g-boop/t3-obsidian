@@ -1,5 +1,5 @@
 import {logEvent,logFailure} from './diagnostics';
-import {hostedPaths,hostedRequestHash,safeNotePath,validateHostedRequest,type HostedInlineRequest,type HostedInlineState,type InlineFiles} from './hosted-inline';
+import {legacyQuestionReply,hostedPaths,hostedRequestHash,safeNotePath,validateHostedRequest,type HostedInlineRequest,type HostedInlineState,type InlineFiles} from './hosted-inline';
 import {sameWorkspacePath} from './folder-link';
 import {steeringBoundary,validSteeringInput,type SteeringInput} from './inline-steering';
 
@@ -13,7 +13,7 @@ export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRec
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export const leasePaths=(directory:string,id:string)=>({record:`${directory}/leases/${id}.json`,command:`${directory}/mailbox/${id}.json`,reply:`${directory}/replies/${id}.json`,catalog:`${directory}/lease-catalog.json`});
-export const terminalLease=(record:LeaseRecord)=>!!record.state&&['complete','interrupted','conflict'].includes(record.state.status);
+export const terminalLease=(record:LeaseRecord)=>!!record.state&&['complete','interrupted','conflict'].includes(record.state.status)&&!legacyQuestionReply(record.state);
 
 /** The existing desktop host lock admits exactly one authority. Clients only
  * submit commands; only this serialized coordinator mutates lease records. */
