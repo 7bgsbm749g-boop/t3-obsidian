@@ -51,6 +51,8 @@ Folder edits and unlink tombstones are recorded per folder in synced settings an
 
 For verification, link a uniquely named temporary folder to a verified existing project, inspect it using a new UUID, replay the link UUID, deliberately relink, unlink, and clean up. Confirm its Files explorer T3 indicator changes. A bounded note send from the linked folder should appear in the selected T3 project; record its returned IDs and verify its completed reply before deleting the temporary note. Preserve the user's current folder links and note.
 
+The command flow was verified on the real QLO2 VPS client with version 2.29.1 using a temporary folder and a completed bounded note send. Validation covered both self modes, inheritance, nested precedence, relinking, unlinking, safe retries and the folder indicator. The durable [smoke receipt](/home/ubuntu/backups/send-to-t3-code/releases/2.29.1/smoke-vps-qlo2.json) records the evidence; the temporary folder has been removed.
+
 ## Start or continue a thread from a note
 
 Generate one request UUID and retain it with the exact arguments before dispatch. Substitute the user's existing note paths:
