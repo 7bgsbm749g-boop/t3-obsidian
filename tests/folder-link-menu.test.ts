@@ -294,3 +294,49 @@ test('closing project creation during connection never creates or links',async()
     await pending;assert.equal(creates,0);assert.equal(closes,1);assert.equal(h.plugin.settings.folderLinks.length,0);
   }finally{h.plugin.onunload();}
 });
+
+for(const cancelled of [true,false])test(`automatic new-project routing ${cancelled?'cancels without sending':'waits for external workspace confirmation'}`,async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const external={...h.project,title:'Chosen workspace',workspaceRoot:'/workspaces/chosen'};
+    const creates:any[]=[];
+    h.plugin.projectLocation=async()=>({browse:async(path:string)=>({parentPath:path,entries:[]}),create:async(path:string)=>{creates.push(path);return external;},close:()=>{}});
+    const pending=h.plugin.chatTarget('Unlinked/note.md',undefined,true);
+    const modal=h.modals.at(-1);assert.equal(modal.constructor.name,'ProjectCreateModal');
+    assert.equal(h.plugin.settings.pending.length,0);assert.equal(creates.length,0);assert.equal(h.plugin.settings.folderLinks.length,0);
+    if(cancelled){
+      const rejected=assert.rejects(pending,/Project creation cancelled/);
+      await h.button(modal,'Cancel').click();await rejected;
+      assert.equal(creates.length,0);assert.equal(h.plugin.settings.folderLinks.length,0);
+    }else{
+      h.setting(modal,'Workspace location').controls[0].change('/workspaces/chosen');
+      await h.button(modal,'Create and link').click();const target=await pending;
+      assert.deepEqual(creates,['/workspaces/chosen']);assert.equal(target.link.self,false);assert.equal(target.project.workspaceRoot,external.workspaceRoot);
+      assert.equal(h.plugin.settings.folderLinks.length,0,'The send link is saved only after delivery');
+      h.plugin.rememberStarted({id:randomUUID(),project:external,connection:{transport:'direct',connectionId:'c'},folderLinkIntent:target.link},'thread');
+      assert.equal(h.plugin.settings.folderLinks[0].workspaceRoot,external.workspaceRoot);
+    }
+  }finally{h.plugin.onunload();}
+});
+
+test('agent sends from unlinked folders fail with linking guidance and never open a picker',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    h.plugin.app.vault.getFileByPath=()=>({path:'Unlinked/note.md'});
+    await assert.rejects(h.plugin.executeNoteCommand({version:1,id:randomUUID(),kind:'send-note',notePath:'Unlinked/note.md',destinations:[],streamReply:false}),/link-folder.*workspace picker/);
+    assert.equal(h.modals.length,0);assert.equal(h.plugin.settings.pending.length,0);
+    await assert.rejects(h.plugin.executeNoteCommand({version:1,id:randomUUID(),kind:'attach-response',notePath:'Unlinked/note.md',destinations:[],streamReply:true,threadId:randomUUID(),messageId:randomUUID()}),/link-folder/);
+    assert.equal(h.modals.length,0);
+  }finally{h.plugin.onunload();}
+});
+
+test('workspace exclusion respects Windows case, separators and directory boundaries',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    h.plugin.settings.vaultLocations=[{environmentId:'env',workspaceRoot:'C:\\Users\\Jack\\QLO2'}];
+    assert.throws(()=>h.plugin.checkProjectWorkspace({id:'c'},'c:/users/jack/qlo2/Code'),/outside/);
+    assert.throws(()=>h.plugin.checkProjectWorkspace({id:'c'},'C:/Users/Jack/Other/../QLO2/Code'),/outside/);
+    assert.doesNotThrow(()=>h.plugin.checkProjectWorkspace({id:'c'},'C:/Users/Jack/QLO2-code'));
+    assert.doesNotThrow(()=>h.plugin.checkProjectWorkspace({id:'another-machine'},'C:/Users/Jack/QLO2/Code'));
+  }finally{h.plugin.onunload();}
+});

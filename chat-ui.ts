@@ -1,6 +1,7 @@
 import {logEvent,logFailure} from './diagnostics';
 import {App, FuzzySuggestModal, Modal, Notice, Setting} from 'obsidian';
 import {RequestDeliveryError} from './bridge';
+import {ProjectCreationCancelled} from './project-create-ui';
 
 export interface ChatHost {
   steering?:boolean;
@@ -75,6 +76,7 @@ class SendDestinationModal extends Modal {
       else if(target==='new')await this.host.sendToNew(prompt,this.projectKey);
       else await this.host.sendChat(prompt,this.projectKey);
     }catch(error){
+      if(error instanceof ProjectCreationCancelled)return;
       logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});
       new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
       if(!(error instanceof RequestDeliveryError&&error.requestSaved))this.open();

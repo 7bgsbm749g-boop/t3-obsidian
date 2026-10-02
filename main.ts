@@ -23,7 +23,7 @@ import {projectThreads,type ThreadChoice} from './thread-target';
 import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,previousNoteThreads,type NoteThread} from './note-threads';
 import {installFolderIndicators,type FolderIndicatorController} from './folder-indicator';
 import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,waitForVaultNote,type VaultLocation,type VaultRegistration} from './vault-connection';
-import {ProjectCreateModal,type ProjectLocation} from './project-create-ui';
+import {ProjectCreateModal,ProjectCreationCancelled,workspaceInsideVault,type ProjectLocation} from './project-create-ui';
 import {VaultSetupModal,VaultSetupCancelled,type VaultMachine} from './vault-setup-ui';
 import {EventSubscriptions,type EventTarget,type NoteEventSnapshot,notificationPrompt,inEventScope} from './event-subscriptions';
 import {existingThreadTurn,threadIsActive} from './thread-target';
@@ -77,6 +77,7 @@ export default class SendToT3 extends Plugin {
   scanError = '';
   private monitoring = false;
   private stopped = false;
+  private projectCreateModal?:ProjectCreateModal;
   private noteCommandServer?:import('./note-command-desktop').NoteCommandServer;
   private saving = Promise.resolve();
   private sharedBaseline='';
@@ -627,7 +628,7 @@ export default class SendToT3 extends Plugin {
       if(expectedProjectKey&&projectKey(project)!==expectedProjectKey)throw Error('The folder’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
       await this.send(file,project,{threadId,newThread,projectOverrideKey:overrideKey,folderPicker:Boolean(expectedProjectKey),folderLink:link,prepared:{content,images}});
-    }catch(error){new Notice(`Send to T3 Code: ${message(error)}`,10000);}
+    }catch(error){if(!(error instanceof ProjectCreationCancelled))new Notice(`Send to T3 Code: ${message(error)}`,10000);}
   }
   openChat(prompt?:string){
     return this.openChatWithNote(this.chatNote(),prompt);
@@ -899,14 +900,14 @@ export default class SendToT3 extends Plugin {
       new Notice('Response finished; remote stop requested.');
     }finally{opened.close();}
   }
-  private async chatTarget(notePath?:string,preferred?:NoteThread,ignorePreviousThread=false,overrideKey?:string):Promise<{project:Project;link:FolderLink}> {
+  private async chatTarget(notePath?:string,preferred?:NoteThread,ignorePreviousThread=false,overrideKey?:string,interactive=true):Promise<{project:Project;link:FolderLink}> {
     if(overrideKey===VAULT_PROJECT)return this.vaultTarget();
-    if(overrideKey===NEW_FOLDER_PROJECT){if(!notePath?.includes('/'))throw Error('Choose a note inside a folder.');return (await this.folderTarget(notePath,true))!;}
+    if(overrideKey===NEW_FOLDER_PROJECT){if(!notePath?.includes('/'))throw Error('Choose a note inside a folder.');return (await this.folderTarget(notePath,true,interactive))!;}
     let link=notePath?folderLinkForPath(this.settings.folderLinks,notePath):this.settings.folderLinks.find(item=>item.folderPath==='/');
     if(overrideKey){const project=[...this.projects(),...this.settings.directProjects,...this.settings.projects].find(item=>projectKey(item)===overrideKey);if(!project)throw Error('The chosen T3 project is unavailable. Choose a project again.');return {project,link:link&&projectKey(project)===`${link.connectionId?link.connectionId+':':''}${link.projectId}`?link:{id:'project-override',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false}};}
     const remembered=preferred??(!ignorePreviousThread?this.noteThread(notePath):undefined);
     if(remembered){const project=this.projectForNoteThread(remembered);return {project,link:link??{id:'note-thread',folderPath:'/',connectionId:remembered.connectionId,projectId:remembered.projectId,projectTitle:project.title,workspaceRoot:remembered.workspaceRoot,self:true}};}
-    if(this.needsFolderProject(notePath))return (await this.folderTarget(notePath!,true))!;
+    if(this.needsFolderProject(notePath))return (await this.folderTarget(notePath!,true,interactive))!;
     if(link){try{return {project:this.projectForLink(link),link};}catch(error){if(link.folderPath!=='/')throw error;}}
     return this.vaultTarget();
   }
@@ -926,47 +927,23 @@ export default class SendToT3 extends Plugin {
     try{await this.save();this.folderIndicators?.refresh();}catch(error){this.settings.folderLinks=previous;throw error;}
     return {project,link};
   }
-  private async folderTarget(notePath:string,create:boolean,fromNote=true):Promise<{project:Project;link:FolderLink}|undefined>{
+  private async folderTarget(notePath:string,create:boolean,interactive=true):Promise<{project:Project;link:FolderLink}|undefined>{
     const folderPath=notePath.slice(0,notePath.lastIndexOf('/'));
-    const existing=this.settings.folderLinks.find(link=>link.folderPath===folderPath);
-    if(existing&&fromNote)return {project:this.projectForLink(existing),link:existing};
-    const root=await this.vaultTarget(),connection=this.connection(root.project);
-    let project:Project|undefined;
-    if(connection.transport==='direct'){
-      const remote=await connectVaultRemote(connection,await this.sessionFor(connection.connectionId??''));
-      try{
-        if(!await remote.matches(root.project.workspaceRoot,`${this.app.vault.configDir||'.obsidian'}/plugins/${this.manifest?.id||'send-to-t3-code'}/data.json`,this.settings.vaultId))throw Error('The vault project machine no longer matches this vault. Reconnect it in settings.');
-        const separator=root.project.workspaceRoot.includes('\\')&&!root.project.workspaceRoot.includes('/')?'\\':'/';
-        const workspaceRoot=root.project.workspaceRoot.replace(/[\\/]+$/,'')+separator+folderPath.replace(/\//g,separator);
-        const directory=(await remote.browse(workspaceRoot)).parentPath;
-        if(!sameWorkspacePath(directory,workspaceRoot))throw Error('This folder has not reached the vault project machine yet. Let Obsidian Sync finish, then try again.');
-        project=(await remote.projects()).find(item=>sameWorkspacePath(item.workspaceRoot,workspaceRoot));
-        if(!project&&create){
-          if(fromNote)await waitForVaultNote(remote,root.project.workspaceRoot,notePath,()=>!this.stopped,()=>new Notice('Waiting for this note to reach the vault project machine…',10000));
-          const proposed=vaultRegistration(connection.environmentId!,workspaceRoot,this.settings.vaultId+':'+folderPath,folderPath.split('/').at(-1)!);
-          const registration=this.vaultRegistrations[proposed.commandId]??proposed;
-          this.vaultRegistrations[proposed.commandId]=registration;await this.save();
-          project=await remote.ensureProject(registration);
-        }
-        if(project)project={...project,connectionId:root.project.connectionId,connectionName:root.project.connectionName};
-      }finally{remote.close();}
-    }else{
-      const folder=this.app.vault.getAbstractFileByPath(folderPath);
-      if(!(folder instanceof TFolder))throw Error('This folder no longer exists. Choose a note again.');
-      if(create)project=await this.localFolderProject(folder);
-      else{
-        const workspaceRoot=(this.app.vault.adapter as unknown as {getFullPath:(path:string)=>string}).getFullPath(folderPath);
-        project=parseProjects(await runBridge(connection,['projects'])).find(item=>sameWorkspacePath(item.workspaceRoot,workspaceRoot));
-      }
-    }
-    if(!project)return;
-    if(this.stopped)throw Error('The plugin was disabled before linking the folder.');
-    const link:FolderLink={id:randomId(),folderPath,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true,vaultId:this.settings.vaultId,...(connection.environmentId?{environmentId:connection.environmentId}:{})};
-    if(project.connectionId)this.settings.directProjects=[...this.settings.directProjects.filter(item=>projectKey(item)!==projectKey(project!)),project];
+    const existing=folderLinkForPath(this.settings.folderLinks.filter(link=>link.folderPath!=='/'),notePath);
+    if(existing)return {project:this.projectForLink(existing),link:existing};
+    if(!create)return;
+    if(!interactive)throw Error('Link this note’s folder to an existing T3 project with link-folder before sending. New projects require the workspace picker.');
+    const project=await this.pickFolderProject(folderPath,folderPath.split('/').at(-1)!);
+    if(!project)throw new ProjectCreationCancelled();
+    if(this.stopped)throw Error('The plugin was disabled before sending.');
+    const connection=this.connection(project);
+    if(project.connectionId)this.settings.directProjects=[...this.settings.directProjects.filter(item=>projectKey(item)!==projectKey(project)),project];
+    else this.settings.projects=[...this.settings.projects.filter(item=>item.id!==project.id),project];
+    const link:FolderLink={id:randomId(),folderPath,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false,vaultId:this.settings.vaultId,...(connection.environmentId?{environmentId:connection.environmentId}:{})};
     return {project,link};
   }
   private folderLinkIntent(link:FolderLink):{folderLinkIntent?:FolderLink}{
-    return link.self&&link.folderPath!=='/'&&!this.settings.folderLinks.some(item=>item.folderPath===link.folderPath)?{folderLinkIntent:link}:{};
+    return link.folderPath!=='/'&&!this.settings.folderLinks.some(item=>item.folderPath===link.folderPath)?{folderLinkIntent:link}:{};
   }
   private async existingTarget(notePath?:string,overrideKey?:string){
     if(this.needsFolderProject(notePath)&&(!overrideKey||overrideKey===NEW_FOLDER_PROJECT)&&!this.settings.folderLinks.some(link=>link.folderPath==='/'))return;
@@ -1109,7 +1086,7 @@ export default class SendToT3 extends Plugin {
       await this.dispatch(request);
       const draft=this.app.loadLocalStorage(this.chatDraftKey);
       if(typeof draft==='string'&&draft&&(draft===prompt||[THREAD_REPLY_INSTRUCTION,INLINE_REPLY_INSTRUCTION].some(instruction=>prompt===`${draft}\n\n${instruction}`||prompt.endsWith(`\n\nQuestion:\n${draft}\n\n${instruction}`))))this.app.saveLocalStorage(this.chatDraftKey,'');
-    }catch(e){throw new RequestDeliveryError(`${message(e)} ${saved?'Check Unconfirmed requests in settings before sending again.':'No thread was created.'}`,saved);}
+    }catch(e){if(e instanceof ProjectCreationCancelled)throw e;throw new RequestDeliveryError(`${message(e)} ${saved?'Check Unconfirmed requests in settings before sending again.':'No thread was created.'}`,saved);}
     finally{this.busy=false;}
   }
   async exportDiagnostics(){
@@ -1253,17 +1230,30 @@ export default class SendToT3 extends Plugin {
     if(!this.settings.selected.includes(project.id))this.settings.selected.push(project.id);
     return project;
   }
-  createFolderProject(folder:TFolder){
-    new ProjectCreateModal(this.app,folder.path==='/'?this.app.vault.getName():folder.name,{
-      machines:()=>this.vaultMachines(),
-      connect:machine=>this.projectLocation(machine),
-      link:async project=>{
-        if(this.stopped)throw Error('The plugin was disabled before linking the folder.');
-        if(project.connectionId)this.settings.directProjects=[...this.settings.directProjects.filter(p=>projectKey(p)!==projectKey(project)),project];
-        else this.settings.projects=[...this.settings.projects.filter(p=>p.id!==project.id),project];
-        await this.saveFolderLink(folder,project,false);
-      },
-    }).open();
+  private pickFolderProject(folderPath:string,name:string,onChosen?:(project:Project)=>Promise<void>):Promise<Project|undefined>{
+    if(this.projectCreateModal)throw Error('Choose or cancel the open project workspace first.');
+    return new Promise(resolve=>{
+      this.projectCreateModal=new ProjectCreateModal(this.app,name,{
+        machines:()=>this.vaultMachines(),connect:machine=>this.projectLocation(machine),
+        link:async project=>{if(this.stopped)throw Error('The plugin was disabled before creating the project.');await onChosen?.(project);resolve(project);},
+        closed:()=>{this.projectCreateModal=undefined;resolve(undefined);},
+      });
+      this.projectCreateModal.open();
+    });
+  }
+  async createFolderProject(folder:TFolder){
+    await this.pickFolderProject(folder.path,folder.path==='/'?this.app.vault.getName():folder.name,async project=>{
+      if(project.connectionId)this.settings.directProjects=[...this.settings.directProjects.filter(p=>projectKey(p)!==projectKey(project)),project];
+      else this.settings.projects=[...this.settings.projects.filter(p=>p.id!==project.id),project];
+      await this.saveFolderLink(folder,project,false);
+    });
+  }
+  private checkProjectWorkspace(machine:VaultMachine,path:string){
+    const c=this.settings.paired.find(c=>c.id===machine.id||'environment:'+c.environmentId===machine.id);
+    const roots=this.settings.vaultLocations.filter(location=>location.environmentId===c?.environmentId).map(location=>location.workspaceRoot);
+    roots.push(...this.settings.folderLinks.filter(link=>link.folderPath==='/'&&(machine.local?!link.connectionId:link.connectionId===c?.id||!!c&&link.environmentId===c.environmentId)).map(link=>link.workspaceRoot));
+    if(machine.local){const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};if(adapter.getFullPath)roots.push(adapter.getFullPath(''));}
+    if(roots.some(root=>workspaceInsideVault(path,root)))throw Error('Choose a workspace outside the Obsidian vault.');
   }
   async projectLocation(machine:VaultMachine):Promise<ProjectLocation>{
     if(machine.local){
@@ -1272,6 +1262,7 @@ export default class SendToT3 extends Plugin {
       return {
         browse:desktop.browseDesktopFolder,
         create:async(root,title)=>{
+          this.checkProjectWorkspace(machine,root);
           let project=parseProjects(await runBridge(connection,['projects'])).find(p=>sameWorkspacePath(p.workspaceRoot,root));
           if(!project){const id=await desktop.addDesktopProject(connection,root,title);project=parseProjects(await runBridge(connection,['projects'])).find(p=>p.id===id);}
           if(!project)throw Error('T3 created the project, but discovery has not returned it yet. Try again.');
@@ -1284,6 +1275,7 @@ export default class SendToT3 extends Plugin {
     if(!c)throw Error('This machine connection changed. Open the dialog again.');
     const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:c.url,environmentId:c.environmentId,connectionId:c.id},await this.sessionFor(c.id));
     return {browse:path=>remote.browse(path),close:()=>remote.close(),create:async(root,title)=>{
+      this.checkProjectWorkspace(machine,root);
       const proposed=vaultRegistration(c.environmentId,root,this.settings.vaultId+':workspace',title);
       const registration=this.vaultRegistrations[proposed.commandId]??proposed;
       this.vaultRegistrations[proposed.commandId]=registration;await this.save();
@@ -1413,7 +1405,7 @@ export default class SendToT3 extends Plugin {
     if(command.kind==='attach-response'){
       const file=this.app.vault.getFileByPath(command.notePath);if(!file)throw Error('Source note not found.');
       if(!request){
-        const {project}=await this.chatTarget(file.path,undefined,true);
+        const {project}=await this.chatTarget(file.path,undefined,true,undefined,false);
         const thread=await runBridge(this.connection(project),['read',command.threadId!]);
         if(thread.id!==command.threadId||thread.projectId!==project.id||!thread.messages?.some((item:any)=>item.role==='user'&&item.id===command.messageId))throw Error('The source response is not in this note’s linked T3 project.');
         request={id:command.id,project,connection:this.connection(project),title:thread.title??'T3 response',prompt:'',threadId:command.threadId};
@@ -1429,7 +1421,7 @@ export default class SendToT3 extends Plugin {
       try{if(!this.settings.pending.some(item=>item.id===request!.id)){this.settings.pending.push(request);await this.save();}threadId=await this.dispatch(request,true);}finally{this.busy=false;}
     }else{
       const file=this.app.vault.getFileByPath(command.notePath);if(!file)throw Error('Source note not found.');
-      const {project,link}=await this.chatTarget(file.path,undefined,true);
+      const {project,link}=await this.chatTarget(file.path,undefined,true,undefined,false);
       const sent=await this.send(file,project,{id:command.id,newThread:!command.threadId,threadId:command.threadId,folderLink:link,throwOnError:true,streamReply:command.streamReply,destinations:command.destinations,onPrepared:async prepared=>{prepared.agentCommand=command;request=prepared;persist({request:prepared});}});
       if(!sent)throw Error('The note was not sent.');threadId=sent.threadId;request=sent.request;
     }
@@ -1492,7 +1484,7 @@ export default class SendToT3 extends Plugin {
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
     }catch(error){logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});throw error;}
   }
-  onunload(){configureDiagnostics();this.stopped=true;this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){configureDiagnostics();this.stopped=true;this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;

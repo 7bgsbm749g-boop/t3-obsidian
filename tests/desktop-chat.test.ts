@@ -118,14 +118,16 @@ test('desktop root fallback works while the user has T3 Connect mode selected',{
 });
 
 
-test('desktop unlinked notes create a containing-folder project and persist the link only after delivery',{timeout:20_000},async()=>{
+test('desktop unlinked notes choose an external workspace and persist the link only after delivery',{timeout:20_000},async()=>{
   const h=await harness(true);
   try{
     await h.addFolder('Fresh/deep');
+    const external=join(h.vaultRoot,'..','External project');await mkdir(external);
+    h.plugin.pickFolderProject=async(_folder:any,name:string)=>{const location=await h.plugin.projectLocation({id:'local',name:'This computer',local:true});return location.create(external,name);};
     await h.plugin.sendChat('Reply only OK',{path:'Fresh/deep/note.md',absolutePath:join(h.vaultRoot,'Fresh/deep/note.md')});
     const link=h.plugin.settings.folderLinks.find((link:any)=>link.folderPath==='Fresh/deep');
-    assert.equal(link.projectTitle,'deep');assert.equal(link.self,true);
-    assert.equal(link.workspaceRoot,join(h.vaultRoot,'Fresh/deep'));
+    assert.equal(link.projectTitle,'deep');assert.equal(link.self,false);
+    assert.equal(link.workspaceRoot,external);
     assert.equal(h.commands[0].projectId,link.projectId);
     await h.plugin.sendChat('Another note',{path:'Fresh/deep/child/note.md',absolutePath:join(h.vaultRoot,'Fresh/deep/child/note.md')},{newThread:true});
     assert.equal(h.commands[2].projectId,link.projectId);

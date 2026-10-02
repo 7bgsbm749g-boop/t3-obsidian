@@ -3,6 +3,19 @@ import type {Project} from './bridge';
 import type {VaultMachine} from './vault-setup-ui';
 import {sameWorkspacePath} from './folder-link';
 
+export class ProjectCreationCancelled extends Error {constructor(){super('Project creation cancelled.');}}
+
+export function workspaceInsideVault(path:string,root:string):boolean {
+  const normalize=(value:string)=>{
+    const parts=value.replace(/\\/g,'/').split('/'),out:string[]=[];
+    for(const part of parts){if(part==='.')continue;if(part==='..'){out.pop();continue;}out.push(part);}
+    return out.join('/').replace(/\/+$/,'');
+  };
+  let target=normalize(path),vault=normalize(root);
+  if(/^[a-z]:\//i.test(vault)||vault.startsWith('//')){target=target.toLowerCase();vault=vault.toLowerCase();}
+  return target===vault||target.startsWith(vault+'/');
+}
+
 export interface ProjectLocation {
   browse(path:string):Promise<{parentPath:string;entries:{name:string;fullPath:string}[]}>;
   create(path:string,title:string):Promise<Project>;
@@ -12,6 +25,7 @@ export interface ProjectCreateHost {
   machines():VaultMachine[];
   connect(machine:VaultMachine):Promise<ProjectLocation>;
   link(project:Project):Promise<void>;
+  closed?():void;
 }
 export class ProjectCreateModal extends Modal {
   private machineId='';private location?:ProjectLocation;
@@ -19,7 +33,7 @@ export class ProjectCreateModal extends Modal {
   private working=false;private ended=false;private status='';
   constructor(app:App,private name:string,private host:ProjectCreateHost){super(app);}
   onOpen(){this.draw();}
-  onClose(){this.ended=true;this.location?.close();this.contentEl.empty();}
+  onClose(){this.ended=true;this.location?.close();this.contentEl.empty();this.host.closed?.();}
   private draw(){
     if(this.ended)return;
     this.titleEl.setText('Create T3 project');this.contentEl.empty();

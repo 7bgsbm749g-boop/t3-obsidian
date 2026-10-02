@@ -751,9 +751,10 @@ test('editor Ask opens the inline chooser without changing the note',async()=>{
   }finally{h.plugin.onunload();}
 });
 
-test('unlinked mobile notes preview a new folder project, register on send, and descendants inherit it',async()=>{
+test('unlinked mobile sends choose an external workspace and descendants inherit its confirmed link',async()=>{
   const h=await chatHarness();
   try{
+    h.plugin.pickFolderProject=async()=>{const location=await h.plugin.projectLocation({id:project.connectionId,name:'Laptop'});try{return await location.create('/workspaces/unlinked','Unlinked');}finally{location.close();}};
     h.setActiveNote('Unlinked/draft.md');await h.plugin.openChat('Edit draft');
     const modal=h.modals.at(-1);
     assert.equal(modal.contentEl.children[0].children[0].text,'New project: Unlinked');
@@ -763,11 +764,11 @@ test('unlinked mobile notes preview a new folder project, register on send, and 
     await modal.choose('new');
     assert.deepEqual(h.commands.map(c=>c.type),['project.create','thread.create','thread.turn.start']);
     assert.equal(h.commands[0].title,'Unlinked');
-    assert.equal(h.commands[0].workspaceRoot,'/projects/notes/Unlinked');
+    assert.equal(h.commands[0].workspaceRoot,'/workspaces/unlinked');
     assert.equal(h.commands[1].projectId,h.commands[0].projectId);
     assert.match(h.commands[2].message.text,/Destination note path: "\/projects\/notes\/Unlinked\/draft.md"/);
     const link=h.plugin.settings.folderLinks.find((link:any)=>link.folderPath==='Unlinked');
-    assert.equal(link.self,true);assert.equal(link.projectTitle,'Unlinked');
+    assert.equal(link.self,false);assert.equal(link.projectTitle,'Unlinked');
     await h.plugin.sendChat('Use the child folder',{path:'Unlinked/deeper/child.md'},{newThread:true});
     assert.equal(h.commands.filter(c=>c.type==='project.create').length,1);
     assert.equal(h.commands.at(-2).projectId,link.projectId);
@@ -1288,12 +1289,13 @@ test('choosing the vault project sends there without linking the containing fold
   }finally{h.plugin.onunload();}
 });
 
-test('mobile reuses an existing folder project and links only after confirmed delivery',async()=>{
+test('mobile reuses a chosen external project and links only after confirmed delivery',async()=>{
   let lose=true;
   const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'&&lose){lose=false;throw Error('Lost response');}});
   try{
-    const folder={...project,id:'existing-folder',title:'Unlinked',workspaceRoot:'/projects/notes/Unlinked'};
+    const folder={...project,id:'existing-folder',title:'Unlinked',workspaceRoot:'/workspaces/unlinked'};
     h.setProjects([project,folder]);
+    h.plugin.pickFolderProject=async()=>folder;
     await assert.rejects(h.plugin.sendChat('Use existing project',{path:'Unlinked/draft.md'},{newThread:true}),/Unconfirmed/);
     assert.equal(h.commands[0].projectId,folder.id);
     assert.equal(h.commands.some(c=>c.type==='project.create'),false);
@@ -1439,5 +1441,17 @@ for(const hosted of [false,true])for(const surface of ['editor','targeted','pale
       assert.ok(opened.value.startsWith('Before'));assert.match(opened.value,/Tail/);
       if(surface==='other-response')assert.ok(opened.value.endsWith(otherRegion.text.slice(0,otherChange.from)+otherChange.text+otherRegion.text.slice(otherChange.to)));
     }
+  }finally{h.plugin.onunload();}
+});
+
+ test('project creation rejects remote vault paths before registering anything',async()=>{
+  const h=await chatHarness();
+  try{
+    const location=await h.plugin.projectLocation({id:project.connectionId,name:'Laptop'});
+    try{
+      for(const path of ['/projects/notes','/projects/notes/Build','/projects/other/../notes/Build'])await assert.rejects(location.create(path,'Forbidden'),/outside the Obsidian vault/);
+      assert.equal(h.commands.length,0);
+      assert.equal(h.plugin.settings.folderLinks.some((link:any)=>link.folderPath==='Build'),false);
+    }finally{location.close();}
   }finally{h.plugin.onunload();}
 });
