@@ -60,9 +60,9 @@ test('recovery reads beyond the recent 20 prompts and validates the destination'
   const state=history(),paths:string[]=[];
   const recent={snapshotSequence:50,page:{hasMore:true},thread:{id:'thread',projectId:'project',...state,messages:state.messages.slice(3)}};
   const full={snapshotSequence:51,thread:{id:'thread',projectId:'project',...state}};
-  const access:ThreadAccess={origin:'https://t3.example',api:async path=>{paths.push(path);return path.includes('?')?recent:full;}};
+  const access:ThreadAccess={origin:'https://t3.example',api:async path=>{paths.push(path);return path.includes('turnLimit=20')?recent:full;}};
   const snapshot=await readInlineSnapshot(access,'thread','project',{messageIds:['prompt'],turnIds:[]});
-  assert.deepEqual(paths,['/api/orchestration/threads/thread?turnLimit=20','/api/orchestration/threads/thread']);
+  assert.deepEqual(paths,['/api/orchestration/threads/thread?reasoningMessages=true&turnLimit=20','/api/orchestration/threads/thread?reasoningMessages=true']);
   assert.equal(turnForMessage(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state,'prompt'),'original');
   await assert.rejects(readInlineSnapshot(access,'thread','wrong-project'),/requested T3 thread/);
 });

@@ -17,7 +17,7 @@ test('thread subscription authenticates, acknowledges chunks, and interrupts on 
   await new Promise(resolve=>setTimeout(resolve,30));
   assert.equal(issueCount,1);assert.match(urls[0],/^wss:\/\/t3\.example\/ws\?/);
   assert.equal(new URL(urls[0]).searchParams.get('orchestrationProtocol'),'1');
-  assert.deepEqual(sent[0],{_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId:'thread-1'},headers:[]});
+  assert.deepEqual(sent[0],{_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId:'thread-1',reasoningMessages:true},headers:[]});
   assert.equal(items.length,2);assert.deepEqual(sent[1],{_tag:'Ack',requestId:'1'});
   watcher.stop();assert.deepEqual(sent[2],{_tag:'Interrupt',requestId:'1'});assert.equal(closed,1);
 });
@@ -36,7 +36,7 @@ test('a quiet subscription refreshes the current thread snapshot',async()=>{
   }}),{item:item=>items.push(item),reconnecting:error=>assert.fail(error.message)},url=>new QuietSocket(url) as unknown as WebSocket);
   try{
     await new Promise(resolve=>setTimeout(resolve,1400));
-    assert.deepEqual(paths,['/api/auth/websocket-ticket','/api/orchestration/threads/thread-2?turnLimit=20']);
+    assert.deepEqual(paths,['/api/auth/websocket-ticket','/api/orchestration/threads/thread-2?reasoningMessages=true&turnLimit=20']);
     assert.equal(items[0]?.kind,'snapshot');assert.equal(items[0]?.snapshot.snapshotSequence,9);
   }finally{watcher.stop();}
 });

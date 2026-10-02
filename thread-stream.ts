@@ -16,7 +16,7 @@ export function needsInlineHistory(state:InlineThreadState,targets:InlineHistory
  * canonical transcript, including prompts older than the polling window. */
 export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets,full=false):Promise<any> {
   const read=async(all:boolean)=>{
-    const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}${all?'':'?turnLimit=20'}`);
+    const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}`);
     if(snapshot?.thread?.id!==threadId||projectId&&snapshot.thread.projectId!==projectId)throw Error('Waiting for the requested T3 thread.');
     return snapshot;
   };
@@ -55,7 +55,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       const poll=async()=>{
         if(stopped||ended||access!==ready)return;
         try{
-          const snapshot=historyTargets?await readInlineSnapshot(ready,threadId,undefined,historyTargets()):await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?turnLimit=20`);
+          const snapshot=historyTargets?await readInlineSnapshot(ready,threadId,undefined,historyTargets()):await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true&turnLimit=20`);
           if(!stopped&&!ended&&access===ready&&snapshot?.thread)callbacks.item({kind:'snapshot',snapshot});
         }catch(error){logFailure('stream.poll.failed',error,{threadId});}
         if(!stopped&&!ended&&access===ready)pollTimer=setTimeout(()=>{void poll();},1200);
@@ -65,7 +65,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         clearTimeout(opening);if(stopped){ws.close();return;}
         logEvent('stream.connected',{threadId});attempt=0;
         rotation=setTimeout(()=>fail(Error('Refreshing the T3 stream session.')),4*60_000);
-        ws.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,...(replay?{afterSequence:replay.afterSequence(),requestCompletionMarker:true}:{})},headers:[]}));
+        ws.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,reasoningMessages:true,...(replay?{afterSequence:replay.afterSequence(),requestCompletionMarker:true}:{})},headers:[]}));
         pollTimer=setTimeout(()=>{void poll();},1200);
       };
       ws.onmessage=message=>{

@@ -40,7 +40,7 @@ function stranded(h:ReturnType<typeof harness>){
     if(!online)throw Error('Server unavailable');
     return {origin:'https://t3.example',api:async(path,payload)=>{
       assert.equal(payload,undefined,'recovery must never dispatch or resend');
-      assert.equal(path,`/api/orchestration/threads/${h.request.threadId}`);
+      assert.equal(path,`/api/orchestration/threads/${h.request.threadId}?reasoningMessages=true`);
       reads++;
       return {snapshotSequence:100,thread:{id:h.request.threadId,projectId:h.request.projectId,...original}};
     }};
