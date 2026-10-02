@@ -1,3 +1,4 @@
+import {ProjectDiscovery,type ProjectSource,type ProjectSnapshot} from './project-discovery';
 import {resolveJobOptions,type ResolvedJobOptions} from './job-options';
 import {intermediateMode,installResponsePresentation,finalAnswerFormat,type FinalAnswerFormat,type IntermediateMode} from './response-presentation';
 import {applyThreadItem} from './inline-thread';
@@ -66,6 +67,12 @@ export default class SendToT3 extends Plugin {
   private nativeRefreshing:Promise<CloudAccount>|undefined;
   private sessionRefreshing=new Map<string,Promise<PairedSession>>();
   private machineRefreshing:Promise<void>|undefined;
+  private projectDiscovery?:ProjectDiscovery;
+  private catalogScope='';
+  private accountCandidates=new Map<string,PairedConnection>();
+  private registryNextAttempt=0;
+  private registryFailures=0;
+  private projectListeners=new Set<()=>void>();
   private refreshRun=0;
   cloudLogin:DeviceLogin|null=null;
   cloudMachines:CloudMachine[]=[];
@@ -78,7 +85,6 @@ export default class SendToT3 extends Plugin {
   private readonly chatDraftKey = 'send-to-t3-code-chat-draft-v1';
   private deviceId = '';
   busy = false;
-  scanError = '';
   private monitoring = false;
   private stopped = false;
   private projectCreateModal?:ProjectCreateModal;
@@ -206,6 +212,7 @@ export default class SendToT3 extends Plugin {
     for(const request of this.settings.pending)request.connection=migrateConnection(request.connection);
     for(const job of this.settings.completionJobs){job.connection=migrateConnection(job.connection);if(retiredConnection(job.connection)&&job.status==='watching'){job.status='kept';job.detail='Kept note: the companion mode was removed. Check the original thread in T3.';}}
     this.settings.settlementJobs=this.settings.settlementJobs.filter(job=>job&&typeof job.requestId==='string'&&typeof job.messageId==='string'&&typeof job.threadId==='string'&&typeof job.projectId==='string'&&job.connection&&!retiredConnection(job.connection)).map(job=>({...job,connection:migrateConnection(job.connection)}));
+    await this.initializeProjectCatalog();
     configureBridge({mobile:Platform.isMobile,pairedSession:id=>this.sessionFor(id),saveRequest:async request=>{if(!this.settings.pending.includes(request))throw Error('Saved request is missing. Nothing was sent.');this.persistAgentCommand(request);await this.save();}});
     // Migrate unfinished desktop requests once, but do not rewrite the shared
     // settings file merely because this device started. Credentials and jobs
@@ -232,8 +239,13 @@ export default class SendToT3 extends Plugin {
       }
       this.registerInterval(window.setInterval(()=>void this.checkExternalSettings().catch(error=>new Notice(`T3 settings: ${message(error)}`,12000)),5000));
     });
-    this.app.workspace.onLayoutReady(()=>{if(!this.stopped){if(this.nativeAccount)void this.refreshMachines().catch(e=>{this.cloudError=message(e);this.cloudChanged?.();});void this.monitorCompletions();this.registerInterval(window.setInterval(()=>{void this.monitorCompletions();},30_000));}});
-    this.app.workspace.onLayoutReady(()=>this.inlineChat?.resume());
+    this.app.workspace.onLayoutReady(()=>{if(!this.stopped){this.refreshProjectsInBackground(true);void this.monitorCompletions();this.registerInterval(window.setInterval(()=>{void this.monitorCompletions();},30_000));}});
+    this.app.workspace.onLayoutReady(()=>{
+      this.registerInterval(window.setInterval(()=>this.refreshProjectsInBackground(),15_000));
+      if(typeof document.addEventListener==='function')this.registerDomEvent(document,'visibilitychange',()=>{if(!document.hidden)this.refreshProjectsInBackground();});
+      if(typeof window.addEventListener==='function'){this.registerDomEvent(window,'focus',()=>this.refreshProjectsInBackground());this.registerDomEvent(window,'online',()=>this.refreshProjectsInBackground(true));}
+      this.inlineChat?.resume();
+    });
     this.app.workspace.onLayoutReady(()=>{
       const tick=()=>{this.deviceInline?.tick();this.deviceInline?.discover(this.inlineTargets);};
       tick();this.registerInlineInterval(tick,150);
@@ -261,7 +273,7 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
         const folder=this.folderForMenu(file);
-        menu.addItem(item=>{item.setTitle('Link to T3 Code').setIcon('link');const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,folder).open());return;}const selected=this.projects().filter(p=>this.selected().includes(projectKey(p)));for(const project of selected)submenu.addItem(i=>i.setTitle(`Link to ${projectLabel(project)}`).onClick(()=>void this.linkFolder(folder,project,false)));submenu.addSeparator();submenu.addItem(i=>i.setTitle('Create T3 project…').onClick(()=>void this.createFolderProject(folder)));if(!selected.length&&Platform.isMobile)submenu.addItem(i=>i.setTitle('Select a project in settings').setDisabled(true));});
+        menu.addItem(item=>{item.setTitle('Link to T3 Code').setIcon('link');const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,folder).open());return;}const projects=this.projects();for(const project of projects)submenu.addItem(i=>i.setTitle(`Link to ${this.projectChoiceLabel(project)}`).onClick(()=>void this.linkFolder(folder,project,false)));submenu.addSeparator();submenu.addItem(i=>i.setTitle('Create T3 project…').onClick(()=>void this.createFolderProject(folder)));if(!projects.length)submenu.addItem(i=>i.setTitle(this.connecting?'Discovering projects…':'No projects found. Connect T3 to discover projects.').setDisabled(true));});
         return;
       }
       if (!(file instanceof TFile) || file.extension.toLowerCase() !== 'md' || (!Platform.isMobile && source !== 'file-explorer-context-menu')) return;
@@ -566,8 +578,9 @@ export default class SendToT3 extends Plugin {
     if(!this.settings.autoSettleThreads&&this.settings.settlementJobs.length){this.settings.settlementJobs=[];await this.saveDeviceState();}
     this.settings.vaultId=vaultIdentity(data)??this.settings.vaultId;
     this.settings.vaultLocations=loadVaultLocations(data);
-    if(Array.isArray(data.paired))this.settings.paired=data.paired;
-    if(Array.isArray(data.directProjects))this.settings.directProjects=data.directProjects;
+    const connectionsChanged=Array.isArray(data.paired)&&JSON.stringify(data.paired)!==JSON.stringify(this.settings.paired);
+    if(connectionsChanged)this.settings.paired=data.paired.map((c:PairedConnection)=>this.settings.paired.find(existing=>JSON.stringify(existing)===JSON.stringify(c))??c);
+    this.syncProjectSources();if(connectionsChanged)this.refreshProjectsInBackground(true);
     this.sharedBaseline=JSON.stringify(this.sharedSnapshot());
     this.settings.noteThreads=mergedThreads;
     if(restoreFolderLinks||JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save(restoreFolderLinks);
@@ -576,7 +589,7 @@ export default class SendToT3 extends Plugin {
   openSettings(){
     const settings=(this.app as App & {setting?:{open():void;openTabById(id:string):void}}).setting;
     if(settings){settings.open();settings.openTabById(this.manifest.id);}
-    else new Notice('Open Settings → Send to T3 Code to sign in and select projects.');
+    else new Notice('Open Settings → Send to T3 Code to sign in.');
   }
   chatReadinessError():string|undefined {
     if(this.stopped)return 'The plugin has been disabled. Re-enable it before sending.';
@@ -629,7 +642,7 @@ export default class SendToT3 extends Plugin {
       if((this.mode==='direct'||Platform.isMobile)&&paired.length===1)return paired[0];
       if(!Platform.isMobile){const project=this.settings.projects.find(p=>p.id===link.projectId);if(project)return project;}
     }
-    throw Error('The linked T3 project is unavailable on this device. Refresh projects or relink the folder in settings.');
+    throw Error('The linked T3 project is unavailable on this device. Reconnect its machine or relink the folder.');
   }
   private projectReadinessError(project:Project):string|undefined {
     if(this.stopped)return 'The plugin has been disabled. Re-enable it before sending.';
@@ -705,7 +718,7 @@ export default class SendToT3 extends Plugin {
   private needsFolderProject(notePath?:string):boolean {
     return Boolean(notePath?.includes('/')&&!folderLinkForPath(this.settings.folderLinks.filter(link=>link.folderPath!=='/'),notePath));
   }
-  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'>{
+  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'onProjectChange'>{
     const projectName=(key?:string)=>{
       const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
       if(key===VAULT_PROJECT)return this.settings.folderLinks.find(item=>item.folderPath==='/')?.projectTitle??this.app.vault.getName();
@@ -721,9 +734,10 @@ export default class SendToT3 extends Plugin {
       getNotePath:()=>note?.path??'No note open',
       getProjectName:projectName,
       getTargetDescription:key=>`${note?.path??'No note open'} → ${projectName(key)}`,
+      onProjectChange:listener=>this.watchProjects(listener),
       getProjectChoices:()=>{
         const root=this.settings.folderLinks.find(item=>item.folderPath==='/');
-        return [...(this.needsFolderProject(note?.path)?[{key:NEW_FOLDER_PROJECT,label:`New project: ${note!.path.split('/').at(-2)}`}]:[]),{key:VAULT_PROJECT,label:`Vault project: ${root?.projectTitle??this.app.vault.getName()}`},...this.projects().filter(project=>!root||project.id!==root.projectId||!sameWorkspacePath(project.workspaceRoot,root.workspaceRoot)).map(project=>({key:projectKey(project),label:projectLabel(project)}))];
+        return [...(this.needsFolderProject(note?.path)?[{key:NEW_FOLDER_PROJECT,label:`New project: ${note!.path.split('/').at(-2)}`}]:[]),{key:VAULT_PROJECT,label:`Vault project: ${root?.projectTitle??this.app.vault.getName()}`},...this.projects().filter(project=>!root||project.id!==root.projectId||(project.connectionId??'')!==root.connectionId||!sameWorkspacePath(project.workspaceRoot,root.workspaceRoot)).map(project=>({key:projectKey(project),label:this.projectChoiceLabel(project)}))];
       },
       getDefaultThread:key=>{const remembered=this.noteThread(note?.path),job=note?this.inlineChat?.activeFor(note.path).find(job=>job.threadId&&['sending','running','reconnecting'].includes(job.phase)):undefined;return !key||remembered&&key===`${remembered.connectionId?remembered.connectionId+':':''}${remembered.projectId}`?job?.threadId??remembered?.threadId:undefined;},
     };
@@ -836,7 +850,7 @@ export default class SendToT3 extends Plugin {
         if(!environmentId||selected===environmentId)return project;
       }catch{}
     }
-    throw Error('The original T3 project is unavailable on this device. Refresh projects and reconnect its machine.');
+    throw Error('The original T3 project is unavailable on this device. Reconnect its machine.');
   }
   private async continueInline(id:string,path:string){
     const hosted=await this.recoveryRecord(id,path),job=hosted?undefined:this.inlineChat?.find(id);
@@ -1153,17 +1167,25 @@ export default class SendToT3 extends Plugin {
     throw Error('Plugin logging is disabled for the performance test. Existing logs have been cleared.');
   }
 
-  projects(){return this.mode==='direct'?this.settings.directProjects:this.settings.projects;}
-  selected(){return this.mode==='direct'?this.settings.directSelected:this.settings.selected;}
-  async select(project:Project,enabled:boolean){const key=projectKey(project);const selected=this.selected().filter(id=>id!==key);if(enabled)selected.push(key);if(this.mode==='direct')this.settings.directSelected=selected;else this.settings.selected=selected;await this.save();}
-  connection(project?:Project):Connection {if(project?!!project.connectionId:this.mode==='direct'){const c=this.settings.paired.find(c=>c.id===(project?.connectionId??this.settings.directScanId));if(!c)throw Error('Pair a T3 connection in settings first.');return {transport:'direct',url:c.url,connectionId:c.id,environmentId:c.environmentId,host:'direct',executable:''};}return {...this.settings.connection,host:'local',transport:'desktop'};}
+  projects(){
+    if(this.mode==='desktop')return this.settings.projects;
+    const catalog=new Map<string,{project:Project;score:number}>();
+    for(const project of this.settings.directProjects){
+      const c=this.settings.paired.find(c=>c.id===project.connectionId);
+      const key=JSON.stringify([c?.environmentId??project.connectionId,project.id]);
+      const score=(this.projectDiscovery?.status(this.sourceKey(c))==='available'?4:0)+(this.cloudMachines.some(m=>m.environmentId===c?.environmentId&&m.url===c.url)?2:0);
+      if(!catalog.has(key)||score>catalog.get(key)!.score)catalog.set(key,{project,score});
+    }
+    return [...catalog.values()].map(entry=>entry.project);
+  }
+  connection(project:Project):Connection {if(project.connectionId){const c=this.settings.paired.find(c=>c.id===project.connectionId);if(!c)throw Error('Pair a T3 connection in settings first.');return {transport:'direct',url:c.url,connectionId:c.id,environmentId:c.environmentId,host:'direct',executable:''};}return {...this.settings.connection,host:'local',transport:'desktop'};}
   async pairConnection(name:string,address:string,code:string,expectedEnvironmentId?:string){
     const result=await pair(address,code,undefined,expectedEnvironmentId);
     const existing=this.settings.paired.find(c=>c.environmentId===result.descriptor.environmentId&&c.url===result.session.url);
     const c:PairedConnection=existing??{id:randomId(),name:name.trim()||result.descriptor.label,url:result.session.url,environmentId:result.descriptor.environmentId};
     if(!existing)this.settings.paired.push(c);
     this.pairedSessions[c.id]=result.session;this.settings.directScanId=c.id;this.mode='direct';await this.save();
-    await this.scan();
+    this.syncProjectSources();await this.projectDiscovery?.refresh(true);
   }
   pairingStatus(c:PairedConnection){const s=this.pairedSessions[c.id];return !s?'Pair on this device':s.expiresAt<=Date.now()?'Pairing expired':`Paired on this device until ${new Date(s.expiresAt).toLocaleDateString()}`;}
   async startEmailSignIn(email:string){
@@ -1198,31 +1220,31 @@ export default class SendToT3 extends Plugin {
     const work=(async()=>{
       const credential=await this.nativeCredential();const machines=await discoverMachines(credential);
       const m=machines.find(m=>m.environmentId===c.environmentId&&m.url===c.url);
-      if(!m)throw Error('This T3 connection is no longer available to your account. Refresh connections.');
+      if(!m)throw Error('This T3 connection is no longer available to your account. Reconnect its machine.');
       const next=await connectMachine(await this.nativeCredential(),m,this.deviceId+':'+account.userId);
       if(this.stopped||this.nativeAccount!==account||generation!==this.cloudGeneration||!this.settings.paired.includes(c))throw Error('Connection cancelled.');
       next.accountId=account.userId;this.pairedSessions[id]=next;await this.save();return next;
     })();this.sessionRefreshing.set(id,work);try{return await work;}finally{if(this.sessionRefreshing.get(id)===work)this.sessionRefreshing.delete(id);}
   }
-  async connectAccountMachine(m:CloudMachine){
+  async connectAccountMachine(m:CloudMachine,candidate?:PairedConnection){
     const account=this.nativeAccount;if(!account)throw Error('Sign in with your T3 email first.');const generation=this.cloudGeneration;
+    const existing=this.settings.paired.find(c=>c.environmentId===m.environmentId&&c.url===m.url);
+    const c=existing??candidate??{id:randomId(),name:m.name,url:m.url,environmentId:m.environmentId};
+    const active=()=>!this.stopped&&this.nativeAccount===account&&generation===this.cloudGeneration&&(!existing||this.settings.paired.includes(existing))&&(!candidate||this.accountCandidates.get(this.machineKey(m))===candidate||this.settings.paired.includes(candidate));
     const session=await connectMachine(await this.nativeCredential(),m,this.deviceId+':'+account.userId);
-    if(this.stopped||this.nativeAccount!==account||generation!==this.cloudGeneration)throw Error('Connection cancelled.');
-    const c=this.settings.paired.find(c=>c.environmentId===m.environmentId&&c.url===m.url)??{id:randomId(),name:m.name,url:m.url,environmentId:m.environmentId};
+    if(!active())throw Error('Connection cancelled.');
+    const changed=!existing||!c.managed||c.name!==m.name;
     if(!this.settings.paired.includes(c))this.settings.paired.push(c);
     c.managed=true;c.name=m.name;session.accountId=account.userId;this.pairedSessions[c.id]=session;
-    if(!this.settings.directScanId)this.settings.directScanId=c.id;this.mode='direct';await this.save();
-    const projects=parseProjects(await readDirect({transport:'direct',host:'direct',executable:'',url:c.url,environmentId:c.environmentId,connectionId:c.id},['projects'],session));
-    if(this.stopped||this.nativeAccount!==account||generation!==this.cloudGeneration||!this.settings.paired.includes(c))return;
-    this.settings.directProjects=[...this.settings.directProjects.filter(p=>p.connectionId!==c.id),...projects.map(p=>({...p,connectionId:c.id,connectionName:c.name}))];
-    delete this.machineErrors[m.environmentId];await this.save();
+    if(changed)await this.save();else await this.saveDeviceState();
+    return c;
   }
   async startCloudLogin(){
     this.cancelCloudLogin();const generation=this.cloudGeneration;this.cloudError='';
     const login=await beginLogin();if(this.stopped||generation!==this.cloudGeneration)return;
     this.cloudLogin=login;this.cloudChanged?.();this.scheduleCloudPoll();
   }
-  cancelCloudLogin(){this.cloudGeneration++;this.refreshRun++;this.connecting=false;if(this.cloudTimer)clearTimeout(this.cloudTimer);this.cloudLogin=null;this.emailLogin=null;this.cloudChanged?.();}
+  cancelCloudLogin(){this.projectDiscovery?.invalidate();this.cloudGeneration++;this.refreshRun++;this.connecting=false;if(this.cloudTimer)clearTimeout(this.cloudTimer);this.cloudLogin=null;this.emailLogin=null;this.cloudChanged?.();}
   private scheduleCloudPoll(){
     const login=this.cloudLogin;if(!login||this.stopped)return;const generation=this.cloudGeneration;
     this.cloudTimer=setTimeout(async()=>{try{
@@ -1238,18 +1260,91 @@ export default class SendToT3 extends Plugin {
     const work=(async()=>{const next=await refreshAccount(old);if(generation!==this.cloudGeneration||this.stopped)throw Error('T3 sign-in was cancelled.');this.cloudAccount=next;if(next!==old)await this.save();return next;})();
     this.cloudRefreshing=work;try{return await work;}finally{if(this.cloudRefreshing===work)this.cloudRefreshing=undefined;}
   }
-  async refreshMachines(){
+  private machineKey(m:{environmentId:string;url:string}){return JSON.stringify([m.environmentId,m.url]);}
+  private sourceKey(c?:PairedConnection){return c?JSON.stringify(['remote',c.id,c.environmentId,c.url]):JSON.stringify(['local',this.settings.connection.executable,this.settings.connection.baseDir??'']);}
+  private async initializeProjectCatalog(){
+    const scope=`project-catalog:${this.deviceId}:${this.settings.vaultId}:${this.nativeAccount?.userId??this.cloudAccount?.identity??'manual'}`;
+    if(this.projectDiscovery&&scope===this.catalogScope)return;
+    this.projectDiscovery?.dispose();this.catalogScope=scope;
+    const seedLocal=this.settings.projects,seedDirect=this.settings.directProjects;
+    const discovery=new ProjectDiscovery(async snapshots=>{await deviceState(scope,snapshots);},()=>{this.publishProjectCatalog();});
+    this.projectDiscovery=discovery;
+    const saved=await deviceState(scope);
+    if(this.stopped||this.projectDiscovery!==discovery)return;
+    if(Array.isArray(saved))discovery.restore(saved as ProjectSnapshot[]);
+    else {
+      discovery.replace(this.sourceKey(),seedLocal);
+      for(const c of this.settings.paired)discovery.replace(this.sourceKey(c),seedDirect.filter(p=>p.connectionId===c.id));
+      await discovery.save();
+    }
+    this.syncProjectSources();this.publishProjectCatalog();
+  }
+  private publishProjectCatalog(){
+    if(!this.projectDiscovery)return;
+    const projects=this.projectDiscovery.all();
+    this.settings.directProjects=projects.filter(p=>!!p.connectionId);this.settings.projects=projects.filter(p=>!p.connectionId);
+    for(const listener of this.projectListeners)listener();if(this.nativeAccount)this.cloudChanged?.();
+  }
+  watchProjects(listener:()=>void){this.projectListeners.add(listener);return ()=>{this.projectListeners.delete(listener);};}
+  projectChoiceLabel(project:Project){
+    const c=project.connectionId?this.settings.paired.find(c=>c.id===project.connectionId):undefined;
+    const status=this.projectDiscovery?.status(this.sourceKey(c));
+    return projectLabel(project)+(status==='offline'?' · Offline (cached)':status==='unverified'||status==='checking'?' · Cached; checking connection':'');
+  }
+  private syncProjectSources(){
+    if(!this.projectDiscovery)return;
+    const generation=this.cloudGeneration;
+    const connections=new Map([...this.accountCandidates.values(),...this.settings.paired].map(c=>[c.id,c]));
+    const sources:ProjectSource[]=[{key:this.sourceKey(),enabled:!Platform.isMobile&&this.mode==='desktop',read:async()=>{
+      const result=await runBridge({...this.settings.connection,host:'local',transport:'desktop'},['projects']);
+      if(result.cached)throw Error(result.warning??'Local T3 is offline.');return parseProjects(result);
+    }}];
+    for(const c of connections.values())sources.push({key:this.sourceKey(c),enabled:this.mode==='direct',read:async()=>{
+      const active=()=>!this.stopped&&generation===this.cloudGeneration&&(this.settings.paired.includes(c)||this.accountCandidates.get(this.machineKey(c))===c);
+      if(!active())throw Error('Connection cancelled.');
+      const m=this.cloudMachines.find(m=>m.environmentId===c.environmentId&&m.url===c.url);
+      let session:PairedSession|undefined=this.pairedSessions[c.id];
+      if(m&&this.nativeAccount&&(!session||session.expiresAt<=Date.now()+60_000||session.accountId!==this.nativeAccount.userId)){
+        await this.connectAccountMachine(m,c);session=this.pairedSessions[c.id];
+      }else session=await this.sessionFor(c.id);
+      if(!active())throw Error('Connection cancelled.');
+      const projects=parseProjects(await readDirect({transport:'direct',host:'direct',executable:'',url:c.url,environmentId:c.environmentId,connectionId:c.id},['projects'],session));
+      if(!active())throw Error('Connection cancelled.');
+      return projects.map(p=>({...p,connectionId:c.id,connectionName:c.name}));
+    }});
+    this.projectDiscovery.setSources(sources);
+  }
+  private rememberProjectViews(){
+    if(!this.projectDiscovery)return;
+    const local=this.settings.projects,direct=this.settings.directProjects;
+    let changed=this.projectDiscovery.replace(this.sourceKey(),local);
+    for(const c of this.settings.paired)changed=this.projectDiscovery.replace(this.sourceKey(c),direct.filter(p=>p.connectionId===c.id))||changed;
+    if(changed)void this.projectDiscovery.save().catch(error=>{this.cloudError=`Project cache: ${message(error)}`;});
+  }
+  private refreshProjectsInBackground(force=false){
+    if(this.stopped)return;
+    this.syncProjectSources();
+    void this.refreshMachines(force).catch(error=>{this.cloudError=message(error);this.cloudChanged?.();});
+  }
+  async refreshMachines(force=true){
     if(this.machineRefreshing)return this.machineRefreshing;
-    const generation=this.cloudGeneration;const run=++this.refreshRun;this.connecting=true;this.connectionSyncComplete=false;this.cloudError='';this.cloudChanged?.();
-    const work=(async()=>{let discovered=false;try{
-      const list=await discoverMachines(this.nativeAccount?await this.nativeCredential():await this.currentCloudAccount());
-      if(generation!==this.cloudGeneration||this.stopped)return;this.cloudMachines=list;this.machineErrors={};discovered=true;this.cloudChanged?.();
-      if(this.nativeAccount)for(const m of list){
-        if(generation!==this.cloudGeneration||this.stopped)return;
-        try{await this.connectAccountMachine(m);}catch(e){if(generation===this.cloudGeneration)this.machineErrors[m.environmentId]=message(e);}
-        if(generation===this.cloudGeneration)this.cloudChanged?.();
+    if(!force&&this.projectDiscovery&&!this.projectDiscovery.due()&&(!(this.nativeAccount||this.cloudAccount)||Date.now()<this.registryNextAttempt))return;
+    const generation=this.cloudGeneration;const run=++this.refreshRun;this.connecting=true;if(this.nativeAccount||this.cloudAccount)this.cloudChanged?.();
+    const work=(async()=>{try{
+      await this.initializeProjectCatalog();if(generation!==this.cloudGeneration||this.stopped)return;
+      if((this.nativeAccount||this.cloudAccount)&&(force||Date.now()>=this.registryNextAttempt)){
+        try{
+          const list=await discoverMachines(this.nativeAccount?await this.nativeCredential():await this.currentCloudAccount());
+          if(generation!==this.cloudGeneration||this.stopped)return;
+          this.cloudMachines=list;this.registryFailures=0;this.registryNextAttempt=Date.now()+300_000;this.cloudError='';this.connectionSyncComplete=true;
+          this.accountCandidates.clear();
+          if(this.nativeAccount)for(const m of list){const c=this.settings.paired.find(c=>c.environmentId===m.environmentId&&c.url===m.url)??{id:randomId(),name:m.name,url:m.url,environmentId:m.environmentId};this.accountCandidates.set(this.machineKey(m),c);}
+        }catch(error){if(generation!==this.cloudGeneration||this.stopped)return;this.cloudError=message(error);this.registryNextAttempt=Date.now()+Math.min(300_000,15_000*2**Math.min(this.registryFailures++,5));}
       }
-    }finally{if(run===this.refreshRun){this.connecting=false;this.connectionSyncComplete=discovered;}if(generation===this.cloudGeneration)this.cloudChanged?.();}})();
+      this.syncProjectSources();await this.projectDiscovery?.refresh(force);
+      if(generation!==this.cloudGeneration||this.stopped)return;
+      this.machineErrors={};for(const c of [...this.accountCandidates.values(),...this.settings.paired]){const error=this.projectDiscovery?.error(this.sourceKey(c));if(error)this.machineErrors[c.environmentId]=error;}
+    }finally{if(run===this.refreshRun)this.connecting=false;if(generation===this.cloudGeneration&&(this.nativeAccount||this.cloudAccount))this.cloudChanged?.();}})();
     this.machineRefreshing=work;try{await work;}finally{if(this.machineRefreshing===work)this.machineRefreshing=undefined;}
   }
   directAccountReady(){
@@ -1345,20 +1440,22 @@ export default class SendToT3 extends Plugin {
   async signOutCloud(){
     const old=this.nativeAccount;this.cancelCloudLogin();this.nativeAccount=null;this.nativeToken=undefined;this.nativeRefreshing=undefined;this.sessionRefreshing.clear();
     for(const [id,s] of Object.entries(this.pairedSessions))if(s.accountId)delete this.pairedSessions[id];
-    this.cloudAccount=null;this.cloudMachines=[];this.cloudError='';this.machineErrors={};this.connectionSyncComplete=false;this.machineRefreshing=undefined;this.cloudRefreshing=undefined;await this.save();this.cloudChanged?.();
+    this.cloudAccount=null;this.cloudMachines=[];this.accountCandidates.clear();this.registryNextAttempt=0;this.cloudError='';this.machineErrors={};this.connectionSyncComplete=false;this.machineRefreshing=undefined;this.cloudRefreshing=undefined;await this.initializeProjectCatalog();await this.save();this.cloudChanged?.();
     if(old)try{await revokeNativeAccount(old,nativeAccountFetch);}catch{new Notice('Signed out on this device. T3 could not be reached to revoke the account session; you can revoke it in your T3 account.');}
   }
-  async forgetPairing(id:string){delete this.pairedSessions[id];await this.save();}
+  async forgetPairing(id:string){delete this.pairedSessions[id];this.projectDiscovery?.invalidate();await this.save();this.refreshProjectsInBackground(true);}
   async removeConnection(id:string){
     if(this.settings.pending.some(r=>r.connection.connectionId===id)||this.settings.completionJobs.some(j=>j.connection.connectionId===id&&j.status==='watching')||this.settings.settlementJobs.some(j=>j.connection.connectionId===id))throw Error('This connection has an unconfirmed request or completion check. Resolve or stop it before removing the connection.');
-    this.settings.paired=this.settings.paired.filter(c=>c.id!==id);this.settings.directProjects=this.settings.directProjects.filter(p=>p.connectionId!==id);this.settings.directSelected=this.settings.directSelected.filter(k=>!k.startsWith(id+':'));delete this.pairedSessions[id];if(this.settings.directScanId===id)this.settings.directScanId=this.settings.paired[0]?.id??'';await this.save();
+    this.projectDiscovery?.invalidate();for(const [key,c] of this.accountCandidates)if(c.id===id)this.accountCandidates.delete(key);
+    this.settings.paired=this.settings.paired.filter(c=>c.id!==id);this.settings.directProjects=this.settings.directProjects.filter(p=>p.connectionId!==id);this.settings.directSelected=this.settings.directSelected.filter(k=>!k.startsWith(id+':'));delete this.pairedSessions[id];if(this.settings.directScanId===id)this.settings.directScanId=this.settings.paired[0]?.id??'';this.syncProjectSources();await this.save();
   }
   private saveDeviceState(state?:unknown) {
     this.app.saveLocalStorage(this.localKey,JSON.parse(JSON.stringify({deviceId:this.deviceId,mode:this.mode,connection:this.settings.connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,vaultRegistrations:this.vaultRegistrations})));
     return deviceState(this.deviceId,state??JSON.parse(JSON.stringify({pending:this.settings.pending,completionJobs:this.settings.completionJobs,settlementJobs:this.settings.settlementJobs})));
   }
-  private sharedSnapshot(){const {pending,completionJobs,settlementJobs,connection,...shared}=this.settings;return JSON.parse(JSON.stringify(shared));}
+  private sharedSnapshot(){const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,...shared}=this.settings;return JSON.parse(JSON.stringify(shared));}
   save(forceShared=false) {
+    this.rememberProjectViews();
     this.refreshFolderIndicators();
     const {pending,completionJobs,settlementJobs,connection}=this.settings,snapshot=this.sharedSnapshot(),intendedThreads=JSON.stringify(this.settings.noteThreads),intendedLinks=JSON.stringify(this.settings.folderLinks);
     const baseline=JSON.parse(this.sharedBaseline) as Settings;
@@ -1385,17 +1482,6 @@ export default class SendToT3 extends Plugin {
       if(JSON.stringify(this.settings.noteThreads)===intendedThreads)this.settings.noteThreads=snapshot.noteThreads;
       this.sharedBaseline=JSON.stringify(snapshot);
     });return this.saving;
-  }
-  async scan() {
-    try {
-      const connection = this.connection();
-      const result=await runBridge(connection,['projects']);
-      const projects = parseProjects(result);
-      if (JSON.stringify(connection) !== JSON.stringify(this.connection())) return;
-      if(connection.transport==='direct'){const c=this.settings.paired.find(c=>c.id===connection.connectionId)!;this.settings.directProjects=[...this.settings.directProjects.filter(p=>p.connectionId!==c.id),...projects.map(p=>({...p,connectionId:c.id,connectionName:c.name}))];}
-      else this.settings.projects=projects;
-      this.scanError=result.cached?(result.warning??'Destination offline. Showing saved projects; sending requires a connection.') : '';await this.save();
-    } catch(e) {logFailure('projects.scan.failed',e,{});this.scanError = message(e); throw e;}
   }
   async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote;streamReply?:boolean;jobOptions?:ResolvedJobOptions;destinations?:string[];onPrepared?:(request:Request)=>Promise<void>}) {
     if (this.busy) {if(options?.throwOnError)throw Error('Obsidian is sending another request. Retry shortly.');return;}
@@ -1546,7 +1632,7 @@ export default class SendToT3 extends Plugin {
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
     }catch(error){logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});throw error;}
   }
-  onunload(){configureDiagnostics();this.stopped=true;this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;
@@ -1652,22 +1738,6 @@ function randomId():string {
   const hex=Buffer.from(bytes).toString('hex');return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
 function message(e:unknown) {return e instanceof Error ? e.message : String(e);}
-function projectsUI(container:HTMLElement, plugin:SendToT3, redraw:()=>void) {
-  if(plugin.mode==='direct')new Setting(container).setName('Connection to scan').addDropdown(d=>{for(const c of plugin.settings.paired)d.addOption(c.id,c.name);d.setValue(plugin.settings.directScanId).onChange(async id=>{plugin.settings.directScanId=id;await plugin.save();});});
-  new Setting(container).setName('Available T3 Code projects').setDesc('Scan the configured T3 environment, then select projects for the Files menu.').addButton(b=>b.setButtonText('Scan projects').onClick(async()=>{
-    b.setDisabled(true).setButtonText('Scanning…');
-    try {await plugin.scan();} catch(e) {new Notice(message(e),10000);} finally {redraw();}
-  }));
-  if (plugin.scanError) container.createEl('p',{text:`${plugin.scanError}`,cls:'t3-error'});
-  if (!plugin.projects().length) container.createEl('p',{text:'No projects discovered. Start T3 Code, register a project there, and scan again.'});
-  for(const p of plugin.projects())new Setting(container).setName(projectLabel(p)).setDesc(p.workspaceRoot).addToggle(t=>t.setValue(plugin.selected().includes(projectKey(p))).onChange(async enabled=>{await plugin.select(p,enabled);}));
-  const missing=plugin.selected().filter(id=>!plugin.projects().some(p=>projectKey(p)===id));
-  if (missing.length) container.createEl('p',{text:`${missing.length} selected project(s) are unavailable. They will reappear if discovered again.`});
-}
-class ProjectModal extends Modal {
-  constructor(app:App,private plugin:SendToT3){super(app);}
-  onOpen(){this.contentEl.empty(); this.titleEl.setText('Send to T3 Code projects'); projectsUI(this.contentEl,this.plugin,()=>this.onOpen());}
-}
 class ExistingThreadModal extends FuzzySuggestModal<ThreadChoice>{
   constructor(app:App,private threads:ThreadChoice[],private choose:(thread:ThreadChoice)=>Promise<void>,placeholder='Send note to an existing thread',empty='No existing threads in this linked project. Use Send to new thread.',private back?:()=>void){super(app);this.setPlaceholder(placeholder);this.emptyStateText=empty;}
   private selected=false;
@@ -1679,8 +1749,11 @@ class ExistingThreadModal extends FuzzySuggestModal<ThreadChoice>{
 type FolderLinkChoice=Project|{create:true;title:string};
 class FolderLinkProjectModal extends FuzzySuggestModal<FolderLinkChoice>{
   constructor(app:App,private plugin:SendToT3,private folder:TFolder){super(app);this.setPlaceholder('Choose a T3 Code project');}
-  getItems(){return [...this.plugin.projects().filter(p=>this.plugin.selected().includes(projectKey(p))),{create:true as const,title:'Create T3 project…'}];}
-  getItemText(choice:FolderLinkChoice){return 'create' in choice?choice.title:`Link to ${projectLabel(choice)}`;}
+  private unwatch?:()=>void;
+  onOpen(){super.onOpen?.();this.unwatch=this.plugin.watchProjects(()=>this.inputEl?.dispatchEvent(new Event('input')));}
+  onClose(){this.unwatch?.();super.onClose?.();}
+  getItems(){return [...this.plugin.projects(),{create:true as const,title:'Create T3 project…'}];}
+  getItemText(choice:FolderLinkChoice){return 'create' in choice?choice.title:`Link to ${this.plugin.projectChoiceLabel(choice)}`;}
   onChooseItem(choice:FolderLinkChoice){if('create' in choice)void this.plugin.createFolderProject(this.folder);else void this.plugin.linkFolder(this.folder,choice,false);}
 }
 class FolderLinkModal extends Modal{
@@ -1727,7 +1800,7 @@ class T3Settings extends PluginSettingTab {
   display(){
     const el=this.containerEl; el.empty();
     el.createEl('p',{text:'Send full Markdown notes and embedded images to your T3 projects. Sending starts a turn using the project’s model and permission defaults.'});
-    new Setting(el).setName('Connection on this device').setDesc('T3 Connect works on desktop and mobile. This computer only is available for local desktop use.').addDropdown(d=>{d.addOptions({...(!Platform.isMobile?{desktop:'This computer only (advanced)'}:{}),direct:'T3 Connect (recommended)'});d.setValue(this.plugin.mode).onChange(async value=>{this.plugin.mode=value as 'desktop'|'direct';this.plugin.scanError='';await this.plugin.save();this.display();});});
+    new Setting(el).setName('Connection on this device').setDesc('T3 Connect works on desktop and mobile. This computer only is available for local desktop use.').addDropdown(d=>{d.addOptions({...(!Platform.isMobile?{desktop:'This computer only (advanced)'}:{}),direct:'T3 Connect (recommended)'});d.setValue(this.plugin.mode).onChange(async value=>{this.plugin.mode=value as 'desktop'|'direct';await this.plugin.save();this.plugin.refreshMachines().catch(error=>new Notice(message(error)));this.display();});});
     if(this.plugin.mode==='direct'){
       this.cloudUI(el);
       const advanced=el.createEl('details');advanced.createEl('summary',{text:'Advanced: manual pairing'});
@@ -1736,14 +1809,14 @@ class T3Settings extends PluginSettingTab {
       new Setting(advanced).setName('Connection name').addText(t=>t.setPlaceholder('My laptop').setValue(name).onChange(v=>name=v));
       new Setting(advanced).setName('T3 address or pairing link').setDesc('Not the old companion URL. Pairing links contain a one-time secret and are never synced or retained.').addText(t=>{t.inputEl.type='password';t.inputEl.autocomplete='off';t.setValue(address).onChange(v=>address=v);});
       new Setting(advanced).setName('Pairing code (if separate)').addText(t=>{t.inputEl.type='password';t.inputEl.autocomplete='off';t.onChange(v=>code=v);});
-      new Setting(advanced).addButton(b=>b.setButtonText('Pair and discover projects').setCta().onClick(async()=>{b.setDisabled(true);try{await this.plugin.pairConnection(name,address,code,this.selectedMachine?.environmentId);this.selectedMachine=null;new Notice('Paired directly with T3. Select projects below.');this.display();}catch(e){new Notice(message(e),12000);b.setDisabled(false);}}));
+      new Setting(advanced).addButton(b=>b.setButtonText('Pair and discover projects').setCta().onClick(async()=>{b.setDisabled(true);try{await this.plugin.pairConnection(name,address,code,this.selectedMachine?.environmentId);this.selectedMachine=null;new Notice('Paired directly with T3. Projects appear automatically.');this.display();}catch(e){new Notice(message(e),12000);b.setDisabled(false);}}));
       for(const c of this.plugin.settings.paired){
         const status=c.managed&&this.plugin.nativeAccount?'T3 account connection · renews automatically':this.plugin.pairingStatus(c);
         const setting=new Setting(el).setName(c.name).setDesc(status);
         if(!c.managed)setting.addButton(b=>b.setButtonText('Forget pairing').onClick(async()=>{await this.plugin.forgetPairing(c.id);this.display();}));
         setting.addButton(b=>b.setButtonText('Remove connection').onClick(async()=>{try{await this.plugin.removeConnection(c.id);this.display();}catch(e){new Notice(message(e));}}));
       }
-      el.createEl('p',{text:'Project choices sync. Sign in once on each device; credentials stay on that device. Computers must be online to receive a note. Unconfirmed sends require manual retry.'});
+      el.createEl('p',{text:'Projects are discovered automatically on this device. Sign in once on each device; credentials stay on that device. Computers must be online to receive a note. Unconfirmed sends require manual retry.'});
     } else {
     new Setting(el).setName('Official T3 executable').setDesc('Leave blank to discover t3 automatically. Otherwise enter the full path to the official T3 CLI executable, not a Fleet adapter or shell command.').addText(t=>t.setValue(this.plugin.settings.connection.executable).onChange(async value=>{this.plugin.settings.connection.executable=value.trim();await this.plugin.save();}));
     new Setting(el).setName('T3 data directory').setDesc('Usually your home directory followed by .t3. Must match the running T3 installation.').addText(t=>t.setValue(this.plugin.settings.connection.baseDir??'').onChange(async value=>{this.plugin.settings.connection.baseDir=value.trim();await this.plugin.save();}));
@@ -1786,8 +1859,6 @@ class T3Settings extends PluginSettingTab {
       for(const job of this.plugin.settings.completionJobs) new Setting(el).setName(job.notePath).setDesc(`${job.action} · ${job.threadId} · ${job.detail || 'Waiting for successful completion'}`).addButton(b=>b.setButtonText(job.status==='watching'?'Stop monitoring':'Dismiss').onClick(async()=>{this.plugin.settings.completionJobs=this.plugin.settings.completionJobs.filter(j=>j!==job);await this.plugin.save();this.display();}));
       new Setting(el).addButton(b=>b.setButtonText('Check now').onClick(async()=>{b.setDisabled(true);await this.plugin.monitorCompletions();this.display();}));
     }
-    el.createEl('h3',{text:'Projects'});
-    projectsUI(el,this.plugin,()=>this.display());
     if(this.plugin.settings.pending.length) {
       el.createEl('h3',{text:'Unconfirmed requests'});
       el.createEl('p',{text:'T3 may already have started this request. Retry uses the same saved content and ID to avoid duplicates. Discard forgets local retry data; it does not cancel a T3 thread.'});

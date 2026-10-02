@@ -11,6 +11,7 @@ export interface ChatHost {
   getNotePath():string;
   getProjectName(projectKey?:string):string;
   getTargetDescription(projectKey?:string):string;
+  onProjectChange?(listener:()=>void):()=>void;
   getProjectChoices():{key:string;label:string}[];
   getDefaultThread(projectKey?:string):string|undefined;
   sendChat(prompt:string,projectKey?:string,resolve?:()=>ResolvedJobOptions,returnToDraft?:()=>void):Promise<void>;
@@ -19,8 +20,11 @@ export interface ChatHost {
 }
 
 class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
-  constructor(app:App,private choices:{key:string;label:string}[],private choose:(key:string)=>void){super(app);this.setPlaceholder('Choose a T3 Code project');this.emptyStateText='No T3 Code projects available. Refresh projects in settings.';}
-  getItems(){return this.choices;}
+  constructor(app:App,private choices:()=>{key:string;label:string}[],private choose:(key:string)=>void,private watch?:(listener:()=>void)=>()=>void){super(app);this.setPlaceholder('Choose a T3 Code project');this.emptyStateText='Discovering projects… Connect T3 if no projects appear.';}
+  private unwatch?:()=>void;
+  onOpen(){super.onOpen?.();this.unwatch=this.watch?.(()=>this.inputEl?.dispatchEvent(new Event('input')));}
+  onClose(){this.unwatch?.();super.onClose?.();}
+  getItems(){return this.choices();}
   getItemText(item:{key:string;label:string}){return item.label;}
   onChooseItem(item:{key:string;label:string}){this.choose(item.key);}
 }
@@ -66,7 +70,7 @@ class SendDestinationModal extends Modal {
     projectButton.disabled=Boolean(this.host.busy);
     projectButton.addEventListener('click',()=>{
       if(this.field)this.prompt=this.field.value;
-      new ChatProjectModal(this.app,this.host.getProjectChoices(),key=>{logEvent('ui.destination.project-selected',{projectKey:key});this.projectKey=key;this.onOpen();}).open();
+      new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),key=>{logEvent('ui.destination.project-selected',{projectKey:key});this.projectKey=key;this.onOpen();},this.host.onProjectChange).open();
     });
     const count=overrideCount(this.overrides);
     const overridesButton=row.createEl('button',{text:count?`Overrides · ${count}`:'Overrides',attr:{'aria-label':`Overrides for this send: ${count} explicit choices`}});

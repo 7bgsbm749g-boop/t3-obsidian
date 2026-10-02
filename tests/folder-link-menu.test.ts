@@ -95,7 +95,7 @@ async function folderMenuHarness(){
   const open=async()=>{
     const menu=new Menu();fileMenu(menu,folder,'file-explorer-context-menu');
     const entry=menu.items.find(item=>item.title==='Link to T3 Code');assert.ok(entry?.submenu);
-    const target=entry.submenu.items.find(item=>item.title==='Link to Writing · Laptop');assert.ok(target);
+    const target=entry.submenu.items.find(item=>item.title.startsWith('Link to Writing · Laptop'));assert.ok(target);
     await target.callback();return modals.at(-1);
   };
   const setting=(modal:Modal,name:string)=>{const item=modal.contentEl.settings.find(item=>item.name===name);assert.ok(item);return item as Setting;};

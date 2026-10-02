@@ -33,6 +33,7 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
   if(url.endsWith('/v1/environments'))return response({environments:['a','b'].map(id=>({environmentId:id,label:id==='a'?'Laptop':'VPS',endpoint:{httpBaseUrl:'https://'+id+'.example'}}))});
   if(url.endsWith('/dpop-token'))return response({token_type:'DPoP',access_token:'relay-private',scope:'environment:connect'});
   if(url.endsWith('/connect')){connects++;const id=url.includes('/a/')?'a':'b';if(id==='b'&&offline)return response({error:'environment_endpoint_unavailable'},503);return response({environmentId:id,endpoint:{httpBaseUrl:'https://'+id+'.example'},credential:'bootstrap-private'});}
+  if(url.startsWith('https://manual.example')){if(url.endsWith('/environment'))return response({environmentId:'manual',label:'Manual',orchestrationProtocolVersion:1});assert.equal(o.headers.Authorization,'Bearer manual-private');return response({projects:[],threads:[]});}
   const id=new URL(url).hostname[0];
   if(url.endsWith('/environment'))return response({environmentId:id,label:id,orchestrationProtocolVersion:1});
   if(url.endsWith('/oauth/token'))return response({token_type:'DPoP',access_token:'environment-private-'+id,expires_in:600,scope:'orchestration:read orchestration:operate'});
