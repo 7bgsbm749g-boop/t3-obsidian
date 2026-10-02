@@ -74,3 +74,17 @@ test('note reads still surface storage errors other than a missing file',async()
   await assert.rejects(io.readNote('Note.md'),/EACCES/);
   await assert.rejects(io.isSaved('Note.md','hash'),/EACCES/);
 });
+
+test('Reading view writes the saved note rather than its hidden editor, preserving progress and cleanup',async()=>{
+  const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',file={path:'Note.md'};let document='Prompt',hidden='Stale hidden editor',writes=0;
+  const view={file,getMode:()=> 'preview',editor:{getValue:()=>hidden,replaceRange:()=>{throw Error('Hidden editor must not receive writes');}}};
+  const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[{view}]},vault:{getFileByPath:()=>file,read:async()=>document,process:async(_file:any,change:(text:string)=>string)=>{writes++;document=change(document);return document;}}} as any);
+  assert.equal(io.isOpen('Note.md'),true);assert.equal(await io.readNote('Note.md'),'Prompt');
+  await io.updateNote('Note.md',current=>current+initialRegion(id).text,()=>true);
+  assert.equal(await io.locateNote(id,'Note.md'),'Note.md');
+  await io.updateNote('Note.md',()=>completionProof(id,'Final'),()=>true);
+  assert.equal(await io.isSaved('Note.md','unused',{id,body:'Final'}),true);
+  await io.updateNote('Note.md',()=> 'Final',()=>true);
+  assert.equal(await io.isSaved('Note.md','unused',{id,body:'Final',cleaned:true}),true);
+  assert.equal(writes,3);assert.equal(hidden,'Stale hidden editor');
+});

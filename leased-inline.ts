@@ -2,8 +2,8 @@ import {explorerResponsePath,leaseExplorerResponse,loadExplorerResponses,relocat
 import {contentHash} from './completion';
 import {HostedInlineWriter,hostedPaths,validateHostedRequest,pendingCompletionCleanup,type HostedInlineRequest,type HostedInlineState,type InlineFiles,type InlineHostTarget} from './hosted-inline';
 import {InlineLeaseClient,HEARTBEAT_MS,leasePaths,terminalLease,type LeaseRecord,type LeaseReply} from './inline-lease';
-import {applyThreadItem,restoreInlineBindings,hasCompletionProof,hasResponseMarkers,regionBody,type InlineThreadState,type InlineStartRequest} from './inline-thread';
-import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
+import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,turnForMessage,hasCompletionProof,hasResponseMarkers,regionBody,type InlineThreadState,type InlineStartRequest} from './inline-thread';
+import {readInlineEvents,readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {ReplyReference} from './reply-assets';
 import type {SteeringInput} from './inline-steering';
 import {logFailure} from './diagnostics';
@@ -180,11 +180,12 @@ export class DeviceInlineManager {
     if(runtime.refresh?.epoch===runtime.record.epoch)return runtime.refresh.work;
     if(runtime.snapshotFailures&&this.monotonic()<runtime.nextSnapshot)return Promise.reject(Error('Waiting to retry the T3 response freshness check.'));
     runtime.refresh?.cancel(Error('Response ownership changed.'));
-    const epoch=runtime.record.epoch,request=runtime.record.request;
+    const epoch=runtime.record.epoch,request=runtime.record.request,abort=new AbortController();
     let resolve!:(state:InlineThreadState|undefined)=>void,reject!:(error:Error)=>void;
     const work=new Promise<InlineThreadState|undefined>((done,fail)=>{resolve=done;reject=fail;});
     const refresh:SnapshotRefresh={epoch,startedAt:this.monotonic(),work,cancel:error=>{
       if(runtime.refresh!==refresh)return;
+      abort.abort();
       runtime.refresh=undefined;
       runtime.nextSnapshot=this.monotonic()+Math.min(30_000,5000*2**Math.min(runtime.snapshotFailures++,3));
       reject(error);
@@ -196,6 +197,19 @@ export class DeviceInlineManager {
       if(runtime.refresh!==refresh)return;
       if(!this.owns(runtime)||runtime.record.epoch!==epoch){refresh.cancel(Error('Response ownership changed.'));return;}
       this.item(runtime,{kind:'snapshot',snapshot});
+      const current=runtime.state!,saved=runtime.record.state?.bindingCheckpoint;
+      const ids=[state?.pendingMessageId??state?.messageId??request.messageId,...state?.steering?.map(input=>input.messageId)??[]];
+      const unresolved=ids.filter(id=>!turnForMessage(current,id)).map(id=>saved?.starts?.[id]).filter((start):start is InlineStartRequest=>!!start&&!start.failed);
+      if(unresolved.length){
+        const items=await readInlineEvents(ready,request.threadId,Math.max(0,Math.min(...unresolved.map(start=>start.sequence))-1),abort.signal);
+        if(runtime.refresh!==refresh||!this.owns(runtime)||runtime.record.epoch!==epoch)return;
+        const proven=new Set(Object.values(saved?.bindings??{}).map(binding=>binding.turnId));
+        let evidence:InlineThreadState={messages:current.messages.filter(message=>message.role==='user'),activities:[],starts:saved?.starts,bindings:saved?.bindings,turns:Object.fromEntries(Object.entries(saved?.turns??{}).filter(([id])=>proven.has(id)))};
+        for(const item of items)evidence=applyThreadItem(evidence,item).state;
+        // Historical replay supplies bindings only. Never replace newer prose,
+        // session state or ownership with the replay's older projection.
+        runtime.state=restoreInlineBindings(runtime.state!,inlineBindingCheckpoint(evidence));
+      }
       runtime.refresh=undefined;runtime.snapshotFailures=0;runtime.nextSnapshot=this.monotonic()+INLINE_SNAPSHOT_INTERVAL_MS;
       runtime.nextTick=0;resolve(runtime.state);this.tick();
     })().catch(error=>refresh.cancel(error instanceof Error?error:Error(String(error))));

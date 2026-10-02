@@ -11,7 +11,10 @@ const missingNote=(error:unknown)=>!!error&&typeof error==='object'&&('code' in 
 /** Real note writes, using the live editor when open and atomic vault edits
  * otherwise. Ownership is checked immediately before each actual mutation. */
 export function deviceNoteIO(app:App){
-  const editors=(path:string)=>app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===path&&view.editor).map(view=>view.editor);
+  const views=(path:string)=>app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===path);
+  // Reading view retains a hidden editor buffer. Mutating it neither renders
+  // nor saves the reply; use the vault's atomic write for those views.
+  const editors=(path:string)=>views(path).filter(view=>view.editor&&view.getMode?.()!=='preview').map(view=>view.editor);
   const readNote=async(path:string)=>{
     const open=editors(path);if(open.length){const value=open[0].getValue();return open.every(editor=>editor.getValue()===value)?value:undefined;}
     const file=app.vault.getFileByPath(path);if(!file)return;
@@ -27,7 +30,7 @@ export function deviceNoteIO(app:App){
     noteChanged:(path:string)=>locations.changed(path),
     noteRenamed:(before:string,after:string)=>locations.renamed(before,after),
     noteDeleted:(path:string)=>locations.deleted(path),
-    isOpen:(path:string)=>editors(path).length>0,
+    isOpen:(path:string)=>views(path).length>0,
     isSaved:async(path:string,hash:string,proof?:{id:string;body:string;cleaned?:boolean})=>{const file=app.vault.getFileByPath(path);if(!file)return false;let document:string;try{document=await app.vault.read(file);}catch(error){if(missingNote(error))return false;throw error;}if(file.path!==undefined&&(file.path!==path||app.vault.getFileByPath(path)!==file))return false;return proof?.cleaned?!hasResponseMarkers(document,proof.id):contentHash(document)===hash||!!proof&&hasCompletionProof(document,proof.id,proof.body);},
     readNote,
     updateNote:async(path:string,change:(current:string)=>string,allowed:()=>boolean):Promise<string|undefined>=>{

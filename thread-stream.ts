@@ -25,6 +25,40 @@ export async function readInlineSnapshot(access:ThreadAccess,threadId:string,pro
   return snapshot;
 }
 
+/** Bounded, one-shot protocol replay for exact start/turn evidence absent from
+ * canonical latestTurn. The caller's native freshness deadline owns aborting
+ * this operation; no renderer timer, polling loop, or database is involved. */
+export async function readInlineEvents(access:ThreadAccess,threadId:string,afterSequence:number,signal:AbortSignal,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url)):Promise<ThreadStreamItem[]> {
+  const issued=await access.api('/api/auth/websocket-ticket',{});
+  if(signal.aborted)throw Error('T3 binding recovery canceled.');
+  if(typeof issued?.ticket!=='string'||!issued.ticket)throw Error('T3 did not issue a stream ticket.');
+  const url=new URL('/ws',access.origin);url.protocol=url.protocol==='https:'?'wss:':'ws:';
+  url.searchParams.set('wsTicket',issued.ticket);url.searchParams.set('orchestrationProtocol','1');
+  return new Promise((resolve,reject)=>{
+    const socket=makeSocket(url.href),items:ThreadStreamItem[]=[];let finished=false;
+    const abort=()=>finish(Error('T3 binding recovery canceled.'));
+    const finish=(error?:Error)=>{if(finished)return;finished=true;signal.removeEventListener('abort',abort);try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{}socket.close();error?reject(error):resolve(items);};
+    signal.addEventListener('abort',abort,{once:true});
+    socket.onopen=()=>{if(signal.aborted){abort();return;}socket.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,reasoningMessages:true,afterSequence,requestCompletionMarker:true},headers:[]}));};
+    socket.onmessage=message=>{try{
+      if(typeof message.data!=='string'||Buffer.byteLength(message.data)>16_000_000)throw Error('T3 stream frame is too large.');
+      const decoded=JSON.parse(message.data);
+      for(const frame of Array.isArray(decoded)?decoded:[decoded]){
+        if(frame._tag==='Ping'){socket.send(JSON.stringify({_tag:'Pong'}));continue;}
+        if(frame._tag==='Defect')throw Error('T3 binding replay failed.');
+        if(String(frame.requestId)!=='1')continue;
+        if(frame._tag==='Chunk'){
+          if(!Array.isArray(frame.values))throw Error('Invalid T3 binding replay.');
+          for(const item of frame.values){if(item.kind==='synchronized'){finish();return;}if(items.length>=1001)throw Error('T3 binding replay exceeded its event limit.');items.push(item);}
+          socket.send(JSON.stringify({_tag:'Ack',requestId:'1'}));
+        }else if(frame._tag==='Exit')throw Error('T3 binding replay ended before synchronization.');
+      }
+    }catch(error){finish(error instanceof Error?error:Error(String(error)));}};
+    socket.onerror=()=>finish(Error('T3 binding replay connection failed.'));
+    socket.onclose=()=>{if(!finished)finish(Error('T3 binding replay closed before synchronization.'));};
+  });
+}
+
 /** The Effect RPC stream stays open until stopped. Every reconnect asks for a
  * fresh snapshot, so lost deltas cannot duplicate text or leave a gap. */
 export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets,replay?:{afterSequence:()=>number|undefined}) {

@@ -17,7 +17,8 @@ import {desktopTimersPlugin} from '../esbuild.config.mjs';
 import {leasePaths} from '../inline-lease';
 import {INLINE_SNAPSHOT_INTERVAL_MS} from '../leased-inline';
 
-for(const missedStart of [false,true])test(`bundled desktop recovers ${missedStart?'a missing start from canonical evidence':'saved start evidence'} with the feed stopped and renderer timers suspended`,async()=>{
+for(const recovery of ['saved','canonical','replay'])test(`bundled desktop recovers ${recovery} binding evidence with the feed stopped and renderer timers suspended`,async()=>{
+  const missedStart=recovery!=='saved';let replayReads=0;
   const bundle=await build({stdin:{contents:"export {DesktopInlineHost,localInlineFiles} from './hosted-inline-desktop'; export {DeviceInlineManager} from './leased-inline'; export {desktopInterval,desktopPause} from './desktop-timers';",resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,platform:'browser',format:'cjs',target:'es2022',external:['node:*',...builtinModules.filter(name=>name!=='buffer')],plugins:[desktopTimersPlugin()]});
   const nativeRequire=createRequire(import.meta.url),lockDelays:number[]=[],module={exports:{} as any};
   let rendererIntervals=0;
@@ -25,7 +26,19 @@ for(const missedStart of [false,true])test(`bundled desktop recovers ${missedSta
     module,exports:module.exports,process,console,crypto:globalThis.crypto,performance,URL,TextEncoder,TextDecoder,Buffer,global:{},document:{createElement:()=>({})},
     require:(name:string)=>name==='node:timers'?{...timers,setTimeout:(callback:()=>void,delay:number)=>{lockDelays.push(delay);return timers.setTimeout(callback,delay);}}:nativeRequire(name),
     setInterval:()=>{rendererIntervals++;return 1;},clearInterval:()=>{},
-    setTimeout:()=>1,clearTimeout:()=>{},setImmediate,
+    setTimeout:()=>1,clearTimeout:()=>{},setImmediate,AbortController,
+    WebSocket:class {
+      onopen?:()=>void;onmessage?:(event:any)=>void;onerror?:()=>void;onclose?:()=>void;
+      constructor(){queueMicrotask(()=>this.onopen?.());}
+      send(raw:string){const frame=JSON.parse(raw);if(frame.tag!=='orchestration.subscribeThread')return;
+        if(frame.payload.afterSequence===undefined){queueMicrotask(()=>this.onerror?.());return;}
+        replayReads++;queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[
+          {kind:'event',event:{sequence:2,type:'thread.turn-start-requested',payload:{messageId:request.messageId,createdAt:request.createdAt}}},
+          {kind:'event',event:{sequence:3,type:'thread.session-set',payload:{session:{status:'running',activeTurnId:'turn',updatedAt:request.createdAt}}}},
+          {kind:'synchronized'}]})}));
+      }
+      close(){this.onclose?.();}
+    },
   });
   const {DesktopInlineHost:Host,localInlineFiles:localFiles,DeviceInlineManager:Manager,desktopInterval,desktopPause}=module.exports;
   const root=await mkdtemp(join(tmpdir(),'t3-background-')),directory='.obsidian/t3-code/inline/v1';
@@ -35,8 +48,8 @@ for(const missedStart of [false,true])test(`bundled desktop recovers ${missedSta
   const host=await Host.open(app,identity,async()=>{throw Error('No turn has been sent yet.');});
   let complete=false,bound=false,document='Outside edit\n'+region.text,clockOffset=0,reads=0;
   const manager=new Manager(actor,identity.vaultId,{access:async()=>({origin:'https://t3.example',api:async(path:string)=>{
-    if(path.includes('websocket-ticket'))throw Error('Stream stalled');
-    reads++;return {snapshotSequence:complete?10:bound?5:1,thread:{id:request.threadId,projectId:request.projectId,messages:[{id:request.messageId,role:'user',text:'Question',createdAt:request.createdAt,turnId:null,streaming:false},{id:'answer',role:'assistant',text:complete?'Recovered desktop final':'Desktop progress',turnId:'turn',streaming:!complete}],activities:[],latestTurn:bound?{turnId:'turn',...(missedStart&&bound?{requestedAt:request.createdAt}:{}),state:complete?'completed':'running',assistantMessageId:'answer'}:undefined,session:{status:complete?'ready':bound?'running':'starting',activeTurnId:complete||!bound?null:'turn'}}};
+    if(path.includes('websocket-ticket')){if(recovery==='replay')return {ticket:'test'};throw Error('Stream stalled');}
+    reads++;return {snapshotSequence:complete?10:bound?5:1,thread:{id:request.threadId,projectId:request.projectId,messages:[{id:request.messageId,role:'user',text:'Question',createdAt:request.createdAt,turnId:null,streaming:false},{id:'answer',role:'assistant',text:complete?'Recovered desktop final':'Desktop progress',turnId:'turn',streaming:!complete}],activities:[],latestTurn:bound?{turnId:'turn',...(missedStart&&bound?{requestedAt:recovery==='replay'?new Date(Date.parse(request.createdAt)+1000).toISOString():request.createdAt}:{}),state:complete?'completed':'running',assistantMessageId:'answer'}:undefined,session:{status:complete?'ready':bound?'running':'starting',activeTurnId:complete||!bound?null:'turn'}}};
   }}),readNote:async()=>document,isSaved:async()=>true,isOpen:()=>true,updateNote:async(_path:string,change:(value:string)=>string,allowed:()=>boolean)=>{assert.equal(allowed(),true);return document=change(document);}},async()=>({files,close:()=>{}}),undefined,()=>performance.now()+clockOffset,desktopPause);
   const stop=desktopInterval(()=>manager.tick(),150);
   try{
@@ -54,13 +67,17 @@ for(const missedStart of [false,true])test(`bundled desktop recovers ${missedSta
         manager.item(runtime,{kind:'event',event:{sequence:3,type:'thread.session-set',payload:{session:{status:'running',activeTurnId:'turn',updatedAt:request.createdAt}}}});
         manager.item(runtime,{kind:'event',event:{sequence:4,type:'thread.message-sent',payload:{messageId:'answer',role:'assistant',text:'Desktop progress',streaming:true,turnId:'turn',createdAt:request.createdAt}}});
       }
-    }else for(const runtime of manager.jobs.values())runtime.nextSnapshot=0;
+    }else {
+      if(recovery==='replay')await manager.delivered(request.host,id,{messageId:request.messageId,requestedAt:request.createdAt,sequence:2});
+      for(const runtime of manager.jobs.values())runtime.nextSnapshot=0;
+    }
     await pause(3400);
     const renewed=JSON.parse((await files.read(path))!);
     assert.equal(renewed.owner,actor);assert.equal(renewed.epoch,initial.epoch);
     assert.ok(renewed.expiresAt>initial.expiresAt,'Background ownership is renewed');
     assert.ok(lockDelays.includes(5000),'The coordinator lock schedules its renewal on Node timers');
     assert.equal(rendererIntervals,0,'Coordinator and heartbeat intervals do not use browser timers');
+    if(recovery==='replay')assert.ok(replayReads>0,'Freshness recovers exact start evidence through the supported replay interface');
     assert.match(document,/Desktop progress/);assert.equal(renewed.state.status,'running');
     const before=reads;complete=true;clockOffset+=INLINE_SNAPSHOT_INTERVAL_MS;
     for(let n=0;n<20;n++){

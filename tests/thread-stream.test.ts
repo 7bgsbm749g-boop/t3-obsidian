@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {watchThread} from '../thread-stream';
+import {watchThread,readInlineEvents} from '../thread-stream';
 
 test('thread subscription authenticates, acknowledges chunks, and interrupts on stop',async()=>{
   const sent:any[]=[],items:any[]=[],urls:string[]=[];let issueCount=0,closed=0;
@@ -56,4 +56,20 @@ test('a closed stream obtains fresh credentials and a new canonical snapshot',as
     assert.equal(tickets,2);assert.equal(sockets.length,2);assert.equal(errors.length,1);
     assert.equal(items.at(-1)?.snapshot.thread.messages[0].text,'snapshot 2');
   }finally{watcher.stop();}
+});
+
+test('one-shot binding replay stops at synchronization and cancels a stranded socket without renderer timers',async()=>{
+  for(const cancel of [false,true]){
+    const abort=new AbortController(),sent:any[]=[];let closed=0;
+    class Socket {
+      onopen?:()=>void;onmessage?:(event:any)=>void;onclose?:()=>void;onerror?:()=>void;
+      constructor(){queueMicrotask(()=>this.onopen?.());}
+      send(raw:string){const frame=JSON.parse(raw);sent.push(frame);if(frame.tag==='orchestration.subscribeThread')queueMicrotask(()=>cancel?abort.abort():this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[{kind:'event',event:{sequence:9}},{kind:'synchronized'}]})}));}
+      close(){closed++;this.onclose?.();}
+    }
+    const work=readInlineEvents({origin:'https://t3.example',api:async()=>({ticket:'test'})},'thread',8,abort.signal,()=>new Socket() as any);
+    if(cancel)await assert.rejects(work,/canceled/);else assert.deepEqual(await work,[{kind:'event',event:{sequence:9}}]);
+    assert.equal(sent[0].payload.afterSequence,8);assert.equal(sent[0].payload.requestCompletionMarker,true);assert.equal(closed,1);
+    assert.equal(sent.at(-1)._tag,'Interrupt');
+  }
 });

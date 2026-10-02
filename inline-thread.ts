@@ -152,6 +152,16 @@ function establishBindings(state:InlineThreadState):InlineThreadState {
     if(matches.length===1){turns[matches[0].turnId]={...matches[0],messageId:message.id};bindings[message.id]={turnId:matches[0].turnId,kind:matches[0].messageId===message.id?'start':'timestamp',sequence:state.sequence};continue;}
     if(request?.turnId&&!bindings[message.id])bindings[message.id]={turnId:request.turnId,kind:request.activeTurnId===request.turnId?'steer':'start',sequence:state.sequence};
   }
+  for(const [id,binding] of Object.entries(bindings)){
+    const request=starts[id],turn=turns[binding.turnId];
+    // Canonical latestTurn.requestedAt may be the provider's session-start
+    // timestamp. Once the exact primary message is proven, retain its actual
+    // start request timestamp independently of that provider clock.
+    if(request&&!request.failed&&binding.kind!=='steer'&&turn?.messageId===id){
+      turns[binding.turnId]={...turn,requestedAt:request.requestedAt};
+      starts[id]={...request,turnId:binding.turnId};
+    }
+  }
   return {...state,bindings,starts,turns,latestTurn:state.latestTurn?turns[state.latestTurn.turnId]:undefined};
 }
 

@@ -121,3 +121,10 @@ test('a stale canonical snapshot after cold recovery cannot roll back a saved bi
   const stale=snapshot(restoreInlineBindings(empty(),saved),162080,{messages:[user(prompt,stamp)],latestTurn:{turnId:turn,state:'running',requestedAt:stamp}});
   assert.equal(turnForMessage(stale,prompt),turn);assert.equal(turnPhase(stale,turn),'complete');assert.equal(stale.messages.length,0,'stale prose is unavailable for rendering');
 });
+
+test('a proven primary binding keeps its exact request timestamp when canonical provider-start time differs',()=>{
+  const state=restoreInlineBindings({messages:[user(prompt,stamp)],activities:[],latestTurn:{turnId:turn,state:'running',messageId:prompt,requestedAt:later},session:{status:'running',activeTurnId:turn}}, {starts:{[prompt]:{messageId:prompt,requestedAt:stamp,sequence:1}},bindings:{[prompt]:{turnId:turn,kind:'start'}}});
+  assert.equal(state.latestTurn?.requestedAt,stamp);assert.equal(state.starts?.[prompt].turnId,turn);
+  const cold=restoreInlineBindings(snapshot(empty(),9,{messages:[user(prompt,stamp)],latestTurn:{turnId:turn,state:'completed',requestedAt:later},session:{status:'ready',activeTurnId:null}}),inlineBindingCheckpoint(state));
+  assert.equal(cold.latestTurn?.requestedAt,stamp);assert.equal(turnForMessage(cold,prompt),turn);
+});
