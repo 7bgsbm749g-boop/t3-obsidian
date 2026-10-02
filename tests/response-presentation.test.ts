@@ -86,3 +86,39 @@ test('Stop preserves header examples inside code fences',()=>{
   const example='```md\n> [!t3-progress]- **Example · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n```';
   assert.equal(stoppedResponseBody(example),example);
 });
+
+test('native fold transitions finish, hidden clones do not cause repeated clicks, and rerenders retain user expansion',async()=>{
+  const {installResponsePresentation}=await import('../response-presentation');
+  const savedElement=(globalThis as any).Element,savedObserver=(globalThis as any).MutationObserver;
+  let observed:(records:any[])=>void=()=>{},clicks=0;
+  const owner={};
+  class NativeElement {
+    constructor(readonly fold?:any){}
+    closest(selector:string){return selector==='.workspace-leaf-content'?owner:selector==='.callout-title'?this:selector==='.callout[data-callout="t3-progress"]'?this.fold:null;}
+  }
+  class NativeFold extends NativeElement {
+    collapsed=true;key='stable-response:0';heading:any;content:any;
+    classList={contains:()=>this.collapsed};
+    constructor(readonly hidden=false){super();this.content={nodeType:1};this.heading=new NativeElement(this);this.heading.setAttribute=()=>{};this.heading.click=()=>{
+      clicks++;
+      // Hidden source clones may have no native handler. A visible callout
+      // changes class immediately and finishes its transition on a timer.
+      if(!this.hidden){root.fire('click',{target:this.heading});this.collapsed=!this.collapsed;}
+      observed([{addedNodes:[this.content],removedNodes:[]}]);
+    };}
+    querySelector(selector:string){return selector==='.send-to-t3-fold-key'?{dataset:{t3Fold:this.key}}:this.heading;}
+  }
+  const listeners=new Map<string,(event:any)=>void>();
+  const root:any={body:{},documentElement:owner,folds:[] as NativeFold[],querySelectorAll:(selector:string)=>selector.startsWith('.callout')?root.folds:[],addEventListener:(kind:string,callback:any)=>listeners.set(kind,callback),removeEventListener:(kind:string)=>listeners.delete(kind),fire:(kind:string,event:any)=>listeners.get(kind)?.(event)};
+  (globalThis as any).Element=NativeElement;(globalThis as any).MutationObserver=class {constructor(callback:any){observed=callback;}observe(){}disconnect(){}};
+  const visible=new NativeFold(),hidden=new NativeFold(true);root.folds=[visible,hidden];
+  let dispose:()=>void=()=>{};
+  try{
+    dispose=installResponsePresentation(root);
+    visible.heading.click();await new Promise(resolve=>setTimeout(resolve,20));
+    assert.equal(visible.collapsed,false);assert.equal(clicks,1,'a native click is not replayed against retained titles or hidden clones');
+    const fresh=new NativeFold();root.folds=[fresh];observed([{addedNodes:[fresh.content],removedNodes:[]}]);
+    await new Promise(resolve=>setTimeout(resolve,20));
+    assert.equal(fresh.collapsed,false,'replacement retains the explicit expansion');assert.equal(clicks,2,'restoration runs once despite transition mutations');
+  }finally{dispose();(globalThis as any).Element=savedElement;(globalThis as any).MutationObserver=savedObserver;}
+});

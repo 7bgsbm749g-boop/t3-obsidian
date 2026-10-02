@@ -33,9 +33,10 @@ export function installResponsePresentation(root:Document):()=>void {
   const owner=(element:Element)=>element.closest('.workspace-leaf-content')??root.documentElement;
   const key=(element:Element)=>element.querySelector<HTMLElement>('.send-to-t3-fold-key')?.dataset.t3Fold;
   const title=(element:Element)=>element.querySelector<HTMLElement>(':scope > .callout-title');
-  let restoring=false,queued=false,disposed=false;
+  const seen=new WeakMap<Element,{heading:HTMLElement;key:string|undefined}>();
+  let restoring=false,queued:ReturnType<typeof setTimeout>|undefined,disposed=false;
   const refresh=()=>{
-    queued=false;if(disposed)return;
+    queued=undefined;if(disposed)return;
     for(const timer of Array.from(root.querySelectorAll<HTMLElement>('.send-to-t3-run-timer[data-t3-start]'))){
       const start=Number(timer.dataset.t3Start),end=timer.dataset.t3End;
       if(!Number.isFinite(start))continue;
@@ -49,14 +50,19 @@ export function installResponsePresentation(root:Document):()=>void {
       // Native callout titles support pointer input. Also offer keyboard input
       // without changing note bytes or Obsidian's native fold implementation.
       heading.tabIndex=0;
-      const id=key(fold),expanded=id?choices.get(owner(fold))?.get(id):undefined;
-      if(expanded!==undefined&&expanded===fold.classList.contains('is-collapsed')){
+      const id=key(fold),previous=seen.get(fold),fresh=previous?.heading!==heading||previous?.key!==id;
+      seen.set(fold,{heading,key:id});
+      const expanded=id?choices.get(owner(fold))?.get(id):undefined;
+      // Restore only newly rendered titles. Native transitions mutate their
+      // own DOM; repeatedly clicking a retained/hidden clone can starve both
+      // the transition and the editor. Mark it before dispatching the click.
+      if(fresh&&expanded!==undefined&&expanded===fold.classList.contains('is-collapsed')){
         restoring=true;try{heading.click();}finally{restoring=false;}
         heading.setAttribute('aria-expanded',String(!fold.classList.contains('is-collapsed')));
       }
     }
   };
-  const schedule=()=>{if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
+  const schedule=()=>{if(queued===undefined&&!disposed)queued=setTimeout(refresh,0);};
   const remember=(event:Event)=>{
     if(restoring)return;
     const target=event.target instanceof Element?event.target.closest('.callout-title'):null;
@@ -70,9 +76,9 @@ export function installResponsePresentation(root:Document):()=>void {
     const target=event.target as HTMLElement;
     if(target.matches('.callout[data-callout="t3-progress"] > .callout-title')){event.preventDefault();target.click();}
   };
-  const observer=new MutationObserver(records=>{if(records.some(record=>record.type==='childList'))schedule();});
+  const observer=new MutationObserver(records=>{if(records.some(record=>[...Array.from(record.addedNodes),...Array.from(record.removedNodes)].some(node=>node.nodeType===1)))schedule();});
   observer.observe(root.body,{childList:true,subtree:true});
   root.addEventListener('click',remember,true);root.addEventListener('keydown',keyboard);
   const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;observer.disconnect();clearInterval(timer);root.removeEventListener('click',remember,true);root.removeEventListener('keydown',keyboard);};
+  return ()=>{disposed=true;observer.disconnect();if(queued!==undefined)clearTimeout(queued);clearInterval(timer);root.removeEventListener('click',remember,true);root.removeEventListener('keydown',keyboard);};
 }
