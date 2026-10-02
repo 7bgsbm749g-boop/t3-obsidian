@@ -6,8 +6,8 @@ export function isLogPath(path:string){return path===EVENT_LOG_PATH||path===EVEN
 export function logDay(now:number){return new Date(now).toISOString().slice(0,10);}
 export function currentDayEvents(events:DiagnosticEvent[],now:number){const day=logDay(now);return events.filter(event=>event.at.slice(0,10)===day);}
 interface Files {exists(path:string):Promise<boolean>;mkdir(path:string):Promise<void>;read(path:string):Promise<string>;write(path:string,data:string):Promise<void>;remove(path:string):Promise<void>;list?(path:string):Promise<{files:string[];folders:string[]}>;rmdir?(path:string,recursive:boolean):Promise<void>}
-/** The designated subscription host records events. Every client reads the same
- * daily Sync file; export on an idle client does not rewrite unchanged content. */
+/** Every device contributes its current-day buffer to the shared Sync file.
+ * Republishing restores local entries after a concurrent Sync replacement. */
 export class SyncedEventLogs {
   private work=Promise.resolve();
   readonly path:string;

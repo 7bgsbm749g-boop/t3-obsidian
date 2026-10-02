@@ -303,15 +303,23 @@ Assistant response HTML outside code is displayed literally so tag-like placehol
 
 ### Daily hidden plugin event log
 
-Plugin activity is recorded while enabled subscriptions are running on the
-vault's designated watcher. Errors only enter the timeline; they never create
-automatic diagnostic threads. Existing recording controls are unchanged.
+Plugin activity is recorded on every device whenever the plugin is enabled,
+including mobile and vaults with no active note subscriptions. The timeline
+records request preparation, saving, response registration, dispatch and manual
+retry with their original IDs and note/thread destinations. Registration logs
+include mailbox write/read timings, polling attempts, acknowledgement or timeout;
+the host records receipt, reply, scan failures and lock failures using the same
+command IDs. Expected background claim refusals are omitted to keep useful history.
+Errors only enter the timeline; they never create automatic diagnostic threads.
 
 There is one shared file: `.obsidian/t3-code-log.json` (or the equivalent in a
 custom configuration folder). It is hidden from the note explorer and graph.
-It updates about every 30 seconds and on export or unload. At midnight UTC,
-the next housekeeping tick clears yesterday's entries, even when recording is
-paused. If Obsidian is closed, it clears them on the next launch. There are no
+It updates about every 30 seconds and immediately after errors, app visibility
+changes, export or unload. Errors are saved locally before publication; logging
+never blocks or changes delivery, and failed writes retry on housekeeping ticks.
+Desktop housekeeping uses Node timers to continue in background windows. At
+midnight UTC, the next housekeeping tick clears yesterday's entries.
+If Obsidian is closed, it clears them on the next launch. There are no
 daily archives or per-device/session log files. The private IndexedDB buffer
 follows the same daily reset and retries failed publication. Current-day history
 is bounded to 10,000 events and roughly 8 MB.
@@ -320,8 +328,9 @@ Obsidian Sync carries this root configuration JSON when **Core plugin settings**
 (`core-plugin-data` in Headless Sync) is enabled for the same configuration
 folder on each device. QLO2's headless Sync configuration includes this category.
 The command palette's **Export plugin diagnostics…** combines the current-day
-shared file and local buffer without duplicate events. Pending Sync changes
-appear after delivery. Official Sync's internal logs are separate.
+shared file and local buffer without duplicate events. Each device republishes
+its retained local entries, recovering them after a concurrent Sync replacement.
+Pending Sync changes appear after delivery. Official Sync's internal logs are separate.
 
 The upgrade migrates today's generated `T3 Code Logs` Markdown entries into the
 hidden file, then deletes those generated files and any empty log folders.

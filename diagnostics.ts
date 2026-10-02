@@ -21,6 +21,7 @@ export function logFailure(event:string,error:unknown,fields:Record<string,unkno
 export class EventJournal {
   private state:DiagnosticState={schema:1,events:[]};
   private sequence=0;private sessionId:string;private dirty=false;private work=Promise.resolve();private closed=false;private bytes=0;private publishAt=0;private publishedDay='';
+  private urgent?:Promise<void>;private errorSequence=0;
   storageError='';
   constructor(private io:DiagnosticIO){this.sessionId=io.id();}
   private now(){return this.io.now?.()??Date.now();}
@@ -35,7 +36,14 @@ export class EventJournal {
   }
   record(event:string,fields:Record<string,unknown>={},level:LogLevel='info'):DiagnosticEvent {
     const entry:DiagnosticEvent={at:new Date(this.now()).toISOString(),sequence:++this.sequence,sessionId:this.sessionId,deviceId:String(this.io.context.deviceId),event,level,fields:redact(fields) as Record<string,unknown>};
-    if(!this.closed){this.state.events.push(entry);this.bytes+=JSON.stringify(entry).length;this.dirty=true;this.trim();}return entry;
+    if(!this.closed){this.state.events.push(entry);this.bytes+=JSON.stringify(entry).length;this.dirty=true;this.trim();if(level==='error'){this.errorSequence=entry.sequence;this.persistErrors();}}return entry;
+  }
+  private persistErrors(){
+    if(this.urgent)return;
+    // Save locally before publishing, without delaying or changing the send.
+    // Coalesce an error burst, but include errors arriving during a write.
+    const run=(async()=>{let sequence:number;do{sequence=this.errorSequence;await this.flush(true);}while(sequence!==this.errorSequence);})();
+    this.urgent=run;void run.catch(()=>{}).finally(()=>{if(this.urgent===run)this.urgent=undefined;});
   }
   private trim(){
     const day=new Date(this.now()).toISOString().slice(0,10);
@@ -50,7 +58,7 @@ export class EventJournal {
         if(this.dirty){this.dirty=false;try{await this.io.save(snapshot);}catch(error){this.dirty=true;throw error;}}
         if(this.io.publish&&(forcePublish||this.now()>=this.publishAt)){await this.io.publish(snapshot.events);this.publishAt=this.now()+30_000;this.publishedDay=today;}
         this.storageError='';
-      }catch(error){this.storageError=JSON.stringify(redact(error));throw error;}
+      }catch(error){this.publishAt=0;this.storageError=JSON.stringify(redact(error));throw error;}
     });this.work=run;return run;
   }
   async tick(){if(!this.closed)await this.flush();}

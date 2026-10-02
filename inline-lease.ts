@@ -22,9 +22,17 @@ export class InlineLeaseAuthority {
   private stopped=false;
   private recovered=false;
   private lastCleanup=0;
+  private scanFailed=false;private lastScanFailure=0;
   constructor(private identity:LeaseIdentity,private files:LeaseFiles,private now=()=>Date.now()){}
   stop(){this.stopped=true;}
-  tick(){if(this.work)return this.work;if(this.stopped)return Promise.resolve();const work=this.scan();this.work=work;void work.finally(()=>{if(this.work===work)this.work=undefined;}).catch(()=>{});return work;}
+  tick(){
+    if(this.work)return this.work;if(this.stopped)return Promise.resolve();
+    const work=this.scan().then(()=>{if(this.scanFailed)logEvent('ownership.coordinator.recovered',this.identity);this.scanFailed=false;}).catch(error=>{
+      if(!this.scanFailed||this.now()-this.lastScanFailure>=30_000){logFailure('ownership.coordinator.scan.failed',error,this.identity);this.lastScanFailure=this.now();}
+      this.scanFailed=true;throw error;
+    });
+    this.work=work;void work.finally(()=>{if(this.work===work)this.work=undefined;}).catch(()=>{});return work;
+  }
   private async scan(){
     const directory=this.identity.directory;
     if(!this.recovered){
@@ -43,16 +51,21 @@ export class InlineLeaseAuthority {
         try{const reply:LeaseReply=JSON.parse(raw);if(reply.answeredAt!==undefined&&reply.answeredAt<this.now()-60_000&&!await this.files.read(leasePaths(directory,reply.id).command))await this.files.remove(path);}catch{/* Leave unfamiliar files alone. */}
       }
     }
-    for(const path of await this.files.list(`${directory}/mailbox`)){
+    const mailbox=await this.files.list(`${directory}/mailbox`);
+    for(const path of mailbox){
       if(this.stopped)return;
       let command:LeaseCommand;
       try{command=JSON.parse((await this.files.read(path))??'');}catch{continue;}
       if(![command.id,command.jobId,command.actor].every(value=>uuid.test(value))||path!==leasePaths(directory,command.id).command)continue;
       const replyPath=leasePaths(directory,command.id).reply;
       if(!await this.files.read(replyPath)){
+        const started=this.now(),trace=['register','follow','steer'].includes(command.kind);
+        const fields={...this.identity,commandId:command.id,jobId:command.jobId,actor:command.actor,kind:command.kind,pendingCommands:mailbox.length};
+        if(trace)logEvent('ownership.coordinator.received',fields);
         const reply=await this.apply(command);
         if(this.stopped)return;
         await this.files.write(replyPath,JSON.stringify(reply));
+        if(trace||command.kind==='claim'&&reply.ok)logEvent('ownership.coordinator.replied',{...fields,ok:reply.ok,error:reply.error,durationMs:this.now()-started,epoch:reply.record?.epoch,revision:reply.record?.revision,owner:reply.record?.owner},reply.ok?'info':'warning');
       }
       await this.files.remove(path);
     }
@@ -156,12 +169,19 @@ export class InlineLeaseClient {
   async command(input:Omit<LeaseCommand,'id'|'actor'>){
     if(this.stopped)throw Error('Response writer stopped.');
     const command:LeaseCommand={...input,id:crypto.randomUUID(),actor:this.actor},paths=leasePaths(this.directory,command.id),wall=this.now(),monotonic=this.monotonic();
-    const fields={jobId:input.jobId,commandId:command.id,kind:input.kind,epoch:input.epoch,revision:input.revision,messageId:input.steering?.messageId};
-    if(input.kind!=='heartbeat')logEvent('ownership.command.started',fields);
+    const fields={jobId:input.jobId,commandId:command.id,actor:this.actor,directory:this.directory,kind:input.kind,epoch:input.epoch,revision:input.revision,messageId:input.steering?.messageId??input.request?.messageId,notePath:input.notePath??input.request?.notePath,threadId:input.request?.threadId,environmentId:input.request?.host.environmentId};
+    const trace=input.kind!=='heartbeat'&&input.kind!=='claim';
+    let phase='writing-command',attempts=0,writeMs=0,readMs=0,maxReadMs=0;
+    const timing=()=>({phase,attempts,elapsedMs:Math.max(0,this.monotonic()-monotonic),writeMs,readMs,maxReadMs,stopped:this.stopped});
+    if(trace)logEvent('ownership.command.started',fields);
     try{
     await this.files.write(paths.command,JSON.stringify(command));
+    writeMs=Math.max(0,this.monotonic()-monotonic);phase='waiting-for-reply';
+    if(trace)logEvent('ownership.command.sent',{...fields,writeMs});
     for(let attempt=0;attempt<50&&!this.stopped;attempt++){
-      const raw=await this.files.read(paths.reply);
+      attempts++;const reading=this.monotonic();
+      let raw:string|undefined;
+      try{raw=await this.files.read(paths.reply);}finally{const duration=Math.max(0,this.monotonic()-reading);readMs+=duration;maxReadMs=Math.max(maxReadMs,duration);}
       if(raw){
         const reply:LeaseReply=JSON.parse(raw);
         if(reply.id!==command.id)throw Error('Invalid ownership acknowledgement.');
@@ -173,12 +193,12 @@ export class InlineLeaseClient {
           const previous=this.grants.get(input.jobId);
           if(!previous||record.epoch>previous.epoch||record.epoch===previous.epoch&&wall+duration>previous.wall)this.grants.set(input.jobId,{epoch:record.epoch,wall:wall+duration,monotonic:monotonic+duration});
         }else if(record?.owner!==this.actor||record.epoch!==input.epoch||reply.ttlMs===0)this.grants.delete(input.jobId);
-        if(input.kind!=='heartbeat'||!reply.ok)logEvent('ownership.command.completed',{...fields,ok:reply.ok,error:reply.error,owner:record?.owner,epoch:record?.epoch,revision:record?.revision,status:record?.state?.status},reply.ok?'info':'warning');
+        if(trace||input.kind==='claim'&&reply.ok||input.kind==='heartbeat'&&!reply.ok)logEvent('ownership.command.completed',{...fields,...timing(),ok:reply.ok,error:reply.error,owner:record?.owner,epoch:record?.epoch,revision:record?.revision,status:record?.state?.status,ttlMs:reply.ttlMs,answeredAt:reply.answeredAt},reply.ok?'info':'warning');
         return reply;
       }
       await this.pause(100);
     }
     throw Error('The ownership coordinator did not answer. The saved request can be retried.');
-    }catch(error){logFailure('ownership.command.failed',error,fields);throw error;}
+    }catch(error){logFailure('ownership.command.failed',error,{...fields,...timing()});throw error;}
   }
 }

@@ -5,6 +5,7 @@ import {join,resolve,dirname} from 'node:path';
 import lockfile from 'proper-lockfile';
 import {desktopInterval} from './desktop-timers';
 import type {App} from 'obsidian';
+import {logEvent,logFailure} from './diagnostics';
 import {InlineLeaseAuthority,type LeaseFiles} from './inline-lease';
 import {importReplyAsset} from './reply-import';
 import {deviceNoteIO} from './inline-note-io';
@@ -69,10 +70,13 @@ export class DesktopInlineHost {
     });
   }
   static async open(app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},access:(environmentId:string)=>Promise<ThreadAccess>){
+    logEvent('ownership.coordinator.opening',identity);
+    try{
     const base=join(identity.workspaceRoot,identity.directory);await fs.mkdir(base,{recursive:true});
     let host:DesktopInlineHost|undefined;
-    const release=await lockfile.lock(base,{realpath:true,stale:30_000,update:5000,onCompromised:()=>{host?.dispose();}});
-    host=new DesktopInlineHost(release,app,identity,localInlineFiles(identity.workspaceRoot,identity.directory),access);return host;
+    const release=await lockfile.lock(base,{realpath:true,stale:30_000,update:5000,onCompromised:error=>{logFailure('ownership.coordinator.lock-lost',error,identity);host?.dispose();}});
+    host=new DesktopInlineHost(release,app,identity,localInlineFiles(identity.workspaceRoot,identity.directory),access);logEvent('ownership.coordinator.opened',identity);return host;
+    }catch(error){logFailure('ownership.coordinator.open.failed',error,identity);throw error;}
   }
   tick(){if(this.stopped)return Promise.resolve();const work=this.writer.tick();this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});return work;}
   renamed(before:string,after:string){this.writer.renamed(before,after);}

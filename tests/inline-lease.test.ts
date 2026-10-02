@@ -6,6 +6,7 @@ import {hostedPaths,hostedRequestHash,type HostedInlineRequest,type HostedInline
 import {initialRegion,completionProof} from '../inline-thread';
 import {DeviceInlineManager} from '../leased-inline';
 import {ResponseNoteLocator} from '../response-location';
+import {EventJournal,configureDiagnostics} from '../diagnostics';
 
 function harness(){
   let time=100_000;
@@ -21,6 +22,33 @@ function harness(){
   const state:HostedInlineState={requestHash:hostedRequestHash(request),accepted:true,notePath:'Note.md',status:'running',hashes:[region.bodyHash],updatedAt:''};
   return {actor,request,region,files,remote,data,client,record,state,now:()=>time,advance:(ms:number)=>{time+=ms;},restart:()=>{authority.stop();authority=new InlineLeaseAuthority(identity,files,()=>time);return authority.tick();}};
 }
+
+test('registration timeout and successful retry expose the exact mailbox stage and correlated host reply',async()=>{
+  const h=harness(),journal=new EventJournal({id:randomUUID,context:{deviceId:'test'},now:h.now,load:async()=>undefined,save:async()=>{}});
+  configureDiagnostics(journal);
+  try{
+    const offline=new InlineLeaseClient(h.actor,h.files,h.request.host.directory,h.now,h.now,async ms=>h.advance(ms));
+    await assert.rejects(offline.command({kind:'register',jobId:h.request.id,request:h.request}),/coordinator did not answer/);
+    let events=JSON.parse(journal.export()).events;const timeout=events.find((e:any)=>e.event==='ownership.command.failed');
+    assert.equal(timeout.fields.phase,'waiting-for-reply');assert.equal(timeout.fields.attempts,50);assert.equal(timeout.fields.elapsedMs,5000);
+    assert.equal(timeout.fields.notePath,'Note.md');assert.equal(timeout.fields.threadId,'thread');assert.equal(timeout.fields.actor,h.actor);
+    assert.equal(events.filter((e:any)=>e.event==='ownership.command.sent').length,1);
+    await h.client().command({kind:'register',jobId:h.request.id,request:h.request});events=JSON.parse(journal.export()).events;
+    const completed=events.findLast((e:any)=>e.event==='ownership.command.completed'),replied=events.find((e:any)=>e.event==='ownership.coordinator.replied'&&e.fields.commandId===completed.fields.commandId);
+    assert.equal(completed.fields.jobId,timeout.fields.jobId);assert.equal(replied.fields.ok,true);assert.equal(completed.fields.attempts,1);
+    assert.ok(events.some((e:any)=>e.event==='ownership.coordinator.received'&&e.fields.commandId===timeout.fields.commandId),'late registration is visible on the host');
+  }finally{configureDiagnostics();await journal.close();}
+});
+test('coordinator scan failures are logged once per interval and recovery is visible',async()=>{
+  const h=harness(),journal=new EventJournal({id:randomUUID,context:{deviceId:'test'},now:h.now,load:async()=>undefined,save:async()=>{}});let fail=true;
+  const authority=new InlineLeaseAuthority({...h.request.host,vaultId:h.request.vaultId},{...h.files,list:async dir=>{if(fail)throw Error('mailbox unavailable');return h.files.list(dir);}},h.now);
+  configureDiagnostics(journal);
+  try{
+    await assert.rejects(authority.tick(),/mailbox unavailable/);await assert.rejects(authority.tick(),/mailbox unavailable/);
+    assert.equal(JSON.parse(journal.export()).events.filter((e:any)=>e.event==='ownership.coordinator.scan.failed').length,1);
+    fail=false;await authority.tick();assert.ok(JSON.parse(journal.export()).events.some((e:any)=>e.event==='ownership.coordinator.recovered'));
+  }finally{authority.stop();configureDiagnostics();await journal.close();}
+});
 
 test('register needs no synced note; healthy heartbeats prevent all competing claims',async()=>{
   const h=harness(),phone=h.client(),laptop=h.client(randomUUID());

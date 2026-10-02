@@ -56,3 +56,27 @@ test('logging preserves observed sync and async results and errors',async()=>{
   const f=fixture(),j=new EventJournal(f.io);configureDiagnostics(j);const target={sync(value:number){return value+1;},async asyncMethod(){return 7;},async fail(){throw Error('bad');}};
   const undo=instrumentOperations(target,['sync','asyncMethod','fail']);try{assert.equal(target.sync(2),3);assert.equal(await target.asyncMethod(),7);await assert.rejects(target.fail(),/bad/);await j.flush(true);assert.equal(f.saved.events.length,6);}finally{undo();configureDiagnostics();}
 });
+test('errors publish immediately without a housekeeping tick and survive failed Sync writes',async()=>{
+  const f=fixture(),j=new EventJournal(f.io);await j.flush(true);f.setFail(true);
+  j.record('request.saved',{requestId:'original'});j.record('request.dispatch.failed',{requestId:'original'},'error');
+  await assert.rejects(j.flush(),/offline/);assert.equal(f.saved.events.length,2);
+  f.setFail(false);f.advance(30_000);await j.tick();
+  assert.deepEqual(JSON.parse(f.data.get(EVENT_LOG_PATH)!).events.map((e:any)=>e.event),['request.saved','request.dispatch.failed']);
+  j.record('request.retry.failed',{requestId:'original'},'error');await j.flush();
+  assert.equal(JSON.parse(f.data.get(EVENT_LOG_PATH)!).events.at(-1).event,'request.retry.failed','errors bypass the normal 30-second publication interval');
+});
+test('errors arriving during persistence are included in a subsequent urgent publication',async()=>{
+  const f=fixture();let release!:()=>void,entered!:()=>void;
+  const blocked=new Promise<void>(r=>release=r),saving=new Promise<void>(r=>entered=r);let saves=0;
+  const j=new EventJournal({...f.io,save:async state=>{if(++saves===1){entered();await blocked;}await f.io.save(state);}});
+  j.record('first.failure',{},'error');await saving;j.record('second.failure',{},'error');release();
+  await j.flush();await j.flush();
+  assert.deepEqual(JSON.parse(f.data.get(EVENT_LOG_PATH)!).events.map((e:any)=>e.event),['first.failure','second.failure']);
+});
+test('devices recover their events after a concurrent shared-file replacement',async()=>{
+  const data=new Map<string,string>(),a=fixture('a',data),b=fixture('b',data),ja=new EventJournal(a.io),jb=new EventJournal(b.io);
+  ja.record('phone.send');await ja.flush(true);const phoneCopy=data.get(EVENT_LOG_PATH)!;
+  jb.record('host.received');await jb.flush(true);
+  data.set(EVENT_LOG_PATH,phoneCopy);b.advance(30_000);await jb.tick();
+  assert.deepEqual(JSON.parse(data.get(EVENT_LOG_PATH)!).events.map((e:any)=>e.event),['phone.send','host.received']);
+});

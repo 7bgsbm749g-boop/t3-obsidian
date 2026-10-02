@@ -169,6 +169,30 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },vaultAccesses:()=>vaultAccesses};
 }
 
+test('mobile logging without subscriptions persists a failed send, original-ID retry and reload',async()=>{
+  let lose=true;
+  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'&&lose){lose=false;throw Error('lost reply');}});
+  let plugin=h.plugin;
+  try{
+    assert.equal(plugin.eventSubscriptions,undefined);
+    await assert.rejects(plugin.sendChat('Private diagnostic regression prompt'),/Unconfirmed requests/);
+    const request=plugin.settings.pending[0];assert.ok(request);
+    await plugin.diagnostics.flush();
+    let events=JSON.parse(plugin.diagnostics.export()).events;
+    assert.ok(events.some((e:any)=>e.event==='plugin.loaded'&&e.fields.platform==='mobile'));
+    assert.ok(events.some((e:any)=>e.event==='request.saved'&&e.fields.requestId===request.id));
+    assert.ok(events.some((e:any)=>e.event==='request.dispatch.failed'&&e.fields.requestId===request.id));
+    await plugin.retry(request);assert.equal(plugin.settings.pending.length,0);
+    events=JSON.parse(plugin.diagnostics.export()).events;
+    for(const event of ['request.retry.started','request.retry.completed','request.dispatch.acknowledged'])assert.ok(events.some((e:any)=>e.event===event&&e.fields.requestId===request.id),event);
+    assert.doesNotMatch(JSON.stringify(events),/Private diagnostic regression prompt|dummy-chat-session/);
+    plugin.onunload();await plugin.diagnostics.flush();plugin=await h.start();
+    events=JSON.parse(plugin.diagnostics.export()).events;
+    assert.ok(events.some((e:any)=>e.event==='request.retry.completed'&&e.fields.requestId===request.id));
+    assert.ok(events.some((e:any)=>e.event==='plugin.unloading'));
+  }finally{plugin.onunload();}
+});
+
 test('mobile chat without a note uses the root link, preserves the prompt, advertises event queries, and never enrolls note cleanup',async()=>{
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';

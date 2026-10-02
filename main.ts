@@ -90,7 +90,6 @@ export default class SendToT3 extends Plugin {
   private eventSubscriptions?:EventSubscriptions;
   private eventHostServer?:import('./event-host-desktop').EventHostServer;
   private eventHostOpening?:Promise<void>;
-  private eventRecording=false;
   private inlineChat?:InlineChatManager;
   private questions?:QuestionController;
   private questionModal?:QuestionModal;
@@ -123,11 +122,11 @@ export default class SendToT3 extends Plugin {
     const adapter=this.app.vault?.adapter;
     const syncedLogs=adapter&&typeof adapter.mkdir==='function'&&typeof adapter.write==='function'?new SyncedEventLogs(adapter,this.deviceId,()=>this.app.vault.getMarkdownFiles().map(file=>file.path),()=>Date.now(),this.app.vault.configDir||'.obsidian'):undefined;
     this.diagnostics=new EventJournal({id:randomId,context:diagnosticContext,load:()=>deviceState(`diagnostics:${this.settings.vaultId}:${this.deviceId}`),save:state=>deviceState(`diagnostics:${this.settings.vaultId}:${this.deviceId}`,state),...(syncedLogs?{publish:(events:import('./diagnostics').DiagnosticEvent[])=>syncedLogs.publish(events),readSynced:()=>syncedLogs.read()}:{})});
-    await this.diagnostics.load();configureDiagnostics();
+    await this.diagnostics.load();configureDiagnostics(this.diagnostics);
     if(syncedLogs)void this.diagnostics.flush(true).catch(()=>{});
     logEvent('plugin.loaded',diagnosticContext);
     this.register?.(instrumentOperations(this,['sendChat','send','dispatch','sendInlineChat','sendInlineSteering','continueInline','stopHostedInline','openEditorChat','openPaletteAction','openQuestion','save','scan','refreshMachines','pairConnection','startEmailSignIn','finishEmailSignIn','signOutCloud','saveFolderLink','linkFolder','createFolderProject','checkExternalSettings']));
-    if(typeof window!=='undefined'&&typeof this.registerInterval==='function')this.registerInterval(window.setInterval(()=>{void this.diagnostics?.tick().catch(()=>{});},2000));
+    if(typeof window!=='undefined'&&typeof this.registerInterval==='function')this.registerInlineInterval(()=>{void this.diagnostics?.tick().catch(()=>{});},2000);
     this.addCommand({id:'export-diagnostics',name:'Export plugin diagnostics…',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
     this.addCommand({id:'send-or-ask',name:'Send to T3 Code',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;
@@ -136,7 +135,7 @@ export default class SendToT3 extends Plugin {
       return true;
     }});
     if(typeof document!=='undefined'&&typeof document.addEventListener==='function'&&typeof this.registerDomEvent==='function'){
-      this.registerDomEvent(document,'visibilitychange',()=>{logEvent('app.visibility',{state:document.visibilityState});if(this.eventRecording)void this.diagnostics?.flush().catch(()=>{});});
+      this.registerDomEvent(document,'visibilitychange',()=>{logEvent('app.visibility',{state:document.visibilityState});void this.diagnostics?.flush(true).catch(()=>{});});
       this.registerDomEvent(window,'online',()=>logEvent('network.online'));
       this.registerDomEvent(window,'offline',()=>logEvent('network.offline',{},'warning'));
       this.registerDomEvent(window,'unhandledrejection',event=>{const error=event.reason;if(error instanceof Error&&/send-to-t3-code/.test(error.stack??''))logFailure('plugin.unhandled-rejection',error);});
@@ -393,7 +392,7 @@ export default class SendToT3 extends Plugin {
         const access=await this.inlineThreadAccess(notification.target.environmentId);
         try{if(!this.eventHostCurrent(server.identity))throw Error('Subscription host ownership changed.');await access.api('/api/orchestration/dispatch',notification.command);return 'delivered';}finally{await access.close?.();}
       },
-      recording:active=>{this.eventRecording=active;configureDiagnostics(active?this.diagnostics:undefined);},
+      recording:active=>logEvent('subscriptions.monitoring',{active}),
     });
     try{await service.initialize();await server.save(service.snapshot);}catch(error){service.stop();throw error;}if(this.stopped||!this.eventHostCurrent(server.identity)){service.stop();return;}this.eventSubscriptions=service;
     let captureWork=Promise.resolve();
@@ -1415,7 +1414,7 @@ export default class SendToT3 extends Plugin {
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
     }catch(error){logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});throw error;}
   }
-  onunload(){logEvent('plugin.unloading');configureDiagnostics();if(this.eventRecording)void this.diagnostics?.close().catch(()=>{});this.stopped=true;this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){logEvent('plugin.unloading');configureDiagnostics();void this.diagnostics?.close().catch(()=>{});this.stopped=true;this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;
@@ -1510,9 +1509,10 @@ export default class SendToT3 extends Plugin {
     }
   }
   async retry(request:Request) {
-    if (this.busy) return;
-    this.busy = true;
-    try {await this.dispatch(request);} catch(e) {new Notice(message(e),12000);} finally {this.busy=false;}
+    const fields={requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId??request.inlineHost?.id,notePath:request.noteThread?.notePath??request.inlineHost?.notePath};
+    if (this.busy){logEvent('request.retry.skipped',{...fields,reason:'Another send is in progress.'},'warning');return;}
+    this.busy = true;logEvent('request.retry.started',fields);
+    try {await this.dispatch(request);logEvent('request.retry.completed',fields);} catch(e) {logFailure('request.retry.failed',e,fields);new Notice(message(e),12000);} finally {this.busy=false;}
   }
 }
 function randomId():string {
