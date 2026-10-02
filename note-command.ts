@@ -16,5 +16,5 @@ export function validateNoteCommand(value:any):NoteCommand {
 
 export type AgentCommand=NoteCommand|EventSubscriptionCommand|FolderCommand;
 export type AgentCommandResult=NoteCommandResult|EventCommandResult|FolderCommandResult;
-export function isEventCommand(value:{kind:string}):value is EventSubscriptionCommand{return ['subscribe','subscriptions','update-subscription','pause-subscription','resume-subscription','cancel-subscription'].includes(value.kind);}
+export function isEventCommand(value:{kind:string}):value is EventSubscriptionCommand{return ['stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination','subscribe-job','subscribe','subscriptions','update-subscription','pause-subscription','resume-subscription','cancel-subscription'].includes(value.kind);}
 export function validateAgentCommand(value:any):AgentCommand{return isFolderCommand(value??{})?validateFolderCommand(value):isEventCommand(value??{})?validateEventCommand(value):validateNoteCommand(value);}

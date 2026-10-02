@@ -381,3 +381,66 @@ Streaming headers display the thread name, such as **Alpha plan · Working**, an
 For an explicitly requested version, use `npm run release:qlo2 -- --version 2.28.1`. The same clean-worktree, strictly newer version, immutable archive and live-smoke requirements apply as for `--bump`.
 
 Agent-triggered `send-note` and `attach-note` commands require an existing folder link when a note would otherwise create a new folder project. Use `link-folder` first; these commands cannot open the interactive workspace picker.
+
+### Job lifecycle notifications and thread display registrations (2.30)
+
+These registrations are independent of sends, folder links, Previous thread,
+and response bindings. They are hosted by the existing vault project machine
+and use its private event store and authenticated command mailbox.
+
+`subscribe-job` observes one exact execution request. Supply the receiving
+orchestrator's `--thread-id`, `--project-id`, and `--environment-id`, plus
+`--job-id`, `--job-request-id`, `--message-id` (original user message),
+`--job-thread-id`, `--job-project-id`, and `--job-environment-id`. Optionally
+supply a verified `--turn-id`; it is never a dispatch command ID. Register
+immediately after the send acknowledgement; fast completed replies are caught
+up from canonical history. Several jobs may use the same thread.
+
+Notifications identify the job, original request/message, actual turn when
+known, project, environment, blocking request and stable event ID. Approval
+and input waits are recoverable; resolution emits `running`. `completed`,
+`failed`, `interrupted`, and explicit `cancelled` turn states are terminal for
+that execution. A T3 Stop normally appears as `interrupted`. A new execution
+needs a new job watch. A transport outage leaves observation retryable;
+attachment errors do not change execution outcome. Completion is explicitly
+**unverified product delivery**: the orchestrator must verify the matching
+immutable release and live-smoke receipts before settling a release job.
+Use existing `subscriptions`, `pause-subscription`, `resume-subscription`, and
+`cancel-subscription` management commands. Job resume catches up unseen states
+of the same execution; note/folder resume still establishes a silent baseline.
+Cancelling a watch cancels unsent notifications, never T3 execution.
+
+`stream-thread --stream-scope thread --thread-id ID --project-id ID
+--environment-id ID --destination A.md --destination B.md` explicitly registers
+all later logical responses from that source thread, including runs started
+in T3 and event notifications. It sends no prompt and changes no routing.
+The default `--start future` boundary excludes every user message already in
+the complete canonical history at registration; `--start history` also catches
+up existing responses. Each eligible response/destination has a durable child
+binding ID. Missed runs catch up after reconnect/restart; completed bindings
+remain receipts after marker cleanup. Same-turn steering and already attached
+continuation/question-answer lineage stay in their original blocks. Existing
+send-created bindings in a destination are reconciled instead of duplicated.
+One thread can feed several notes and several threads can feed separate blocks
+of one note, through the ordinary writer, leases and placement rules.
+
+Inspect with `thread-streams`; manage with `pause-thread-stream`,
+`resume-thread-stream`, `cancel-thread-stream`, or `remove-stream-destination
+--remove-destination A.md`, each with `--subscription-id ID`. Pause and cancel
+stop future attachment; independently registered active child bindings finish
+normally. Resume starts a new future boundary, skipping runs created while
+paused. Removing a destination stops future attachment only to that note.
+These commands never interrupt a turn. Use the response's Stop control when
+interruption is intended. Destination paths follow Obsidian note/folder rename
+and Sync events; stable destination IDs survive the rename. Missing or
+unwritable notes remain inspectable attachment errors, preserving surrounding
+content and allowing retries. A deletion alone never redirects output to an
+unrelated note. Existing `send-note` and `attach-response` remain response-only.
+
+Use a fresh retained request UUID for each command and replay identical input
+after timeouts. Successful results are immutable snapshots; use a fresh UUID
+for a current listing. Lifecycle identities, event replay cursors, pending
+notification bytes and planned child bindings persist before external writes.
+Bounded live verification must include an idle orchestrator receiving a worker
+outcome, its resumed reply streaming automatically, and independent verification
+of the actual outcome rather than interpreting a transport acknowledgement.

@@ -50,7 +50,7 @@ export function validateHostedRequest(value:any):HostedInlineRequest {
   if(value?.threadTitle!==undefined&&(typeof value.threadTitle!=='string'||value.threadTitle.length>200))throw Error('Invalid thread title.');
   if(value?.independent!==undefined&&typeof value.independent!=='boolean')throw Error('Invalid binding preference.');
   if(value?.keepIntermediate!==undefined&&typeof value.keepIntermediate!=='boolean')throw Error('Invalid hosted response preference.');
-  if(![1,2].includes(value?.version)||(value.version===2&&!uuid.test(value.initialOwner??''))||![value.id,value.messageId].every(x=>typeof x==='string'&&uuid.test(x))||!safeNotePath(value.notePath)||
+  if(![1,2].includes(value?.version)||(value.version===2&&!uuid.test(value.initialOwner??''))||!uuid.test(value.id??'')||!(typeof value.messageId==='string'&&(uuid.test(value.messageId)||/^async-answer:[^\s\x00-\x1f]{1,200}$/.test(value.messageId)))||!safeNotePath(value.notePath)||
     ![value.threadId,value.vaultId,value.projectId,value.threadEnvironmentId,value.createdAt,value.host?.environmentId,value.host?.workspaceRoot,value.host?.directory].every(x=>typeof x==='string'&&x.length>0)||
     !/^[0-9a-f]{64}$/.test(value.initialHash))throw Error('Invalid hosted response job.');
   return value;

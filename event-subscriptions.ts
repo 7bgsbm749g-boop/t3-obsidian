@@ -1,3 +1,6 @@
+import {jobEvents,validateJob,type JobWatch,type JobEvent,type JobObservation} from './job-lifecycle';
+import {STREAM_COMMANDS,validateDisplayCommand,displayCommand,tickDisplay,renameDisplays,type ThreadDisplayCommand,type ThreadDisplay,type DisplayHost} from './thread-display';
+import {applyThreadItem,type InlineThreadState} from './inline-thread';
 import {sha256} from '@noble/hashes/sha256';
 import {safeNotePath} from './hosted-inline';
 import {isLogPath} from './synced-event-logs';
@@ -7,21 +10,25 @@ export type EventKind=typeof EVENT_KINDS[number];
 export interface EventScope {path:string;kind:'note'|'folder';recursive:boolean}
 export interface EventFilter {events:EventKind[];property?:string;equals?:unknown}
 export interface EventTarget {threadId:string;projectId:string;environmentId:string}
-export interface EventSubscription extends EventTarget {id:string;scope:EventScope;filter:EventFilter;enabled:boolean;revision:number;createdAt:string}
-export interface EventSubscriptionCommand {
-  version:1;id:string;kind:'subscribe'|'subscriptions'|'update-subscription'|'pause-subscription'|'resume-subscription'|'cancel-subscription';
-  subscriptionId?:string;target?:EventTarget;scope?:EventScope;filter?:EventFilter;
+export interface EventSubscription extends EventTarget {id:string;scope:EventScope;filter:EventFilter;enabled:boolean;revision:number;createdAt:string;job?:JobWatch;observation?:JobObservation}
+export interface NoteEventSubscriptionCommand {
+  version:1;id:string;kind:'subscribe'|'subscribe-job'|'subscriptions'|'update-subscription'|'pause-subscription'|'resume-subscription'|'cancel-subscription';
+  subscriptionId?:string;target?:EventTarget;scope?:EventScope;filter?:EventFilter;job?:JobWatch;
 }
-export interface EventCommandResult {host?:import('./event-host').EventHostIdentity;id:string;ok:boolean;subscriptionId?:string;subscriptions?:EventSubscription[];monitoring?:boolean;notifications?:Array<Pick<EventNotification,'id'|'subscriptionId'|'status'|'count'|'attempts'|'error'>>;error?:string}
+export type EventSubscriptionCommand=NoteEventSubscriptionCommand|ThreadDisplayCommand;
+export interface EventCommandResult {display?:ThreadDisplay;displays?:ThreadDisplay[];host?:import('./event-host').EventHostIdentity;id:string;ok:boolean;subscriptionId?:string;subscriptions?:EventSubscription[];monitoring?:boolean;notifications?:Array<Pick<EventNotification,'id'|'subscriptionId'|'status'|'count'|'attempts'|'error'>>;error?:string}
 export interface NoteEventSnapshot {path:string;content:string;properties:Record<string,unknown>|null}
 export interface NoteEvent {kind:EventKind;path:string;oldPath?:string;at:string;beforeHash?:string;afterHash?:string;property?:string;before?:unknown;after?:unknown}
-export interface EventNotification {id:string;subscriptionId:string;target:EventTarget;events:NoteEvent[];count:number;firstAt:number;dueAt:number;status:'pending'|'prepared'|'delivered'|'cancelled';command?:unknown;attempts:number;retryAt?:number;error?:string}
-export interface EventState {version:1;subscriptions:EventSubscription[];notifications:EventNotification[];commands:Record<string,{input:string;result:EventCommandResult}>;feedback:EventTarget[]}
+export interface EventNotification {id:string;subscriptionId:string;target:EventTarget;events:Array<NoteEvent|JobEvent>;count:number;firstAt:number;dueAt:number;status:'pending'|'prepared'|'delivered'|'cancelled';command?:unknown;attempts:number;retryAt?:number;error?:string}
+export interface EventState {version:1;subscriptions:EventSubscription[];notifications:EventNotification[];commands:Record<string,{input:string;result:EventCommandResult}>;feedback:EventTarget[];displays?:ThreadDisplay[];threads?:Record<string,{state:InlineThreadState;sequence?:number}>}
 export interface EventSubscriptionHost {
   load():Promise<unknown>;save(state:EventState):Promise<void>;notes(scope:EventScope):Promise<NoteEventSnapshot[]>;
   validateTarget(target:EventTarget):Promise<void>;isBusy(target:EventTarget):Promise<boolean>;
   prepare(notification:EventNotification):Promise<unknown>;
   deliver(notification:EventNotification):Promise<'delivered'|'busy'>;
+  readThread?(target:EventTarget):Promise<InlineThreadState>;
+  displayHost?:Omit<DisplayHost,'save'|'readThread'>;
+  watchThread?(target:EventTarget,item:(value:any)=>void,sequence:()=>number|undefined):{stop():void};
   recording(active:boolean):void;now():number;id():string;
 }
 const uuid=(value:unknown):value is string=>typeof value==='string'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
@@ -41,17 +48,20 @@ export function validateEventFilter(value:any):EventFilter {
   return {events:[...value.events],...(value.property?{property:value.property}:{}),...(Object.hasOwn(value,'equals')?{equals:value.equals}:{})};
 }
 export function validateEventCommand(value:any):EventSubscriptionCommand {
-  if(value?.version!==1||!uuid(value.id)||!['subscribe','subscriptions','update-subscription','pause-subscription','resume-subscription','cancel-subscription'].includes(value.kind))throw Error('Invalid event subscription command.');
-  if(value.kind==='subscribe'){
+  if(STREAM_COMMANDS.includes(value?.kind))return validateDisplayCommand(value);
+  if(value?.version!==1||!uuid(value.id)||!['subscribe','subscribe-job','subscriptions','update-subscription','pause-subscription','resume-subscription','cancel-subscription'].includes(value.kind))throw Error('Invalid event subscription command.');
+  if(value.kind==='subscribe'||value.kind==='subscribe-job'){
     if(!value.target||![value.target.threadId,value.target.projectId,value.target.environmentId].every(identity))throw Error('A subscription needs its originating thread, project, and machine IDs.');
-    validateEventScope(value.scope);validateEventFilter(value.filter);
+    if(value.kind==='subscribe-job'){validateJob(value.job);if(value.scope!==undefined||value.filter!==undefined)throw Error('Job watches do not take note filters.');}
+    else {validateEventScope(value.scope);validateEventFilter(value.filter);}
   }else if(value.kind!=='subscriptions'&&!uuid(value.subscriptionId))throw Error('A subscription ID is required.');
   if(value.kind==='update-subscription'){
     if(!value.scope&&!value.filter)throw Error('Supply a scope or event filter to update.');
     if(value.scope)validateEventScope(value.scope);if(value.filter)validateEventFilter(value.filter);
   }
   if(!['subscribe','update-subscription'].includes(value.kind)&&(value.scope!==undefined||value.filter!==undefined))throw Error('This command does not accept a scope or filter.');
-  if(value.kind!=='subscribe'&&value.target!==undefined)throw Error('A subscription cannot change its receiving thread.');
+  if(!['subscribe','subscribe-job'].includes(value.kind)&&value.target!==undefined)throw Error('A subscription cannot change its receiving thread.');
+  if(value.job!==undefined&&value.kind!=='subscribe-job')throw Error('Job watches require subscribe-job.');
   return value;
 }
 export function eventContent(content:string):string {
@@ -73,59 +83,66 @@ const empty=():EventState=>({version:1,subscriptions:[],notifications:[],command
 
 /** One desktop host, serialized capture, durable messages; no task definitions. */
 export class EventSubscriptions {
-  private state=empty();private baselines=new Map<string,Map<string,NoteEventSnapshot>>();private work=Promise.resolve();private ticking?:Promise<void>;private stopped=false;
+  private state=empty();private baselines=new Map<string,Map<string,NoteEventSnapshot>>();private work=Promise.resolve();private ticking?:Promise<void>;private stopped=false;private monitors=new Map<string,{stop():void}>();
   constructor(private host:EventSubscriptionHost){}
-  get active(){return this.state.subscriptions.some(subscription=>subscription.enabled);}
+  get active(){return this.state.subscriptions.some(subscription=>subscription.enabled)||(this.state.displays??[]).some(d=>d.enabled&&!d.cancelled);}
   get snapshot(){return clone(this.state);}
   private serialize<T>(action:()=>Promise<T>):Promise<T>{
     const run=this.work.catch(()=>{}).then(async()=>{
       if(this.stopped)throw Error('Event subscriptions are stopped.');
       const before=clone(this.state),baselines=new Map([...this.baselines].map(([key,notes])=>[key,new Map(notes)]));
-      try{return await action();}catch(error){this.state=before;this.baselines=baselines;throw error;}finally{this.host.recording(this.active&&!this.stopped);}
+      try{return await action();}catch(error){this.state=before;this.baselines=baselines;throw error;}finally{this.host.recording(this.active&&!this.stopped);this.syncMonitors();}
     });this.work=run.then(()=>{},()=>{});return run;
   }
   async initialize(){return this.serialize(async()=>{
     const saved=await this.host.load() as EventState|undefined;
     if(saved){
       if(saved.version!==1||!Array.isArray(saved.subscriptions)||!Array.isArray(saved.notifications)||!saved.commands||!Array.isArray(saved.feedback))throw Error('Invalid saved event subscription state.');
-      for(const subscription of saved.subscriptions){validateEventCommand({version:1,id:subscription.id,kind:'subscribe',target:subscription,scope:subscription.scope,filter:subscription.filter});if(typeof subscription.enabled!=='boolean')throw Error('Invalid saved subscription.');}
+      for(const subscription of saved.subscriptions){validateEventCommand({version:1,id:subscription.id,kind:subscription.job?'subscribe-job':'subscribe',target:subscription,...(subscription.job?{job:subscription.job}:{scope:subscription.scope,filter:subscription.filter})});if(typeof subscription.enabled!=='boolean')throw Error('Invalid saved subscription.');}
       this.state=clone(saved);
     }
     for(const subscription of this.state.subscriptions)if(subscription.enabled)await this.seed(subscription);
   });}
-  private async seed(subscription:EventSubscription){const notes=await this.host.notes(subscription.scope);this.baselines.set(subscription.id,new Map(notes.filter(note=>inEventScope(subscription.scope,note.path)).map(note=>[note.path,{...note,content:eventContent(note.content)}])));}
+  private async seed(subscription:EventSubscription){if(subscription.job)return;const notes=await this.host.notes(subscription.scope);this.baselines.set(subscription.id,new Map(notes.filter(note=>inEventScope(subscription.scope,note.path)).map(note=>[note.path,{...note,content:eventContent(note.content)}])));}
   async command(input:EventSubscriptionCommand):Promise<EventCommandResult>{return this.serialize(async()=>{
     const command=validateEventCommand(input),key=canonical(command),prior=this.state.commands[command.id];
     if(prior){if(prior.input!==key)throw Error('This request ID already belongs to different input.');return clone(prior.result);}
+    if((STREAM_COMMANDS as readonly string[]).includes(command.kind)){
+      const fields=await displayCommand(this.state.displays??= [],command as ThreadDisplayCommand,this.displayIO(),this.host.now());
+      const result:EventCommandResult={id:command.id,ok:true,monitoring:this.active,...clone(fields)};
+      this.state.commands[command.id]={input:key,result};await this.host.save(this.state);return result;
+    }
+    const noteCommand=command as NoteEventSubscriptionCommand;
     let subscription:EventSubscription|undefined;
-    if(command.kind==='subscribe'){
+    if(noteCommand.kind==='subscribe'||noteCommand.kind==='subscribe-job'){
       if(this.state.subscriptions.length>=256)throw Error('Cancel unused subscriptions before adding more (limit 256).');
-      await this.host.validateTarget(command.target!);
-      subscription={...command.target!,id:command.id,scope:validateEventScope(command.scope),filter:validateEventFilter(command.filter),enabled:true,revision:1,createdAt:new Date(this.host.now()).toISOString()};
+      await this.host.validateTarget(noteCommand.target!);if(noteCommand.job)await this.host.validateTarget(noteCommand.job);
+      subscription={...noteCommand.target!,id:noteCommand.id,scope:noteCommand.job?{path:'/',kind:'folder',recursive:true}:validateEventScope(noteCommand.scope),filter:noteCommand.job?{events:['modify']}:validateEventFilter(noteCommand.filter),...(noteCommand.job?{job:validateJob(noteCommand.job),observation:{seen:[]}}:{}),enabled:true,revision:1,createdAt:new Date(this.host.now()).toISOString()};
       await this.seed(subscription);this.state.subscriptions.push(subscription);
-    }else if(command.kind!=='subscriptions'){
-      subscription=this.state.subscriptions.find(item=>item.id===command.subscriptionId);if(!subscription)throw Error('Event subscription not found.');
-      if(command.kind==='cancel-subscription')this.state.subscriptions=this.state.subscriptions.filter(item=>item!==subscription);
+    }else if(noteCommand.kind!=='subscriptions'){
+      subscription=this.state.subscriptions.find(item=>item.id===noteCommand.subscriptionId);if(!subscription)throw Error('Event subscription not found.');
+      if(noteCommand.kind==='cancel-subscription')this.state.subscriptions=this.state.subscriptions.filter(item=>item!==subscription);
       else {
-        if(command.kind==='update-subscription'){if(command.scope)subscription.scope=validateEventScope(command.scope);if(command.filter)subscription.filter=validateEventFilter(command.filter);}
-        subscription.enabled=command.kind==='pause-subscription'?false:command.kind==='resume-subscription'?true:subscription.enabled;subscription.revision++;
+        if(noteCommand.kind==='update-subscription'){if(subscription.job)throw Error('Job identity is immutable; create a new job subscription.');if(noteCommand.scope)subscription.scope=validateEventScope(noteCommand.scope);if(noteCommand.filter)subscription.filter=validateEventFilter(noteCommand.filter);}
+        subscription.enabled=noteCommand.kind==='pause-subscription'?false:noteCommand.kind==='resume-subscription'?true:subscription.enabled;subscription.revision++;
       }
       this.baselines.delete(subscription.id);
-      if(subscription.enabled&&command.kind!=='cancel-subscription')await this.seed(subscription);
+      if(subscription.enabled&&noteCommand.kind!=='cancel-subscription')await this.seed(subscription);
       for(const notification of this.state.notifications)if(notification.subscriptionId===subscription.id&&['pending','prepared'].includes(notification.status))notification.status='cancelled';
     }
-    const result:EventCommandResult={id:command.id,ok:true,monitoring:this.active,...(subscription?{subscriptionId:subscription.id}:{}),...(command.kind==='subscriptions'?{subscriptions:clone(this.state.subscriptions),notifications:this.state.notifications.filter(n=>n.status==='pending'||n.status==='prepared').map(({id,subscriptionId,status,count,attempts,error})=>({id,subscriptionId,status,count,attempts,...(error?{error}:{})}))}:{})};
-    this.state.commands[command.id]={input:key,result};await this.host.save(this.state);return result;
+    const result:EventCommandResult={id:noteCommand.id,ok:true,monitoring:this.active,...(subscription?{subscriptionId:subscription.id}:{}),...(noteCommand.kind==='subscriptions'?{subscriptions:clone(this.state.subscriptions),notifications:this.state.notifications.filter(n=>n.status==='pending'||n.status==='prepared').map(({id,subscriptionId,status,count,attempts,error})=>({id,subscriptionId,status,count,attempts,...(error?{error}:{})}))}:{})};
+    this.state.commands[noteCommand.id]={input:key,result};await this.host.save(this.state);return result;
   });}
-  interested(path:string,oldPath?:string){return !this.stopped&&this.state.subscriptions.some(subscription=>subscription.enabled&&(inEventScope(subscription.scope,path)||Boolean(oldPath&&inEventScope(subscription.scope,oldPath))));}
+  interested(path:string,oldPath?:string){return !this.stopped&&Boolean(oldPath&&(this.state.displays??[]).length)||!this.stopped&&this.state.subscriptions.some(subscription=>subscription.enabled&&!subscription.job&&(inEventScope(subscription.scope,path)||Boolean(oldPath&&inEventScope(subscription.scope,oldPath))));}
   async observe(kind:Exclude<EventKind,'property'>,path:string,note?:NoteEventSnapshot,oldPath?:string){
+    if(kind==='rename'&&oldPath&&(this.state.displays??[]).length)await this.serialize(async()=>{renameDisplays(this.state.displays!,oldPath,path);await this.host.save(this.state);});
     if(!this.interested(path,oldPath))return;
     return this.serialize(()=>this.capture(kind,path,note,oldPath));
   }
   private async capture(kind:Exclude<EventKind,'property'>,path:string,note?:NoteEventSnapshot,oldPath?:string){
       const now=this.host.now(),content=note?eventContent(note.content):undefined;
       for(const subscription of this.state.subscriptions){
-        if(!subscription.enabled||!inEventScope(subscription.scope,path)&&!(oldPath&&inEventScope(subscription.scope,oldPath)))continue;
+        if(subscription.job||!subscription.enabled||!inEventScope(subscription.scope,path)&&!(oldPath&&inEventScope(subscription.scope,oldPath)))continue;
         const baselines=this.baselines.get(subscription.id)??new Map<string,NoteEventSnapshot>(),before=baselines.get(oldPath??path);
         const feedback=this.state.feedback.some(target=>sameTarget(target,subscription));
         // Only turns initiated by this system suppress feedback. Ordinary busy
@@ -147,13 +164,16 @@ export class EventSubscriptions {
         this.baselines.set(subscription.id,baselines);
       }
       // Follow an explicitly watched note or folder through a rename.
+      if(kind==='rename'&&oldPath){renameDisplays(this.state.displays??[],oldPath,path);}
       if(kind==='rename'&&oldPath)for(const subscription of this.state.subscriptions)if(subscription.scope.path===oldPath||subscription.scope.path.startsWith(oldPath+'/')){subscription.scope.path=path+subscription.scope.path.slice(oldPath.length);subscription.revision++;}
       await this.host.save(this.state);
   }
-  interestedFolder(path:string,oldPath?:string){return this.active&&[path,oldPath].some(folder=>folder&&this.state.subscriptions.some(s=>s.enabled&&(s.scope.path===folder||s.scope.path.startsWith(folder+'/')||s.scope.kind==='folder'&&inEventScope(s.scope,folder+'/scope.md'))));}
+  interestedFolder(path:string,oldPath?:string){return Boolean(oldPath&&(this.state.displays??[]).length)||this.active&&[path,oldPath].some(folder=>folder&&this.state.subscriptions.some(s=>s.enabled&&!s.job&&(s.scope.path===folder||s.scope.path.startsWith(folder+'/')||s.scope.kind==='folder'&&inEventScope(s.scope,folder+'/scope.md'))));}
   async renameFolder(oldPath:string,path:string,notes:NoteEventSnapshot[]){
+    if((this.state.displays??[]).length)await this.serialize(async()=>{renameDisplays(this.state.displays!,oldPath,path);await this.host.save(this.state);});
     if(!this.interestedFolder(path,oldPath))return;
     return this.serialize(async()=>{
+      renameDisplays(this.state.displays??[],oldPath,path);
       for(const note of notes)await this.capture('rename',note.path,note,oldPath+note.path.slice(path.length));
       for(const subscription of this.state.subscriptions)if(subscription.scope.path===oldPath||subscription.scope.path.startsWith(oldPath+'/')){subscription.scope.path=path+subscription.scope.path.slice(oldPath.length);subscription.revision++;}
       for(const subscription of this.state.subscriptions)if(subscription.enabled)await this.seed(subscription);
@@ -164,8 +184,8 @@ export class EventSubscriptions {
     if(!this.interestedFolder(path))return;
     return this.serialize(async()=>{const paths=new Set<string>();for(const notes of this.baselines.values())for(const note of notes.keys())if(note.startsWith(path+'/'))paths.add(note);for(const note of paths)await this.capture('delete',note);});
   }
-  private enqueue(subscription:EventSubscription,event:NoteEvent,now:number){
-    let notification=this.state.notifications.find(item=>item.subscriptionId===subscription.id&&item.status==='pending'&&item.events[0]?.path===event.path);
+  private enqueue(subscription:EventSubscription,event:NoteEvent|JobEvent,now:number){
+    let notification=this.state.notifications.find(item=>item.subscriptionId===subscription.id&&item.status==='pending'&&item.events[0]?.path===event.path&&event.kind!=='job');
     if(notification){notification.events.push(event);notification.events=notification.events.slice(-32);notification.count++;notification.dueAt=Math.min(now+1500,notification.firstAt+30_000);}
     else {
       if(this.state.notifications.filter(item=>item.status==='pending'||item.status==='prepared').length>=1000)throw Error('Event notification queue is full. Reconnect receiving threads.');
@@ -174,6 +194,17 @@ export class EventSubscriptions {
   }
   tick(){if(this.ticking)return this.ticking;const run=this.serialize(async()=>{
     if(!this.active)return;
+    for(const subscription of this.state.subscriptions.filter(s=>s.enabled&&s.job)){
+      try{
+        const observation=subscription.observation??={seen:[]};if(observation.terminal)continue;
+        const state=await this.readObservedThread(subscription.job!);
+        for(const event of jobEvents(subscription.job!,state,observation)){
+          this.enqueue(subscription,event,this.host.now());observation.seen.push(event.id);if(event.terminal)observation.terminal=event.state;
+        }
+        delete observation.error;await this.host.save(this.state);
+      }catch(error){subscription.observation??={seen:[]};subscription.observation.error=error instanceof Error?error.message:String(error);await this.host.save(this.state);}
+    }
+    for(const display of this.state.displays??[]){if(!display.enabled||display.cancelled)continue;try{await tickDisplay(display,this.displayIO());delete display.error;}catch(error){display.error=error instanceof Error?error.message:String(error);}await this.host.save(this.state);}
     // Once a notified thread becomes idle, rebaseline its scopes before clearing
     // suppression. Its edits may arrive via Sync after completion; identical
     // snapshots and response stripping also exclude repeats.
@@ -206,7 +237,33 @@ export class EventSubscriptions {
     const terminal=this.state.notifications.filter(item=>item.status==='delivered'||item.status==='cancelled');
     if(terminal.length>200){const retained=new Set(terminal.slice(-200).map(item=>item.id));this.state.notifications=this.state.notifications.filter(item=>item.status==='pending'||item.status==='prepared'||retained.has(item.id));await this.host.save(this.state);}
   });this.ticking=run;void run.finally(()=>{this.ticking=undefined;}).catch(()=>{});return run;}
-  stop(){this.stopped=true;this.baselines.clear();this.host.recording(false);}
+  private threadKey(target:EventTarget){return JSON.stringify([target.environmentId,target.projectId,target.threadId]);}
+  private async readObservedThread(target:EventTarget){
+    if(!this.host.readThread)throw Error('Thread lifecycle observation is unavailable.');
+    const state=await this.host.readThread(target),key=this.threadKey(target),prior=this.state.threads?.[key];
+    const merged={...state,turns:{...prior?.state.turns,...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})}};
+    (this.state.threads??={})[key]={state:merged,sequence:prior?.sequence};return merged;
+  }
+  private displayIO():DisplayHost {
+    if(!this.host.displayHost)throw Error('Thread streaming is unavailable.');
+    return {...this.host.displayHost,readThread:target=>this.readObservedThread(target),save:()=>this.host.save(this.state)};
+  }
+  private syncMonitors(){
+    if(this.stopped||!this.host.watchThread)return;
+    const targets=new Map<string,EventTarget>();
+    for(const s of this.state.subscriptions)if(s.enabled&&s.job&&!s.observation?.terminal)targets.set(this.threadKey(s.job),s.job);
+    for(const d of this.state.displays??[])if(d.enabled&&!d.cancelled)targets.set(this.threadKey(d),d);
+    for(const [key,monitor] of this.monitors)if(!targets.has(key)){monitor.stop();this.monitors.delete(key);}
+    for(const [key,target] of targets)if(!this.monitors.has(key))this.monitors.set(key,this.host.watchThread(target,item=>{
+      void this.serialize(async()=>{
+        const prior=this.state.threads?.[key]??{state:{messages:[],activities:[]}};
+        if(item.kind==='event'&&item.event?.sequence<= (prior.sequence??-1))return;
+        const applied=applyThreadItem(prior.state,item);
+        (this.state.threads??={})[key]={state:applied.state,sequence:item.kind==='snapshot'&&prior.sequence!==undefined?prior.sequence:applied.sequence??prior.sequence};await this.host.save(this.state);
+      }).catch(()=>{});
+    },()=>this.state.threads?.[key]?.sequence));
+  }
+  stop(){this.stopped=true;for(const monitor of this.monitors.values())monitor.stop();this.monitors.clear();this.baselines.clear();this.host.recording(false);}
 }
 
 export function notificationPrompt(notification:EventNotification,vault:string){

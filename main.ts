@@ -1,3 +1,5 @@
+import {applyThreadItem} from './inline-thread';
+import {readInlineSnapshot,watchThread} from './thread-stream';
 import {editorStream} from './editor-stream';
 import {validateNoteCommand,isEventCommand,type NoteCommand,type NoteCommandResult} from './note-command';
 import {isFolderCommand,executeFolderCommand,type FolderCommand} from './folder-command';
@@ -317,7 +319,7 @@ export default class SendToT3 extends Plugin {
   private async eventThread(target:EventTarget){
     const access=await this.inlineThreadAccess(target.environmentId);
     try{
-      const thread=(await access.api(`/api/orchestration/threads/${encodeURIComponent(target.threadId)}?turnLimit=100`)).thread;
+      const thread=(await readInlineSnapshot(access,target.threadId,target.projectId,undefined,true)).thread;
       if(!thread||thread.id!==target.threadId||thread.projectId!==target.projectId||thread.deletedAt||thread.archivedAt)throw Error('The subscribing thread is unavailable in its original project.');
       return thread;
     }finally{await access.close?.();}
@@ -390,6 +392,29 @@ export default class SendToT3 extends Plugin {
         const access=await this.inlineThreadAccess(notification.target.environmentId);
         try{if(!this.eventHostCurrent(server.identity))throw Error('Subscription host ownership changed.');await access.api('/api/orchestration/dispatch',notification.command);return 'delivered';}finally{await access.close?.();}
       },
+      readThread:async target=>{const thread=await this.eventThread(target);return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread}}).state;},
+      watchThread:(target,item,sequence)=>{
+        return watchThread(target.threadId,()=>this.inlineThreadAccess(target.environmentId),{item:value=>{if(value.kind==='snapshot'&&value.snapshot?.thread?.projectId!==target.projectId)return;item(value);},reconnecting:error=>logFailure('subscriptions.thread.reconnecting',error,{...target})},undefined,undefined,{afterSequence:sequence});
+      },
+      displayHost:{
+        validateDestination:async path=>{const text=await deviceNoteIO(this.app).readNote(path);if(text===undefined)throw Error(`Destination note unavailable: ${path}`);endInsertionOffset(text);},
+        responseBindings:target=>this.displayResponseBindings(target),
+        prepareDisplay:async(display,destination,input)=>{
+          const host=await this.inlineHostTarget(),id=commandId(display.id,`response:${input.id}:${destination.id}`);
+          return {version:2,independent:true,id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:this.settings.inlineStreaming.keepIntermediate===true};
+        },
+        attachDisplay:async(request,path)=>{
+          if(this.stopped||!this.eventHostCurrent(server.identity)||!this.deviceInline)throw Error('Streaming host ownership changed.');
+          const io=deviceNoteIO(this.app),opened=await this.inlineHostFiles(request.host);
+          try{
+            const raw=await opened.files.read(leasePaths(request.host.directory,request.id).record);
+            if(raw){const record:LeaseRecord=JSON.parse(raw);if(record.state?.finalSaved||['complete','interrupted'].includes(record.state?.status??''))return;await this.deviceInline.register(record.request);return;}
+            const current={...request,notePath:path};
+            await editorStream(current,path,io,()=>!this.stopped&&this.eventHostCurrent(server.identity),request.id);
+            await this.deviceInline.register(current);
+          }finally{opened.close();}
+        },
+      },
       recording:active=>logEvent('subscriptions.monitoring',{active}),
     });
     try{await service.initialize();await server.save(service.snapshot);}catch(error){service.stop();throw error;}if(this.stopped||!this.eventHostCurrent(server.identity)){service.stop();return;}this.eventSubscriptions=service;
@@ -408,6 +433,18 @@ export default class SendToT3 extends Plugin {
     for(const kind of ['create','modify','rename','delete'] as const)this.registerEvent(this.app.vault.on(kind as any,(file:TAbstractFile,oldPath?:string)=>observe(kind,file,oldPath)));
     // Node timers continue polling in background desktop windows.
     this.registerInlineInterval(()=>{if(this.eventSubscriptions===service&&this.eventHostCurrent(server.identity)&&service.active)void service.tick().catch(error=>new Notice(`T3 event delivery: ${message(error)}`,10000));},1000);
+  }
+  private async displayResponseBindings(target:EventTarget){
+    const host=await this.inlineHostTarget(),files=(await import('./hosted-inline-desktop')).localInlineFiles(host.workspaceRoot,host.directory);
+    const records:LeaseRecord[]=[];
+    for(const path of await files.list(`${host.directory}/leases`)){
+      const raw=await files.read(path);if(!raw)continue;const record:LeaseRecord=JSON.parse(raw);
+      if(record.request.threadId===target.threadId&&record.request.projectId===target.projectId&&record.request.threadEnvironmentId===target.environmentId)records.push(record);
+    }
+    return records.map(record=>({id:record.request.id,path:record.state?.notePath??record.request.notePath,
+      messageIds:[record.request.messageId,...[record.state?.messageId,record.state?.pendingMessageId].filter((v):v is string=>!!v),...record.state?.steering?.map(s=>s.messageId)??[],...record.state?.questionFollows?.flatMap(q=>[`async-answer:${q.requestId}`,...(q.input?[q.input.messageId]:[])])??[]],
+      turnIds:[...record.state?.turnIds??[],...(record.state?.turnId?[record.state.turnId]:[]),...record.state?.questionFollows?.flatMap(q=>q.replyTurnId?[q.replyTurnId]:[])??[]],
+    }));
   }
   private async renameEventFolder(folder:TFolder,oldPath:string,service:EventSubscriptions){
     if(!service.interestedFolder(folder.path,oldPath))return;

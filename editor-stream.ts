@@ -8,9 +8,9 @@ export interface StreamNoteIO {
 }
 /** Attach a single response to a note without dispatching another prompt.
  * Stable IDs make registration/recovery retries reuse the same block. */
-export async function editorStream(source:HostedInlineRequest,notePath:string,io:StreamNoteIO,allowed:()=>boolean):Promise<HostedInlineRequest>{
+export async function editorStream(source:HostedInlineRequest,notePath:string,io:StreamNoteIO,allowed:()=>boolean,bindingId?:string):Promise<HostedInlineRequest>{
   if(!safeNotePath(notePath))throw Error('Choose a vault-relative Markdown note path.');
-  const id=commandId(source.id,`binding:${notePath}`),region=initialRegion(id,source.initialInput,source.threadTitle);
+  const id=bindingId??commandId(source.id,`binding:${notePath}`),region=initialRegion(id,source.initialInput,source.threadTitle);
   const request:HostedInlineRequest={...source,id,notePath,initialHash:region.bodyHash,independent:true};
   if(await io.completed?.(id))return request;
   const document=await io.updateNote(notePath,current=>{

@@ -27,7 +27,7 @@ export async function readInlineSnapshot(access:ThreadAccess,threadId:string,pro
 
 /** The Effect RPC stream stays open until stopped. Every reconnect asks for a
  * fresh snapshot, so lost deltas cannot duplicate text or leave a gap. */
-export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets) {
+export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets,replay?:{afterSequence:()=>number|undefined}) {
   let stopped=false,socket:WebSocket|undefined,timer:ReturnType<typeof setTimeout>|undefined,rotation:ReturnType<typeof setTimeout>|undefined,pollTimer:ReturnType<typeof setTimeout>|undefined,attempt=0;
   let access:ThreadAccess|undefined;
   const closeAccess=()=>{if(pollTimer)clearTimeout(pollTimer);pollTimer=undefined;const old=access;access=undefined;if(old?.close)void Promise.resolve(old.close()).catch(()=>{});};
@@ -65,7 +65,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         clearTimeout(opening);if(stopped){ws.close();return;}
         logEvent('stream.connected',{threadId});attempt=0;
         rotation=setTimeout(()=>fail(Error('Refreshing the T3 stream session.')),4*60_000);
-        ws.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId},headers:[]}));
+        ws.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,...(replay?{afterSequence:replay.afterSequence(),requestCompletionMarker:true}:{})},headers:[]}));
         pollTimer=setTimeout(()=>{void poll();},1200);
       };
       ws.onmessage=message=>{

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {EventSubscriptions,eventContent,inEventScope,validateEventCommand,validateEventFilter,validateEventScope,type EventState,type EventSubscriptionCommand,type NoteEventSnapshot,type EventNotification} from '../event-subscriptions';
+import {EventSubscriptions,eventContent,inEventScope,validateEventCommand,validateEventFilter,validateEventScope,type EventState,type NoteEventSubscriptionCommand as EventSubscriptionCommand,type NoteEventSnapshot,type EventNotification} from '../event-subscriptions';
 
 const target={threadId:'thread',projectId:'project',environmentId:'machine'};
 const note=(path='Gym/A.md',content='old',properties:Record<string,unknown>|null={}):NoteEventSnapshot=>({path,content,properties});
@@ -50,7 +50,7 @@ test('property transition matches a typed value once and preserves rapid transit
   const h=await harness([note('Gym/A.md','body',{completed:false})]);await h.service.command(subscription({filter:{events:['property'],property:'completed',equals:true}}));
   await h.service.observe('modify','Gym/A.md',note('Gym/A.md','body',{completed:'true'}));assert.equal(h.service.snapshot.notifications.length,0);
   await h.service.observe('modify','Gym/A.md',note('Gym/A.md','body',{completed:true}));await h.service.observe('modify','Gym/A.md',note('Gym/A.md','body',{completed:true}));
-  assert.equal(h.service.snapshot.notifications[0].count,1);assert.equal(h.service.snapshot.notifications[0].events[0].before,'true');assert.equal(h.service.snapshot.notifications[0].events[0].after,true);
+  assert.equal(h.service.snapshot.notifications[0].count,1);const event=h.service.snapshot.notifications[0].events[0];assert.equal(event.kind,'property');assert.equal(event.before,'true');assert.equal(event.after,true);
 });
 test('invalid YAML does not fabricate a property removal or transition',async()=>{
   const h=await harness([note('Gym/A.md','body',{completed:true})]);await h.service.command(subscription({filter:{events:['property'],property:'completed'}}));

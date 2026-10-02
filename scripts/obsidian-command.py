@@ -15,10 +15,19 @@ def main():
     parser.add_argument('--request-id', default=None, help='Reuse this UUID to inspect/retry the same command')
     parser.add_argument('--timeout', type=float, default=90)
     parser.add_argument('--retry', action='store_true', help='Retry a failed result with the original prepared send')
-    parser.add_argument('kind', choices=['send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
+    parser.add_argument('kind', choices=['send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination', 'subscribe-job', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
     parser.add_argument('note', nargs='?', help='Vault-relative note or folder path; / means vault root')
     parser.add_argument('--destination', action='append', default=[])
     parser.add_argument('--thread-id')
+    parser.add_argument('--stream-scope', choices=['thread'], help='Explicit opt-in for thread-wide display')
+    parser.add_argument('--start', choices=['future', 'history'], default='future')
+    parser.add_argument('--job-id')
+    parser.add_argument('--job-request-id', help='Original job dispatch request ID')
+    parser.add_argument('--job-thread-id')
+    parser.add_argument('--job-project-id')
+    parser.add_argument('--job-environment-id')
+    parser.add_argument('--turn-id')
+    parser.add_argument('--remove-destination')
     parser.add_argument('--message-id')
     parser.add_argument('--no-stream', action='store_true')
     parser.add_argument('--scope', help='Vault-relative note/folder to watch; / means vault root')
@@ -61,6 +70,22 @@ def main():
                            environmentId=args.environment_id, mode=args.mode or 'project', relink=args.relink)
         elif any([args.project_id, args.connection_id, args.environment_id, args.mode, args.relink]):
             parser.error('Project selection and relinking options require link-folder.')
+    elif args.kind in ['stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination']:
+        if args.note or args.no_stream or args.message_id or args.scope or args.event:
+            parser.error('Thread display registration does not send notes or prompts.')
+        command = dict(version=1, id=command_id, kind=args.kind)
+        if args.kind == 'stream-thread':
+            if not all([args.thread_id, args.project_id, args.environment_id, args.destination, args.stream_scope]):
+                parser.error('stream-thread requires --stream-scope thread, source --thread-id, --project-id, --environment-id, and --destination.')
+            command.update(scope=args.stream_scope, source=dict(threadId=args.thread_id, projectId=args.project_id, environmentId=args.environment_id), destinations=list(dict.fromkeys(args.destination)), start=args.start)
+        elif args.kind != 'thread-streams':
+            if not args.subscription_id:
+                parser.error('Management requires --subscription-id.')
+            command['subscriptionId'] = args.subscription_id
+            if args.kind == 'remove-stream-destination':
+                if not args.remove_destination:
+                    parser.error('Removing a destination requires --remove-destination.')
+                command['destination'] = args.remove_destination
     elif args.kind in ['send-note', 'attach-response']:
         if not args.note:
             parser.error('Note sends and attachments require a source note.')
@@ -71,17 +96,25 @@ def main():
         if args.message_id:
             command['messageId'] = args.message_id
     else:
-        if args.note or args.destination or args.message_id or args.no_stream:
+        if args.note or args.destination or args.message_id and args.kind != 'subscribe-job' or args.no_stream:
             parser.error('Subscription commands do not take notes or streaming destinations.')
         command = dict(version=1, id=command_id, kind=args.kind)
-        if args.kind == 'subscribe':
-            if not all([args.scope, args.scope_kind, args.thread_id, args.project_id, args.environment_id]):
+        if args.kind in ['subscribe', 'subscribe-job']:
+            if not all([args.thread_id, args.project_id, args.environment_id]) or args.kind == 'subscribe' and not all([args.scope, args.scope_kind]):
                 parser.error('subscribe requires --scope, --scope-kind, --thread-id, --project-id, and --environment-id.')
             command['target'] = dict(threadId=args.thread_id, projectId=args.project_id, environmentId=args.environment_id)
         elif args.kind != 'subscriptions':
             if not args.subscription_id:
                 parser.error('This command requires --subscription-id.')
             command['subscriptionId'] = args.subscription_id
+        if args.kind == 'subscribe-job':
+            if not all([args.job_id, args.job_request_id, args.message_id, args.job_thread_id, args.job_project_id, args.job_environment_id]):
+                parser.error('subscribe-job requires --job-id, --job-request-id, --message-id, --job-thread-id, --job-project-id, and --job-environment-id.')
+            if args.scope or args.event or args.property or args.equals is not None:
+                parser.error('Job subscriptions do not take note filters.')
+            command['job'] = dict(jobId=args.job_id, requestId=args.job_request_id, messageId=args.message_id, threadId=args.job_thread_id, projectId=args.job_project_id, environmentId=args.job_environment_id)
+            if args.turn_id:
+                command['job']['turnId'] = args.turn_id
         if args.scope:
             if not args.scope_kind:
                 parser.error('--scope requires --scope-kind.')
