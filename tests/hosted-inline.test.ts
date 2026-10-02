@@ -407,16 +407,17 @@ test('completion refresh includes the final message when session-ready overtakes
   assert.doesNotMatch(h.document,/t3-inline:/);
 });
 
-for(const version of [1,2] as const)test(`initial question survives hosted v${version} writer restart and final-only completion`,async()=>{
+for(const version of [1,2,3] as const)test(`initial question survives hosted v${version} writer restart and final-only completion`,async()=>{
   const h=harness('Explain **this**.\n\nKeep it brief.');
   h.request.version=version;
-  if(version===2){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===2;}
+  if(version!==1){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===version;}
+  if(version===3)h.request.finalAnswerFormat='raw-markdown';
   h.files.set(h.paths.request,JSON.stringify(h.request));
   assert.match(h.document,/> Keep it brief\.[\s\S]*T3 · Working/);
   h.dispatch();let writer=h.create();await writer.tick();writer.stop();
   assert.match(h.document,/> Keep it brief\.[\s\S]*> Progress A/);
   writer=h.create();h.answer('Final answer.',true);await writer.tick();writer.stop();
-  assert.match(h.document,/> \[!t3-steering\] You\n> Explain \*\*this\*\*\.\n>\n> Keep it brief\.\n\n> Final answer\./);
+  assert.match(h.document,version===3?/> \[!t3-steering\] You\n> Explain \*\*this\*\*\.\n>\n> Keep it brief\.\n\nFinal answer\./:/> \[!t3-steering\] You\n> Explain \*\*this\*\*\.\n>\n> Keep it brief\.\n\n> Final answer\./);
   assert.equal(h.document.split('[!t3-steering]').length-1,1);
   assert.doesNotMatch(h.document,/T3 · Working|Progress A|t3-inline:/);
 });
@@ -429,15 +430,17 @@ test('hosted initial input validates bounded text and binds the original message
   assert.equal(validateHostedRequest(h.request).initialInput?.text,'Question');
 });
 
-for(const version of [1,2] as const)for(const dismiss of [false,true])test(`hosted v${version} follows a late async ${dismiss?'dismissal':'answer'} across restart`,async()=>{
+for(const version of [1,2,3] as const)for(const dismiss of [false,true])test(`hosted v${version} follows a late async ${dismiss?'dismissal':'answer'} across restart`,async()=>{
   const h=harness();h.request.version=version;
-  if(version===2){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===2;}
+  if(version!==1){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===version;}
+  if(version===3)h.request.finalAnswerFormat='raw-markdown';
   h.files.set(h.paths.request,JSON.stringify(h.request));h.dispatch();
   const time='2026-10-01T18:00:00Z';
   const requested={id:'question',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'late',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Continue?',options:[{label:'Yes',description:''}]}]}};
   let current:InlineThreadState={messages:[{id:h.request.messageId,role:'user',text:'Begin',turnId:null,streaming:false,createdAt:h.request.createdAt},{id:'first',role:'assistant',text:'First final.',turnId:'turn',streaming:false}],activities:[requested],latestTurn:{turnId:'turn',state:'completed',requestedAt:h.request.createdAt,assistantMessageId:'first'},session:{status:'ready',activeTurnId:null}};
   h.io.threadState=async()=>current;
   await h.create().tick();assert.equal(h.state.status,'waiting');assert.match(h.document,/First final/);assert.doesNotMatch(h.document,/T3 · Working/);
+  if(version===3)assert.match(h.document,/\nFirst final\.\n/);
   const waiting=h.document;
   current={...current,latestTurn:{turnId:'unrelated',state:'completed',requestedAt:time},messages:[...current.messages,{id:'other',role:'user',text:'Other work',turnId:'unrelated',streaming:false},{id:'other-final',role:'assistant',text:'Unrelated result',turnId:'unrelated',streaming:false}]};
   await h.create().tick();assert.equal(h.document,waiting);assert.equal(h.state.turnId,'turn');
@@ -454,14 +457,16 @@ for(const version of [1,2] as const)for(const dismiss of [false,true])test(`host
   current.messages.at(-1)!.streaming=false;current.messages.push({id:'last',role:'assistant',text:'Follow-up final.',turnId:'answer-turn',streaming:false});
   current.latestTurn={...current.latestTurn,state:'completed',assistantMessageId:'last'};current.session={status:'ready',activeTurnId:null};
   await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/First final[\s\S]*> \[!t3-steering\] You\n> Yes[\s\S]*Follow-up final/);assert.equal(h.document.split('> Yes').length-1,1);assert.doesNotMatch(h.document,/t3-inline:|t3-question:/);
+  if(version===3){assert.match(h.document,/\nFollow-up final\.\n/);assert.match(h.document,/> Follow-up progress/);}
   const finished=h.document;await h.create().tick();assert.equal(h.document,finished);
   assert.doesNotMatch(finished,/· Working|send-to-t3-inline-spinner/);
 });
 
-for(const version of [1,2] as const)test(`hosted v${version} completes a mid-turn async answer and repairs persisted Working after restart`,async()=>{
+for(const version of [1,2,3] as const)test(`hosted v${version} completes a mid-turn async answer and repairs persisted Working after restart`,async()=>{
   const h=harness();h.request.version=version;
   h.request.createdAt='2026-10-02T08:42:00.000Z';
-  if(version===2){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===2;}
+  if(version!==1){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===version;}
+  if(version===3)h.request.finalAnswerFormat='raw-markdown';
   h.files.set(h.paths.request,JSON.stringify(h.request));h.dispatch();
   const at=(seconds:number)=>`2026-10-02T08:42:${String(seconds).padStart(2,'0')}.000Z`;
   const requested={id:'question',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'steered',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Continue?',options:[{label:'Yes',description:''}]}]}};
@@ -480,6 +485,7 @@ for(const version of [1,2] as const)test(`hosted v${version} completes a mid-tur
   assert.equal(h.state.status,'complete');assert.equal(h.state.questionFollows![0].replyTurnId,'turn');assert.deepEqual(h.state.turnIds,['turn']);
   assert.match(h.document,/Before answer[\s\S]*> Yes[\s\S]*Same-turn final/);assert.match(h.document,/Outside user edit/);
   assert.doesNotMatch(h.document,/· Working|send-to-t3-inline-spinner|t3-inline:|t3-question:/);
+  if(version===3){assert.match(h.document,/\nSame-turn final\.\n/);assert.match(h.document,/> Before answer/);}
   const final=h.document;await h.create().tick();assert.equal(h.document,final);
 });
 
@@ -557,9 +563,10 @@ test('a stop between network stages prevents the next history fetch from startin
   assert.equal(historyReads,0);assert.equal(h.state.status,'interrupted');assert.doesNotMatch(h.document,/Working|t3-inline:/);
 });
 
-for(const version of [1,2] as const)test(`Collapse survives hosted v${version} restart, imports progress assets and retains a frozen duration`,async()=>{
+for(const version of [1,2,3] as const)test(`Collapse survives hosted v${version} restart, imports progress assets and retains a frozen duration`,async()=>{
   const h=harness();h.request.version=version;h.request.intermediateMode='collapse';
-  if(version===2){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===2;}
+  if(version!==1){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===version;}
+  if(version===3)h.request.finalAnswerFormat='raw-markdown';
   h.files.set(h.paths.request,JSON.stringify(h.request));
   let complete=false;
   h.io.threadState=async()=>({messages:[
@@ -572,7 +579,7 @@ for(const version of [1,2] as const)test(`Collapse survives hosted v${version} r
   complete=true;await h.create().tick();
   assert.equal(h.state.status,'complete');assert.match(h.document,/T3 · Completed[\s\S]*>03:17<\/span>/);
   assert.match(h.document,/\[\[T3 Code Attachments\/progress.txt\]\]/);assert.deepEqual(assets,['/tmp/progress.txt']);
-  assert.match(h.document,/\n\n> Exact final answer\.\n/);assert.doesNotMatch(h.document,/t3-inline:|spinner/);
+  assert.match(h.document,version===3?/\n\nExact final answer\.\n/:/\n\n> Exact final answer\.\n/);assert.doesNotMatch(h.document,/t3-inline:|spinner/);
   const finished=h.document;await h.create().tick();assert.equal(h.document,finished);
   assert.throws(()=>validateHostedRequest({...h.request,intermediateMode:'maybe'}),/preference/);
 });

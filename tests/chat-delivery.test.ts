@@ -953,13 +953,13 @@ test('sending a note into an existing thread retains Markdown and images and cle
 test('inline streaming switches default on and persist independently',async()=>{
   const h=await chatHarness();
   try{
-    assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.inlineStreaming)),{enabled:true,keepIntermediate:false});
+    assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.inlineStreaming)),{enabled:true,keepIntermediate:false,finalAnswerFormat:'formatted'});
     h.plugin.settings.inlineStreaming.enabled=false;
     h.plugin.settings.inlineStreaming.keepIntermediate=true;
     await h.plugin.save();
     h.plugin.onunload();
     const restarted=await h.start();
-    assert.deepEqual(JSON.parse(JSON.stringify(restarted.settings.inlineStreaming)),{enabled:false,keepIntermediate:true});
+    assert.deepEqual(JSON.parse(JSON.stringify(restarted.settings.inlineStreaming)),{enabled:false,keepIntermediate:true,finalAnswerFormat:'formatted'});
     restarted.onunload();
   }finally{h.plugin.onunload();}
 });

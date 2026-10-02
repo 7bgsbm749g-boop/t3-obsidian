@@ -1,7 +1,7 @@
 import {escapeReplyHtml,markdownCodeRanges} from './reply-html';
 import {contentHash} from './completion';
 import {pendingQuestions,renderQuestion} from './questions';
-import {intermediateMode,runTimer,type IntermediateMode,type RunTiming} from './response-presentation';
+import {intermediateMode,runTimer,type IntermediateMode,type RunTiming,type FinalAnswerFormat} from './response-presentation';
 import {steeringSegments,type InlineSteering} from './inline-steering';
 import {responseActivityLabel,responseActivityRow} from './response-activity';
 
@@ -305,7 +305,22 @@ export function inlineTurnMessages(state:InlineThreadState,turnId:string,keepInt
   return keepIntermediate?messages:final?[final]:[];
 }
 
-export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate:boolean|IntermediateMode=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[];preserveHistory?:boolean},initialInput?:InitialInlineInput,threadTitle?:string,timing?:RunTiming):string {
+/** Keep terminal turn evidence when later snapshots omit older metadata.
+ * Failed partial output must not become a final answer during continuation. */
+export function rememberInlineTurns(state:InlineThreadState,turnIds:string[],saved:Record<string,InlineTurn>={}):Record<string,InlineTurn> {
+  const result={...saved};
+  for(const turnId of turnIds){
+    const phase=turnPhase(state,turnId),turn=state.latestTurn?.turnId===turnId?state.latestTurn:state.turns?.[turnId];
+    if(phase==='error'||phase==='interrupted')result[turnId]={...turn,turnId,state:phase};
+    else if(phase==='complete'){
+      const final=inlineTurnMessages(state,turnId).at(-1);
+      if(final&&!final.streaming)result[turnId]={...turn,turnId,state:'completed',assistantMessageId:final.id};
+    }
+  }
+  return result;
+}
+
+export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate:boolean|IntermediateMode=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[];preserveHistory?:boolean},initialInput?:InitialInlineInput,threadTitle?:string,timing?:RunTiming,format:FinalAnswerFormat='formatted'):string {
   const mode=intermediateMode(keepIntermediate),retain=mode!=='remove';
   const messages=inlineTurnMessages(state,turnId,phase!=='complete'||retain);
   const answer=messages.map(m=>m.text.replace(/\n+$/,'')).filter(Boolean).join('\n\n');
@@ -313,6 +328,24 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // steer. Keep the final-only preference for unsteered completed responses.
   const transcript=conversation&&(phase!=='complete'||retain||conversation.steering.length||conversation.preserveHistory)?conversation:undefined;
   const segments=transcript?steeringSegments(transcript.messages,transcript.steering.filter(input=>input.confirmed)):[];
+  const all=conversation?.messages??inlineTurnMessages(state,turnId,true);
+  const finalIds=new Set<string>();
+  // Never guess which live paragraph is the final answer. Completed earlier
+  // turns remain identifiable while a continuation or question answer runs.
+  for(const turn of new Set(all.map(message=>message.turnId).filter((id):id is string=>!!id))){
+    if(turnPhase(state,turn)==='complete'){
+      const final=inlineTurnMessages({...state,messages:all},turn).at(-1);if(final)finalIds.add(final.id);
+    }
+  }
+  const rawFinal=(id?:string)=>format==='raw-markdown'&&!!id&&finalIds.has(id);
+  const assistant=(text:string,id?:string)=>rawFinal(id)?escapeReplyHtml(closeOpenFence(text.replace(/\n+$/,''))):quoteResponse(closeOpenFence(text.trim()));
+  const answerBlocks:string[]=[];let progressMessages:string[]=[];
+  const flushProgress=()=>{if(progressMessages.length)answerBlocks.push(quoteResponse(closeOpenFence(progressMessages.join('\n\n'))));progressMessages=[];};
+  if(format==='raw-markdown')for(const message of messages){
+    const text=message.text.replace(/\n+$/,'');if(!text)continue;
+    if(rawFinal(message.id)){flushProgress();answerBlocks.push(assistant(text,message.id));}else progressMessages.push(text);
+  }
+  flushProgress();
   const label=inlineThreadLabel(state.title??threadTitle);
   const heading=`**${label} · ${phase==='running'||phase==='sending'?'Working':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const timer=timing?' '+runTimer(timing):'';
@@ -323,26 +356,19 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
   let previousRole:string|undefined;
   const prose=transcript?segments.reduce((body,segment,index)=>{
-    const rendered=segment.role==='user'?renderInlineInput(segment.text):quoteResponse(closeOpenFence(segment.text.trim()));
+    const rendered=segment.role==='user'?renderInlineInput(segment.text):assistant(segment.text,segment.messageId);
     // Only adjacent assistant quote blocks share a quoted blank line. Callouts
     // and raw Markdown blocks need a real boundary to avoid swallowing prose.
-    const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
+    const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&!rawFinal(segment.messageId)&&!rawFinal(segments[index-1]?.messageId)&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
     previousRole=segment.role;
     const next=body?body+separator+rendered:rendered;
     return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}`:next;
-  },''):answer?quoteResponse(closeOpenFence(answer)):'';
+  },''):format==='raw-markdown'?answerBlocks.join('\n\n'):answer?quoteResponse(closeOpenFence(answer)):'';
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null||conversation?.messages.some(m=>m.turnId===request.turnId)).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
   const input=initialInput?`${renderInlineInput(initialInput.text)}\n\n`:'';
   if(mode==='collapse'){
-    const all=conversation?.messages??inlineTurnMessages(state,turnId,true);
-    const finalIds=new Set<string>();
-    for(const turn of new Set(all.map(message=>message.turnId).filter((id):id is string=>!!id))){
-      if(turnPhase(state,turn)==='complete'){
-        const final=inlineTurnMessages({...state,messages:all},turn).at(-1);if(final)finalIds.add(final.id);
-      }
-    }
     const pieces=steeringSegments(all,conversation?.steering.filter(item=>item.confirmed)??[]);
     const title=phase==='complete'?`**${label} · Completed**`:heading;
     const blocks:string[]=[];let progress:string[]=[];let fold=0;
@@ -353,7 +379,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     for(const piece of pieces){
       if(piece.role==='user'||piece.messageId&&finalIds.has(piece.messageId)){
         if(progress.length||!blocks.length)flush();
-        blocks.push(piece.role==='user'?renderInlineInput(piece.text):quoteResponse(closeOpenFence(piece.text.trim())));
+        blocks.push(piece.role==='user'?renderInlineInput(piece.text):assistant(piece.text,piece.messageId));
       }else if(piece.text.trim())progress.push(quoteResponse(closeOpenFence(piece.text.trim())));
     }
     if(progress.length||!blocks.length||phase!=='complete'&&pieces.at(-1)?.role==='user')flush();

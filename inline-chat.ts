@@ -1,4 +1,4 @@
-import {intermediateMode,completionTime,type IntermediateMode} from './response-presentation';
+import {intermediateMode,completionTime,finalAnswerFormat,type IntermediateMode,type FinalAnswerFormat} from './response-presentation';
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,type InlineQuestionFollow} from './inline-questions';
 import {logEvent,logFailure} from './diagnostics';
 import type {App,Editor,MarkdownFileInfo,MarkdownView} from 'obsidian';
@@ -6,7 +6,7 @@ import {Notice} from 'obsidian';
 import type {Connection,Request} from './bridge';
 import {commandId,endpoint,environmentApi,type PairedSession} from './direct';
 import {contentHash} from './completion';
-import {activeInlineIds,applyThreadItem,endInsertionOffset,endMarker,finalizeRegion,hasResponseMarkers,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,applyThreadItem,rememberInlineTurns,endInsertionOffset,endMarker,finalizeRegion,hasResponseMarkers,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type InlineTurn,type SelectionAnchor} from './inline-thread';
 import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {InlineHostTarget} from './hosted-inline';
 import {replaceInlineEditorText} from './inline-editor';
@@ -21,7 +21,7 @@ export interface InlineJob {
   bodyHash:string;phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'|'conflict';createdAt:string;finalized?:boolean;
   hosted?:boolean;
   remoteStopPending?:boolean;
-  keepIntermediate?:boolean;intermediateMode?:IntermediateMode;finishedAt?:string;
+  keepIntermediate?:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat;presentationTurns?:Record<string,InlineTurn>;finishedAt?:string;
   hostTarget?:InlineHostTarget;
   initialInput?:InitialInlineInput;
   steering?:InlineSteering[];prose?:InlineMessage[];turnIds?:string[];questionFollows?:InlineQuestionFollow[];
@@ -33,7 +33,7 @@ export class InlineChatManager {
   private jobs:InlineJob[]=[];
   private runtimes=new Map<string,Runtime>();
   private stopped=false;
-  constructor(private app:App,private key:string,private sessionFor:(id:string)=>Promise<PairedSession|undefined>,private hosted?:{prepare(job:InlineJob,request:Request):Promise<void>;stop(job:InlineJob):Promise<void>},private keepIntermediate:()=>boolean|IntermediateMode=()=>false) {
+  constructor(private app:App,private key:string,private sessionFor:(id:string)=>Promise<PairedSession|undefined>,private hosted?:{prepare(job:InlineJob,request:Request):Promise<void>;stop(job:InlineJob):Promise<void>},private keepIntermediate:()=>boolean|IntermediateMode=()=>false,private answerFormat:()=>FinalAnswerFormat=()=> 'formatted') {
     const saved=this.app.loadLocalStorage(key);
     if(Array.isArray(saved))this.jobs=saved.filter(validJob).map(job=>{
       // 2.12.6 mistook the client command ID for T3's provider-assigned turn ID.
@@ -83,7 +83,7 @@ export class InlineChatManager {
     if(this.stopped)throw Error('The plugin was disabled.');
     const file=info.file;if(!file||file.path!==expectedPath||file.extension.toLowerCase()!=='md')throw Error('The original Markdown note is no longer open. Reopen it and ask T3 again.');
     const id=requestId,createdAt=new Date().toISOString(),mode=intermediateMode(this.keepIntermediate()),region=initialRegion(id,initialInput,threadTitle,mode,{startedAt:createdAt});
-    const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt,keepIntermediate:mode!=='remove',intermediateMode:mode,...(initialInput?{initialInput}:{})};
+    const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt,keepIntermediate:mode!=='remove',intermediateMode:mode,finalAnswerFormat:finalAnswerFormat(this.answerFormat()),...(initialInput?{initialInput}:{})};
     this.jobs.push(job);this.runtime(job).source={editor,info};
     try{this.persist();replaceInlineEditorText(editor,region.text,offset);}
     catch(error){this.jobs=this.jobs.filter(item=>item!==job);this.runtimes.delete(job.id);try{this.persist();}catch{/* Original storage error remains primary. */}throw error;}
@@ -132,7 +132,7 @@ export class InlineChatManager {
     const runtime=this.runtime(job);
     if(item.kind==='snapshot'&&Number.isSafeInteger(item.snapshot?.snapshotSequence)&&item.snapshot.snapshotSequence<runtime.sequence){logEvent('stream.snapshot.stale',{jobId:job.id,sequence:item.snapshot.snapshotSequence,lastSequence:runtime.sequence});return;}
     if(item.kind==='event'&&Number.isSafeInteger(item.event?.sequence)&&item.event.sequence<=runtime.sequence)return;
-    const applied=applyThreadItem(runtime.state,item);runtime.state=applied.state;
+    const applied=applyThreadItem(runtime.state,item);runtime.state=job.finalAnswerFormat==='raw-markdown'?{...applied.state,turns:{...job.presentationTurns,...applied.state.turns}}:applied.state;
     runtime.completionChecked=item.kind==='snapshot';
     if(!job.turnId&&job.messageId){
       const turnId=turnForMessage(runtime.state,job.messageId);
@@ -199,11 +199,15 @@ export class InlineChatManager {
       })();
       return;
     }
+    if(job.finalAnswerFormat==='raw-markdown'){
+      job.presentationTurns=rememberInlineTurns({...runtime.state,messages:job.prose??runtime.state.messages},job.turnIds??[],job.presentationTurns);
+      runtime.state={...runtime.state,turns:{...job.presentationTurns,...runtime.state.turns}};
+    }
     const questions=followInlineQuestions(runtime.state,job.turnIds??[],job.questionFollows,job.prose);
     const inputs=questionConversationInputs(runtime.state,job.steering??[],questions.follows,job.prose??[]);
     const conversation=(job.turnIds?.length??0)>1||inputs.length?{messages:job.prose??[],steering:inputs,preserveHistory:questions.continued}:undefined;
     if(job.phase==='complete'||job.phase==='interrupted')job.finishedAt??=completionTime(runtime.state,job.turnId??'');else delete job.finishedAt;
-    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,intermediateMode(job.intermediateMode,job.keepIntermediate),job.connection?.environmentId,conversation,job.initialInput,undefined,{startedAt:job.createdAt,finishedAt:job.finishedAt});
+    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,intermediateMode(job.intermediateMode,job.keepIntermediate),job.connection?.environmentId,conversation,job.initialInput,undefined,{startedAt:job.createdAt,finishedAt:job.finishedAt},finalAnswerFormat(job.finalAnswerFormat));
     const original=editor.getValue();let document=original;
     const current=regionBody(document,job.id);
     const terminal=job.phase==='complete'&&!questions.waiting||['interrupted','cancelled'].includes(job.phase);

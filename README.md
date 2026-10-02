@@ -229,6 +229,8 @@ The completion action and note fingerprint are saved when sending. Later setting
 
 Notes edited, replaced, renamed, or left with unsaved editor changes are kept. Archive/delete runs in the sending Obsidian vault, including when the T3 thread runs on another computer. Existing notes and previously sent threads are not automatically enrolled.
 
+The **Final answer format** setting under **Inline responses** defaults to **Current formatting**. **Raw Markdown** inserts only each verified completed final answer without added blockquote prefixes; while a turn is running, its paragraphs retain current formatting. Intermediate responses still follow **Remove / Keep / Collapse**, and questions, steering controls, status, timers, and tool activity keep their existing presentation. Both formats share image/file imports and literal-HTML protection. The choice is saved per response, including independent destination bindings, and survives reloads, writer takeover, continuations, and question answers. Setting changes affect new responses. Raw-mode responses require an updated writer; older clients cannot take them over.
+
 ## Embedded images
 
 Full-note sends and Ask T3 questions use the same image packaging. Only images embedded in the selected passage or question are attached; unselected note content is not sent.

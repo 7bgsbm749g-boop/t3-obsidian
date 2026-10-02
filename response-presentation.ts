@@ -1,6 +1,11 @@
 import type {InlineThreadState} from './inline-thread';
 
 export type IntermediateMode='remove'|'keep'|'collapse';
+export type FinalAnswerFormat='formatted'|'raw-markdown';
+/** Resolve legacy preferences without changing immutable response requests. */
+export function finalAnswerFormat(value:unknown):FinalAnswerFormat {
+  return value==='raw-markdown'?'raw-markdown':'formatted';
+}
 /** Old saved responses keep their original boolean preference. */
 export function intermediateMode(value:unknown,legacy?:boolean):IntermediateMode {
   return value==='collapse'||value==='keep'||value==='remove'?value:value===true||legacy===true?'keep':'remove';

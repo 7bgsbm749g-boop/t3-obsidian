@@ -10,8 +10,8 @@ const source=():HostedInlineRequest=>({version:2,id:randomUUID(),initialOwner:ra
 test('bindings have independent destination IDs and retain one source message; replay never duplicates a block',async()=>{
   const documents=new Map([['A.md','Keep A'],['B.md','Keep B']]);
   const io={updateNote:async(path:string,change:(document:string)=>string,allowed:()=>boolean)=>{assert.ok(allowed());const value=documents.get(path);if(value===undefined)return;const next=change(value);documents.set(path,next);return next;}};
-  const x=source(),a=await editorStream(x,'A.md',io,()=>true),b=await editorStream(x,'B.md',io,()=>true);
-  assert.notEqual(a.id,b.id);assert.notEqual(a.id,x.id);assert.equal(a.messageId,b.messageId);
+  const x={...source(),version:3 as const,finalAnswerFormat:'raw-markdown' as const},a=await editorStream(x,'A.md',io,()=>true),b=await editorStream(x,'B.md',io,()=>true);
+  assert.notEqual(a.id,b.id);assert.notEqual(a.id,x.id);assert.equal(a.messageId,b.messageId);assert.equal(a.finalAnswerFormat,'raw-markdown');assert.equal(b.finalAnswerFormat,'raw-markdown');assert.equal(a.version,3);
   const before=documents.get('A.md');assert.deepEqual(await editorStream(x,'A.md',io,()=>true),a);assert.equal(documents.get('A.md'),before);
   const y=await editorStream(source(),'A.md',io,()=>true);assert.ok(regionBody(documents.get('A.md')!,a.id));assert.ok(regionBody(documents.get('A.md')!,y.id));
   await assert.rejects(editorStream(x,'../Outside.md',io,()=>true),/relative/);

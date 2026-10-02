@@ -524,3 +524,22 @@ test('a coordinated stop checkpoints a block already cleaned by the sending edit
     assert.match(laptop.document.value,/First paragraph/);assert.doesNotMatch(laptop.document.value,/Working|t3-inline:|t3-response:/);
   }finally{h.dispose();}
 });
+
+for(const format of ['formatted','raw-markdown'] as const)test(`${format} preference survives a real lease takeover and completion`,async()=>{
+  const h=devices(true);
+  h.request.finalAnswerFormat=format;h.request.version=format==='raw-markdown'?3:2;
+  const first=h.create(h.actor),second=h.create(randomUUID());
+  try{
+    await first.manager.register(h.request);await h.drain(first.manager);
+    assert.match(first.document.value,/> First paragraph/);
+    second.document.value=first.document.value;
+    first.manager.dispose();h.advance(LEASE_MS+2001);
+    second.manager.discover([h.request.host]);await h.drain(second.manager);
+    assert.equal(h.record().epoch,2);assert.equal(h.record().request.finalAnswerFormat,format);
+    h.answer('Final after takeover.',true);h.advance(200);await h.drain(second.manager);
+    assert.equal(h.record().state?.status,'complete');
+    assert.match(second.document.value,format==='raw-markdown'?/\nFinal after takeover\.\n/:/\n> Final after takeover\.\n/);
+    assert.match(second.document.value,/Outside before/);assert.match(second.document.value,/Outside after/);
+    assert.doesNotMatch(second.document.value,/t3-inline:|t3-response:/);
+  }finally{h.dispose();}
+});

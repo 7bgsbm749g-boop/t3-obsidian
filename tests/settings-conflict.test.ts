@@ -72,3 +72,12 @@ test('a reloaded client restores its durable unlink record when Sync drops the c
   assert.equal(restarted.current().folderLinks.length,0);
   assert.equal(restarted.current().folderLinkChanges[0].id,removed.id);assert.equal(restarted.saves(),1);
 });
+
+for(const format of [undefined,'formatted','raw-markdown','invalid'])test(`final answer setting ${format} defaults safely and persists independently of progress`,async()=>{
+  const h=await harness({vaultId:'vault',inlineStreaming:{intermediateMode:'collapse',...(format?{finalAnswerFormat:format}:{})}});
+  assert.equal(h.plugin.settings.inlineStreaming.finalAnswerFormat,format==='raw-markdown'?'raw-markdown':'formatted');
+  assert.equal(h.plugin.settings.inlineStreaming.intermediateMode,'collapse');assert.equal(h.saves(),0);
+  h.plugin.settings.inlineStreaming.finalAnswerFormat='raw-markdown';await h.plugin.save();
+  assert.equal(h.current().inlineStreaming.finalAnswerFormat,'raw-markdown');
+  assert.equal(h.current().inlineStreaming.intermediateMode,'collapse');
+});

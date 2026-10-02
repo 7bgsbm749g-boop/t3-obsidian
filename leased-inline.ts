@@ -90,7 +90,7 @@ export class DeviceInlineManager {
         const requests=JSON.parse(raw);if(!Array.isArray(requests))return;
         await Promise.allSettled(requests.map(async value=>{
           const request=validateHostedRequest(value);
-          if(request.version!==2||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(host.target)||this.jobs.has(request.id))return;
+          if(![2,3].includes(request.version)||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(host.target)||this.jobs.has(request.id))return;
           const bytes=await host.files.read(leasePaths(host.target.directory,request.id).record);if(!bytes||this.stopped)return;
           const record:LeaseRecord=JSON.parse(bytes);
           const path=await this.location(record);if(path===undefined)return;
@@ -113,7 +113,7 @@ export class DeviceInlineManager {
     let stopping=false;
     const allowed=()=>!this.stopped&&(!runtime.record.stopRequestedAt||stopping)&&runtime.writeEpoch===runtime.record.epoch&&runtime.record.owner===this.actor&&host.client.valid(record.request.id,runtime.record.epoch);
     runtime.writer=new HostedInlineWriter({vaultId:this.vaultId,...host.target},{
-      requests:async()=>[paths.request],accepts:request=>{if(runtime.record.stopRequestedAt)stopping=true;return request.version===2&&allowed();},
+      requests:async()=>[paths.request],accepts:request=>{if(runtime.record.stopRequestedAt)stopping=true;return [2,3].includes(request.version)&&allowed();},
       canResume:path=>this.io.isOpen(path),
       locateNote:this.io.locateNote?async(id,path)=>{
         const located=await this.io.locateNote!(id,path);

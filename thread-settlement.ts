@@ -5,7 +5,7 @@ import type {InlineHostTarget} from './hosted-inline';
 export interface ThreadSettlementJob {
   requestId:string;messageId:string;threadId:string;projectId:string;connection:Connection;
   inlineBindings?:Array<{id:string;host:InlineHostTarget}>;
-  inlineJobId?:string;inlineHost?:InlineHostTarget;inlineVersion?:1|2;
+  inlineJobId?:string;inlineHost?:InlineHostTarget;inlineVersion?:1|2|3;
 }
 
 export function settlementState(thread:any,job:ThreadSettlementJob):'wait'|'settle'|'discard' {

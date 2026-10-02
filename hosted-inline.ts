@@ -1,32 +1,32 @@
-import {intermediateMode,completionTime,type IntermediateMode} from './response-presentation';
+import {intermediateMode,completionTime,type IntermediateMode,type FinalAnswerFormat,finalAnswerFormat} from './response-presentation';
 import {questionTargets} from './questions';
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,type InlineQuestionFollow} from './inline-questions';
 import {logEvent,logFailure} from './diagnostics';
 import {contentHash} from './completion';
 import {commandId} from './direct';
-import {applyThreadItem,completionProof,hasCompletionProof,hasResponseMarkers,removeCompletionProof,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
+import {applyThreadItem,rememberInlineTurns,completionProof,hasCompletionProof,hasResponseMarkers,removeCompletionProof,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
 import {needsInlineHistory,readInlineSnapshot,type ThreadAccess} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
 import {mergeProse,selectionRange,type InlineSteering} from './inline-steering';
-import type {InitialInlineInput,InlineMessage} from './inline-thread';
+import type {InitialInlineInput,InlineMessage,InlineTurn} from './inline-thread';
 import {interruptStoppedResponse,stoppedResponseBody} from './response-stop';
 class StopStreamRequested extends Error {}
 
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface HostedInlineRequest {
-  keepIntermediate?:boolean;intermediateMode?:IntermediateMode;
+  keepIntermediate?:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat;
   initialInput?:InitialInlineInput;
   independent?:boolean;
   threadTitle?:string;
-  version:1|2;initialOwner?:string;id:string;vaultId:string;host:InlineHostTarget;notePath:string;
+  version:1|2|3;initialOwner?:string;id:string;vaultId:string;host:InlineHostTarget;notePath:string;
   threadId:string;messageId:string;projectId:string;threadEnvironmentId:string;initialHash:string;createdAt:string;
 }
 export interface HostedInlineState {
   requestHash:string;accepted:boolean;notePath:string;turnId?:string;messageId?:string;pendingMessageId?:string;
   status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict'|'paused';
   hashes:string[];body?:string;detail?:string;updatedAt:string;
-  finishedAt?:string;
+  finishedAt?:string;presentationTurns?:Record<string,InlineTurn>;
   finalDocumentHash?:string;
   finalBody?:string;
   /** The proof was verified on disk before its temporary boundaries were removed. */
@@ -51,9 +51,11 @@ export function validateHostedRequest(value:any):HostedInlineRequest {
   if(value?.initialInput!==undefined&&(!uuid.test(value.initialInput?.messageId??'')||value.initialInput.messageId!==value.messageId||typeof value.initialInput.text!=='string'||!value.initialInput.text.trim()||value.initialInput.text.length>120_000))throw Error('Invalid initial response input.');
   if(value?.threadTitle!==undefined&&(typeof value.threadTitle!=='string'||value.threadTitle.length>200))throw Error('Invalid thread title.');
   if(value?.independent!==undefined&&typeof value.independent!=='boolean')throw Error('Invalid binding preference.');
+  if(value?.finalAnswerFormat!==undefined&&!['formatted','raw-markdown'].includes(value.finalAnswerFormat))throw Error('Invalid final answer format.');
+  if(value?.finalAnswerFormat==='raw-markdown'&&value.version!==3)throw Error('Raw Markdown requires an updated response writer.');
   if(value?.intermediateMode!==undefined&&!['remove','keep','collapse'].includes(value.intermediateMode))throw Error('Invalid hosted response preference.');
   if(value?.keepIntermediate!==undefined&&typeof value.keepIntermediate!=='boolean')throw Error('Invalid hosted response preference.');
-  if(![1,2].includes(value?.version)||(value.version===2&&!uuid.test(value.initialOwner??''))||!uuid.test(value.id??'')||!(typeof value.messageId==='string'&&(uuid.test(value.messageId)||/^async-answer:[^\s\x00-\x1f]{1,200}$/.test(value.messageId)))||!safeNotePath(value.notePath)||
+  if(![1,2,3].includes(value?.version)||(value.version!==1&&!uuid.test(value.initialOwner??''))||!uuid.test(value.id??'')||!(typeof value.messageId==='string'&&(uuid.test(value.messageId)||/^async-answer:[^\s\x00-\x1f]{1,200}$/.test(value.messageId)))||!safeNotePath(value.notePath)||
     ![value.threadId,value.vaultId,value.projectId,value.threadEnvironmentId,value.createdAt,value.host?.environmentId,value.host?.workspaceRoot,value.host?.directory].every(x=>typeof x==='string'&&x.length>0)||
     !/^[0-9a-f]{64}$/.test(value.initialHash))throw Error('Invalid hosted response job.');
   return value;
@@ -219,6 +221,7 @@ export class HostedInlineWriter {
             this.history.set(path,{key,expires:Date.now()+3000,state:current});
           }
         }
+        if(request.finalAnswerFormat==='raw-markdown')current={...current,turns:{...state.presentationTurns,...current.turns}};
         if((!state.turnId||state.pendingMessageId)&&!current.messages.some(m=>m.id===messageId&&m.role==='user'))return;
         if(state.pendingMessageId){
           const nextTurn=turnForMessage(current,messageId);
@@ -257,6 +260,10 @@ export class HostedInlineWriter {
         if(state.status==='error'&&phase==='running'&&current.latestTurn?.turnId!==state.turnId&&current.session?.activeTurnId!==state.turnId)return;
         if(state.status==='error'&&!state.pendingMessageId&&phase==='error')return;
         if(this.stopIntents.has(request.id)||await this.io.read(paths.stop)!==undefined){await this.finishStopped(request,state,save);return;}
+        if(request.finalAnswerFormat==='raw-markdown'){
+          state.presentationTurns=rememberInlineTurns({...current,messages:state.prose},state.turnIds,state.presentationTurns);
+          current={...current,turns:{...state.presentationTurns,...current.turns}};
+        }
         const inputs=questionConversationInputs(current,state.steering??[],state.questionFollows,state.prose);
         const conversation=state.turnIds.length>1||inputs.length?{messages:state.prose,steering:inputs,preserveHistory:questions.continued}:undefined;
         if(phase==='complete'&&this.io.importReplyAsset&&!conversation){
@@ -265,7 +272,7 @@ export class HostedInlineWriter {
           }
         }
         if(phase==='complete'||phase==='interrupted')state.finishedAt??=completionTime(current,state.turnId);else delete state.finishedAt;
-        let next=renderInlineTurn(current,state.turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,request.threadTitle,{startedAt:request.createdAt,finishedAt:state.finishedAt});
+        let next=renderInlineTurn(current,state.turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,request.threadTitle,{startedAt:request.createdAt,finishedAt:state.finishedAt},finalAnswerFormat(request.finalAnswerFormat));
         if(phase==='complete'&&conversation&&this.io.importReplyAsset)next=await this.network(path,()=>rewriteReplyReferences(next,reference=>this.io.importReplyAsset!(reference,request,access)));
         const terminal=phase==='complete'&&!questions.waiting||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the

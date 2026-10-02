@@ -1,4 +1,4 @@
-import {intermediateMode,installResponsePresentation,type IntermediateMode} from './response-presentation';
+import {intermediateMode,installResponsePresentation,finalAnswerFormat,type FinalAnswerFormat,type IntermediateMode} from './response-presentation';
 import {applyThreadItem} from './inline-thread';
 import {readInlineSnapshot,watchThread} from './thread-stream';
 import {editorStream} from './editor-stream';
@@ -48,7 +48,7 @@ const INLINE_REPLY_INSTRUCTION='Answer in the T3 thread. The Obsidian plugin wil
 const THREAD_REPLY_INSTRUCTION='Answer in the T3 thread.';
 const NEW_FOLDER_PROJECT='folder:new';
 const VAULT_PROJECT='vault:root';
-interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode}
+interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
 type PreparedNote={content:string;images:Awaited<ReturnType<typeof collectImages>>};
 interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
 export default class SendToT3 extends Plugin {
@@ -124,7 +124,7 @@ export default class SendToT3 extends Plugin {
     this.cloudAccount=local?.cloudAccount??null;
     this.nativeAccount=local?.nativeAccount??null;
     this.vaultRegistrations=local?.vaultRegistrations??{};
-    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
+    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
     this.folderLinkReplica=mergeFolderLinkChanges(this.settings.folderLinkChanges,loadFolderLinkChanges(await deviceState(`folder-links:${this.deviceId}:${this.settings.vaultId}`)));
     this.settings.folderLinkChanges=this.folderLinkReplica;
     this.settings.folderLinks=applyFolderLinkChanges(this.settings.folderLinks,this.folderLinkReplica);
@@ -152,7 +152,7 @@ export default class SendToT3 extends Plugin {
       this.settings.noteThreads.push({notePath:job.notePath,threadId:job.threadId,projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId??'',...(job.connection.environmentId?{environmentId:job.connection.environmentId}:{}),selectedAt:new Date().toISOString()});
       migratedNoteThreads=true;
     }
-    this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>this.stopHostedInline(job.id,job.hostTarget)},()=>intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate));
+    this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>this.stopHostedInline(job.id,job.hostTarget)},()=>intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate),()=>finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat));
     const storedTargets=this.app.loadLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`);
     if(Array.isArray(storedTargets))this.inlineTargets=storedTargets.filter(target=>target&&typeof target.environmentId==='string'&&typeof target.workspaceRoot==='string'&&typeof target.directory==='string');
     this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),access:environmentId=>this.inlineThreadAccess(environmentId),importReplyAsset:(reference,request,access)=>importReplyAsset(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
@@ -403,7 +403,7 @@ export default class SendToT3 extends Plugin {
         responseBindings:target=>this.displayResponseBindings(target),
         prepareDisplay:async(display,destination,input)=>{
           const host=await this.inlineHostTarget(),id=commandId(display.id,`response:${input.id}:${destination.id}`);
-          return {version:2,independent:true,id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id,undefined,undefined,intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate),{startedAt:input.createdAt??display.createdAt}).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)!=='remove',intermediateMode:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)};
+          return {version:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat)==='raw-markdown'?3:2,finalAnswerFormat:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat),independent:true,id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id,undefined,undefined,intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate),{startedAt:input.createdAt??display.createdAt}).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)!=='remove',intermediateMode:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)};
         },
         attachDisplay:async(request,path)=>{
           if(this.stopped||!this.eventHostCurrent(server.identity)||!this.deviceInline)throw Error('Streaming host ownership changed.');
@@ -915,7 +915,7 @@ export default class SendToT3 extends Plugin {
     const host=await this.inlineHostTarget();
     const threadEnvironmentId=request.connection.environmentId??await this.localInlineEnvironment();
     job.hostTarget=host;this.rememberInlineTarget(host);
-    request.inlineHost={version:2,independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
+    request.inlineHost={version:finalAnswerFormat(job.finalAnswerFormat)==='raw-markdown'?3:2,finalAnswerFormat:finalAnswerFormat(job.finalAnswerFormat),independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
   }
   private async inlineHostFiles(target:InlineHostTarget):Promise<{files:InlineFiles;close():void}>{
     const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
@@ -938,7 +938,7 @@ export default class SendToT3 extends Plugin {
       const request=await opened.files.read(paths.request);
       if(!request){new Notice('Response finished in this note. No remote response binding was found.');return;}
       await opened.files.write(paths.stop,JSON.stringify({id,requestedAt:new Date().toISOString()}));
-      if(this.deviceInline&&JSON.parse(request).version===2)await this.deviceInline.stopResponse(host,id);
+      if(this.deviceInline&&[2,3].includes(JSON.parse(request).version))await this.deviceInline.stopResponse(host,id);
       new Notice('Response finished; remote stop requested.');
     }finally{opened.close();}
   }
@@ -1416,7 +1416,7 @@ export default class SendToT3 extends Plugin {
   private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string){
     const io=deviceNoteIO(this.app),host=await this.inlineHostTarget();
     for(const path of destinations){const document=await io.readNote(path);if(document===undefined)throw Error(`Destination note unavailable: ${path}`);endInsertionOffset(document);}
-    const source:HostedInlineRequest={version:2,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)!=='remove',intermediateMode:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)};
+    const source:HostedInlineRequest={version:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat)==='raw-markdown'?3:2,finalAnswerFormat:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat),independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)!=='remove',intermediateMode:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)};
     request.inlineBindings=[];this.rememberInlineTarget(host);
     const opened=await this.inlineHostFiles(host);
     try{
@@ -1476,7 +1476,7 @@ export default class SendToT3 extends Plugin {
     const inlineJobId=request.inlineSteering?.jobId??request.inlineFollow?.jobId??(request.inlineHost||this.inlineChat?.find(request.id)?request.id:undefined);
     const inlineHost=request.inlineSteering?.host??request.inlineFollow?.host??request.inlineHost?.host;
     this.settings.settlementJobs.push({requestId:request.id,messageId:commandId(request.id,'message'),threadId,projectId:request.project.id,connection:{...request.connection},
-      ...(inlineJobId?{inlineJobId:request.inlineHost?.id??inlineJobId}:{}),...(request.inlineBindings?{inlineBindings:request.inlineBindings.map(binding=>({id:binding.id,host:binding.host}))}:{}),...(inlineHost?{inlineHost,inlineVersion:(request.inlineHost?.version??2) as 1|2}:{})});
+      ...(inlineJobId?{inlineJobId:request.inlineHost?.id??inlineJobId}:{}),...(request.inlineBindings?{inlineBindings:request.inlineBindings.map(binding=>({id:binding.id,host:binding.host}))}:{}),...(inlineHost?{inlineHost,inlineVersion:(request.inlineHost?.version??2) as 1|2|3}:{})});
   }
   rememberStarted(request:Request,threadId:string) {
     if(request.folderLinkIntent&&!this.settings.folderLinks.some(link=>link.folderPath===request.folderLinkIntent!.folderPath))this.settings.folderLinks=upsertFolderLink(this.settings.folderLinks,request.folderLinkIntent);
@@ -1507,7 +1507,7 @@ export default class SendToT3 extends Plugin {
       if(follow.host){if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');await this.deviceInline.follow(follow.host,follow.jobId,follow.previousMessageId,follow.messageId,follow.notePath);}
       else {const job=this.inlineChat?.find(follow.jobId);if(!job||job.threadId!==request.threadId)throw Error('The original response is unavailable on this device.');this.inlineChat!.follow(job,follow.messageId);}
     }
-    if(request.inlineHost?.version===2){
+    if(request.inlineHost&&[2,3].includes(request.inlineHost.version)){
       if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');
       for(const binding of request.inlineBindings??[request.inlineHost])await this.deviceInline.register(binding);
     }else if(request.inlineHost){
@@ -1733,6 +1733,7 @@ class T3Settings extends PluginSettingTab {
     el.createEl('p',{text:'Sending includes the current note and its embedded images. Asking sends the question and note location. A selected passage and its embedded images are included with the question.'});
     el.createEl('h3',{text:'Inline responses'});
     new Setting(el).setName('Stream replies into the editor').setDesc('For every manual Send or Ask, insert the reply into the note. Selection questions appear below the selection; other replies appear at the end.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));
+    new Setting(el).setName('Final answer format').setDesc('Choose how the completed final answer appears. Intermediate responses keep their formatting and Remove / Keep / Collapse behavior. Images and files are handled in both formats. Applies to new responses.').addDropdown(dropdown=>dropdown.addOptions({formatted:'Current formatting','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));
     const modes:IntermediateMode[]=['remove','keep','collapse'];
     const progressSetting=new Setting(el).setName('Intermediate agent responses');
     const describe=(mode:IntermediateMode)=>progressSetting.setDesc(`${mode==='remove'?'Remove progress; keep the final answer.':mode==='keep'?'Keep progress alongside the final answer.':'Collapse progress under an H6-style thread/status header; keep the final answer visible.'} Applies to new responses. Remove / Keep / Collapse.`);
