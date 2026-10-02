@@ -6,6 +6,7 @@ import {replaceInlineEditorText} from './inline-editor';
 import {ResponseNoteLocator} from './response-location';
 
 const locators=new WeakMap<App,ResponseNoteLocator>();
+const missingNote=(error:unknown)=>!!error&&typeof error==='object'&&('code' in error&&error.code==='ENOENT'||'message' in error&&typeof error.message==='string'&&error.message.startsWith('ENOENT:'));
 
 /** Real note writes, using the live editor when open and atomic vault edits
  * otherwise. Ownership is checked immediately before each actual mutation. */
@@ -14,7 +15,8 @@ export function deviceNoteIO(app:App){
   const readNote=async(path:string)=>{
     const open=editors(path);if(open.length){const value=open[0].getValue();return open.every(editor=>editor.getValue()===value)?value:undefined;}
     const file=app.vault.getFileByPath(path);if(!file)return;
-    const document=await app.vault.read(file);
+    let document:string;
+    try{document=await app.vault.read(file);}catch(error){if(missingNote(error))return;throw error;}
     return file.path!==undefined&&(file.path!==path||app.vault.getFileByPath(path)!==file)?undefined:document;
   };
   let locator=locators.get(app);
@@ -26,7 +28,7 @@ export function deviceNoteIO(app:App){
     noteRenamed:(before:string,after:string)=>locations.renamed(before,after),
     noteDeleted:(path:string)=>locations.deleted(path),
     isOpen:(path:string)=>editors(path).length>0,
-    isSaved:async(path:string,hash:string,proof?:{id:string;body:string;cleaned?:boolean})=>{const file=app.vault.getFileByPath(path);if(!file)return false;const document=await app.vault.read(file);if(file.path!==undefined&&(file.path!==path||app.vault.getFileByPath(path)!==file))return false;return proof?.cleaned?!hasResponseMarkers(document,proof.id):contentHash(document)===hash||!!proof&&hasCompletionProof(document,proof.id,proof.body);},
+    isSaved:async(path:string,hash:string,proof?:{id:string;body:string;cleaned?:boolean})=>{const file=app.vault.getFileByPath(path);if(!file)return false;let document:string;try{document=await app.vault.read(file);}catch(error){if(missingNote(error))return false;throw error;}if(file.path!==undefined&&(file.path!==path||app.vault.getFileByPath(path)!==file))return false;return proof?.cleaned?!hasResponseMarkers(document,proof.id):contentHash(document)===hash||!!proof&&hasCompletionProof(document,proof.id,proof.body);},
     readNote,
     updateNote:async(path:string,change:(current:string)=>string,allowed:()=>boolean):Promise<string|undefined>=>{
       if(!allowed())throw Error('Writer ownership expired.');
@@ -41,7 +43,8 @@ export function deviceNoteIO(app:App){
       }
       const file=app.vault.getFileByPath(path);if(!file)return;
       const stillHere=()=>file.path===undefined||file.path===path&&app.vault.getFileByPath(path)===file;
-      const current=await app.vault.read(file);
+      let current:string;
+      try{current=await app.vault.read(file);}catch(error){if(missingNote(error))return;throw error;}
       if(!allowed()||!stillHere()||editors(path).length)throw Error('The note or its ownership changed; retrying.');
       const next=change(current);if(next===current)return current;
       const written=await app.vault.process(file,value=>{

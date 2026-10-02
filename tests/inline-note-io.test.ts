@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {deviceNoteIO} from '../inline-note-io';
-import {completionProof} from '../inline-thread';
+import {completionProof,initialRegion} from '../inline-thread';
 
 test('completion checks distinguish saved proof from saved cleanup despite another stream changing the note',async()=>{
   const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',body='> Answer\n';
@@ -55,4 +55,22 @@ test('a move during final-save verification does not certify the previous path',
   const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',body='Final',file={path:'Note.md'};
   const io=deviceNoteIO({vault:{getFileByPath:(path:string)=>path===file.path?file:undefined,read:async()=>{file.path='Moved.md';return completionProof(id,body);}}} as any);
   assert.equal(await io.isSaved('Note.md','old hash',{id,body}),false);
+});
+
+test('stale Obsidian file entries after an external folder move do not prevent recovery scans',async()=>{
+  const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',old={path:'Old/Note.md'},moved={path:'Moved/Note.md'},text=initialRegion(id).text;
+  const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[]},vault:{
+    getFileByPath:(path:string)=>path===old.path?old:path===moved.path?moved:undefined,
+    getMarkdownFiles:()=>[old,moved],read:async(file:any)=>{if(file===old)throw Object.assign(Error('ENOENT: stale cached file'),{code:'ENOENT'});return text;},
+  }} as any);
+  assert.equal(await io.locateNote(id,old.path),moved.path);
+  assert.equal(await io.readNote(old.path),undefined);
+  assert.equal(await io.isSaved(old.path,'hash'),false);
+  assert.equal(await io.updateNote(old.path,()=>{throw Error('Must not mutate');},()=>true),undefined);
+});
+
+test('note reads still surface storage errors other than a missing file',async()=>{
+  const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:()=>({path:'Note.md'}),read:async()=>{throw Object.assign(Error('EACCES: permission denied'),{code:'EACCES'});}}} as any);
+  await assert.rejects(io.readNote('Note.md'),/EACCES/);
+  await assert.rejects(io.isSaved('Note.md','hash'),/EACCES/);
 });
