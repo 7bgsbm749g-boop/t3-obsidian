@@ -1,6 +1,6 @@
 {
   "name": "send-to-t3-code",
-  "version": "2.30.0",
+  "version": "2.30.1",
   "private": true,
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
