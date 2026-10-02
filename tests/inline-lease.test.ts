@@ -369,7 +369,7 @@ for(const stopped of [false,true])test(`${stopped?'stopped':'completed'} finaliz
     phone.document.saved=false;
     if(stopped)h.data.set(hostedPaths(h.request.host.directory,h.request.id).stop,'{}');
     h.answer('Final before save',!stopped);h.advance(200);await h.drain(phone.manager);
-    assert.match(phone.document.value,/Final before save/);assert.doesNotMatch(phone.document.value,/t3-inline:/);
+    assert.match(phone.document.value,stopped?/First paragraph/:/Final before save/);assert.doesNotMatch(phone.document.value,/t3-inline:/);
     assert.equal(h.record().state?.status,'running','The catalog must still advertise recoverable work');
     assert.equal(JSON.parse(h.data.get(leasePaths(h.request.host.directory,h.request.id).catalog)!).length,1);
     phone.document.saved=true;h.advance(200);await h.drain(phone.manager);assert.equal(h.record().state?.status,stopped?'interrupted':'complete');
@@ -426,4 +426,34 @@ test('different bindings in one note use the same writing device, including regi
   assert.equal((await other.command({kind:'claim',jobId:next.id})).ok,true);
   assert.equal((await sender.command({kind:'claim',jobId:h.request.id})).ok,false);
   assert.equal((await other.command({kind:'claim',jobId:h.request.id})).ok,true);
+});
+
+test('stop intent is idempotent, durable, and fences stale and resumed checkpoints',async()=>{
+  const h=harness(),owner=h.client(),sender=h.client(randomUUID());
+  await owner.command({kind:'register',jobId:h.request.id,request:h.request});
+  await owner.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:0,state:h.state});
+  const old=h.record();assert.equal((await sender.command({kind:'stop',jobId:h.request.id})).ok,true);
+  const stopped=h.record();assert.ok(stopped.stopRequestedAt);assert.equal(stopped.owner,old.owner);
+  assert.equal((await sender.command({kind:'stop',jobId:h.request.id})).ok,true);assert.equal(h.record().revision,stopped.revision);
+  assert.equal((await owner.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:old.revision,state:h.state})).ok,false);
+  assert.equal((await owner.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:stopped.revision,state:h.state})).ok,false);
+  await h.restart();assert.equal(h.record().stopRequestedAt,stopped.stopRequestedAt);
+  assert.equal((await owner.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:stopped.revision,state:{...h.state,userStopped:true,status:'interrupted'}})).ok,true);
+});
+
+test('a coordinated stop checkpoints a block already cleaned by the sending editor and survives takeover',async()=>{
+  const h=devices(true),phone=h.create(h.actor),laptop=h.create(randomUUID());
+  try{
+    await phone.manager.register(h.request);await h.drain(phone.manager);
+    const {stopResponseEdit}=await import('../response-stop');
+    const change=stopResponseEdit(phone.document.value,h.request.id)!;
+    phone.document.value=phone.document.value.slice(0,change.from)+change.text+phone.document.value.slice(change.to);
+    phone.document.saved=false;
+    await phone.manager.stopResponse(h.request.host,h.request.id);h.advance(200);await h.drain(phone.manager);
+    assert.ok(h.record().stopRequestedAt);assert.equal(h.record().state?.status,'running');assert.doesNotMatch(phone.document.value,/Working|t3-inline:|t3-response:/);
+    phone.manager.dispose();laptop.document.value=phone.document.value;h.advance(LEASE_MS+3000);
+    laptop.manager.discover([h.request.host]);await h.drain(laptop.manager);h.advance(200);await h.drain(laptop.manager);
+    assert.equal(h.record().state?.status,'interrupted');assert.equal(h.record().state?.cleanupComplete,true);
+    assert.match(laptop.document.value,/First paragraph/);assert.doesNotMatch(laptop.document.value,/Working|t3-inline:|t3-response:/);
+  }finally{h.dispose();}
 });

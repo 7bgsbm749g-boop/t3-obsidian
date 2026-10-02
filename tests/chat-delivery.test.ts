@@ -661,7 +661,8 @@ test('editor selection menu streams a T3 reply into its original note for new an
 test('stopping a local editor response removes both tracking tags and the Stop menu action',async()=>{
   const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/Stop.md',region=initialRegion(id);
   try{
-    const opened=h.attachEditor(path,'Before'+region.text+'After');
+    const changed=replaceRegion(region.text,id,region.bodyHash,'**T3 · Working**\n\n> Partial answer')!;
+    const opened=h.attachEditor(path,'Before'+region.text.slice(0,changed.from)+changed.text+region.text.slice(changed.to)+'After');
     const job={id,path,requestId:id,bodyHash:region.bodyHash,phase:'running',createdAt:new Date().toISOString(),threadId:'old-thread',turnId:'old-turn',messageId:webcrypto.randomUUID(),projectId:project.id,connection:{transport:'direct',host:'direct',url:'https://chat.example',connectionId:'chat-connection',environmentId:'chat-env',executable:''}};
     const manager=(h.plugin as any).inlineChat;
     manager.jobs.push(job);
@@ -671,10 +672,11 @@ test('stopping a local editor response removes both tracking tags and the Stop m
     await h.menuFor(opened.view).items.find(item=>item.title==='Stop T3 response')!.callback();
     for(let n=0;n<20&&opened.value.includes('t3-inline:');n++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.doesNotMatch(opened.value,/t3-inline:(?:start|end)/);
-    assert.match(opened.value,/T3 · Stopped/);assert.match(opened.value,/Partial answer/);
+    assert.doesNotMatch(opened.value,/T3 · (?:Working|Stopped)/);assert.match(opened.value,/Partial answer/);
     assert.match(opened.value,/Before/);assert.match(opened.value,/After/);
     assert.equal(manager.activeFor(path).length,0);
     assert.ok(!h.menuFor(opened.view).items.some(item=>item.title==='Stop T3 response'));
+    for(let n=0;n<20&&!h.commands.some(command=>command.type==='thread.turn.interrupt');n++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.equal(h.commands.filter(command=>command.type==='thread.turn.interrupt').length,1);
   }finally{h.plugin.onunload();}
 });
@@ -690,7 +692,7 @@ test('a failed editor response offers recovery and a new saved turn reuses its b
     const menu=h.menuFor(opened.view);
     assert.ok(menu.items.some(item=>item.title==='Continue T3 response'));
     assert.ok(menu.items.some(item=>item.title==='Attach latest T3 continuation'));
-    assert.ok(!menu.items.some(item=>item.title==='Stop T3 response'));
+    assert.ok(menu.items.some(item=>item.title==='Stop T3 response'),'failed blocks also support local cleanup');
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',updatedAt:new Date().toISOString(),session:{status:'error',activeTurnId:null,lastError:'Usage limit'},latestTurn:{turnId:'old-turn',state:'error'}}]);
     await menu.items.find(item=>item.title==='Continue T3 response')!.callback();
     assert.equal(h.commands.length,1,'continuation creates one turn in the existing thread');

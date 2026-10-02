@@ -7,8 +7,8 @@ export const LEASE_MS=15_000;
 export const HEARTBEAT_MS=3000;
 export const LEASE_MARGIN_MS=2000;
 export type LeaseIdentity={vaultId:string;environmentId:string;workspaceRoot:string;directory:string};
-export interface LeaseRecord {request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;state?:HostedInlineState}
-export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer';epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
+export interface LeaseRecord {request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;stopRequestedAt?:number;state?:HostedInlineState}
+export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'stop';epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
 export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;ttlMs:number;answeredAt?:number}
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -87,7 +87,10 @@ export class InlineLeaseAuthority {
       }else{
         if(!record)throw Error('The response is not registered.');
         if(command.kind==='follow'&&record.state?.messageId===command.messageId&&command.previousMessageId!==command.messageId)return respond(true);
-        if(command.kind==='steer'){
+        if(command.kind==='stop'){
+          if(!record.stopRequestedAt)record={...record,stopRequestedAt:this.now(),revision:record.revision+1};
+        }else if(command.kind==='steer'){
+          if(record.stopRequestedAt)throw Error('The response was stopped.');
           const input=command.steering,state=record.state;
           if(!validSteeringInput(input))throw Error('Invalid steering message.');
           const existing=state?.steering?.find(item=>item.messageId===input.messageId);
@@ -95,6 +98,7 @@ export class InlineLeaseAuthority {
           if(!state||state.status!=='running'||!state.turnId||state.finalDocumentHash)throw Error('Wait for a running response before steering. If it finished or paused, ask again after it finishes.');
           record={...record,revision:record.revision+1,state:{...state,steering:[...state.steering??[],{...input,before:steeringBoundary(state.prose??[])}]}};
         }else if(command.kind==='follow'){
+          if(record.stopRequestedAt)throw Error('The response was stopped.');
           const state=record.state,previous=state?.messageId??record.request.messageId;
           if(state?.status!=='error'||!uuid.test(command.messageId??'')||command.messageId===previous||command.previousMessageId!==previous)throw Error('This response is no longer waiting for that continuation.');
           if(command.notePath!==undefined&&!safeNotePath(command.notePath))throw Error('Invalid continuation note path.');
@@ -120,6 +124,9 @@ export class InlineLeaseAuthority {
           else if(command.kind==='checkpoint'){
             if(command.revision!==record.revision)return respond(false,'Response checkpoint changed.');
             const state=command.state;
+            if(state?.userStopped!==undefined&&typeof state.userStopped!=='boolean')throw Error('Invalid response stop checkpoint.');
+            if(record.state?.userStopped&&!state?.userStopped)throw Error('The response was stopped.');
+            if(record.stopRequestedAt&&!state?.userStopped)throw Error('The response was stopped.');
             if(!state||state.requestHash!==hostedRequestHash(record.request)||!safeNotePath(state.notePath)||!Array.isArray(state.hashes)||state.hashes.some(hash=>!/^([0-9a-f]{64})$/.test(hash))||!['waiting','running','complete','interrupted','error','conflict','paused'].includes(state.status)||state.messageId!==undefined&&!uuid.test(state.messageId)||state.pendingMessageId!==undefined&&!uuid.test(state.pendingMessageId))throw Error('Invalid response checkpoint.');
             if(record.state?.pendingMessageId&&state.pendingMessageId!==record.state.pendingMessageId&&state.messageId!==record.state.pendingMessageId)throw Error('The pending continuation changed.');
             if(state.steering!==undefined&&(!Array.isArray(state.steering)||state.steering.length!==(record.state?.steering?.length??0)||state.steering.some(input=>!validSteeringInput(input)||!Array.isArray(input.before))))throw Error('Invalid steering checkpoint.');

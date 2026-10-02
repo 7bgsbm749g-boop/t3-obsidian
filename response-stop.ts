@@ -1,0 +1,67 @@
+import {markdownCodeRanges} from './reply-html';
+import {contentHash} from './completion';
+import {applyThreadItem,finalizeRegion,regionBody,turnForMessage} from './inline-thread';
+import {readInlineSnapshot} from './thread-stream';
+import {parseQuestionToken} from './questions';
+import {commandId} from './direct';
+import type {ThreadAccess} from './thread-stream';
+
+/** Seal the visible transcript, without rebuilding it from a possibly stale stream. */
+export function stoppedResponseBody(body:string):string {
+  const protectedCode=markdownCodeRanges(body);
+  const questions=[...body.matchAll(/^<!-- t3-question:start:([^\n]+) -->\n([\s\S]*?)\n<!-- t3-question:end:\1 -->$/gm)].filter(match=>parseQuestionToken(match[1])&&!protectedCode.some(([from,to])=>match.index!>=from&&match.index!<to));
+  for(const match of questions.reverse()){
+    const text=match[2].split('\n').filter(line=>line!=='> **T3 · Question pending**'&&line!=='> **T3 · Answer needed**'&&line!==`> [Answer](t3-question:${match[1]})`).join('\n');
+    body=body.slice(0,match.index)+text+body.slice(match.index!+match[0].length);
+  }
+  const code=markdownCodeRanges(body);
+  let offset=0;
+  const lines=body.split('\n').filter(line=>{
+    const position=offset;offset+=line.length+1;
+    return code.some(([from,to])=>position>=from&&position<to)||!/^\*\*[^\n]+ · (?:Sending…|Working|Reconnecting|Stopped|Interrupted|Error)\*\*(?: <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>)?\s*$/.test(line);
+  });
+  // Rendered replies normally already close fences; also repair old/broken output.
+  let fence:{mark:string;prefix:string}|undefined;
+  for(const line of lines){
+    const match=/^((?:> ?)* {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
+    if(!match)continue;
+    if(!fence){if(match[2][0]!=='`'||!match[3].includes('`'))fence={mark:match[2],prefix:match[1]};}
+    else if(match[2][0]===fence.mark[0]&&match[2].length>=fence.mark.length&&!match[3].trim())fence=undefined;
+  }
+  if(fence)lines.push(fence.prefix+fence.mark);
+  return lines.join('\n').trim();
+}
+
+export function stopResponseEdit(document:string,id:string){
+  const region=regionBody(document,id);
+  return region?finalizeRegion(document,id,contentHash(region.body),stoppedResponseBody(region.body)):null;
+}
+
+export async function boundedStopOperation<T>(work:Promise<T>,timeoutMs=10_000):Promise<T>{
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  try{return await Promise.race([work,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('Remote stop timed out.')),timeoutMs);})]);}
+  finally{if(timer)clearTimeout(timer);}
+}
+
+/** A deadline bounds access creation and dispatch; late access cannot dispatch. */
+export async function interruptStoppedResponse(accessFor:()=>Promise<ThreadAccess>,requestId:string,threadId:string,turnId?:string,timeoutMs=10_000,messageId?:string,projectId?:string,createdAt=new Date().toISOString()){
+  let expired=false,access:ThreadAccess|undefined,timer:ReturnType<typeof setTimeout>|undefined;
+  let closed=false;
+  const close=()=>{if(!access||closed)return;closed=true;try{void Promise.resolve(access.close?.()).catch(()=>{});}catch{/* Cleanup must not change the stop result. */}};
+  const work=(async()=>{
+    access=await accessFor();
+    if(expired){close();return;}
+    try{
+      if(!turnId){
+        if(!messageId)throw Error('The stopped response has no bound T3 turn.');
+        const snapshot=await readInlineSnapshot(access,threadId,projectId,{messageIds:[messageId],turnIds:[]});
+        turnId=turnForMessage(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state,messageId);
+        if(!turnId)throw Error('T3 has not identified the stopped response turn.');
+      }
+      if(expired)return;
+      await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(requestId,'interrupt'),threadId,turnId,createdAt});
+    }finally{close();}
+  })();
+  try{await Promise.race([work,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{expired=true;close();reject(Error('The response was finished in the note, but T3 did not acknowledge the interrupt.'));},timeoutMs);})]);}
+  finally{if(timer)clearTimeout(timer);}
+}

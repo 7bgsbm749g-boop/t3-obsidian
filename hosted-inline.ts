@@ -9,6 +9,8 @@ import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
 import {mergeProse,selectionRange,type InlineSteering} from './inline-steering';
 import type {InitialInlineInput,InlineMessage} from './inline-thread';
+import {interruptStoppedResponse,stoppedResponseBody} from './response-stop';
+class StopStreamRequested extends Error {}
 
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface HostedInlineRequest {
@@ -29,6 +31,7 @@ export interface HostedInlineState {
   finalSaved?:boolean;
   finalPhase?:'complete'|'interrupted';
   cleanupComplete?:boolean;
+  userStopped?:boolean;
   prose?:InlineMessage[];turnIds?:string[];steering?:InlineSteering[];questionFollows?:InlineQuestionFollow[];
 }
 export interface InlineFiles {
@@ -93,17 +96,34 @@ export interface HostedWriterIO extends InlineFiles {
  * no sender socket, editor tab, or synced credentials participate in writing. */
 export class HostedInlineWriter {
   private stopped=false;
+  private stopIntents=new Set<string>();
+  private networkCancels=new Map<string,()=>void>();
+  private interrupts=new Set<string>();
   private work=new Map<string,Promise<void>>();
   private renameOffsets=new Map<string,number>();
   private renames:Array<{before:string;after:string}>=[];
   private history=new Map<string,{key:string;expires:number;state:import('./inline-thread').InlineThreadState}>();
   constructor(private identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},private io:HostedWriterIO){}
-  stop(){this.stopped=true;}
+  stop(){this.stopped=true;for(const cancel of this.networkCancels.values())cancel();}
+  requestStop(id:string){this.stopIntents.add(id);this.networkCancels.get(hostedPaths(this.identity.directory,id).request)?.();}
+  private async network<T>(path:string,work:()=>Promise<T>):Promise<T>{
+    const id=path.slice(path.lastIndexOf('/')+1,-5);
+    if(this.stopped||this.stopIntents.has(id))throw new StopStreamRequested();
+    let cancel!:()=>void;
+    const interrupted=new Promise<never>((_,reject)=>{cancel=()=>reject(new StopStreamRequested());this.networkCancels.set(path,cancel);});
+    try{return await Promise.race([work(),interrupted]);}
+    finally{if(this.networkCancels.get(path)===cancel)this.networkCancels.delete(path);}
+  }
   renamed(before:string,after:string){this.renames.push({before,after});}
   async tick(){
     const paths=await this.io.requests();
-    const results=await Promise.allSettled(paths.map(path=>{
-      if(this.stopped||this.work.has(path))return;
+    const results=await Promise.allSettled(paths.map(async path=>{
+      if(this.stopped)return;
+      if(this.work.has(path)){
+        const id=path.slice(path.lastIndexOf('/')+1,-5);
+        if(await this.io.read(hostedPaths(this.identity.directory,id).stop)!==undefined)this.requestStop(id);
+        return;
+      }
       const work=this.process(path);this.work.set(path,work);
       return work.finally(()=>{if(this.work.get(path)===work)this.work.delete(path);});
     }));
@@ -136,6 +156,7 @@ export class HostedInlineWriter {
         if(state.notePath!==previousPath)await save();
         if(legacyProof){state.finalPhase=state.status as 'complete'|'interrupted';state.finalSaved=true;state.status='running';await save();}
         if(state.finalSaved){await this.cleanup(request,state,save);return;}
+        if(state.userStopped||this.stopIntents.has(request.id)||await this.io.read(paths.stop)!==undefined){await this.finishStopped(request,state,save);return;}
         if(legacyQuestionReply(state)){
           // Older releases sealed pending questions. Reopen only byte-identical
           // final output; never reconstruct over an edited or moved response.
@@ -161,7 +182,7 @@ export class HostedInlineWriter {
           });
           if(!restored)return;
         }
-        const access=await this.io.access(request.threadEnvironmentId);
+        const access=await this.network(path,()=>this.io.access(request.threadEnvironmentId));
         if(this.stopped)return;
         if(!state.accepted){
           let found=false;
@@ -174,9 +195,9 @@ export class HostedInlineWriter {
         }
         // Upgrade old paused bindings from canonical history before replacing
         // their intact response block, even when Sync changed its contents.
-        let current=restored?undefined:await this.io.threadState?.(request,access);
+        let current=restored?undefined:await this.network(path,()=>Promise.resolve(this.io.threadState?.(request,access)));
         if(!current){
-          const snapshot=await readInlineSnapshot(access,request.threadId,request.projectId);
+          const snapshot=await this.network(path,()=>readInlineSnapshot(access,request.threadId,request.projectId));
           if(this.stopped)return;
           if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
           current=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
@@ -189,7 +210,7 @@ export class HostedInlineWriter {
           const key=JSON.stringify(targets),cached=this.history.get(path);
           if(cached?.key===key&&cached.expires>Date.now())current=cached.state;
           else{
-            const snapshot=await readInlineSnapshot(access,request.threadId,request.projectId,undefined,true);
+            const snapshot=await this.network(path,()=>readInlineSnapshot(access,request.threadId,request.projectId,undefined,true));
             if(this.stopped)return;
             current=applyThreadItem(current,{kind:'snapshot',snapshot}).state;
             this.history.set(path,{key,expires:Date.now()+3000,state:current});
@@ -223,7 +244,7 @@ export class HostedInlineWriter {
         // Session-ready events can precede the final message in the stream.
         // Resolve completion from a fresh canonical snapshot before sealing it.
         if(phase==='complete'&&this.io.threadState){
-          const refreshed=await this.io.threadState(request,access,true);
+          const refreshed=await this.network(path,()=>this.io.threadState!(request,access,true));
           if(refreshed)current={...refreshed,turns:{...current.turns,...refreshed.turns}};
           questions=followInlineQuestions(current,state.turnIds,state.questionFollows,state.prose);
           state.questionFollows=questions.follows;state.turnIds=questions.turnIds;state.turnId=questions.turnId!;
@@ -232,19 +253,16 @@ export class HostedInlineWriter {
         }
         if(state.status==='error'&&phase==='running'&&current.latestTurn?.turnId!==state.turnId&&current.session?.activeTurnId!==state.turnId)return;
         if(state.status==='error'&&!state.pendingMessageId&&phase==='error')return;
-        if(await this.io.read(paths.stop)!==undefined&&phase==='running'){
-          await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(request.id,'interrupt'),threadId:request.threadId,turnId:state.turnId,createdAt:request.createdAt});
-          phase='interrupted';
-        }
+        if(this.stopIntents.has(request.id)||await this.io.read(paths.stop)!==undefined){await this.finishStopped(request,state,save);return;}
         const inputs=questionConversationInputs(current,state.steering??[],state.questionFollows,state.prose);
         const conversation=state.turnIds.length>1||inputs.length?{messages:state.prose,steering:inputs,preserveHistory:questions.continued}:undefined;
         if(phase==='complete'&&this.io.importReplyAsset&&!conversation){
           for(const message of inlineTurnMessages(current,state.turnId,request.keepIntermediate===true)){
-            message.text=await rewriteReplyReferences(message.text,reference=>this.io.importReplyAsset!(reference,request,access));
+            message.text=await this.network(path,()=>rewriteReplyReferences(message.text,reference=>this.io.importReplyAsset!(reference,request,access)));
           }
         }
         let next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true,request.threadEnvironmentId,conversation,request.initialInput,request.threadTitle);
-        if(phase==='complete'&&conversation&&this.io.importReplyAsset)next=await rewriteReplyReferences(next,reference=>this.io.importReplyAsset!(reference,request,access));
+        if(phase==='complete'&&conversation&&this.io.importReplyAsset)next=await this.network(path,()=>rewriteReplyReferences(next,reference=>this.io.importReplyAsset!(reference,request,access)));
         const terminal=phase==='complete'&&!questions.waiting||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the
         // vault edit cannot turn our own output into an apparent user edit.
@@ -300,6 +318,7 @@ export class HostedInlineWriter {
           await this.cleanup(request,state,save);
         }else await save();
       }catch(error){
+        if(error instanceof StopStreamRequested)return;
         logFailure('response.writer.retry',error,{jobId:request.id,notePath:state.notePath,threadId:request.threadId});
         if(state.finalSaved)state.status='running';
         state.detail=error instanceof Error?error.message:'The streaming host will retry.';
@@ -307,6 +326,40 @@ export class HostedInlineWriter {
         // this retry checkpoint: the device adapter verifies that transition.
         await save();
       }
+  }
+  private async finishStopped(request:HostedInlineRequest,state:HostedInlineState,save:()=>Promise<void>){
+    state.userStopped=true;state.status='running';await save();
+    // Remote interruption never participates in the note transaction.
+    if(!this.interrupts.has(request.id)){
+      this.interrupts.add(request.id);
+      void interruptStoppedResponse(()=>this.io.access(request.threadEnvironmentId),request.id,request.threadId,state.turnId,10_000,state.messageId??request.messageId,request.projectId,request.createdAt)
+        .catch(error=>logFailure('response.stop.interrupt.failed',error,{jobId:request.id,threadId:request.threadId}));
+    }
+    let before:string|undefined,after:string|undefined;
+    await this.io.updateNote(state.notePath,document=>{
+      const region=regionBody(document,request.id);
+      if(region){
+        const body=stoppedResponseBody(region.body);
+        const change=finalizeRegion(document,request.id,contentHash(region.body),request.independent?completionProof(request.id,body):body);
+        if(!change)throw Error('Stopped response boundaries are ambiguous. Your text is preserved.');
+        state.body=body;state.finalBody=body;
+        before=document;after=document.slice(0,change.from)+change.text+document.slice(change.to);
+      }else{
+        // The sending editor may already have cleaned this block while offline.
+        const cleaned=removeCompletionProof(document,request.id);
+        if(cleaned===null&&hasResponseMarkers(document,request.id))throw Error('Stopped response boundaries are incomplete. Your text is preserved.');
+        state.finalBody??=stoppedResponseBody(state.body??'');
+        before=document;after=cleaned??document;
+      }
+      return document;
+    });
+    if(before===undefined||after===undefined)return;
+    state.finalDocumentHash=contentHash(after);state.finalPhase='interrupted';await save();
+    let applied=false;
+    await this.io.updateNote(state.notePath,document=>{if(document!==before)return document;applied=true;return after!;});
+    if(!applied)return;
+    if(request.independent){state.finalSaved=true;await save();await this.cleanup(request,state,save);}
+    else{state.status='interrupted';delete state.detail;await save();}
   }
   private async cleanup(request:HostedInlineRequest,state:HostedInlineState,save:()=>Promise<void>){
     let cleaned=false;

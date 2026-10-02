@@ -249,7 +249,7 @@ for(const complete of [false,true])test(`write-ahead recovery survives a crash a
 test('remote Stop interrupts the bound turn with one stable command and writes interrupted status',async()=>{
   const h=harness();h.dispatch();const writer=h.create();await writer.tick();
   h.files.set(h.paths.stop,'{}');await writer.tick();await writer.tick();
-  assert.equal(h.state.status,'interrupted');assert.match(h.document,/T3 · Interrupted/);
+  assert.equal(h.state.status,'interrupted');assert.doesNotMatch(h.document,/T3 · (?:Working|Interrupted)/);
   assert.match(h.document,/Progress A/);assert.doesNotMatch(h.document,/t3-inline:(?:start|end)/);
   const interrupts=h.calls.filter(call=>call.type==='thread.turn.interrupt');assert.equal(interrupts.length,1);assert.equal(interrupts[0].turnId,'turn');assert.equal(interrupts[0].commandId,commandId(h.request.id,'interrupt'));
 });
@@ -489,4 +489,44 @@ test('copied response context survives hosted confirmation and writer restart wi
   assert.match(h.document,/Captured claim\.[\s\S]*\[!t3-steering\] You[\s\S]*Captured claim\.[\s\S]*Steered final/);
   assert.match(h.document,/^User introduction/);assert.match(h.document,/User tail$/);assert.doesNotMatch(h.document,/t3-inline:/);
   const completed=h.document;await h.create().tick();assert.equal(h.document,completed);
+});
+
+for(const independentReply of [false,true])test(`stop finalizes ${independentReply?'independent':'legacy'} output without T3 access or a bound turn`,async()=>{
+  const h=independentReply?independent(harness()):harness();
+  h.document=h.document.replace(/\*\*T3 · Working\*\*[^\n]*/, '**T3 · Reconnecting**\n\n> Visible partial answer');
+  h.files.set(h.paths.stop,'{}');h.io.access=async()=>{throw Error('offline');};
+  await h.create().tick();
+  assert.equal(h.state.status,'interrupted');assert.equal(h.state.userStopped,true);assert.equal(h.state.turnId,undefined);
+  assert.match(h.document,/Visible partial answer/);assert.doesNotMatch(h.document,/t3-inline:|t3-response:|Reconnecting|spinner/);
+  if(independentReply)assert.equal(h.state.cleanupComplete,true);
+});
+
+test('stop bypasses an already hung history fetch and a late snapshot cannot rewrite the note',async()=>{
+  const h=harness();h.dispatch();const writer=h.create();await writer.tick();
+  let release!:(value:any)=>void,started=false;
+  h.io.threadState=()=>{started=true;return new Promise(resolve=>{release=resolve;});};
+  const pending=writer.tick();
+  for(let n=0;n<30&&!started;n++)await new Promise(resolve=>setImmediate(resolve));assert.ok(started);
+  h.files.set(h.paths.stop,'{}');await writer.tick();await pending;await writer.tick();
+  const sealed=h.document;assert.equal(h.state.status,'interrupted');assert.match(sealed,/Progress A/);assert.doesNotMatch(sealed,/Working|t3-inline:/);
+  release({messages:[],activities:[]});await new Promise(resolve=>setImmediate(resolve));await writer.tick();assert.equal(h.document,sealed);
+});
+
+test('stop seals a waiting question and unconfirmed steering without requiring delivery',async()=>{
+  const h=independent(harness());h.dispatch();await h.create().tick();
+  h.files.set(h.paths.state,JSON.stringify({...h.state,status:'waiting',steering:[{messageId:randomUUID(),text:'Not delivered',before:[]}]}));
+  h.files.set(h.paths.stop,'{}');h.io.access=async()=>{throw Error('offline');};await h.create().tick();
+  assert.equal(h.state.status,'interrupted');assert.match(h.document,/Progress A/);assert.doesNotMatch(h.document,/Working|t3-inline:|t3-response:/);
+});
+
+test('a stop between network stages prevents the next history fetch from starting',async()=>{
+  const h=harness();h.dispatch();const writer=h.create(),update=h.io.updateNote;let stopped=false,historyReads=0;
+  h.io.updateNote=async(path,change)=>{
+    const value=await update(path,change);
+    if(!stopped){stopped=true;h.files.set(h.paths.stop,'{}');writer.requestStop(h.request.id);}
+    return value;
+  };
+  h.io.threadState=async()=>{historyReads++;return new Promise(()=>{});};
+  await writer.tick();await writer.tick();
+  assert.equal(historyReads,0);assert.equal(h.state.status,'interrupted');assert.doesNotMatch(h.document,/Working|t3-inline:/);
 });

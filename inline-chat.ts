@@ -5,7 +5,7 @@ import {Notice} from 'obsidian';
 import type {Connection,Request} from './bridge';
 import {commandId,endpoint,environmentApi,type PairedSession} from './direct';
 import {contentHash} from './completion';
-import {activeInlineIds,applyThreadItem,endInsertionOffset,endMarker,finalizeRegion,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,applyThreadItem,endInsertionOffset,endMarker,finalizeRegion,hasResponseMarkers,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type SelectionAnchor} from './inline-thread';
 import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {InlineHostTarget} from './hosted-inline';
 import {replaceInlineEditorText} from './inline-editor';
@@ -13,18 +13,20 @@ import {pendingQuestions} from './questions';
 import {mergeProse,selectionRange,steeringBoundary,validSteeringInput,type InlineSteering,type SteeringInput} from './inline-steering';
 import type {InlineMessage} from './inline-thread';
 import {replaceChangedText} from './inline-note-io';
+import {boundedStopOperation,interruptStoppedResponse,stopResponseEdit} from './response-stop';
 
 export interface InlineJob {
   id:string;path:string;requestId:string;threadId?:string;turnId?:string;messageId?:string;projectId?:string;connection?:Connection;
   bodyHash:string;phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'|'conflict';createdAt:string;finalized?:boolean;
   hosted?:boolean;
+  remoteStopPending?:boolean;
   keepIntermediate?:boolean;
   hostTarget?:InlineHostTarget;
   initialInput?:InitialInlineInput;
   steering?:InlineSteering[];prose?:InlineMessage[];turnIds?:string[];questionFollows?:InlineQuestionFollow[];
 }
 interface EditorSource {editor:Editor;info:MarkdownView|MarkdownFileInfo}
-interface Runtime {state:InlineThreadState;sequence:number;monitor?:{stop():void};source?:EditorSource;timer?:ReturnType<typeof setTimeout>;alerted?:string;refreshing?:boolean;completionChecked?:boolean}
+interface Runtime {state:InlineThreadState;sequence:number;monitor?:{stop():void};source?:EditorSource;timer?:ReturnType<typeof setTimeout>;alerted?:string;refreshing?:boolean;completionChecked?:boolean;stopWork?:Promise<void>;stopRetryAt?:number;stopRetryTimer?:ReturnType<typeof setTimeout>}
 
 export class InlineChatManager {
   private jobs:InlineJob[]=[];
@@ -40,7 +42,7 @@ export class InlineChatManager {
     });
   }
   resume(){for(const job of this.jobs)if(!job.hosted&&job.threadId&&job.connection&&!job.finalized&&!['conflict','cancelled'].includes(job.phase))this.start(job);this.flushAvailable();}
-  dispose(){this.stopped=true;for(const runtime of this.runtimes.values()){runtime.monitor?.stop();if(runtime.timer)clearTimeout(runtime.timer);}this.runtimes.clear();}
+  dispose(){this.stopped=true;for(const runtime of this.runtimes.values()){runtime.monitor?.stop();if(runtime.timer)clearTimeout(runtime.timer);if(runtime.stopRetryTimer)clearTimeout(runtime.stopRetryTimer);}this.runtimes.clear();}
   activeFor(path:string){this.reconcileHosted();return this.jobs.filter(j=>j.path===path&&!j.finalized&&!['cancelled','conflict'].includes(j.phase));}
   find(id:string){return this.jobs.find(job=>job.id===id&&!job.finalized);}
   steeringJob(id:string,messageId:string){return this.jobs.find(job=>job.id===id&&job.steering?.some(input=>input.messageId===messageId&&input.confirmed));}
@@ -50,7 +52,7 @@ export class InlineChatManager {
     if(['conflict','interrupted','error','cancelled'].includes(job.phase))return 'discard';
     return job.phase==='complete'&&job.finalized?'ready':'wait';
   }
-  private reconcileHosted(){let changed=false;for(const job of this.jobs){if(!job.hosted||job.finalized)continue;const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region){job.finalized=true;changed=true;}else if(/^\*\*[^\n]+ · Error\*\*/m.test(region.body)&&job.phase!=='error'){job.phase='error';changed=true;}else if(/^\*\*[^\n]+ · (?:Working|Reconnecting)\*\*/m.test(region.body)&&job.phase==='error'){job.phase='running';changed=true;}}if(changed)this.persist();}
+  private reconcileHosted(){let changed=false;for(const job of this.jobs){if(!job.hosted||job.finalized||job.phase==='cancelled')continue;const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region){job.finalized=true;changed=true;}else if(/^\*\*[^\n]+ · Error\*\*/m.test(region.body)&&job.phase!=='error'){job.phase='error';changed=true;}else if(/^\*\*[^\n]+ · (?:Working|Reconnecting)\*\*/m.test(region.body)&&job.phase==='error'){job.phase='running';changed=true;}}if(changed)this.persist();}
   follow(job:InlineJob,messageId:string){
     if(job.hosted)throw Error('Hosted responses need their owner to attach the continuation.');
     if(job.messageId===messageId&&job.phase!=='error')return;
@@ -104,7 +106,7 @@ export class InlineChatManager {
     if(job.threadId&&job.connection)this.start(job);
   }
   start(job:InlineJob){
-    if(this.stopped||job.hosted||!job.threadId||!job.connection)return;
+    if(this.stopped||job.hosted||job.finalized||job.phase==='cancelled'||!job.threadId||!job.connection)return;
     const runtime=this.runtime(job);runtime.monitor?.stop();
     const access=async()=>{
       if(!job.connection!.environmentId&&job.connection!.transport!=='direct'){job.connection!.environmentId=await (await import('./desktop')).desktopEnvironment(job.connection!);this.persist();}
@@ -112,7 +114,7 @@ export class InlineChatManager {
     };
     runtime.monitor=watchThread(job.threadId,access,{
       item:item=>this.receive(job,item),
-      reconnecting:()=>{if(this.stopped||job.phase==='complete'||job.phase==='conflict')return;job.phase='reconnecting';this.schedule(job);},
+      reconnecting:()=>{if(this.stopped||job.finalized||['complete','conflict','cancelled'].includes(job.phase))return;job.phase='reconnecting';this.schedule(job);},
     },undefined,()=>({messageIds:job.messageId?[job.messageId]:[],turnIds:job.turnIds??(job.turnId?[job.turnId]:[])}));
     if(!['reconnecting','complete','interrupted','error'].includes(job.phase))job.phase='running';this.persist();this.schedule(job);
   }
@@ -125,7 +127,7 @@ export class InlineChatManager {
     const desktop=await import('./desktop');return desktop.desktopThreadAccess(connection);
   }
   private receive(job:InlineJob,item:ThreadStreamItem){
-    if(this.stopped||!this.jobs.includes(job))return;
+    if(this.stopped||job.finalized||job.phase==='cancelled'||!this.jobs.includes(job))return;
     const runtime=this.runtime(job);
     if(item.kind==='snapshot'&&Number.isSafeInteger(item.snapshot?.snapshotSequence)&&item.snapshot.snapshotSequence<runtime.sequence){logEvent('stream.snapshot.stale',{jobId:job.id,sequence:item.snapshot.snapshotSequence,lastSequence:runtime.sequence});return;}
     if(item.kind==='event'&&Number.isSafeInteger(item.event?.sequence)&&item.event.sequence<=runtime.sequence)return;
@@ -167,7 +169,7 @@ export class InlineChatManager {
     const runtime=this.runtime(job);if(runtime.timer)clearTimeout(runtime.timer);
     runtime.timer=setTimeout(()=>{runtime.timer=undefined;this.flush(job);},100);
   }
-  flushAvailable(){this.reconcileHosted();for(const job of this.jobs)if(!job.hosted&&job.threadId&&!job.finalized&&job.phase!=='conflict')this.schedule(job);}
+  flushAvailable(){this.reconcileHosted();for(const job of this.jobs){if(job.phase==='cancelled'){try{this.finishStopped(job);}catch(error){logFailure('response.stop.cleanup.failed',error,{jobId:job.id});}this.requestRemoteStop(job);}else if(!job.hosted&&job.threadId&&!job.finalized&&job.phase!=='conflict')this.schedule(job);}}
   renamed(oldPath:string,newPath:string){let changed=false;for(const job of this.jobs)if(!job.finalized&&(job.path===oldPath||job.path.startsWith(oldPath+'/'))){job.path=newPath+job.path.slice(oldPath.length);changed=true;}if(changed){this.persist();this.flushAvailable();}}
   deleted(path:string){let changed=false;for(const job of this.jobs)if(!job.finalized&&(job.path===path||job.path.startsWith(path+'/'))){job.phase='conflict';this.runtimes.get(job.id)?.monitor?.stop();changed=true;}if(changed)this.persist();}
   private editorFor(job:InlineJob):Editor|undefined {
@@ -177,6 +179,7 @@ export class InlineChatManager {
     return source?.info.file?.path===job.path?source.editor:undefined;
   }
   private flush(job:InlineJob){
+    if(job.phase==='cancelled'){this.finishStopped(job);return;}
     if(this.stopped||job.hosted||!this.jobs.includes(job)||job.finalized||!job.threadId)return;
     const editor=this.editorFor(job);if(!editor)return;
     const runtime=this.runtime(job);
@@ -223,13 +226,45 @@ export class InlineChatManager {
     this.persist();
     if(terminal)runtime.monitor?.stop();
   }
+  /** Menu cleanup also works for an orphaned block with no runtime or connection. */
+  stopAt(id:string,editor:Editor,info:MarkdownView|MarkdownFileInfo){
+    const path=info.file?.path;if(!path)return Promise.resolve();
+    let job=this.jobs.find(item=>item.id===id);
+    if(!job){job={id,path,requestId:id,bodyHash:'',phase:'running',createdAt:new Date().toISOString(),hosted:true};this.jobs.push(job);}
+    this.runtime(job).source={editor,info};
+    return this.stop(job);
+  }
+  private finishStopped(job:InlineJob){
+    if(this.stopped)return;
+    const editor=this.editorFor(job);if(!editor)return;
+    const document=editor.getValue();
+    if(job.finalized&&!hasResponseMarkers(document,job.id))return;
+    const change=stopResponseEdit(document,job.id);
+    if(!change){
+      if(hasResponseMarkers(document,job.id))throw Error('Response boundaries are incomplete. Your text is preserved.');
+    }else replaceChangedText(editor,document,document.slice(0,change.from)+change.text+document.slice(change.to));
+    job.finalized=true;this.persist();
+  }
+  private requestRemoteStop(job:InlineJob){
+    if(this.stopped||!job.remoteStopPending)return;
+    const runtime=this.runtime(job);
+    if(runtime.stopWork||(runtime.stopRetryAt??0)>Date.now())return;
+    runtime.stopRetryAt=Date.now()+30_000;
+    const work=(async()=>{
+      try{
+        if(job.hosted&&this.hosted)await boundedStopOperation(this.hosted.stop(job));
+        else if(job.threadId&&job.connection)await interruptStoppedResponse(()=>this.access(job.connection!),job.requestId,job.threadId,job.turnId,10_000,job.messageId,job.projectId,job.createdAt);
+        job.remoteStopPending=false;this.persist();
+      }catch(error){logFailure('response.stop.remote.failed',error,{jobId:job.id});new Notice('Response finished in this note. The remote stop could not be confirmed; it will retry while Obsidian is open.',10000);}
+    })();
+    runtime.stopWork=work;void work.finally(()=>{runtime.stopWork=undefined;if(!this.stopped&&job.remoteStopPending)runtime.stopRetryTimer=setTimeout(()=>{runtime.stopRetryTimer=undefined;this.requestRemoteStop(job);},30_000);});
+  }
   async stop(job:InlineJob){
-    if(job.hosted&&this.hosted){await this.hosted.stop(job);return;}
-    if(!job.threadId||!job.connection)return;
-    const access=await this.access(job.connection);
-    try{await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(job.requestId,'interrupt'),threadId:job.threadId,...(job.turnId?{turnId:job.turnId}:{}),createdAt:new Date().toISOString()});}
-    finally{await access.close?.();}
-    this.runtime(job).monitor?.stop();job.phase='cancelled';this.persist();this.schedule(job);
+    if(job.phase!=='cancelled'){
+      job.phase='cancelled';job.remoteStopPending=Boolean(job.hosted&&this.hosted||job.threadId&&job.connection);this.persist();
+    }
+    const runtime=this.runtime(job);runtime.monitor?.stop();if(runtime.timer){clearTimeout(runtime.timer);runtime.timer=undefined;}
+    try{this.finishStopped(job);}finally{this.requestRemoteStop(job);}
   }
 }
 function validJob(value:any):value is InlineJob{return value&&typeof value.id==='string'&&typeof value.path==='string'&&typeof value.requestId==='string'&&typeof value.bodyHash==='string'&&typeof value.phase==='string'&&typeof value.createdAt==='string';}

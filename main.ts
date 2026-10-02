@@ -294,7 +294,7 @@ export default class SendToT3 extends Plugin {
           menu.addItem(item=>item.setTitle('Continue T3 response'+suffix).setIcon('rotate-cw').setDisabled(this.busy).onClick(()=>this.continueInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000))));
           menu.addItem(item=>item.setTitle('Attach latest T3 continuation'+suffix).setIcon('link').setDisabled(this.busy).onClick(()=>{void this.attachInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
         }else {if(captured)menu.addItem(item=>item.setTitle('Ask T3 in this response'+suffix).setIcon('message-circle').onClick(()=>this.openEditorChat(selection,file,{editor,view,...captured,responseId:id})));}
-        if(!failed)menu.addItem(item=>item.setTitle('Stop T3 response'+suffix).setIcon('square').onClick(()=>{const job=active.find(job=>job.id===id);void (job?this.inlineChat!.stop(job):this.stopHostedInline(id)).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
+        menu.addItem(item=>item.setTitle('Stop T3 response'+suffix).setIcon('square').onClick(()=>{void this.inlineChat!.stopAt(id,editor,view).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
       }
       if(!captured)return;
       menu.addItem(item=>item.setTitle('Ask T3 Code').setIcon('message-circle').setDisabled(this.busy).onClick(()=>this.openEditorChat(selection,file,{editor,view,...captured})));
@@ -906,9 +906,11 @@ export default class SendToT3 extends Plugin {
     const host=target??await this.inlineHostTarget(),opened=await this.inlineHostFiles(host);
     try{
       const paths=hostedPaths(host.directory,id);
-      if(!await opened.files.read(paths.request))throw Error('This response belongs to an older local stream. Stop it on the device that started it.');
+      const request=await opened.files.read(paths.request);
+      if(!request){new Notice('Response finished in this note. No remote response binding was found.');return;}
       await opened.files.write(paths.stop,JSON.stringify({id,requestedAt:new Date().toISOString()}));
-      new Notice('Stop requested on the vault project machine.');
+      if(this.deviceInline&&JSON.parse(request).version===2)await this.deviceInline.stopResponse(host,id);
+      new Notice('Response finished; remote stop requested.');
     }finally{opened.close();}
   }
   private async chatTarget(notePath?:string,preferred?:NoteThread,ignorePreviousThread=false,overrideKey?:string):Promise<{project:Project;link:FolderLink}> {

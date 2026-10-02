@@ -57,6 +57,11 @@ export class DeviceInlineManager {
     if(!reply.ok||!reply.record)throw Error(reply.error??'Response registration failed.');
     this.receiveRecord(host,reply.record);const runtime=this.jobs.get(request.id);if(runtime)runtime.lastHeartbeat=this.now();this.tick();
   }
+  async stopResponse(target:InlineHostTarget,id:string){
+    const host=this.host(target),reply=await host.client.command({kind:'stop',jobId:id});
+    if(!reply.ok||!reply.record)throw Error(reply.error??'Could not record the response stop.');
+    this.receiveRecord(host,reply.record);this.tick();
+  }
   async follow(target:InlineHostTarget,id:string,previousMessageId:string,messageId:string,notePath?:string){
     if(this.stopped)throw Error('The response writer is unavailable.');
     const host=this.host(target),reply=await host.client.command({kind:'follow',jobId:id,previousMessageId,messageId,notePath});
@@ -95,14 +100,15 @@ export class DeviceInlineManager {
   private receiveRecord(host:Host,record:LeaseRecord){
     if(this.stopped||record.request.vaultId!==this.vaultId||hostKey(record.request.host)!==hostKey(host.target))return;
     const old=this.jobs.get(record.request.id);
-    if(old){if(record.epoch>old.record.epoch||record.epoch===old.record.epoch&&record.revision>=old.record.revision)old.record=record;return;}
+    if(old){if(record.epoch>old.record.epoch||record.epoch===old.record.epoch&&record.revision>=old.record.revision){old.record=record;if(record.stopRequestedAt)old.writer.requestStop(record.request.id);}return;}
     if(terminalLease(record))return;
     const runtime={} as Runtime;
     Object.assign(runtime,{record,host,lastHeartbeat:-Infinity,nextTick:0,sequence:-1});
     const paths=hostedPaths(host.target.directory,record.request.id);
-    const allowed=()=>!this.stopped&&runtime.writeEpoch===runtime.record.epoch&&runtime.record.owner===this.actor&&host.client.valid(record.request.id,runtime.record.epoch);
+    let stopping=false;
+    const allowed=()=>!this.stopped&&(!runtime.record.stopRequestedAt||stopping)&&runtime.writeEpoch===runtime.record.epoch&&runtime.record.owner===this.actor&&host.client.valid(record.request.id,runtime.record.epoch);
     runtime.writer=new HostedInlineWriter({vaultId:this.vaultId,...host.target},{
-      requests:async()=>[paths.request],accepts:request=>request.version===2&&allowed(),
+      requests:async()=>[paths.request],accepts:request=>{if(runtime.record.stopRequestedAt)stopping=true;return request.version===2&&allowed();},
       canResume:path=>this.io.isOpen(path),
       locateNote:this.io.locateNote?async(id,path)=>{
         const located=await this.io.locateNote!(id,path);
@@ -112,10 +118,12 @@ export class DeviceInlineManager {
         }
         return located;
       }:undefined,
-      read:async path=>path===paths.request?JSON.stringify(runtime.record.request):path===paths.state?(runtime.record.state?JSON.stringify(runtime.record.state):undefined):host.files.read(path),
+      read:async path=>path===paths.request?JSON.stringify(runtime.record.request):path===paths.state?(runtime.record.state?JSON.stringify(runtime.record.state):undefined):path===paths.stop&&runtime.record.stopRequestedAt?'{}':host.files.read(path),
       write:async(path,value)=>{
         if(path!==paths.state||!allowed())throw Error('Writer ownership expired.');
         const state:HostedInlineState=JSON.parse(value);
+        if(runtime.record.stopRequestedAt&&!state.userStopped)throw Error('The response was stopped.');
+        stopping=state.userStopped===true;
         // Editor mutations precede Obsidian's debounced disk save. Keep the
         // recovery record active until the final Markdown is actually durable.
         const proofTransition=state.finalSaved&&!runtime.record.state?.finalSaved;
@@ -156,11 +164,13 @@ export class DeviceInlineManager {
         const work=this.maintain(runtime);runtime.heartbeat=work;void work.finally(()=>{runtime.heartbeat=undefined;}).catch(()=>{});
       }
       if(!owns){runtime.monitor?.stop();runtime.monitor=undefined;runtime.state=undefined;runtime.sequence=-1;continue;}
-      if(!runtime.monitor)runtime.monitor=watchThread(record.request.threadId,async()=>{
+      if(record.stopRequestedAt){runtime.monitor?.stop();runtime.monitor=undefined;runtime.writer.requestStop(id);}
+      if(!record.stopRequestedAt&&!runtime.monitor)runtime.monitor=watchThread(record.request.threadId,async()=>{
         // A stream owns its own access lifetime. Its reconnect must not revoke
         // the independently cached access used for note checkpoints/assets.
         return this.io.access(record.request.threadEnvironmentId);
       },{item:item=>this.item(runtime,item),reconnecting:()=>{runtime.state=undefined;}});
+      if(runtime.work&&this.now()>=runtime.nextTick){runtime.nextTick=this.now()+150;void runtime.writer.tick().catch(()=>{});}
       if(!runtime.work&&this.now()>=runtime.nextTick){
         runtime.nextTick=this.now()+150;runtime.writeEpoch=record.epoch;
         const work=runtime.writer.tick();runtime.work=work;void work.finally(()=>{runtime.work=undefined;}).catch(()=>{});
@@ -191,10 +201,10 @@ export class DeviceInlineManager {
   }
   private available(record:LeaseRecord,document:string){
     const {request,state}=record;
-    return state?.finalSaved===true||pendingCompletionCleanup(request,state)&&hasResponseMarkers(document,request.id)||!!regionBody(document,request.id)||contentHash(document)===state?.finalDocumentHash||state?.finalBody!==undefined&&hasCompletionProof(document,request.id,state.finalBody);
+    return !!record.stopRequestedAt||state?.finalSaved===true||pendingCompletionCleanup(request,state)&&hasResponseMarkers(document,request.id)||!!regionBody(document,request.id)||contentHash(document)===state?.finalDocumentHash||state?.finalBody!==undefined&&hasCompletionProof(document,request.id,state.finalBody);
   }
   private item(runtime:Runtime,item:ThreadStreamItem){
-    if(this.stopped||runtime.record.owner!==this.actor||!runtime.host.client.valid(runtime.record.request.id,runtime.record.epoch))return;
+    if(this.stopped||runtime.record.stopRequestedAt||runtime.record.owner!==this.actor||!runtime.host.client.valid(runtime.record.request.id,runtime.record.epoch))return;
     if(item.kind==='snapshot'){
       if(item.snapshot?.thread?.id!==runtime.record.request.threadId||item.snapshot.thread.projectId!==runtime.record.request.projectId)return;
       if(Number.isSafeInteger(item.snapshot.snapshotSequence)&&item.snapshot.snapshotSequence<runtime.sequence)return;
