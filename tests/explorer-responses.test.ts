@@ -12,6 +12,8 @@ test('exact binding checkpoints distinguish running, unresolved input, answered 
     assert.equal(response.input,true);assert.equal(response.complete,false);
     assert.equal(response.active,status==='running');
   }
+  const saving=leaseExplorerResponse(record({status:'running',finishedAt:'2026-10-02T18:28:12Z',questionFollows:[{completed:true}]}));
+  assert.equal(saving.active,false,'A finished exact turn does not spin during a write-ahead checkpoint');assert.equal(saving.input,true);assert.equal(saving.complete,false);
   assert.equal(leaseExplorerResponse(record({status:'complete',questionFollows:[{answered:true}]})).complete,true);
   assert.equal(leaseExplorerResponse(record({status:'complete',pendingMessageId:'follow'})).active,true);
   assert.equal(leaseExplorerResponse(record({status:'complete',pendingMessageId:'follow'})).complete,false);
