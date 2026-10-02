@@ -8,7 +8,7 @@ import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberIn
 import {needsInlineHistory,readInlineSnapshot,type ThreadAccess} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
-import {mergeProse,selectionRange,type InlineSteering} from './inline-steering';
+import {observeIncoming,mergeProse,selectionRange,type InlineSteering} from './inline-steering';
 import type {InitialInlineInput,InlineMessage,InlineTurn,InlineBindingCheckpoint} from './inline-thread';
 import {interruptStoppedResponse,stoppedResponseBody} from './response-stop';
 class StopStreamRequested extends Error {}
@@ -37,7 +37,7 @@ export interface HostedInlineState {
   finalPhase?:'complete'|'interrupted';
   cleanupComplete?:boolean;
   userStopped?:boolean;
-  prose?:InlineMessage[];turnIds?:string[];steering?:InlineSteering[];questionFollows?:InlineQuestionFollow[];
+  prose?:InlineMessage[];turnIds?:string[];steering?:InlineSteering[];incoming?:InlineSteering[];questionFollows?:InlineQuestionFollow[];
 }
 export interface InlineFiles {
   read(path:string):Promise<string|undefined>;
@@ -51,7 +51,7 @@ export function safeNotePath(path:unknown):path is string {
   return typeof path==='string'&&path.endsWith('.md')&&!path.includes('\\')&&!/[\x00-\x1f:]/.test(path)&&path.split('/').every(p=>!!p&&p!=='.'&&p!=='..'&&!p.startsWith('.'));
 }
 export function validateHostedRequest(value:any):HostedInlineRequest {
-  if(value?.initialInput!==undefined&&(!uuid.test(value.initialInput?.messageId??'')||value.initialInput.messageId!==value.messageId||typeof value.initialInput.text!=='string'||!value.initialInput.text.trim()||value.initialInput.text.length>120_000))throw Error('Invalid initial response input.');
+  if(value?.initialInput!==undefined&&(!uuid.test(value.initialInput?.messageId??'')||value.initialInput.messageId!==value.messageId||typeof value.initialInput.text!=='string'||!value.initialInput.text.trim()||value.initialInput.text.length>120_000||value.initialInput.label!==undefined&&(typeof value.initialInput.label!=='string'||value.initialInput.label.length>200)))throw Error('Invalid initial response input.');
   if(value?.threadTitle!==undefined&&(typeof value.threadTitle!=='string'||value.threadTitle.length>200))throw Error('Invalid thread title.');
   if(value?.independent!==undefined&&typeof value.independent!=='boolean')throw Error('Invalid binding preference.');
   if(value?.finalAnswerFormat!==undefined&&!['formatted','raw-markdown'].includes(value.finalAnswerFormat))throw Error('Invalid final answer format.');
@@ -265,6 +265,7 @@ export class HostedInlineWriter {
         }
         let questions=followInlineQuestions(current,state.turnIds,state.questionFollows,state.prose);
         state.questionFollows=questions.follows;state.turnIds=questions.turnIds;state.turnId=questions.turnId!;
+        state.incoming=observeIncoming(current,state.turnIds,state.incoming,state.steering,[request.messageId,request.initialInput?.messageId??'',...Object.values(current.turns??{}).filter(turn=>state.turnIds!.includes(turn.turnId)).map(turn=>turn.messageId??''),...state.questionFollows.flatMap(follow=>follow.input?[follow.input.messageId]:[])]);
         state.prose=mergeProse(state.prose??[],current.messages,state.turnIds);
         let phase=inlineQuestionPhase(current,state.turnId,state.questionFollows);
         const checkCompletion=phase==='complete';
@@ -276,6 +277,7 @@ export class HostedInlineWriter {
           if(refreshed)current=restoreInlineBindings(refreshed,inlineBindingCheckpoint(current));
           questions=followInlineQuestions(current,state.turnIds,state.questionFollows,state.prose);
           state.questionFollows=questions.follows;state.turnIds=questions.turnIds;state.turnId=questions.turnId!;
+          state.incoming=observeIncoming(current,state.turnIds,state.incoming,state.steering,[request.messageId,request.initialInput?.messageId??'',...Object.values(current.turns??{}).filter(turn=>state.turnIds!.includes(turn.turnId)).map(turn=>turn.messageId??''),...state.questionFollows.flatMap(follow=>follow.input?[follow.input.messageId]:[])]);
           state.prose=mergeProse(state.prose,current.messages,state.turnIds);
           phase=inlineQuestionPhase(current,state.turnId,state.questionFollows);
           if(state.steering?.some(input=>!input.confirmed||!turnForMessage(current!,input.messageId)))phase='running';
@@ -288,7 +290,7 @@ export class HostedInlineWriter {
           current={...current,turns:{...state.presentationTurns,...current.turns}};
         }
         state.bindingCheckpoint=inlineBindingCheckpoint(current);
-        const inputs=questionConversationInputs(current,state.steering??[],state.questionFollows,state.prose);
+        const inputs=questionConversationInputs(current,state.incoming??[],state.questionFollows,state.prose);
         const conversation=state.turnIds.length>1||inputs.length?{messages:state.prose,steering:inputs,preserveHistory:questions.continued}:undefined;
         if(phase==='complete'&&this.io.importReplyAsset&&!conversation){
           for(const message of inlineTurnMessages(current,state.turnId,intermediateMode(request.intermediateMode,request.keepIntermediate)!=='remove')){

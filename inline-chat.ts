@@ -13,7 +13,7 @@ import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} 
 import type {InlineHostTarget} from './hosted-inline';
 import {replaceInlineEditorText} from './inline-editor';
 import {pendingQuestions} from './questions';
-import {mergeProse,selectionRange,steeringBoundary,validSteeringInput,type InlineSteering,type SteeringInput} from './inline-steering';
+import {observeIncoming,mergeProse,selectionRange,steeringBoundary,validSteeringInput,type InlineSteering,type SteeringInput} from './inline-steering';
 import type {InlineMessage,InlineBindingCheckpoint} from './inline-thread';
 import {replaceChangedText} from './inline-note-io';
 import {boundedStopOperation,interruptStoppedResponse,stopResponseEdit} from './response-stop';
@@ -26,7 +26,7 @@ export interface InlineJob {
   keepIntermediate?:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat;presentationTurns?:Record<string,InlineTurn>;finishedAt?:string;
   hostTarget?:InlineHostTarget;
   initialInput?:InitialInlineInput;
-  steering?:InlineSteering[];prose?:InlineMessage[];turnIds?:string[];questionFollows?:InlineQuestionFollow[];
+  steering?:InlineSteering[];incoming?:InlineSteering[];prose?:InlineMessage[];turnIds?:string[];questionFollows?:InlineQuestionFollow[];
 }
 interface EditorSource {editor:Editor;info:MarkdownView|MarkdownFileInfo}
 interface Runtime {state:InlineThreadState;sequence:number;monitor?:{stop():void};source?:EditorSource;timer?:ReturnType<typeof setTimeout>;alerted?:string;refreshing?:boolean;completionChecked?:boolean;stopWork?:Promise<void>;stopRetryAt?:number;stopRetryTimer?:ReturnType<typeof setTimeout>}
@@ -160,6 +160,7 @@ export class InlineChatManager {
       }
       const questions=followInlineQuestions(runtime.state,job.turnIds,job.questionFollows,job.prose);
       job.questionFollows=questions.follows;job.turnIds=questions.turnIds;job.turnId=questions.turnId;
+      job.incoming=observeIncoming(runtime.state,job.turnIds,job.incoming,job.steering,[commandId(job.requestId,'message'),job.initialInput?.messageId??'',...Object.values(runtime.state.turns??{}).filter(turn=>job.turnIds!.includes(turn.turnId)).map(turn=>turn.messageId??''),...job.questionFollows.flatMap(follow=>follow.input?[follow.input.messageId]:[])]);
       job.prose=mergeProse(job.prose??[],runtime.state.messages,job.turnIds);
     }
     if(item.kind==='snapshot')runtime.sequence=Number.isSafeInteger(applied.sequence)?applied.sequence!:runtime.sequence;
@@ -213,7 +214,7 @@ export class InlineChatManager {
       runtime.state={...runtime.state,turns:{...job.presentationTurns,...runtime.state.turns}};
     }
     const questions=followInlineQuestions(runtime.state,job.turnIds??[],job.questionFollows,job.prose);
-    const inputs=questionConversationInputs(runtime.state,job.steering??[],questions.follows,job.prose??[]);
+    const inputs=questionConversationInputs(runtime.state,job.incoming??[],questions.follows,job.prose??[]);
     const conversation=(job.turnIds?.length??0)>1||inputs.length?{messages:job.prose??[],steering:inputs,preserveHistory:questions.continued}:undefined;
     if(job.phase==='complete'||job.phase==='interrupted')job.finishedAt??=completionTime(runtime.state,job.turnId??'');else delete job.finishedAt;
     const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,intermediateMode(job.intermediateMode,job.keepIntermediate),job.connection?.environmentId,conversation,job.initialInput,undefined,{startedAt:job.createdAt,finishedAt:job.finishedAt},finalAnswerFormat(job.finalAnswerFormat));

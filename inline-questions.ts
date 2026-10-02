@@ -1,5 +1,5 @@
 import {turnForMessage,turnPhase,type InlineThreadState,type InlineMessage} from './inline-thread';
-import {mergeProse,steeringBoundary,type InlineSteering} from './inline-steering';
+import {incomingLabel,mergeProse,steeringBoundary,type InlineSteering} from './inline-steering';
 import {staleQuestionFailure} from './questions';
 
 export interface InlineQuestionFollow {requestId:string;turnId:string|null;answered?:boolean;dismissed?:boolean;replyTurnId?:string;completed?:boolean;responseMode?:'message'|'native';input?:InlineSteering}
@@ -31,6 +31,7 @@ export function followInlineQuestions(state:InlineThreadState,turnIds:string[],s
         item.input={messageId:reply?.id??`${item.responseMode==='native'?'question-answer':'async-answer'}:${item.requestId}`,text,before:steeringBoundary(history),confirmed:true};
       }
     }
+    if(item.input)item.input.label=reply?incomingLabel(reply):'User';
     if(item.replyTurnId&&!turns.includes(item.replyTurnId))turns.push(item.replyTurnId);
   }
   if(turns.length>turnIds.length)return followInlineQuestions(state,turns,follows,prose);

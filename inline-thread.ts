@@ -6,12 +6,12 @@ import {steeringSegments,type InlineSteering} from './inline-steering';
 import {responseActivityLabel,responseActivityRow} from './response-activity';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
-export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string}
+export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string;context?:unknown}
 export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null;createdAt?:string;sequence?:number;payload?:Record<string,any>}
 export interface InlineTurn {turnId:string;state:string;messageId?:string;requestedAt?:string;completedAt?:string|null;assistantMessageId?:string|null}
 export interface InlineStartRequest {messageId:string;requestedAt:string;sequence:number;activeTurnId?:string;turnId?:string;failed?:boolean}
 export interface InlineBinding {turnId:string;kind:'explicit'|'timestamp'|'start'|'steer';sequence?:number}
-export interface InlineBindingCheckpoint {bindings?:Record<string,InlineBinding>;starts?:Record<string,InlineStartRequest>;turns?:Record<string,InlineTurn>;sequence?:number}
+export interface InlineBindingCheckpoint {bindings?:Record<string,InlineBinding>;starts?:Record<string,InlineStartRequest>;turns?:Record<string,InlineTurn>;sequence?:number;inputBoundaries?:Record<string,InlineMessage[]>}
 export interface InlineThreadState extends InlineBindingCheckpoint {title?:string;messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {
@@ -70,16 +70,17 @@ export function activeInlineIds(document:string):string[]{
 export function failedInlineIds(document:string):string[]{
   return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^(?:> \[!t3-progress\]- )?\*\*[^\n]+ · Error\*\*/m.test(regionBody(document,id)?.body??''));
 }
-export interface InitialInlineInput {messageId:string;text:string}
+export interface InitialInlineInput {messageId:string;text:string;label?:string}
 
 /** The same neutral user quote is used for initial questions and steering. */
-export function renderInlineInput(text:string):string {
-  return `> [!t3-steering] You\n${text.split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
+export function renderInlineInput(text:string,label='You',position?:'live'|'recovered'):string {
+  const heading=label.replace(/[\r\n\t]+/g,' ').replace(/[\\`*_{}\[\]()#+.!>|]/g,'\\$&').slice(0,200);
+  return `> [!t3-steering] ${heading}${position==='recovered'?' · Recovered (paragraph position approximate)':''}\n${text.split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
 }
 
 export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming):{text:string;bodyHash:string} {
   const status=`${mode==='collapse'?'> [!t3-progress]- ':''}**${inlineThreadLabel(threadTitle)} · Working**${timing?' '+runTimer(timing):''} <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
-  const body=(initialInput?`${renderInlineInput(initialInput.text)}\n\n${status}`:status)+`\n\n${responseActivityRow()}`;
+  const body=(initialInput?`${renderInlineInput(initialInput.text,initialInput.label)}\n\n${status}`:status)+`\n\n${responseActivityRow()}`;
   // The final blank line also closes the quote in Obsidian Live Preview when
   // this response is the last block in the note.
   return {text:`\n${startMarker(id)}\n${body}\n${endMarker(id)}\n\n`,bodyHash:contentHash(body)};
@@ -123,13 +124,13 @@ export function finalizeRegion(document:string,id:string,expectedHash:string,fin
 
 /** Keep exact prompt evidence independently of a snapshot's recent transcript. */
 export function inlineBindingCheckpoint(state:InlineThreadState):InlineBindingCheckpoint {
-  return {bindings:state.bindings,starts:state.starts,turns:{...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})},sequence:state.sequence};
+  return {bindings:state.bindings,starts:state.starts,turns:{...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})},sequence:state.sequence,inputBoundaries:state.inputBoundaries};
 }
 export function restoreInlineBindings(state:InlineThreadState,saved?:InlineBindingCheckpoint):InlineThreadState {
   if(saved?.sequence!==undefined&&state.sequence!==undefined&&saved.sequence>state.sequence)return {...saved,messages:[],activities:[],historyComplete:false};
   const turns={...saved?.turns};
   for(const [id,turn] of Object.entries({...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})}))turns[id]={...turns[id],...turn,...(turns[id]?.messageId?{messageId:turns[id].messageId,requestedAt:turns[id].requestedAt}:{})};
-  return establishBindings({...state,sequence:state.sequence??saved?.sequence,latestTurn:state.latestTurn?turns[state.latestTurn.turnId]:undefined,turns,bindings:{...saved?.bindings,...state.bindings},starts:{...saved?.starts,...state.starts}});
+  return establishBindings({...state,inputBoundaries:{...saved?.inputBoundaries,...state.inputBoundaries},sequence:state.sequence??saved?.sequence,latestTurn:state.latestTurn?turns[state.latestTurn.turnId]:undefined,turns,bindings:{...saved?.bindings,...state.bindings},starts:{...saved?.starts,...state.starts}});
 }
 function establishBindings(state:InlineThreadState):InlineThreadState {
   const bindings={...state.bindings},turns={...state.turns},starts={...state.starts};
@@ -195,7 +196,7 @@ export function applyThreadItem(previous:InlineThreadState,item:any):{state:Inli
   }
   if(event.type==='thread.message-sent'&&p&&typeof p.messageId==='string'&&typeof p.text==='string'&&typeof p.role==='string'){
     const old=state.messages.find(m=>m.id===p.messageId);
-    const message:InlineMessage={id:p.messageId,role:p.role,turnId:p.turnId??null,streaming:p.streaming===true,text:old?(p.streaming?old.text+p.text:p.text||old.text):p.text,createdAt:old?.createdAt??p.createdAt};
+    const message:InlineMessage={id:p.messageId,role:p.role,turnId:p.turnId??null,streaming:p.streaming===true,text:old?(p.streaming?old.text+p.text:p.text||old.text):p.text,createdAt:old?.createdAt??p.createdAt,context:p.context??old?.context};
     const latestTurn=p.role==='assistant'&&p.turnId&&state.latestTurn&&state.latestTurn.turnId===p.turnId?{...state.latestTurn,assistantMessageId:p.messageId}:state.latestTurn;
     const starts={...state.starts};
     // A projected prompt plus its start request while the same primary run is
@@ -204,7 +205,8 @@ export function applyThreadItem(previous:InlineThreadState,item:any):{state:Inli
     if(p.role==='assistant'&&p.turnId&&state.session?.status==='running'&&state.session.activeTurnId===p.turnId){
       for(const [id,request] of Object.entries(starts))if(!request.failed&&!request.turnId&&request.activeTurnId===p.turnId&&event.sequence>request.sequence&&Date.parse(p.createdAt)>=Date.parse(request.requestedAt))starts[id]={...request,turnId:p.turnId};
     }
-    return finish({...state,starts,latestTurn,messages:old?state.messages.map(m=>m.id===message.id?message:m):[...state.messages,message]});
+    const inputBoundaries=p.role==='user'&&!old&&!state.inputBoundaries?.[message.id]?{...state.inputBoundaries,[message.id]:state.messages.filter(m=>m.role==='assistant').map(m=>({...m}))}:state.inputBoundaries;
+    return finish({...state,inputBoundaries,starts,latestTurn,messages:old?state.messages.map(m=>m.id===message.id?message:m):[...state.messages,message]});
   }
   if(event.type==='thread.activity-appended'&&validActivity(p?.activity)){
     const activity=p.activity,activities=state.activities.some(a=>a.id===activity.id)?state.activities:[...state.activities,activity];
@@ -436,7 +438,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
   let previousRole:string|undefined;
   const prose=transcript?segments.reduce((body,segment,index)=>{
-    const rendered=segment.role==='user'?renderInlineInput(segment.text):assistant(segment.text,segment.messageId);
+    const rendered=segment.role==='user'?renderInlineInput(segment.text,segment.label,segment.position):assistant(segment.text,segment.messageId);
     // Only adjacent assistant quote blocks share a quoted blank line. Callouts
     // and raw Markdown blocks need a real boundary to avoid swallowing prose.
     const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&!rawFinal(segment.messageId)&&!rawFinal(segments[index-1]?.messageId)&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
@@ -447,7 +449,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null||conversation?.messages.some(m=>m.turnId===request.turnId)).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
-  const input=initialInput?`${renderInlineInput(initialInput.text)}\n\n`:'';
+  const input=initialInput?`${renderInlineInput(initialInput.text,initialInput.label)}\n\n`:'';
   if(mode==='collapse'){
     const pieces=steeringSegments(all,conversation?.steering.filter(item=>item.confirmed)??[]);
     const title=phase==='complete'?`**${label} · Completed**`:heading;
@@ -467,7 +469,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     for(const [index,piece] of pieces.entries()){
       if(piece.role==='user'||piece.messageId&&finalIds.has(piece.messageId)){
         if(progress.length||!blocks.length)flush(index-1);
-        blocks.push(piece.role==='user'?renderInlineInput(piece.text):assistant(piece.text,piece.messageId));
+        blocks.push(piece.role==='user'?renderInlineInput(piece.text,piece.label,piece.position):assistant(piece.text,piece.messageId));
       }else if(piece.text.trim())progress.push(quoteResponse(closeOpenFence(piece.text.trim())));
     }
     if(progress.length||!statusShown)flush(pieces.length);

@@ -455,12 +455,12 @@ for(const version of [1,2,3] as const)for(const dismiss of [false,true])test(`ho
   assert.match(h.document,/First final[\s\S]*> Yes[\s\S]*\*\*T3 · Working\*\*[^\n]*<span class="send-to-t3-inline-spinner"/);
   current.messages.push({id:'async-answer:late',role:'user',text:'Continue? Yes',turnId:null,streaming:false,createdAt:time},{id:'continued',role:'assistant',text:'Follow-up progress.',turnId:'answer-turn',streaming:true});
   current.latestTurn={turnId:'answer-turn',state:'running',requestedAt:time};current.session={status:'running',activeTurnId:'answer-turn'};
-  await h.create().tick();assert.equal(h.state.status,'running');assert.equal(h.state.turnId,'answer-turn');assert.match(h.document,/First final[\s\S]*> \[!t3-steering\] You\n> Yes[\s\S]*Follow-up progress/);assert.equal(h.document.split('> Yes').length-1,1);assert.doesNotMatch(h.document,/Unrelated result/);
+  await h.create().tick();assert.equal(h.state.status,'running');assert.equal(h.state.turnId,'answer-turn');assert.match(h.document,/First final[\s\S]*> \[!t3-steering\] User\n> Yes[\s\S]*Follow-up progress/);assert.equal(h.document.split('> Yes').length-1,1);assert.doesNotMatch(h.document,/Unrelated result/);
   assert.match(h.document,/> Yes[\s\S]*\*\*T3 · Working\*\*[\s\S]*Follow-up progress/);
   assert.equal(h.document.split('· Working').length-1,1);
   current.messages.at(-1)!.streaming=false;current.messages.push({id:'last',role:'assistant',text:'Follow-up final.',turnId:'answer-turn',streaming:false});
   current.latestTurn={...current.latestTurn,state:'completed',assistantMessageId:'last'};current.session={status:'ready',activeTurnId:null};
-  await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/First final[\s\S]*> \[!t3-steering\] You\n> Yes[\s\S]*Follow-up final/);assert.equal(h.document.split('> Yes').length-1,1);assert.doesNotMatch(h.document,/t3-inline:|t3-question:/);
+  await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/First final[\s\S]*> \[!t3-steering\] User\n> Yes[\s\S]*Follow-up final/);assert.equal(h.document.split('> Yes').length-1,1);assert.doesNotMatch(h.document,/t3-inline:|t3-question:/);
   if(version===3){assert.match(h.document,/\nFollow-up final\.\n/);assert.match(h.document,/> Follow-up progress/);}
   const finished=h.document;await h.create().tick();assert.equal(h.document,finished);
   assert.doesNotMatch(finished,/· Working|send-to-t3-inline-spinner/);
@@ -617,4 +617,24 @@ test('a start-only stream checkpoints exact evidence before its prompt or provid
   // The real canonical interface carries a sequence. The harness's older
   // snapshot is intentionally unsequenced and still supplies exact requestedAt.
   await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/Recovered start-only answer/);
+});
+
+test('canonical external inputs complete independent mirrors without touching identical outside text',async()=>{
+ const destinations=[independent(harness()),independent(harness())];
+ const primary=destinations[0].request.messageId,external=randomUUID(),native=randomUUID();
+ const current:InlineThreadState={historyComplete:true,messages:[{id:primary,role:'user',text:'Original',turnId:'turn',streaming:false},
+ {id:'progress',role:'assistant',text:'Before incoming.',turnId:'turn',streaming:false},
+ {id:external,role:'user',text:'External message',turnId:'turn',streaming:false,context:{version:1,records:[{version:1,kind:'fleet-sender',contextId:'fleet-sender-v1',payload:{version:1,kind:'agent',environmentId:'3630e7fa-f1df-4631-b5a2-6086ddaf28a1',threadId:'2801be1c-a9f2-5106-bf29-242a97eee8fe',title:'Sender'}}]}},
+ {id:native,role:'user',text:'Native input',turnId:'turn',streaming:false},
+ {id:'final',role:'assistant',text:'Final after incoming.',turnId:'turn',streaming:false},
+ {id:'other',role:'user',text:'Later unrelated input',turnId:'other-turn',streaming:false}],activities:[],latestTurn:{turnId:'turn',state:'completed',messageId:primary,assistantMessageId:'final'},session:{status:'ready',activeTurnId:null}};
+ for(const h of destinations){
+  h.request.messageId=primary;h.files.set(h.paths.request,JSON.stringify(h.request));h.document+='\nExternal message\nNative input\n';h.io.threadState=async()=>current;
+  await h.create().tick();await h.create().tick();
+  assert.equal(h.state.status,'complete');assert.equal(h.state.cleanupComplete,true);assert.equal(h.state.steering,undefined);
+  assert.equal(h.state.incoming?.length,2);assert.match(h.document,/\[!t3-steering\] Agent · Sender/);assert.match(h.document,/\[!t3-steering\] User/);
+  assert.doesNotMatch(h.document,/Later unrelated input|t3-inline:|t3-response:/);assert.match(h.document,/\nExternal message\nNative input\n$/);
+  assert.equal(h.document.split('> External message').length-1,1);
+  const done=h.document;await h.create().tick();assert.equal(h.document,done);
+ }
 });

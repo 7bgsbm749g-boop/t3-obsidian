@@ -1,9 +1,10 @@
-import type {InlineMessage,SelectionAnchor} from './inline-thread';
+import {turnForMessage,type InlineMessage,type InlineThreadState,type SelectionAnchor} from './inline-thread';
 
 /** Stored with the response checkpoint, never inferred from editable Markdown. */
 export interface InlineSteering {
   messageId:string;text:string;before:InlineMessage[];
   selection?:SelectionAnchor;selectionApplied?:boolean;confirmed?:boolean;
+  label?:string;createdAt?:string;position?:'live'|'recovered';
 }
 export interface SteeringInput {messageId:string;text:string;selection?:SelectionAnchor}
 
@@ -40,8 +41,8 @@ export function mergeProse(saved:InlineMessage[],incoming:InlineMessage[],turns:
   return result.sort((a,b)=>a.createdAt&&b.createdAt?a.createdAt.localeCompare(b.createdAt):0);
 }
 
-export function steeringSegments(messages:InlineMessage[],steering:InlineSteering[]):Array<{role:'assistant'|'user';text:string;messageId?:string}> {
-  const result:Array<{role:'assistant'|'user';text:string;messageId?:string}>=[],consumed=new Map<string,string>();
+export function steeringSegments(messages:InlineMessage[],steering:InlineSteering[]):Array<{role:'assistant'|'user';text:string;messageId?:string;label?:string;position?:'live'|'recovered'}> {
+  const result:Array<{role:'assistant'|'user';text:string;messageId?:string;label?:string;position?:'live'|'recovered'}>=[],consumed=new Map<string,string>();
   const append=(items:InlineMessage[])=>{
     for(const message of items){
       const before=consumed.get(message.id)??'';
@@ -50,8 +51,48 @@ export function steeringSegments(messages:InlineMessage[],steering:InlineSteerin
       consumed.set(message.id,message.text);
     }
   };
-  for(const input of steering){append(input.before);result.push({role:'user',text:input.text});}
+  for(const input of steering){append(input.before);result.push({role:'user',text:input.text,messageId:input.messageId,label:input.label,position:input.position});}
   append(messages);return result;
+}
+
+/** Attribution is structured data, never a guess based on the user role or prose.
+ * Fleet validates the source against its local provider session before sending.
+ * This is a display convention between trusted clients, not a signed identity. */
+export function incomingLabel(message:InlineMessage,local=false):string {
+  const records=(message.context as any)?.records;
+  const senders=Array.isArray(records)?records.filter(record=>record?.kind==='fleet-sender'):[];
+  if(senders.length===1){
+    const record=senders[0],p=record.payload,uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+    if(record.version===1&&p?.version===1&&p.kind==='agent'&&uuid.test(p.environmentId??'')&&uuid.test(p.threadId??'')&&typeof p.title==='string'&&p.title.trim()&&p.title.length<=160)return `Agent · ${p.title}`;
+  }
+  return local?'You':'User';
+}
+
+/** Canonical display records are separate from local editor removal receipts.
+ * Observe only exactly bound turns. Never adopt a later primary turn here. */
+export function observeIncoming(state:InlineThreadState,turns:string[],saved:InlineSteering[]=[],local:InlineSteering[]=[],excluded:string[]=[]):InlineSteering[]{
+  const result=saved.filter(input=>{const turn=turnForMessage(state,input.messageId);return (!excluded.includes(input.messageId)||local.some(item=>item.messageId===input.messageId))&&(!turn||turns.includes(turn)||local.some(item=>item.messageId===input.messageId));}).map(input=>({...input}));
+  for(const message of state.messages){
+    if(message.role!=='user'||!message.text.trim())continue;
+    const reservation=local.find(input=>input.messageId===message.id);
+    if(!reservation&&excluded.includes(message.id))continue;
+    const turn=turnForMessage(state,message.id);
+    if(!reservation&&(!turn||!turns.includes(turn)))continue;
+    const old=result.find(input=>input.messageId===message.id);
+    const index=state.messages.findIndex(item=>item.id===message.id);
+    // Snapshots cannot reconstruct how much a same-id assistant paragraph had
+    // grown when the input arrived. Keep canonical message order and disclose
+    // that the recovered paragraph position is approximate.
+    const preceding=state.messages.slice(0,index).filter(item=>item.role==='assistant'&&turns.includes(item.turnId??'')&&(!message.createdAt||!item.createdAt||item.createdAt<message.createdAt));
+
+    const localOffset=reservation?message.text.indexOf(reservation.text):-1;
+    const exactLocal=reservation&&localOffset>=0&&message.text.indexOf(reservation.text,localOffset+1)<0;
+    const observed=state.inputBoundaries?.[message.id]?.filter(item=>turns.includes(item.turnId??''));
+    const input:InlineSteering={messageId:message.id,text:exactLocal?message.text.slice(localOffset,localOffset+reservation.text.length):message.text,before:old?.before??reservation?.before??(observed?steeringBoundary(observed):steeringBoundary(preceding)),confirmed:true,label:incomingLabel(message,!!reservation),createdAt:message.createdAt,position:old?.position??(reservation||observed?'live':'recovered')};
+    if(old)Object.assign(old,input);else result.push(input);
+  }
+  const positions=new Map(state.messages.map((message,index)=>[message.id,index]));
+  return result.sort((a,b)=>a.createdAt&&b.createdAt&&a.createdAt!==b.createdAt?a.createdAt.localeCompare(b.createdAt):(positions.get(a.messageId)??Number.MAX_SAFE_INTEGER)-(positions.get(b.messageId)??Number.MAX_SAFE_INTEGER));
 }
 
 export function selectionRange(document:string,anchor:SelectionAnchor,exclude?:{from:number;to:number}):{from:number;to:number}|null {

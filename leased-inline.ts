@@ -24,7 +24,7 @@ export interface DeviceInlineIO {
   importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
 type SnapshotRefresh={epoch:number;startedAt:number;work:Promise<InlineThreadState|undefined>;cancel(error:Error):void};
-type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void}};
+type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;replayedIncoming?:Set<string>;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void}};
 type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;close():void;discovery?:Promise<void>;lastDiscovery:number;responses:ExplorerResponse[]};
 const hostKey=(target:InlineHostTarget)=>JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);
 const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...state,updatedAt:''}):'';
@@ -200,15 +200,23 @@ export class DeviceInlineManager {
       const current=runtime.state!,saved=runtime.record.state?.bindingCheckpoint;
       const ids=[state?.pendingMessageId??state?.messageId??request.messageId,...state?.steering?.map(input=>input.messageId)??[]];
       const unresolved=ids.filter(id=>!turnForMessage(current,id)).map(id=>saved?.starts?.[id]).filter((start):start is InlineStartRequest=>!!start&&!start.failed);
-      if(unresolved.length){
-        const items=await readInlineEvents(ready,request.threadId,Math.max(0,Math.min(...unresolved.map(start=>start.sequence))-1),abort.signal);
+      // Recover foreign null-turn inputs from exact events once per identity.
+      // Older installations may have a primary binding without its start event.
+      const foreign=current.messages.filter(message=>message.role==='user'&&message.id!==request.messageId&&!turnForMessage(current,message.id)&&!runtime.replayedIncoming?.has(message.id));
+      if(unresolved.length||foreign.length){
+        const origin=saved?.starts?.[request.messageId];
+        const after=unresolved.length?Math.max(0,Math.min(...unresolved.map(start=>start.sequence))-1):Math.max(0,(origin?.sequence??1)-1);
+        let items:ThreadStreamItem[];
+        try{items=await readInlineEvents(ready,request.threadId,after,abort.signal);}
+        catch(error){if(unresolved.length)throw error;logFailure('response.incoming-replay.failed',error,{jobId:request.id});items=[];}
         if(runtime.refresh!==refresh||!this.owns(runtime)||runtime.record.epoch!==epoch)return;
         const proven=new Set(Object.values(saved?.bindings??{}).map(binding=>binding.turnId));
-        let evidence:InlineThreadState={messages:current.messages.filter(message=>message.role==='user'),activities:[],starts:saved?.starts,bindings:saved?.bindings,turns:Object.fromEntries(Object.entries(saved?.turns??{}).filter(([id])=>proven.has(id)))};
+        let evidence:InlineThreadState={messages:[],activities:[],starts:saved?.starts,bindings:saved?.bindings,turns:Object.fromEntries(Object.entries(saved?.turns??{}).filter(([id])=>proven.has(id)))};
         for(const item of items)evidence=applyThreadItem(evidence,item).state;
         // Historical replay supplies bindings only. Never replace newer prose,
         // session state or ownership with the replay's older projection.
         runtime.state=restoreInlineBindings(runtime.state!,inlineBindingCheckpoint(evidence));
+        if(items.length){runtime.replayedIncoming??=new Set();for(const message of foreign)runtime.replayedIncoming.add(message.id);}
       }
       runtime.refresh=undefined;runtime.snapshotFailures=0;runtime.nextSnapshot=this.monotonic()+INLINE_SNAPSHOT_INTERVAL_MS;
       runtime.nextTick=0;resolve(runtime.state);this.tick();
