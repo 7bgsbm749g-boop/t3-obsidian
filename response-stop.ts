@@ -1,3 +1,4 @@
+import {elapsedRun} from './response-presentation';
 import {markdownCodeRanges} from './reply-html';
 import {contentHash} from './completion';
 import {applyThreadItem,finalizeRegion,regionBody,turnForMessage} from './inline-thread';
@@ -14,11 +15,22 @@ export function stoppedResponseBody(body:string):string {
     const text=match[2].split('\n').filter(line=>line!=='> **T3 · Question pending**'&&line!=='> **T3 · Answer needed**'&&line!==`> [Answer](t3-question:${match[1]})`).join('\n');
     body=body.slice(0,match.index)+text+body.slice(match.index!+match[0].length);
   }
+  // Collapse keeps its thread header when stopped, with a frozen duration.
+  const beforeStop=markdownCodeRanges(body);let stopOffset=0;
+  body=body.split('\n').map(line=>{
+    const position=stopOffset;stopOffset+=line.length+1;
+    if(beforeStop.some(([from,to])=>position>=from&&position<to))return line;
+    if(!/^> \[!t3-progress\]- \*\*[^\n]+ · (?:Working|Reconnecting|Error)\*\*/.test(line))return line;
+    return line.replace(/ · (?:Working|Reconnecting|Error)\*\*/, ' · Interrupted**').replace(/ <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>/,'').replace(/<span class="send-to-t3-run-timer" data-t3-start="(\d+)"(?: data-t3-end="\d+")? aria-label="Elapsed run time">[^<]*<\/span>/,(_match,start)=>{
+      const end=Date.now(),timing={startedAt:new Date(Number(start)).toISOString(),finishedAt:new Date(end).toISOString()};
+      return `<span class="send-to-t3-run-timer" data-t3-start="${start}" data-t3-end="${end}" aria-label="Elapsed run time">${elapsedRun(timing)}</span>`;
+    });
+  }).join('\n');
   const code=markdownCodeRanges(body);
   let offset=0;
   const lines=body.split('\n').filter(line=>{
     const position=offset;offset+=line.length+1;
-    return code.some(([from,to])=>position>=from&&position<to)||!/^\*\*[^\n]+ · (?:Sending…|Working|Reconnecting|Stopped|Interrupted|Error)\*\*(?: <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>)?\s*$/.test(line);
+    return code.some(([from,to])=>position>=from&&position<to)||!/^\*\*[^\n]+ · (?:Sending…|Working|Reconnecting|Stopped|Interrupted|Error)\*\*(?: <span class="send-to-t3-run-timer"[^>]*>[^<]*<\/span>)?(?: <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>)?\s*$/.test(line);
   });
   // Rendered replies normally already close fences; also repair old/broken output.
   let fence:{mark:string;prefix:string}|undefined;

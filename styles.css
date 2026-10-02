@@ -111,3 +111,30 @@
   height: auto;
   min-height: var(--input-height);
 }
+
+/* A default-closed native fold with the requested H6 thread/status header.
+   Its blockquote boundary, rather than heading level, bounds the history. */
+.callout[data-callout="t3-progress"] {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0.7em 0;
+}
+.callout[data-callout="t3-progress"] > .callout-title {
+  font-size: var(--h6-size);
+  font-weight: var(--h6-weight);
+  font-family: var(--h6-font);
+  color: var(--h6-color, var(--text-muted));
+  gap: 0.4em;
+  cursor: pointer;
+}
+.callout[data-callout="t3-progress"] > .callout-title > .callout-icon { display: none; }
+.callout[data-callout="t3-progress"] > .callout-content {
+  padding-inline-start: 1em;
+  border-inline-start: 1px solid var(--background-modifier-border);
+}
+.send-to-t3-run-timer { font-variant-numeric: tabular-nums; color: var(--text-muted); font-weight: normal; }
+.send-to-t3-fold-key { display: none; }
+.send-to-t3-mode-control { flex-direction: column; align-items: stretch; gap: 0.3em; min-width: 170px; }
+.send-to-t3-mode-control input[type="range"] { width: 100%; margin: 0; }
+.send-to-t3-mode-labels { display: flex; justify-content: space-between; gap: 0.5em; font-size: var(--font-ui-smaller); color: var(--text-muted); }

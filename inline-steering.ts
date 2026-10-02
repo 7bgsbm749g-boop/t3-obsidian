@@ -40,13 +40,13 @@ export function mergeProse(saved:InlineMessage[],incoming:InlineMessage[],turns:
   return result.sort((a,b)=>a.createdAt&&b.createdAt?a.createdAt.localeCompare(b.createdAt):0);
 }
 
-export function steeringSegments(messages:InlineMessage[],steering:InlineSteering[]):Array<{role:'assistant'|'user';text:string}> {
-  const result:Array<{role:'assistant'|'user';text:string}>=[],consumed=new Map<string,string>();
+export function steeringSegments(messages:InlineMessage[],steering:InlineSteering[]):Array<{role:'assistant'|'user';text:string;messageId?:string}> {
+  const result:Array<{role:'assistant'|'user';text:string;messageId?:string}>=[],consumed=new Map<string,string>();
   const append=(items:InlineMessage[])=>{
     for(const message of items){
       const before=consumed.get(message.id)??'';
       const text=message.text.startsWith(before)?message.text.slice(before.length):message.text;
-      if(text.trim())result.push({role:'assistant',text});
+      if(text.trim())result.push({role:'assistant',text,messageId:message.id});
       consumed.set(message.id,message.text);
     }
   };

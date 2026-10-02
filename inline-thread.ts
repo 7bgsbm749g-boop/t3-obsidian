@@ -1,6 +1,7 @@
 import {escapeReplyHtml,markdownCodeRanges} from './reply-html';
 import {contentHash} from './completion';
 import {pendingQuestions,renderQuestion} from './questions';
+import {intermediateMode,runTimer,type IntermediateMode,type RunTiming} from './response-presentation';
 import {steeringSegments,type InlineSteering} from './inline-steering';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
@@ -60,10 +61,10 @@ function safeInsertionOffset(document:string,initialOffset:number):number {
 export function startMarker(id:string){return `<!-- t3-inline:start:${id} -->`;}
 export function endMarker(id:string){return `<!-- t3-inline:end:${id} -->`;}
 export function activeInlineIds(document:string):string[]{
-  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*[^\n]+ · (?:Sending…|Working|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
+  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^(?:> \[!t3-progress\]- )?\*\*[^\n]+ · (?:Sending…|Working|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
 }
 export function failedInlineIds(document:string):string[]{
-  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^\*\*[^\n]+ · Error\*\*/m.test(regionBody(document,id)?.body??''));
+  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^(?:> \[!t3-progress\]- )?\*\*[^\n]+ · Error\*\*/m.test(regionBody(document,id)?.body??''));
 }
 export interface InitialInlineInput {messageId:string;text:string}
 
@@ -72,8 +73,8 @@ export function renderInlineInput(text:string):string {
   return `> [!t3-steering] You\n${text.split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
 }
 
-export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string):{text:string;bodyHash:string} {
-  const status=`**${inlineThreadLabel(threadTitle)} · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
+export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming):{text:string;bodyHash:string} {
+  const status=`${mode==='collapse'?'> [!t3-progress]- ':''}**${inlineThreadLabel(threadTitle)} · Working**${timing?' '+runTimer(timing):''} <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
   const body=initialInput?`${renderInlineInput(initialInput.text)}\n\n${status}`:status;
   // The final blank line also closes the quote in Obsidian Live Preview when
   // this response is the last block in the note.
@@ -293,15 +294,17 @@ export function inlineTurnMessages(state:InlineThreadState,turnId:string,keepInt
   return keepIntermediate?messages:final?[final]:[];
 }
 
-export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[];preserveHistory?:boolean},initialInput?:InitialInlineInput,threadTitle?:string):string {
-  const messages=inlineTurnMessages(state,turnId,phase!=='complete'||keepIntermediate);
+export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate:boolean|IntermediateMode=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[];preserveHistory?:boolean},initialInput?:InitialInlineInput,threadTitle?:string,timing?:RunTiming):string {
+  const mode=intermediateMode(keepIntermediate),retain=mode!=='remove';
+  const messages=inlineTurnMessages(state,turnId,phase!=='complete'||retain);
   const answer=messages.map(m=>m.text.replace(/\n+$/,'')).filter(Boolean).join('\n\n');
   // A continuation uses the same transcript as steering, even before the first
   // steer. Keep the final-only preference for unsteered completed responses.
-  const transcript=conversation&&(phase!=='complete'||keepIntermediate||conversation.steering.length||conversation.preserveHistory)?conversation:undefined;
+  const transcript=conversation&&(phase!=='complete'||retain||conversation.steering.length||conversation.preserveHistory)?conversation:undefined;
   const segments=transcript?steeringSegments(transcript.messages,transcript.steering.filter(input=>input.confirmed)):[];
   const label=inlineThreadLabel(state.title??threadTitle);
   const heading=`**${label} · ${phase==='running'||phase==='sending'?'Working':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
+  const timer=timing?' '+runTimer(timing):'';
   const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
@@ -314,17 +317,43 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
     previousRole=segment.role;
     const next=body?body+separator+rendered:rendered;
-    return index===followupIndex?`${next}\n\n${heading}${spinner}`:next;
+    return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}`:next;
   },''):answer?quoteResponse(closeOpenFence(answer)):'';
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null||conversation?.messages.some(m=>m.turnId===request.turnId)).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
   const input=initialInput?`${renderInlineInput(initialInput.text)}\n\n`:'';
+  if(mode==='collapse'){
+    const all=conversation?.messages??inlineTurnMessages(state,turnId,true);
+    const finalIds=new Set<string>();
+    for(const turn of new Set(all.map(message=>message.turnId).filter((id):id is string=>!!id))){
+      if(turnPhase(state,turn)==='complete'){
+        const final=inlineTurnMessages({...state,messages:all},turn).at(-1);if(final)finalIds.add(final.id);
+      }
+    }
+    const pieces=steeringSegments(all,conversation?.steering.filter(item=>item.confirmed)??[]);
+    const title=phase==='complete'?`**${label} · Completed**`:heading;
+    const blocks:string[]=[];let progress:string[]=[];let fold=0;
+    const flush=()=>{
+      const key=encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:${fold++}`);
+      blocks.push(`> [!t3-progress]- ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(progress.length?'\n>\n'+progress.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):''));progress=[];
+    };
+    for(const piece of pieces){
+      if(piece.role==='user'||piece.messageId&&finalIds.has(piece.messageId)){
+        if(progress.length||!blocks.length)flush();
+        blocks.push(piece.role==='user'?renderInlineInput(piece.text):quoteResponse(closeOpenFence(piece.text.trim())));
+      }else if(piece.text.trim())progress.push(quoteResponse(closeOpenFence(piece.text.trim())));
+    }
+    if(progress.length||!blocks.length||phase!=='complete'&&pieces.at(-1)?.role==='user')flush();
+    const action=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
+    const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):phase!=='complete'&&action?'Action needed in T3: '+safeStatus(action.summary):'';
+    return input+blocks.join('\n\n')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
+  }
   if(phase==='complete')return input+(prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
   const activity=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
   const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
   const body=prose?`\n\n${prose}\n`:'';
-  return `${input}${followupIndex<0?heading+spinner:''}${status}${body}${questions?`\n\n${questions}\n`:''}`;
+  return `${input}${followupIndex<0?heading+timer+spinner:''}${status}${body}${questions?`\n\n${questions}\n`:''}`;
 }
 
 export function turnPhase(state:InlineThreadState,turnId:string):'running'|'complete'|'interrupted'|'error' {

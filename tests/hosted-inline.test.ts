@@ -444,7 +444,7 @@ for(const version of [1,2] as const)for(const dismiss of [false,true])test(`host
   await h.create().tick();
   if(dismiss){assert.equal(h.state.status,'complete');assert.doesNotMatch(h.document,/t3-inline:|t3-question:/);return;}
   assert.equal(h.state.status,'running','accepted late answer must show working before the new turn is projected');
-  assert.match(h.document,/First final[\s\S]*> Yes[\s\S]*\*\*T3 · Working\*\* <span class="send-to-t3-inline-spinner"/);
+  assert.match(h.document,/First final[\s\S]*> Yes[\s\S]*\*\*T3 · Working\*\*[^\n]*<span class="send-to-t3-inline-spinner"/);
   current.messages.push({id:'async-answer:late',role:'user',text:'Continue? Yes',turnId:null,streaming:false,createdAt:time},{id:'continued',role:'assistant',text:'Follow-up progress.',turnId:'answer-turn',streaming:true});
   current.latestTurn={turnId:'answer-turn',state:'running',requestedAt:time};current.session={status:'running',activeTurnId:'answer-turn'};
   await h.create().tick();assert.equal(h.state.status,'running');assert.equal(h.state.turnId,'answer-turn');assert.match(h.document,/First final[\s\S]*> \[!t3-steering\] You\n> Yes[\s\S]*Follow-up progress/);assert.equal(h.document.split('> Yes').length-1,1);assert.doesNotMatch(h.document,/Unrelated result/);
@@ -554,4 +554,24 @@ test('a stop between network stages prevents the next history fetch from startin
   h.io.threadState=async()=>{historyReads++;return new Promise(()=>{});};
   await writer.tick();await writer.tick();
   assert.equal(historyReads,0);assert.equal(h.state.status,'interrupted');assert.doesNotMatch(h.document,/Working|t3-inline:/);
+});
+
+for(const version of [1,2] as const)test(`Collapse survives hosted v${version} restart, imports progress assets and retains a frozen duration`,async()=>{
+  const h=harness();h.request.version=version;h.request.intermediateMode='collapse';
+  if(version===2){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===2;}
+  h.files.set(h.paths.request,JSON.stringify(h.request));
+  let complete=false;
+  h.io.threadState=async()=>({messages:[
+    {id:h.request.messageId,role:'user',text:'Question',turnId:null,streaming:false,createdAt:h.request.createdAt},
+    {id:'progress',role:'assistant',text:'Checked [asset](/tmp/progress.txt).\n\n## Nested',turnId:'turn',streaming:false},
+    {id:'final',role:'assistant',text:'Exact final answer.',turnId:'turn',streaming:!complete},
+  ],activities:[],latestTurn:{turnId:'turn',state:complete?'completed':'running',requestedAt:h.request.createdAt,completedAt:complete?new Date(Date.parse(h.request.createdAt)+197000).toISOString():null,assistantMessageId:'final'},session:{status:complete?'ready':'running',activeTurnId:complete?null:'turn'}});
+  const assets:string[]=[];h.io.importReplyAsset=async reference=>{assets.push(reference.source);return '[[T3 Code Attachments/progress.txt]]';};
+  await h.create().tick();assert.match(h.document,/> \[!t3-progress\]- \*\*T3 · Working/);
+  complete=true;await h.create().tick();
+  assert.equal(h.state.status,'complete');assert.match(h.document,/T3 · Completed[\s\S]*>03:17<\/span>/);
+  assert.match(h.document,/\[\[T3 Code Attachments\/progress.txt\]\]/);assert.deepEqual(assets,['/tmp/progress.txt']);
+  assert.match(h.document,/\n\n> Exact final answer\.\n/);assert.doesNotMatch(h.document,/t3-inline:|spinner/);
+  const finished=h.document;await h.create().tick();assert.equal(h.document,finished);
+  assert.throws(()=>validateHostedRequest({...h.request,intermediateMode:'maybe'}),/preference/);
 });

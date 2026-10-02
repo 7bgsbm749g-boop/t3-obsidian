@@ -1,3 +1,4 @@
+import {intermediateMode,completionTime,type IntermediateMode} from './response-presentation';
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,type InlineQuestionFollow} from './inline-questions';
 import {logEvent,logFailure} from './diagnostics';
 import type {App,Editor,MarkdownFileInfo,MarkdownView} from 'obsidian';
@@ -20,7 +21,7 @@ export interface InlineJob {
   bodyHash:string;phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'|'conflict';createdAt:string;finalized?:boolean;
   hosted?:boolean;
   remoteStopPending?:boolean;
-  keepIntermediate?:boolean;
+  keepIntermediate?:boolean;intermediateMode?:IntermediateMode;finishedAt?:string;
   hostTarget?:InlineHostTarget;
   initialInput?:InitialInlineInput;
   steering?:InlineSteering[];prose?:InlineMessage[];turnIds?:string[];questionFollows?:InlineQuestionFollow[];
@@ -32,7 +33,7 @@ export class InlineChatManager {
   private jobs:InlineJob[]=[];
   private runtimes=new Map<string,Runtime>();
   private stopped=false;
-  constructor(private app:App,private key:string,private sessionFor:(id:string)=>Promise<PairedSession|undefined>,private hosted?:{prepare(job:InlineJob,request:Request):Promise<void>;stop(job:InlineJob):Promise<void>},private keepIntermediate:()=>boolean=()=>false) {
+  constructor(private app:App,private key:string,private sessionFor:(id:string)=>Promise<PairedSession|undefined>,private hosted?:{prepare(job:InlineJob,request:Request):Promise<void>;stop(job:InlineJob):Promise<void>},private keepIntermediate:()=>boolean|IntermediateMode=()=>false) {
     const saved=this.app.loadLocalStorage(key);
     if(Array.isArray(saved))this.jobs=saved.filter(validJob).map(job=>{
       // 2.12.6 mistook the client command ID for T3's provider-assigned turn ID.
@@ -52,7 +53,7 @@ export class InlineChatManager {
     if(['conflict','interrupted','error','cancelled'].includes(job.phase))return 'discard';
     return job.phase==='complete'&&job.finalized?'ready':'wait';
   }
-  private reconcileHosted(){let changed=false;for(const job of this.jobs){if(!job.hosted||job.finalized||job.phase==='cancelled')continue;const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region){job.finalized=true;changed=true;}else if(/^\*\*[^\n]+ · Error\*\*/m.test(region.body)&&job.phase!=='error'){job.phase='error';changed=true;}else if(/^\*\*[^\n]+ · (?:Working|Reconnecting)\*\*/m.test(region.body)&&job.phase==='error'){job.phase='running';changed=true;}}if(changed)this.persist();}
+  private reconcileHosted(){let changed=false;for(const job of this.jobs){if(!job.hosted||job.finalized||job.phase==='cancelled')continue;const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region){job.finalized=true;changed=true;}else if(/^(?:> \[!t3-progress\]- )?\*\*[^\n]+ · Error\*\*/m.test(region.body)&&job.phase!=='error'){job.phase='error';changed=true;}else if(/^(?:> \[!t3-progress\]- )?\*\*[^\n]+ · (?:Working|Reconnecting)\*\*/m.test(region.body)&&job.phase==='error'){job.phase='running';changed=true;}}if(changed)this.persist();}
   follow(job:InlineJob,messageId:string){
     if(job.hosted)throw Error('Hosted responses need their owner to attach the continuation.');
     if(job.messageId===messageId&&job.phase!=='error')return;
@@ -81,8 +82,8 @@ export class InlineChatManager {
   private reserveAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,offset:number,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string):InlineJob {
     if(this.stopped)throw Error('The plugin was disabled.');
     const file=info.file;if(!file||file.path!==expectedPath||file.extension.toLowerCase()!=='md')throw Error('The original Markdown note is no longer open. Reopen it and ask T3 again.');
-    const id=requestId,region=initialRegion(id,initialInput,threadTitle);
-    const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt:new Date().toISOString(),keepIntermediate:this.keepIntermediate()===true,...(initialInput?{initialInput}:{})};
+    const id=requestId,createdAt=new Date().toISOString(),mode=intermediateMode(this.keepIntermediate()),region=initialRegion(id,initialInput,threadTitle,mode,{startedAt:createdAt});
+    const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt,keepIntermediate:mode!=='remove',intermediateMode:mode,...(initialInput?{initialInput}:{})};
     this.jobs.push(job);this.runtime(job).source={editor,info};
     try{this.persist();replaceInlineEditorText(editor,region.text,offset);}
     catch(error){this.jobs=this.jobs.filter(item=>item!==job);this.runtimes.delete(job.id);try{this.persist();}catch{/* Original storage error remains primary. */}throw error;}
@@ -201,7 +202,8 @@ export class InlineChatManager {
     const questions=followInlineQuestions(runtime.state,job.turnIds??[],job.questionFollows,job.prose);
     const inputs=questionConversationInputs(runtime.state,job.steering??[],questions.follows,job.prose??[]);
     const conversation=(job.turnIds?.length??0)>1||inputs.length?{messages:job.prose??[],steering:inputs,preserveHistory:questions.continued}:undefined;
-    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,job.keepIntermediate===true,job.connection?.environmentId,conversation,job.initialInput);
+    if(job.phase==='complete'||job.phase==='interrupted')job.finishedAt??=completionTime(runtime.state,job.turnId??'');else delete job.finishedAt;
+    const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,intermediateMode(job.intermediateMode,job.keepIntermediate),job.connection?.environmentId,conversation,job.initialInput,undefined,{startedAt:job.createdAt,finishedAt:job.finishedAt});
     const original=editor.getValue();let document=original;
     const current=regionBody(document,job.id);
     const terminal=job.phase==='complete'&&!questions.waiting||['interrupted','cancelled'].includes(job.phase);

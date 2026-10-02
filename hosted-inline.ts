@@ -1,3 +1,4 @@
+import {intermediateMode,completionTime,type IntermediateMode} from './response-presentation';
 import {questionTargets} from './questions';
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,type InlineQuestionFollow} from './inline-questions';
 import {logEvent,logFailure} from './diagnostics';
@@ -14,7 +15,7 @@ class StopStreamRequested extends Error {}
 
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface HostedInlineRequest {
-  keepIntermediate?:boolean;
+  keepIntermediate?:boolean;intermediateMode?:IntermediateMode;
   initialInput?:InitialInlineInput;
   independent?:boolean;
   threadTitle?:string;
@@ -25,6 +26,7 @@ export interface HostedInlineState {
   requestHash:string;accepted:boolean;notePath:string;turnId?:string;messageId?:string;pendingMessageId?:string;
   status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict'|'paused';
   hashes:string[];body?:string;detail?:string;updatedAt:string;
+  finishedAt?:string;
   finalDocumentHash?:string;
   finalBody?:string;
   /** The proof was verified on disk before its temporary boundaries were removed. */
@@ -49,6 +51,7 @@ export function validateHostedRequest(value:any):HostedInlineRequest {
   if(value?.initialInput!==undefined&&(!uuid.test(value.initialInput?.messageId??'')||value.initialInput.messageId!==value.messageId||typeof value.initialInput.text!=='string'||!value.initialInput.text.trim()||value.initialInput.text.length>120_000))throw Error('Invalid initial response input.');
   if(value?.threadTitle!==undefined&&(typeof value.threadTitle!=='string'||value.threadTitle.length>200))throw Error('Invalid thread title.');
   if(value?.independent!==undefined&&typeof value.independent!=='boolean')throw Error('Invalid binding preference.');
+  if(value?.intermediateMode!==undefined&&!['remove','keep','collapse'].includes(value.intermediateMode))throw Error('Invalid hosted response preference.');
   if(value?.keepIntermediate!==undefined&&typeof value.keepIntermediate!=='boolean')throw Error('Invalid hosted response preference.');
   if(![1,2].includes(value?.version)||(value.version===2&&!uuid.test(value.initialOwner??''))||!uuid.test(value.id??'')||!(typeof value.messageId==='string'&&(uuid.test(value.messageId)||/^async-answer:[^\s\x00-\x1f]{1,200}$/.test(value.messageId)))||!safeNotePath(value.notePath)||
     ![value.threadId,value.vaultId,value.projectId,value.threadEnvironmentId,value.createdAt,value.host?.environmentId,value.host?.workspaceRoot,value.host?.directory].every(x=>typeof x==='string'&&x.length>0)||
@@ -257,11 +260,12 @@ export class HostedInlineWriter {
         const inputs=questionConversationInputs(current,state.steering??[],state.questionFollows,state.prose);
         const conversation=state.turnIds.length>1||inputs.length?{messages:state.prose,steering:inputs,preserveHistory:questions.continued}:undefined;
         if(phase==='complete'&&this.io.importReplyAsset&&!conversation){
-          for(const message of inlineTurnMessages(current,state.turnId,request.keepIntermediate===true)){
+          for(const message of inlineTurnMessages(current,state.turnId,intermediateMode(request.intermediateMode,request.keepIntermediate)!=='remove')){
             message.text=await this.network(path,()=>rewriteReplyReferences(message.text,reference=>this.io.importReplyAsset!(reference,request,access)));
           }
         }
-        let next=renderInlineTurn(current,state.turnId,request.threadId,phase,request.keepIntermediate===true,request.threadEnvironmentId,conversation,request.initialInput,request.threadTitle);
+        if(phase==='complete'||phase==='interrupted')state.finishedAt??=completionTime(current,state.turnId);else delete state.finishedAt;
+        let next=renderInlineTurn(current,state.turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,request.threadTitle,{startedAt:request.createdAt,finishedAt:state.finishedAt});
         if(phase==='complete'&&conversation&&this.io.importReplyAsset)next=await this.network(path,()=>rewriteReplyReferences(next,reference=>this.io.importReplyAsset!(reference,request,access)));
         const terminal=phase==='complete'&&!questions.waiting||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the
