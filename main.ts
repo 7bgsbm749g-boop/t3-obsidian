@@ -34,12 +34,12 @@ import {handoffInline,hostedPaths,type HostedInlineRequest,type InlineHostTarget
 import {leasePaths,type LeaseRecord} from './inline-lease';
 import {installMobileSelectionAction} from './mobile-selection-action';
 import {hiddenInlineMarkerExtension} from './inline-markers';
-import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,initialRegion,endInsertionOffset,endMarker,failedInlineIds,regionBody,startMarker,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,selectionOverlapsInlineResponse,initialRegion,endInsertionOffset,endMarker,failedInlineIds,regionBody,startMarker,type SelectionAnchor} from './inline-thread';
 import {QuestionController} from './question-controller';
 import {QuestionModal,questionButton,questionEditorExtension} from './question-ui';
 import {questionTargets,parseQuestionToken,clearResolvedQuestion,type QuestionTarget} from './questions';
 import {settlementState,type ThreadSettlementJob} from './thread-settlement';
-type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;initialQuestion?:string;responseId?:string};
+type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;referenceSelection?:boolean;initialQuestion?:string;responseId?:string};
 const INLINE_REPLY_INSTRUCTION='Answer in the T3 thread. The Obsidian plugin will insert your reply.';
 const THREAD_REPLY_INSTRUCTION='Answer in the T3 thread.';
 const NEW_FOLDER_PROJECT='folder:new';
@@ -277,6 +277,8 @@ export default class SendToT3 extends Plugin {
       const active=this.inlineChat?.activeFor(file.path)??[];
       const ids=[...new Set([...active.map(job=>job.id),...activeInlineIds(editor.getValue()),...failedInlineIds(editor.getValue())])];
       const cursorId=inlineTargetAt(editor.getValue(),editor.posToOffset(editor.getCursor()));
+      let captured:Pick<EditorChatContext,'anchor'|'referenceSelection'>|undefined;
+      if(selection.trim())try{const anchor=captureEditorSelection(editor);captured={anchor,referenceSelection:selectionOverlapsInlineResponse(editor.getValue(),anchor)};}catch{}
       for(const id of cursorId?[cursorId]:ids){
         const failed=active.find(job=>job.id===id)?.phase==='error'||failedInlineIds(editor.getValue()).includes(id);
         const label=/^\*\*(.+) · (?:Working|Reconnecting|Error)\*\*/m.exec(regionBody(editor.getValue(),id)?.body??'')?.[1];
@@ -284,13 +286,11 @@ export default class SendToT3 extends Plugin {
         if(failed){
           menu.addItem(item=>item.setTitle('Continue T3 response'+suffix).setIcon('rotate-cw').setDisabled(this.busy).onClick(()=>this.continueInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000))));
           menu.addItem(item=>item.setTitle('Attach latest T3 continuation'+suffix).setIcon('link').setDisabled(this.busy).onClick(()=>{void this.attachInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
-        }else {if(selection.trim())menu.addItem(item=>item.setTitle('Ask T3 in this response'+suffix).setIcon('message-circle').onClick(()=>this.openEditorChat(selection,file,{editor,view,anchor:captureEditorSelection(editor),responseId:id})));}
+        }else {if(captured)menu.addItem(item=>item.setTitle('Ask T3 in this response'+suffix).setIcon('message-circle').onClick(()=>this.openEditorChat(selection,file,{editor,view,...captured,responseId:id})));}
         if(!failed)menu.addItem(item=>item.setTitle('Stop T3 response'+suffix).setIcon('square').onClick(()=>{const job=active.find(job=>job.id===id);void (job?this.inlineChat!.stop(job):this.stopHostedInline(id)).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
       }
-      if(!selection.trim())return;
-      let anchor:SelectionAnchor;
-      try{anchor=captureEditorSelection(editor);}catch{return;}
-      menu.addItem(item=>item.setTitle('Ask T3 Code').setIcon('message-circle').setDisabled(this.busy).onClick(()=>this.openEditorChat(selection,file,{editor,view,anchor})));
+      if(!captured)return;
+      menu.addItem(item=>item.setTitle('Ask T3 Code').setIcon('message-circle').setDisabled(this.busy).onClick(()=>this.openEditorChat(selection,file,{editor,view,...captured})));
     }));
   }
   private openQuestion(target:QuestionTarget){
@@ -619,6 +619,9 @@ export default class SendToT3 extends Plugin {
     };
   }
   private openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false){
+    // Generated text is captured context, never a source to move. Classify it
+    // before the chooser/network waits: streaming may replace its surroundings.
+    if(inline?.anchor&&inline.referenceSelection===undefined)inline={...inline,referenceSelection:selectionOverlapsInlineResponse(inline.editor.getValue(),inline.anchor)};
     const send=(text:string,options?:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string})=>inline&&note?this.sendInlineChat(text,note,inline,options):this.sendChat(answerOnly?`${text}\n\n${THREAD_REPLY_INSTRUCTION}`:text,note,options);
     const host:ChatHost={...this.destinationContext(note,inline),
       sendChat:(text,key)=>send(text,{projectOverrideKey:key}),
@@ -663,12 +666,13 @@ export default class SendToT3 extends Plugin {
     if(options?.threadId&&options.threadId!==threadId)throw Error('This note has a running response in another thread. Finish or stop it first.');
     if(hosted&&(hosted.record.state?.notePath??hosted.record.request.notePath)!==note.path)throw Error('The response note moved. Wait for the writer to catch up.');
     await this.checkRecoveryBlock(id,note.path,hosted?.record.state?.hashes??[job!.bodyHash]);
-    if(context.anchor){const range=selectionRange(context.editor.getValue(),context.anchor),region=regionBody(context.editor.getValue(),id)!;if(!range)throw Error('The selected text changed. Select it again.');if(range.to>region.from-startMarker(id).length-1&&range.from<region.to+endMarker(id).length+1)throw Error('Select your message outside the running response, or type it in the palette.');}
+    let selection=context.referenceSelection?undefined:context.anchor;
+    if(selection){const document=context.editor.getValue(),range=selectionRange(document,selection);if(!range)throw Error('The selected text changed. Select it again.');if(selectionOverlapsInlineResponse(document,{start:range.from,end:range.to}))selection=undefined;}
     const project=await this.recoveryProject(projectId,environmentId),key=projectKey(project);
     if(options?.expectedProjectKey&&options.expectedProjectKey!==key||options?.projectOverrideKey&&options.projectOverrideKey!==key)throw Error('Steering must use the running thread’s project.');
     await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{threadId,projectOverrideKey:key,onPrepared:request=>{
       logEvent('steering.prepared',{jobId:id,requestId:request.id,messageId:commandId(request.id,'message'),threadId,projectId});
-      request.inlineSteering={jobId:id,...(hosted?{host:hosted.host}:{}),input:{messageId:commandId(request.id,'message'),text:prompt,...(context.anchor?{selection:context.anchor}:{})}};
+      request.inlineSteering={jobId:id,...(hosted?{host:hosted.host}:{}),input:{messageId:commandId(request.id,'message'),text:prompt,...(selection?{selection}:{})}};
     }});
   }
   private async recoveryRecord(id:string,path:string):Promise<{record:LeaseRecord;host:InlineHostTarget}|undefined>{

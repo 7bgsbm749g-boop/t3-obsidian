@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {contentHash} from '../completion';
-import {activeInlineIds,applyThreadItem,endInsertionOffset,failedInlineIds,finalizeRegion,initialRegion,insertionOffset,inlineSteeringTarget,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
+import {activeInlineIds,applyThreadItem,endInsertionOffset,failedInlineIds,finalizeRegion,initialRegion,insertionOffset,inlineSteeringTarget,selectionOverlapsInlineResponse,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
 
 test('follow-up steering targets the sole running reply outside its block and scopes multiple replies explicitly',()=>{
   const a='f95a3b36-7393-4508-9fb3-38aa2da3590f',b='915e8577-9bbc-463c-88c6-e6c2d3e24c3b';
@@ -238,4 +238,17 @@ test('canonical thread names label active replies and disappear on completion',(
   }
   const updated=applyThreadItem(state,{kind:'snapshot',snapshot:{thread:{title:'Beta',messages:[],activities:[]}}}).state;
   assert.match(renderInlineTurn(updated,'turn','thread'),/^\*\*Beta · Working/);
+});
+
+test('selection overlap includes any tracked block and its boundaries, but excludes adjacent note text',()=>{
+  const a='f95a3b36-7393-4508-9fb3-38aa2da3590f',b='915e8577-9bbc-463c-88c6-e6c2d3e24c3b';
+  const document='Before'+initialRegion(a).text+'Between'+initialRegion(b).text+'After';
+  for(const id of [a,b]){
+    const region=regionBody(document,id)!;
+    assert.equal(selectionOverlapsInlineResponse(document,{start:region.from,end:region.from+3}),true);
+    assert.equal(selectionOverlapsInlineResponse(document,{start:0,end:region.from+3}),true);
+    assert.equal(selectionOverlapsInlineResponse(document,{start:region.to,end:document.length}),true);
+  }
+  assert.equal(selectionOverlapsInlineResponse(document,{start:0,end:6}),false);
+  assert.equal(selectionOverlapsInlineResponse(document,{start:document.length-5,end:document.length}),false);
 });

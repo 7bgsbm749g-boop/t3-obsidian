@@ -361,6 +361,14 @@ export function turnPhase(state:InlineThreadState,turnId:string):'running'|'comp
   return 'running';
 }
 
+/** Generated selections are context, including selections crossing markers. */
+export function selectionOverlapsInlineResponse(document:string,range:{start:number;end:number}):boolean {
+  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].some(match=>{
+    const region=regionBody(document,match[1]);
+    return !!region&&range.end>match.index!&&range.start<region.to+1+endMarker(match[1]).length;
+  });
+}
+
 /** Find the response containing the cursor/selection. */
 export function inlineTargetAt(document:string,offset:number):string|undefined {
   return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)]

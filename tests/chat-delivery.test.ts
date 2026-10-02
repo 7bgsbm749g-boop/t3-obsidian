@@ -8,7 +8,7 @@ import {WAIT_FOR_OTHER_THREADS_INSTRUCTION} from '../orchestration';
 import {modelConfig} from './rpc-fixture';
 import {InlineLeaseAuthority,leasePaths} from '../inline-lease';
 import {hostedRequestHash} from '../hosted-inline';
-import {initialRegion,replaceRegion} from '../inline-thread';
+import {initialRegion,replaceRegion,regionBody} from '../inline-thread';
 import {contentHash} from '../completion';
 
 const project={id:'chat-project',title:'Personal notes',workspaceRoot:'/projects/notes',connectionId:'chat-connection',connectionName:'Laptop'};
@@ -1377,4 +1377,48 @@ test('an agent send retries a lost delivery acknowledgement with the exact durab
     assert.equal((note.value.match(/t3-inline:start:/g)??[]).length,1);
     assert.equal(h.commands.filter(item=>item.type==='thread.create').length,1,'An acknowledged thread creation is not repeated');
   }finally{restarted?.onunload();h.plugin.onunload();}
+});
+
+for(const hosted of [false,true])for(const surface of ['editor','targeted','palette','boundary','other-response'])test(`response selection is copied through ${surface} steering on the ${hosted?'hosted':'local'} writer after streaming changes`,async()=>{
+  const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/ResponseSelection.md',initial=initialRegion(id);
+  try{
+    const body='**T3 · Working**\n\n> Captured claim.',change=replaceRegion(initial.text,id,initial.bodyHash,body)!;
+    const original='Before'+initial.text.slice(0,change.from)+change.text+initial.text.slice(change.to)+'Tail';
+    const other=webcrypto.randomUUID(),otherRegion=initialRegion(other),otherChange=replaceRegion(otherRegion.text,other,otherRegion.bodyHash,'**T3 · Working**\n\n> Other claim.')!;
+    const opened=h.attachEditor(path,original+(surface==='other-response'?otherRegion.text.slice(0,otherChange.from)+otherChange.text+otherRegion.text.slice(otherChange.to):''));
+    const start=surface==='boundary'?0:opened.value.indexOf(surface==='other-response'?'Other claim.':'Captured claim.');
+    const end=surface==='other-response'?start+'Other claim.'.length:opened.value.indexOf('Captured claim.')+'Captured claim.'.length;
+    const selected=opened.value.slice(start,end);
+    opened.editor.getSelection=()=>selected;opened.editor.getCursor=(side:string)=>opened.editor.offsetToPos(side==='from'?start:end);
+    const messageId=webcrypto.randomUUID(),prose=[{id:'progress',role:'assistant',turnId:'old-turn',text:'Captured claim.',streaming:false}];
+    const manager=h.plugin.inlineChat;
+    const job:any={id,path,requestId:id,bodyHash:contentHash(body),phase:'running',createdAt:'original-time',threadId:'old-thread',turnId:'old-turn',messageId,projectId:project.id,prose,connection:{transport:'direct',host:'direct',url:'https://chat.example',connectionId:'chat-connection',environmentId:'chat-env',executable:''}};
+    const host={environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1',connectionId:'chat-connection'};
+    if(hosted){
+      const request={version:2,initialOwner:webcrypto.randomUUID(),id,vaultId:h.plugin.settings.vaultId,host,notePath:path,threadId:'old-thread',messageId,projectId:project.id,threadEnvironmentId:'chat-env',initialHash:initial.bodyHash,createdAt:'original-time'};
+      h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,owner:request.initialOwner,epoch:1,revision:1,expiresAt:Date.now()+15_000,state:{requestHash:hostedRequestHash(request as any),accepted:true,notePath:path,status:'running',hashes:[contentHash(body)],turnId:'old-turn',prose,updatedAt:''}}));
+    }else {manager.jobs.push(job);const runtime=manager.runtime(job);runtime.sequence=1;runtime.state={messages:prose,activities:[]};}
+    h.setThreads([{id:'old-thread',projectId:project.id,title:'Working',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running',requestedAt:'original-time'}}]);
+    if(surface==='palette')await h.plugin.openPaletteAction('Explain this claim.',selected);
+    else if(surface==='editor'||surface==='targeted')await h.menuFor(opened.view).items.find(item=>item.title===(surface==='editor'?'Ask T3 Code':'Ask T3 in this response'))!.callback();
+    else h.plugin.openEditorChat(selected,opened.file,{editor:opened.editor,view:opened.view,anchor:{text:selected,start,end,before:opened.value.slice(Math.max(0,start-24),start),after:opened.value.slice(end,end+24)},responseId:id});
+    const expanded=body+' More streamed text.',region=regionBody(opened.value,id)!;
+    opened.editor.replaceRange(expanded,opened.editor.offsetToPos(region.from),opened.editor.offsetToPos(region.to));
+    if(hosted){const record=JSON.parse(h.hostFiles.get(leasePaths(host.directory,id).record)!);record.state.hashes.push(contentHash(expanded));h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify(record));}
+    else job.bodyHash=contentHash(expanded);
+    await h.modals.at(-1).choose(false);
+    assert.equal(h.commands.length,1);assert.equal(h.commands[0].threadId,'old-thread');assert.ok(h.commands[0].message.text.includes(selected));
+    const input=hosted?JSON.parse(h.hostFiles.get(leasePaths(host.directory,id).record)!).state.steering[0]:job.steering[0];
+    assert.equal(input.selection,undefined,'generated context must never become a removal anchor');
+    assert.ok(opened.value.includes('Captured claim. More streamed text.'));
+    if(surface==='palette')assert.match(input.text,/Question:\nExplain this claim\./);
+    if(!hosted){
+      const command=h.commands[0];
+      manager.receive(job,{kind:'snapshot',snapshot:{snapshotSequence:3,thread:{messages:[{id:command.message.messageId,role:'user',text:command.message.text,streaming:false,createdAt:command.createdAt},{id:'final',role:'assistant',turnId:'next-turn',text:'Changed approach.',streaming:false}],activities:[],latestTurn:{turnId:'next-turn',state:'completed',requestedAt:command.createdAt,assistantMessageId:'final'},session:{status:'ready',activeTurnId:null}}}});
+      manager.flush(job);
+      assert.match(opened.value,/Captured claim\.[\s\S]*\[!t3-steering\] You[\s\S]*Changed approach\./);
+      assert.ok(opened.value.startsWith('Before'));assert.match(opened.value,/Tail/);
+      if(surface==='other-response')assert.ok(opened.value.endsWith(otherRegion.text.slice(0,otherChange.from)+otherChange.text+otherRegion.text.slice(otherChange.to)));
+    }
+  }finally{h.plugin.onunload();}
 });

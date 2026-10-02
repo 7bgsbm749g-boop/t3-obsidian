@@ -458,3 +458,18 @@ test('upgrade reopens an older finalized async question only from byte-identical
     else {assert.equal(h.state.status,'waiting');assert.match(h.document,/t3-inline:start/);assert.match(h.document,/Old final/);}
   }
 });
+
+test('copied response context survives hosted confirmation and writer restart without deleting assistant prose',async()=>{
+  const h=harness(),id=randomUUID(),selected='Captured claim.';
+  h.dispatch();h.answer(selected);await h.create().tick();
+  h.files.set(h.paths.state,JSON.stringify({...h.state,steering:[{messageId:id,text:selected,before:h.state.prose}]}));
+  h.answer('Original final',true);await h.create().tick();
+  assert.equal(h.state.status,'running','unconfirmed input keeps the response attached');
+  h.io.threadState=async()=>({messages:[{id,role:'user',text:selected,turnId:null,streaming:false,createdAt:'next-time'},{id:'next-answer',role:'assistant',text:'Steered final',turnId:'next-turn',streaming:false}],activities:[],latestTurn:{turnId:'next-turn',state:'completed',requestedAt:'next-time',assistantMessageId:'next-answer'},session:{status:'ready',activeTurnId:null}});
+  await h.create().tick();
+  assert.equal(h.state.status,'complete');assert.equal(h.state.steering![0].selection,undefined);
+  assert.equal(h.document.split(selected).length-1,2,'assistant prose and the copied You quote both remain');
+  assert.match(h.document,/Captured claim\.[\s\S]*\[!t3-steering\] You[\s\S]*Captured claim\.[\s\S]*Steered final/);
+  assert.match(h.document,/^User introduction/);assert.match(h.document,/User tail$/);assert.doesNotMatch(h.document,/t3-inline:/);
+  const completed=h.document;await h.create().tick();assert.equal(h.document,completed);
+});
