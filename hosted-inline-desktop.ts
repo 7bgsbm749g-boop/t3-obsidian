@@ -79,6 +79,7 @@ export class DesktopInlineHost {
     }catch(error){logFailure('ownership.coordinator.open.failed',error,identity);throw error;}
   }
   tick(){if(this.stopped)return Promise.resolve();const work=this.writer.tick();this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});return work;}
-  renamed(before:string,after:string){this.writer.renamed(before,after);}
+  renamed(before:string,after:string){this.writer.renamed(before,after);this.authority.renamed(before,after);}
+  deleted(path:string){this.authority.deleted(path);}
   dispose(){if(this.stopped)return;this.stopped=true;this.stopAuthorityTimer();this.authority.stop();this.writer.stop();void (async()=>{try{await Promise.allSettled([...this.work,this.authority.tick()]);}catch{}finally{for(const {access} of this.accesses.values())await access.close?.();this.accesses.clear();await this.release();}})().catch(()=>{});}
 }

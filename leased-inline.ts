@@ -1,3 +1,4 @@
+import {explorerResponsePath,leaseExplorerResponse,loadExplorerResponses,relocateExplorerResponses,type ExplorerResponse} from './explorer-responses';
 import {contentHash} from './completion';
 import {HostedInlineWriter,hostedPaths,validateHostedRequest,pendingCompletionCleanup,type HostedInlineRequest,type HostedInlineState,type InlineFiles,type InlineHostTarget} from './hosted-inline';
 import {InlineLeaseClient,HEARTBEAT_MS,leasePaths,terminalLease,type LeaseRecord,type LeaseReply} from './inline-lease';
@@ -24,7 +25,7 @@ export interface DeviceInlineIO {
 }
 type SnapshotRefresh={epoch:number;startedAt:number;work:Promise<InlineThreadState|undefined>;cancel(error:Error):void};
 type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void}};
-type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;close():void;discovery?:Promise<void>;lastDiscovery:number};
+type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;close():void;discovery?:Promise<void>;lastDiscovery:number;responses:ExplorerResponse[]};
 const hostKey=(target:InlineHostTarget)=>JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);
 const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...state,updatedAt:''}):'';
 
@@ -44,7 +45,7 @@ export class DeviceInlineManager {
       try{return await fn((await opened).files);}catch(error){if(connection===opened)connection=undefined;void opened.then(value=>value.close()).catch(()=>{});throw error;}
     };
     const files:InlineFiles={read:path=>perform(io=>io.read(path)),write:(path,value)=>perform(io=>io.write(path,value))};
-    const host:Host={target,files,client:new InlineLeaseClient(this.actor,files,target.directory,this.now,this.monotonic,this.pause),lastDiscovery:0,close:()=>{host.client.dispose();void connection?.then(value=>value.close()).catch(()=>{});}};
+    const host:Host={target,files,client:new InlineLeaseClient(this.actor,files,target.directory,this.now,this.monotonic,this.pause),lastDiscovery:0,responses:[],close:()=>{host.client.dispose();void connection?.then(value=>value.close()).catch(()=>{});}};
     this.hosts.set(key,host);return host;
   }
   private access(environmentId:string){
@@ -86,6 +87,13 @@ export class DeviceInlineManager {
       if(host.discovery||this.now()-host.lastDiscovery<3000)continue;
       host.lastDiscovery=this.now();
       const work=(async()=>{
+        // Decoration availability must not gate canonical writer discovery.
+        try{const indicators=await host.files.read(explorerResponsePath(host.target.directory));
+          if(indicators&&!this.stopped){
+            const incoming=loadExplorerResponses(JSON.parse(indicators));
+            host.responses=incoming.map(response=>{const current=host.responses.find(r=>r.id===response.id);return current&&(current.epoch>response.epoch||current.epoch===response.epoch&&current.revision>response.revision)?current:response;});
+          }
+        }catch{/* Older/offline hosts still expose their active lease catalog. */}
         const raw=await host.files.read(leasePaths(host.target.directory,'').catalog);if(!raw||this.stopped)return;
         const requests=JSON.parse(raw);if(!Array.isArray(requests))return;
         await Promise.allSettled(requests.map(async value=>{
@@ -102,8 +110,11 @@ export class DeviceInlineManager {
       })();host.discovery=work;void work.finally(()=>{host.discovery=undefined;}).catch(()=>{});
     }
   }
+  explorerResponses():ExplorerResponse[]{return [...this.hosts.values()].flatMap(host=>host.responses);}
   private receiveRecord(host:Host,record:LeaseRecord){
     if(this.stopped||record.request.vaultId!==this.vaultId||hostKey(record.request.host)!==hostKey(host.target))return;
+    const projected=leaseExplorerResponse(record),previous=host.responses.find(r=>r.id===projected.id);
+    if(!previous||projected.epoch>previous.epoch||projected.epoch===previous.epoch&&projected.revision>previous.revision)host.responses=host.responses.filter(r=>r.id!==projected.id).concat(projected);
     const old=this.jobs.get(record.request.id);
     if(old){if(record.epoch>old.record.epoch||record.epoch===old.record.epoch&&record.revision>=old.record.revision){old.record=record;if(record.stopRequestedAt)old.writer.requestStop(record.request.id);}return;}
     if(terminalLease(record))return;
@@ -251,8 +262,8 @@ export class DeviceInlineManager {
     if(item.kind==='snapshot'){runtime.nextSnapshot=this.monotonic()+INLINE_SNAPSHOT_INTERVAL_MS;runtime.snapshotFailures=0;}
   }
   changed(path:string){this.io.noteChanged?.(path);}
-  deleted(path:string){this.io.noteDeleted?.(path);}
-  renamed(before:string,after:string){this.io.noteRenamed?.(before,after);for(const runtime of this.jobs.values()){runtime.writer.renamed(before,after);runtime.nextTick=0;}this.tick();}
+  deleted(path:string){this.io.noteDeleted?.(path);for(const host of this.hosts.values())host.responses=relocateExplorerResponses(host.responses,path);}
+  renamed(before:string,after:string){this.io.noteRenamed?.(before,after);for(const host of this.hosts.values())host.responses=relocateExplorerResponses(host.responses,before,after);for(const runtime of this.jobs.values()){runtime.writer.renamed(before,after);runtime.nextTick=0;}this.tick();}
   dispose(){
     this.stopped=true;
     for(const runtime of this.jobs.values()){runtime.refresh?.cancel(Error('Response writer stopped.'));runtime.monitor?.stop();runtime.writer.stop();}

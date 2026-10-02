@@ -26,6 +26,8 @@ import {openChatFlow,openNoteSendFlow,type ChatHost} from './chat-ui';
 import {selectionRange} from './inline-steering';
 import {projectThreads,type ThreadChoice} from './thread-target';
 import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,previousNoteThreads,type NoteThread} from './note-threads';
+import {noteIndicators} from './explorer-responses';
+import {folderNotePath,type FolderNotesSettings} from './folder-note-adapter';
 import {installFolderIndicators,type FolderIndicatorController} from './folder-indicator';
 import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,waitForVaultNote,type VaultLocation,type VaultRegistration} from './vault-connection';
 import {ProjectCreateModal,ProjectCreationCancelled,workspaceInsideVault,type ProjectLocation} from './project-create-ui';
@@ -234,7 +236,15 @@ export default class SendToT3 extends Plugin {
       this.paletteChat=installPaletteChat(this.app,(prompt,selection)=>this.openPaletteAction(prompt,selection),{onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),getSelection:()=>this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getSelection()??''});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined'){
-        this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks);
+        this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>{
+          const responses=this.deviceInline?.explorerResponses()??[],known=new Set(responses.map(r=>r.id));
+          return noteIndicators([...responses,...(this.inlineChat?.explorerResponses()??[]).filter(r=>!known.has(r.id))],path=>this.app.vault.getAbstractFileByPath(path) instanceof TFile);
+        },title=>{
+          const plugin=(this.app as App&{plugins?:{plugins?:Record<string,{settings?:FolderNotesSettings}>}}).plugins?.plugins?.['folder-notes'];
+          if(!plugin||!title.classList.contains('has-folder-note'))return;
+          return folderNotePath(title.getAttribute('data-path')??'',plugin.settings,path=>this.app.vault.getAbstractFileByPath(path) instanceof TFile);
+        });
+        this.registerInterval(window.setInterval(()=>this.folderIndicators?.refresh(),1000));
         this.registerEvent(this.app.workspace.on('layout-change',()=>this.folderIndicators?.refresh()));
       }
       this.registerInterval(window.setInterval(()=>void this.checkExternalSettings().catch(error=>new Notice(`T3 settings: ${message(error)}`,12000)),5000));
@@ -260,7 +270,7 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('layout-change',()=>this.inlineChat?.flushAvailable()));
     if(typeof this.app.vault?.on==='function'){
       for(const name of ['create','modify'] as const)this.registerEvent(this.app.vault.on(name as any,(file:TAbstractFile)=>this.deviceInline?.changed(file.path)));
-      this.registerEvent(this.app.vault.on('delete',file=>this.deviceInline?.deleted(file.path)));
+      this.registerEvent(this.app.vault.on('delete',file=>{this.deviceInline?.deleted(file.path);this.inlineHostService?.deleted(file.path);this.folderIndicators?.refresh();}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.inlineChat?.renamed(oldPath,file.path)));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{if(!(file instanceof TFolder))return;let changed=false;for(const link of this.settings.folderLinks)if(link.folderPath===oldPath||link.folderPath.startsWith(oldPath+'/')){link.folderPath=file.path+link.folderPath.slice(oldPath.length);changed=true;}if(changed)void this.save().catch(error=>new Notice(`T3 folder links: ${message(error)}`,10000));}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{this.inlineHostService?.renamed(oldPath,file.path);this.deviceInline?.renamed(oldPath,file.path);}));

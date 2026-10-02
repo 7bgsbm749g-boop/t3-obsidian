@@ -1,4 +1,5 @@
 import {logEvent,logFailure} from './diagnostics';
+import {explorerResponsePath,leaseExplorerResponse,loadExplorerResponses,relocateExplorerResponses,type ExplorerResponse} from './explorer-responses';
 import {legacyQuestionReply,pendingCompletionCleanup,hostedPaths,hostedRequestHash,safeNotePath,validateHostedRequest,type HostedInlineRequest,type HostedInlineState,type InlineFiles} from './hosted-inline';
 import {sameWorkspacePath} from './folder-link';
 import {steeringBoundary,validSteeringInput,type SteeringInput} from './inline-steering';
@@ -21,6 +22,10 @@ export class InlineLeaseAuthority {
   private work?:Promise<void>;
   private stopped=false;
   private recovered=false;
+  private explorerResponses:ExplorerResponse[]=[];
+  private relocations:Array<{before:string;after?:string}>=[];
+  renamed(before:string,after:string){this.relocations.push({before,after});}
+  deleted(before:string){this.relocations.push({before});}
   private lastCleanup=0;
   private scanFailed=false;private lastScanFailure=0;
   constructor(private identity:LeaseIdentity,private files:LeaseFiles,private now=()=>Date.now()){}
@@ -36,12 +41,19 @@ export class InlineLeaseAuthority {
   private async scan(){
     const directory=this.identity.directory;
     if(!this.recovered){
+      try{this.explorerResponses=loadExplorerResponses(JSON.parse((await this.files.read(explorerResponsePath(directory)))??'[]'));}catch{this.explorerResponses=[];}
       // Repair a crash between the durable grant and its discovery index.
       for(const path of await this.files.list(`${directory}/leases`)){
         if(this.stopped)return;
         const raw=await this.files.read(path);if(raw)await this.publishCatalog(JSON.parse(raw));
       }
       this.recovered=true;
+    }
+    while(this.relocations.length){
+      const {before,after}=this.relocations[0];
+      const next=relocateExplorerResponses(this.explorerResponses,before,after);
+      await this.files.write(explorerResponsePath(directory),JSON.stringify(next));
+      this.explorerResponses=next;this.relocations.shift();
     }
     if(this.now()-this.lastCleanup>30_000){
       this.lastCleanup=this.now();
@@ -154,6 +166,16 @@ export class InlineLeaseAuthority {
     }
   }
   private async publishCatalog(record:LeaseRecord){
+    const projected=leaseExplorerResponse(record),previous=this.explorerResponses.find(r=>r.id===projected.id);
+    // Keep vault rename/delete observations across recovery until a newer
+    // writer checkpoint supplies its canonical destination location.
+    const moved=previous&&(previous.sourceNotePath===projected.notePath||previous.epoch===projected.epoch&&previous.revision===projected.revision);
+    const response={...projected,...(moved?{notePath:previous.notePath,sourceNotePath:previous.sourceNotePath}:{}),...(previous?.deleted?{deleted:true}:{})};
+    if(JSON.stringify(previous)!==JSON.stringify(response)){
+      const next=this.explorerResponses.filter(r=>r.id!==response.id).concat(response);
+      await this.files.write(explorerResponsePath(this.identity.directory),JSON.stringify(next));
+      this.explorerResponses=next;
+    }
     const path=leasePaths(this.identity.directory,record.request.id).catalog;
     const raw=await this.files.read(path),catalog:HostedInlineRequest[]=raw?JSON.parse(raw):[];
     const discoverable=!terminalLease(record);

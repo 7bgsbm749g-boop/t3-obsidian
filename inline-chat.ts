@@ -1,3 +1,4 @@
+import type {ExplorerResponse} from './explorer-responses';
 import type {ResolvedJobOptions} from './job-options';
 import {intermediateMode,completionTime,finalAnswerFormat,type IntermediateMode,type FinalAnswerFormat} from './response-presentation';
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,type InlineQuestionFollow} from './inline-questions';
@@ -71,6 +72,10 @@ export class InlineChatManager {
     job.steering=[...job.steering??[],{...input,before:steeringBoundary(job.prose??this.runtime(job).state.messages.filter(m=>m.role==='assistant'&&m.turnId===job.turnId))}];
     this.persist();
   }
+  explorerResponses():ExplorerResponse[]{return this.jobs.filter(job=>!job.hosted||job.phase==='sending'&&!job.finalized).map(job=>{
+    const input=!!job.questionFollows?.some(q=>!q.answered&&!q.dismissed);
+    return {id:job.id,notePath:job.path,epoch:0,revision:0,active:['sending','running','reconnecting'].includes(job.phase),input,complete:job.phase==='complete'&&!!job.finalized&&!input};
+  });}
   private persist(){this.app.saveLocalStorage(this.key,this.jobs.map(j=>({...j})));}
   private runtime(job:InlineJob){let runtime=this.runtimes.get(job.id);if(!runtime){runtime={state:{messages:[],activities:[]},sequence:-1};this.runtimes.set(job.id,runtime);}return runtime;}
 
@@ -172,8 +177,8 @@ export class InlineChatManager {
     runtime.timer=setTimeout(()=>{runtime.timer=undefined;this.flush(job);},100);
   }
   flushAvailable(){this.reconcileHosted();for(const job of this.jobs){if(job.phase==='cancelled'){try{this.finishStopped(job);}catch(error){logFailure('response.stop.cleanup.failed',error,{jobId:job.id});}this.requestRemoteStop(job);}else if(!job.hosted&&job.threadId&&!job.finalized&&job.phase!=='conflict')this.schedule(job);}}
-  renamed(oldPath:string,newPath:string){let changed=false;for(const job of this.jobs)if(!job.finalized&&(job.path===oldPath||job.path.startsWith(oldPath+'/'))){job.path=newPath+job.path.slice(oldPath.length);changed=true;}if(changed){this.persist();this.flushAvailable();}}
-  deleted(path:string){let changed=false;for(const job of this.jobs)if(!job.finalized&&(job.path===path||job.path.startsWith(path+'/'))){job.phase='conflict';this.runtimes.get(job.id)?.monitor?.stop();changed=true;}if(changed)this.persist();}
+  renamed(oldPath:string,newPath:string){let changed=false;for(const job of this.jobs)if((job.path===oldPath||job.path.startsWith(oldPath+'/'))){job.path=newPath+job.path.slice(oldPath.length);changed=true;}if(changed){this.persist();this.flushAvailable();}}
+  deleted(path:string){let changed=false;for(const job of this.jobs)if((job.path===path||job.path.startsWith(path+'/'))){job.phase='conflict';this.runtimes.get(job.id)?.monitor?.stop();changed=true;}if(changed)this.persist();}
   private editorFor(job:InlineJob):Editor|undefined {
     const leaves=this.app.workspace.getLeavesOfType?.('markdown')??[];
     for(const leaf of leaves){const view=leaf.view as MarkdownView;if(view.file?.path===job.path&&view.editor)return view.editor;}

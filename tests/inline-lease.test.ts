@@ -543,3 +543,18 @@ for(const format of ['formatted','raw-markdown'] as const)test(`${format} prefer
     assert.doesNotMatch(second.document.value,/t3-inline:|t3-response:/);
   }finally{h.dispose();}
 });
+
+test('explorer projection survives terminal catalog cleanup, recovery, note moves and deletion without changing the lease',async()=>{
+  const {explorerResponsePath}=await import('../explorer-responses');
+  const h=harness(),client=h.client();await client.command({kind:'register',jobId:h.request.id,request:h.request});
+  await client.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:0,state:{...h.state,status:'complete'}});
+  const path=explorerResponsePath(h.request.host.directory),before=h.record();
+  assert.equal(JSON.parse(h.data.get(path)!)[0].complete,true);
+  assert.deepEqual(JSON.parse(h.data.get(leasePaths(h.request.host.directory,'').catalog)!),[]);
+  const authority=new InlineLeaseAuthority({...h.request.host,vaultId:'vault'},h.files,h.now);
+  await authority.tick();authority.renamed('Note.md','Moved.md');await authority.tick();
+  assert.equal(JSON.parse(h.data.get(path)!)[0].notePath,'Moved.md');assert.deepEqual(h.record(),before);
+  authority.stop();const recovered=new InlineLeaseAuthority({...h.request.host,vaultId:'vault'},h.files,h.now);await recovered.tick();
+  assert.equal(JSON.parse(h.data.get(path)!)[0].notePath,'Moved.md');
+  recovered.deleted('Moved.md');await recovered.tick();assert.equal(JSON.parse(h.data.get(path)!)[0].deleted,true);recovered.stop();
+});
