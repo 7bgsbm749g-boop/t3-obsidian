@@ -5,6 +5,8 @@ import remarkParse from 'remark-parse';
 import {activeInlineIds,failedInlineIds,initialRegion,renderInlineTurn,type InlineThreadState} from '../inline-thread';
 import {elapsedRun,intermediateMode,runTimer,completionTime} from '../response-presentation';
 import {stoppedResponseBody} from '../response-stop';
+import {followInlineQuestions,questionConversationInputs} from '../inline-questions';
+import type {InlineSteering} from '../inline-steering';
 
 const timing={startedAt:'2026-10-02T10:00:00Z',finishedAt:'2026-10-02T10:03:17Z'};
 const state:InlineThreadState={title:'Bounded history',messages:[
@@ -60,12 +62,77 @@ test('steering quotes stay outside folds and final-message pieces retain exact b
     if(block.startsWith('> [!t3-progress]-'))assert.doesNotMatch(block,/Keep my question visible|Final visible answer/);
   }
   assert.match(text,/> \[!t3-steering\] You\n> Keep my question visible\./);
+  assert.equal(text.match(/Bounded history · Completed/g)?.length,1);
+  assert.equal(text.match(/class="send-to-t3-run-timer"/g)?.length,1);
+});
+
+function assertOneRun(text:string,phase='Working'){
+  assert.equal(text.match(new RegExp(`Bounded history · ${phase}`,'g'))?.length,1);
+  assert.equal(text.match(/class="send-to-t3-run-timer"/g)?.length,1);
+  assert.equal(text.match(/^> \[!t3-progress\]- .*class="send-to-t3-inline-spinner"/gm)?.length,1);
+  assert.equal(text.match(/class="send-to-t3-response-activity"/g)?.length,1,'retain the separate bottom tool activity indicator');
+}
+function foldsOf(text:string){
+  return unified().use(remarkParse).parse(text).children.filter(node=>node.type==='blockquote').map(node=>text.slice(node.position!.start.offset!,node.position!.end.offset!)).filter(block=>block.startsWith('> [!t3-progress]-'));
+}
+function foldKeys(text:string){return [...text.matchAll(/data-t3-fold="([^"]+)"/g)].map(match=>match[1]);}
+
+for(const inputKind of ['question answer','steering','repeated mixed inputs'] as const)test(`${inputKind} within a run keeps one status while progress and inputs retain chronological boundaries`,()=>{
+  const progress={id:'progress',role:'assistant',turnId:'turn',text:'Before input.',streaming:false,createdAt:'2026-10-02T10:00:01Z'};
+  const after={...progress,id:'after',text:'After first input.',createdAt:'2026-10-02T10:00:03Z'};
+  let live:InlineThreadState={title:state.title,messages:[progress],activities:[],latestTurn:{turnId:'turn',state:'running',requestedAt:timing.startedAt},session:{status:'running',activeTurnId:'turn'}};
+  const steering:InlineSteering[]=[];
+  const addQuestion=(id:string,text:string,at:string)=>{
+    live.messages.push({id:`async-answer:${id}`,role:'user',turnId:null,text,streaming:false,createdAt:at});
+    live.activities.push({id,kind:'user-input.requested',turnId:'turn',summary:'Question',payload:{requestId:id,responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Choose?',options:[{label:'One',description:'First'}]}]}},
+      {id:`resolved:${id}`,kind:'user-input.resolved',turnId:'turn',summary:'Answered',createdAt:at,payload:{requestId:id,answers:{choice:[text]}}});
+  };
+  if(inputKind==='steering')steering.push({messageId:'steer',text:'Use private handoff browser',before:[progress],confirmed:true});
+  else addQuestion('question','jslepx','2026-10-02T10:00:02Z');
+  // Accepted input without new prose must not manufacture another status.
+  const renderLive=()=>{
+    const prose=live.messages.filter(message=>message.role==='assistant');
+    const follows=followInlineQuestions(live,['turn'],[],prose);
+    const inputs=questionConversationInputs(live,steering,follows.follows,prose);
+    return renderInlineTurn(live,'turn','thread','running','collapse','environment',{messages:prose,steering:inputs,preserveHistory:follows.continued},undefined,undefined,{startedAt:timing.startedAt});
+  };
+  const waiting=renderLive();assertOneRun(waiting);
+  live.messages.push(after);
+  const first=renderLive();assertOneRun(first);
+  assert.match(first,/> \[!t3-progress\]- Progress /);
+  assert.deepEqual(foldKeys(first).slice(0,foldKeys(waiting).length),foldKeys(waiting),'streaming retains the keys used for explicit fold choices');
+  if(inputKind==='repeated mixed inputs'){
+    steering.push({messageId:'steer',text:'Use private handoff browser',before:[progress,after],confirmed:true});
+    addQuestion('second','Second answer','2026-10-02T10:00:04Z');
+    live.messages.push({...after,id:'last',text:'After repeated inputs.',createdAt:'2026-10-02T10:00:05Z'});
+  }
+  const text=renderLive();assertOneRun(text);
+  const visibleInputs=inputKind==='steering'?['Use private handoff browser']:inputKind==='question answer'?['jslepx']:['jslepx','Use private handoff browser','Second answer'];
+  for(const fold of foldsOf(text))for(const input of visibleInputs)assert.ok(!fold.includes(input),'input stays outside progress');
+  const ordered=['Before input.',visibleInputs[0],'After first input.',...visibleInputs.slice(1),...(inputKind==='repeated mixed inputs'?['After repeated inputs.']:[])];
+  for(let index=1;index<ordered.length;index++)assert.ok(text.indexOf(ordered[index-1])<text.indexOf(ordered[index]),'transcript retains chronological order');
+  const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',document=`<!-- t3-inline:start:${id} -->\n${text}<!-- t3-inline:end:${id} -->`;
+  assert.deepEqual(activeInlineIds(document),[id]);
+  assert.deepEqual(failedInlineIds(document.replace(' · Working**',' · Error**')),[id]);
+  assert.doesNotMatch(stoppedResponseBody(document),/ · Working|class="send-to-t3-inline-spinner"/);
+});
+
+test('independent response bindings and a new run in the same thread each own their status and fold choices',()=>{
+  const live={...state,messages:state.messages.slice(0,1),latestTurn:{turnId:'turn',state:'running'},session:{status:'running',activeTurnId:'turn'}};
+  const first=renderInlineTurn(live,'turn','thread','running','collapse',undefined,undefined,undefined,undefined,{startedAt:timing.startedAt});
+  const next={...live,messages:[{...live.messages[0],turnId:'next'}],latestTurn:{turnId:'next',state:'running'},session:{status:'running',activeTurnId:'next'}};
+  const second=renderInlineTurn(next,'next','thread','running','collapse',undefined,undefined,undefined,undefined,{startedAt:'2026-10-02T10:04:00Z'});
+  assertOneRun(first);assertOneRun(second);assert.notDeepEqual(foldKeys(first),foldKeys(second));
+  const a='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',b='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const document=`<!-- t3-inline:start:${a} -->\n${first}<!-- t3-inline:end:${a} -->\n\n<!-- t3-inline:start:${b} -->\n${second}<!-- t3-inline:end:${b} -->`;
+  assert.deepEqual(activeInlineIds(document),[a,b]);
 });
 
 test('empty late-answer follow-up places a working fold after its visible input',()=>{
   const running={...state,messages:state.messages.slice(0,2),latestTurn:{turnId:'next',state:'running'},turns:{turn:{turnId:'turn',state:'completed',assistantMessageId:'final'}},session:{status:'running',activeTurnId:'next'}};
   const text=render(running,'running',{messages:running.messages,steering:[{messageId:'reply',text:'Follow up now.',confirmed:true,before:running.messages}],preserveHistory:true});
   assert.match(text,/Final visible answer\.[\s\S]*> Follow up now\.[\s\S]*> \[!t3-progress\]- \*\*Bounded history · Working/);
+  assertOneRun(text);
 });
 
 test('Collapse status remains discoverable for steering and exact error recovery; Stop freezes it',()=>{

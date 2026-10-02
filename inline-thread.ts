@@ -372,17 +372,25 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const pieces=steeringSegments(all,conversation?.steering.filter(item=>item.confirmed)??[]);
     const title=phase==='complete'?`**${label} · Completed**`:heading;
     const blocks:string[]=[];let progress:string[]=[];let fold=0;
-    const flush=()=>{
+    // The response binding owns one run status, not each progress section.
+    // Late answers retain the historical transcript above the active status,
+    // just as in the expanded presentation. Keep fold identities unchanged.
+    const statusAfter=phase!=='complete'&&conversation?.preserveHistory?pieces.reduce((last,piece,index)=>piece.role==='user'?index:last,-1):-1;
+    let statusShown=false;
+    const flush=(after:number)=>{
       const key=encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:${fold++}`);
-      blocks.push(`> [!t3-progress]- ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(progress.length?'\n>\n'+progress.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):''));progress=[];
+      const showStatus=!statusShown&&after>=statusAfter;
+      const caption=showStatus?`${title}${timer}${spinner}`:'Progress';
+      if(showStatus)statusShown=true;
+      blocks.push(`> [!t3-progress]- ${caption} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(progress.length?'\n>\n'+progress.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):''));progress=[];
     };
-    for(const piece of pieces){
+    for(const [index,piece] of pieces.entries()){
       if(piece.role==='user'||piece.messageId&&finalIds.has(piece.messageId)){
-        if(progress.length||!blocks.length)flush();
+        if(progress.length||!blocks.length)flush(index-1);
         blocks.push(piece.role==='user'?renderInlineInput(piece.text):assistant(piece.text,piece.messageId));
       }else if(piece.text.trim())progress.push(quoteResponse(closeOpenFence(piece.text.trim())));
     }
-    if(progress.length||!blocks.length||phase!=='complete'&&pieces.at(-1)?.role==='user')flush();
+    if(progress.length||!statusShown)flush(pieces.length);
     const action=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
     const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):phase!=='complete'&&action?'Action needed in T3: '+safeStatus(action.summary):'';
     return input+blocks.join('\n\n')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+bottom+'\n';
