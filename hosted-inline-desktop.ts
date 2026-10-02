@@ -7,6 +7,7 @@ import {desktopInterval} from './desktop-timers';
 import type {App} from 'obsidian';
 import {InlineLeaseAuthority,type LeaseFiles} from './inline-lease';
 import {importReplyAsset} from './reply-import';
+import {deviceNoteIO} from './inline-note-io';
 export {importReplyAsset} from './reply-import';
 import {HostedInlineWriter,type HostedInlineRequest,type InlineFiles} from './hosted-inline';
 import type {ThreadAccess} from './thread-stream';
@@ -39,6 +40,7 @@ export class DesktopInlineHost {
     this.stopAuthorityTimer=desktopInterval(()=>void this.authority.tick().catch(()=>{}),100);
     this.writer=new HostedInlineWriter(identity,{
       ...files,
+      locateNote:deviceNoteIO(app).locateNote,
       access:async environmentId=>{
         const cached=this.accesses.get(environmentId);
         if(cached&&cached.expires>Date.now())return cached.access;
@@ -55,12 +57,12 @@ export class DesktopInlineHost {
         const file=app.vault.getFileByPath(path);if(!file)return undefined;
         const current=await app.vault.read(file);
         const saved=(value:string)=>app.workspace.getLeavesOfType('markdown').every(leaf=>{const view=leaf.view as any;return view.file?.path!==path||!view.editor||view.editor.getValue()===value;});
-        if(this.stopped||!saved(current))return undefined;
+        if(this.stopped||file.path!==path||app.vault.getFileByPath(path)!==file||!saved(current))return undefined;
         const next=change(current);
         // Probes and unchanged progress must not touch mtime or wake Sync.
         if(next===current)return current;
         return app.vault.process(file,value=>{
-          if(this.stopped||value!==current||!saved(value))throw Error('The note changed during the host update; retrying.');
+          if(this.stopped||file.path!==path||app.vault.getFileByPath(path)!==file||value!==current||!saved(value))throw Error('The note changed during the host update; retrying.');
           return next;
         });
       },

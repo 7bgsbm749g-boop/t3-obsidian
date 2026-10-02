@@ -81,6 +81,7 @@ export interface HostedWriterIO extends InlineFiles {
   // undefined means the file is missing or has unsaved editor changes. The
   // callback must execute against the latest content in an atomic vault edit.
   updateNote(path:string,change:(current:string)=>string):Promise<string|undefined>;
+  locateNote?(id:string,path:string):Promise<string|undefined>;
   threadState?(request:HostedInlineRequest,access:ThreadAccess,refresh?:boolean):Promise<import('./inline-thread').InlineThreadState|undefined>;
   accepts?(request:HostedInlineRequest):boolean;
   /** Only the still-open editor that paused this response may resume it. */
@@ -125,7 +126,14 @@ export class HostedInlineWriter {
       if(['complete','interrupted','conflict'].includes(state.status)&&!legacyQuestionReply(state)&&!legacyProof)return;
       const save=async()=>{state.updatedAt=new Date().toISOString();await this.io.write(paths.state,JSON.stringify(state));this.renameOffsets.set(path,renameEnd);};
       try{
+        const previousPath=state.notePath;
         for(const move of renames)if(state.notePath===move.before||state.notePath.startsWith(move.before+'/'))state.notePath=move.after+state.notePath.slice(move.before.length);
+        if(this.io.locateNote){
+          const located=await this.io.locateNote(request.id,state.notePath);
+          if(located===undefined){state.detail='Waiting for moved note to reach this device.';await save();return;}
+          state.notePath=located;
+        }
+        if(state.notePath!==previousPath)await save();
         if(legacyProof){state.finalPhase=state.status as 'complete'|'interrupted';state.finalSaved=true;state.status='running';await save();}
         if(state.finalSaved){await this.cleanup(request,state,save);return;}
         if(legacyQuestionReply(state)){

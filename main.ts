@@ -244,6 +244,8 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('file-open',()=>this.inlineChat?.flushAvailable()));
     this.registerEvent(this.app.workspace.on('layout-change',()=>this.inlineChat?.flushAvailable()));
     if(typeof this.app.vault?.on==='function'){
+      for(const name of ['create','modify'] as const)this.registerEvent(this.app.vault.on(name as any,(file:TAbstractFile)=>this.deviceInline?.changed(file.path)));
+      this.registerEvent(this.app.vault.on('delete',file=>this.deviceInline?.deleted(file.path)));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.inlineChat?.renamed(oldPath,file.path)));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{if(!(file instanceof TFolder))return;let changed=false;for(const link of this.settings.folderLinks)if(link.folderPath===oldPath||link.folderPath.startsWith(oldPath+'/')){link.folderPath=file.path+link.folderPath.slice(oldPath.length);changed=true;}if(changed)void this.save().catch(error=>new Notice(`T3 folder links: ${message(error)}`,10000));}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{this.inlineHostService?.renamed(oldPath,file.path);this.deviceInline?.renamed(oldPath,file.path);}));

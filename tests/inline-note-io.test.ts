@@ -37,3 +37,22 @@ test('an intervening disk edit is preserved and a stale lease is checked inside 
     assert.equal(document,staleLease?'Original':'Outside edit');
   }
 });
+
+test('moving a file during its disk read or atomic update retries without writing stale text',async()=>{
+  for(const moveDuringRead of [true,false]){
+    const file={path:'Note.md'};let document='Original',writes=0;
+    const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[]},vault:{
+      getFileByPath:(path:string)=>path===file.path?file:undefined,
+      read:async()=>{if(moveDuringRead)file.path='Moved.md';return document;},
+      process:async(_file:any,change:(value:string)=>string)=>{file.path='Moved.md';document=change(document);writes++;return document;},
+    }} as any);
+    await assert.rejects(io.updateNote('Note.md',current=>current+' Reply',()=>true),/ownership changed/);
+    assert.equal(writes,0);assert.equal(document,'Original');
+  }
+});
+
+test('a move during final-save verification does not certify the previous path',async()=>{
+  const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',body='Final',file={path:'Note.md'};
+  const io=deviceNoteIO({vault:{getFileByPath:(path:string)=>path===file.path?file:undefined,read:async()=>{file.path='Moved.md';return completionProof(id,body);}}} as any);
+  assert.equal(await io.isSaved('Note.md','old hash',{id,body}),false);
+});

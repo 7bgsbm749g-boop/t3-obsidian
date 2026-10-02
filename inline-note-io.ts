@@ -3,18 +3,31 @@ import {logEvent} from './diagnostics';
 import {contentHash} from './completion';
 import type {App,Editor,MarkdownView} from 'obsidian';
 import {replaceInlineEditorText} from './inline-editor';
+import {ResponseNoteLocator} from './response-location';
+
+const locators=new WeakMap<App,ResponseNoteLocator>();
 
 /** Real note writes, using the live editor when open and atomic vault edits
  * otherwise. Ownership is checked immediately before each actual mutation. */
 export function deviceNoteIO(app:App){
   const editors=(path:string)=>app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===path&&view.editor).map(view=>view.editor);
+  const readNote=async(path:string)=>{
+    const open=editors(path);if(open.length){const value=open[0].getValue();return open.every(editor=>editor.getValue()===value)?value:undefined;}
+    const file=app.vault.getFileByPath(path);if(!file)return;
+    const document=await app.vault.read(file);
+    return file.path!==undefined&&(file.path!==path||app.vault.getFileByPath(path)!==file)?undefined:document;
+  };
+  let locator=locators.get(app);
+  if(!locator){locator=new ResponseNoteLocator(()=>app.vault.getMarkdownFiles?.().map(file=>file.path)??[],readNote);locators.set(app,locator);}
+  const locations=locator;
   return {
+    locateNote:(id:string,path:string)=>locations.locate(id,path),
+    noteChanged:(path:string)=>locations.changed(path),
+    noteRenamed:(before:string,after:string)=>locations.renamed(before,after),
+    noteDeleted:(path:string)=>locations.deleted(path),
     isOpen:(path:string)=>editors(path).length>0,
-    isSaved:async(path:string,hash:string,proof?:{id:string;body:string;cleaned?:boolean})=>{const file=app.vault.getFileByPath(path);if(!file)return false;const document=await app.vault.read(file);return proof?.cleaned?!hasResponseMarkers(document,proof.id):contentHash(document)===hash||!!proof&&hasCompletionProof(document,proof.id,proof.body);},
-    readNote:async(path:string)=>{
-      const open=editors(path);if(open.length){const value=open[0].getValue();return open.every(editor=>editor.getValue()===value)?value:undefined;}
-      const file=app.vault.getFileByPath(path);return file?app.vault.read(file):undefined;
-    },
+    isSaved:async(path:string,hash:string,proof?:{id:string;body:string;cleaned?:boolean})=>{const file=app.vault.getFileByPath(path);if(!file)return false;const document=await app.vault.read(file);if(file.path!==undefined&&(file.path!==path||app.vault.getFileByPath(path)!==file))return false;return proof?.cleaned?!hasResponseMarkers(document,proof.id):contentHash(document)===hash||!!proof&&hasCompletionProof(document,proof.id,proof.body);},
+    readNote,
     updateNote:async(path:string,change:(current:string)=>string,allowed:()=>boolean):Promise<string|undefined>=>{
       if(!allowed())throw Error('Writer ownership expired.');
       const open=editors(path);
@@ -23,16 +36,19 @@ export function deviceNoteIO(app:App){
         const next=change(current);
         if(!allowed())throw Error('Writer ownership expired.');
         if(next!==current){logEvent('note.write.editor',{notePath:path,fromHash:contentHash(current),toHash:contentHash(next)});replaceChangedText(editor,current,next);}
+        locations.remember(path,next);
         return next;
       }
       const file=app.vault.getFileByPath(path);if(!file)return;
+      const stillHere=()=>file.path===undefined||file.path===path&&app.vault.getFileByPath(path)===file;
       const current=await app.vault.read(file);
-      if(!allowed()||editors(path).length)throw Error('The note or its ownership changed; retrying.');
+      if(!allowed()||!stillHere()||editors(path).length)throw Error('The note or its ownership changed; retrying.');
       const next=change(current);if(next===current)return current;
       const written=await app.vault.process(file,value=>{
-        if(!allowed()||value!==current||editors(path).length)throw Error('The note or its ownership changed; retrying.');
+        if(!allowed()||!stillHere()||value!==current||editors(path).length)throw Error('The note or its ownership changed; retrying.');
         return next;
       });
+      locations.remember(path,written);
       logEvent('note.write.saved',{notePath:path,fromHash:contentHash(current),toHash:contentHash(written)});return written;
     },
   };

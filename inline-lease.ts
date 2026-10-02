@@ -95,9 +95,13 @@ export class InlineLeaseAuthority {
           // Give clients with the note open a short head start over closed-note
           // fallback writers. Healthy ownership is never preempted.
           if(command.fallback&&record.expiresAt+2000>this.now())return respond(false,'Waiting for an open-note writer.');
-          const writer=await this.noteWriter(record.state?.notePath??record.request.notePath,record.request.id);
+          const notePath=command.notePath??record.state?.notePath??record.request.notePath;
+          if(!safeNotePath(notePath))throw Error('Invalid response note path.');
+          const writer=await this.noteWriter(notePath,record.request.id);
           if(writer&&writer!==command.actor)return respond(false,'Another device owns a response in this note.');
-          record={...record,owner:command.actor,epoch:record.epoch+1,expiresAt:this.now()+LEASE_MS};
+          const moved=notePath!==(record.state?.notePath??record.request.notePath);
+          record={...record,owner:command.actor,epoch:record.epoch+1,expiresAt:this.now()+LEASE_MS,
+            ...(moved?{revision:record.revision+1,state:{...record.state??{requestHash:hostedRequestHash(record.request),accepted:false,status:'waiting' as const,hashes:[record.request.initialHash],updatedAt:new Date(this.now()).toISOString()},notePath}}:{})};
         }else{
           if(record.owner!==command.actor||record.epoch!==command.epoch||record.expiresAt<=this.now())return respond(false,'Writer ownership expired.');
           if(command.kind==='heartbeat')record={...record,expiresAt:this.now()+LEASE_MS};

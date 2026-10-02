@@ -5,6 +5,7 @@ import {InlineLeaseAuthority,InlineLeaseClient,LEASE_MS,leasePaths,type LeaseFil
 import {hostedPaths,hostedRequestHash,type HostedInlineRequest,type HostedInlineState} from '../hosted-inline';
 import {initialRegion,completionProof} from '../inline-thread';
 import {DeviceInlineManager} from '../leased-inline';
+import {ResponseNoteLocator} from '../response-location';
 
 function harness(){
   let time=100_000;
@@ -86,6 +87,19 @@ test('a failed response can attach a continuation after its note moves',async()=
   assert.equal((await sender.command({kind:'follow',jobId:h.request.id,previousMessageId:h.request.messageId,messageId,notePath:'Another.md'})).ok,false);
 });
 
+test('relocation claims validate paths and cannot move an active grant or bypass another note writer',async()=>{
+  const h=harness(),owner=h.client(),other=h.client(randomUUID());
+  await owner.command({kind:'register',jobId:h.request.id,request:h.request});
+  assert.equal((await other.command({kind:'claim',jobId:h.request.id,notePath:'Moved.md'})).ok,false);
+  assert.equal(h.record().state,undefined);
+  h.advance(LEASE_MS+1);
+  assert.equal((await other.command({kind:'claim',jobId:h.request.id,notePath:'../Outside.md'})).ok,false);
+  const occupant=randomUUID(),second={...h.request,id:randomUUID(),initialOwner:occupant,notePath:'Moved.md'};
+  assert.equal((await h.client(occupant).command({kind:'register',jobId:second.id,request:second})).ok,true);
+  assert.equal((await other.command({kind:'claim',jobId:h.request.id,notePath:'Moved.md'})).ok,false);
+  assert.equal(h.record().owner,h.actor);assert.equal(h.record().epoch,1);
+});
+
 test('slow grants are expired on arrival and wall clock changes cannot prolong a lease',async()=>{
   const h=harness();let monotonic=h.now();
   const delayed={...h.remote,read:async(path:string)=>{const value=await h.remote.read(path);if(path.includes('/replies/')){h.advance(LEASE_MS+1);monotonic+=LEASE_MS+1;}return value;}};
@@ -121,17 +135,96 @@ function devices(independent=false){
     {id:h.request.messageId,role:'user',text:'Question',streaming:false,createdAt:h.request.createdAt},
     {id:'answer',role:'assistant',text:answer,streaming:!complete,turnId:'turn'}],activities:[],latestTurn:{turnId:'turn',state:complete?'completed':'running',requestedAt:h.request.createdAt,assistantMessageId:'answer'},session:{status:complete?'ready':'running',activeTurnId:complete?null:'turn'}}});
   const create=(actor:string)=>{
-    const document={value:'Outside before\n'+h.region.text+'Outside after',writes:0,saved:true,hold:undefined as (()=>Promise<void>)|undefined};
+    const document={path:'Note.md',present:true,value:'Outside before\n'+h.region.text+'Outside after',writes:0,saved:true,hold:undefined as (()=>Promise<void>)|undefined};
+    const extras=new Map<string,string>();
+    const readNote=async(path:string)=>path===document.path&&document.present?document.value:extras.get(path);
+    const locator=new ResponseNoteLocator(()=>[...(document.present?[document.path]:[]),...extras.keys()],readNote,h.now);
     const manager=new DeviceInlineManager(actor,h.request.vaultId,{
       access:async()=>({origin:'https://unused.example',api:async path=>{if(path.includes('websocket-ticket'))throw Error('REST fallback fixture');return snapshot();}}),
-      isOpen:()=>true,isSaved:async()=>document.saved,readNote:async()=>document.value,
-      updateNote:async(_path,change,allowed)=>{assert.equal(allowed(),true);const next=change(document.value);if(next!==document.value){await document.hold?.();if(!allowed())throw Error('Expired write');document.writes++;document.value=next;}return next;},
-    },async()=>({files:h.remote,close:()=>{}}),h.now,h.now);
-    managers.push(manager);return {document,manager};
+      isOpen:()=>true,isSaved:async path=>path===document.path&&document.saved,readNote,
+      locateNote:(id,path)=>locator.locate(id,path),noteChanged:path=>locator.changed(path),noteRenamed:(before,after)=>locator.renamed(before,after),
+      updateNote:async(path,change,allowed)=>{assert.equal(allowed(),true);if(path!==document.path||!document.present)return;const next=change(document.value);if(next!==document.value){await document.hold?.();if(!allowed())throw Error('Expired write');if(path!==document.path)throw Error('Note moved during write');document.writes++;document.value=next;}return next;},
+    },async()=>({files:h.remote,close:()=>{}}),h.now,h.now,async()=>{await new Promise(resolve=>setImmediate(resolve));});
+    managers.push(manager);return {document,manager,extras};
   };
-  const drain=async(...active:DeviceInlineManager[])=>{for(let n=0;n<12;n++){for(const manager of active)manager.tick();await new Promise(resolve=>setImmediate(resolve));}};
+  const drain=async(...active:DeviceInlineManager[])=>{for(let n=0;n<32;n++){for(const manager of active)manager.tick();await new Promise(resolve=>setImmediate(resolve));}};
   return {...h,create,drain,answer:(text:string,done=false)=>{answer=text;complete=done;},dispose:()=>managers.forEach(manager=>manager.dispose())};
 }
+
+for(const observed of [true,false])test(`stream follows ${observed?'observed folder moves':'a missed rename with old-path reuse'} without changing its request or ownership`,async()=>{
+  const h=devices(true),phone=h.create(h.actor);
+  try{
+    await phone.manager.register(h.request);await h.drain(phone.manager);
+    const original=h.record().request,epoch=h.record().epoch;
+    phone.document.path='Moved/Note.md';
+    if(observed)phone.manager.renamed('Note.md','Moved/Note.md');
+    else phone.extras.set('Note.md','Replacement note stays untouched');
+    h.answer('Progress after move');h.advance(200);await h.drain(phone.manager);
+    assert.equal(h.record().state?.notePath,'Moved/Note.md');assert.equal(h.record().epoch,epoch);
+    assert.match(phone.document.value,/Progress after move/);assert.deepEqual(h.record().request,original);
+    phone.document.path='Final/Note.md';phone.manager.renamed('Moved','Final');
+    h.answer('Final after second move',true);h.advance(200);await h.drain(phone.manager);h.advance(200);await h.drain(phone.manager);
+    assert.equal(h.record().state?.notePath,'Final/Note.md');assert.equal(h.record().state?.status,'complete');
+    assert.match(phone.document.value,/Final after second move/);assert.match(phone.document.value,/Outside before/);
+    assert.doesNotMatch(phone.document.value,/<!-- t3-(?:inline|response):/);
+    if(!observed)assert.equal(phone.extras.get('Note.md'),'Replacement note stays untouched');
+  }finally{h.dispose();}
+});
+
+test('move arriving through Sync keeps a healthy lease and resumes from current T3 state',async()=>{
+  const h=devices(),phone=h.create(h.actor),other=h.client(randomUUID());
+  try{
+    await phone.manager.register(h.request);await h.drain(phone.manager);
+    phone.document.present=false;phone.document.path='Delayed.md';phone.manager.renamed('Note.md','Delayed.md');
+    const epoch=h.record().epoch;
+    for(let index=0;index<7;index++){h.advance(3000);await h.drain(phone.manager);}
+    assert.equal(h.record().epoch,epoch);assert.match(h.record().state?.detail??'',/Waiting for moved note/);
+    assert.equal((await other.command({kind:'claim',jobId:h.request.id})).ok,false);
+    phone.document.present=true;phone.manager.changed('Delayed.md');h.answer('Caught up final',true);
+    h.advance(200);await h.drain(phone.manager);
+    assert.equal(h.record().state?.status,'complete');assert.match(phone.document.value,/Caught up final/);
+  }finally{h.dispose();}
+});
+
+test('a restarted device discovers a moved response and persists its path atomically with takeover',async()=>{
+  const h=devices(),phone=h.create(h.actor),laptop=h.create(randomUUID());
+  try{
+    await phone.manager.register(h.request);await h.drain(phone.manager);phone.manager.dispose();
+    laptop.document.value='Outside edit\n'+phone.document.value;laptop.document.path='Offline move/Note.md';
+    h.advance(LEASE_MS+1);laptop.manager.discover([h.request.host]);await h.drain(laptop.manager);
+    assert.equal(h.record().epoch,2);assert.equal(h.record().state?.notePath,laptop.document.path);
+    h.answer('Recovered final',true);h.advance(200);await h.drain(laptop.manager);
+    assert.equal(h.record().state?.status,'complete');assert.match(laptop.document.value,/Outside edit/);assert.match(laptop.document.value,/Recovered final/);
+  }finally{h.dispose();}
+});
+
+test('a moved edited response is protected and a copied block waits for disambiguation',async()=>{
+  const h=devices(),phone=h.create(h.actor);
+  try{
+    await phone.manager.register(h.request);await h.drain(phone.manager);
+    phone.document.path='Moved.md';phone.extras.set('Copy.md',phone.document.value);phone.manager.changed('Copy.md');
+    h.answer('New paragraph');h.advance(200);await h.drain(phone.manager);
+    assert.equal(h.record().state?.status,'running');assert.match(h.record().state?.detail??'',/multiple notes/);
+    assert.doesNotMatch(phone.document.value,/New paragraph/);
+    phone.extras.delete('Copy.md');phone.manager.changed('Copy.md');
+    phone.document.value=phone.document.value.replace('First paragraph','My correction');
+    h.advance(200);await h.drain(phone.manager);
+    assert.equal(h.record().state?.status,'paused');assert.match(phone.document.value,/My correction/);assert.doesNotMatch(phone.document.value,/New paragraph/);
+  }finally{h.dispose();}
+});
+
+test('a move during final disk-save verification finishes in the relocated note',async()=>{
+  const h=devices(true),phone=h.create(h.actor);
+  try{
+    await phone.manager.register(h.request);await h.drain(phone.manager);
+    phone.document.saved=false;h.answer('Final before move',true);h.advance(200);await h.drain(phone.manager);
+    assert.match(phone.document.value,/t3-response:start:/);assert.equal(h.record().state?.status,'running');
+    phone.document.path='Final moved.md';phone.document.saved=true;
+    h.advance(200);await h.drain(phone.manager);h.advance(200);await h.drain(phone.manager);
+    assert.equal(h.record().state?.status,'complete');assert.equal(h.record().state?.notePath,'Final moved.md');
+    assert.doesNotMatch(phone.document.value,/<!-- t3-(?:inline|response):/);assert.match(phone.document.value,/Final before move/);
+  }finally{h.dispose();}
+});
 
 test('temporary proof cleanup waits for both disk saves and resumes after reload with outside edits',async()=>{
   const h=devices(true),phone=h.create(h.actor);

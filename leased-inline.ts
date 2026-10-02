@@ -9,12 +9,16 @@ import type {SteeringInput} from './inline-steering';
 export interface DeviceInlineIO {
   access(environmentId:string):Promise<ThreadAccess>;
   readNote(path:string):Promise<string|undefined>;
+  locateNote?(id:string,path:string):Promise<string|undefined>;
+  noteChanged?(path:string):void;
+  noteRenamed?(before:string,after:string):void;
+  noteDeleted?(path:string):void;
   isOpen(path:string):boolean;
   isSaved?(path:string,hash:string,proof?:{id:string;body:string;cleaned?:boolean}):Promise<boolean>;
   updateNote(path:string,change:(current:string)=>string,allowed:()=>boolean):Promise<string|undefined>;
   importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
-type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;nextTick:number;writeEpoch?:number;state?:InlineThreadState;sequence:number;monitor?:{stop():void}};
+type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;nextTick:number;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void}};
 type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;close():void;discovery?:Promise<void>;lastDiscovery:number};
 const hostKey=(target:InlineHostTarget)=>JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);
 const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...state,updatedAt:''}):'';
@@ -79,7 +83,8 @@ export class DeviceInlineManager {
           if(request.version!==2||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(host.target)||this.jobs.has(request.id))return;
           const bytes=await host.files.read(leasePaths(host.target.directory,request.id).record);if(!bytes||this.stopped)return;
           const record:LeaseRecord=JSON.parse(bytes);
-          const path=record.state?.notePath??request.notePath,document=await this.io.readNote(path);
+          const path=await this.location(record);if(path===undefined)return;
+          const document=await this.io.readNote(path);
           if(document===undefined||!this.available(record,document))return;
           this.receiveRecord(host,record);
         }));
@@ -99,6 +104,14 @@ export class DeviceInlineManager {
     runtime.writer=new HostedInlineWriter({vaultId:this.vaultId,...host.target},{
       requests:async()=>[paths.request],accepts:request=>request.version===2&&allowed(),
       canResume:path=>this.io.isOpen(path),
+      locateNote:this.io.locateNote?async(id,path)=>{
+        const located=await this.io.locateNote!(id,path);
+        if(located===undefined)runtime.awaitingNote=true;
+        else if(runtime.awaitingNote||located!==(runtime.record.state?.notePath??runtime.record.request.notePath)){
+          runtime.state=undefined;runtime.awaitingNote=false;
+        }
+        return located;
+      }:undefined,
       read:async path=>path===paths.request?JSON.stringify(runtime.record.request):path===paths.state?(runtime.record.state?JSON.stringify(runtime.record.state):undefined):host.files.read(path),
       write:async(path,value)=>{
         if(path!==paths.state||!allowed())throw Error('Writer ownership expired.');
@@ -123,7 +136,10 @@ export class DeviceInlineManager {
         if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
         return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
       },
-      updateNote:(path,change)=>this.io.updateNote(path,change,allowed),
+      updateNote:async(path,change)=>{
+        if(this.io.locateNote&&await this.io.locateNote(record.request.id,path)!==path)throw Error('The response note moved during the update; retrying.');
+        return this.io.updateNote(path,change,allowed);
+      },
       importReplyAsset:this.io.importReplyAsset?(reference,request,access)=>this.io.importReplyAsset!(reference,{...request,notePath:runtime.record.state?.notePath??request.notePath},access):undefined,
     });
     this.jobs.set(record.request.id,runtime);
@@ -159,12 +175,19 @@ export class DeviceInlineManager {
     if(!raw||this.stopped)return;
     record=JSON.parse(raw);this.receiveRecord(host,record);
     if(terminalLease(record))return;
-    const path=record.state?.notePath??record.request.notePath;
+    const renewing=record.owner===this.actor&&host.client.valid(record.request.id,record.epoch);
+    // A healthy owner retains its grant while a move is arriving through Sync.
+    // Actual writes still require the marker, known hashes and a current epoch.
+    if(renewing){this.reply(runtime,await host.client.command({kind:'heartbeat',jobId:record.request.id,epoch:record.epoch}));return;}
+    const path=await this.location(record);if(path===undefined)return;
     const document=await this.io.readNote(path);
     if(document===undefined||!this.available(record,document))return;
-    const renewing=record.owner===this.actor&&host.client.valid(record.request.id,record.epoch);
-    const reply=await host.client.command({kind:renewing?'heartbeat':'claim',jobId:record.request.id,epoch:record.epoch,fallback:!this.io.isOpen(path)});
+    const reply=await host.client.command({kind:'claim',jobId:record.request.id,epoch:record.epoch,notePath:path,fallback:!this.io.isOpen(path)});
     this.reply(runtime,reply);
+  }
+  private async location(record:LeaseRecord){
+    const path=record.state?.notePath??record.request.notePath;
+    return this.io.locateNote?this.io.locateNote(record.request.id,path):path;
   }
   private available(record:LeaseRecord,document:string){
     const {request,state}=record;
@@ -180,7 +203,9 @@ export class DeviceInlineManager {
     const applied=applyThreadItem(runtime.state??{messages:[],activities:[]},item);
     runtime.state=applied.state;if(applied.sequence!==undefined)runtime.sequence=applied.sequence;
   }
-  renamed(before:string,after:string){for(const runtime of this.jobs.values())runtime.writer.renamed(before,after);}
+  changed(path:string){this.io.noteChanged?.(path);}
+  deleted(path:string){this.io.noteDeleted?.(path);}
+  renamed(before:string,after:string){this.io.noteRenamed?.(before,after);for(const runtime of this.jobs.values()){runtime.writer.renamed(before,after);runtime.nextTick=0;}this.tick();}
   dispose(){
     this.stopped=true;
     for(const runtime of this.jobs.values()){runtime.monitor?.stop();runtime.writer.stop();}
