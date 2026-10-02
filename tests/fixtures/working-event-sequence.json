@@ -1,0 +1,136 @@
+[
+  {
+    "sequence": 162080,
+    "type": "thread.message-sent",
+    "payload": {
+      "messageId": "9b1cb0df-1bee-526e-bf25-8d188118e039",
+      "role": "user",
+      "text": "hello?",
+      "turnId": null,
+      "streaming": false,
+      "createdAt": "2026-10-02T17:55:18.588Z",
+      "updatedAt": "2026-10-02T17:55:18.588Z"
+    }
+  },
+  {
+    "sequence": 162081,
+    "type": "thread.turn-start-requested",
+    "payload": {
+      "messageId": "9b1cb0df-1bee-526e-bf25-8d188118e039",
+      "createdAt": "2026-10-02T17:55:18.588Z"
+    }
+  },
+  {
+    "sequence": 162082,
+    "type": "thread.session-set",
+    "payload": {
+      "session": {
+        "threadId": "1e93576d-6eec-577b-80ab-63ca08b58926",
+        "status": "starting",
+        "providerName": "codex",
+        "providerInstanceId": "codex",
+        "runtimeMode": "full-access",
+        "activeTurnId": null,
+        "lastError": null,
+        "updatedAt": "2026-10-02T17:55:18.588Z"
+      }
+    }
+  },
+  {
+    "sequence": 162083,
+    "type": "thread.session-set",
+    "payload": {
+      "session": {
+        "threadId": "1e93576d-6eec-577b-80ab-63ca08b58926",
+        "status": "running",
+        "providerName": "codex",
+        "providerInstanceId": "codex",
+        "runtimeMode": "full-access",
+        "activeTurnId": "01a0fdc1-9ab9-7463-9b44-3b7a96d6ef43",
+        "lastError": null,
+        "updatedAt": "2026-10-02T17:55:18.938Z"
+      }
+    }
+  },
+  {
+    "sequence": 162084,
+    "type": "thread.message-sent",
+    "payload": {
+      "messageId": "assistant:msg_01f07e3165185c10016abff009ba4887d298e83a6428ef00d6",
+      "role": "assistant",
+      "text": "Synthetic assistant prose",
+      "turnId": "01a0fdc1-9ab9-7463-9b44-3b7a96d6ef43",
+      "streaming": true,
+      "createdAt": "2026-10-02T17:55:23.106Z",
+      "updatedAt": "2026-10-02T17:55:23.106Z"
+    }
+  },
+  {
+    "sequence": 162085,
+    "type": "thread.message-sent",
+    "payload": {
+      "messageId": "assistant:msg_01f07e3165185c10016abff009ba4887d298e83a6428ef00d6",
+      "role": "assistant",
+      "text": "Synthetic assistant prose",
+      "turnId": "01a0fdc1-9ab9-7463-9b44-3b7a96d6ef43",
+      "streaming": false,
+      "createdAt": "2026-10-02T17:55:23.106Z",
+      "updatedAt": "2026-10-02T17:55:23.106Z"
+    }
+  },
+  {
+    "sequence": 162089,
+    "type": "thread.message-sent",
+    "payload": {
+      "messageId": "assistant:msg_01f07e3165185c10016abff012156887d2ba9bcdd109204574",
+      "role": "assistant",
+      "text": "Synthetic assistant prose",
+      "turnId": "01a0fdc1-9ab9-7463-9b44-3b7a96d6ef43",
+      "streaming": true,
+      "createdAt": "2026-10-02T17:55:30.597Z",
+      "updatedAt": "2026-10-02T17:55:30.597Z"
+    }
+  },
+  {
+    "sequence": 162090,
+    "type": "thread.message-sent",
+    "payload": {
+      "messageId": "assistant:msg_01f07e3165185c10016abff012156887d2ba9bcdd109204574",
+      "role": "assistant",
+      "text": "Synthetic assistant prose",
+      "turnId": "01a0fdc1-9ab9-7463-9b44-3b7a96d6ef43",
+      "streaming": true,
+      "createdAt": "2026-10-02T17:55:32.992Z",
+      "updatedAt": "2026-10-02T17:55:32.992Z"
+    }
+  },
+  {
+    "sequence": 162091,
+    "type": "thread.message-sent",
+    "payload": {
+      "messageId": "assistant:msg_01f07e3165185c10016abff012156887d2ba9bcdd109204574",
+      "role": "assistant",
+      "text": "Synthetic assistant prose",
+      "turnId": "01a0fdc1-9ab9-7463-9b44-3b7a96d6ef43",
+      "streaming": false,
+      "createdAt": "2026-10-02T17:55:32.992Z",
+      "updatedAt": "2026-10-02T17:55:32.992Z"
+    }
+  },
+  {
+    "sequence": 162093,
+    "type": "thread.session-set",
+    "payload": {
+      "session": {
+        "threadId": "1e93576d-6eec-577b-80ab-63ca08b58926",
+        "status": "ready",
+        "providerName": "codex",
+        "providerInstanceId": "codex",
+        "runtimeMode": "full-access",
+        "activeTurnId": null,
+        "lastError": null,
+        "updatedAt": "2026-10-02T17:55:33.060Z"
+      }
+    }
+  }
+]

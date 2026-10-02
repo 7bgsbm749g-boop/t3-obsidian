@@ -558,3 +558,34 @@ test('explorer projection survives terminal catalog cleanup, recovery, note move
   assert.equal(JSON.parse(h.data.get(path)!)[0].notePath,'Moved.md');
   recovered.deleted('Moved.md');await recovered.tick();assert.equal(JSON.parse(h.data.get(path)!)[0].deleted,true);recovered.stop();
 });
+
+test('acknowledged exact prompt delivery survives a stopped feed, is idempotent, and cannot target another response',async()=>{
+  const h=harness(),sender=h.client();await sender.command({kind:'register',jobId:h.request.id,request:h.request});
+  const delivery={messageId:h.request.messageId,requestedAt:h.request.createdAt,sequence:40,activeTurnId:'existing'};
+  assert.equal((await sender.command({kind:'delivery',jobId:h.request.id,delivery})).ok,true);
+  assert.deepEqual(h.record().state?.bindingCheckpoint?.starts?.[h.request.messageId],delivery);
+  const before=h.record();assert.equal((await sender.command({kind:'delivery',jobId:h.request.id,delivery})).ok,true);assert.deepEqual(h.record(),before);
+  assert.equal((await sender.command({kind:'delivery',jobId:h.request.id,delivery:{...delivery,messageId:randomUUID()}})).ok,false);
+  assert.equal((await sender.command({kind:'delivery',jobId:h.request.id,delivery:{...delivery,requestedAt:'2026-10-03T12:00:00Z'}})).ok,false);
+  h.advance(LEASE_MS);await h.client(randomUUID()).command({kind:'claim',jobId:h.request.id});
+  assert.deepEqual(h.record().state?.bindingCheckpoint?.starts?.[h.request.messageId],delivery);
+});
+
+test('an independent mid-run destination recovers from acknowledged delivery with the live feed stopped',async()=>{
+  const h=devices(true,false),device=h.create(h.actor);
+  try{
+    await device.manager.register(h.request);await h.drain(device.manager);
+    const id=randomUUID(),messageId=randomUUID(),initial=initialRegion(id),createdAt=new Date(Date.parse(h.request.createdAt)+1000).toISOString();
+    const second={...h.request,id,messageId,initialHash:initial.bodyHash,createdAt};
+    device.document.value+=initial.text;
+    let stage=0;
+    h.override(async()=>({snapshotSequence:10+stage,thread:{id:h.request.threadId,projectId:h.request.projectId,messages:[{id:h.request.messageId,role:'user',text:'Original',turnId:null,streaming:false,createdAt:h.request.createdAt},{id:'before',role:'assistant',text:'Original progress',turnId:'turn',streaming:false,createdAt:h.request.createdAt},{id:messageId,role:'user',text:'Mid-run question',turnId:null,streaming:false,createdAt},...(stage?[{id:'after',role:'assistant',text:stage===2?'Mid-run final':'Mid-run streamed progress',turnId:'turn',streaming:stage!==2,createdAt:new Date(Date.parse(createdAt)+1000).toISOString()}]:[])],activities:[],latestTurn:{turnId:'turn',state:stage===2?'completed':'running',requestedAt:h.request.createdAt,assistantMessageId:stage?'after':'before',...(stage===2?{completedAt:new Date(Date.parse(createdAt)+2000).toISOString()}:{})},session:{status:stage===2?'ready':'running',activeTurnId:stage===2?null:'turn'}}}));
+    await device.manager.register(second);await device.manager.delivered(second.host,id,{messageId,requestedAt:createdAt,sequence:9,activeTurnId:'turn'});await h.drain(device.manager);
+    const record=()=>JSON.parse(h.data.get(leasePaths(second.host.directory,id).record)!);
+    assert.equal(record().state.turnId,undefined,'Delivery alone cannot invent a turn');
+    stage=1;h.advance(INLINE_SNAPSHOT_INTERVAL_MS);await h.drain(device.manager);
+    assert.equal(record().state.turnId,'turn');assert.equal(record().state.status,'running');assert.match(device.document.value,/Mid-run streamed progress/);
+    stage=2;h.advance(INLINE_SNAPSHOT_INTERVAL_MS);await h.drain(device.manager);
+    assert.equal(record().state.status,'complete');assert.equal(record().state.cleanupComplete,true);assert.equal(record().epoch,1);assert.match(device.document.value,/Mid-run final/);assert.doesNotMatch(device.document.value,/Working|<!-- t3-(?:inline|response):/);
+  }finally{h.dispose();}
+});

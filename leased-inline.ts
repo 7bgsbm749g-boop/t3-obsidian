@@ -2,7 +2,7 @@ import {explorerResponsePath,leaseExplorerResponse,loadExplorerResponses,relocat
 import {contentHash} from './completion';
 import {HostedInlineWriter,hostedPaths,validateHostedRequest,pendingCompletionCleanup,type HostedInlineRequest,type HostedInlineState,type InlineFiles,type InlineHostTarget} from './hosted-inline';
 import {InlineLeaseClient,HEARTBEAT_MS,leasePaths,terminalLease,type LeaseRecord,type LeaseReply} from './inline-lease';
-import {applyThreadItem,hasCompletionProof,hasResponseMarkers,regionBody,type InlineThreadState} from './inline-thread';
+import {applyThreadItem,restoreInlineBindings,hasCompletionProof,hasResponseMarkers,regionBody,type InlineThreadState,type InlineStartRequest} from './inline-thread';
 import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {ReplyReference} from './reply-assets';
 import type {SteeringInput} from './inline-steering';
@@ -62,6 +62,11 @@ export class DeviceInlineManager {
     const host=this.host(request.host),reply=await host.client.command({kind:'register',jobId:request.id,request});
     if(!reply.ok||!reply.record)throw Error(reply.error??'Response registration failed.');
     this.receiveRecord(host,reply.record);const runtime=this.jobs.get(request.id);if(runtime)runtime.lastHeartbeat=this.now();this.tick();
+  }
+  async delivered(target:InlineHostTarget,id:string,delivery:InlineStartRequest){
+    const host=this.host(target),reply=await host.client.command({kind:'delivery',jobId:id,delivery});
+    if(!reply.ok||!reply.record)throw Error(reply.error??'Could not retain the prompt delivery evidence.');
+    this.receiveRecord(host,reply.record);this.tick();
   }
   async stopResponse(target:InlineHostTarget,id:string){
     const host=this.host(target),reply=await host.client.command({kind:'stop',jobId:id});
@@ -124,7 +129,7 @@ export class DeviceInlineManager {
     let stopping=false;
     const allowed=()=>!this.stopped&&(!runtime.record.stopRequestedAt||stopping)&&runtime.writeEpoch===runtime.record.epoch&&runtime.record.owner===this.actor&&host.client.valid(record.request.id,runtime.record.epoch);
     runtime.writer=new HostedInlineWriter({vaultId:this.vaultId,...host.target},{
-      requests:async()=>[paths.request],accepts:request=>{if(runtime.record.stopRequestedAt)stopping=true;return [2,3].includes(request.version)&&allowed();},
+      monotonic:this.monotonic,requests:async()=>[paths.request],accepts:request=>{if(runtime.record.stopRequestedAt)stopping=true;return [2,3].includes(request.version)&&allowed();},
       canResume:path=>this.io.isOpen(path),
       locateNote:this.io.locateNote?async(id,path)=>{
         const located=await this.io.locateNote!(id,path);
@@ -154,7 +159,7 @@ export class DeviceInlineManager {
       },
       access:environmentId=>this.access(environmentId),
       threadState:async(request,access,refresh)=>{
-        if(!refresh&&runtime.state)return runtime.state;
+        if(!refresh&&runtime.state)return restoreInlineBindings(runtime.state,runtime.record.state?.bindingCheckpoint);
         return this.refreshSnapshot(runtime,access);
       },
       updateNote:async(path,change)=>{
@@ -212,11 +217,14 @@ export class DeviceInlineManager {
       if(!record.stopRequestedAt&&!runtime.refresh&&this.monotonic()>=runtime.nextSnapshot){
         void this.refreshSnapshot(runtime).catch(error=>{if(this.owns(runtime))logFailure('stream.freshness.failed',error,{jobId:id,threadId:record.request.threadId});});
       }
-      if(!record.stopRequestedAt&&!runtime.monitor)runtime.monitor=watchThread(record.request.threadId,async()=>{
+      if(!record.stopRequestedAt&&!runtime.monitor){
+        const monitorEpoch=record.epoch;
+        runtime.monitor=watchThread(record.request.threadId,async()=>{
         // A stream owns its own access lifetime. Its reconnect must not revoke
         // the independently cached access used for note checkpoints/assets.
         return this.io.access(record.request.threadEnvironmentId);
-      },{item:item=>this.item(runtime,item),reconnecting:()=>{runtime.state=undefined;}});
+      },{item:item=>{if(runtime.record.epoch===monitorEpoch)this.item(runtime,item);},reconnecting:()=>{/* Retain exact start/turn evidence across feed reconnects. */}});
+      }
       if(runtime.work&&this.now()>=runtime.nextTick){runtime.nextTick=this.now()+150;void runtime.writer.tick().catch(()=>{});}
       if(!runtime.work&&this.now()>=runtime.nextTick){
         runtime.nextTick=this.now()+150;runtime.writeEpoch=record.epoch;
@@ -257,7 +265,7 @@ export class DeviceInlineManager {
       if(Number.isSafeInteger(item.snapshot.snapshotSequence)&&item.snapshot.snapshotSequence<runtime.sequence)return;
     }
     if(item.kind==='event'&&Number.isSafeInteger(item.event?.sequence)&&item.event.sequence<=runtime.sequence)return;
-    const applied=applyThreadItem(runtime.state??{messages:[],activities:[]},item);
+    const applied=applyThreadItem(restoreInlineBindings(runtime.state??{messages:[],activities:[]},runtime.record.state?.bindingCheckpoint),item);
     runtime.state=applied.state;if(applied.sequence!==undefined)runtime.sequence=applied.sequence;
     if(item.kind==='snapshot'){runtime.nextSnapshot=this.monotonic()+INLINE_SNAPSHOT_INTERVAL_MS;runtime.snapshotFailures=0;}
   }

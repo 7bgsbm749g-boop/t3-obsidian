@@ -55,7 +55,7 @@ test('stopping removes pending question controls while preserving the prompt and
 
 test('an unbound stop resolves the original message turn rather than interrupting the newest turn',async()=>{
   const commands:any[]=[];
-  const snapshot={thread:{id:'thread',messages:[{id:'original',role:'user',streaming:false,text:'Question',createdAt:'2026-10-01T00:00:00Z'},{id:'partial',role:'assistant',text:'Partial',turnId:'original-turn',streaming:false},{id:'new',role:'user',streaming:false,text:'Later',createdAt:'2026-10-02T00:00:00Z'}],activities:[],latestTurn:{turnId:'new-turn',state:'running',requestedAt:'2026-10-02T00:00:00Z'},checkpoints:[{turnId:'original-turn',status:'ready',checkpointRef:'refs/t3/checkpoints/thread/turn/1',assistantMessageId:'partial',completedAt:'2026-10-01T01:00:00Z'}]}};
+  const snapshot={thread:{id:'thread',messages:[{id:'original',role:'user',turnId:'original-turn',streaming:false,text:'Question',createdAt:'2026-10-01T00:00:00Z'},{id:'partial',role:'assistant',text:'Partial',turnId:'original-turn',streaming:false},{id:'new',role:'user',streaming:false,text:'Later',createdAt:'2026-10-02T00:00:00Z'}],activities:[],latestTurn:{turnId:'new-turn',state:'running',requestedAt:'2026-10-02T00:00:00Z'},checkpoints:[{turnId:'original-turn',status:'ready',checkpointRef:'refs/t3/checkpoints/thread/turn/1',assistantMessageId:'partial',completedAt:'2026-10-01T01:00:00Z'}]}};
   await interruptStoppedResponse(async()=>({origin:'https://test',api:async(_path,payload)=>{if(payload){commands.push(payload);return {};}return snapshot;}}),randomUUID(),'thread',undefined,1000,'original');
   assert.equal(commands.length,1);assert.equal(commands[0].turnId,'original-turn');
 });

@@ -26,6 +26,9 @@ function harness(input?:string){
 }
 
 function stranded(h:ReturnType<typeof harness>){
+  // Older turns are absent from canonical latestTurn. Recovery needs saved
+  // exact bindings; a bare prose interval no longer proves a run association.
+  if(!h.files.has(h.paths.state))h.files.set(h.paths.state,JSON.stringify({requestHash:hostedRequestHash(h.request),accepted:false,notePath:h.request.notePath,status:'waiting',hashes:[h.request.initialHash],updatedAt:'',bindingCheckpoint:{bindings:{[h.request.messageId]:{turnId:'original-turn',kind:'start'}}}}));
   const original:InlineThreadState={historyComplete:true,messages:[
     {id:h.request.messageId,role:'user',text:'Original question',turnId:null,streaming:false,createdAt:h.request.createdAt},
     {id:'original-final',role:'assistant',text:'Recovered original answer',turnId:'original-turn',streaming:false},
@@ -114,6 +117,7 @@ test('automatic outage recovery overwrites changed active contents',async()=>{
 
 test('ambiguous recovered history remains tracked and retries without dispatching',async()=>{
   const h=harness(),s=stranded(h);s.online();
+  const unbound=JSON.parse(h.files.get(h.paths.state)!);delete unbound.bindingCheckpoint;h.files.set(h.paths.state,JSON.stringify(unbound));
   s.original.messages.splice(2,0,{id:'ambiguous',role:'assistant',text:'Fan-out',turnId:'other-turn',streaming:false});
   const writer=h.create(),before=h.document;await writer.tick();await writer.tick();
   assert.equal(h.state.turnId,undefined);assert.equal(h.document,before);assert.equal(s.reads,1,'history retry is throttled');
@@ -135,7 +139,7 @@ test('progress, failure, continue, reload repair, steer, answer and final cleanu
   assert.match(h.document,/> Original progress\.\n>\n> Continued progress\./,'continuation preserves prose before steering exists');
   // Model a checkpoint produced by the broken release, then reload the writer.
   h.files.set(h.paths.state,JSON.stringify({...h.state,turnIds:['old-turn'],prose:[old],steering:[{messageId:steerMessage,text:'Ask me a question',before:[old,next]}]}));
-  current.messages.push({id:steerMessage,role:'user',text:'Ask me a question',streaming:false,turnId:null,createdAt:new Date(Date.parse(nextTime)+1000).toISOString()});
+  current.messages.push({id:steerMessage,role:'user',text:'Ask me a question',streaming:false,turnId:'next-turn',createdAt:new Date(Date.parse(nextTime)+1000).toISOString()});
   const requested={id:'request',kind:'user-input.requested',summary:'Question',turnId:'next-turn',payload:{requestId:'request',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Which result?',options:[{label:'OK',description:'Continue with OK',value:'native-ok'}]}]}};
   current.activities.push(requested);
   await h.create().tick();assert.deepEqual(h.state.turnIds,['old-turn','next-turn']);assert.match(h.document,/Original progress[\s\S]*Continued progress[\s\S]*Ask me a question[\s\S]*Question pending/);
@@ -383,7 +387,7 @@ test('steering never removes a selection changed before its T3 delivery is confi
   const anchor=selectionAnchor(h.document,'User introduction',0,17);
   h.files.set(h.paths.state,JSON.stringify({...h.state,steering:[{messageId:id,text:'User introduction',before:h.state.prose,selection:anchor}]}));
   h.document=h.document.replace('User introduction','My updated introduction');
-  h.io.threadState=async()=>({messages:[{id:h.request.messageId,role:'user',text:'Original',turnId:null,streaming:false,createdAt:h.request.createdAt},{id,role:'user',text:'User introduction',turnId:null,streaming:false},{id:'answer',role:'assistant',text:'After steering',turnId:'turn',streaming:true}],activities:[],latestTurn:{turnId:'turn',state:'running',requestedAt:h.request.createdAt},session:{status:'running',activeTurnId:'turn'}});
+  h.io.threadState=async()=>({messages:[{id:h.request.messageId,role:'user',text:'Original',turnId:null,streaming:false,createdAt:h.request.createdAt},{id,role:'user',text:'User introduction',turnId:'turn',streaming:false},{id:'answer',role:'assistant',text:'After steering',turnId:'turn',streaming:true}],activities:[],latestTurn:{turnId:'turn',state:'running',requestedAt:h.request.createdAt},session:{status:'running',activeTurnId:'turn'}});
   await h.create().tick();assert.match(h.document,/My updated introduction/);assert.match(h.document,/\[!t3-steering\] You/);assert.equal(h.state.status,'running');
 });
 
@@ -397,7 +401,7 @@ test('completion refresh includes the final message when session-ready overtakes
     return {messages:[
       {id:h.request.messageId,role:'user',turnId:null,text:'Question',streaming:false,createdAt:h.request.createdAt},
       {id:'answer',role:'assistant',text:'Progress A',streaming:false,turnId:'turn'},
-      {id,role:'user',turnId:null,text:'Finish',streaming:false},
+      {id,role:'user',turnId:'turn',text:'Finish',streaming:false},
       ...(refresh?[{id:'final',role:'assistant',text:'Final after steering',streaming:false,turnId:'turn'}]:[]),
     ],activities:[],latestTurn:{turnId:'turn',state:'completed',requestedAt:h.request.createdAt,assistantMessageId:refresh?'final':'answer'},session:{status:'ready',activeTurnId:null}};
   };
@@ -582,4 +586,35 @@ for(const version of [1,2,3] as const)test(`Collapse survives hosted v${version}
   assert.match(h.document,version===3?/\n\nExact final answer\.\n/:/\n\n> Exact final answer\.\n/);assert.doesNotMatch(h.document,/t3-inline:|spinner/);
   const finished=h.document;await h.create().tick();assert.equal(h.document,finished);
   assert.throws(()=>validateHostedRequest({...h.request,intermediateMode:'maybe'}),/preference/);
+});
+
+test('a hung historical read releases the serial writer on coordinator ticks and fences its late result',async()=>{
+  const h=harness();h.dispatch();
+  let clock=0,release!:(snapshot:any)=>void,hang=true;
+  h.io.monotonic=()=>clock;
+  const current:InlineThreadState={messages:[{id:h.request.messageId,role:'user',text:'Question',turnId:null,streaming:false,createdAt:h.request.createdAt}],activities:[],historyComplete:false};
+  h.io.threadState=async()=>current;
+  h.io.access=async()=>({origin:'https://t3.example',api:async()=>hang?new Promise(resolve=>{release=resolve;}):{snapshotSequence:5,thread:{id:h.request.threadId,projectId:h.request.projectId,messages:[{...current.messages[0],turnId:'correct'},{id:'final',role:'assistant',text:'Final after timeout',turnId:'correct',streaming:false}],activities:[],latestTurn:{turnId:'correct',state:'completed',requestedAt:h.request.createdAt,assistantMessageId:'final'}}}});
+  const writer=h.create(),blocked=writer.tick();
+  for(let n=0;n<12&&!release;n++)await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(release);
+  clock=30_000;await writer.tick();await blocked;
+  assert.match(h.state.detail!,/timed out/);assert.match(h.document,/Working/);
+  hang=false;clock+=5000;delete h.io.threadState;await writer.tick();
+  assert.equal(h.state.status,'complete');assert.match(h.document,/Final after timeout/);
+  const final=h.document;
+  release({snapshotSequence:1,thread:{id:h.request.threadId,projectId:h.request.projectId,messages:[{...current.messages[0],turnId:'wrong'},{id:'late',role:'assistant',text:'Late unrelated output',turnId:'wrong',streaming:false}],latestTurn:{turnId:'wrong',state:'completed'}}});
+  await new Promise(resolve=>setImmediate(resolve));await writer.tick();assert.equal(h.document,final);
+});
+
+test('a start-only stream checkpoints exact evidence before its prompt or provider turn is projected',async()=>{
+  const h=harness();h.dispatch();
+  const {applyThreadItem}=await import('../inline-thread');
+  const start=applyThreadItem({messages:[],activities:[]},{kind:'event',event:{sequence:4,type:'thread.turn-start-requested',payload:{messageId:h.request.messageId,createdAt:h.request.createdAt}}}).state;
+  h.io.threadState=async()=>start;
+  await h.create().tick();assert.equal(h.state.turnId,undefined);assert.equal(h.state.bindingCheckpoint?.starts?.[h.request.messageId].requestedAt,h.request.createdAt);
+  h.io.threadState=undefined;h.answer('Recovered start-only answer',true);
+  // The real canonical interface carries a sequence. The harness's older
+  // snapshot is intentionally unsequenced and still supplies exact requestedAt.
+  await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/Recovered start-only answer/);
 });

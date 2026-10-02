@@ -95,3 +95,17 @@ test('existing-thread validation rejects other projects, archived threads, and p
   assert.equal(dispatched,false);
  }
 });
+
+test('direct acknowledgement persists exact prompt delivery and the observed active run across a retry',async()=>{
+  const request:Request={id:'c3b04c8e-f340-4202-bfa2-ae65ed4e2a3a',threadId:'thread',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',connectionId:'c',environmentId:eid,url,host:'direct',executable:''},title:'Steer',prompt:'Ordinary mid-run input'};
+  const snapshots:any[]=[];let dispatches=0;
+  const fetcher=async(u:any)=>{
+    if(u.endsWith('/.well-known/t3/environment'))return response(descriptor);
+    if(u.includes('/threads/'))return response({thread:{id:'thread',projectId:'p',session:{status:'running',activeTurnId:'existing',runtimeMode:'approval-required'}}});
+    dispatches++;return response({sequence:123});
+  };
+  await sendDirect(request,session,async()=>{snapshots.push(structuredClone(request));},fetcher as any);
+  assert.deepEqual(request.directPlan?.delivery,{messageId:commandId(request.id,'message'),requestedAt:request.directPlan!.turn.createdAt,sequence:123,activeTurnId:'existing'});
+  const restored=structuredClone(snapshots.at(-1));await sendDirect(restored,session,async()=>{},fetcher as any);
+  assert.equal(dispatches,1);assert.deepEqual(restored.directPlan.delivery,request.directPlan?.delivery);
+});

@@ -3,11 +3,12 @@ import {sha1} from '@noble/hashes/sha1';
 import {sha256} from '@noble/hashes/sha256';
 import {proofKey,proof} from './dpop';
 import type {Connection,Request} from './bridge';
+import type {InlineStartRequest} from './inline-thread';
 import {existingThreadTurn} from './thread-target';
 import {readNewThreadModel} from './model-defaults';
 export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean}
 export interface PairedSession {token:string;expiresAt:number;environmentId:string;url:string;dpopKeyId?:string;accountId?:string}
-export interface DirectPlan {hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:any;turn:any}
+export interface DirectPlan {hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:any;turn:any;observedActiveTurnId?:string;delivery?:InlineStartRequest}
 export type Fetcher=typeof fetch;
 export function endpoint(value:string):string {
  let u:URL;try{u=new URL(value.trim());}catch{throw Error('Enter a T3 HTTPS address or pairing link.');}
@@ -81,7 +82,7 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
   if(r.threadId){
    const thread=(await api('threads/'+encodeURIComponent(r.threadId)+'?turnLimit=1')).thread;
    const turn=existingThreadTurn(thread,{threadId:r.threadId,projectId:r.project.id},commandId(r.id,'turn'),{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})});
-   r.directPlan={hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn};
+   r.directPlan={hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{
   const shell=await api('shell');const project=shell.projects.find((p:any)=>p.id===r.project.id);if(!project)throw Error('Project no longer exists. Scan this connection again.');
   const candidates=[...shell.threads].sort((a:any,b:any)=>b.updatedAt.localeCompare(a.updatedAt));const inherited=candidates.find((t:any)=>t.projectId===project.id)??candidates[0]??{};
@@ -94,6 +95,6 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
  // A lost reply can only replay the same commands, including timestamps/model.
  await save();const plan=r.directPlan;
  if(plan.phase==='prepared'){await api('dispatch',plan.create);plan.phase='created';await save();}
- if(plan.phase==='created'){await api('dispatch',plan.turn);plan.phase='started';await save();}
+ if(plan.phase==='created'){const acknowledged=await api('dispatch',plan.turn);if(Number.isSafeInteger(acknowledged?.sequence)&&acknowledged.sequence>=0)plan.delivery={messageId:plan.turn.message.messageId,requestedAt:plan.turn.createdAt,sequence:acknowledged.sequence,activeTurnId:plan.observedActiveTurnId};plan.phase='started';await save();}
  return {threadId:plan.turn.threadId as string,phase:'started' as const};
 }

@@ -1,6 +1,7 @@
 import {logEvent,logFailure} from './diagnostics';
 import {explorerResponsePath,leaseExplorerResponse,loadExplorerResponses,relocateExplorerResponses,type ExplorerResponse} from './explorer-responses';
 import {legacyQuestionReply,pendingCompletionCleanup,hostedPaths,hostedRequestHash,safeNotePath,validateHostedRequest,type HostedInlineRequest,type HostedInlineState,type InlineFiles} from './hosted-inline';
+import type {InlineStartRequest} from './inline-thread';
 import {sameWorkspacePath} from './folder-link';
 import {steeringBoundary,validSteeringInput,type SteeringInput} from './inline-steering';
 
@@ -9,7 +10,7 @@ export const HEARTBEAT_MS=3000;
 export const LEASE_MARGIN_MS=2000;
 export type LeaseIdentity={vaultId:string;environmentId:string;workspaceRoot:string;directory:string};
 export interface LeaseRecord {request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;stopRequestedAt?:number;state?:HostedInlineState}
-export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'stop';epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
+export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop';delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
 export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;ttlMs:number;answeredAt?:number}
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -109,6 +110,16 @@ export class InlineLeaseAuthority {
           if(existing){if(existing.text!==input.text||JSON.stringify(existing.selection)!==JSON.stringify(input.selection))throw Error('This steering ID already belongs to another message.');if(terminalLease(record)&&!existing.confirmed)throw Error('The response stopped before this message reached T3.');return respond(true);}
           if(!state||state.status!=='running'||!state.turnId||state.finalDocumentHash)throw Error('Wait for a running response before steering. If it finished or paused, ask again after it finishes.');
           record={...record,revision:record.revision+1,state:{...state,steering:[...state.steering??[],{...input,before:steeringBoundary(state.prose??[])}]}};
+        }else if(command.kind==='delivery'){
+          const delivery=command.delivery,state=record.state;
+          const messageId=delivery?.messageId;
+          if(!delivery||!uuid.test(messageId??'')||!Number.isSafeInteger(delivery.sequence)||delivery.sequence<0||!Number.isFinite(Date.parse(delivery.requestedAt))||delivery.activeTurnId!==undefined&&(typeof delivery.activeTurnId!=='string'||!delivery.activeTurnId))throw Error('Invalid T3 delivery evidence.');
+          if(messageId!==record.request.messageId&&messageId!==state?.pendingMessageId&&messageId!==state?.messageId&&!state?.steering?.some(input=>input.messageId===messageId))throw Error('Delivery evidence belongs to another prompt.');
+          const existing=state?.bindingCheckpoint?.starts?.[messageId!];
+          if(existing){if(existing.requestedAt!==delivery.requestedAt)throw Error('The prompt delivery timestamp changed.');return respond(true);}
+          if(terminalLease(record)||record.stopRequestedAt)return respond(true);
+          const checkpoint=state?.bindingCheckpoint;
+          record={...record,revision:record.revision+1,state:{...state??{requestHash:hostedRequestHash(record.request),accepted:false,status:'waiting' as const,hashes:[record.request.initialHash],notePath:record.request.notePath,updatedAt:new Date(this.now()).toISOString()},bindingCheckpoint:{...checkpoint,starts:{...checkpoint?.starts,[messageId!]:delivery}}}};
         }else if(command.kind==='follow'){
           if(record.stopRequestedAt)throw Error('The response was stopped.');
           const state=record.state,previous=state?.messageId??record.request.messageId;
@@ -148,6 +159,16 @@ export class InlineLeaseAuthority {
               const next=state.steering?.find(item=>item.messageId===input.messageId);
               return !next||next.text!==input.text||JSON.stringify(next.before)!==JSON.stringify(input.before)||JSON.stringify(next.selection)!==JSON.stringify(input.selection)||input.confirmed&&!next.confirmed||input.selectionApplied&&!next.selectionApplied;
             }))throw Error('The saved steering message changed.');
+            const previous=record.state?.bindingCheckpoint,incoming=state.bindingCheckpoint;
+            if(previous||incoming){
+              const starts={...previous?.starts};
+              for(const [id,start] of Object.entries(incoming?.starts??{}))starts[id]={...starts[id],...start};
+              // A dispatch acknowledgement can arrive during a writer read.
+              // The next checkpoint must retain it even when that read began
+              // before delivery, just as steering reservations are retained.
+              state.bindingCheckpoint={...previous,...incoming,starts,bindings:{...previous?.bindings,...incoming?.bindings},turns:{...previous?.turns,...incoming?.turns},sequence:Math.max(previous?.sequence??-1,incoming?.sequence??-1)};
+              if(state.bindingCheckpoint.sequence===-1)delete state.bindingCheckpoint.sequence;
+            }
             record={...record,revision:record.revision+1,state:{...state,hashes:[...new Set([record.request.initialHash,...record.state?.hashes??[],...state.hashes])]}};
           }else throw Error('Unknown ownership command.');
         }

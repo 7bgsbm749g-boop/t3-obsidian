@@ -4,12 +4,12 @@ import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,typ
 import {logEvent,logFailure} from './diagnostics';
 import {contentHash} from './completion';
 import {commandId} from './direct';
-import {applyThreadItem,rememberInlineTurns,completionProof,hasCompletionProof,hasResponseMarkers,removeCompletionProof,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
+import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,completionProof,hasCompletionProof,hasResponseMarkers,removeCompletionProof,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
 import {needsInlineHistory,readInlineSnapshot,type ThreadAccess} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
 import {mergeProse,selectionRange,type InlineSteering} from './inline-steering';
-import type {InitialInlineInput,InlineMessage,InlineTurn} from './inline-thread';
+import type {InitialInlineInput,InlineMessage,InlineTurn,InlineBindingCheckpoint} from './inline-thread';
 import {interruptStoppedResponse,stoppedResponseBody} from './response-stop';
 class StopStreamRequested extends Error {}
 
@@ -26,6 +26,7 @@ export interface HostedInlineState {
   requestHash:string;accepted:boolean;notePath:string;turnId?:string;messageId?:string;pendingMessageId?:string;
   status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict'|'paused';
   hashes:string[];body?:string;detail?:string;updatedAt:string;
+  bindingCheckpoint?:InlineBindingCheckpoint;
   finishedAt?:string;presentationTurns?:Record<string,InlineTurn>;
   finalDocumentHash?:string;
   finalBody?:string;
@@ -91,6 +92,7 @@ export interface HostedWriterIO extends InlineFiles {
   updateNote(path:string,change:(current:string)=>string):Promise<string|undefined>;
   locateNote?(id:string,path:string):Promise<string|undefined>;
   threadState?(request:HostedInlineRequest,access:ThreadAccess,refresh?:boolean):Promise<import('./inline-thread').InlineThreadState|undefined>;
+  monotonic?():number;
   accepts?(request:HostedInlineRequest):boolean;
   /** Keep missing-boundary jobs recoverable while their editor is open. */
   canResume?(path:string):boolean;
@@ -102,7 +104,10 @@ export interface HostedWriterIO extends InlineFiles {
 export class HostedInlineWriter {
   private stopped=false;
   private stopIntents=new Set<string>();
-  private networkCancels=new Map<string,()=>void>();
+  private networkCancels=new Map<string,(error?:Error)=>void>();
+  private networkStarted=new Map<string,number>();
+  private networkRetryAt=new Map<string,number>();
+  private monotonic(){return this.io.monotonic?.()??performance.now();}
   private interrupts=new Set<string>();
   private work=new Map<string,Promise<void>>();
   private renameOffsets=new Map<string,number>();
@@ -114,13 +119,20 @@ export class HostedInlineWriter {
   private async network<T>(path:string,work:()=>Promise<T>):Promise<T>{
     const id=path.slice(path.lastIndexOf('/')+1,-5);
     if(this.stopped||this.stopIntents.has(id))throw new StopStreamRequested();
-    let cancel!:()=>void;
-    const interrupted=new Promise<never>((_,reject)=>{cancel=()=>reject(new StopStreamRequested());this.networkCancels.set(path,cancel);});
+    let cancel!:(error?:Error)=>void;
+    const interrupted=new Promise<never>((_,reject)=>{cancel=(error)=>reject(error??new StopStreamRequested());this.networkCancels.set(path,cancel);this.networkStarted.set(path,this.monotonic());});
     try{return await Promise.race([work(),interrupted]);}
-    finally{if(this.networkCancels.get(path)===cancel)this.networkCancels.delete(path);}
+    finally{if(this.networkCancels.get(path)===cancel){this.networkCancels.delete(path);this.networkStarted.delete(path);}}
   }
   renamed(before:string,after:string){this.renames.push({before,after});}
   async tick(){
+    // Native desktop coordination bounds every network operation, including
+    // the writer's historical reads and asset imports. Renderer timers are
+    // not needed to free a wedged serial worker; Promise.race fences late work.
+    for(const [path,started] of this.networkStarted)if(this.monotonic()-started>=30_000){
+      this.networkRetryAt.set(path,this.monotonic()+5000);
+      this.networkCancels.get(path)?.(Error('T3 response writer network operation timed out.'));
+    }
     const paths=await this.io.requests();
     const results=await Promise.allSettled(paths.map(async path=>{
       if(this.stopped)return;
@@ -129,6 +141,7 @@ export class HostedInlineWriter {
         if(await this.io.read(hostedPaths(this.identity.directory,id).stop)!==undefined)this.requestStop(id);
         return;
       }
+      if(!this.stopIntents.has(path.slice(path.lastIndexOf('/')+1,-5))&&this.monotonic()<(this.networkRetryAt.get(path)??0))return;
       const work=this.process(path);this.work.set(path,work);
       return work.finally(()=>{if(this.work.get(path)===work)this.work.delete(path);});
     }));
@@ -205,15 +218,16 @@ export class HostedInlineWriter {
           const snapshot=await this.network(path,()=>readInlineSnapshot(access,request.threadId,request.projectId));
           if(this.stopped)return;
           if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
-          current=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+          current=applyThreadItem({...state.bindingCheckpoint,messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
         }
+        current=restoreInlineBindings(current,state.bindingCheckpoint);
         // A continuation is explicitly bound to a user message. Until T3
         // projects that message and its turn, retain the failed block intact.
         const messageId=state.pendingMessageId??state.messageId??request.messageId;
-        const targets={messageIds:[messageId,...(state.steering??[]).filter(input=>!input.confirmed).map(input=>input.messageId)],turnIds:state.turnIds??(state.turnId?[state.turnId]:[])};
+        const targets={messageIds:[messageId,...(state.steering??[]).filter(input=>!input.confirmed).map(input=>input.messageId)],turnIds:[...new Set([...(state.turnIds??(state.turnId?[state.turnId]:[])),...([messageId,...(state.steering??[]).map(input=>input.messageId)].map(id=>turnForMessage(current!,id)).filter((id):id is string=>!!id))])]};
         if(needsInlineHistory(current,targets)){
           const key=JSON.stringify(targets),cached=this.history.get(path);
-          if(cached?.key===key&&cached.expires>Date.now())current=cached.state;
+          if(cached?.key===key&&cached.expires>Date.now()&&(cached.state.sequence??-1)>=(current.sequence??-1))current=restoreInlineBindings(cached.state,inlineBindingCheckpoint(current));
           else{
             const snapshot=await this.network(path,()=>readInlineSnapshot(access,request.threadId,request.projectId,undefined,true));
             if(this.stopped)return;
@@ -221,6 +235,10 @@ export class HostedInlineWriter {
             this.history.set(path,{key,expires:Date.now()+3000,state:current});
           }
         }
+        const previousBinding=state.bindingCheckpoint?.bindings?.[messageId];
+        const checkpoint=inlineBindingCheckpoint(current);
+        if(JSON.stringify(checkpoint)!==JSON.stringify(state.bindingCheckpoint)){state.bindingCheckpoint=checkpoint;await save();}
+        if(!current.messages.length)return;
         if(request.finalAnswerFormat==='raw-markdown')current={...current,turns:{...state.presentationTurns,...current.turns}};
         if((!state.turnId||state.pendingMessageId)&&!current.messages.some(m=>m.id===messageId&&m.role==='user'))return;
         if(state.pendingMessageId){
@@ -228,7 +246,8 @@ export class HostedInlineWriter {
           if(!nextTurn||nextTurn===state.turnId)return;
           state.messageId=messageId;state.turnId=nextTurn;delete state.pendingMessageId;
         }
-        state.turnId??=turnForMessage(current,messageId);
+        const bound=turnForMessage(current,messageId);
+        if(bound&&(!state.turnId||previousBinding?.kind==='steer'&&previousBinding.turnId!==bound))state.turnId=bound;
         if(!state.turnId)return;
         state.turnIds??=[state.turnId];
         // Follow changes turnId independently of steering. Repair old checkpoints
@@ -246,16 +265,18 @@ export class HostedInlineWriter {
         state.questionFollows=questions.follows;state.turnIds=questions.turnIds;state.turnId=questions.turnId!;
         state.prose=mergeProse(state.prose??[],current.messages,state.turnIds);
         let phase=inlineQuestionPhase(current,state.turnId,state.questionFollows);
-        if(state.steering?.some(input=>!input.confirmed))phase='running';
+        const checkCompletion=phase==='complete';
+        if(state.steering?.some(input=>!input.confirmed||!turnForMessage(current!,input.messageId)))phase='running';
         // Session-ready events can precede the final message in the stream.
         // Resolve completion from a fresh canonical snapshot before sealing it.
-        if(phase==='complete'&&this.io.threadState){
+        if(checkCompletion&&this.io.threadState){
           const refreshed=await this.network(path,()=>this.io.threadState!(request,access,true));
-          if(refreshed)current={...refreshed,turns:{...current.turns,...refreshed.turns}};
+          if(refreshed)current=restoreInlineBindings(refreshed,inlineBindingCheckpoint(current));
           questions=followInlineQuestions(current,state.turnIds,state.questionFollows,state.prose);
           state.questionFollows=questions.follows;state.turnIds=questions.turnIds;state.turnId=questions.turnId!;
           state.prose=mergeProse(state.prose,current.messages,state.turnIds);
           phase=inlineQuestionPhase(current,state.turnId,state.questionFollows);
+          if(state.steering?.some(input=>!input.confirmed||!turnForMessage(current!,input.messageId)))phase='running';
         }
         if(state.status==='error'&&phase==='running'&&current.latestTurn?.turnId!==state.turnId&&current.session?.activeTurnId!==state.turnId)return;
         if(state.status==='error'&&!state.pendingMessageId&&phase==='error')return;
@@ -264,6 +285,7 @@ export class HostedInlineWriter {
           state.presentationTurns=rememberInlineTurns({...current,messages:state.prose},state.turnIds,state.presentationTurns);
           current={...current,turns:{...state.presentationTurns,...current.turns}};
         }
+        state.bindingCheckpoint=inlineBindingCheckpoint(current);
         const inputs=questionConversationInputs(current,state.steering??[],state.questionFollows,state.prose);
         const conversation=state.turnIds.length>1||inputs.length?{messages:state.prose,steering:inputs,preserveHistory:questions.continued}:undefined;
         if(phase==='complete'&&this.io.importReplyAsset&&!conversation){

@@ -1633,6 +1633,15 @@ export default class SendToT3 extends Plugin {
     }
     if(!quiet)new Notice(`Working in ${projectLabel(request.project)}…`);
     const result=await sendRequest(request);
+    // Keep the acknowledged exact start even when the renderer/event feed
+    // missed it. This is orchestration delivery, not a guessed provider turn.
+    const delivery=request.directPlan?.delivery;
+    if(delivery&&this.deviceInline){
+      const bindings=request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]);
+      for(const binding of bindings)if([2,3].includes(binding.version))await this.deviceInline.delivered(binding.host,binding.id,delivery);
+      if(request.inlineSteering?.host)await this.deviceInline.delivered(request.inlineSteering.host,request.inlineSteering.jobId,delivery);
+      if(request.inlineFollow?.host)await this.deviceInline.delivered(request.inlineFollow.host,request.inlineFollow.jobId,delivery);
+    }
     this.persistAgentCommand(request,result.threadId);
     logEvent('request.dispatch.acknowledged',{requestId:request.id,threadId:result.threadId,jobId:request.inlineSteering?.jobId,messageId:commandId(request.id,'message')});
     const before={jobs:this.settings.completionJobs,settlementJobs:this.settings.settlementJobs,pending:this.settings.pending,noteThreads:this.settings.noteThreads,folderLinks:this.settings.folderLinks};

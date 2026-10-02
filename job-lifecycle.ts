@@ -22,6 +22,9 @@ export function validateJob(value:any):JobWatch {
 export function jobEvents(job:JobWatch,state:InlineThreadState,observation:JobObservation):JobEvent[] {
   const matched=turnForMessage(state,job.messageId);
   if(matched&&job.turnId&&matched!==job.turnId)throw Error('The supplied turn does not belong to the job’s originating message.');
+  const origin=state.messages.find(message=>message.id===job.messageId&&message.role==='user');
+  const supplied=job.turnId===state.latestTurn?.turnId?state.latestTurn:job.turnId?state.turns?.[job.turnId]:undefined;
+  if(!matched&&job.turnId&&origin?.createdAt&&supplied?.requestedAt&&origin.createdAt!==supplied.requestedAt)throw Error('The supplied turn does not belong to the job’s originating message.');
   const turnId=job.turnId??observation.turnId??matched;
   if(turnId)observation.turnId=turnId;
   const events:JobEvent[]=[];

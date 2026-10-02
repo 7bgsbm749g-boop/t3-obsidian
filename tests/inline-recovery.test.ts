@@ -1,15 +1,15 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applyThreadItem,inlineTurnMessages,renderInlineTurn,turnForMessage,turnPhase,type InlineThreadState} from '../inline-thread';
+import {applyThreadItem,restoreInlineBindings,inlineTurnMessages,renderInlineTurn,turnForMessage,turnPhase,type InlineThreadState} from '../inline-thread';
 import {readInlineSnapshot,type ThreadAccess} from '../thread-stream';
 
 const message=(id:string,role:string,turnId:string|null,text=id)=>({id,role,turnId,text,streaming:false});
 function history():InlineThreadState {
-  return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:{
+  return restoreInlineBindings(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:{
     messages:[message('prompt','user',null),message('final','assistant','original','Original answer'),message('late-progress','assistant','original','Old progress arriving late'),message('later-prompt','user',null),{...message('later-answer','assistant','later'),streaming:true}],
     activities:[],latestTurn:{turnId:'later',state:'running'},session:{status:'running',activeTurnId:'later'},
     checkpoints:[{turnId:'original',status:'ready',checkpointRef:'refs/t3/checkpoints/thread/turn/1',assistantMessageId:'final'}],
-  }}}).state;
+  }}}).state,{bindings:{prompt:{turnId:'original',kind:'start'}}});
 }
 
 test('canonical history recovers the original prompt after a newer turn has started',()=>{
@@ -21,13 +21,13 @@ test('canonical history recovers the original prompt after a newer turn has star
   assert.equal(turnPhase(state,'later'),'running');
 });
 
-test('history refuses partial, ambiguous, missing, and crossing-turn prompt associations',()=>{
-  const state=history();
+test('a transcript interval without exact saved evidence refuses partial, ambiguous, and late-output associations',()=>{
+  const state={...history(),bindings:{}};
   assert.equal(turnForMessage({...state,historyComplete:false},'prompt'),undefined);
+  assert.equal(turnForMessage(state,'prompt'),undefined);
   assert.equal(turnForMessage(state,'missing'),undefined);
   assert.equal(turnForMessage({...state,messages:[state.messages[0],message('fanout','assistant','another'),...state.messages.slice(1)]},'prompt'),undefined);
   assert.equal(turnForMessage({...state,messages:[message('earlier','assistant','original'),...state.messages]},'prompt'),undefined);
-  assert.equal(turnForMessage({...state,messages:[state.messages[0],...state.messages.slice(3)]},'prompt'),undefined);
 });
 
 test('a projected explicit user turn ID and a remembered requestedAt remain authoritative',()=>{
@@ -63,7 +63,7 @@ test('recovery reads beyond the recent 20 prompts and validates the destination'
   const access:ThreadAccess={origin:'https://t3.example',api:async path=>{paths.push(path);return path.includes('turnLimit=20')?recent:full;}};
   const snapshot=await readInlineSnapshot(access,'thread','project',{messageIds:['prompt'],turnIds:[]});
   assert.deepEqual(paths,['/api/orchestration/threads/thread?reasoningMessages=true&turnLimit=20','/api/orchestration/threads/thread?reasoningMessages=true']);
-  assert.equal(turnForMessage(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state,'prompt'),'original');
+  assert.equal(turnForMessage(applyThreadItem({messages:[],activities:[],bindings:state.bindings},{kind:'snapshot',snapshot}).state,'prompt'),'original');
   await assert.rejects(readInlineSnapshot(access,'thread','wrong-project'),/requested T3 thread/);
 });
 

@@ -8,20 +8,20 @@ import {Notice} from 'obsidian';
 import type {Connection,Request} from './bridge';
 import {commandId,endpoint,environmentApi,type PairedSession} from './direct';
 import {contentHash} from './completion';
-import {activeInlineIds,applyThreadItem,rememberInlineTurns,endInsertionOffset,endMarker,finalizeRegion,hasResponseMarkers,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type InlineTurn,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,endInsertionOffset,endMarker,finalizeRegion,hasResponseMarkers,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type InlineTurn,type SelectionAnchor} from './inline-thread';
 import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {InlineHostTarget} from './hosted-inline';
 import {replaceInlineEditorText} from './inline-editor';
 import {pendingQuestions} from './questions';
 import {mergeProse,selectionRange,steeringBoundary,validSteeringInput,type InlineSteering,type SteeringInput} from './inline-steering';
-import type {InlineMessage} from './inline-thread';
+import type {InlineMessage,InlineBindingCheckpoint} from './inline-thread';
 import {replaceChangedText} from './inline-note-io';
 import {boundedStopOperation,interruptStoppedResponse,stopResponseEdit} from './response-stop';
 
 export interface InlineJob {
   id:string;path:string;requestId:string;threadId?:string;turnId?:string;messageId?:string;projectId?:string;connection?:Connection;
   bodyHash:string;phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'|'conflict';createdAt:string;finalized?:boolean;
-  hosted?:boolean;
+  hosted?:boolean;bindingCheckpoint?:InlineBindingCheckpoint;
   remoteStopPending?:boolean;
   keepIntermediate?:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat;presentationTurns?:Record<string,InlineTurn>;finishedAt?:string;
   hostTarget?:InlineHostTarget;
@@ -77,7 +77,7 @@ export class InlineChatManager {
     return {id:job.id,notePath:job.path,epoch:0,revision:0,active:['sending','running','reconnecting'].includes(job.phase),input,complete:job.phase==='complete'&&!!job.finalized&&!input};
   });}
   private persist(){this.app.saveLocalStorage(this.key,this.jobs.map(j=>({...j})));}
-  private runtime(job:InlineJob){let runtime=this.runtimes.get(job.id);if(!runtime){runtime={state:{messages:[],activities:[]},sequence:-1};this.runtimes.set(job.id,runtime);}return runtime;}
+  private runtime(job:InlineJob){let runtime=this.runtimes.get(job.id);if(!runtime){runtime={state:restoreInlineBindings({messages:[],activities:[]},job.bindingCheckpoint),sequence:-1};this.runtimes.set(job.id,runtime);}return runtime;}
 
   reserve(editor:Editor,info:MarkdownView|MarkdownFileInfo,anchor:SelectionAnchor,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string,options?:ResolvedJobOptions):InlineJob {
     return this.reserveAt(editor,info,insertionOffset(editor.getValue(),anchor),requestId,expectedPath,initialInput,threadTitle,options);
@@ -140,9 +140,12 @@ export class InlineChatManager {
     if(item.kind==='event'&&Number.isSafeInteger(item.event?.sequence)&&item.event.sequence<=runtime.sequence)return;
     const applied=applyThreadItem(runtime.state,item);runtime.state=job.finalAnswerFormat==='raw-markdown'?{...applied.state,turns:{...job.presentationTurns,...applied.state.turns}}:applied.state;
     runtime.completionChecked=item.kind==='snapshot';
-    if(!job.turnId&&job.messageId){
+    const previousBinding=job.messageId?job.bindingCheckpoint?.bindings?.[job.messageId]:undefined;
+    const checkpoint=inlineBindingCheckpoint(runtime.state);
+    if(JSON.stringify(checkpoint)!==JSON.stringify(job.bindingCheckpoint)){job.bindingCheckpoint=checkpoint;this.persist();}
+    if(job.messageId){
       const turnId=turnForMessage(runtime.state,job.messageId);
-      if(turnId){job.turnId=turnId;this.persist();}
+      if(turnId&&(!job.turnId||previousBinding?.kind==='steer'&&previousBinding.turnId!==turnId)){job.turnId=turnId;this.persist();}
     }
     if(job.turnId){
       job.turnIds??=[job.turnId];
@@ -168,7 +171,7 @@ export class InlineChatManager {
     const phase=job.turnId?inlineQuestionPhase(runtime.state,job.turnId,job.questionFollows):'running';
     if(job.phase==='error'&&phase==='running'&&runtime.state.latestTurn?.turnId!==job.turnId&&runtime.state.session?.activeTurnId!==job.turnId)return;
     if(job.phase==='error'&&phase==='error')return;
-    const nextPhase=job.steering?.some(input=>!input.confirmed)?'running':phase;
+    const nextPhase=job.steering?.some(input=>!input.confirmed||!turnForMessage(runtime.state,input.messageId))?'running':phase;
     if(job.phase!==nextPhase)logEvent('response.phase.changed',{jobId:job.id,threadId:job.threadId,turnId:job.turnId,from:job.phase,to:nextPhase});
     job.phase=nextPhase;this.schedule(job);
   }
