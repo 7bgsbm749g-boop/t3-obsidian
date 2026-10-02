@@ -104,11 +104,11 @@ test('a previously bound writer recovers old history after restart without adopt
   assert.match(h.document,/Recovered original answer/);assert.doesNotMatch(h.document,/Unrelated answer|t3-inline:/);
 });
 
-test('automatic outage recovery preserves a response edited while disconnected',async()=>{
+test('automatic outage recovery overwrites changed active contents',async()=>{
   const h=harness(),s=stranded(h);await h.create().tick();
   h.document=h.document.replace('**T3 · Working**','My replacement text');s.online();
-  const edited=h.document;await h.create().tick();
-  assert.equal(h.document,edited);assert.equal(h.state.status,'conflict');
+  await h.create().tick();
+  assert.equal(h.state.status,'complete');assert.match(h.document,/Recovered original answer/);assert.doesNotMatch(h.document,/My replacement text/);
 });
 
 test('ambiguous recovered history remains tracked and retries without dispatching',async()=>{
@@ -215,11 +215,28 @@ test('final reply imports referenced files before replacing the response, then r
   assert.deepEqual(sources,['/tmp/plot.png','/tmp/plot.png','/tmp/data.pdf']);
 });
 
-test('editing generated text preserves the edit and stops only that writer',async()=>{
+for(const complete of [false,true])test(`changed active contents are overwritten during ${complete?'completion':'streaming'} while surroundings survive`,async()=>{
   const h=harness();h.dispatch();const writer=h.create();await writer.tick();
-  h.document=h.document.replace('Progress A','My correction');h.answer('Progress B');await writer.tick();
-  assert.equal(h.state.status,'conflict');assert.match(h.document,/My correction/);assert.doesNotMatch(h.document,/Progress B/);
-  await h.create().tick();assert.match(h.document,/My correction/);
+  h.document='Outside edit\n'+h.document.replace('Progress A','Duplicated Sync text\n> Duplicated Sync text')+'\nAnother outside edit';
+  h.answer('Progress B',complete);await writer.tick();
+  assert.equal(h.state.status,complete?'complete':'running');assert.match(h.document,/Progress B/);assert.doesNotMatch(h.document,/Duplicated Sync text/);
+  assert.match(h.document,/Outside edit/);assert.match(h.document,/Another outside edit/);
+  if(complete){h.document=h.document.replace('Progress B','My completed edit');await h.create().tick();assert.match(h.document,/My completed edit/);}
+});
+
+test('upgrade resumes an old paused binding with changed contents without requiring the original editor',async()=>{
+  const h=harness();h.dispatch();await h.create().tick();
+  h.document=h.document.replace('Progress A','Sync duplication');
+  h.files.set(h.paths.state,JSON.stringify({...h.state,status:'paused'}));
+  h.answer('Recovered final',true);await h.create().tick();
+  assert.equal(h.state.status,'complete');assert.match(h.document,/Recovered final/);assert.doesNotMatch(h.document,/Sync duplication/);
+});
+
+test('removed response boundaries still prevent overwriting surrounding text',async()=>{
+  const h=harness();h.dispatch();await h.create().tick();
+  h.document=h.document.replace(`<!-- t3-inline:start:${h.request.id} -->`,'User removed the response boundary');
+  const before=h.document;h.answer('New progress');await h.create().tick();
+  assert.equal(h.state.status,'conflict');assert.equal(h.document,before);
 });
 
 for(const complete of [false,true])test(`write-ahead recovery survives a crash after ${complete?'final':'progress'} insertion`,async()=>{

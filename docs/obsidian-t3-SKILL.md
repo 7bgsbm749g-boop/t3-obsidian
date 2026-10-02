@@ -105,7 +105,7 @@ Command requests and results live under `<vault>/<configDir>/t3-code/commands/v1
 
 Inspect every destination's actual content. For a completion claim, verify each binding's durable `state.status` is `complete`, alongside its final note block. `paused`, `conflict`, `interrupted`, or `error` is not successful completion. An acknowledgement alone is insufficient.
 
-Preserve tracking comments while a response is active. Editing inside an active block can pause writing to protect the user's edits; edits outside blocks are preserved. Each block's status header shows its source thread name.
+Preserve tracking comments while a response is active. The agent owns an active block's contents until completion: edits and Sync changes inside intact markers are overwritten by the latest T3 output. Edits outside blocks are preserved. Removing or damaging a marker stops insertion into that destination. Each block's status header shows its source thread name.
 
 ## User controls and combined flows
 

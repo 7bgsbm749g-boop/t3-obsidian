@@ -23,10 +23,14 @@ for(const text of [undefined,'Explain the selection.'])test(`device-local jobs r
   manager.receive(job,snapshot([original,old],'old-turn','error',oldTime,1));manager.flush(job);assert.match(value,/Old progress/);
   manager.follow(job,'continue');manager.dispose();manager=create();job=manager.find(id);
   const continued={id:'continue',role:'user',text:'Continue',turnId:null,streaming:false,createdAt:nextTime},next={id:'next',role:'assistant',text:'New progress.',turnId:'next-turn',streaming:false,createdAt:nextTime};
+  value=value.replace('Old progress.','SYNC_DUPLICATE\n> SYNC_DUPLICATE')+'\nOutside edit';
   manager.receive(job,snapshot([original,old,continued,next],'next-turn','running',nextTime,2));manager.flush(job);
+  assert.doesNotMatch(value,/SYNC_DUPLICATE/);assert.match(value,/Outside edit/);
   assert.deepEqual(Array.from(job.turnIds),['old-turn','next-turn']);assert.match(value,/> Old progress\.\n>\n> New progress\./);
+  value=value.replace('New progress.','SYNC_FINAL_DUPLICATE');
   const final={...next,id:'final',text:'Final answer.'};
   manager.receive(job,snapshot([original,old,continued,next,final],'next-turn','completed',nextTime,3));manager.flush(job);
+  assert.doesNotMatch(value,/SYNC_FINAL_DUPLICATE/);assert.match(value,/Outside edit/);
   assert.match(value,/> Old progress\.\n>\n> New progress\.\n>\n> Final answer\./);assert.doesNotMatch(value,/t3-inline:/);assert.equal(job.finalized,true);
   if(text){assert.match(value,/> Explain the selection\.[\s\S]*> Old progress\./);assert.equal(value.split('> Explain the selection.').length-1,1);}
   manager.dispose();

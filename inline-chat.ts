@@ -205,15 +205,16 @@ export class InlineChatManager {
     const outside=current?{from:current.from-startMarker(job.id).length-1,to:current.to+endMarker(job.id).length+1}:undefined;
     if(!terminal&&current&&current.body===next&&!job.steering?.some(input=>input.confirmed&&input.selection&&(!input.selectionApplied||selectionRange(document,input.selection,outside))))return;
     const selectionsApplied:InlineSteering[]=[];
-    if(current&&contentHash(current.body)===job.bodyHash)for(const input of job.steering??[]){
+    if(current)for(const input of job.steering??[]){
       if(!input.confirmed||!input.selection)continue;
       const region=regionBody(document,job.id)!;
       const range=selectionRange(document,input.selection,{from:region.from-startMarker(job.id).length-1,to:region.to+endMarker(job.id).length+1});
       if(range&&(range.to<=region.from-startMarker(job.id).length-1||range.from>=region.to+endMarker(job.id).length+1))document=document.slice(0,range.from)+document.slice(range.to);
       selectionsApplied.push(input);
     }
-    const change=terminal?finalizeRegion(document,job.id,job.bodyHash,next):replaceRegion(document,job.id,job.bodyHash,next);
-    if(!change){logFailure('note.write.conflict',new Error('Response block was edited or removed.'),{jobId:job.id,notePath:job.path,expectedHash:job.bodyHash,actualHash:current?contentHash(current.body):undefined});job.phase='conflict';runtime.monitor?.stop();this.persist();new Notice(`T3 stopped writing to ${job.path} because its inline response was edited or removed. The T3 thread remains available.`,12000);return;}
+    const expectedHash=current?contentHash(current.body):job.bodyHash;
+    const change=terminal?finalizeRegion(document,job.id,expectedHash,next):replaceRegion(document,job.id,expectedHash,next);
+    if(!change){logFailure('note.write.conflict',new Error('Response markers were removed or malformed.'),{jobId:job.id,notePath:job.path,expectedHash:job.bodyHash,actualHash:current?contentHash(current.body):undefined});job.phase='conflict';runtime.monitor?.stop();this.persist();new Notice(`T3 stopped writing to ${job.path} because its response markers were removed or malformed. The T3 thread remains available.`,12000);return;}
     logEvent('note.response.write',{jobId:job.id,notePath:job.path,fromHash:contentHash(original),toHash:contentHash(document.slice(0,change.from)+change.text+document.slice(change.to)),terminal});
     replaceChangedText(editor,original,document.slice(0,change.from)+change.text+document.slice(change.to));
     for(const input of selectionsApplied)input.selectionApplied=true;

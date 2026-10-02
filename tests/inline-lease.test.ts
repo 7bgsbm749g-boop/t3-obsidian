@@ -88,6 +88,16 @@ test('checkpoints preserve hashes without renewing expiry and stale revisions ar
   assert.deepEqual(h.record().state?.hashes,[h.request.initialHash]);assert.equal(h.record().revision,1);
 });
 
+test('old paused bindings are discoverable and can be claimed after the original lease expires',async()=>{
+  const h=harness(),owner=h.client(),other=h.client(randomUUID());
+  await owner.command({kind:'register',jobId:h.request.id,request:h.request});
+  await owner.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:0,state:{...h.state,status:'paused'}});
+  assert.equal(JSON.parse(h.data.get(leasePaths(h.request.host.directory,h.request.id).catalog)!).length,1);
+  assert.equal((await other.command({kind:'claim',jobId:h.request.id})).ok,false);
+  h.advance(LEASE_MS);
+  assert.equal((await other.command({kind:'claim',jobId:h.request.id})).ok,true);
+});
+
 test('a failed response accepts one durable continuation and fences stale writer checkpoints',async()=>{
   const h=harness(),phone=h.client(),other=h.client(randomUUID());
   await phone.command({kind:'register',jobId:h.request.id,request:h.request});
@@ -226,7 +236,7 @@ test('a restarted device discovers a moved response and persists its path atomic
   }finally{h.dispose();}
 });
 
-test('a moved edited response is protected and a copied block waits for disambiguation',async()=>{
+test('a moved response overwrites changed contents and a copied block waits for disambiguation',async()=>{
   const h=devices(),phone=h.create(h.actor);
   try{
     await phone.manager.register(h.request);await h.drain(phone.manager);
@@ -237,7 +247,7 @@ test('a moved edited response is protected and a copied block waits for disambig
     phone.extras.delete('Copy.md');phone.manager.changed('Copy.md');
     phone.document.value=phone.document.value.replace('First paragraph','My correction');
     h.advance(200);await h.drain(phone.manager);
-    assert.equal(h.record().state?.status,'paused');assert.match(phone.document.value,/My correction/);assert.doesNotMatch(phone.document.value,/New paragraph/);
+    assert.equal(h.record().state?.status,'running');assert.doesNotMatch(phone.document.value,/My correction/);assert.match(phone.document.value,/New paragraph/);
   }finally{h.dispose();}
 });
 
@@ -303,21 +313,21 @@ test('another device resumes a missed-heartbeat reply from a known older Sync ve
   }finally{h.dispose();}
 });
 
-test('a genuine edit inside the response survives takeover and pauses that editor',async()=>{
+test('changed response contents are overwritten after device takeover',async()=>{
   const h=devices(),phone=h.create(h.actor),laptop=h.create(randomUUID());
   try{
     await phone.manager.register(h.request);await h.drain(phone.manager);
     laptop.document.value=phone.document.value.replace('First paragraph','My own correction');
     laptop.manager.discover([h.request.host]);await h.drain(laptop.manager);
     h.advance(LEASE_MS+1);h.answer('New answer');await h.drain(laptop.manager);h.advance(200);await h.drain(laptop.manager);
-    assert.equal(h.record().state?.status,'paused');assert.match(laptop.document.value,/My own correction/);assert.doesNotMatch(laptop.document.value,/New answer/);
-    assert.deepEqual(JSON.parse(h.data.get(leasePaths(h.request.host.directory,h.request.id).catalog)!),[],'A paused editor is not a device takeover job');
-    h.advance(LEASE_MS);assert.equal((await h.client(randomUUID()).command({kind:'claim',jobId:h.request.id})).ok,false);
+    assert.equal(h.record().state?.status,'running');assert.doesNotMatch(laptop.document.value,/My own correction/);assert.match(laptop.document.value,/New answer/);
+    assert.equal(JSON.parse(h.data.get(leasePaths(h.request.host.directory,h.request.id).catalog)!).length,1);
+    h.advance(LEASE_MS);assert.equal((await h.client(randomUUID()).command({kind:'claim',jobId:h.request.id})).ok,true);
   }finally{h.dispose();}
 });
 
-test('undoing an edited or deleted response marker to a known body resumes the same open editor',async()=>{
-  for(const damage of [(text:string)=>text.replace('First paragraph','My correction'),(text:string)=>text.replace(`<!-- t3-inline:start:`, '<!-- removed:start:')]){
+test('restoring removed response markers resumes the same open editor',async()=>{
+  for(const damage of [(text:string)=>text.replace(`<!-- t3-inline:start:`, '<!-- removed:start:')]){
     const h=devices(),editor=h.create(h.actor);
     try{
       await editor.manager.register(h.request);await h.drain(editor.manager);

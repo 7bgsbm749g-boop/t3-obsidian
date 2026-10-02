@@ -177,7 +177,7 @@ export class DeviceInlineManager {
     if(terminalLease(record))return;
     const renewing=record.owner===this.actor&&host.client.valid(record.request.id,record.epoch);
     // A healthy owner retains its grant while a move is arriving through Sync.
-    // Actual writes still require the marker, known hashes and a current epoch.
+    // Actual writes still require intact response markers and a current epoch.
     if(renewing){this.reply(runtime,await host.client.command({kind:'heartbeat',jobId:record.request.id,epoch:record.epoch}));return;}
     const path=await this.location(record);if(path===undefined)return;
     const document=await this.io.readNote(path);

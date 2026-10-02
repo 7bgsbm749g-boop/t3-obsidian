@@ -103,7 +103,6 @@ export class InlineLeaseAuthority {
           if(!state.pendingMessageId)record={...record,revision:record.revision+1,state:{...state,pendingMessageId:command.messageId,notePath:command.notePath??state.notePath}};
         }else if(command.kind==='claim'){
           if(terminalLease(record))return respond(false,'The response is finished.');
-          if(record.state?.status==='paused'&&record.owner!==command.actor)return respond(false,'The changed response is paused in its original editor.');
           if(record.expiresAt>this.now())return respond(false,'Another writer still owns this response.');
           // Give clients with the note open a short head start over closed-note
           // fallback writers. Healthy ownership is never preempted.
@@ -150,7 +149,7 @@ export class InlineLeaseAuthority {
   private async publishCatalog(record:LeaseRecord){
     const path=leasePaths(this.identity.directory,record.request.id).catalog;
     const raw=await this.files.read(path),catalog:HostedInlineRequest[]=raw?JSON.parse(raw):[];
-    const discoverable=!terminalLease(record)&&record.state?.status!=='paused';
+    const discoverable=!terminalLease(record);
     if(discoverable&&catalog.some(item=>item.id===record.request.id))return;
     const next=catalog.filter(item=>item.id!==record.request.id);
     if(discoverable)next.push(record.request);

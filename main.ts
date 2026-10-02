@@ -742,7 +742,7 @@ export default class SendToT3 extends Plugin {
     if(!threadId||!projectId)throw Error('Wait for the first message to reach T3 before steering.');
     if(options?.threadId&&options.threadId!==threadId)throw Error('This note has a running response in another thread. Finish or stop it first.');
     if(hosted&&(hosted.record.state?.notePath??hosted.record.request.notePath)!==note.path)throw Error('The response note moved. Wait for the writer to catch up.');
-    await this.checkRecoveryBlock(id,note.path,hosted?.record.state?.hashes??[job!.bodyHash]);
+    await this.checkRecoveryBlock(id,note.path);
     let selection=context.referenceSelection?undefined:context.anchor;
     if(selection){const document=context.editor.getValue(),range=selectionRange(document,selection);if(!range)throw Error('The selected text changed. Select it again.');if(selectionOverlapsInlineResponse(document,{start:range.from,end:range.to}))selection=undefined;}
     const project=await this.recoveryProject(projectId,environmentId),key=projectKey(project);
@@ -767,19 +767,19 @@ export default class SendToT3 extends Plugin {
         if(record.state.pendingMessageId)throw Error('A continuation is already attached and waiting for its T3 turn.');
         if(record.state.notePath!==path){
           if(this.app.vault.getFileByPath(record.state.notePath))throw Error('The original response note still exists at its previous path. Resolve the duplicate before continuing.');
-          await this.checkRecoveryBlock(id,path,record.state.hashes);
+          await this.checkRecoveryBlock(id,path);
         }
         return {record,host};
       }finally{opened.close();}
     }
   }
-  private async checkRecoveryBlock(id:string,path:string,hashes:string[]){
+  private async checkRecoveryBlock(id:string,path:string){
     const leaf=this.app.workspace.getLeavesOfType('markdown').find(leaf=>(leaf.view as MarkdownView).file?.path===path);
     const file=this.app.vault.getFileByPath(path);
     if(!file)throw Error('The original note is no longer available.');
     const document=leaf?(leaf.view as MarkdownView).editor.getValue():await this.app.vault.read(file);
     const block=regionBody(document,id);
-    if(!block||!hashes.includes(contentHash(block.body)))throw Error('The response block changed. Your edits are preserved; continue in the T3 thread instead.');
+    if(!block)throw Error('The response markers were removed or malformed. Restore them or continue in the T3 thread.');
   }
   private async recoveryProject(projectId:string,environmentId?:string){
     for(const project of [...this.settings.directProjects,...this.settings.projects]){
@@ -794,7 +794,7 @@ export default class SendToT3 extends Plugin {
   private async continueInline(id:string,path:string){
     const hosted=await this.recoveryRecord(id,path),job=hosted?undefined:this.inlineChat?.find(id);
     if(!hosted&&(!job||job.hosted||job.path!==path||job.phase!=='error'||!job.threadId||!job.projectId||!job.messageId))throw Error('The streaming host is unavailable or this response is no longer waiting for a continuation.');
-    await this.checkRecoveryBlock(id,path,hosted?.record.state?.hashes??[job!.bodyHash]);
+    await this.checkRecoveryBlock(id,path);
     const threadId=hosted?.record.request.threadId??job!.threadId!,projectId=hosted?.record.request.projectId??job!.projectId!;
     const environmentId=hosted?.record.request.threadEnvironmentId??job!.connection?.environmentId;
     const project=await this.recoveryProject(projectId,environmentId),previousMessageId=hosted?.record.state?.messageId??hosted?.record.request.messageId??job!.messageId!;
@@ -812,7 +812,7 @@ export default class SendToT3 extends Plugin {
   private async attachInline(id:string,path:string){
     const hosted=await this.recoveryRecord(id,path),job=hosted?undefined:this.inlineChat?.find(id);
     if(!hosted&&(!job||job.hosted||job.path!==path||job.phase!=='error'||!job.threadId||!job.messageId||!job.connection))throw Error('The streaming host is unavailable or this response is no longer waiting for a continuation.');
-    await this.checkRecoveryBlock(id,path,hosted?.record.state?.hashes??[job!.bodyHash]);
+    await this.checkRecoveryBlock(id,path);
     const threadId=hosted?.record.request.threadId??job!.threadId!,projectId=hosted?.record.request.projectId??job!.projectId!;
     let thread:any;
     if(hosted){const access=await this.inlineThreadAccess(hosted.record.request.threadEnvironmentId);try{thread=(await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?turnLimit=20`)).thread;}finally{await access.close?.();}}

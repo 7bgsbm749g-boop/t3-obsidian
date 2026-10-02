@@ -84,7 +84,7 @@ export interface HostedWriterIO extends InlineFiles {
   locateNote?(id:string,path:string):Promise<string|undefined>;
   threadState?(request:HostedInlineRequest,access:ThreadAccess,refresh?:boolean):Promise<import('./inline-thread').InlineThreadState|undefined>;
   accepts?(request:HostedInlineRequest):boolean;
-  /** Only the still-open editor that paused this response may resume it. */
+  /** Keep missing-boundary jobs recoverable while their editor is open. */
   canResume?(path:string):boolean;
   importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
@@ -154,10 +154,9 @@ export class HostedInlineWriter {
         }
         let restored=false;
         if(state.status==='paused'){
-          if(!this.io.canResume?.(state.notePath))return;
           await this.io.updateNote(state.notePath,document=>{
             const region=regionBody(document,request.id);
-            restored=!!region&&state.hashes.includes(contentHash(region.body));
+            restored=!!region;
             return document;
           });
           if(!restored)return;
@@ -165,18 +164,16 @@ export class HostedInlineWriter {
         const access=await this.io.access(request.threadEnvironmentId);
         if(this.stopped)return;
         if(!state.accepted){
-          let found=false,conflict=false;
+          let found=false;
           await this.io.updateNote(state.notePath,current=>{
-            const region=regionBody(current,request.id);found=!!region;
-            conflict=!!region&&contentHash(region.body)!==request.initialHash;
+            found=!!regionBody(current,request.id);
             return current;
           });
-          if(conflict){if(!['paused','conflict'].includes(state.status))logFailure('note.write.conflict',new Error('Response block was edited or removed.'),{jobId:request.id,notePath:state.notePath,knownHashes:state.hashes.slice(-5)});state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='The response block changed before the host accepted it.';await save();return;}
           if(!found){state.detail='Waiting for the response marker to reach the vault project machine.';await save();return;}
           state.accepted=true;delete state.detail;await save();
         }
-        // An undo may restore an older body while T3 has moved on. Reconcile
-        // from the canonical thread before replacing that restored body.
+        // Upgrade old paused bindings from canonical history before replacing
+        // their intact response block, even when Sync changed its contents.
         let current=restored?undefined:await this.io.threadState?.(request,access);
         if(!current){
           const snapshot=await readInlineSnapshot(access,request.threadId,request.projectId);
@@ -262,7 +259,9 @@ export class HostedInlineWriter {
           const originalDocument=document;
           let region=regionBody(document,request.id);
           if(terminal&&!region&&(state.finalDocumentHash===contentHash(document)||state.finalBody!==undefined&&hasCompletionProof(document,request.id,state.finalBody))){applied=true;return document;}
-          if(!region||!state.hashes.includes(contentHash(region.body))){conflict=true;return document;}
+          // Active response contents belong to T3. Only missing or ambiguous
+          // boundaries prevent replacement; surrounding text stays untouched.
+          if(!region){conflict=true;return document;}
           for(const input of state.steering??[]){
             if(!input.confirmed||!input.selection)continue;
             const range=selectionRange(document,input.selection,{from:region.from-startMarker(request.id).length-1,to:region.to+endMarker(request.id).length+1});
@@ -291,7 +290,7 @@ export class HostedInlineWriter {
             applied=true;return finalAfter!;
           });
         }
-        if(conflict){if(!['paused','conflict'].includes(state.status))logFailure('note.write.conflict',new Error('Response block was edited or removed.'),{jobId:request.id,notePath:state.notePath,knownHashes:state.hashes.slice(-5)});state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='Response edited or removed. Undo until the original response block is intact to resume streaming.';}
+        if(conflict){if(!['paused','conflict'].includes(state.status))logFailure('note.write.conflict',new Error('Response markers were removed or malformed.'),{jobId:request.id,notePath:state.notePath,knownHashes:state.hashes.slice(-5)});state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='Response markers removed or malformed. Restore the response boundaries to resume streaming.';}
         else if(applied)state.status=phase==='complete'&&questions.waiting?'waiting':phase;
         else state.detail='Waiting for the note to become available and saved on the host.';
         if(applied)for(const input of selectionsApplied)input.selectionApplied=true;
