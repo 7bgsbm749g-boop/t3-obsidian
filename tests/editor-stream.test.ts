@@ -23,8 +23,16 @@ test('cursor routing targets only its own block; completion proofs survive indep
   assert.equal(inlineTargetAt(document,0),undefined);
   assert.equal(inlineTargetAt(document,regionBody(document,aId)!.from),aId);
   assert.equal(inlineTargetAt(document,regionBody(document,bId)!.from),bId);
-  const finished=completionProof(aId,'Answer A');assert.ok(hasCompletionProof(finished+'Changed elsewhere',aId,'Answer A'));
+  const finished=completionProof(aId,'Answer A');assert.ok(hasCompletionProof(finished+'\nChanged elsewhere',aId,'Answer A'));
   assert.equal(hasCompletionProof(finished.replace('Answer A','User edit'),aId,'Answer A'),false);
+});
+test('a completed binding receipt prevents reinsertion after cleanup and later user edits',async()=>{
+  const x=source();let document='Source';
+  const io={updateNote:async(_path:string,change:(current:string)=>string)=>document=change(document)};
+  const binding=await editorStream(x,'A.md',io,()=>true);
+  document='User changed the completed answer and surrounding note';
+  const replay=await editorStream(x,'A.md',{...io,completed:async id=>id===binding.id},()=>true);
+  assert.deepEqual(replay,binding);assert.equal(document,'User changed the completed answer and surrounding note');
 });
 test('agent commands reject path traversal, hidden notes, duplicate destinations, and ambiguous attachment',()=>{
   const command={version:1,id:randomUUID(),kind:'send-note',notePath:'A.md',destinations:['A.md','B.md'],streamReply:true};

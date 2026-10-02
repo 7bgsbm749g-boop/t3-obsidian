@@ -1,5 +1,5 @@
 import {logEvent,logFailure} from './diagnostics';
-import {legacyQuestionReply,hostedPaths,hostedRequestHash,safeNotePath,validateHostedRequest,type HostedInlineRequest,type HostedInlineState,type InlineFiles} from './hosted-inline';
+import {legacyQuestionReply,pendingCompletionCleanup,hostedPaths,hostedRequestHash,safeNotePath,validateHostedRequest,type HostedInlineRequest,type HostedInlineState,type InlineFiles} from './hosted-inline';
 import {sameWorkspacePath} from './folder-link';
 import {steeringBoundary,validSteeringInput,type SteeringInput} from './inline-steering';
 
@@ -13,7 +13,7 @@ export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRec
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export const leasePaths=(directory:string,id:string)=>({record:`${directory}/leases/${id}.json`,command:`${directory}/mailbox/${id}.json`,reply:`${directory}/replies/${id}.json`,catalog:`${directory}/lease-catalog.json`});
-export const terminalLease=(record:LeaseRecord)=>!!record.state&&['complete','interrupted','conflict'].includes(record.state.status)&&!legacyQuestionReply(record.state);
+export const terminalLease=(record:LeaseRecord)=>!!record.state&&['complete','interrupted','conflict'].includes(record.state.status)&&!legacyQuestionReply(record.state)&&!pendingCompletionCleanup(record.request,record.state);
 
 /** The existing desktop host lock admits exactly one authority. Clients only
  * submit commands; only this serialized coordinator mutates lease records. */
@@ -108,6 +108,7 @@ export class InlineLeaseAuthority {
             if(record.state?.pendingMessageId&&state.pendingMessageId!==record.state.pendingMessageId&&state.messageId!==record.state.pendingMessageId)throw Error('The pending continuation changed.');
             if(state.steering!==undefined&&(!Array.isArray(state.steering)||state.steering.length!==(record.state?.steering?.length??0)||state.steering.some(input=>!validSteeringInput(input)||!Array.isArray(input.before))))throw Error('Invalid steering checkpoint.');
             if(state.status==='complete'&&state.steering?.some(input=>!input.confirmed))throw Error('Waiting for steering delivery before finalizing.');
+            if(state.finalSaved!==undefined&&typeof state.finalSaved!=='boolean'||state.cleanupComplete!==undefined&&typeof state.cleanupComplete!=='boolean'||state.finalSaved&&(state.finalBody===undefined||!['complete','interrupted'].includes(state.finalPhase??''))||state.cleanupComplete&&!state.finalSaved||record.state?.finalSaved&&!state.finalSaved)throw Error('Invalid completion cleanup checkpoint.');
             if(record.state?.steering?.some(input=>{
               const next=state.steering?.find(item=>item.messageId===input.messageId);
               return !next||next.text!==input.text||JSON.stringify(next.before)!==JSON.stringify(input.before)||JSON.stringify(next.selection)!==JSON.stringify(input.selection)||input.confirmed&&!next.confirmed||input.selectionApplied&&!next.selectionApplied;

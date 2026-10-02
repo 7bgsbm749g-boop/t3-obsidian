@@ -1344,8 +1344,10 @@ test('agent note commands combine many threads per note, mirrored responses, att
     assert.equal((a.value.match(/t3-inline:start:/g)??[]).length,3);
     h.setStreaming(false);
     await new Promise(resolve=>setTimeout(resolve,2200));
-    assert.equal((a.value.match(/t3-response:start:/g)??[]).length,3);
-    assert.equal((b.value.match(/t3-response:start:/g)??[]).length,2);
+    assert.equal((a.value.match(/Inline reply from T3\./g)??[]).length,3);
+    assert.equal((b.value.match(/Inline reply from T3\./g)??[]).length,2);
+    assert.doesNotMatch(a.value,/t3-response:(?:start|end):/);
+    assert.doesNotMatch(b.value,/t3-response:(?:start|end):/);
     assert.doesNotMatch(a.value,/t3-inline:start:|T3 · Working/);
     assert.doesNotMatch(b.value,/t3-inline:start:|T3 · Working/);
     assert.ok(a.value.startsWith('Source A: explain alpha.'));

@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {HostedInlineWriter,handoffInline,hostedPaths,hostedRequestHash,validateHostedRequest,type HostedInlineRequest,type HostedInlineState,type HostedWriterIO} from '../hosted-inline';
-import {initialRegion,regionBody} from '../inline-thread';
+import {initialRegion,regionBody,completionProof} from '../inline-thread';
 import {contentHash} from '../completion';
 import {commandId} from '../direct';
 import {QuestionController} from '../question-controller';
@@ -46,6 +46,40 @@ function stranded(h:ReturnType<typeof harness>){
   };
   return {original,recent,online:()=>{online=true;},get reads(){return reads;}};
 }
+
+function independent(h:ReturnType<typeof harness>){h.request.independent=true;h.files.set(h.paths.request,JSON.stringify(h.request));return h;}
+
+for(const crash of ['none','proof','cleanup'])test(`independent reply removes all tracking boundaries and survives ${crash} crash`,async()=>{
+  const h=independent(harness());h.dispatch();await h.create().tick();h.answer('Final reply',true);
+  if(crash==='proof')h.crash(true);
+  if(crash==='cleanup'){
+    const write=h.io.write;let fail=true;
+    h.io.write=async(path,value)=>{if(fail&&JSON.parse(value).cleanupComplete){fail=false;throw Error('Crash before cleanup acknowledgement');}await write(path,value);};
+  }
+  if(crash==='proof'){await assert.rejects(h.create().tick(),/disk unavailable/);h.crash(false);}else await h.create().tick();
+  h.document+='\nAn independent surrounding edit';
+  await h.create().tick();
+  assert.equal(h.state.status,'complete');assert.equal(h.state.finalSaved,true);assert.equal(h.state.cleanupComplete,true);
+  assert.doesNotMatch(h.document,/<!-- t3-(?:inline|response):/);assert.equal(h.document.split('Final reply').length-1,1);
+  assert.match(h.document,/An independent surrounding edit/);
+});
+
+test('final marker examples complete successfully through the independent writer',async()=>{
+  const h=independent(harness());h.dispatch();
+  const answer='Example:\n\n```text\n<!-- t3-inline:start:'+h.request.id+' -->\n<!-- t3-inline:end:'+h.request.id+' -->\n```\n\nDone.';
+  h.answer(answer);await h.create().tick();h.answer(answer,true);await h.create().tick();
+  assert.equal(h.state.status,'complete');assert.equal(h.state.cleanupComplete,true);
+  assert.equal(regionBody(h.document,h.request.id),null);assert.match(h.document,/```text\n<!-- t3-inline:start:/);assert.doesNotMatch(h.document,/· Working/);
+});
+
+test('upgrade cleans old completed proof tags without changing later user edits or accessing T3',async()=>{
+  const h=independent(harness());
+  h.document='Before\n'+completionProof(h.request.id,'> User edited the answer\n')+'\nAfter';
+  h.files.set(h.paths.state,JSON.stringify({requestHash:hostedRequestHash(h.request),accepted:true,notePath:h.request.notePath,status:'complete',hashes:[],updatedAt:'',finalBody:'> Original answer\n',finalDocumentHash:'old hash'}));
+  h.io.access=async()=>{throw Error('Must not access T3 during cleanup');};
+  await h.create().tick();assert.equal(h.state.status,'complete');assert.equal(h.state.cleanupComplete,true);
+  assert.equal(h.document,'Before\n> User edited the answer\nAfter');
+});
 
 test('an unbound response automatically recovers after an outage, reload, and later T3 chat',async()=>{
   const h=harness(),s=stranded(h);

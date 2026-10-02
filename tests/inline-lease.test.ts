@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {InlineLeaseAuthority,InlineLeaseClient,LEASE_MS,leasePaths,type LeaseFiles,type LeaseRecord} from '../inline-lease';
 import {hostedPaths,hostedRequestHash,type HostedInlineRequest,type HostedInlineState} from '../hosted-inline';
-import {initialRegion} from '../inline-thread';
+import {initialRegion,completionProof} from '../inline-thread';
 import {DeviceInlineManager} from '../leased-inline';
 
 function harness(){
@@ -113,8 +113,9 @@ test('closed-note fallback waits briefly; completion removes discovery entry and
   h.advance(LEASE_MS);assert.equal((await phone.command({kind:'claim',jobId:h.request.id})).ok,false);
 });
 
-function devices(){
+function devices(independent=false){
   const h=harness(),managers:DeviceInlineManager[]=[];
+  if(independent)h.request.independent=true;
   let answer='First paragraph',complete=false;
   const snapshot=()=>({thread:{id:h.request.threadId,projectId:h.request.projectId,messages:[
     {id:h.request.messageId,role:'user',text:'Question',streaming:false,createdAt:h.request.createdAt},
@@ -131,6 +132,41 @@ function devices(){
   const drain=async(...active:DeviceInlineManager[])=>{for(let n=0;n<12;n++){for(const manager of active)manager.tick();await new Promise(resolve=>setImmediate(resolve));}};
   return {...h,create,drain,answer:(text:string,done=false)=>{answer=text;complete=done;},dispose:()=>managers.forEach(manager=>manager.dispose())};
 }
+
+test('temporary proof cleanup waits for both disk saves and resumes after reload with outside edits',async()=>{
+  const h=devices(true),phone=h.create(h.actor);
+  try{
+    await phone.manager.register(h.request);await h.drain(phone.manager);
+    phone.document.saved=false;h.answer('Independent final',true);h.advance(200);await h.drain(phone.manager);
+    assert.match(phone.document.value,/t3-response:start:/);assert.equal(h.record().state?.finalSaved,undefined);
+    phone.document.saved=true;
+    phone.document.hold=async()=>{phone.document.saved=false;};
+    h.advance(200);await h.drain(phone.manager);
+    assert.equal(h.record().state?.finalSaved,true);assert.equal(h.record().state?.status,'running');
+    assert.doesNotMatch(phone.document.value,/<!-- t3-(?:inline|response):/);
+    phone.manager.dispose();
+    const reloaded=h.create(h.actor);reloaded.document.value=phone.document.value+'\nAnother stream changed the note';
+    h.advance(LEASE_MS+1);reloaded.manager.discover([h.request.host]);await h.drain(reloaded.manager);h.advance(200);await h.drain(reloaded.manager);
+    assert.equal(h.record().state?.status,'complete');assert.equal(h.record().state?.cleanupComplete,true);
+    assert.match(reloaded.document.value,/Another stream changed the note/);
+    assert.equal(reloaded.document.value.split('Independent final').length-1,1);
+  }finally{h.dispose();}
+});
+
+test('coordinator restart publishes old completed proof records for cleanup on an eligible device',async()=>{
+  const h=devices(true),phone=h.create(h.actor),owner=h.client();
+  try{
+    await owner.command({kind:'register',jobId:h.request.id,request:h.request});
+    const body='> Old finished answer\n';phone.document.value='Before\n'+completionProof(h.request.id,'> Later user edit\n')+'\nAfter';
+    const record=h.record();
+    h.data.set(leasePaths(h.request.host.directory,h.request.id).record,JSON.stringify({...record,state:{...h.state,requestHash:hostedRequestHash(h.request),status:'complete',finalBody:body,finalDocumentHash:'old whole-note hash'}}));
+    h.data.set(leasePaths(h.request.host.directory,h.request.id).catalog,'[]');await h.restart();
+    assert.equal(JSON.parse(h.data.get(leasePaths(h.request.host.directory,h.request.id).catalog)!).length,1);
+    h.advance(LEASE_MS+1);phone.manager.discover([h.request.host]);await h.drain(phone.manager);h.advance(200);await h.drain(phone.manager);
+    assert.equal(h.record().state?.status,'complete');assert.equal(h.record().state?.cleanupComplete,true);
+    assert.equal(phone.document.value,'Before\n> Later user edit\nAfter');
+  }finally{h.dispose();}
+});
 
 test('another device resumes a missed-heartbeat reply from a known older Sync version, preserving outside edits',async()=>{
   const h=devices(),phone=h.create(h.actor),laptop=h.create(randomUUID());

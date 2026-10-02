@@ -1300,7 +1300,16 @@ export default class SendToT3 extends Plugin {
     for(const path of destinations){const document=await io.readNote(path);if(document===undefined)throw Error(`Destination note unavailable: ${path}`);endInsertionOffset(document);}
     const source:HostedInlineRequest={version:2,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:new Date().toISOString(),keepIntermediate:this.settings.inlineStreaming.keepIntermediate===true};
     request.inlineBindings=[];this.rememberInlineTarget(host);
-    for(const path of destinations)request.inlineBindings.push(await editorStream(source,path,io,()=>!this.stopped));
+    const opened=await this.inlineHostFiles(host);
+    try{
+      const bindingIO={...io,completed:async(id:string)=>{
+        const raw=await opened.files.read(leasePaths(host.directory,id).record);
+        if(!raw)return false;
+        const record:LeaseRecord=JSON.parse(raw);
+        return record.request.threadId===source.threadId&&record.request.messageId===source.messageId&&!!record.state&&(record.state.finalSaved===true||['complete','interrupted'].includes(record.state.status));
+      }};
+      for(const path of destinations)request.inlineBindings.push(await editorStream(source,path,bindingIO,()=>!this.stopped));
+    }finally{opened.close();}
     request.inlineHost=request.inlineBindings[0];
   }
   private persistAgentCommand(request:Request,threadId?:string){

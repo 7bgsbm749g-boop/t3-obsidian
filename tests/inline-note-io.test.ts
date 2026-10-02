@@ -1,6 +1,17 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {deviceNoteIO} from '../inline-note-io';
+import {completionProof} from '../inline-thread';
+
+test('completion checks distinguish saved proof from saved cleanup despite another stream changing the note',async()=>{
+  const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',body='> Answer\n';
+  let document=completionProof(id,body)+'\nOther stream changed';
+  const io=deviceNoteIO({vault:{getFileByPath:()=>({}),read:async()=>document}} as any);
+  assert.equal(await io.isSaved('Note.md','stale whole-note hash',{id,body}),true);
+  assert.equal(await io.isSaved('Note.md','stale whole-note hash',{id,body,cleaned:true}),false);
+  document=body+'Other stream changed again';
+  assert.equal(await io.isSaved('Note.md','stale whole-note hash',{id,body,cleaned:true}),true);
+});
 
 test('open-editor writes use the current text and preserve an outside edit',async()=>{
   let value='User edit\nOld reply\nTail',replacement:any;

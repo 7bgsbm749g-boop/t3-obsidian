@@ -4,23 +4,27 @@ import type {Root,RootContent} from 'mdast';
 
 const parser=unified().use(remarkParse);
 
+/** Source ranges remain stable even when HTML would swallow Markdown code. */
+export function markdownCodeRanges(markdown:string):Array<[number,number]> {
+  const ranges:Array<[number,number]>=[];
+  function walk(node:Root|RootContent){
+    if(node.type==='code'||node.type==='inlineCode'){
+      const from=node.position?.start.offset,to=node.position?.end.offset;
+      if(from!==undefined&&to!==undefined)ranges.push([from,to]);
+    }else if('children' in node)for(const child of node.children)walk(child as RootContent);
+  }
+  walk(parser.parse(markdown.replace(/</g,' ')) as Root);
+  return ranges;
+}
+
 /** Treat response HTML as literal Markdown, without changing code or link targets.
  * Edit source offsets rather than serializing the tree: quote/paragraph layout
  * belongs to the inline renderer. Partial tags are escaped during streaming too. */
 export function escapeReplyHtml(markdown:string):string {
   if(!markdown.includes('<'))return markdown;
-  const protectedRanges:Array<[number,number]>=[];
+  const protectedRanges=markdownCodeRanges(markdown);
   // Raw HTML blocks can swallow following Markdown code in the first parse.
   // Mask angle openings for a code-only parse, preserving all source offsets.
-  function protectCode(node:Root|RootContent){
-    if(node.type==='code'||node.type==='inlineCode'){
-      const from=node.position?.start.offset,to=node.position?.end.offset;
-      if(from!==undefined&&to!==undefined)protectedRanges.push([from,to]);
-      return;
-    }
-    if('children' in node)for(const child of node.children)protectCode(child as RootContent);
-  }
-  protectCode(parser.parse(markdown.replace(/</g,' ')) as Root);
   function walk(node:Root|RootContent){
     const start=node.position?.start.offset,end=node.position?.end.offset;
     if(start!==undefined&&end!==undefined){

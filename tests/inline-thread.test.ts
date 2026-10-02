@@ -70,6 +70,19 @@ test('completed response removes only its guarded markers and preserves surround
   assert.equal(finalizeRegion(nested,id,contentHash(regionBody(nested,id)!.body),final),null);
 });
 
+test('finalization ignores marker examples in fenced and inline code, including its own exact ID',()=>{
+  const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const body='**T3 · Working**\n\n```text\n<!-- t3-inline:start:'+id+' -->\n<!-- t3-inline:end:'+id+' -->\nWhile streaming: <!-- t3-inline:start:ID -->\n```\n\n> `<!-- t3-inline:end:'+id+' -->`\n';
+  const document='Before\n<!-- t3-inline:start:'+id+' -->\n'+body+'\n<!-- t3-inline:end:'+id+' -->\nAfter';
+  assert.equal(regionBody(document,id)?.body,body);
+  const change=finalizeRegion(document,id,contentHash(body),body.replace('**T3 · Working**\n\n',''));
+  assert.ok(change);
+  const completed=document.slice(0,change.from)+change.text+document.slice(change.to);
+  assert.equal(regionBody(completed,id),null);
+  assert.match(completed,/```text\n<!-- t3-inline:start:/);
+  assert.match(completed,/Before[\s\S]*After/);
+});
+
 test('stream deltas, final replacement, snapshots, status, and fence balancing render without duplicate text',()=>{
   let state={messages:[],activities:[]} as any;
   const event=(sequence:number,text:string,streaming:boolean)=>({kind:'event',event:{sequence,type:'thread.message-sent',payload:{messageId:'m1',role:'assistant',text,streaming,turnId:'turn'}}});

@@ -3,7 +3,7 @@ import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,typ
 import {logEvent,logFailure} from './diagnostics';
 import {contentHash} from './completion';
 import {commandId} from './direct';
-import {applyThreadItem,completionProof,hasCompletionProof,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
+import {applyThreadItem,completionProof,hasCompletionProof,hasResponseMarkers,removeCompletionProof,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
 import {needsInlineHistory,readInlineSnapshot,type ThreadAccess} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
@@ -25,6 +25,10 @@ export interface HostedInlineState {
   hashes:string[];body?:string;detail?:string;updatedAt:string;
   finalDocumentHash?:string;
   finalBody?:string;
+  /** The proof was verified on disk before its temporary boundaries were removed. */
+  finalSaved?:boolean;
+  finalPhase?:'complete'|'interrupted';
+  cleanupComplete?:boolean;
   prose?:InlineMessage[];turnIds?:string[];steering?:InlineSteering[];questionFollows?:InlineQuestionFollow[];
 }
 export interface InlineFiles {
@@ -33,6 +37,7 @@ export interface InlineFiles {
 }
 export const hostedPaths=(directory:string,id:string)=>({request:`${directory}/requests/${id}.json`,state:`${directory}/states/${id}.json`,stop:`${directory}/stops/${id}.json`});
 export const legacyQuestionReply=(state:HostedInlineState|undefined)=>state?.status==='complete'&&state.questionFollows===undefined&&!!state.body?.includes('> **T3 · Question pending**')&&questionTargets(state.body).length>0;
+export const pendingCompletionCleanup=(request:HostedInlineRequest,state:HostedInlineState|undefined)=>!!request.independent&&state?.finalBody!==undefined&&!state.cleanupComplete&&!legacyQuestionReply(state)&&(state.finalSaved===true||['complete','interrupted'].includes(state.status));
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export function safeNotePath(path:unknown):path is string {
   return typeof path==='string'&&path.endsWith('.md')&&!path.includes('\\')&&!/[\x00-\x1f:]/.test(path)&&path.split('/').every(p=>!!p&&p!=='.'&&p!=='..'&&!p.startsWith('.'));
@@ -116,10 +121,13 @@ export class HostedInlineWriter {
       let state:HostedInlineState;
       try{state=JSON.parse((await this.io.read(paths.state))??'null')??{requestHash:hash,accepted:false,notePath:request.notePath,status:'waiting',hashes:[request.initialHash],updatedAt:new Date().toISOString()};}catch{return;}
       if(state.requestHash!==hash||!Array.isArray(state.hashes)||!safeNotePath(state.notePath))return;
-      if(['complete','interrupted','conflict'].includes(state.status)&&!legacyQuestionReply(state))return;
+      const legacyProof=pendingCompletionCleanup(request,state)&&['complete','interrupted'].includes(state.status);
+      if(['complete','interrupted','conflict'].includes(state.status)&&!legacyQuestionReply(state)&&!legacyProof)return;
       const save=async()=>{state.updatedAt=new Date().toISOString();await this.io.write(paths.state,JSON.stringify(state));this.renameOffsets.set(path,renameEnd);};
       try{
         for(const move of renames)if(state.notePath===move.before||state.notePath.startsWith(move.before+'/'))state.notePath=move.after+state.notePath.slice(move.before.length);
+        if(legacyProof){state.finalPhase=state.status as 'complete'|'interrupted';state.finalSaved=true;state.status='running';await save();}
+        if(state.finalSaved){await this.cleanup(request,state,save);return;}
         if(legacyQuestionReply(state)){
           // Older releases sealed pending questions. Reopen only byte-identical
           // final output; never reconstruct over an edited or moved response.
@@ -279,11 +287,32 @@ export class HostedInlineWriter {
         else if(applied)state.status=phase==='complete'&&questions.waiting?'waiting':phase;
         else state.detail='Waiting for the note to become available and saved on the host.';
         if(applied)for(const input of selectionsApplied)input.selectionApplied=true;
-        await save();
+        if(applied&&terminal&&request.independent){
+          state.finalPhase=phase as 'complete'|'interrupted';state.finalSaved=true;state.status='running';
+          await save();
+          await this.cleanup(request,state,save);
+        }else await save();
       }catch(error){
         logFailure('response.writer.retry',error,{jobId:request.id,notePath:state.notePath,threadId:request.threadId});
+        if(state.finalSaved)state.status='running';
         state.detail=error instanceof Error?error.message:'The streaming host will retry.';
+        // A failed proof-save acknowledgement must not persist finalSaved via
+        // this retry checkpoint: the device adapter verifies that transition.
         await save();
       }
+  }
+  private async cleanup(request:HostedInlineRequest,state:HostedInlineState,save:()=>Promise<void>){
+    let cleaned=false;
+    await this.io.updateNote(state.notePath,document=>{
+      const next=removeCompletionProof(document,request.id);
+      if(next===null&&hasResponseMarkers(document,request.id))throw Error('Completed response boundaries are incomplete or nested. Your text is preserved.');
+      // No boundaries means a previous cleanup already landed, including a
+      // crash before its checkpoint. Never reconstruct or overwrite the body.
+      cleaned=true;state.finalDocumentHash=contentHash(next??document);
+      return next??document;
+    });
+    if(!cleaned)return;
+    state.cleanupComplete=true;state.status=state.finalPhase!;delete state.detail;
+    await save();
   }
 }

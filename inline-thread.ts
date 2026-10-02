@@ -1,4 +1,4 @@
-import {escapeReplyHtml} from './reply-html';
+import {escapeReplyHtml,markdownCodeRanges} from './reply-html';
 import {contentHash} from './completion';
 import {pendingQuestions,renderQuestion} from './questions';
 import {steeringSegments,type InlineSteering} from './inline-steering';
@@ -81,11 +81,19 @@ export function initialRegion(id:string,initialInput?:InitialInlineInput,threadT
 }
 
 export function regionBody(document:string,id:string):{from:number;to:number;body:string}|null {
-  const start=startMarker(id),end=endMarker(id),first=document.indexOf(start);
-  if(first<0||document.indexOf(start,first+1)>=0)return null;
-  const from=first+start.length+1,to=document.indexOf(`\n${end}`,from);
-  if(to<0||document.indexOf(end,to+1+end.length)>=0)return null;
-  return {from,to,body:document.slice(from,to)};
+  return trackedRegion(document,id,'t3-inline');
+}
+
+function markerLines(document:string,prefix:'t3-inline'|'t3-response') {
+  const code=markdownCodeRanges(document);
+  return [...document.matchAll(new RegExp(`^<!-- ${prefix}:(start|end):([a-z0-9-]+) -->$`,'gm'))]
+    .filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to));
+}
+function trackedRegion(document:string,id:string,prefix:'t3-inline'|'t3-response'):{from:number;to:number;body:string}|null {
+  const lines=markerLines(document,prefix).filter(match=>match[2]===id);
+  if(lines.length!==2||lines[0][1]!=='start'||lines[1][1]!=='end')return null;
+  const from=lines[0].index!+lines[0][0].length+1,to=lines[1].index!-1;
+  return to>=from?{from,to,body:document.slice(from,to)}:null;
 }
 
 export function replaceRegion(document:string,id:string,expectedHash:string,next:string):{from:number;to:number;text:string;hash:string}|null {
@@ -97,7 +105,7 @@ export function replaceRegion(document:string,id:string,expectedHash:string,next
 /** Remove a completed reply's tracking lines with the final body in one edit. */
 export function finalizeRegion(document:string,id:string,expectedHash:string,finalBody:string):{from:number;to:number;text:string}|null {
   const found=regionBody(document,id);
-  if(!found||contentHash(found.body)!==expectedHash||/<!-- t3-inline:(?:start|end):/.test(found.body))return null;
+  if(!found||contentHash(found.body)!==expectedHash||markerLines(found.body,'t3-inline').length)return null;
   const start=startMarker(id),end=endMarker(id);
   const from=found.from-start.length-1,endFrom=found.to+1;
   if(document.slice(from,from+start.length)!==start||document.slice(endFrom,endFrom+end.length)!==end)return null;
@@ -368,7 +376,15 @@ export function inlineSteeringTarget(document:string,offset:number,responseId?:s
   return active.length===1?active[0]:undefined;
 }
 export function completionProof(id:string,body:string){return `<!-- t3-response:start:${id} -->\n${body}\n<!-- t3-response:end:${id} -->`;}
-export function hasCompletionProof(document:string,id:string,body:string){return document.includes(completionProof(id,body));}
+export function hasCompletionProof(document:string,id:string,body:string){return trackedRegion(document,id,'t3-response')?.body===body;}
+export function hasResponseMarkers(document:string,id:string){return ['t3-inline','t3-response'].some(prefix=>markerLines(document,prefix as 't3-inline'|'t3-response').some(match=>match[2]===id));}
+/** Remove only our completed boundary lines, preserving even edited prose. */
+export function removeCompletionProof(document:string,id:string):string|null {
+  const region=trackedRegion(document,id,'t3-response');
+  if(!region||markerLines(region.body,'t3-inline').length||markerLines(region.body,'t3-response').length)return null;
+  const start=`<!-- t3-response:start:${id} -->`,end=`<!-- t3-response:end:${id} -->`;
+  return document.slice(0,region.from-start.length-1)+region.body.replace(/\n+$/,'')+document.slice(region.to+1+end.length);
+}
 
 /** Thread titles are plain display text, never executable Markdown or HTML. */
 export function inlineThreadLabel(title?:string){
