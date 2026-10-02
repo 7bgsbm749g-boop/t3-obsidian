@@ -9,7 +9,7 @@ async function folderMenuHarness(){
   const deviceId=randomUUID();let local:any={deviceId,mode:'direct',pairedSessions:{c:{url:'https://folder.example',environmentId:'env',token:'test',expiresAt:Date.now()+600000}}};
   const project={id:'project',title:'Writing',workspaceRoot:'/writing',connectionId:'c',connectionName:'Laptop'};
   const shared:any[]=[],modals:any[]=[],notices:string[]=[];
-  let shownMenu:any,threadsReply:any[]|undefined;
+  let shownMenu:any,threadsReply:any[]|undefined,projectsReply:any[]|undefined;
   let fileMenu:(...args:any[])=>void=()=>{},failSave=false,networkRequests=0;
   class Element {
     text='';settings:any[]=[];children:Element[]=[];
@@ -88,7 +88,7 @@ async function folderMenuHarness(){
   runInNewContext(await readFile('dist/main.js','utf8'),{
     module,exports:module.exports,window:{innerWidth:1000,innerHeight:700},require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,
     document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
-    fetch:(url:string)=>{networkRequests++;if(threadsReply===undefined)throw Error('Link configuration must not dispatch or scan T3');return new Response(JSON.stringify(url.endsWith('/environment')?{environmentId:'env',label:'Laptop',orchestrationProtocolVersion:1}:{threads:threadsReply}));},
+    fetch:(url:string,options:any)=>{networkRequests++;assert.equal(options?.method??'GET','GET','Folder linking must never dispatch T3 commands');if(threadsReply===undefined&&projectsReply===undefined)throw Error('Link configuration must not dispatch or scan T3');return new Response(JSON.stringify(url.endsWith('/environment')?{environmentId:'env',label:'Laptop',orchestrationProtocolVersion:1}:{threads:threadsReply,projects:projectsReply}));},
     Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console,
   },{timeout:5000});
   const plugin=new module.exports.default();await plugin.onload();
@@ -100,8 +100,47 @@ async function folderMenuHarness(){
   };
   const setting=(modal:Modal,name:string)=>{const item=modal.contentEl.settings.find(item=>item.name===name);assert.ok(item);return item as Setting;};
   const button=(modal:Modal,text:string)=>{const item=modal.contentEl.settings.flatMap(setting=>setting.controls).find(control=>control.text===text);assert.ok(item);return item as Control;};
-  return {plugin,open,setting,button,shared,notices,deviceId,project,modals,shownMenu:()=>shownMenu,setThreads:(value:any[])=>{threadsReply=value;},folderMenu:(root=false)=>{const menu=new Menu();const selected=new Folder();if(root){selected.path='/';selected.name='QLO2';}fileMenu(menu,selected,'file-explorer-context-menu');return menu;},fileMenu:(path:string,mobile:boolean)=>{api.Platform.isMobile=mobile;const menu=new Menu();const file=new File(path);fileMenu(menu,file,'file-explorer-context-menu');return {menu,file};},networkRequests:()=>networkRequests,setFailSave:(value:boolean)=>{failSave=value;}};
+  return {plugin,open,setting,button,shared,notices,deviceId,project,modals,shownMenu:()=>shownMenu,setProjects:(value:any[])=>{projectsReply=value;},setThreads:(value:any[])=>{threadsReply=value;},folderMenu:(root=false)=>{const menu=new Menu();const selected=new Folder();if(root){selected.path='/';selected.name='QLO2';}fileMenu(menu,selected,'file-explorer-context-menu');return menu;},fileMenu:(path:string,mobile:boolean)=>{api.Platform.isMobile=mobile;const menu=new Menu();const file=new File(path);fileMenu(menu,file,'file-explorer-context-menu');return {menu,file};},networkRequests:()=>networkRequests,setFailSave:(value:boolean)=>{failSave=value;}};
 }
+
+test('agent folder commands use verified metadata, UI persistence, and the subsequent note send route',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const live={...h.project,title:'Live repository title',workspaceRoot:'/live/repository'};h.setProjects([live]);
+    let refreshes=0;h.plugin.folderIndicators={refresh:()=>{refreshes++;},dispose:()=>{}};
+    const remembered={notePath:'Notes/A.md',projectId:'previous',threadId:'previous-thread',connectionId:'c',workspaceRoot:'/previous',selectedAt:new Date().toISOString()};
+    h.plugin.settings.noteThreads=[remembered];await h.plugin.save();
+    const command={version:1,id:randomUUID(),kind:'link-folder',folderPath:'Notes',projectId:'project',connectionId:'c',environmentId:'env',mode:'project',relink:false};
+    const result=await h.plugin.executeAgentCommand(command);
+    assert.equal(result.directLink.projectTitle,live.title);assert.equal(result.directLink.workspaceRoot,live.workspaceRoot);
+    assert.equal(h.shared.at(-1).folderLinks[0].environmentId,'env');assert.ok(refreshes>0);
+    assert.equal(h.plugin.settings.pending.length,0);assert.equal(h.modals.length,0);assert.equal(h.plugin.settings.noteThreads[0].threadId,remembered.threadId);
+    const requests=h.networkRequests(),saves=h.shared.length;
+    assert.equal(JSON.stringify(await h.plugin.executeAgentCommand(command)),JSON.stringify(result));assert.equal(h.networkRequests(),requests);assert.equal(h.shared.length,saves);
+    const file={path:'Notes/A.md'};h.plugin.app.vault.getFileByPath=()=>file;
+    const sent:any[]=[];h.plugin.send=async(_file:any,project:any,options:any)=>{sent.push({project,options});return {threadId:'new-thread',request:{id:options.id,project}};};
+    await h.plugin.executeNoteCommand({version:1,id:randomUUID(),kind:'send-note',notePath:file.path,destinations:[],streamReply:false});
+    assert.equal(sent[0].project.workspaceRoot,live.workspaceRoot);assert.equal(sent[0].options.folderLink.id,result.directLink.id);
+    assert.equal(h.plugin.settings.noteThreads[0].threadId,remembered.threadId);
+    const inspect=await h.plugin.executeAgentCommand({version:1,id:randomUUID(),kind:'inspect-folder',folderPath:'Notes'});assert.equal(inspect.effectiveLink.projectId,'project');
+    const unlinked=await h.plugin.executeAgentCommand({version:1,id:randomUUID(),kind:'unlink-folder',folderPath:'Notes'});assert.equal(unlinked.directLink,null);assert.equal(h.shared.at(-1).folderLinks.length,0);
+  }finally{h.plugin.onunload();}
+});
+
+test('agent failures preserve UI-created links and do not create missing self projects',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const modal=await h.open();await h.button(modal,'Link').click();const saved=JSON.stringify(h.plugin.settings.folderLinks);
+    const make=(extra:any={})=>({version:1,id:randomUUID(),kind:'link-folder',folderPath:'Notes',projectId:'project',connectionId:'c',environmentId:'env',mode:'project',relink:true,...extra});
+    await assert.rejects(h.plugin.executeAgentCommand(make({environmentId:'wrong'})),/connection and environment/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);
+    h.setProjects([]);await assert.rejects(h.plugin.executeAgentCommand(make()),/project is unavailable/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);
+    h.setProjects([h.project]);await assert.rejects(h.plugin.executeAgentCommand(make({mode:'self'})),/verified vault project machine/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);
+    h.setProjects([{...h.project,id:'other'}]);h.setFailSave(true);
+    const request=make({projectId:'other'});await assert.rejects(h.plugin.executeAgentCommand(request),/storage failure/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);assert.equal(h.plugin.settings.directProjects[0].id,'project');
+    h.setFailSave(false);const result=await h.plugin.executeAgentCommand(request);assert.equal(result.directLink.projectId,'other');
+    assert.equal(h.plugin.settings.pending.length,0);assert.equal(h.plugin.settings.noteThreads.length,0);
+  }finally{h.plugin.onunload();}
+});
 
 test('folder menu opens an inactive link dialog; cancel is inert and Link alone persists',{timeout:5000},async()=>{
   const h=await folderMenuHarness();

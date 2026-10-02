@@ -1,5 +1,6 @@
 import {editorStream} from './editor-stream';
 import {validateNoteCommand,isEventCommand,type NoteCommand,type NoteCommandResult} from './note-command';
+import {isFolderCommand,executeFolderCommand,type FolderCommand} from './folder-command';
 import {EventJournal,configureDiagnostics,logEvent,logFailure} from './diagnostics';
 import {SyncedEventLogs,isLogPath} from './synced-event-logs';
 import {instrumentOperations} from './diagnostic-operations';
@@ -417,6 +418,25 @@ export default class SendToT3 extends Plugin {
     await service.renameFolder(oldPath,folder.path,notes);
   }
   async executeAgentCommand(input:import('./note-command').AgentCommand){
+    if(isFolderCommand(input)){
+      if(this.stopped||this.busy)throw Error('Obsidian is unavailable or sending another request.');
+      this.busy=true;
+      try{return await executeFolderCommand(input,{
+        vaultId:this.settings.vaultId,links:()=>this.settings.folderLinks,
+        validateFolder:path=>{this.commandFolder(path);},refresh:()=>this.checkExternalSettings(),
+        resolve:command=>this.folderCommandProject(command),
+        read:id=>deviceState(`folder-command:${this.deviceId}:${this.settings.vaultId}:${id}`),
+        write:async(id,journal)=>{await deviceState(`folder-command:${this.deviceId}:${this.settings.vaultId}:${id}`,journal);},
+        save:async(link,project)=>{
+          const previous=project.connectionId?this.settings.directProjects:this.settings.projects;
+          if(project.connectionId)this.settings.directProjects=[...previous.filter(p=>projectKey(p)!==projectKey(project)),project];
+          else this.settings.projects=[...previous.filter(p=>p.id!==project.id),project];
+          try{await this.saveFolderLink(this.commandFolder(link.folderPath),project,link.self,link);}
+          catch(error){if(project.connectionId)this.settings.directProjects=previous;else this.settings.projects=previous;throw error;}
+        },
+        unlink:path=>this.unlinkFolder(path),
+      });}finally{this.busy=false;}
+    }
     if(isEventCommand(input)){
       const {forwardEventCommand,eventCanonical}=await import('./event-host');
       const key=`event-route:${this.settings.vaultId}:${input.id}`;
@@ -432,6 +452,52 @@ export default class SendToT3 extends Plugin {
     }
     return this.executeNoteCommand(input);
   }
+  private commandFolder(path:string):TFolder {
+    if(this.stopped)throw Error('The plugin was disabled before linking the folder.');
+    const folder=path==='/'?this.app.vault.getRoot():this.app.vault.getAbstractFileByPath(path);
+    if(!(folder instanceof TFolder))throw Error('Folder not found in the requested vault.');
+    return folder;
+  }
+  private async folderCommandProject(command:Extract<FolderCommand,{kind:'link-folder'}>):Promise<Project>{
+    const local=command.connectionId==='local';
+    const paired=local?undefined:this.settings.paired.find(connection=>connection.id===command.connectionId);
+    if(!local&&(!paired||paired.environmentId!==command.environmentId))throw Error('The explicit connection and environment do not identify an available destination.');
+    if(local&&Platform.isMobile)throw Error('Local folder linking requires a desktop client.');
+    const connection:Connection=local?{...this.settings.connection,host:'local',transport:'desktop'}:{transport:'direct',host:'direct',executable:'',url:paired!.url,connectionId:paired!.id,environmentId:paired!.environmentId};
+    let reply:any;
+    if(local){
+      const access=await (await import('./desktop')).desktopThreadAccess(connection);
+      try{
+        const environment=await access.api('/.well-known/t3/environment');
+        if(environment.environmentId!==command.environmentId||environment.orchestrationProtocolVersion!==1)throw Error('The requested environment is not this desktop’s T3 machine.');
+        reply=await access.api('/api/orchestration/shell');
+      }finally{await access.close?.();}
+    }else reply=await runBridge(connection,['projects']);
+    if(reply.cached)throw Error('The destination is offline. Linking requires verified live project metadata.');
+    const project=parseProjects(reply).find(project=>project.id===command.projectId);
+    if(!project||!project.workspaceRoot.trim())throw Error('The requested project is unavailable on that connection and environment.');
+    if(command.mode==='self'){
+      let workspaceRoot:string;
+      if(local){
+        const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
+        if(!adapter.getFullPath)throw Error('This vault does not expose a local filesystem path.');
+        workspaceRoot=adapter.getFullPath(command.folderPath==='/'?'':command.folderPath);
+      }else{
+        const root=this.settings.folderLinks.find(link=>link.folderPath==='/');
+        const rootEnvironment=root?.environmentId??this.settings.paired.find(c=>c.id===root?.connectionId)?.environmentId;
+        if(!root||rootEnvironment!==command.environmentId)throw Error('Self mode requires the selected machine to be the verified vault project machine.');
+        const remote=await connectVaultRemote(connection,await this.sessionFor(paired!.id));
+        try{
+          if(!await remote.matches(root.workspaceRoot,`${this.app.vault.configDir||'.obsidian'}/plugins/${this.manifest?.id||'send-to-t3-code'}/data.json`,this.settings.vaultId))throw Error('The destination vault no longer matches the requested vault.');
+          const separator=root.workspaceRoot.includes('\\')&&!root.workspaceRoot.includes('/')?'\\':'/';
+          workspaceRoot=command.folderPath==='/'?root.workspaceRoot:root.workspaceRoot.replace(/[\\/]+$/,'')+separator+command.folderPath.replace(/\//g,separator);
+          if(!sameWorkspacePath((await remote.browse(workspaceRoot)).parentPath,workspaceRoot))throw Error('The folder has not reached the vault project machine. Let Sync finish before retrying.');
+        }finally{remote.close();}
+      }
+      if(!sameWorkspacePath(project.workspaceRoot,workspaceRoot))throw Error('Self mode requires an existing project rooted at this exact vault folder. No project was created.');
+    }
+    return {...project,...(paired?{connectionId:paired.id,connectionName:paired.name}:{})};
+  }
   private folderForMenu(file:TFolder):TFolder{
     const gesture=this.recentFolderGesture;
     if(!Platform.isMobile||file.path!=='/'||!gesture||Date.now()-gesture.at>3000)return file;
@@ -443,11 +509,11 @@ export default class SendToT3 extends Plugin {
   private async checkExternalSettings(){
     if(this.stopped||this.checkingExternalSettings)return;
     this.checkingExternalSettings=true;
-    try{await this.saving;const data=await this.loadData(),serialized=JSON.stringify(data);if(serialized!==this.lastDiskSnapshot)await this.onExternalSettingsChange(data);}
+    try{await this.saving.catch(()=>{});const data=await this.loadData(),serialized=JSON.stringify(data);if(serialized!==this.lastDiskSnapshot)await this.onExternalSettingsChange(data);}
     finally{this.checkingExternalSettings=false;}
   }
   async onExternalSettingsChange(loaded?:any){
-    await this.saving;
+    await this.saving.catch(()=>{});
     const data=loaded??await this.loadData();if(this.stopped||!data)return;
     this.lastDiskSnapshot=JSON.stringify(data);
     this.settings.folderLinks=loadFolderLinks(data);
@@ -1159,13 +1225,18 @@ export default class SendToT3 extends Plugin {
   async linkFolder(folder:TFolder,project:Project,self:boolean){
     new FolderLinkModal(this.app,this,folder,project,self).open();
   }
-  async saveFolderLink(folder:TFolder,project:Project,self:boolean){
-    if(this.app.vault.getAbstractFileByPath(folder.path)!==folder)throw Error('This folder no longer exists. Choose a folder again.');
+  async saveFolderLink(folder:TFolder,project:Project,self:boolean,verified?:FolderLink){
+    if((folder.path==='/'?this.app.vault.getRoot():this.app.vault.getAbstractFileByPath(folder.path))!==folder)throw Error('This folder no longer exists. Choose a folder again.');
     const previous=this.settings.folderLinks;
     const existing=previous.find(link=>link.folderPath===folder.path&&link.projectId===project.id&&link.connectionId===(project.connectionId??''));
-    this.settings.folderLinks=upsertFolderLink(previous,{id:existing?.id??randomId(),folderPath:folder.path,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self});
-    try{await this.save();this.refreshFolderIndicators();}catch(error){this.settings.folderLinks=previous;throw error;}
+    this.settings.folderLinks=upsertFolderLink(previous,verified??{id:existing?.id??randomId(),folderPath:folder.path,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self});
+    try{await this.save();this.refreshFolderIndicators();}catch(error){this.settings.folderLinks=previous;this.refreshFolderIndicators();throw error;}
     new Notice(`${folder.path} linked to ${projectLabel(project)}.`);
+  }
+  async unlinkFolder(path:string){
+    const previous=this.settings.folderLinks;
+    this.settings.folderLinks=previous.filter(link=>link.folderPath!==path);
+    try{await this.save();this.refreshFolderIndicators();}catch(error){this.settings.folderLinks=previous;this.refreshFolderIndicators();throw error;}
   }
   private async localFolderProject(folder:TFolder):Promise<Project>{
     if(Platform.isMobile)throw Error('Link to self is available when Obsidian and T3 Code run on the same desktop computer.');
@@ -1633,7 +1704,7 @@ class T3Settings extends PluginSettingTab {
     new Setting(el).setName('Vault project machine').setDesc(root?`${machine??(Platform.isMobile?'Linked computer':'This computer')} · ${root.workspaceRoot} · Hosts new note responses; keep Obsidian open there.`:'Choose the default T3 destination and response-writing host. Keep Obsidian and this plugin running there.').addButton(b=>b.setButtonText(root?'Change machine':'Connect vault').onClick(async()=>{try{await this.plugin.configureVaultRoot();this.display();}catch(e){if(!(e instanceof VaultSetupCancelled))new Notice(message(e),10000);}}));
     if(!this.plugin.settings.folderLinks.length)el.createEl('p',{text:'No folders are linked.'});
     for(const link of this.plugin.settings.folderLinks){
-      new Setting(el).setName(link.folderPath==='/'?'Vault root':link.folderPath).setDesc(`${link.self?'Self · ':''}${link.projectTitle} · ${link.workspaceRoot}`).addButton(b=>b.setButtonText('Unlink').onClick(async()=>{this.plugin.settings.folderLinks=this.plugin.settings.folderLinks.filter(item=>item!==link);await this.plugin.save();this.plugin.refreshFolderIndicators();this.display();}));
+      new Setting(el).setName(link.folderPath==='/'?'Vault root':link.folderPath).setDesc(`${link.self?'Self · ':''}${link.projectTitle} · ${link.workspaceRoot}`).addButton(b=>b.setButtonText('Unlink').onClick(async()=>{await this.plugin.unlinkFolder(link.folderPath);this.display();}));
     }
     if(this.plugin.settings.completionJobs.length){
       el.createEl('h3',{text:'Task completion monitoring'});

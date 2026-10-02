@@ -249,6 +249,26 @@ A request is saved before dispatch. During sending, additional sends are disable
 
 Pending requests store the full note and base64 image bytes in local IndexedDB until confirmed/discarded. Direct mode stores the complete immutable commands in device-local IndexedDB before dispatch, without a server-side plugin journal. Local desktop integration keeps a private request journal under the T3 data directory (`send-to-t3-code/desktop`). Journals retain prompt/image bytes to retry exactly; they contain no session credentials. In local mode, T3 credentials are issued through its official CLI and revoked after use. Direct pairing sessions stay in device-local app storage. Official CLI output is bounded and each CLI operation times out after 45 seconds. Note contents and image payloads travel in authenticated HTTP request bodies, never shell commands or CLI arguments.
 
+## Agent folder routing commands
+
+Agents can inspect, link, deliberately relink, and unlink existing vault folders through the same private command mailbox used for note sends:
+
+```bash
+python3 scripts/obsidian-command.py --vault /home/ubuntu/vaults/QLO2 \
+  --request-id INSPECTION_UUID inspect-folder 'Projects/Side/handoff'
+python3 scripts/obsidian-command.py --vault /home/ubuntu/vaults/QLO2 \
+  --request-id LINK_UUID link-folder 'Projects/Side/handoff' \
+  --project-id PROJECT_ID --connection-id CONNECTION_ID --environment-id ENVIRONMENT_ID
+python3 scripts/obsidian-command.py --vault /home/ubuntu/vaults/QLO2 \
+  --request-id UNLINK_UUID unlink-folder 'Projects/Side/handoff'
+```
+
+Use verified project and machine IDs. The connection ID is an exact configured paired connection or `local` for this desktop. Linking verifies the authenticated machine and live project catalog, then saves through the UI's folder-link logic and refreshes its T3 indicator. Titles and workspaces come from the project catalog. It never creates a project, starts a thread, or sends a note. `--mode self` requires an existing project at the exact vault folder; paired self links also verify the vault identity and synced directory on the vault project machine. The vault root requires self mode.
+
+Replacing a different direct link requires `--relink`. Unlinking affects only that direct link; nested links, source files and remembered conversations remain. Results expose `directLink`, nearest inherited `effectiveLink`, vault identity, and `routing`. An otherwise unlinked folder reports `new-folder-project` even with a root association, reflecting normal new-note routing. Inspection reads saved links and does not prove current connectivity.
+
+Retain immutable request UUIDs and exact arguments. Replaying returns the original acknowledgement; use a fresh UUID for current inspection. After timeout replay the same UUID, and after fixing a failure add `--retry`. Prepared mutations recover lost acknowledgements without overwriting later links; unavailable or invalid destinations preserve the previous link. Credentials stay device-local and never appear in results. See [the agent skill](docs/obsidian-t3-SKILL.md) for the complete workflow.
+
 ## Development and release pipeline
 
 The canonical source checkout is `/home/ubuntu/projects/send-to-t3-code`. It is deliberately separate from both installed copies:

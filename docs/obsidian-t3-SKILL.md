@@ -1,6 +1,6 @@
 ---
 name: obsidian-t3
-description: "Use the Send to T3 Code Obsidian plugin to start or continue T3 threads from notes and attach replies to streaming destinations. Use for agent-triggered Obsidian note sends, mirroring replies into several notes, streaming several threads into one note, and managing subscriptions that notify their originating T3 thread when a note/folder changes. Use personal-fleet for machine-to-machine T3 dispatch."
+description: "Use the Send to T3 Code Obsidian plugin to start or continue T3 threads from notes and attach replies to streaming destinations. Use for authenticated folder routing commands, agent-triggered Obsidian note sends, mirroring replies into several notes, streaming several threads into one note, and managing subscriptions that notify their originating T3 thread when a note/folder changes. Use personal-fleet for machine-to-machine T3 dispatch."
 ---
 
 # Obsidian T3 Plugin
@@ -11,7 +11,7 @@ Use the running Obsidian plugin's command interface for note-driven T3 work. Loa
 
 - The CLI is `/home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py`.
 - The usual local vault is `/home/ubuntu/vaults/QLO2`; honor another requested vault.
-- That vault must be open in a real Obsidian desktop client with Send to T3 Code 2.28.1 or newer for subscriptions (2.17.0 or newer for note sends) enabled. Its authenticated T3 connection and streaming coordinator must be reachable.
+- That vault must be open in a real Obsidian desktop client with Send to T3 Code 2.29.0 or newer for folder commands (2.28.1 for subscriptions; 2.17.0 for note sends) enabled. Its authenticated T3 connection and streaming coordinator must be reachable.
 - This is a local filesystem command bridge, not an MCP tool. Run it on the machine where that desktop vault is open.
 - Source and destination notes must already exist. Pass vault-relative `.md` paths. Absolute paths, traversal, hidden paths, backslashes, and control characters are rejected. At most 32 unique streaming destinations are supported.
 - `--config-dir` defaults to `.obsidian`; specify it for a vault using a different configuration directory.
@@ -19,6 +19,35 @@ Use the running Obsidian plugin's command interface for note-driven T3 work. Loa
 The plugin reads the source note and embedded images, resolves its normal project routing, registers reply destinations, then dispatches the prompt once. Routing can create a project for an unlinked folder; inspect the intended routing first when project choice matters. Do not substitute direct T3 dispatch or hand-written streaming records for this flow.
 
 The source note supplies the prompt. Create or edit it when authorized; do not overwrite an existing note merely to inject different instructions.
+
+## Inspect and change folder routing
+
+Folder commands require an existing vault-relative folder; `/` means the vault root. Use the requested vault and configuration directory. Never edit installed `data.json`. Each command needs its own retained UUID; replay exact arguments after a timeout and use `--retry` after fixing a failure. A repeated inspection returns its original snapshot, so use a new UUID to inspect current state.
+
+```bash
+python3 /home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py \
+  --vault /home/ubuntu/vaults/QLO2 --request-id INSPECTION_REQUEST_UUID \
+  inspect-folder 'Projects/Side/handoff'
+
+python3 /home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py \
+  --vault /home/ubuntu/vaults/QLO2 --request-id LINK_REQUEST_UUID \
+  link-folder 'Projects/Side/handoff' \
+  --project-id PROJECT_ID --connection-id CONNECTION_ID --environment-id ENVIRONMENT_ID
+
+python3 /home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py \
+  --vault /home/ubuntu/vaults/QLO2 --request-id UNLINK_REQUEST_UUID \
+  unlink-folder 'Projects/Side/handoff'
+```
+
+Replace placeholder UUIDs and identities with verified values. `--connection-id` is an exact paired connection ID from this device's configured connections, or `local` for its desktop T3 server. `--environment-id` must identify that connection's real machine. Select the existing project by its ID from authenticated project discovery; for the handoff workflow verify its workspace is `/home/ubuntu/projects/agentic-handoff`. Do not select by title alone or infer an environment from a directory name. The plugin rechecks the authenticated environment and live project catalog and obtains title/workspace itself. An unavailable destination leaves the old link intact.
+
+Default `--mode project` links to an existing repository. `--mode self` requires an existing project rooted at that exact vault folder. For a paired connection, that machine must already be the verified vault project machine and the folder must have reached it through Sync. The vault root only supports self mode. Folder commands never create projects, dispatch prompts, or start threads; create a missing self project separately through the normal user flow.
+
+A different direct link requires `--relink`. Add it deliberately with a new request UUID after inspecting the old link; do not change arguments under the old UUID. Unlink removes only that folder's direct link. Child links, remembered note/thread bindings, source files, and existing conversations remain intact. New sends use the updated routing; existing conversations stay in their original project.
+
+Results include `vaultId`, `folderPath`, `directLink`, `effectiveLink`, and `routing`, with no connection credentials. `effectiveLink` is the nearest saved ancestor, including the vault root. `routing: new-folder-project` means a new send from this otherwise unlinked folder would create its own project despite a root link; establish a non-root link before sending to a repository. `vault-project-setup` means the root is unconfigured. Inspection reads saved routing without requiring the destination to be online. Link metadata and successful inspection acknowledgements are snapshots, not ongoing availability guarantees.
+
+For verification, link a uniquely named temporary folder to a verified existing project, inspect it using a new UUID, replay the link UUID, deliberately relink, unlink, and clean up. Confirm its Files explorer T3 indicator changes. A bounded note send from the linked folder should appear in the selected T3 project; record its returned IDs and verify its completed reply before deleting the temporary note. Preserve the user's current folder links and note.
 
 ## Start or continue a thread from a note
 

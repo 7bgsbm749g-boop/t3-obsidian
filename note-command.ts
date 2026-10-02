@@ -1,5 +1,6 @@
 import {validateEventCommand,type EventSubscriptionCommand,type EventCommandResult} from './event-subscriptions';
 import {safeNotePath} from './hosted-inline';
+import {isFolderCommand,validateFolderCommand,type FolderCommand,type FolderCommandResult} from './folder-command';
 export interface NoteCommand {
   version:1;id:string;kind:'send-note'|'attach-response';notePath:string;
   destinations:string[];threadId?:string;messageId?:string;streamReply:boolean;
@@ -13,7 +14,7 @@ export function validateNoteCommand(value:any):NoteCommand {
   return value;
 }
 
-export type AgentCommand=NoteCommand|EventSubscriptionCommand;
-export type AgentCommandResult=NoteCommandResult|EventCommandResult;
+export type AgentCommand=NoteCommand|EventSubscriptionCommand|FolderCommand;
+export type AgentCommandResult=NoteCommandResult|EventCommandResult|FolderCommandResult;
 export function isEventCommand(value:{kind:string}):value is EventSubscriptionCommand{return ['subscribe','subscriptions','update-subscription','pause-subscription','resume-subscription','cancel-subscription'].includes(value.kind);}
-export function validateAgentCommand(value:any):AgentCommand{return isEventCommand(value??{})?validateEventCommand(value):validateNoteCommand(value);}
+export function validateAgentCommand(value:any):AgentCommand{return isFolderCommand(value??{})?validateFolderCommand(value):isEventCommand(value??{})?validateEventCommand(value):validateNoteCommand(value);}

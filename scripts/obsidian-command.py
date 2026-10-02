@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send notes, attach responses, or manage thread event subscriptions in Obsidian."""
+"""Send notes, manage folder routing, attach responses, or subscribe to Obsidian events."""
 import argparse
 import json
 import os
@@ -15,8 +15,8 @@ def main():
     parser.add_argument('--request-id', default=None, help='Reuse this UUID to inspect/retry the same command')
     parser.add_argument('--timeout', type=float, default=90)
     parser.add_argument('--retry', action='store_true', help='Retry a failed result with the original prepared send')
-    parser.add_argument('kind', choices=['send-note', 'attach-response', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
-    parser.add_argument('note', nargs='?', help='Vault-relative source note path (note sends only)')
+    parser.add_argument('kind', choices=['send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
+    parser.add_argument('note', nargs='?', help='Vault-relative note or folder path; / means vault root')
     parser.add_argument('--destination', action='append', default=[])
     parser.add_argument('--thread-id')
     parser.add_argument('--message-id')
@@ -30,9 +30,38 @@ def main():
     parser.add_argument('--project-id')
     parser.add_argument('--environment-id')
     parser.add_argument('--subscription-id')
+    parser.add_argument('--connection-id', help='Exact paired connection ID, or local for this desktop')
+    parser.add_argument('--mode', choices=['project', 'self'], help='Link mode (default: project); self requires an existing project at the folder')
+    parser.add_argument('--relink', action='store_true', help='Deliberately replace a different direct folder link')
     args = parser.parse_args()
-    command_id = str(uuid.UUID(args.request_id)) if args.request_id else str(uuid.uuid4())
-    if args.kind in ['send-note', 'attach-response']:
+    config_path = Path(args.config_dir)
+    if (not args.config_dir or config_path.is_absolute() or '..' in config_path.parts
+            or '\\' in args.config_dir or ':' in args.config_dir
+            or any(ord(char) < 32 or ord(char) == 127 for char in args.config_dir)):
+        parser.error('--config-dir must be a directory inside the requested vault.')
+    folder_kind = args.kind in ['inspect-folder', 'link-folder', 'unlink-folder']
+    if not folder_kind and (args.connection_id is not None or args.mode is not None or args.relink):
+        parser.error('Folder linking options require a folder command.')
+    try:
+        command_id = str(uuid.UUID(args.request_id)) if args.request_id else str(uuid.uuid4())
+    except ValueError:
+        parser.error('--request-id must be a UUID.')
+    if folder_kind:
+        if not args.note:
+            parser.error('Folder commands require a vault-relative folder; / means the vault root.')
+        if any([args.destination, args.thread_id, args.message_id, args.no_stream, args.scope,
+                args.scope_kind, args.no_subfolders, args.event, args.property,
+                args.equals is not None, args.subscription_id]):
+            parser.error('Folder commands do not take note-send or subscription arguments.')
+        command = dict(version=1, id=command_id, kind=args.kind, folderPath=args.note)
+        if args.kind == 'link-folder':
+            if not all([args.project_id, args.connection_id, args.environment_id]):
+                parser.error('link-folder requires --project-id, --connection-id, and --environment-id.')
+            command.update(projectId=args.project_id, connectionId=args.connection_id,
+                           environmentId=args.environment_id, mode=args.mode or 'project', relink=args.relink)
+        elif any([args.project_id, args.connection_id, args.environment_id, args.mode, args.relink]):
+            parser.error('Project selection and relinking options require link-folder.')
+    elif args.kind in ['send-note', 'attach-response']:
         if not args.note:
             parser.error('Note sends and attachments require a source note.')
         command = dict(version=1, id=command_id, kind=args.kind, notePath=args.note,

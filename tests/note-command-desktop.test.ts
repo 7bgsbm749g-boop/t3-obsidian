@@ -43,3 +43,18 @@ test('a second mailbox consumer cannot acquire authority and stop callbacks revo
   try{await assert.rejects(NoteCommandServer.open(root,'.obsidian',async command=>({id:command.id,ok:true}),()=>true),/lock/i);await server.dispose();assert.equal(stopped,true);}
   finally{await server.dispose();await rm(root,{recursive:true,force:true});}
 });
+
+test('folder CLI requires exact identities, preserves modes, and replays immutable requests',{timeout:15000},async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3-folder-command-'));const received:any[]=[];
+  const server=await NoteCommandServer.open(root,'.custom',async command=>{received.push(command);return {id:command.id,ok:true};},()=>true);
+  const base=['--vault',root,'--config-dir','.custom'];
+  try{
+    const id=randomUUID(),args=[...base,'--request-id',id,'link-folder','Projects/Side/handoff','--project-id','repo','--connection-id','c','--environment-id','env','--mode','self','--relink'];
+    assert.equal((await run(args)).code,0);assert.equal(received[0].folderPath,'Projects/Side/handoff');assert.equal(received[0].mode,'self');assert.equal(received[0].relink,true);
+    assert.equal((await run(args)).code,0);assert.equal(received.length,1);
+    const changed=await run([...args.slice(0,-1)]);assert.notEqual(changed.code,0);assert.match(changed.out,/different input/);
+    for(const kind of ['inspect-folder','unlink-folder'])assert.equal((await run([...base,kind,'Projects'])).code,0);
+    for(const args of [['link-folder','Projects','--project-id','repo'],['inspect-folder','Projects','--project-id','repo'],['link-folder','Projects','--project-id','repo','--connection-id','c','--environment-id','env','--thread-id','thread'],['subscriptions','--relink']])assert.notEqual((await run([...base,...args])).code,0);
+    const invalid=await run([...base,'inspect-folder','../private']);assert.equal(invalid.code,1);assert.match(invalid.out,/vault-relative/);
+  }finally{await server.dispose();await rm(root,{recursive:true,force:true});}
+});
