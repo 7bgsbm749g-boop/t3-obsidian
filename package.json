@@ -5,6 +5,7 @@
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
     "test": "tsx --test tests/*.test.ts && python3 -m unittest scripts/test_release_qlo2.py",
+    "validate:native:prepare": "node scripts/build-native-response-lab.mjs",
     "release:qlo2": "python3 scripts/release-qlo2.py"
   },
   "devDependencies": {
