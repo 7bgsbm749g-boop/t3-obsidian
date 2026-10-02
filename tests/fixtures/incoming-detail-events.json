@@ -1,0 +1,236 @@
+{
+  "primary": "5d5f33a6-9239-54c9-a05d-3209e4e599c0",
+  "turnId": "01a0fe77-e17b-7e22-80d5-e7b935e759ab",
+  "external": "e9f608bf-8ba0-5f55-9821-f91293b6ad1b",
+  "neutral": "72f873b8-dbec-592a-b9d8-910f33747657",
+  "local": "31fb67e5-f264-5f25-8478-dcde8c848e52",
+  "initial": {
+    "messages": [
+      {
+        "id": "5d5f33a6-9239-54c9-a05d-3209e4e599c0",
+        "role": "user",
+        "text": "Bounded integration smoke only. Send the commentary paragraph SMOKE_PROGRESS. Run exactly one shell command sleep 120 using exec_command with yield_time_ms 1000. Wait for that command to finish without editing files or starting other tasks. Accept incoming steers during the wait. Then reply SMOKE_FINAL and acknowledge any EXTERNAL_INCOMING_ACK, NEUTRAL_INCOMING_ACK, and LOCAL_SELECTION_ACK steers you received. Do not change the wait or perform other work.",
+        "attachments": [],
+        "context": {
+          "version": 1,
+          "records": [
+            {
+              "version": 1,
+              "contextId": "fleet-sender-v1",
+              "label": "Agent \u00b7 i love this",
+              "kind": "fleet-sender",
+              "payload": {
+                "version": 1,
+                "kind": "agent",
+                "environmentId": "3630e7fa-f1df-4631-b5a2-6086ddaf28a1",
+                "threadId": "2801be1c-a9f2-5106-bf29-242a97eee8fe",
+                "title": "i love this"
+              }
+            }
+          ]
+        },
+        "turnId": null,
+        "streaming": false,
+        "createdAt": "2026-10-02T21:14:24.326Z",
+        "updatedAt": "2026-10-02T21:14:24.326Z"
+      },
+      {
+        "id": "assistant:msg_050447e17c440d2c016ac01eb36e3487d293a7d70f86164214",
+        "role": "assistant",
+        "text": "SMOKE_PROGRESS",
+        "turnId": "01a0fe77-e17b-7e22-80d5-e7b935e759ab",
+        "streaming": false,
+        "createdAt": "2026-10-02T21:14:27.892Z",
+        "updatedAt": "2026-10-02T21:14:27.892Z"
+      }
+    ],
+    "activities": [],
+    "latestTurn": {
+      "turnId": "01a0fe77-e17b-7e22-80d5-e7b935e759ab",
+      "state": "running",
+      "requestedAt": "2026-10-02T21:14:24.326Z",
+      "startedAt": "2026-10-02T21:14:24.326Z",
+      "messageId": "5d5f33a6-9239-54c9-a05d-3209e4e599c0"
+    },
+    "session": {
+      "status": "running",
+      "activeTurnId": "01a0fe77-e17b-7e22-80d5-e7b935e759ab"
+    }
+  },
+  "events": [
+    {
+      "sequence": 167251,
+      "type": "thread.message-sent",
+      "occurredAt": "2026-10-02T21:14:52.037Z",
+      "payload": {
+        "threadId": "328f0359-9131-51eb-bf0e-caa958b1620b",
+        "messageId": "e9f608bf-8ba0-5f55-9821-f91293b6ad1b",
+        "role": "user",
+        "text": "EXTERNAL_INCOMING_ACK. This verified fleet agent input must appear in the Obsidian stream. Acknowledge it after the bounded wait; do no additional work.",
+        "attachments": [],
+        "context": {
+          "version": 1,
+          "records": [
+            {
+              "version": 1,
+              "contextId": "fleet-sender-v1",
+              "label": "Agent \u00b7 i love this",
+              "kind": "fleet-sender",
+              "payload": {
+                "version": 1,
+                "kind": "agent",
+                "environmentId": "3630e7fa-f1df-4631-b5a2-6086ddaf28a1",
+                "threadId": "2801be1c-a9f2-5106-bf29-242a97eee8fe",
+                "title": "i love this"
+              }
+            }
+          ]
+        },
+        "turnId": null,
+        "streaming": false,
+        "createdAt": "2026-10-02T21:14:52.037Z",
+        "updatedAt": "2026-10-02T21:14:52.037Z"
+      }
+    },
+    {
+      "sequence": 167260,
+      "type": "thread.message-sent",
+      "occurredAt": "2026-10-02T21:15:01.466Z",
+      "payload": {
+        "threadId": "328f0359-9131-51eb-bf0e-caa958b1620b",
+        "messageId": "72f873b8-dbec-592a-b9d8-910f33747657",
+        "role": "user",
+        "text": "NEUTRAL_INCOMING_ACK. Unattributed input for the same bounded smoke. Acknowledge it after the existing wait; do no additional work.",
+        "attachments": [],
+        "turnId": null,
+        "streaming": false,
+        "createdAt": "2026-10-02T21:15:01.466Z",
+        "updatedAt": "2026-10-02T21:15:01.466Z"
+      }
+    },
+    {
+      "sequence": 167308,
+      "type": "thread.message-sent",
+      "occurredAt": "2026-10-02T21:16:05.777Z",
+      "payload": {
+        "threadId": "328f0359-9131-51eb-bf0e-caa958b1620b",
+        "messageId": "assistant:msg_050447e17c440d2c016ac01f14d49c87d2a37c63b25794bca5",
+        "role": "assistant",
+        "text": "The bounded wait is still running. I\u2019ll acknowledge the incoming steers after it finishes.",
+        "turnId": "01a0fe77-e17b-7e22-80d5-e7b935e759ab",
+        "streaming": true,
+        "createdAt": "2026-10-02T21:16:05.777Z",
+        "updatedAt": "2026-10-02T21:16:05.777Z"
+      }
+    },
+    {
+      "sequence": 167309,
+      "type": "thread.message-sent",
+      "occurredAt": "2026-10-02T21:16:05.777Z",
+      "payload": {
+        "threadId": "328f0359-9131-51eb-bf0e-caa958b1620b",
+        "messageId": "assistant:msg_050447e17c440d2c016ac01f14d49c87d2a37c63b25794bca5",
+        "role": "assistant",
+        "text": "",
+        "turnId": "01a0fe77-e17b-7e22-80d5-e7b935e759ab",
+        "streaming": false,
+        "createdAt": "2026-10-02T21:16:05.777Z",
+        "updatedAt": "2026-10-02T21:16:05.777Z"
+      }
+    },
+    {
+      "sequence": 167326,
+      "type": "thread.message-sent",
+      "occurredAt": "2026-10-02T21:16:28.969Z",
+      "payload": {
+        "threadId": "328f0359-9131-51eb-bf0e-caa958b1620b",
+        "messageId": "31fb67e5-f264-5f25-8478-dcde8c848e52",
+        "role": "user",
+        "text": "LOCAL_SELECTION_ACK: acknowledge this local selection, then continue the bounded smoke.\n\n\nAnswer in the T3 thread. The Obsidian plugin will insert your reply.\n\nSent from Obsidian.\nObsidian vault: \"QLO2\"\nDestination note path: \"/home/ubuntu/vaults/QLO2/Projects/Side/T3 CODE x OBSIDIAN/Smoke incoming 20261002 A.md\"",
+        "attachments": [],
+        "turnId": null,
+        "streaming": false,
+        "createdAt": "2026-10-02T21:16:28.969Z",
+        "updatedAt": "2026-10-02T21:16:28.969Z"
+      }
+    },
+    {
+      "sequence": 167328,
+      "type": "thread.message-sent",
+      "occurredAt": "2026-10-02T21:16:31.608Z",
+      "payload": {
+        "threadId": "328f0359-9131-51eb-bf0e-caa958b1620b",
+        "messageId": "assistant:msg_050447e17c440d2c016ac01f2f022487d2bae6c744940c7936",
+        "role": "assistant",
+        "text": "SMOKE_FINAL\nEXTERNAL_INCOMING_ACK\nNEUTRAL_INCOMING_ACK",
+        "turnId": "01a0fe77-e17b-7e22-80d5-e7b935e759ab",
+        "streaming": true,
+        "createdAt": "2026-10-02T21:16:31.608Z",
+        "updatedAt": "2026-10-02T21:16:31.608Z"
+      }
+    },
+    {
+      "sequence": 167329,
+      "type": "thread.message-sent",
+      "occurredAt": "2026-10-02T21:16:31.608Z",
+      "payload": {
+        "threadId": "328f0359-9131-51eb-bf0e-caa958b1620b",
+        "messageId": "assistant:msg_050447e17c440d2c016ac01f2f022487d2bae6c744940c7936",
+        "role": "assistant",
+        "text": "",
+        "turnId": "01a0fe77-e17b-7e22-80d5-e7b935e759ab",
+        "streaming": false,
+        "createdAt": "2026-10-02T21:16:31.608Z",
+        "updatedAt": "2026-10-02T21:16:31.608Z"
+      }
+    },
+    {
+      "sequence": 167331,
+      "type": "thread.message-sent",
+      "occurredAt": "2026-10-02T21:16:34.348Z",
+      "payload": {
+        "threadId": "328f0359-9131-51eb-bf0e-caa958b1620b",
+        "messageId": "assistant:msg_050447e17c440d2c016ac01f318d3887d2a0e2f4cd564a5e02",
+        "role": "assistant",
+        "text": "LOCAL_SELECTION_ACK. The bounded smoke wait has completed.",
+        "turnId": "01a0fe77-e17b-7e22-80d5-e7b935e759ab",
+        "streaming": true,
+        "createdAt": "2026-10-02T21:16:34.348Z",
+        "updatedAt": "2026-10-02T21:16:34.348Z"
+      }
+    },
+    {
+      "sequence": 167332,
+      "type": "thread.message-sent",
+      "occurredAt": "2026-10-02T21:16:34.348Z",
+      "payload": {
+        "threadId": "328f0359-9131-51eb-bf0e-caa958b1620b",
+        "messageId": "assistant:msg_050447e17c440d2c016ac01f318d3887d2a0e2f4cd564a5e02",
+        "role": "assistant",
+        "text": "",
+        "turnId": "01a0fe77-e17b-7e22-80d5-e7b935e759ab",
+        "streaming": false,
+        "createdAt": "2026-10-02T21:16:34.348Z",
+        "updatedAt": "2026-10-02T21:16:34.348Z"
+      }
+    },
+    {
+      "sequence": 167334,
+      "type": "thread.session-set",
+      "occurredAt": "2026-10-02T21:16:34.349Z",
+      "payload": {
+        "threadId": "328f0359-9131-51eb-bf0e-caa958b1620b",
+        "session": {
+          "threadId": "328f0359-9131-51eb-bf0e-caa958b1620b",
+          "status": "ready",
+          "providerName": "codex",
+          "providerInstanceId": "codex",
+          "runtimeMode": "full-access",
+          "activeTurnId": null,
+          "lastError": null,
+          "updatedAt": "2026-10-02T21:16:34.349Z"
+        }
+      }
+    }
+  ]
+}

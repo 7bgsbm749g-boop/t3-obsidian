@@ -11,7 +11,7 @@ export interface InlineActivity {id:string;kind:string;summary:string;turnId:str
 export interface InlineTurn {turnId:string;state:string;messageId?:string;requestedAt?:string;completedAt?:string|null;assistantMessageId?:string|null}
 export interface InlineStartRequest {messageId:string;requestedAt:string;sequence:number;activeTurnId?:string;turnId?:string;failed?:boolean}
 export interface InlineBinding {turnId:string;kind:'explicit'|'timestamp'|'start'|'steer';sequence?:number}
-export interface InlineBindingCheckpoint {bindings?:Record<string,InlineBinding>;starts?:Record<string,InlineStartRequest>;turns?:Record<string,InlineTurn>;sequence?:number;inputBoundaries?:Record<string,InlineMessage[]>}
+export interface InlineBindingCheckpoint {bindings?:Record<string,InlineBinding>;starts?:Record<string,InlineStartRequest>;turns?:Record<string,InlineTurn>;sequence?:number;inputBoundaries?:Record<string,InlineMessage[]>;inputTurns?:Record<string,string>}
 export interface InlineThreadState extends InlineBindingCheckpoint {title?:string;messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {
@@ -124,13 +124,13 @@ export function finalizeRegion(document:string,id:string,expectedHash:string,fin
 
 /** Keep exact prompt evidence independently of a snapshot's recent transcript. */
 export function inlineBindingCheckpoint(state:InlineThreadState):InlineBindingCheckpoint {
-  return {bindings:state.bindings,starts:state.starts,turns:{...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})},sequence:state.sequence,inputBoundaries:state.inputBoundaries};
+  return {bindings:state.bindings,starts:state.starts,turns:{...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})},sequence:state.sequence,inputBoundaries:state.inputBoundaries,inputTurns:state.inputTurns};
 }
 export function restoreInlineBindings(state:InlineThreadState,saved?:InlineBindingCheckpoint):InlineThreadState {
   if(saved?.sequence!==undefined&&state.sequence!==undefined&&saved.sequence>state.sequence)return {...saved,messages:[],activities:[],historyComplete:false};
   const turns={...saved?.turns};
   for(const [id,turn] of Object.entries({...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})}))turns[id]={...turns[id],...turn,...(turns[id]?.messageId?{messageId:turns[id].messageId,requestedAt:turns[id].requestedAt}:{})};
-  return establishBindings({...state,inputBoundaries:{...saved?.inputBoundaries,...state.inputBoundaries},sequence:state.sequence??saved?.sequence,latestTurn:state.latestTurn?turns[state.latestTurn.turnId]:undefined,turns,bindings:{...saved?.bindings,...state.bindings},starts:{...saved?.starts,...state.starts}});
+  return establishBindings({...state,inputBoundaries:{...saved?.inputBoundaries,...state.inputBoundaries},inputTurns:{...saved?.inputTurns,...state.inputTurns},sequence:state.sequence??saved?.sequence,latestTurn:state.latestTurn?turns[state.latestTurn.turnId]:undefined,turns,bindings:{...saved?.bindings,...state.bindings},starts:{...saved?.starts,...state.starts}});
 }
 function establishBindings(state:InlineThreadState):InlineThreadState {
   const bindings={...state.bindings},turns={...state.turns},starts={...state.starts};
@@ -205,8 +205,9 @@ export function applyThreadItem(previous:InlineThreadState,item:any):{state:Inli
     if(p.role==='assistant'&&p.turnId&&state.session?.status==='running'&&state.session.activeTurnId===p.turnId){
       for(const [id,request] of Object.entries(starts))if(!request.failed&&!request.turnId&&request.activeTurnId===p.turnId&&event.sequence>request.sequence&&Date.parse(p.createdAt)>=Date.parse(request.requestedAt))starts[id]={...request,turnId:p.turnId};
     }
-    const inputBoundaries=p.role==='user'&&!old&&!state.inputBoundaries?.[message.id]?{...state.inputBoundaries,[message.id]:state.messages.filter(m=>m.role==='assistant').map(m=>({...m}))}:state.inputBoundaries;
-    return finish({...state,inputBoundaries,starts,latestTurn,messages:old?state.messages.map(m=>m.id===message.id?message:m):[...state.messages,message]});
+    const inputBoundaries=p.role==='user'&&!old&&!state.inputBoundaries?.[message.id]?{...state.inputBoundaries,[message.id]:state.messages.filter(m=>m.role==='assistant'&&m.turnId===state.session?.activeTurnId).map(m=>({...m}))}:state.inputBoundaries;
+    const inputTurns=p.role==='user'&&!old&&state.session?.status==='running'&&state.session.activeTurnId?{...state.inputTurns,[message.id]:state.session.activeTurnId}:state.inputTurns;
+    return finish({...state,inputTurns,inputBoundaries,starts,latestTurn,messages:old?state.messages.map(m=>m.id===message.id?message:m):[...state.messages,message]});
   }
   if(event.type==='thread.activity-appended'&&validActivity(p?.activity)){
     const activity=p.activity,activities=state.activities.some(a=>a.id===activity.id)?state.activities:[...state.activities,activity];

@@ -68,15 +68,34 @@ export function incomingLabel(message:InlineMessage,local=false):string {
   return local?'You':'User';
 }
 
+/** A display association never adopts a provider turn or confirms execution.
+ * T3's detail feed omits start-request events. Use the observed active session,
+ * or a unique canonical source lifecycle when recovering null-turn inputs.
+ * An authoritative newer primary always wins over these display observations. */
+function displayTurn(state:InlineThreadState,message:InlineMessage,turns:string[]):string|undefined {
+  const exact=turnForMessage(state,message.id);if(exact)return exact;
+  const observed=state.inputTurns?.[message.id];if(observed)return observed;
+  const created=Date.parse(message.createdAt??'');if(!Number.isFinite(created))return;
+  const candidates=turns.filter(id=>{
+    const turn=state.turns?.[id]??(state.latestTurn?.turnId===id?state.latestTurn:undefined);
+    const requested=Date.parse(turn?.requestedAt??'');
+    if(!turn||!turn.messageId||!Number.isFinite(requested)||requested>=created)return false;
+    const completed=Date.parse(turn.completedAt??'');
+    return Number.isFinite(completed)?created<completed:state.session?.status==='running'&&state.session.activeTurnId===id&&created<=Date.now();
+  });
+  return candidates.length===1?candidates[0]:undefined;
+}
+
 /** Canonical display records are separate from local editor removal receipts.
- * Observe only exactly bound turns. Never adopt a later primary turn here. */
+ * Display incoming thread messages within tracked response lifecycles only.
+ * This does not change execution bindings or follow later primary turns. */
 export function observeIncoming(state:InlineThreadState,turns:string[],saved:InlineSteering[]=[],local:InlineSteering[]=[],excluded:string[]=[]):InlineSteering[]{
   const result=saved.filter(input=>{const turn=turnForMessage(state,input.messageId);return (!excluded.includes(input.messageId)||local.some(item=>item.messageId===input.messageId))&&(!turn||turns.includes(turn)||local.some(item=>item.messageId===input.messageId));}).map(input=>({...input}));
   for(const message of state.messages){
     if(message.role!=='user'||!message.text.trim())continue;
     const reservation=local.find(input=>input.messageId===message.id);
     if(!reservation&&excluded.includes(message.id))continue;
-    const turn=turnForMessage(state,message.id);
+    const turn=displayTurn(state,message,turns);
     if(!reservation&&(!turn||!turns.includes(turn)))continue;
     const old=result.find(input=>input.messageId===message.id);
     const index=state.messages.findIndex(item=>item.id===message.id);

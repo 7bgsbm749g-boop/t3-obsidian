@@ -1,4 +1,5 @@
 import {test} from 'node:test';
+import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,renderInlineTurn,type InlineThreadState,type InlineMessage} from '../inline-thread';
 import {observeIncoming,incomingLabel,steeringSegments,type InlineSteering} from '../inline-steering';
@@ -12,8 +13,8 @@ test('external steer captures live paragraph boundary, structured context and ex
  let s=state();s=event(s,1,'thread.turn-start-requested',{messageId:'external',createdAt:at(10)});
  s=event(s,2,'thread.message-sent',{messageId:'external',role:'user',text:'Change direction',streaming:false,createdAt:at(10),context:sender});
  assert.deepEqual(s.messages.at(-1)?.context,sender);
- // Steering association is proven by subsequent output, never the bare append.
- assert.equal(observeIncoming(s,['turn']).length,0);
+ // Display the confirmed input immediately without inventing an execution binding.
+ assert.equal(s.bindings?.external,undefined);assert.equal(observeIncoming(s,['turn']).length,1);
  s=event(s,3,'thread.message-sent',{messageId:'answer',role:'assistant',text:' finished.\n\nFinal.',streaming:true,turnId:'turn',createdAt:at(11)});
  let incoming=observeIncoming(s,['turn']);assert.equal(incoming[0].label,'Agent · Source agent');assert.equal(incoming[0].position,'live');
  assert.equal(incoming[0].before[0].text,'First.\n\n');
@@ -47,4 +48,34 @@ test('plain prose, invalid or conflicting sender records stay neutral; titles ca
  assert.equal(incomingLabel({...msg,context:{version:1,records:[sender.records[0],sender.records[0]]}}),'User');
  const incoming=observeIncoming({...state(),messages:[{...msg,context:{...sender,records:[{...sender.records[0],payload:{...sender.records[0].payload,title:'Bad\n> [!danger]'}}]}}]},['turn']);
  const rendered=renderInlineTurn(state(),'turn','thread','running',true,undefined,{messages:[],steering:incoming});assert.doesNotMatch(rendered,/\n> \[!danger\]/);
+});
+
+test('recovery requires a dated canonical lifecycle before associating an unbound input',()=>{
+ const s=state();delete s.latestTurn!.requestedAt;
+ s.messages.push({id:'unknown',role:'user',text:'Unbound input',turnId:null,createdAt:at(10),streaming:false});
+ assert.equal(observeIncoming(s,['turn']).length,0);
+});
+
+
+test('installed detail feed omits starts but still displays canonical agent and neutral inputs without adopting turns',()=>{
+ const fixture=JSON.parse(readFileSync(new URL('./fixtures/incoming-detail-events.json',import.meta.url),'utf8'));
+ let s:InlineThreadState=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:fixture.initial}}).state;
+ let incoming:InlineSteering[]=[];
+ for(const e of fixture.events){
+  assert.notEqual(e.type,'thread.turn-start-requested');
+  s=event(s,e.sequence,e.type,e.payload);
+  incoming=observeIncoming(s,[fixture.turnId],incoming,[],[fixture.primary]);
+ }
+ assert.equal(s.bindings?.[fixture.external],undefined,'display association is not an execution binding');
+ assert.equal(s.bindings?.[fixture.neutral],undefined);
+ assert.deepEqual(incoming.map(input=>input.messageId),[fixture.external,fixture.neutral,fixture.local]);
+ assert.deepEqual(incoming.map(input=>input.label),['Agent · i love this','User','User']);
+ assert.equal(incoming[0].before.length,1);assert.equal(incoming[0].before[0].text,'SMOKE_PROGRESS');
+ const checkpoint=JSON.parse(JSON.stringify(inlineBindingCheckpoint(s)));
+ const reloaded=restoreInlineBindings(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:s}}).state,checkpoint);
+ assert.equal(observeIncoming(reloaded,[fixture.turnId],incoming,[],[fixture.primary]).length,3);
+ // With no witnessed boundary, recovery discloses an approximate position.
+ delete reloaded.inputTurns;delete reloaded.inputBoundaries;
+ const recovered=observeIncoming(reloaded,[fixture.turnId],[],[],[fixture.primary]);
+ assert.equal(recovered.length,3);assert.equal(recovered[0].position,'recovered');
 });
