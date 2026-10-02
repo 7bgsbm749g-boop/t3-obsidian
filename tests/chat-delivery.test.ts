@@ -21,7 +21,8 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   const initial={folderLinks:[rootLink,{...rootLink,id:'notes',folderPath:'Notes',self:false}],chatProjectKey:'old:unrelated-project',paired:[{id:'chat-connection',name:'Laptop',url:'https://chat.example',environmentId:'chat-env'}],directScanId:'chat-connection',directProjects:[project],directSelected:['chat-connection:chat-project'],completion:{action:'delete'}};
   const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[],settingsControls:any[]=[],workspaceEvents:Record<string,((...args:any[])=>void)[]>={};let threads:any[]=[],catalog:any[]=[project],focusedButton:any;
   let vaultAccesses=0;
-  const hostFiles=new Map<string,string>(),hostEditors=new Map<string,any>();
+  const hostFiles=new Map<string,string>(),hostEditors=new Map<string,any>(),hostNotes=new Map<string,{path:string}>();
+  const noteFile=(path:string)=>{let file=hostNotes.get(path);if(!file){file={path};hostNotes.set(path,file);}return file;};
   let authority:InlineLeaseAuthority|undefined;
   const hostTick=async()=>{
     authority??=new InlineLeaseAuthority({vaultId:shared.at(-1).vaultId,environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1'},{
@@ -78,8 +79,8 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     app={
       loadLocalStorage:(key:string)=>localStorage.get(key)??(key==='send-to-t3-code-device-v1'?local:undefined),
       saveLocalStorage:(key:string,value:any)=>{localStorage.set(key,value);if(key==='send-to-t3-code-device-v1')local=value;},
-      workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{(workspaceEvents[name]??=[]).push(callback);return {};},getActiveViewOfType:()=>activeEditorView&&activeNote?(activeEditor??{file:activeNote}):undefined,getActiveFile:()=>activeNote,getLeavesOfType:()=>[...hostEditors].map(([path,editor])=>({view:{file:{path},editor}}))},
-      vault:{adapter:{},getFileByPath:(path:string)=>hostEditors.has(path)?{path}:undefined,getName:()=> 'Notes',read:(file:any)=>{const editor=hostEditors.get(file.path);if(editor)return Promise.resolve(editor.getValue());vaultAccesses++;throw Error('Chat must not read note contents');},readBinary:()=>{vaultAccesses++;throw Error('Chat must not read attachments');}},
+      workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{(workspaceEvents[name]??=[]).push(callback);return {};},getActiveViewOfType:()=>activeEditorView&&activeNote?(activeEditor??{file:activeNote}):undefined,getActiveFile:()=>activeNote,getLeavesOfType:()=>[...hostEditors].map(([path,editor])=>({view:{file:noteFile(path),editor}}))},
+      vault:{adapter:{},getFileByPath:(path:string)=>hostEditors.has(path)?noteFile(path):undefined,getName:()=> 'Notes',read:(file:any)=>{const editor=hostEditors.get(file.path);if(editor)return Promise.resolve(editor.getValue());vaultAccesses++;throw Error('Chat must not read note contents');},readBinary:()=>{vaultAccesses++;throw Error('Chat must not read attachments');}},
     };
     async loadData(){return shared.at(-1)??initial;}
     async saveData(value:any){shared.push(value);}
