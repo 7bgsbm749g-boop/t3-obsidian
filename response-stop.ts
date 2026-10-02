@@ -30,7 +30,7 @@ export function stoppedResponseBody(body:string):string {
   let offset=0;
   const lines=body.split('\n').filter(line=>{
     const position=offset;offset+=line.length+1;
-    return code.some(([from,to])=>position>=from&&position<to)||!/^\*\*[^\n]+ · (?:Sending…|Working|Reconnecting|Stopped|Interrupted|Error)\*\*(?: <span class="send-to-t3-run-timer"[^>]*>[^<]*<\/span>)?(?: <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>)?\s*$/.test(line);
+    return code.some(([from,to])=>position>=from&&position<to)||!(/^<span class="send-to-t3-response-activity" role="status" aria-live="polite">.*<\/span>$/.test(line)||/^\*\*[^\n]+ · (?:Sending…|Working|Reconnecting|Stopped|Interrupted|Error)\*\*(?: <span class="send-to-t3-run-timer"[^>]*>[^<]*<\/span>)?(?: <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>)?\s*$/.test(line));
   });
   // Rendered replies normally already close fences; also repair old/broken output.
   let fence:{mark:string;prefix:string}|undefined;

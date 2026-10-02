@@ -1,3 +1,4 @@
+import {responseActivityRow} from '../response-activity';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {escapeReplyHtml} from '../reply-html';
@@ -23,7 +24,7 @@ test('renderer preserves quote paragraphs, bold and lists in running, final and 
   const state={messages:[message],activities:[],latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'answer'}};
   const expected='> **New project: \\<folder name>** before creation.\n>\n> Next **paragraph**.\n>\n> - **First**\n> - Second\n';
   assert.equal(renderInlineTurn(state,'turn','thread','complete'),expected);
-  assert.ok(renderInlineTurn(state,'turn','thread','running').endsWith(expected));
+  assert.ok(renderInlineTurn(state,'turn','thread','running').endsWith(expected+'\n\n'+responseActivityRow()+'\n'));
   assert.equal(renderInlineTurn(state,'turn','thread','complete',true,undefined,{messages:[message],steering:[]}),expected);
   assert.equal(message.text,text);
 });

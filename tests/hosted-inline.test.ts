@@ -1,3 +1,4 @@
+import {responseActivityRow} from '../response-activity';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -162,7 +163,7 @@ test('handoff waits for a saved synced anchor and host-owned access before dispa
   await handoffInline(h.io,h.request,()=>true,async()=>writer.tick());
   assert.equal(h.state.accepted,true);assert.equal(h.state.status,'waiting');
   assert.equal(h.calls.at(-1).access,'thread-machine');
-  assert.equal(regionBody(h.document,h.request.id)?.body,'**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>');
+  assert.equal(regionBody(h.document,h.request.id)?.body,'**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n\n'+responseActivityRow());
 });
 
 test('host continues after sender disappears, handles outside edits and known Sync rollbacks, and finalizes a closed note',async()=>{

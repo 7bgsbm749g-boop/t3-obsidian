@@ -3,10 +3,11 @@ import {contentHash} from './completion';
 import {pendingQuestions,renderQuestion} from './questions';
 import {intermediateMode,runTimer,type IntermediateMode,type RunTiming} from './response-presentation';
 import {steeringSegments,type InlineSteering} from './inline-steering';
+import {responseActivityLabel,responseActivityRow} from './response-activity';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string}
-export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null;createdAt?:string;payload?:Record<string,any>}
+export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null;createdAt?:string;sequence?:number;payload?:Record<string,any>}
 export interface InlineTurn {turnId:string;state:string;requestedAt?:string;completedAt?:string|null;assistantMessageId?:string|null}
 export interface InlineThreadState {title?:string;messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
 
@@ -75,7 +76,7 @@ export function renderInlineInput(text:string):string {
 
 export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming):{text:string;bodyHash:string} {
   const status=`${mode==='collapse'?'> [!t3-progress]- ':''}**${inlineThreadLabel(threadTitle)} · Working**${timing?' '+runTimer(timing):''} <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
-  const body=initialInput?`${renderInlineInput(initialInput.text)}\n\n${status}`:status;
+  const body=(initialInput?`${renderInlineInput(initialInput.text)}\n\n${status}`:status)+`\n\n${responseActivityRow()}`;
   // The final blank line also closes the quote in Obsidian Live Preview when
   // this response is the last block in the note.
   return {text:`\n${startMarker(id)}\n${body}\n${endMarker(id)}\n\n`,bodyHash:contentHash(body)};
@@ -306,6 +307,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const heading=`**${label} · ${phase==='running'||phase==='sending'?'Working':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const timer=timing?' '+runTimer(timing):'';
   const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
+  const bottom=spinner?`\n\n${responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Working')}`:'';
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
@@ -347,13 +349,13 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     if(progress.length||!blocks.length||phase!=='complete'&&pieces.at(-1)?.role==='user')flush();
     const action=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
     const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):phase!=='complete'&&action?'Action needed in T3: '+safeStatus(action.summary):'';
-    return input+blocks.join('\n\n')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
+    return input+blocks.join('\n\n')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+bottom+'\n';
   }
   if(phase==='complete')return input+(prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
   const activity=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
   const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
   const body=prose?`\n\n${prose}\n`:'';
-  return `${input}${followupIndex<0?heading+timer+spinner:''}${status}${body}${questions?`\n\n${questions}\n`:''}`;
+  return `${input}${followupIndex<0?heading+timer+spinner:''}${status}${body}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
 }
 
 export function turnPhase(state:InlineThreadState,turnId:string):'running'|'complete'|'interrupted'|'error' {

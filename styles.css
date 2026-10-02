@@ -135,6 +135,12 @@
 }
 .send-to-t3-run-timer { font-variant-numeric: tabular-nums; color: var(--text-muted); font-weight: normal; }
 .send-to-t3-fold-key { display: none; }
+.send-to-t3-response-activity {
+  font-size: var(--h6-size);
+  font-family: var(--h6-font);
+  color: var(--h6-color, var(--text-muted));
+  overflow-wrap: anywhere;
+}
 .send-to-t3-mode-control { flex-direction: column; align-items: stretch; gap: 0.3em; min-width: 170px; }
 .send-to-t3-mode-control input[type="range"] { width: 100%; margin: 0; }
 .send-to-t3-mode-labels { display: flex; justify-content: space-between; gap: 0.5em; font-size: var(--font-ui-smaller); color: var(--text-muted); }
