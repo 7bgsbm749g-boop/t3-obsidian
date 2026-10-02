@@ -221,7 +221,10 @@ export default class SendToT3 extends Plugin {
       }
       this.paletteChat=installPaletteChat(this.app,(prompt,selection)=>this.openPaletteAction(prompt,selection),{onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),getSelection:()=>this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getSelection()??''});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
-      if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined')this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks);
+      if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined'){
+        this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks);
+        this.registerEvent(this.app.workspace.on('layout-change',()=>this.folderIndicators?.refresh()));
+      }
       this.registerInterval(window.setInterval(()=>void this.checkExternalSettings().catch(error=>new Notice(`T3 settings: ${message(error)}`,12000)),5000));
     });
     this.app.workspace.onLayoutReady(()=>{if(!this.stopped){if(this.nativeAccount)void this.refreshMachines().catch(e=>{this.cloudError=message(e);this.cloudChanged?.();});void this.monitorCompletions();this.registerInterval(window.setInterval(()=>{void this.monitorCompletions();},30_000));}});

@@ -85,8 +85,10 @@ export function regionBody(document:string,id:string):{from:number;to:number;bod
 }
 
 function markerLines(document:string,prefix:'t3-inline'|'t3-response') {
+  const matches=[...document.matchAll(new RegExp(`^<!-- ${prefix}:(start|end):([a-z0-9-]+) -->$`,'gm'))];
+  if(!matches.length)return [];
   const code=markdownCodeRanges(document);
-  return [...document.matchAll(new RegExp(`^<!-- ${prefix}:(start|end):([a-z0-9-]+) -->$`,'gm'))]
+  return matches
     .filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to));
 }
 function trackedRegion(document:string,id:string,prefix:'t3-inline'|'t3-response'):{from:number;to:number;body:string}|null {

@@ -41,8 +41,19 @@ export interface FolderIndicatorController {refresh():void;dispose():void}
 
 export function installFolderIndicators(root:HTMLElement,getLinks:()=>FolderLink[]):FolderIndicatorController{
   let stopped=false,scheduled=false;
-  const refresh=()=>{if(!stopped)decorateLinkedFolders(root,getLinks());};
+  const observers=new Map<HTMLElement,MutationObserver>();
   const schedule=()=>{if(stopped||scheduled)return;scheduled=true;Promise.resolve().then(()=>{scheduled=false;refresh();});};
-  const observer=new MutationObserver(schedule);observer.observe(root,{childList:true,subtree:true});refresh();
-  return {refresh,dispose(){stopped=true;observer.disconnect();for(const badge of Array.from(root.querySelectorAll('.'+LINKED_FOLDER_BADGE_CLASS)))badge.remove();}};
+  const refresh=()=>{
+    if(stopped)return;
+    const explorers=new Set(Array.from(root.querySelectorAll('.nav-files-container')) as HTMLElement[]);
+    for(const [explorer,observer] of observers)if(!explorers.has(explorer)){observer.disconnect();observers.delete(explorer);}
+    for(const explorer of explorers){
+      if(!observers.has(explorer)){
+        const observer=new MutationObserver(schedule);observer.observe(explorer,{childList:true,subtree:true});observers.set(explorer,observer);
+      }
+      decorateLinkedFolders(explorer,getLinks());
+    }
+  };
+  refresh();
+  return {refresh,dispose(){stopped=true;for(const observer of observers.values())observer.disconnect();observers.clear();for(const badge of Array.from(root.querySelectorAll('.'+LINKED_FOLDER_BADGE_CLASS)))badge.remove();}};
 }

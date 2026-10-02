@@ -64,3 +64,32 @@ test('edited bodies retain their identity and removed markers reach the conflict
   h.notes.set('Moved.md','My text with the block removed');h.locator.changed('Moved.md');
   assert.equal(await h.locator.locate(h.id,'Moved.md'),'Moved.md');
 });
+
+test('many missing responses share an index and do not repeatedly read unchanged notes',async()=>{
+  const notes=new Map(Array.from({length:100},(_,i)=>[`Note${i}.md`,'Ordinary Markdown']));
+  let reads=0,time=0;
+  const locator=new ResponseNoteLocator(()=>[...notes.keys()],async path=>{reads++;return notes.get(path);},()=>time);
+  for(let i=0;i<20;i++){
+    await locator.locate(randomUUID(),'Missing.md');time+=3001;
+  }
+  assert.equal(reads,120,'One initial scan plus one preferred-path check per response');
+  const id=randomUUID();notes.set('New.md',initialRegion(id).text);
+  assert.equal(await locator.locate(id,'Missing.md'),'New.md','New Sync files bypass fallback backoff without an event');
+});
+
+test('missed changes to an existing note recover through the bounded fallback sweep',async()=>{
+  let time=0;const id=randomUUID(),notes=new Map([['Existing.md','Unrelated']]);
+  const locator=new ResponseNoteLocator(()=>[...notes.keys()],async path=>notes.get(path),()=>time);
+  assert.equal(await locator.locate(id,'Missing.md'),undefined);
+  notes.set('Existing.md',initialRegion(id).text);
+  time=3001;assert.equal(await locator.locate(id,'Missing.md'),undefined);
+  time=120001;assert.equal(await locator.locate(id,'Missing.md'),'Existing.md');
+});
+
+test('changed existing files bypass fallback backoff and still detect copies',async()=>{
+  const h=harness();await h.locator.locate(randomUUID(),'Missing.md');
+  h.notes.set('Old.md',initialRegion(h.id).text);h.locator.changed('Old.md');
+  assert.equal(await h.locator.locate(h.id,'Missing.md'),'Old.md');
+  h.notes.set('Copy.md',h.notes.get('Old.md')!);h.locator.changed('Copy.md');
+  await assert.rejects(h.locator.locate(h.id,'Old.md'),/multiple notes/);
+});

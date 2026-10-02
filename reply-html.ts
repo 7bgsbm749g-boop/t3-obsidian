@@ -3,9 +3,16 @@ import remarkParse from 'remark-parse';
 import type {Root,RootContent} from 'mdast';
 
 const parser=unified().use(remarkParse);
+// Bound retained source text as well as entry count. Callers receive copies
+// because reply escaping adds its own protected ranges.
+const codeCache=new Map<string,Array<[number,number]>>();
+let cachedCharacters=0;
+const maxCachedCharacters=2_000_000;
 
 /** Source ranges remain stable even when HTML would swallow Markdown code. */
 export function markdownCodeRanges(markdown:string):Array<[number,number]> {
+  const cached=codeCache.get(markdown);
+  if(cached){codeCache.delete(markdown);codeCache.set(markdown,cached);return cached.map(([from,to])=>[from,to]);}
   const ranges:Array<[number,number]>=[];
   function walk(node:Root|RootContent){
     if(node.type==='code'||node.type==='inlineCode'){
@@ -14,7 +21,13 @@ export function markdownCodeRanges(markdown:string):Array<[number,number]> {
     }else if('children' in node)for(const child of node.children)walk(child as RootContent);
   }
   walk(parser.parse(markdown.replace(/</g,' ')) as Root);
-  return ranges;
+  if(markdown.length<=maxCachedCharacters){
+    codeCache.set(markdown,ranges);cachedCharacters+=markdown.length;
+    while(codeCache.size>32||cachedCharacters>maxCachedCharacters){
+      const oldest=codeCache.keys().next().value!;cachedCharacters-=oldest.length;codeCache.delete(oldest);
+    }
+  }
+  return ranges.map(([from,to])=>[from,to]);
 }
 
 /** Treat response HTML as literal Markdown, without changing code or link targets.

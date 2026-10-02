@@ -1,4 +1,4 @@
-import {regionBody,hasResponseMarkers} from './inline-thread';
+import {markdownCodeRanges} from './reply-html';
 import {safeNotePath} from './hosted-inline';
 
 /** Locations are hints; a binding's Markdown markers are its identity. The
@@ -8,12 +8,15 @@ export class ResponseNoteLocator {
   private dirty=new Set<string>();
   private scan?:Promise<void>;
   private scannedAt=-Infinity;
+  private recoveryDelay=60000;
+  private known=new Set<string>();
   constructor(private paths:()=>string[],private read:(path:string)=>Promise<string|undefined>,private now=()=>Date.now()){}
   remember(path:string,document:string|undefined){
     this.dirty.delete(path);
     if(document===undefined){this.notes.delete(path);return;}
-    const ids=new Set([...document.matchAll(/^<!-- (?:t3-inline|t3-response):start:([0-9a-f-]{36}) -->$/gm)]
-      .map(match=>match[1]).filter(id=>!!regionBody(document,id)||hasResponseMarkers(document,id)));
+    const matches=[...document.matchAll(/^<!-- (?:t3-inline|t3-response):start:([0-9a-f-]{36}) -->$/gm)];
+    const code=matches.length?markdownCodeRanges(document):[];
+    const ids=new Set(matches.filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to)).map(match=>match[1]));
     if(ids.size)this.notes.set(path,ids);else this.notes.delete(path);
   }
   changed(path:string){if(safeNotePath(path))this.dirty.add(path);}
@@ -29,13 +32,18 @@ export class ResponseNoteLocator {
   private candidates(id:string){return [...this.notes].filter(([,ids])=>ids.has(id)).map(([path])=>path);}
   private async recover(){
     if(this.scan)return this.scan;
-    if(this.now()-this.scannedAt<3000)return;
-    this.scannedAt=this.now();
+    const paths=this.paths().filter(safeNotePath),existing=new Set(paths);
+    const full=this.now()-this.scannedAt>=this.recoveryDelay;
+    const pending=full?paths:paths.filter(path=>!this.known.has(path));
+    for(const path of this.known)if(!existing.has(path)){this.known.delete(path);this.notes.delete(path);}
+    if(!pending.length&&!full)return;
     const work=(async()=>{
-      const paths=this.paths().filter(safeNotePath),existing=new Set(paths);
-      for(const path of this.notes.keys())if(!existing.has(path))this.notes.delete(path);
-      // Bound disk concurrency, and use editor content through the read adapter.
-      for(let index=0;index<paths.length;index+=16)await Promise.all(paths.slice(index,index+16).map(path=>this.refresh(path)));
+      // Observed changes are refreshed immediately; missed events get a shared
+      // fallback sweep with backoff instead of a full-vault read every 3s.
+      for(let index=0;index<pending.length;index+=16)await Promise.all(pending.slice(index,index+16).map(async path=>{
+        await this.refresh(path);this.known.add(path);
+      }));
+      if(full){this.scannedAt=this.now();this.recoveryDelay=Math.min(300000,this.recoveryDelay*2);}
     })();this.scan=work;
     try{await work;}finally{this.scan=undefined;}
   }
