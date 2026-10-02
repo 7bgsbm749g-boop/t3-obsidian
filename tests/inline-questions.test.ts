@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {followInlineQuestions,questionConversationInputs} from '../inline-questions';
+import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs} from '../inline-questions';
 import {steeringSegments,type InlineSteering} from '../inline-steering';
 import type {InlineThreadState,InlineMessage} from '../inline-thread';
 
@@ -36,4 +36,59 @@ test('question answers interleave with steering in message order, with dismissal
   assert.deepEqual(steeringSegments([old,next],inputs).map(s=>s.text),['Before.','Steering.','Late answer.','After.']);
   assert.equal(followed.follows.some(item=>item.requestId==='other'),false);
   assert.equal(followed.follows.find(item=>item.requestId==='dismissed')?.input,undefined);
+});
+
+const at=(seconds:number)=>`2026-10-02T08:42:${String(seconds).padStart(2,'0')}.000Z`;
+function steeredQuestion():InlineThreadState {
+  return {messages:[{...message('before','Before.'),createdAt:at(0)},{...message('async-answer:steered','Yes',null,'user'),createdAt:at(10)},{...message('after','After answer.'),createdAt:at(20)}],activities:[requested('steered'),resolved('steered',{choice:'Yes'})],latestTurn:{turnId:'turn',state:'completed',requestedAt:at(0),completedAt:at(30)},session:{status:'ready',activeTurnId:null}};
+}
+
+test('a completed same-turn async answer repairs an old running checkpoint and stays bound after restart',()=>{
+  const state=steeredQuestion();
+  const old=[{requestId:'steered',turnId:'turn',responseMode:'message' as const,answered:true,completed:true}];
+  const followed=followInlineQuestions(state,['turn'],old);
+  assert.equal(old[0].answered,true);
+  assert.equal(followed.follows[0].replyTurnId,'turn');
+  assert.equal(followed.waiting,false);assert.equal(followed.continued,false);
+  assert.equal(inlineQuestionPhase(state,'turn',followed.follows),'complete');
+  assert.deepEqual(steeringSegments(state.messages.filter(m=>m.role==='assistant'),questionConversationInputs(state,[],followed.follows,state.messages)).map(s=>s.text),['Before.','Yes','After answer.']);
+  const restarted=followInlineQuestions({...state,messages:[],activities:[]},['turn'],JSON.parse(JSON.stringify(followed.follows)));
+  assert.equal(restarted.waiting,false);assert.equal(inlineQuestionPhase(state,'turn',restarted.follows),'complete');
+});
+
+test('same-turn answer recovery uses the source completion checkpoint while unrelated work is running',()=>{
+  const state=steeredQuestion();
+  state.latestTurn={turnId:'unrelated',state:'running'};state.session={status:'running',activeTurnId:'unrelated'};
+  state.checkpoints=[{turnId:'turn',status:'ready',checkpointRef:'refs/t3/checkpoints/thread/turn/1',assistantMessageId:'after',completedAt:at(30)}];
+  const followed=followInlineQuestions(state,['turn']);
+  assert.equal(followed.follows[0].replyTurnId,'turn');assert.deepEqual(followed.turnIds,['turn']);assert.equal(followed.waiting,false);
+});
+
+test('late answers and ambiguous source history keep the projection-gap guard',()=>{
+  for(const change of [
+    (s:InlineThreadState)=>{s.messages[1].createdAt=at(40);},
+    (s:InlineThreadState)=>{s.messages[1].createdAt=at(30);},
+    (s:InlineThreadState)=>{delete s.messages[1].createdAt;},
+    (s:InlineThreadState)=>{delete s.latestTurn!.completedAt;},
+    (s:InlineThreadState)=>{delete s.latestTurn!.requestedAt;s.messages[2].turnId='unrelated';},
+    (s:InlineThreadState)=>{delete s.latestTurn!.requestedAt;s.messages[2].streaming=true;},
+    (s:InlineThreadState)=>{delete s.latestTurn!.requestedAt;s.messages=s.messages.slice(1);},
+    (s:InlineThreadState)=>{s.latestTurn!.state='running';s.session={status:'running',activeTurnId:'turn'};},
+  ]){
+    const state=steeredQuestion();change(state);
+    const followed=followInlineQuestions(state,['turn']);
+    assert.equal(followed.follows[0].replyTurnId,undefined);assert.equal(followed.waiting,true);assert.equal(inlineQuestionPhase(state,'turn',followed.follows),'running');
+  }
+});
+
+test('a completed source lifecycle binds an answer even without separate before and after prose',()=>{
+  const state=steeredQuestion();state.messages=[state.messages[1]];
+  const followed=followInlineQuestions(state,['turn']);
+  assert.equal(followed.follows[0].replyTurnId,'turn');assert.equal(followed.waiting,false);
+});
+
+test('an exact new-turn binding takes precedence over source-turn timing evidence',()=>{
+  const state=steeredQuestion();state.messages[1].turnId='follow-up';
+  const followed=followInlineQuestions(state,['turn']);
+  assert.equal(followed.follows[0].replyTurnId,'follow-up');assert.deepEqual(followed.turnIds,['turn','follow-up']);
 });

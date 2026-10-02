@@ -6,7 +6,7 @@ import {steeringSegments,type InlineSteering} from './inline-steering';
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string}
 export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null;createdAt?:string;payload?:Record<string,any>}
-export interface InlineTurn {turnId:string;state:string;requestedAt?:string;assistantMessageId?:string|null}
+export interface InlineTurn {turnId:string;state:string;requestedAt?:string;completedAt?:string|null;assistantMessageId?:string|null}
 export interface InlineThreadState {title?:string;messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {

@@ -457,6 +457,31 @@ for(const version of [1,2] as const)for(const dismiss of [false,true])test(`host
   assert.doesNotMatch(finished,/· Working|send-to-t3-inline-spinner/);
 });
 
+for(const version of [1,2] as const)test(`hosted v${version} completes a mid-turn async answer and repairs persisted Working after restart`,async()=>{
+  const h=harness();h.request.version=version;
+  h.request.createdAt='2026-10-02T08:42:00.000Z';
+  if(version===2){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===2;}
+  h.files.set(h.paths.request,JSON.stringify(h.request));h.dispatch();
+  const at=(seconds:number)=>`2026-10-02T08:42:${String(seconds).padStart(2,'0')}.000Z`;
+  const requested={id:'question',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'steered',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Continue?',options:[{label:'Yes',description:''}]}]}};
+  let current:InlineThreadState={messages:[{id:h.request.messageId,role:'user',text:'Begin',turnId:null,streaming:false,createdAt:h.request.createdAt},{id:'before',role:'assistant',text:'Before answer.',turnId:'turn',streaming:false,createdAt:at(0)}],activities:[requested],latestTurn:{turnId:'turn',state:'running',requestedAt:h.request.createdAt},session:{status:'running',activeTurnId:'turn'}};
+  h.io.threadState=async()=>current;
+  await h.create().tick();
+  current.messages.push({id:'async-answer:steered',role:'user',text:'Continue? Yes',turnId:null,streaming:false,createdAt:at(10)});
+  current.activities.push({id:'resolved',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',payload:{requestId:'steered',answers:{choice:'Yes'}}});
+  await h.create().tick();assert.equal(h.state.status,'running');assert.equal(h.state.questionFollows![0].replyTurnId,undefined);
+  current.messages.push({id:'final',role:'assistant',text:'Same-turn final.',turnId:'turn',streaming:false,createdAt:at(20)});
+  current={...current,latestTurn:{...current.latestTurn!,state:'completed',completedAt:at(30),assistantMessageId:'final'},session:{status:'ready',activeTurnId:null}};
+  // Reproduce an already stuck release checkpoint, then let a fresh writer recover.
+  h.files.set(h.paths.state,JSON.stringify({...h.state,questionFollows:h.state.questionFollows!.map(item=>({...item,completed:true}))}));
+  h.document+='\nOutside user edit';
+  await h.create().tick();
+  assert.equal(h.state.status,'complete');assert.equal(h.state.questionFollows![0].replyTurnId,'turn');assert.deepEqual(h.state.turnIds,['turn']);
+  assert.match(h.document,/Before answer[\s\S]*> Yes[\s\S]*Same-turn final/);assert.match(h.document,/Outside user edit/);
+  assert.doesNotMatch(h.document,/· Working|send-to-t3-inline-spinner|t3-inline:|t3-question:/);
+  const final=h.document;await h.create().tick();assert.equal(h.document,final);
+});
+
 test('upgrade reopens an older finalized async question only from byte-identical output',async()=>{
   for(const edited of [false,true]){
     const h=harness();h.dispatch();

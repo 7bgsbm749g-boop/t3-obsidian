@@ -60,3 +60,20 @@ for(const dismiss of [false,true])test(`local async ${dismiss?'dismissal':'answe
   if(!dismiss){assert.match(value,/First final[\s\S]*> \[!t3-steering\] You\n> Yes[\s\S]*Follow-up final/);assert.equal(value.split('> Yes').length-1,1);}
   manager.dispose();
 });
+
+test('local completed async steering clears Working from a persisted unbound answer',async()=>{
+  const result=await build({entryPoints:['inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+  const module={exports:{} as any},realRequire=createRequire(import.meta.url);
+  runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Notice:class{}}:realRequire(id),console,setTimeout,clearTimeout,TextEncoder,Uint8Array});
+  const id=randomUUID(),initial=initialRegion(id),at=(seconds:number)=>`2026-10-02T08:42:${String(seconds).padStart(2,'0')}.000Z`;
+  let value='User text\n'+initial.text+'\nOutside edit';
+  let saved:any[]=[{id,path:'Note.md',requestId:id,threadId:'thread',messageId:'original',turnId:'turn',turnIds:['turn'],bodyHash:initial.bodyHash,phase:'running',createdAt:at(0),questionFollows:[{requestId:'steered',turnId:'turn',responseMode:'message',answered:true,completed:true}]}];
+  const editor={getValue:()=>value,offsetToPos:(offset:number)=>offset,replaceRange:(text:string,from:number,to:number)=>{value=value.slice(0,from)+text+value.slice(to);}};
+  const app={loadLocalStorage:()=>saved,saveLocalStorage:(_key:string,jobs:any[])=>{saved=JSON.parse(JSON.stringify(jobs));},workspace:{getLeavesOfType:()=>[{view:{file:{path:'Note.md'},editor}}]}};
+  const manager=new module.exports.InlineChatManager(app,'jobs',async()=>undefined);manager.schedule=()=>{};manager.start=()=>{};
+  const job=manager.find(id),thread={messages:[{id:'before',role:'assistant',turnId:'turn',text:'Before.',streaming:false,createdAt:at(0)},{id:'async-answer:steered',role:'user',turnId:null,text:'Yes',streaming:false,createdAt:at(10)},{id:'final',role:'assistant',turnId:'turn',text:'Same-turn final.',streaming:false,createdAt:at(20)}],activities:[{id:'resolved',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',payload:{requestId:'steered',answers:{choice:'Yes'}}}],latestTurn:{turnId:'turn',state:'completed',requestedAt:at(0),completedAt:at(30),assistantMessageId:'final'},session:{status:'ready',activeTurnId:null}};
+  manager.receive(job,{kind:'snapshot',snapshot:{thread,snapshotSequence:1}});manager.flush(job);
+  assert.equal(job.phase,'complete');assert.equal(job.finalized,true);assert.equal(job.questionFollows[0].replyTurnId,'turn');
+  assert.match(value,/Before[\s\S]*> Yes[\s\S]*Same-turn final/);assert.match(value,/Outside edit/);assert.doesNotMatch(value,/Working|send-to-t3-inline-spinner|t3-inline:/);
+  manager.dispose();
+});

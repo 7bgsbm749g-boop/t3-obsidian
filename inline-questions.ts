@@ -18,7 +18,7 @@ export function followInlineQuestions(state:InlineThreadState,turnIds:string[],s
     if(state.activities.some(a=>a.payload?.requestId===item.requestId&&staleQuestionFailure(a)))item.dismissed=true;
     if(item.dismissed)continue;
     const reply=state.messages.find(m=>m.role==='user'&&m.id===`async-answer:${item.requestId}`);
-    if(reply){item.answered=true;item.replyTurnId??=turnForMessage(state,reply.id);}
+    if(reply){item.answered=true;item.replyTurnId??=turnForMessage(state,reply.id)??completedQuestionSteeringTurn(state,item,reply);}
     if(!item.input&&(resolution?.payload?.answers||reply)){
       const answers=resolution?.payload?.answers;
       const text=answers&&typeof answers==='object'?Object.values(answers).map(answer=>Array.isArray(answer)?answer.join(', '):typeof answer==='string'?answer:'').filter(Boolean).join('\n\n'):reply?.text??'';
@@ -35,6 +35,27 @@ export function followInlineQuestions(state:InlineThreadState,turnIds:string[],s
   }
   if(turns.length>turnIds.length)return followInlineQuestions(state,turns,follows,prose);
   return {follows,turnIds:turns,turnId:turns.at(-1),waiting:follows.some(item=>!item.dismissed&&item.responseMode!=='native'&&!item.replyTurnId),continued:follows.some(item=>item.replyTurnId&&item.replyTurnId!==item.turnId||pendingQuestionReply(item))};
+}
+/** An async answer can steer its question's existing turn. T3 leaves that
+ * user message's turnId null and retains the original requestedAt, so the
+ * normal new-turn lookup cannot bind it. Bind an exact answer inside the
+ * source turn's completed lifecycle, never from the session's latest status.
+ * For older turns without requestedAt, source prose must bracket the answer.
+ * A late answer, an unrelated turn, or incomplete evidence still waits for
+ * the exact async-answer turn to be projected. Persist the proven binding. */
+function completedQuestionSteeringTurn(state:InlineThreadState,item:InlineQuestionFollow,reply:InlineMessage):string|undefined {
+  if(!item.turnId||item.responseMode!=='message'||turnPhase(state,item.turnId)!=='complete')return;
+  const turn=state.latestTurn?.turnId===item.turnId?state.latestTurn:state.turns?.[item.turnId];
+  const checkpoint=state.checkpoints?.find(c=>c.turnId===item.turnId&&c.status==='ready'&&c.checkpointRef?.startsWith('refs/t3/checkpoints/'));
+  const answeredAt=Date.parse(reply.createdAt??''),completedAt=Date.parse(turn?.completedAt??checkpoint?.completedAt??'');
+  if(!Number.isFinite(answeredAt)||!Number.isFinite(completedAt)||completedAt<=answeredAt)return;
+  const requestedAt=Date.parse(turn?.requestedAt??'');
+  if(Number.isFinite(requestedAt))return requestedAt<answeredAt?item.turnId:undefined;
+  const index=state.messages.findIndex(m=>m.id===reply.id);
+  const source=(message:InlineMessage)=>message.role==='assistant'&&message.turnId===item.turnId&&!message.streaming;
+  if(!state.messages.slice(0,index).some(m=>source(m)&&Date.parse(m.createdAt??'')<answeredAt))return;
+  if(!state.messages.slice(index+1).some(m=>source(m)&&Date.parse(m.createdAt??'')>answeredAt&&Date.parse(m.createdAt??'')<=completedAt))return;
+  return item.turnId;
 }
 function pendingQuestionReply(item:InlineQuestionFollow):boolean {
   return !!(item.completed&&item.answered&&!item.dismissed&&item.responseMode==='message'&&!item.replyTurnId);
