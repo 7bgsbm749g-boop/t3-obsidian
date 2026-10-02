@@ -20,7 +20,7 @@ export function logEvent(event:string,fields:Record<string,unknown>={},level:Log
 export function logFailure(event:string,error:unknown,fields:Record<string,unknown>={}){logEvent(event,{...fields,error},'error');}
 export class EventJournal {
   private state:DiagnosticState={schema:1,events:[]};
-  private sequence=0;private sessionId:string;private dirty=false;private work=Promise.resolve();private closed=false;private bytes=0;private publishAt=0;
+  private sequence=0;private sessionId:string;private dirty=false;private work=Promise.resolve();private closed=false;private bytes=0;private publishAt=0;private publishedDay='';
   storageError='';
   constructor(private io:DiagnosticIO){this.sessionId=io.id();}
   private now(){return this.io.now?.()??Date.now();}
@@ -37,19 +37,24 @@ export class EventJournal {
     const entry:DiagnosticEvent={at:new Date(this.now()).toISOString(),sequence:++this.sequence,sessionId:this.sessionId,deviceId:String(this.io.context.deviceId),event,level,fields:redact(fields) as Record<string,unknown>};
     if(!this.closed){this.state.events.push(entry);this.bytes+=JSON.stringify(entry).length;this.dirty=true;this.trim();}return entry;
   }
-  private trim(){const cutoff=this.now()-7*24*60*60_000;while(this.state.events.length&&(this.state.events.length>MAX_EVENTS||this.bytes>MAX_BYTES||Date.parse(this.state.events[0].at)<cutoff))this.bytes-=JSON.stringify(this.state.events.shift()).length;}
+  private trim(){
+    const day=new Date(this.now()).toISOString().slice(0,10);
+    const retained=this.state.events.filter(event=>event.at.slice(0,10)===day);
+    if(retained.length!==this.state.events.length){this.state.events=retained;this.bytes=retained.reduce((sum,event)=>sum+JSON.stringify(event).length,0);this.dirty=true;}
+    while(this.state.events.length&&(this.state.events.length>MAX_EVENTS||this.bytes>MAX_BYTES)){this.bytes-=JSON.stringify(this.state.events.shift()).length;this.dirty=true;}
+  }
   async flush(forcePublish=false){
     const run=this.work.catch(()=>{}).then(async()=>{
-      this.trim();const snapshot=JSON.parse(JSON.stringify(this.state));
+      this.trim();const today=new Date(this.now()).toISOString().slice(0,10);if(this.publishedDay!==today)this.publishAt=0;const snapshot=JSON.parse(JSON.stringify(this.state));
       try{
         if(this.dirty){this.dirty=false;try{await this.io.save(snapshot);}catch(error){this.dirty=true;throw error;}}
-        if(this.io.publish&&(forcePublish||this.now()>=this.publishAt)){await this.io.publish(snapshot.events);this.publishAt=this.now()+30_000;}
+        if(this.io.publish&&(forcePublish||this.now()>=this.publishAt)){await this.io.publish(snapshot.events);this.publishAt=this.now()+30_000;this.publishedDay=today;}
         this.storageError='';
       }catch(error){this.storageError=JSON.stringify(redact(error));throw error;}
     });this.work=run;return run;
   }
   async tick(){if(!this.closed)await this.flush();}
-  export(){return JSON.stringify({exportedAt:new Date(this.now()).toISOString(),context:redact(this.io.context),...this.state,storageError:this.storageError},null,2);}
+  export(){this.trim();return JSON.stringify({exportedAt:new Date(this.now()).toISOString(),context:redact(this.io.context),...this.state,storageError:this.storageError},null,2);}
   async exportSynced(){
     await this.flush(true);const events=new Map<string,DiagnosticEvent>();
     for(const event of [...await this.io.readSynced?.()??[],...this.state.events])events.set(`${event.deviceId}:${event.sessionId}:${event.sequence}`,event);

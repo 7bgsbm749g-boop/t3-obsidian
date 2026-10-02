@@ -6,7 +6,7 @@ One Obsidian plugin for desktop and mobile. Chat from the command palette, send 
 
 The plugin notices changes; the subscribing T3 thread decides what to do. There is no workflow builder, stored task definition, setup thread, or new thread for each change. An agent registers a subscription through the same private command mailbox used for note sends. A subscription contains only a note/folder scope, selected change types, and the originating thread, project, and machine IDs.
 
-With no enabled subscriptions, note monitoring and automatic activity logging are off. The command listener stays available so the next agent can register a subscription. Pausing or cancelling the last subscription stops recording; historical records remain untouched. Old folder-workflow definitions are ignored and do not migrate or run. The retired menus, badges, settings, setup compiler, event journals, coordinator, and execution engine have been removed.
+With no enabled subscriptions, note monitoring and automatic activity logging are off. The command listener stays available so the next agent can register a subscription. Pausing or cancelling the last subscription stops recording; subscription records remain untouched; the activity log still resets daily. Old folder-workflow definitions are ignored and do not migrate or run. The retired menus, badges, settings, setup compiler, event journals, coordinator, and execution engine have been removed.
 
 A subscription watches future saved Markdown changes from its registration. It supports creation, text modification, rename, deletion, or a named frontmatter property changing (optionally to an exact JSON value). Property values are compared by type, so `true` differs from `"true"`. Invalid YAML does not count as a property transition. Folder scopes may include subfolders; `/` watches the vault. Hidden paths and plugin log notes cannot be watched. Explicit note/folder scopes follow renames; a folder subscription continues watching its path after deletion, so a later recreated folder is covered.
 
@@ -301,33 +301,33 @@ Version 2.9.2 fixes new threads inheriting a recent conversation's model and rea
 
 Assistant response HTML outside code is displayed literally so tag-like placeholders cannot disrupt Obsidian Live Preview. Markdown paragraph quotes, inline and fenced code, and URL/email autolinks retain their formatting. This is renderer-side processing; agent prompts are unchanged.
 
-### Activity logging while subscriptions are active
+### Daily hidden plugin event log
 
-While this desktop has enabled event subscriptions, the plugin records operation boundaries, delivery and steering acknowledgements,
-stream state, ownership, note writes, observed vault changes, and failures. Errors
-only enter the timeline: no automatic diagnostic threads, reporting commands,
-reporting settings, destinations, incidents, or watchdog reports are created.
+Plugin activity is recorded while enabled subscriptions are running on the
+vault's designated watcher. Errors only enter the timeline; they never create
+automatic diagnostic threads. Existing recording controls are unchanged.
 
-With zero enabled subscriptions, no new activity is recorded or automatically published. Export remains an explicit read of available historical logs. While subscriptions are active, events remain in a device-local IndexedDB buffer and are copied every 30 seconds
-(and on unload/export) to `T3 Code Logs/<device-id>/<session-id>.md` in the vault.
-These ordinary Markdown files sync through Obsidian Sync like notes. Each device
-writes only its own session files, so devices do not overwrite each other's logs.
-Sync must be enabled and this folder must not be excluded on receiving devices.
-The log folder is excluded from plugin observation and subscription capture to avoid
-logging loops or automatic sends. Sync's own internal logs are separate.
+There is one shared file: `.obsidian/t3-code-log.json` (or the equivalent in a
+custom configuration folder). It is hidden from the note explorer and graph.
+It updates about every 30 seconds and on export or unload. At midnight UTC,
+the next housekeeping tick clears yesterday's entries, even when recording is
+paused. If Obsidian is closed, it clears them on the next launch. There are no
+daily archives or per-device/session log files. The private IndexedDB buffer
+follows the same daily reset and retries failed publication. Current-day history
+is bounded to 10,000 events and roughly 8 MB.
 
-The command palette's **Export plugin diagnostics…** produces JSON combining the
-local timeline with available synced device timelines, deduplicated by device,
-session, and sequence. Unreceived/offline device logs appear after Sync delivers
-them. The local timeline/export is bounded to 10,000 events; local storage also
-has an 8 MB size limit. Each device expires its own session files after seven days.
-Publication failures preserve local events and retry on later flushes.
+Obsidian Sync carries this root configuration JSON when **Core plugin settings**
+(`core-plugin-data` in Headless Sync) is enabled for the same configuration
+folder on each device. QLO2's headless Sync configuration includes this category.
+The command palette's **Export plugin diagnostics…** combines the current-day
+shared file and local buffer without duplicate events. Pending Sync changes
+appear after delivery. Official Sync's internal logs are separate.
 
-Raw note bodies, prompts, selections, attachments, credentials, and connection
-URLs are redacted. Metadata includes note paths, device/session IDs, hashes,
-lengths, times, operation IDs, and sanitized errors. Log files inherit the vault's
-sharing and Sync access. Older device-local timelines migrate; obsolete reporting
-state and preferences are ignored. Upgrade every device to remove reporting there.
+The upgrade migrates today's generated `T3 Code Logs` Markdown entries into the
+hidden file, then deletes those generated files and any empty log folders.
+Other files placed in that folder are preserved. No previous-day logs are kept.
+Note bodies, prompts, selections, attachments, credentials, and connection URLs
+are redacted; paths, identifiers, hashes, lengths and sanitized errors remain.
 
 ## Multiple streaming destinations and agent commands
 
