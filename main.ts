@@ -16,6 +16,7 @@ import { applyOrchestration, OrchestrationSettings } from './orchestration';
 import { CompletionSettings, CompletionJob, CompletionAction, archiveFolder, contentHash, completionState, isOriginalCompletedTurn, cleanCompletedNote } from './completion';
 import { Connection, Project, Request, RequestDeliveryError, parseProjects, runBridge, sendRequest, configureBridge, retiredConnection, RETIRED_MESSAGE, projectKey, projectLabel } from './bridge';
 import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from './folder-link';
+import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from './folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from './palette-chat';
 import {openChatFlow,openNoteSendFlow,type ChatHost} from './chat-ui';
 import {selectionRange} from './inline-steering';
@@ -47,7 +48,7 @@ const NEW_FOLDER_PROJECT='folder:new';
 const VAULT_PROJECT='vault:root';
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean}
 type PreparedNote={content:string;images:Awaited<ReturnType<typeof collectImages>>};
-interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
+interface Settings { paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
 export default class SendToT3 extends Plugin {
   declare settings: Settings;
   mode: 'desktop'|'direct' = 'desktop';
@@ -81,6 +82,8 @@ export default class SendToT3 extends Plugin {
   private saving = Promise.resolve();
   private sharedBaseline='';
   private lastDiskSnapshot='';
+  private folderLinkReplica:FolderLinkChange[]=[];
+  private folderLinkClock=0;
   private checkingExternalSettings=false;
   private recentFolderGesture?:{path:string;at:number};
   private paletteChat?:PaletteChatController;
@@ -118,7 +121,11 @@ export default class SendToT3 extends Plugin {
     this.cloudAccount=local?.cloudAccount??null;
     this.nativeAccount=local?.nativeAccount??null;
     this.vaultRegistrations=local?.vaultRegistrations??{};
-    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
+    this.settings = {paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
+    this.folderLinkReplica=mergeFolderLinkChanges(this.settings.folderLinkChanges,loadFolderLinkChanges(await deviceState(`folder-links:${this.deviceId}:${this.settings.vaultId}`)));
+    this.settings.folderLinkChanges=this.folderLinkReplica;
+    this.settings.folderLinks=applyFolderLinkChanges(this.settings.folderLinks,this.folderLinkReplica);
+    const restoreFolderLinks=JSON.stringify(loadFolderLinks(data))!==JSON.stringify(this.settings.folderLinks)||JSON.stringify(loadFolderLinkChanges(data?.folderLinkChanges))!==JSON.stringify(this.folderLinkReplica);
     const diagnosticContext={deviceId:this.deviceId,vaultId:this.settings.vaultId,pluginVersion:this.manifest?.version??'unknown',platform:Platform.isMobile?'mobile':'desktop'};
     const adapter=this.app.vault?.adapter;
     const syncedLogs=adapter&&typeof adapter.mkdir==='function'&&typeof adapter.write==='function'?new SyncedEventLogs(adapter,this.deviceId,()=>this.app.vault.getMarkdownFiles().map(file=>file.path),()=>Date.now(),this.app.vault.configDir||'.obsidian'):undefined;
@@ -216,7 +223,7 @@ export default class SendToT3 extends Plugin {
     // verify the same vault root. This is a one-time migration, not an
     // unconditional startup snapshot write, and uses the conflict-safe path.
     if(typeof data?.vaultId!=='string'||!data.vaultId)await this.save(true);
-    else if(migratedNoteThreads)await this.save(true);
+    else if(migratedNoteThreads||restoreFolderLinks)await this.save(true);
     this.addSettingTab(new T3Settings(this.app,this));
     this.app.workspace.onLayoutReady(()=>{
       if(this.stopped)return;
@@ -509,14 +516,19 @@ export default class SendToT3 extends Plugin {
   private async checkExternalSettings(){
     if(this.stopped||this.checkingExternalSettings)return;
     this.checkingExternalSettings=true;
-    try{await this.saving.catch(()=>{});const data=await this.loadData(),serialized=JSON.stringify(data);if(serialized!==this.lastDiskSnapshot)await this.onExternalSettingsChange(data);}
+    try{await this.saving.catch(()=>{});const data=await this.loadData(),serialized=JSON.stringify(data);if(serialized!==this.lastDiskSnapshot)await this.onExternalSettingsChange();}
     finally{this.checkingExternalSettings=false;}
   }
   async onExternalSettingsChange(loaded?:any){
     await this.saving.catch(()=>{});
     const data=loaded??await this.loadData();if(this.stopped||!data)return;
     this.lastDiskSnapshot=JSON.stringify(data);
-    this.settings.folderLinks=loadFolderLinks(data);
+    const diskLinks=loadFolderLinks(data),diskChanges=loadFolderLinkChanges(data.folderLinkChanges);
+    this.folderLinkReplica=mergeFolderLinkChanges(this.folderLinkReplica,diskChanges);
+    this.settings.folderLinkChanges=this.folderLinkReplica;
+    this.settings.folderLinks=applyFolderLinkChanges(diskLinks,this.folderLinkReplica);
+    const restoreFolderLinks=JSON.stringify(diskLinks)!==JSON.stringify(this.settings.folderLinks)||JSON.stringify(diskChanges)!==JSON.stringify(this.folderLinkReplica);
+    await deviceState(`folder-links:${this.deviceId}:${this.settings.vaultId}`,this.folderLinkReplica);
     const remoteThreads=loadNoteThreads(data.noteThreads);
     const mergedThreads=mergeNoteThreads(remoteThreads,this.settings.noteThreads);
     this.settings.noteThreads=remoteThreads;
@@ -528,7 +540,7 @@ export default class SendToT3 extends Plugin {
     if(Array.isArray(data.directProjects))this.settings.directProjects=data.directProjects;
     this.sharedBaseline=JSON.stringify(this.sharedSnapshot());
     this.settings.noteThreads=mergedThreads;
-    if(JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save();
+    if(restoreFolderLinks||JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save(restoreFolderLinks);
     this.refreshFolderIndicators();
   }
   openSettings(){
@@ -1311,17 +1323,27 @@ export default class SendToT3 extends Plugin {
   private sharedSnapshot(){const {pending,completionJobs,settlementJobs,connection,...shared}=this.settings;return JSON.parse(JSON.stringify(shared));}
   save(forceShared=false) {
     this.refreshFolderIndicators();
-    const {pending,completionJobs,settlementJobs,connection}=this.settings,snapshot=this.sharedSnapshot(),intendedThreads=JSON.stringify(this.settings.noteThreads);
+    const {pending,completionJobs,settlementJobs,connection}=this.settings,snapshot=this.sharedSnapshot(),intendedThreads=JSON.stringify(this.settings.noteThreads),intendedLinks=JSON.stringify(this.settings.folderLinks);
+    const baseline=JSON.parse(this.sharedBaseline) as Settings;
+    const changes=changedFolderLinks(loadFolderLinks(baseline),snapshot.folderLinks,mergeFolderLinkChanges(this.folderLinkReplica,snapshot.folderLinkChanges),randomId,Math.max(Date.now(),this.folderLinkClock+1));
+    if(changes.length)this.folderLinkClock=Date.parse(changes[0].at);
+    snapshot.folderLinkChanges=mergeFolderLinkChanges(snapshot.folderLinkChanges,changes);
     const writeShared=forceShared||JSON.stringify(snapshot)!==this.sharedBaseline;
     const state=JSON.parse(JSON.stringify({pending,completionJobs,settlementJobs}));
     this.app.saveLocalStorage(this.localKey,JSON.parse(JSON.stringify({deviceId:this.deviceId,mode:this.mode,connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,vaultRegistrations:this.vaultRegistrations})));
     this.saving=this.saving.catch(()=>{}).then(async()=>{
       await deviceState(this.deviceId,state);
       if(!writeShared)return;
-      const baseline=JSON.parse(this.sharedBaseline) as Settings;
       const current=await this.loadData();
+      snapshot.folderLinkChanges=mergeFolderLinkChanges(this.folderLinkReplica,loadFolderLinkChanges(current?.folderLinkChanges),snapshot.folderLinkChanges);
+      snapshot.folderLinks=applyFolderLinkChanges(mergeLegacyFolderLinks(loadFolderLinks(baseline),loadFolderLinks(current),snapshot.folderLinks),snapshot.folderLinkChanges);
       snapshot.noteThreads=mergeNoteThreads(loadNoteThreads(current?.noteThreads),snapshot.noteThreads);
       await this.saveData(snapshot);
+      this.folderLinkReplica=snapshot.folderLinkChanges;
+      await deviceState(`folder-links:${this.deviceId}:${this.settings.vaultId}`,this.folderLinkReplica);
+      this.settings.folderLinkChanges=this.folderLinkReplica;
+      if(JSON.stringify(this.settings.folderLinks)===intendedLinks)this.settings.folderLinks=snapshot.folderLinks;
+      this.refreshFolderIndicators();
       this.lastDiskSnapshot=JSON.stringify(snapshot);
       if(JSON.stringify(this.settings.noteThreads)===intendedThreads)this.settings.noteThreads=snapshot.noteThreads;
       this.sharedBaseline=JSON.stringify(snapshot);

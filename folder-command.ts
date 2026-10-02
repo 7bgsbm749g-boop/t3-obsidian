@@ -76,5 +76,6 @@ export async function executeFolderCommand(input:FolderCommand,host:FolderComman
   const result=inspectFolderLinks(command.id,host.vaultId,command.folderPath,links);
   journal={command,prepared:{before,after,project,result}};await host.write(command.id,journal);
   if(after)await host.save(after,project!);else await host.unlink(command.folderPath);
+  if(!same(current(),after))throw Error('A newer folder edit took precedence while saving. Inspect the current destination and use a new request ID.');
   await host.write(command.id,{...journal,result});return result;
 }

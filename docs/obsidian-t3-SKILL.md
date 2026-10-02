@@ -11,7 +11,7 @@ Use the running Obsidian plugin's command interface for note-driven T3 work. Loa
 
 - The CLI is `/home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py`.
 - The usual local vault is `/home/ubuntu/vaults/QLO2`; honor another requested vault.
-- That vault must be open in a real Obsidian desktop client with Send to T3 Code 2.29.0 or newer for folder commands (2.28.1 for subscriptions; 2.17.0 for note sends) enabled. Its authenticated T3 connection and streaming coordinator must be reachable.
+- That vault must be open in a real Obsidian desktop client with Send to T3 Code 2.29.1 or newer for folder commands (2.28.1 for subscriptions; 2.17.0 for note sends) enabled. Its authenticated T3 connection and streaming coordinator must be reachable.
 - This is a local filesystem command bridge, not an MCP tool. Run it on the machine where that desktop vault is open.
 - Source and destination notes must already exist. Pass vault-relative `.md` paths. Absolute paths, traversal, hidden paths, backslashes, and control characters are rejected. At most 32 unique streaming destinations are supported.
 - `--config-dir` defaults to `.obsidian`; specify it for a vault using a different configuration directory.
@@ -46,6 +46,8 @@ Default `--mode project` links to an existing repository. `--mode self` requires
 A different direct link requires `--relink`. Add it deliberately with a new request UUID after inspecting the old link; do not change arguments under the old UUID. Unlink removes only that folder's direct link. Child links, remembered note/thread bindings, source files, and existing conversations remain intact. New sends use the updated routing; existing conversations stay in their original project.
 
 Results include `vaultId`, `folderPath`, `directLink`, `effectiveLink`, and `routing`, with no connection credentials. `effectiveLink` is the nearest saved ancestor, including the vault root. `routing: new-folder-project` means a new send from this otherwise unlinked folder would create its own project despite a root link; establish a non-root link before sending to a repository. `vault-project-setup` means the root is unconfigured. Inspection reads saved routing without requiring the destination to be online. Link metadata and successful inspection acknowledgements are snapshots, not ongoing availability guarantees.
+
+Folder edits and unlink tombstones are recorded per folder in synced settings and retained locally to repair stale whole-file replacements. Reload the updated plugin on other devices before editing folder links there; newer explicit edits take precedence.
 
 For verification, link a uniquely named temporary folder to a verified existing project, inspect it using a new UUID, replay the link UUID, deliberately relink, unlink, and clean up. Confirm its Files explorer T3 indicator changes. A bounded note send from the linked folder should appear in the selected T3 project; record its returned IDs and verify its completed reply before deleting the temporary note. Preserve the user's current folder links and note.
 

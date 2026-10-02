@@ -58,6 +58,12 @@ test('lost acknowledgement recovers the exact saved result without revalidating 
   const saved=h.links()[0];h.unavailable();const result=await executeFolderCommand(request,h.host);
   assert.deepEqual(result.directLink,saved);assert.equal(h.resolutions(),1);assert.equal(h.saves(),1);
 });
+test('a concurrent newer edit cannot receive a false successful acknowledgement',async()=>{
+  const h=harness(),newer=link('Notes','newer');
+  h.host.save=async()=>{h.setLinks([newer]);};
+  await assert.rejects(executeFolderCommand(command(),h.host),/newer folder edit/);
+  assert.equal(h.links()[0].id,'newer');
+});
 test('inspection and unlinking are independent of T3 connectivity; inspections replay immutable snapshots',async()=>{
   const h=harness([link('Notes')]);h.unavailable();
   const inspect:FolderCommand={version:1,id:randomUUID(),kind:'inspect-folder',folderPath:'Notes/Child'};

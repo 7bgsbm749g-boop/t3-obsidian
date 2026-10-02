@@ -267,6 +267,8 @@ Use verified project and machine IDs. The connection ID is an exact configured p
 
 Replacing a different direct link requires `--relink`. Unlinking affects only that direct link; nested links, source files and remembered conversations remain. Results expose `directLink`, nearest inherited `effectiveLink`, vault identity, and `routing`. An otherwise unlinked folder reports `new-folder-project` even with a root association, reflecting normal new-note routing. Inspection reads saved links and does not prove current connectivity.
 
+Folder edits also save per-folder change records and unlink tombstones through normal settings Sync, with a device-local copy to recover stale whole-file replacements. Newer explicit edits take precedence. Reload the updated plugin on other devices before editing folder links there.
+
 Retain immutable request UUIDs and exact arguments. Replaying returns the original acknowledgement; use a fresh UUID for current inspection. After timeout replay the same UUID, and after fixing a failure add `--retry`. Prepared mutations recover lost acknowledgements without overwriting later links; unavailable or invalid destinations preserve the previous link. Credentials stay device-local and never appear in results. See [the agent skill](docs/obsidian-t3-SKILL.md) for the complete workflow.
 
 ## Development and release pipeline

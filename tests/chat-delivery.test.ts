@@ -637,7 +637,7 @@ test('editor selection menu streams a T3 reply into its original note for new an
     const newThreadText=h.commands[1].message.text;
     assert.ok(newThreadText.startsWith(selection));assert.match(newThreadText,/Answer in the T3 thread\. The Obsidian plugin will insert your reply\./);assert.doesNotMatch(newThreadText,/Do not edit the Obsidian note|Reply in the Obsidian note itself/);
     assert.match(newThreadText,/Destination note path: "\/projects\/notes\/Notes\/Original.md"/);assert.doesNotMatch(newThreadText,/Different.md/);
-    await new Promise(resolve=>setTimeout(resolve,500));
+    for(let attempt=0;attempt<80&&(first.value.includes('t3-inline:start:')||!first.value.includes('Inline reply from T3.'));attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.match(first.value,/Inline reply from T3\./);
     assert.doesNotMatch(first.value,/\*\*T3 answer\*\*/);
     h.setThreads([{id:h.commands[1].threadId,projectId:project.id,title:'Selection reply',updatedAt:new Date().toISOString()}]);
@@ -652,7 +652,8 @@ test('editor selection menu streams a T3 reply into its original note for new an
     const secondTurn=h.commands.filter(command=>command.type==='thread.turn.start').at(-1);
     assert.equal(secondTurn.type,'thread.turn.start');assert.equal(secondTurn.threadId,'old-thread');
     assert.ok(secondTurn.message.text.startsWith(followup));assert.doesNotMatch(secondTurn.message.text,/Reply in the Obsidian note itself/);
-    await new Promise(resolve=>setTimeout(resolve,500));assert.match(second.value,/Inline reply from T3\./);
+    for(let attempt=0;attempt<80&&(second.value.includes('t3-inline:start:')||!second.value.includes('Inline reply from T3.'));attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.match(second.value,/Inline reply from T3\./);
     assert.equal(h.vaultAccesses(),0,'Selection chat sends the selection and note path without reading the note body');
   }finally{h.plugin.onunload();}
 });
