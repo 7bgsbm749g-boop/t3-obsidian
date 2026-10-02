@@ -1,3 +1,4 @@
+import type {ResolvedJobOptions} from './job-options';
 import type {NoteCommand} from './note-command';
 import {logEvent,logFailure} from './diagnostics';
 import {readDirect,sendDirect,type PairedSession,type DirectPlan} from './direct';
@@ -11,7 +12,7 @@ export interface Project { id: string; title: string; workspaceRoot: string; con
 export function projectKey(project:Project){return project.connectionId?`${project.connectionId}:${project.id}`:project.id;}
 export function projectLabel(project:Project){return project.title+(project.connectionName?` · ${project.connectionName}`:'');}
 export interface Connection { executable: string; host: string; scriptPath?: string; transport?: 'desktop'|'https'|'direct'; url?: string; native?:boolean; baseDir?:string; stateDir?:string;connectionId?:string;environmentId?:string }
-export interface Request {agentCommand?:NoteCommand; id: string; project: Project; title: string; prompt: string; connection: Connection; threadId?:string; folderLinkIntent?:FolderLink; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion; noteThread?:Omit<NoteThread,'threadId'|'selectedAt'>;/** Legacy saved request field; only read when resuming old requests. */noteLink?:Omit<NoteThread,'threadId'|'selectedAt'>;directPlan?:DirectPlan;inlineHost?:HostedInlineRequest;inlineBindings?:HostedInlineRequest[];inlineSteering?:{jobId:string;host?:HostedInlineRequest['host'];input:SteeringInput};inlineFollow?:{jobId:string;host?:HostedInlineRequest['host'];notePath?:string;previousMessageId:string;messageId:string} }
+export interface Request {jobOptions?:ResolvedJobOptions;agentCommand?:NoteCommand; id: string; project: Project; title: string; prompt: string; connection: Connection; threadId?:string; folderLinkIntent?:FolderLink; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion; noteThread?:Omit<NoteThread,'threadId'|'selectedAt'>;/** Legacy saved request field; only read when resuming old requests. */noteLink?:Omit<NoteThread,'threadId'|'selectedAt'>;directPlan?:DirectPlan;inlineHost?:HostedInlineRequest;inlineBindings?:HostedInlineRequest[];inlineSteering?:{jobId:string;host?:HostedInlineRequest['host'];input:SteeringInput};inlineFollow?:{jobId:string;host?:HostedInlineRequest['host'];notePath?:string;previousMessageId:string;messageId:string} }
 export class RequestDeliveryError extends Error {
   constructor(message:string,readonly requestSaved:boolean){super(message);}
 }

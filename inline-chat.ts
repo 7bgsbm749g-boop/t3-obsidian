@@ -1,3 +1,4 @@
+import type {ResolvedJobOptions} from './job-options';
 import {intermediateMode,completionTime,finalAnswerFormat,type IntermediateMode,type FinalAnswerFormat} from './response-presentation';
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,type InlineQuestionFollow} from './inline-questions';
 import {logEvent,logFailure} from './diagnostics';
@@ -73,17 +74,17 @@ export class InlineChatManager {
   private persist(){this.app.saveLocalStorage(this.key,this.jobs.map(j=>({...j})));}
   private runtime(job:InlineJob){let runtime=this.runtimes.get(job.id);if(!runtime){runtime={state:{messages:[],activities:[]},sequence:-1};this.runtimes.set(job.id,runtime);}return runtime;}
 
-  reserve(editor:Editor,info:MarkdownView|MarkdownFileInfo,anchor:SelectionAnchor,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string):InlineJob {
-    return this.reserveAt(editor,info,insertionOffset(editor.getValue(),anchor),requestId,expectedPath,initialInput,threadTitle);
+  reserve(editor:Editor,info:MarkdownView|MarkdownFileInfo,anchor:SelectionAnchor,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string,options?:ResolvedJobOptions):InlineJob {
+    return this.reserveAt(editor,info,insertionOffset(editor.getValue(),anchor),requestId,expectedPath,initialInput,threadTitle,options);
   }
-  reserveAtEnd(editor:Editor,info:MarkdownView|MarkdownFileInfo,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string):InlineJob {
-    return this.reserveAt(editor,info,endInsertionOffset(editor.getValue()),requestId,expectedPath,initialInput,threadTitle);
+  reserveAtEnd(editor:Editor,info:MarkdownView|MarkdownFileInfo,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string,options?:ResolvedJobOptions):InlineJob {
+    return this.reserveAt(editor,info,endInsertionOffset(editor.getValue()),requestId,expectedPath,initialInput,threadTitle,options);
   }
-  private reserveAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,offset:number,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string):InlineJob {
+  private reserveAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,offset:number,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string,options?:ResolvedJobOptions):InlineJob {
     if(this.stopped)throw Error('The plugin was disabled.');
     const file=info.file;if(!file||file.path!==expectedPath||file.extension.toLowerCase()!=='md')throw Error('The original Markdown note is no longer open. Reopen it and ask T3 again.');
-    const id=requestId,createdAt=new Date().toISOString(),mode=intermediateMode(this.keepIntermediate()),region=initialRegion(id,initialInput,threadTitle,mode,{startedAt:createdAt});
-    const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt,keepIntermediate:mode!=='remove',intermediateMode:mode,finalAnswerFormat:finalAnswerFormat(this.answerFormat()),...(initialInput?{initialInput}:{})};
+    const id=requestId,createdAt=new Date().toISOString(),mode=options?.inline.intermediateMode??intermediateMode(this.keepIntermediate()),region=initialRegion(id,initialInput,threadTitle,mode,{startedAt:createdAt});
+    const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt,keepIntermediate:mode!=='remove',intermediateMode:mode,finalAnswerFormat:options?.inline.finalAnswerFormat??finalAnswerFormat(this.answerFormat()),...(initialInput?{initialInput}:{})};
     this.jobs.push(job);this.runtime(job).source={editor,info};
     try{this.persist();replaceInlineEditorText(editor,region.text,offset);}
     catch(error){this.jobs=this.jobs.filter(item=>item!==job);this.runtimes.delete(job.id);try{this.persist();}catch{/* Original storage error remains primary. */}throw error;}

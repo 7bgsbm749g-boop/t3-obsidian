@@ -1,3 +1,4 @@
+import {resolveJobOptions,overrideCount,type JobOverrides,type ResolvedJobOptions,type InlineDefaults} from './job-options';
 import {logEvent,logFailure} from './diagnostics';
 import {App, FuzzySuggestModal, Modal, Notice, Setting} from 'obsidian';
 import {RequestDeliveryError} from './bridge';
@@ -5,15 +6,16 @@ import {ProjectCreationCancelled} from './project-create-ui';
 
 export interface ChatHost {
   steering?:boolean;
+  getInlineDefaults?():InlineDefaults;
   busy?:boolean;
   getNotePath():string;
   getProjectName(projectKey?:string):string;
   getTargetDescription(projectKey?:string):string;
   getProjectChoices():{key:string;label:string}[];
   getDefaultThread(projectKey?:string):string|undefined;
-  sendChat(prompt:string,projectKey?:string):Promise<void>;
-  sendToNew(prompt:string,projectKey?:string):Promise<void>;
-  sendToExisting(prompt:string,projectKey?:string):Promise<void>;
+  sendChat(prompt:string,projectKey?:string,resolve?:()=>ResolvedJobOptions,returnToDraft?:()=>void):Promise<void>;
+  sendToNew(prompt:string,projectKey?:string,resolve?:()=>ResolvedJobOptions,returnToDraft?:()=>void):Promise<void>;
+  sendToExisting(prompt:string,projectKey?:string,resolve?:()=>ResolvedJobOptions,returnToDraft?:()=>void):Promise<void>;
 }
 
 class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
@@ -23,11 +25,34 @@ class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
   onChooseItem(item:{key:string;label:string}){this.choose(item.key);}
 }
 
+/** Child edits are isolated until Apply. Closing or Cancel leaves the parent draft intact. */
+export class JobOverridesModal extends Modal {
+  private draft:JobOverrides;
+  constructor(app:App,draft:JobOverrides,private defaults:InlineDefaults,private apply:(draft:JobOverrides)=>void){super(app);this.draft={inline:{...draft.inline}};}
+  onOpen(){
+    this.titleEl.setText('Overrides for this send');this.contentEl.empty();
+    this.contentEl.createEl('p',{text:'Use default inherits your settings. Explicit choices apply to this new job only.'});
+    const base=resolveJobOptions(this.defaults).inline,enabled=resolveJobOptions(this.defaults,this.draft).inline.enabled;
+    const inline=this.draft.inline!;
+    new Setting(this.contentEl).setName('Stream replies into the editor').addDropdown(d=>{
+      d.addOption('default',`Use default — ${base.enabled?'On':'Off'}`).addOption('on','On').addOption('off','Off').setValue(inline.enabled===undefined?'default':inline.enabled?'on':'off').onChange(value=>{inline.enabled=value==='default'?undefined:value==='on';this.onOpen();});
+    });
+    new Setting(this.contentEl).setName('Intermediate agent responses').setDesc('Applies when streaming is On.').addDropdown(d=>{
+      d.addOption('default',`Use default — ${base.intermediateMode}`).addOption('remove','Remove').addOption('keep','Keep').addOption('collapse','Collapse').setValue(inline.intermediateMode??'default').setDisabled(!enabled).onChange(value=>{inline.intermediateMode=value==='default'?undefined:value as NonNullable<typeof inline.intermediateMode>;});
+    });
+    new Setting(this.contentEl).setName('Final answer format').addDropdown(d=>{
+      d.addOption('default',`Use default — ${base.finalAnswerFormat==='formatted'?'Current formatting':'Raw Markdown'}`).addOption('formatted','Current formatting').addOption('raw-markdown','Raw Markdown').setValue(inline.finalAnswerFormat??'default').setDisabled(!enabled).onChange(value=>{inline.finalAnswerFormat=value==='default'?undefined:value as NonNullable<typeof inline.finalAnswerFormat>;});
+    });
+    new Setting(this.contentEl).addButton(b=>b.setButtonText('Reset overrides').onClick(()=>{this.draft={inline:{}};this.onOpen();})).addButton(b=>b.setButtonText('Cancel').onClick(()=>this.close())).addButton(b=>b.setButtonText('Apply').setCta().onClick(()=>{this.apply(this.draft);this.close();}));
+  }
+}
+
 type Destination='default'|'new'|'existing';
 
 /** The same compact destination UI handles whole notes, selections, and typed asks. */
 class SendDestinationModal extends Modal {
   private choosing=false;
+  private overrides:JobOverrides={};
   private actions!:Setting;
   private field?:HTMLTextAreaElement;
   private projectKey?:string;
@@ -36,13 +61,21 @@ class SendDestinationModal extends Modal {
   onOpen(){
     logEvent('ui.destination.opened',{notePath:this.host.getNotePath(),steering:this.host.steering,composing:this.composing,projectKey:this.projectKey});
     this.titleEl.setText('Send to T3 Code');this.contentEl.empty();
-    const row=this.contentEl.createEl('p');
+    const row=this.contentEl.createEl('p',{cls:'send-to-t3-destination-top'});
     const projectButton=row.createEl('button',{text:this.host.getProjectName(this.projectKey),cls:'send-to-t3-note-project',attr:{'aria-label':`Change project for this send: ${this.host.getProjectName(this.projectKey)}`,title:this.host.getTargetDescription(this.projectKey)}});
     projectButton.disabled=Boolean(this.host.busy);
     projectButton.addEventListener('click',()=>{
       if(this.field)this.prompt=this.field.value;
       new ChatProjectModal(this.app,this.host.getProjectChoices(),key=>{logEvent('ui.destination.project-selected',{projectKey:key});this.projectKey=key;this.onOpen();}).open();
     });
+    const count=overrideCount(this.overrides);
+    const overridesButton=row.createEl('button',{text:count?`Overrides · ${count}`:'Overrides',attr:{'aria-label':`Overrides for this send: ${count} explicit choices`}});
+    overridesButton.disabled=Boolean(this.host.busy);
+    overridesButton.addEventListener('click',()=>{
+      if(this.field)this.prompt=this.field.value;
+      new JobOverridesModal(this.app,this.overrides,this.host.getInlineDefaults?.()??{enabled:false},draft=>{this.overrides=draft;this.onOpen();}).open();
+    });
+    if(this.host.steering)this.contentEl.createEl('p',{text:'Send to running thread keeps that response’s streaming and rendering choices. New thread uses these overrides.'});
     if(this.composing){
       this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Message for T3',placeholder:'What would you like to do?',rows:'5'}});
       this.field.style.width='100%';this.field.value=this.prompt??'';
@@ -71,10 +104,12 @@ class SendDestinationModal extends Modal {
     logEvent('ui.destination.submitted',{notePath:this.host.getNotePath(),target,projectKey:this.projectKey,steering:this.host.steering});
     this.choosing=true;this.actions.setDisabled(true);this.close();
     const prompt=this.prompt??'';
+    const resolve=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
+    const returnToDraft=()=>this.open();
     try{
-      if(target===true||target==='existing')await this.host.sendToExisting(prompt,this.projectKey);
-      else if(target==='new')await this.host.sendToNew(prompt,this.projectKey);
-      else await this.host.sendChat(prompt,this.projectKey);
+      if(target===true||target==='existing')await this.host.sendToExisting(prompt,this.projectKey,resolve,returnToDraft);
+      else if(target==='new')await this.host.sendToNew(prompt,this.projectKey,resolve);
+      else await this.host.sendChat(prompt,this.projectKey,resolve);
     }catch(error){
       if(error instanceof ProjectCreationCancelled)return;
       logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});

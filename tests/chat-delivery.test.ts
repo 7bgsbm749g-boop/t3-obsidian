@@ -62,7 +62,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     setName(text:string){this.name=text;return this;}setDesc(_text:string){return this;}setDisabled(_value:boolean){return this;}
     addToggle(callback:(toggle:any)=>void){const toggle={setValue:()=>toggle,onChange:()=>toggle};callback(toggle);return this;}
     addButton(callback:(button:any)=>void){const button:any={text:'',click:()=>{},buttonEl:{isConnected:true,focus:()=>{focusedButton=button;}},setButtonText:(text:string)=>{button.text=text;return button;},setCta:()=>button,setDisabled:()=>button,onClick:(click:()=>void)=>{button.click=click;return button;}};callback(button);this.buttons.push(button);return this;}
-    addDropdown(callback:(d:any)=>void){const d={addOption:()=>d,setValue:()=>d,setDisabled:()=>d,onChange:()=>d};callback(d);return this;}
+    addDropdown(callback:(d:any)=>void){const d:any={options:{},value:'',disabled:false,change:()=>{},addOption:(key:string,label:string)=>{d.options[key]=label;return d;},setValue:(value:string)=>{d.value=value;return d;},setDisabled:(value:boolean)=>{d.disabled=value;return d;},onChange:(fn:any)=>{d.change=fn;return d;}};(this as any).dropdown=d;callback(d);return this;}
     addText(callback:(t:any)=>void){const t={setValue:()=>t,setPlaceholder:()=>t,setDisabled:()=>t,onChange:()=>t};callback(t);return this;}
   }
   class File {extension='md';constructor(public path:string){}}
@@ -1080,19 +1080,23 @@ test('new inline responses capture the retention setting in their immutable host
   }finally{h.plugin.onunload();}
 });
 
-for(const destination of ['default','new'])test(`a synced running response accepts palette ${destination} with no local thread history`,async()=>{
+for(const streamingDefault of [false,true])for(const destination of ['default','new'])test(`a synced running response accepts palette ${destination} with streaming default ${streamingDefault} and no local thread history`,async()=>{
   const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/Steering.md',region=initialRegion(id);
   try{
     const body='**T3 · Working**\n\n> Earlier progress.\n',edit=replaceRegion(region.text,id,region.bodyHash,body)!;
     const opened=h.attachEditor(path,'Before'+region.text.slice(0,edit.from)+edit.text+region.text.slice(edit.to)+'After');
     const host={environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1',connectionId:'chat-connection'};
-    const initialMessage=webcrypto.randomUUID(),request={version:2 as const,initialOwner:webcrypto.randomUUID(),id,vaultId:h.plugin.settings.vaultId,host,notePath:path,threadId:'old-thread',messageId:initialMessage,projectId:project.id,threadEnvironmentId:'chat-env',initialHash:region.bodyHash,createdAt:'original-time'};
+    h.plugin.settings.inlineStreaming.enabled=streamingDefault;
+    const initialMessage=webcrypto.randomUUID(),request={version:2 as const,initialOwner:webcrypto.randomUUID(),id,vaultId:h.plugin.settings.vaultId,host,notePath:path,threadId:'old-thread',messageId:initialMessage,projectId:project.id,threadEnvironmentId:'chat-env',initialHash:region.bodyHash,createdAt:'original-time',intermediateMode:'collapse' as const,keepIntermediate:true,finalAnswerFormat:'raw-markdown' as const};
     h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,owner:request.initialOwner,epoch:1,revision:1,expiresAt:Date.now()+15_000,state:{requestHash:hostedRequestHash(request),accepted:true,notePath:path,status:'running',hashes:[region.bodyHash,contentHash(body)],turnId:'old-turn',prose:[{id:'old-progress',role:'assistant',text:'Earlier progress.',turnId:'old-turn',streaming:false}],updatedAt:''}}));
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Working',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running',requestedAt:'original-time'},messages:[{id:initialMessage,role:'user',createdAt:'original-time'}]}]);
     await h.plugin.openPaletteAction('Change the approach.','');
     assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Send to running thread','New thread','Existing thread…']);
+    const destinationModal=h.modals.at(-1);
+    editOverrides(h,destinationModal,{'Stream replies into the editor':'on','Intermediate agent responses':'remove','Final answer format':'formatted'});
+    if(destination==='default')editOverrides(h,destinationModal,{'Stream replies into the editor':'off'});
     if(destination==='new')h.setStreaming(true);
-    await h.modals.at(-1).choose(destination);
+    await destinationModal.choose(destination);
     if(destination==='new'){
       assert.equal(h.commands[0].type,'thread.create');
       assert.notEqual(h.commands[0].threadId,'old-thread');
@@ -1105,6 +1109,7 @@ for(const destination of ['default','new'])test(`a synced running response accep
     assert.equal((opened.value.match(/t3-inline:start:/g)??[]).length,1);
     const record=JSON.parse(h.hostFiles.get(leasePaths(host.directory,id).record)!);
     assert.equal(record.state.steering.length,1);assert.equal(record.state.steering[0].text,'Change the approach.');
+    assert.equal(record.request.intermediateMode,'collapse');assert.equal(record.request.finalAnswerFormat,'raw-markdown');
     assert.equal(record.owner,request.initialOwner,'another device can send without preempting the writer');
     const settlement=h.plugin.settings.settlementJobs[0];assert.equal(settlement.inlineJobId,id);assert.deepEqual(JSON.parse(JSON.stringify(settlement.inlineHost)),host);
   }finally{h.plugin.onunload();}
@@ -1412,6 +1417,7 @@ for(const hosted of [false,true])for(const surface of ['editor','targeted','pale
     const selected=opened.value.slice(start,end);
     opened.editor.getSelection=()=>selected;opened.editor.getCursor=(side:string)=>opened.editor.offsetToPos(side==='from'?start:end);
     const messageId=webcrypto.randomUUID(),prose=[{id:'progress',role:'assistant',turnId:'old-turn',text:'Captured claim.',streaming:false}];
+    h.plugin.settings.inlineStreaming.enabled=false;
     const manager=h.plugin.inlineChat;
     const job:any={id,path,requestId:id,bodyHash:contentHash(body),phase:'running',createdAt:'original-time',threadId:'old-thread',turnId:'old-turn',messageId,projectId:project.id,prose,connection:{transport:'direct',host:'direct',url:'https://chat.example',connectionId:'chat-connection',environmentId:'chat-env',executable:''}};
     const host={environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1',connectionId:'chat-connection'};
@@ -1453,5 +1459,129 @@ for(const hosted of [false,true])for(const surface of ['editor','targeted','pale
       assert.equal(h.commands.length,0);
       assert.equal(h.plugin.settings.folderLinks.some((link:any)=>link.folderPath==='Build'),false);
     }finally{location.close();}
+  }finally{h.plugin.onunload();}
+});
+
+function editOverrides(h:Awaited<ReturnType<typeof chatHarness>>,destination:any,choices:Record<string,string>){
+  destination.contentEl.children[0].children[1].click();
+  const modal=h.modals.at(-1);
+  for(const [name,value] of Object.entries(choices)){
+    const control=h.settingsControls.filter((setting:any)=>setting.name===name).at(-1) as any;
+    assert.ok(control?.dropdown);assert.equal(control.dropdown.disabled,false);control.dropdown.change(value);
+  }
+  h.settingsControls.at(-1).buttons.find((b:any)=>b.text==='Apply').click();
+  return modal;
+}
+
+for(const surface of ['editor','palette','hotkey','full-note'])for(const enabled of [true,false])test(`${surface} overrides streaming ${enabled?'On against default Off':'Off against default On'} without changing settings`,async()=>{
+  const h=await chatHarness();
+  try{
+    h.plugin.settings.inlineStreaming.enabled=!enabled;
+    const original=JSON.stringify(h.plugin.settings.inlineStreaming);
+    const opened=h.attachEditor('Notes/Overrides.md','Selected question\nPrivate remainder');
+    Object.assign(opened.file,{basename:'Overrides',stat:{ctime:1}});
+    opened.editor.getSelection=()=>surface==='full-note'?'':'Selected question';
+    opened.editor.getCursor=(side:string)=>opened.editor.offsetToPos(side==='from'?0:17);
+    if(surface==='editor')await h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code')!.callback();
+    else if(surface==='palette')await h.plugin.openPaletteAction('Explain.','Selected question');
+    else h.registered.find(command=>command.id==='send-or-ask').editorCheckCallback(false,opened.editor,opened.view);
+    const destination=h.modals.at(-1);
+    editOverrides(h,destination,{'Stream replies into the editor':enabled?'on':'off',...(enabled?{'Intermediate agent responses':'collapse','Final answer format':'raw-markdown'}:{})});
+    assert.equal(destination.contentEl.children[0].children[1].text,`Overrides · ${enabled?3:1}`);
+    await destination.choose('new');
+    const sent=h.commands.find(command=>command.type==='thread.turn.start');assert.ok(sent);
+    assert.equal(JSON.stringify(h.plugin.settings.inlineStreaming),original);
+    assert.match(sent.message.text,/Selected question/);
+    if(surface!=='full-note')assert.doesNotMatch(sent.message.text,/Private remainder/);
+    if(enabled){
+      assert.match(opened.value,/t3-inline:start:/);
+      const records=[...h.hostFiles].filter(([path])=>path.includes('/leases/')&&path.endsWith('.json')).map(([,bytes])=>JSON.parse(bytes));
+      assert.equal(records.length,1);assert.equal(records[0].request.intermediateMode,'collapse');assert.equal(records[0].request.finalAnswerFormat,'raw-markdown');
+    }else{assert.equal(opened.value,'Selected question\nPrivate remainder');assert.doesNotMatch(sent.message.text,/plugin will insert/);}
+    await h.plugin.openPaletteAction('Later.','');
+    assert.equal(h.modals.at(-1).contentEl.children[0].children[1].text,'Overrides','A later send starts from defaults');h.modals.at(-1).close();
+  }finally{h.plugin.onunload();}
+});
+
+test('child Cancel and reset are isolated; Off disables dependent controls without losing their drafts',async()=>{
+  const h=await chatHarness();
+  try{
+    h.attachEditor('Notes/Overrides.md','Question');await h.plugin.openPaletteAction('Explain.','');const destination=h.modals.at(-1);
+    editOverrides(h,destination,{'Intermediate agent responses':'keep','Final answer format':'raw-markdown','Stream replies into the editor':'off'});
+    destination.contentEl.children[0].children[1].click();
+    const child=h.modals.at(-1),controls=h.settingsControls.slice(-4);
+    assert.equal((controls[1] as any).dropdown.disabled,true);assert.equal((controls[2] as any).dropdown.disabled,true);
+    assert.equal((controls[1] as any).dropdown.value,'keep');assert.equal((controls[2] as any).dropdown.value,'raw-markdown');
+    controls[3].buttons.find((b:any)=>b.text==='Reset overrides').click();
+    h.settingsControls.at(-1).buttons.find((b:any)=>b.text==='Cancel').click();assert.equal(child.closed,true);
+    assert.equal(destination.contentEl.children[0].children[1].text,'Overrides · 3');
+    destination.contentEl.children[0].children[1].click();h.settingsControls.at(-1).buttons.find((b:any)=>b.text==='Reset overrides').click();h.settingsControls.at(-1).buttons.find((b:any)=>b.text==='Apply').click();
+    assert.equal(destination.contentEl.children[0].children[1].text,'Overrides');destination.close();assert.equal(h.commands.length,0);assert.equal(h.plugin.settings.pending.length,0);
+  }finally{h.plugin.onunload();}
+});
+
+test('project changes, existing-picker cancellation and safe errors preserve the draft; inheritance freezes at thread confirmation',async()=>{
+  const h=await chatHarness();
+  try{
+    h.attachEditor('Notes/Overrides.md','Question');h.plugin.settings.inlineStreaming.enabled=true;
+    h.setThreads([{id:'existing',projectId:project.id,title:'Existing',latestTurn:{state:'completed'},session:{status:'ready',activeTurnId:null}}]);
+    await h.plugin.openPaletteAction('Explain.','');const destination=h.modals.at(-1);
+    editOverrides(h,destination,{'Intermediate agent responses':'collapse'});h.plugin.settings.inlineStreaming.enabled=false;
+    destination.contentEl.children[0].children[0].click();h.modals.at(-1).onChooseItem(h.modals.at(-1).getItems().find((item:any)=>item.key==='vault:root'));
+    assert.equal(destination.contentEl.children[0].children[1].text,'Overrides · 1');
+    await destination.choose('existing');h.modals.at(-1).close();await new Promise(resolve=>setTimeout(resolve,5));assert.equal(destination.closed,false);assert.equal(h.commands.length,0);
+    h.plugin.prepareImages=async()=>{throw Error('recoverable image failure');};await destination.choose('new');assert.equal(destination.closed,false);assert.equal(destination.contentEl.children[0].children[1].text,'Overrides · 1');
+    delete h.plugin.prepareImages;
+    await destination.choose('existing');const picker=h.modals.at(-1);
+    h.plugin.settings.inlineStreaming.enabled=true;h.plugin.settings.inlineStreaming.finalAnswerFormat='raw-markdown';
+    await picker.onChooseItem(picker.getItems()[0]);
+    assert.equal(h.commands.filter(command=>command.type==='thread.create').length,0);
+    const binding=JSON.parse([...h.hostFiles].find(([path])=>path.includes('/leases/')&&path.endsWith('.json'))![1]).request;
+    assert.equal(binding.intermediateMode,'collapse');assert.equal(binding.finalAnswerFormat,'raw-markdown');
+  }finally{h.plugin.onunload();}
+});
+
+test('an overridden uncertain job replays its saved options, prompt and bindings across reload and opposite defaults',async()=>{
+  let lose=true;const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'&&lose){lose=false;throw Error('lost response');}});let restarted:any;
+  try{
+    h.attachEditor('Notes/Overrides.md','Question');h.plugin.settings.inlineStreaming.enabled=false;
+    await h.plugin.openPaletteAction('Explain.','');const destination=h.modals.at(-1);
+    editOverrides(h,destination,{'Stream replies into the editor':'on','Intermediate agent responses':'collapse','Final answer format':'raw-markdown'});await destination.choose('new');
+    assert.equal(destination.closed,true);const pending=h.plugin.settings.pending[0];assert.ok(pending);
+    assert.deepEqual(JSON.parse(JSON.stringify(pending.jobOptions)),{version:1,inline:{enabled:true,intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'}});
+    const bytes=JSON.stringify(pending),binding=JSON.stringify(pending.inlineHost);h.plugin.onunload();restarted=await h.start();
+    assert.equal(JSON.stringify(restarted.settings.pending[0]),bytes);
+    restarted.settings.inlineStreaming={enabled:false,keepIntermediate:false,intermediateMode:'remove',finalAnswerFormat:'formatted'};
+    await restarted.retry(restarted.settings.pending[0]);assert.deepEqual(h.commands[1],h.commands[2]);assert.equal(JSON.stringify(pending.inlineHost),binding);
+  }finally{restarted?.onunload();h.plugin.onunload();}
+});
+
+test('all new response mirrors inherit the resolved snapshot even after defaults change',async()=>{
+  const h=await chatHarness();
+  try{
+    const a=h.attachEditor('Notes/MirrorA.md','A'),b=h.attachEditor('Notes/MirrorB.md','B');
+    h.plugin.app.workspace.getLeavesOfType=()=>[{view:a.view},{view:b.view}];
+    const request:any={id:webcrypto.randomUUID(),title:'Mirrored',project,connection:{environmentId:'chat-env'},jobOptions:{version:1,inline:{enabled:true,intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'}}};
+    h.plugin.settings.inlineStreaming={enabled:false,keepIntermediate:false,intermediateMode:'remove',finalAnswerFormat:'formatted'};
+    await h.plugin.prepareStreamBindings(request,['Notes/MirrorA.md','Notes/MirrorB.md']);
+    assert.equal(request.inlineBindings.length,2);
+    for(const binding of request.inlineBindings){assert.equal(binding.intermediateMode,'collapse');assert.equal(binding.finalAnswerFormat,'raw-markdown');assert.equal(binding.keepIntermediate,true);}
+  }finally{h.plugin.onunload();}
+});
+
+for(const picker of ['project','existing'])test(`an override preserves the captured source and selection while the ${picker} picker changes editor state`,async()=>{
+  const h=await chatHarness();
+  try{
+    h.plugin.settings.inlineStreaming.enabled=false;
+    const opened=h.attachEditor('Notes/Original.md','Original selection\nTail');
+    opened.editor.getSelection=()=> 'Original selection';opened.editor.getCursor=(side:string)=>opened.editor.offsetToPos(side==='from'?0:18);
+    h.setThreads([{id:'existing',projectId:project.id,title:'Existing',latestTurn:{state:'completed'},session:{status:'ready',activeTurnId:null}}]);
+    await h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code')!.callback();const destination=h.modals.at(-1);
+    editOverrides(h,destination,{'Stream replies into the editor':'on'});
+    if(picker==='project')destination.contentEl.children[0].children[0].click();else await destination.choose('existing');
+    const chooser=h.modals.at(-1);h.setActiveNote('Notes/Other.md');opened.editor.getSelection=()=> 'Tail';opened.editor.getCursor=()=>opened.editor.offsetToPos(opened.value.length);
+    if(picker==='project'){chooser.onChooseItem(chooser.getItems().find((item:any)=>item.key==='vault:root'));await destination.choose('new');}else await chooser.onChooseItem(chooser.getItems()[0]);
+    const sent=h.commands.find(command=>command.type==='thread.turn.start');assert.ok(sent);assert.match(sent.message.text,/^Original selection/);assert.match(sent.message.text,/Notes\/Original.md/);assert.doesNotMatch(sent.message.text,/Other.md/);
+    assert.match(opened.value,/Original selection\n[\s\S]*t3-inline:start:[\s\S]*Tail/);
   }finally{h.plugin.onunload();}
 });
