@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {InlineLeaseAuthority,InlineLeaseClient,LEASE_MS,leasePaths,type LeaseFiles,type LeaseRecord} from '../inline-lease';
 import {hostedPaths,hostedRequestHash,type HostedInlineRequest,type HostedInlineState} from '../hosted-inline';
 import {initialRegion,completionProof} from '../inline-thread';
-import {DeviceInlineManager} from '../leased-inline';
+import {DeviceInlineManager,INLINE_SNAPSHOT_INTERVAL_MS,INLINE_SNAPSHOT_TIMEOUT_MS} from '../leased-inline';
 import {ResponseNoteLocator} from '../response-location';
 import {EventJournal,configureDiagnostics} from '../diagnostics';
 
@@ -165,11 +165,12 @@ test('closed-note fallback waits briefly; completion removes discovery entry and
   h.advance(LEASE_MS);assert.equal((await phone.command({kind:'claim',jobId:h.request.id})).ok,false);
 });
 
-function devices(independent=false){
+function devices(independent=false,stream=true){
   const h=harness(),managers:DeviceInlineManager[]=[];
   if(independent)h.request.independent=true;
-  let answer='First paragraph',complete=false;
-  const snapshot=()=>({thread:{id:h.request.threadId,projectId:h.request.projectId,messages:[
+  let answer='First paragraph',complete=false,sequence=0,reads=0;
+  let readOverride:(()=>Promise<any>)|undefined;
+  const snapshot=()=>({snapshotSequence:sequence,thread:{id:h.request.threadId,projectId:h.request.projectId,messages:[
     {id:h.request.messageId,role:'user',text:'Question',streaming:false,createdAt:h.request.createdAt},
     {id:'answer',role:'assistant',text:answer,streaming:!complete,turnId:'turn'}],activities:[],latestTurn:{turnId:'turn',state:complete?'completed':'running',requestedAt:h.request.createdAt,assistantMessageId:'answer'},session:{status:complete?'ready':'running',activeTurnId:complete?null:'turn'}}});
   const create=(actor:string)=>{
@@ -178,7 +179,7 @@ function devices(independent=false){
     const readNote=async(path:string)=>path===document.path&&document.present?document.value:extras.get(path);
     const locator=new ResponseNoteLocator(()=>[...(document.present?[document.path]:[]),...extras.keys()],readNote,h.now);
     const manager=new DeviceInlineManager(actor,h.request.vaultId,{
-      access:async()=>({origin:'https://unused.example',api:async path=>{if(path.includes('websocket-ticket'))throw Error('REST fallback fixture');return snapshot();}}),
+      access:async()=>({origin:'https://unused.example',api:async path=>{if(path.includes('websocket-ticket'))throw Error('REST fallback fixture');reads++;return readOverride?readOverride():snapshot();}}),
       isOpen:()=>true,isSaved:async path=>path===document.path&&document.saved,readNote,
       locateNote:(id,path)=>locator.locate(id,path),noteChanged:path=>locator.changed(path),noteRenamed:(before,after)=>locator.renamed(before,after),
       updateNote:async(path,change,allowed)=>{assert.equal(allowed(),true);if(path!==document.path||!document.present)return;const next=change(document.value);if(next!==document.value){await document.hold?.();if(!allowed())throw Error('Expired write');if(path!==document.path)throw Error('Note moved during write');document.writes++;document.value=next;}return next;},
@@ -186,8 +187,74 @@ function devices(independent=false){
     managers.push(manager);return {document,manager,extras};
   };
   const drain=async(...active:DeviceInlineManager[])=>{for(let n=0;n<32;n++){for(const manager of active)manager.tick();await new Promise(resolve=>setImmediate(resolve));}};
-  return {...h,create,drain,answer:(text:string,done=false)=>{answer=text;complete=done;},dispose:()=>managers.forEach(manager=>manager.dispose())};
+  const deliver=(value:any)=>{for(const manager of managers)for(const runtime of (manager as any).jobs.values())(manager as any).item(runtime,{kind:'snapshot',snapshot:value});};
+  return {...h,create,drain,snapshot,deliver,get reads(){return reads;},override:(read?:()=>Promise<any>)=>{readOverride=read;},answer:(text:string,done=false)=>{
+    answer=text;complete=done;sequence++;
+    if(stream)deliver(snapshot());
+  },dispose:()=>managers.forEach(manager=>manager.dispose())};
 }
+
+test('an owned stale running cache recovers final output without stream events, reconnects or takeover',async()=>{
+  const h=devices(true,false),device=h.create(h.actor);
+  try{
+    await device.manager.register(h.request);await h.drain(device.manager);
+    const epoch=h.record().epoch,reads=h.reads,writes=device.document.writes;
+    await h.drain(device.manager);assert.equal(h.reads,reads,'The writer does not poll on every rendering tick');assert.equal(device.document.writes,writes);
+    h.answer('Recovered full final.',true);h.advance(INLINE_SNAPSHOT_INTERVAL_MS-1);await h.drain(device.manager);
+    assert.equal(h.record().state?.status,'running');assert.match(device.document.value,/Working/);
+    h.advance(1);await h.drain(device.manager);
+    assert.equal(h.record().state?.status,'complete');assert.equal(h.record().epoch,epoch);assert.equal(h.record().owner,h.actor);
+    assert.match(device.document.value,/Recovered full final/);assert.match(device.document.value,/Outside before/);assert.doesNotMatch(device.document.value,/Working|send-to-t3-inline-spinner|<!-- t3-(?:inline|response):/);
+  }finally{h.dispose();}
+});
+
+test('failed freshness reads back off while lease renewal continues and then recover',async()=>{
+  const h=devices(false,false),device=h.create(h.actor);
+  try{
+    await device.manager.register(h.request);await h.drain(device.manager);const epoch=h.record().epoch;
+    h.override(async()=>{throw Error('Temporary T3 outage');});h.advance(INLINE_SNAPSHOT_INTERVAL_MS);await h.drain(device.manager);
+    const reads=h.reads;h.advance(4999);await h.drain(device.manager);assert.equal(h.reads,reads);assert.equal(h.record().state?.status,'running');assert.equal(h.record().epoch,epoch);
+    h.override();h.answer('Recovered after outage',true);h.advance(1);await h.drain(device.manager);
+    assert.equal(h.record().state?.status,'complete');assert.match(device.document.value,/Recovered after outage/);
+  }finally{h.dispose();}
+});
+
+test('hung freshness reads time out on coordinator ticks and late snapshots cannot roll back recovery',async()=>{
+  const h=devices(false,false),device=h.create(h.actor);
+  try{
+    await device.manager.register(h.request);await h.drain(device.manager);
+    const stale=h.snapshot();let release!:(snapshot:any)=>void;
+    h.override(()=>new Promise(resolve=>{release=resolve;}));h.advance(INLINE_SNAPSHOT_INTERVAL_MS);await h.drain(device.manager);assert.ok(release);
+    for(let elapsed=0;elapsed<INLINE_SNAPSHOT_TIMEOUT_MS;elapsed+=3000){h.advance(3000);await h.drain(device.manager);}
+    assert.equal(h.record().epoch,1,'Timeout does not discard a healthy owner');
+    h.override();h.answer('Final after hung request',true);h.advance(5000);await h.drain(device.manager);
+    assert.equal(h.record().state?.status,'complete');const final=device.document.value;
+    release(stale);await h.drain(device.manager);assert.equal(device.document.value,final);
+  }finally{h.dispose();}
+});
+
+test('a slow canonical response cannot overwrite a newer stream snapshot',async()=>{
+  const h=devices(false,false),device=h.create(h.actor);
+  try{
+    await device.manager.register(h.request);await h.drain(device.manager);const stale=h.snapshot();let release!:(value:any)=>void;
+    h.override(()=>new Promise(resolve=>{release=resolve;}));h.advance(INLINE_SNAPSHOT_INTERVAL_MS);await h.drain(device.manager);
+    h.answer('Newer stream progress');h.deliver(h.snapshot());h.advance(200);await h.drain(device.manager);
+    release(stale);await h.drain(device.manager);
+    assert.match(device.document.value,/Newer stream progress/);assert.doesNotMatch(device.document.value,/First paragraph/);assert.equal(h.record().state?.status,'running');
+  }finally{h.dispose();}
+});
+
+test('a canonical read from an expired ownership epoch cannot finalize the note',async()=>{
+  const h=devices(false,false),device=h.create(h.actor);
+  try{
+    await device.manager.register(h.request);await h.drain(device.manager);let release!:(value:any)=>void;
+    h.override(()=>new Promise(resolve=>{release=resolve;}));h.advance(INLINE_SNAPSHOT_INTERVAL_MS);await h.drain(device.manager);
+    const document=device.document.value;h.answer('Final from old request',true);
+    h.advance(LEASE_MS+1);const other=h.client(randomUUID());assert.equal((await other.command({kind:'claim',jobId:h.request.id,epoch:1})).ok,true);
+    release(h.snapshot());await h.drain(device.manager);
+    assert.equal(device.document.value,document);assert.equal(h.record().epoch,2);assert.equal(h.record().state?.status,'running');
+  }finally{h.dispose();}
+});
 
 for(const observed of [true,false])test(`stream follows ${observed?'observed folder moves':'a missed rename with old-path reuse'} without changing its request or ownership`,async()=>{
   const h=devices(true),phone=h.create(h.actor);

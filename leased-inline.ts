@@ -5,6 +5,10 @@ import {applyThreadItem,hasCompletionProof,hasResponseMarkers,regionBody,type In
 import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {ReplyReference} from './reply-assets';
 import type {SteeringInput} from './inline-steering';
+import {logFailure} from './diagnostics';
+
+export const INLINE_SNAPSHOT_INTERVAL_MS=10_000;
+export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
 
 export interface DeviceInlineIO {
   access(environmentId:string):Promise<ThreadAccess>;
@@ -18,7 +22,8 @@ export interface DeviceInlineIO {
   updateNote(path:string,change:(current:string)=>string,allowed:()=>boolean):Promise<string|undefined>;
   importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
-type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;nextTick:number;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void}};
+type SnapshotRefresh={epoch:number;startedAt:number;work:Promise<InlineThreadState|undefined>;cancel(error:Error):void};
+type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void}};
 type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;close():void;discovery?:Promise<void>;lastDiscovery:number};
 const hostKey=(target:InlineHostTarget)=>JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);
 const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...state,updatedAt:''}):'';
@@ -103,7 +108,7 @@ export class DeviceInlineManager {
     if(old){if(record.epoch>old.record.epoch||record.epoch===old.record.epoch&&record.revision>=old.record.revision){old.record=record;if(record.stopRequestedAt)old.writer.requestStop(record.request.id);}return;}
     if(terminalLease(record))return;
     const runtime={} as Runtime;
-    Object.assign(runtime,{record,host,lastHeartbeat:-Infinity,nextTick:0,sequence:-1});
+    Object.assign(runtime,{record,host,lastHeartbeat:-Infinity,nextTick:0,nextSnapshot:0,snapshotFailures:0,sequence:-1});
     const paths=hostedPaths(host.target.directory,record.request.id);
     let stopping=false;
     const allowed=()=>!this.stopped&&(!runtime.record.stopRequestedAt||stopping)&&runtime.writeEpoch===runtime.record.epoch&&runtime.record.owner===this.actor&&host.client.valid(record.request.id,runtime.record.epoch);
@@ -138,11 +143,8 @@ export class DeviceInlineManager {
       },
       access:environmentId=>this.access(environmentId),
       threadState:async(request,access,refresh)=>{
-        if(!refresh)return runtime.state;
-        const state=runtime.record.state;
-        const snapshot=await readInlineSnapshot(access,request.threadId,request.projectId,{messageIds:[state?.pendingMessageId??state?.messageId??request.messageId],turnIds:state?.turnIds??(state?.turnId?[state.turnId]:[])});
-        if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
-        return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+        if(!refresh&&runtime.state)return runtime.state;
+        return this.refreshSnapshot(runtime,access);
       },
       updateNote:async(path,change)=>{
         if(this.io.locateNote&&await this.io.locateNote(record.request.id,path)!==path)throw Error('The response note moved during the update; retrying.');
@@ -153,18 +155,52 @@ export class DeviceInlineManager {
     this.jobs.set(record.request.id,runtime);
   }
   private reply(runtime:Runtime,reply:LeaseReply){if(reply.record)this.receiveRecord(runtime.host,reply.record);}
+  private owns(runtime:Runtime){return !this.stopped&&!runtime.record.stopRequestedAt&&runtime.record.owner===this.actor&&runtime.host.client.valid(runtime.record.request.id,runtime.record.epoch);}
+  /** Driven by the same desktop tick as lease renewal, independently of the
+   * stream's browser polling/reconnect timers and cached running/complete phase.
+   * The tick also bounds a hung read; late results cannot cross ownership epochs. */
+  private refreshSnapshot(runtime:Runtime,access?:ThreadAccess):Promise<InlineThreadState|undefined>{
+    if(!this.owns(runtime))return Promise.resolve(undefined);
+    if(runtime.refresh?.epoch===runtime.record.epoch)return runtime.refresh.work;
+    if(runtime.snapshotFailures&&this.monotonic()<runtime.nextSnapshot)return Promise.reject(Error('Waiting to retry the T3 response freshness check.'));
+    runtime.refresh?.cancel(Error('Response ownership changed.'));
+    const epoch=runtime.record.epoch,request=runtime.record.request;
+    let resolve!:(state:InlineThreadState|undefined)=>void,reject!:(error:Error)=>void;
+    const work=new Promise<InlineThreadState|undefined>((done,fail)=>{resolve=done;reject=fail;});
+    const refresh:SnapshotRefresh={epoch,startedAt:this.monotonic(),work,cancel:error=>{
+      if(runtime.refresh!==refresh)return;
+      runtime.refresh=undefined;
+      runtime.nextSnapshot=this.monotonic()+Math.min(30_000,5000*2**Math.min(runtime.snapshotFailures++,3));
+      reject(error);
+    }};
+    runtime.refresh=refresh;runtime.nextSnapshot=this.monotonic()+INLINE_SNAPSHOT_INTERVAL_MS;
+    void (async()=>{
+      const ready=access??await this.access(request.threadEnvironmentId),state=runtime.record.state;
+      const snapshot=await readInlineSnapshot(ready,request.threadId,request.projectId,{messageIds:[state?.pendingMessageId??state?.messageId??request.messageId],turnIds:state?.turnIds??(state?.turnId?[state.turnId]:[])});
+      if(runtime.refresh!==refresh)return;
+      if(!this.owns(runtime)||runtime.record.epoch!==epoch){refresh.cancel(Error('Response ownership changed.'));return;}
+      this.item(runtime,{kind:'snapshot',snapshot});
+      runtime.refresh=undefined;runtime.snapshotFailures=0;runtime.nextSnapshot=this.monotonic()+INLINE_SNAPSHOT_INTERVAL_MS;
+      runtime.nextTick=0;resolve(runtime.state);this.tick();
+    })().catch(error=>refresh.cancel(error instanceof Error?error:Error(String(error))));
+    return work;
+  }
   tick(){
     if(this.stopped)return;
     for(const runtime of this.jobs.values()){
       const {record,host}=runtime,id=record.request.id;
-      if(terminalLease(record)){runtime.monitor?.stop();runtime.writer.stop();this.jobs.delete(id);continue;}
+      if(terminalLease(record)){runtime.refresh?.cancel(Error('Response completed.'));runtime.monitor?.stop();runtime.writer.stop();this.jobs.delete(id);continue;}
       const owns=record.owner===this.actor&&host.client.valid(id,record.epoch);
       if(!runtime.heartbeat&&this.now()-runtime.lastHeartbeat>=HEARTBEAT_MS){
         runtime.lastHeartbeat=this.now();
         const work=this.maintain(runtime);runtime.heartbeat=work;void work.finally(()=>{runtime.heartbeat=undefined;}).catch(()=>{});
       }
-      if(!owns){runtime.monitor?.stop();runtime.monitor=undefined;runtime.state=undefined;runtime.sequence=-1;continue;}
-      if(record.stopRequestedAt){runtime.monitor?.stop();runtime.monitor=undefined;runtime.writer.requestStop(id);}
+      if(!owns){runtime.refresh?.cancel(Error('Response ownership changed.'));runtime.monitor?.stop();runtime.monitor=undefined;runtime.state=undefined;runtime.sequence=-1;runtime.nextSnapshot=0;continue;}
+      if(record.stopRequestedAt){runtime.refresh?.cancel(Error('Response stopped.'));runtime.monitor?.stop();runtime.monitor=undefined;runtime.writer.requestStop(id);}
+      if(runtime.refresh&&this.monotonic()-runtime.refresh.startedAt>=INLINE_SNAPSHOT_TIMEOUT_MS)runtime.refresh.cancel(Error('T3 response freshness check timed out.'));
+      if(!record.stopRequestedAt&&!runtime.refresh&&this.monotonic()>=runtime.nextSnapshot){
+        void this.refreshSnapshot(runtime).catch(error=>{if(this.owns(runtime))logFailure('stream.freshness.failed',error,{jobId:id,threadId:record.request.threadId});});
+      }
       if(!record.stopRequestedAt&&!runtime.monitor)runtime.monitor=watchThread(record.request.threadId,async()=>{
         // A stream owns its own access lifetime. Its reconnect must not revoke
         // the independently cached access used for note checkpoints/assets.
@@ -212,13 +248,14 @@ export class DeviceInlineManager {
     if(item.kind==='event'&&Number.isSafeInteger(item.event?.sequence)&&item.event.sequence<=runtime.sequence)return;
     const applied=applyThreadItem(runtime.state??{messages:[],activities:[]},item);
     runtime.state=applied.state;if(applied.sequence!==undefined)runtime.sequence=applied.sequence;
+    if(item.kind==='snapshot'){runtime.nextSnapshot=this.monotonic()+INLINE_SNAPSHOT_INTERVAL_MS;runtime.snapshotFailures=0;}
   }
   changed(path:string){this.io.noteChanged?.(path);}
   deleted(path:string){this.io.noteDeleted?.(path);}
   renamed(before:string,after:string){this.io.noteRenamed?.(before,after);for(const runtime of this.jobs.values()){runtime.writer.renamed(before,after);runtime.nextTick=0;}this.tick();}
   dispose(){
     this.stopped=true;
-    for(const runtime of this.jobs.values()){runtime.monitor?.stop();runtime.writer.stop();}
+    for(const runtime of this.jobs.values()){runtime.refresh?.cancel(Error('Response writer stopped.'));runtime.monitor?.stop();runtime.writer.stop();}
     for(const host of this.hosts.values())host.close();
     for(const access of this.accesses.values())void access.value.then(value=>value.close?.()).catch(()=>{});
     this.jobs.clear();this.hosts.clear();this.accesses.clear();
