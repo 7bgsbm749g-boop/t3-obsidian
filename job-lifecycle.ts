@@ -20,7 +20,6 @@ export function validateJob(value:any):JobWatch {
 /** Transitions retain canonical activity IDs. A newer thread session cannot
  * complete, fail, or unblock an unrelated response. Outages produce no event. */
 export function jobEvents(job:JobWatch,state:InlineThreadState,observation:JobObservation):JobEvent[] {
-  if(!state.messages.some(m=>m.role==='user'&&m.id===job.messageId))return [];
   const matched=turnForMessage(state,job.messageId);
   if(matched&&job.turnId&&matched!==job.turnId)throw Error('The supplied turn does not belong to the job’s originating message.');
   const turnId=job.turnId??observation.turnId??matched;
@@ -32,7 +31,10 @@ export function jobEvents(job:JobWatch,state:InlineThreadState,observation:JobOb
     const terminal=['completed','failed','interrupted','cancelled'].includes(status);
     events.push({kind:'job',path:job.jobId,id,at,job:{...job,...(turnId?{turnId}:{})},state:status,terminal,execution:'t3',delivery:'independent',productDelivery:'unverified',...(requestId?{requestId}:{}),...(detail?{detail}:{})});
   };
-  if(!turnId||observation.terminal)return events;
+  if(observation.terminal)return events;
+  const startFailure=state.activities.find(a=>a.kind==='provider.turn.start.failed'&&a.payload?.requestId===job.messageId);
+  if(startFailure){emit('failed',startFailure.id,startFailure.createdAt??'',job.messageId,String(startFailure.payload?.detail??startFailure.summary));return events;}
+  if(!turnId||!state.messages.some(m=>m.role==='user'&&m.id===job.messageId))return events;
   const activities=state.activities.filter(a=>a.turnId===turnId);
   for(const activity of activities){
     const requestId=activity.payload?.requestId;

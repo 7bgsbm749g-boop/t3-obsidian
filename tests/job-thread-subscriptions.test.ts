@@ -94,3 +94,8 @@ test('registration validates explicit opt-in, exact source and destinations; ins
   assert.throws(()=>jobEvents({...job,turnId:'newer'},state,{seen:[]}),/does not belong/);
   const cancelled={...original,latestTurn:{...original.latestTurn!,state:'cancelled'}};assert.equal(jobEvents(job,cancelled,{seen:[]}).at(-1)?.state,'cancelled');
 });
+
+test('a provider start failure identifies the exact message before a turn ID exists and ignores unrelated failures',()=>{
+ const state:InlineThreadState={messages:[],activities:[{id:'failed-start',kind:'provider.turn.start.failed',summary:'Provider unavailable',turnId:null,payload:{requestId:job.messageId,detail:'Could not start'},createdAt:'2026-10-02T12:00:00Z'}],historyComplete:true};
+ const events=jobEvents(job,state,{seen:[]});assert.equal(events[0].state,'failed');assert.equal(events[0].job.turnId,undefined);assert.equal(events[0].requestId,job.messageId);assert.equal(jobEvents({...job,messageId:randomUUID()},state,{seen:[]}).length,0);assert.equal(jobEvents(job,state,{seen:events.map(e=>e.id)}).length,0);
+});

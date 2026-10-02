@@ -394,7 +394,8 @@ orchestrator's `--thread-id`, `--project-id`, and `--environment-id`, plus
 `--job-thread-id`, `--job-project-id`, and `--job-environment-id`. Optionally
 supply a verified `--turn-id`; it is never a dispatch command ID. Register
 immediately after the send acknowledgement; fast completed replies are caught
-up from canonical history. Several jobs may use the same thread.
+up from canonical history. Provider start failures correlate by the exact
+original message even before a turn ID exists. Several jobs may use the same thread.
 
 Notifications identify the job, original request/message, actual turn when
 known, project, environment, blocking request and stable event ID. Approval
