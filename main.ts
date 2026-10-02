@@ -1,15 +1,14 @@
 import {editorStream} from './editor-stream';
 import {validateNoteCommand,isEventCommand,type NoteCommand,type NoteCommandResult} from './note-command';
 import {isFolderCommand,executeFolderCommand,type FolderCommand} from './folder-command';
-import {EventJournal,configureDiagnostics,logEvent,logFailure} from './diagnostics';
-import {SyncedEventLogs,isLogPath} from './synced-event-logs';
-import {instrumentOperations} from './diagnostic-operations';
+import {configureDiagnostics,logEvent,logFailure,type EventJournal} from './diagnostics';
+import {clearVaultDiagnostics} from './disabled-diagnostics';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from './cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from './native-account';
 import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from './direct';
 import { App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, parseYaml } from 'obsidian';
 import { Buffer } from 'buffer';
-import { deviceState } from './device-state';
+import { deviceState,clearDeviceDiagnostics } from './device-state';
 import { downloadImage,nativeAccountFetch } from './network';
 import { collectImages, imageReferenceDefinitions, MAX_IMAGE_BYTES } from './images';
 import { applyOrchestration, OrchestrationSettings } from './orchestration';
@@ -126,15 +125,14 @@ export default class SendToT3 extends Plugin {
     this.settings.folderLinkChanges=this.folderLinkReplica;
     this.settings.folderLinks=applyFolderLinkChanges(this.settings.folderLinks,this.folderLinkReplica);
     const restoreFolderLinks=JSON.stringify(loadFolderLinks(data))!==JSON.stringify(this.settings.folderLinks)||JSON.stringify(loadFolderLinkChanges(data?.folderLinkChanges))!==JSON.stringify(this.folderLinkReplica);
-    const diagnosticContext={deviceId:this.deviceId,vaultId:this.settings.vaultId,pluginVersion:this.manifest?.version??'unknown',platform:Platform.isMobile?'mobile':'desktop'};
+    // Logging is disabled for the performance isolation trial. Do not create
+    // a journal, operation wrappers, diagnostic listeners or flush timers.
+    configureDiagnostics();
+    try{await clearDeviceDiagnostics(this.settings.vaultId);}catch(error){new Notice(message(error));}
     const adapter=this.app.vault?.adapter;
-    const syncedLogs=adapter&&typeof adapter.mkdir==='function'&&typeof adapter.write==='function'?new SyncedEventLogs(adapter,this.deviceId,()=>this.app.vault.getMarkdownFiles().map(file=>file.path),()=>Date.now(),this.app.vault.configDir||'.obsidian'):undefined;
-    this.diagnostics=new EventJournal({id:randomId,context:diagnosticContext,load:()=>deviceState(`diagnostics:${this.settings.vaultId}:${this.deviceId}`),save:state=>deviceState(`diagnostics:${this.settings.vaultId}:${this.deviceId}`,state),...(syncedLogs?{publish:(events:import('./diagnostics').DiagnosticEvent[])=>syncedLogs.publish(events),readSynced:()=>syncedLogs.read()}:{})});
-    await this.diagnostics.load();configureDiagnostics(this.diagnostics);
-    if(syncedLogs)void this.diagnostics.flush(true).catch(()=>{});
-    logEvent('plugin.loaded',diagnosticContext);
-    this.register?.(instrumentOperations(this,['sendChat','send','dispatch','sendInlineChat','sendInlineSteering','continueInline','stopHostedInline','openEditorChat','openPaletteAction','openQuestion','save','scan','refreshMachines','pairConnection','startEmailSignIn','finishEmailSignIn','signOutCloud','saveFolderLink','linkFolder','createFolderProject','checkExternalSettings']));
-    if(typeof window!=='undefined'&&typeof this.registerInterval==='function')this.registerInlineInterval(()=>{void this.diagnostics?.tick().catch(()=>{});},2000);
+    if(adapter&&typeof adapter.exists==='function'&&typeof adapter.remove==='function'){
+      try{await clearVaultDiagnostics(adapter,this.app.vault.configDir||'.obsidian');}catch(error){new Notice(`Could not clear plugin logs: ${message(error)}`);}
+    }
     this.addCommand({id:'export-diagnostics',name:'Export plugin diagnostics…',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
     this.addCommand({id:'send-or-ask',name:'Send to T3 Code',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;
@@ -142,18 +140,6 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view}).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
       return true;
     }});
-    if(typeof document!=='undefined'&&typeof document.addEventListener==='function'&&typeof this.registerDomEvent==='function'){
-      this.registerDomEvent(document,'visibilitychange',()=>{logEvent('app.visibility',{state:document.visibilityState});void this.diagnostics?.flush(true).catch(()=>{});});
-      this.registerDomEvent(window,'online',()=>logEvent('network.online'));
-      this.registerDomEvent(window,'offline',()=>logEvent('network.offline',{},'warning'));
-      this.registerDomEvent(window,'unhandledrejection',event=>{const error=event.reason;if(error instanceof Error&&/send-to-t3-code/.test(error.stack??''))logFailure('plugin.unhandled-rejection',error);});
-      this.registerDomEvent(window,'error',event=>{if(/send-to-t3-code/.test(event.error?.stack??event.filename??''))logFailure('plugin.uncaught-error',event.error??new Error(event.message));});
-    }
-    if(typeof this.app.vault?.on==='function')for(const name of ['create','modify','delete','rename'] as const)this.registerEvent(this.app.vault.on(name as any,(file:TAbstractFile,oldPath?:string)=>{
-      if(!file?.path||isLogPath(file.path)||file.path.startsWith(`${this.app.vault.configDir}/`))return;
-      logEvent(`vault.${name}`,{notePath:file.path,oldPath,size:file instanceof TFile?file.stat.size:undefined,mtime:file instanceof TFile?file.stat.mtime:undefined,source:'observed; origin unknown'});
-    }));
-    this.registerEvent(this.app.workspace.on('file-open',file=>logEvent('editor.file-open',{notePath:file?.path})));
     let migratedNoteThreads=false;
     for(const job of this.settings.completionJobs){
       if(this.noteThread(job.notePath)||typeof this.app.vault?.getAbstractFileByPath!=='function'||!(this.app.vault.getAbstractFileByPath(job.notePath) instanceof TFile))continue;
@@ -1127,12 +1113,9 @@ export default class SendToT3 extends Plugin {
     finally{this.busy=false;}
   }
   async exportDiagnostics(){
-    if(!this.diagnostics)throw Error('Diagnostics are still starting.');
-    await this.diagnostics.flush();
-    const blob=new Blob([await this.diagnostics.exportSynced()],{type:'application/json'}),url=URL.createObjectURL(blob);
-    const link=document.createElement('a');link.href=url;link.download=`t3-diagnostics-${this.deviceId}-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),30_000);
-    new Notice('Exported plugin diagnostics from this device and synced devices. Official Sync logs can be attached separately.');
+    throw Error('Plugin logging is disabled for the performance test. Existing logs have been cleared.');
   }
+
   projects(){return this.mode==='direct'?this.settings.directProjects:this.settings.projects;}
   selected(){return this.mode==='direct'?this.settings.directSelected:this.settings.selected;}
   async select(project:Project,enabled:boolean){const key=projectKey(project);const selected=this.selected().filter(id=>id!==key);if(enabled)selected.push(key);if(this.mode==='direct')this.settings.directSelected=selected;else this.settings.selected=selected;await this.save();}
@@ -1509,7 +1492,7 @@ export default class SendToT3 extends Plugin {
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
     }catch(error){logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});throw error;}
   }
-  onunload(){logEvent('plugin.unloading');configureDiagnostics();void this.diagnostics?.close().catch(()=>{});this.stopped=true;this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){configureDiagnostics();this.stopped=true;this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;

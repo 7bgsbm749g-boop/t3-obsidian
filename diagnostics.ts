@@ -17,7 +17,7 @@ function clean(value:string){return value.replace(/(?:https?|wss?):\/\/[^\s)"']+
 let active:EventJournal|undefined;
 export function configureDiagnostics(journal?:EventJournal){active=journal;}
 export function logEvent(event:string,fields:Record<string,unknown>={},level:LogLevel='info'){try{active?.record(event,fields,level);}catch{/* Logging must never break the observed operation. */}}
-export function logFailure(event:string,error:unknown,fields:Record<string,unknown>={}){logEvent(event,{...fields,error},'error');}
+export function logFailure(event:string,error:unknown,fields:Record<string,unknown>={}){if(active)logEvent(event,{...fields,error},'error');}
 export class EventJournal {
   private state:DiagnosticState={schema:1,events:[]};
   private sequence=0;private sessionId:string;private dirty=false;private work=Promise.resolve();private closed=false;private bytes=0;private publishAt=0;private publishedDay='';

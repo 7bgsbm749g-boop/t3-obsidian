@@ -169,27 +169,20 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },vaultAccesses:()=>vaultAccesses};
 }
 
-test('mobile logging without subscriptions persists a failed send, original-ID retry and reload',async()=>{
+test('disabled logging leaves failed-send recovery and original-ID retries intact across reload',async()=>{
   let lose=true;
   const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'&&lose){lose=false;throw Error('lost reply');}});
   let plugin=h.plugin;
   try{
-    assert.equal(plugin.eventSubscriptions,undefined);
+    assert.equal(plugin.diagnostics,undefined);
     await assert.rejects(plugin.sendChat('Private diagnostic regression prompt'),/Unconfirmed requests/);
     const request=plugin.settings.pending[0];assert.ok(request);
-    await plugin.diagnostics.flush();
-    let events=JSON.parse(plugin.diagnostics.export()).events;
-    assert.ok(events.some((e:any)=>e.event==='plugin.loaded'&&e.fields.platform==='mobile'));
-    assert.ok(events.some((e:any)=>e.event==='request.saved'&&e.fields.requestId===request.id));
-    assert.ok(events.some((e:any)=>e.event==='request.dispatch.failed'&&e.fields.requestId===request.id));
-    await plugin.retry(request);assert.equal(plugin.settings.pending.length,0);
-    events=JSON.parse(plugin.diagnostics.export()).events;
-    for(const event of ['request.retry.started','request.retry.completed','request.dispatch.acknowledged'])assert.ok(events.some((e:any)=>e.event===event&&e.fields.requestId===request.id),event);
-    assert.doesNotMatch(JSON.stringify(events),/Private diagnostic regression prompt|dummy-chat-session/);
-    plugin.onunload();await plugin.diagnostics.flush();plugin=await h.start();
-    events=JSON.parse(plugin.diagnostics.export()).events;
-    assert.ok(events.some((e:any)=>e.event==='request.retry.completed'&&e.fields.requestId===request.id));
-    assert.ok(events.some((e:any)=>e.event==='plugin.unloading'));
+    plugin.onunload();plugin=await h.start();
+    assert.equal(plugin.diagnostics,undefined);
+    assert.equal(plugin.settings.pending[0].id,request.id);
+    await plugin.retry(plugin.settings.pending[0]);assert.equal(plugin.settings.pending.length,0);
+    assert.equal(h.commands.filter(c=>c.type==='thread.turn.start').at(-1).commandId,h.commands.find(c=>c.type==='thread.turn.start').commandId);
+    await assert.rejects(plugin.exportDiagnostics(),/logging is disabled/);
   }finally{plugin.onunload();}
 });
 
@@ -1330,10 +1323,9 @@ test('mobile project creation uses the chosen external location and reuses its p
 });
 
 
-test('plugin errors only log and never create diagnostic threads',async()=>{
+test('disabled diagnostics create no journal or diagnostic threads',async()=>{
   const h=await chatHarness();try{
-    h.plugin.diagnostics.record('request.dispatch.failed',{error:Error('bad')},'error');
-    await h.plugin.diagnostics.tick();await h.plugin.diagnostics.tick();
+    assert.equal(h.plugin.diagnostics,undefined);
     assert.equal(h.commands.length,0);assert.equal(h.plugin.settings.pending.length,0);
     assert.equal(h.registered.some(command=>command.id==='report-plugin-problem'),false);
     assert.equal(h.plugin.sendDiagnosticIncident,undefined);assert.equal(h.plugin.diagnosticPreferences,undefined);

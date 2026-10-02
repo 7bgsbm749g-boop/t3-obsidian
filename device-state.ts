@@ -16,3 +16,20 @@ export async function deviceState(key:string, value?:unknown):Promise<any> {
     });
   }finally{db.close();}
 }
+
+/** Remove diagnostic buffers only; credentials, requests and other vaults survive. */
+export async function clearDeviceDiagnostics(vaultId:string):Promise<void> {
+  const db=await openStateDatabase();
+  try{
+    await new Promise<void>((resolve,reject)=>{
+      const transaction=db.transaction('devices','readwrite');
+      const request=transaction.objectStore('devices').openCursor();
+      request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;
+        if(typeof cursor.key==='string'&&cursor.key.startsWith(`diagnostics:${vaultId}:`))cursor.delete();
+        cursor.continue();
+      };
+      transaction.oncomplete=()=>resolve();
+      transaction.onabort=transaction.onerror=()=>reject(new Error('Cannot clear local plugin diagnostics.'));
+    });
+  }finally{db.close();}
+}
