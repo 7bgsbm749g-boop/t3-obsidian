@@ -291,7 +291,17 @@ function quoteResponse(text:string):string {
 export function inlineTurnMessages(state:InlineThreadState,turnId:string,keepIntermediate=false):InlineMessage[] {
   const messages=state.messages.filter(m=>m.turnId===turnId&&m.role==='assistant');
   const finalId=state.latestTurn?.turnId===turnId?state.latestTurn.assistantMessageId:state.checkpoints?.find(c=>c.turnId===turnId&&c.checkpointRef?.startsWith('refs/t3/checkpoints/'))?.assistantMessageId??state.turns?.[turnId]?.assistantMessageId;
-  const final=messages.find(m=>m.id===finalId)??messages.at(-1);
+  let final=messages.find(m=>m.id===finalId)??messages.at(-1);
+  // Some providers seal a checkpoint against the last commentary paragraph
+  // just before delivering final prose. Arrival order cannot repair that ID:
+  // use only finalized messages created strictly later and before completion.
+  const turn=state.latestTurn?.turnId===turnId?state.latestTurn:state.turns?.[turnId];
+  const completed=Date.parse(turn?.completedAt??state.checkpoints?.find(c=>c.turnId===turnId&&c.status==='ready')?.completedAt??'');
+  let latest=Date.parse(final?.createdAt??'');
+  if(Number.isFinite(completed)&&Number.isFinite(latest))for(const message of messages){
+    const created=Date.parse(message.createdAt??'');
+    if(!message.streaming&&created>latest&&created<=completed){final=message;latest=created;}
+  }
   return keepIntermediate?messages:final?[final]:[];
 }
 

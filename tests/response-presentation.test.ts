@@ -34,6 +34,24 @@ test('default-closed fold bounds nested headings, tables, fences and out-of-orde
   assert.equal(text.split('Final visible answer.').length-1,1);
 });
 
+test('a stale commentary checkpoint cannot hide newer final prose created before completion',()=>{
+  const messages=[
+    {id:'commentary',role:'assistant',turnId:'turn',text:'AFTER TOOL',streaming:false,createdAt:'2026-10-02T10:03:16.200Z'},
+    {id:'final',role:'assistant',turnId:'turn',text:'FINAL ANSWER',streaming:false,createdAt:'2026-10-02T10:03:16.900Z'},
+    {id:'recovered',role:'assistant',turnId:'turn',text:'EARLIER RECOVERED PROGRESS',streaming:false,createdAt:'2026-10-02T10:00:10Z'},
+  ];
+  const snapshot={...state,messages,latestTurn:{...state.latestTurn!,assistantMessageId:'commentary'}};
+  const text=render(snapshot),ast=unified().use(remarkParse).parse(text);
+  assert.match(text,/\n\n> FINAL ANSWER\n/);
+  for(const node of ast.children.filter(n=>n.type==='blockquote')){
+    const block=text.slice(node.position!.start.offset!,node.position!.end.offset!);
+    if(block.startsWith('> [!t3-progress]-'))assert.doesNotMatch(block,/FINAL ANSWER/);
+  }
+  assert.equal(renderInlineTurn(snapshot,'turn','thread','complete','remove'),'> FINAL ANSWER\n');
+  const afterCompletion={...snapshot,messages:[...messages,{...messages[1],id:'late',text:'LATE UNVERIFIED PROGRESS',createdAt:'2026-10-02T10:04:00Z'}]};
+  assert.equal(renderInlineTurn(afterCompletion,'turn','thread','complete','remove'),'> FINAL ANSWER\n');
+});
+
 test('steering quotes stay outside folds and final-message pieces retain exact boundaries',()=>{
   const conversation={messages:state.messages,steering:[{messageId:'steer',text:'Keep my question visible.',confirmed:true,before:[{...state.messages[0],text:'Checking.'}]}]};
   const text=render(state,'complete',conversation),ast=unified().use(remarkParse).parse(text);
