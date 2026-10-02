@@ -29,6 +29,8 @@ export interface HostedInlineState {
   bindingCheckpoint?:InlineBindingCheckpoint;
   finishedAt?:string;presentationTurns?:Record<string,InlineTurn>;
   finalDocumentHash?:string;
+  /** Positional provenance outside the note; never a retained Markdown marker. */
+  responseAnchor?:{length:number;hash:string};
   finalBody?:string;
   /** The proof was verified on disk before its temporary boundaries were removed. */
   finalSaved?:boolean;
@@ -326,6 +328,7 @@ export class HostedInlineWriter {
           if(terminal){
             const change=finalizeRegion(document,request.id,contentHash(region.body),request.independent?completionProof(request.id,next):next);
             if(!change){conflict=true;return document;}
+            if(request.independent)state.responseAnchor={length:change.from+1,hash:contentHash(document.slice(0,change.from)+'\n')};
             finalBefore=originalDocument;finalAfter=document.slice(0,change.from)+change.text+document.slice(change.to);
             return originalDocument;
           }

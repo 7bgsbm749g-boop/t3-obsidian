@@ -469,3 +469,29 @@ Collapse keeps intermediate prose in native default-closed `t3-progress` callout
 The elapsed counter sits beside the working status and spinner. It measures wall time from submission through completion, including waiting and reconnects. Saved timestamps let each client update its DOM once per second without rewriting the note or triggering Sync. Collapse freezes and retains the final duration; Remove and Keep remove the status line and timer on completion. Stop retains a frozen Interrupted header in Collapse. Late question answers resume the counter for the continued response.
 
 The bottom activity row stays outside collapsed intermediate content, so current activity remains readable with the fold closed. Final answers and question controls remain visible. Each response and destination follows its own bound turn; completed tools stop being reported as active, and completion or interruption removes the bottom row and its spinner.
+
+### Missing 3 context for selected follow-ups
+
+When a selection follows a verified T3 reply in the same note and destination
+thread, Ask includes any omitted user Markdown between that reply and the
+selection. It uses the captured editor snapshot, preserves complete Markdown
+blocks, and packages embedded images through the ordinary attachment pipeline.
+Selecting the entire passage or sending the note already supplies that context.
+
+Confirmed delivery coverage records exact Markdown blocks relative to the
+response ID, scoped to note, project, environment, and thread. Unchanged blocks
+can be omitted on later requests; edited or shifted blocks resend. Image blocks
+resend conservatively because unchanged embed text does not prove unchanged
+image bytes. Saved unconfirmed requests retain their prepared prompt and
+attachments for retries.
+
+Provenance comes from authoritative response lease records and their exact
+message-to-turn binding, saved final body and position fingerprint, and completed
+save/cleanup proofs.
+Completed replies keep their existing marker-free cleanup. A duplicated or
+edited reply, unavailable provenance, a different preceding thread, or an
+intervening heading requires a context review; closing that review cancels the
+send. If no unique response boundary can be established, select the surrounding
+context explicitly. Older replies without saved positional provenance cannot
+anchor automatic expansion. Changes before the preceding reply remain outside
+this detector's scope; changes to its saved prefix require explicit review.

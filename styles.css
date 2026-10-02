@@ -145,3 +145,9 @@
   gap: 8px;
   align-items: center;
 }
+
+.send-to-t3-context-preview {
+  max-height: 45vh;
+  overflow: auto;
+  white-space: pre-wrap;
+}

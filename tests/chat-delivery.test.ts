@@ -1585,3 +1585,87 @@ for(const picker of ['project','existing'])test(`an override preserves the captu
     assert.match(opened.value,/Original selection\n[\s\S]*t3-inline:start:[\s\S]*Tail/);
   }finally{h.plugin.onunload();}
 });
+
+test('Missing 3 expands the captured snapshot before insertion, saves exact retry bytes and records only confirmed coverage',{timeout:15000},async()=>{
+  let fail=true;
+  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'&&fail){fail=false;throw Error('lost acknowledgement');}});
+  const path='Notes/Missing-three.md',id='31111111-1111-4111-8111-111111111111',body='> Verified response 2';
+  const seed=()=>{
+    const host={environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1',connectionId:'chat-connection'};
+    const request={version:2,id,vaultId:h.plugin.settings.vaultId,host,notePath:path,threadId:'missing-thread',messageId:'31111111-1111-4111-8111-111111111112',projectId:project.id,threadEnvironmentId:'chat-env',initialHash:contentHash(body),createdAt:new Date().toISOString(),independent:true};
+    const state={status:'complete',turnId:'exact-turn',bindingCheckpoint:{bindings:{[request.messageId]:{turnId:'exact-turn',kind:'explicit'}}},finalBody:body,responseAnchor:{length:8,hash:contentHash('Idea 1\n\n')},finalSaved:true,cleanupComplete:true,notePath:path};
+    h.hostFiles.set(`${host.directory}/explorer-responses.json`,JSON.stringify([{id,notePath:path,epoch:1,revision:1,active:false,input:false,complete:true}]));
+    h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,state,epoch:1,revision:1,owner:'fixture',expiresAt:0}));
+    h.plugin.settings.noteThreads.push({notePath:path,threadId:request.threadId,projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:'chat-connection',environmentId:'chat-env',selectedAt:new Date().toISOString()});
+  };
+  try{
+    seed();
+    const document=`Idea 1\n\n${body}\n\nMISSING-CAPTURED-CONTEXT\n\nImplement`;
+    const view=h.attachEditor(path,document),start=document.lastIndexOf('Implement');
+    const context={editor:view.editor,view:view.view,anchor:{text:'Implement',start,end:start+9,before:document.slice(start-24,start),after:''},snapshot:document};
+    await assert.rejects(h.plugin.sendResolvedChat('Implement',{path},context,true,{jobOptions:{inline:{enabled:false,intermediateMode:'remove',finalAnswerFormat:'formatted'}}}),/Unconfirmed requests/);
+    const pending=h.plugin.settings.pending[0];assert.ok(pending);
+    assert.match(pending.prompt,/Additional context preceding your selection:\nMISSING-CAPTURED-CONTEXT\n\nYour selected request:\nImplement/);
+    assert.doesNotMatch(pending.prompt,/Idea 1|Verified response 2/);
+    assert.equal(h.plugin.settings.noteDeliveries.length,0);
+    const prompt=pending.prompt;
+    await h.plugin.retry(pending);
+    assert.equal(h.commands.filter(command=>command.type==='thread.turn.start').at(-1).message.text,prompt);
+    assert.equal(h.plugin.settings.noteDeliveries.length,1);
+    await h.plugin.onExternalSettingsChange({...h.shared.at(-1),noteDeliveries:[]});
+    assert.equal(h.plugin.settings.noteDeliveries.length,1,'Stale synced settings retain confirmed coverage');
+    assert.equal(h.shared.at(-1).noteDeliveries.length,1);
+    const prepared=await h.plugin.prepareMissingThree('Implement',path,context,'missing-thread',project,h.plugin.connection(project));
+    assert.equal(prepared.prompt,'Implement');
+    const edited=document.replace('MISSING-CAPTURED-CONTEXT','EDITED-CAPTURED-CONTEXT'),editedStart=edited.lastIndexOf('Implement');
+    const changed=await h.plugin.prepareMissingThree('Implement',path,{...context,snapshot:edited,anchor:{...context.anchor,start:editedStart,end:editedStart+9}},'missing-thread',project,h.plugin.connection(project));
+    assert.match(changed.prompt,/EDITED-CAPTURED-CONTEXT/);
+    await h.plugin.save();h.plugin.onunload();const restored=await h.start();
+    try{assert.equal(restored.settings.noteDeliveries.length,1);}finally{restored.onunload();}
+  }finally{h.plugin.onunload();}
+});
+
+test('Missing 3 review shows context, cancellation dispatches nothing, and explicit selection-only skips expansion',{timeout:10000},async()=>{
+  const h=await chatHarness();
+  try{
+    const body='> Verified response',document=`${body}\n\n# Another topic\n\nIdea 3\n\nImplement`,path='Notes/Review.md';
+    const view=h.attachEditor(path,document),start=document.lastIndexOf('Implement');
+    const context={view:view.view,editor:view.editor,snapshot:document,anchor:{text:'Implement',start,end:start+9,before:document.slice(start-24,start),after:''}};
+    h.plugin.missingThreeResponses=async()=>({responses:[{id:'response',threadId:'thread',projectId:project.id,environmentId:'chat-env',body}],unavailable:false});
+    const work=h.plugin.sendChat('Implement',{path},{threadId:'thread',sourceContext:context});
+    for(let i=0;i<30&&h.modals.at(-1)?.constructor.name!=='MissingThreeModal';i++)await new Promise(resolve=>setTimeout(resolve,10));
+    const modal=h.modals.at(-1);assert.equal(modal.constructor.name,'MissingThreeModal');
+    assert.ok(modal.contentEl.children.some((child:any)=>child.tag==='pre'&&child.text.includes('Idea 3')));
+    modal.close();await assert.rejects(work,/Context review cancelled/);assert.equal(h.commands.length,0);
+    const next=h.plugin.sendChat('Implement',{path},{threadId:'thread',sourceContext:context});
+    for(let i=0;i<30&&h.modals.at(-1)===modal;i++)await new Promise(resolve=>setTimeout(resolve,10));
+    [...h.settingsControls].reverse().find((setting:any)=>setting.buttons.some((button:any)=>button.text==='Send selected request only')).buttons[0].click();
+    await next;assert.ok(h.commands.at(-1).message.text.startsWith('Implement'));assert.doesNotMatch(h.commands.at(-1).message.text,/Idea 3/);
+    assert.equal(h.plugin.settings.noteDeliveries.length,0);
+  }finally{h.plugin.onunload();}
+});
+
+test('a real completed writer retains marker-free positional provenance usable by Missing 3',{timeout:12000},async()=>{
+  const h=await chatHarness();
+  try{
+    const path='Notes/AnchorProof.md',note=h.attachEditor(path,'Baseline prompt.');
+    Object.assign(note.file,{basename:'AnchorProof',stat:{ctime:123}});
+    const result=await h.plugin.send(note.file,project,{newThread:true,streamReply:true,throwOnError:true});
+    const binding=result.request.inlineBindings[0];
+    let record:any;
+    for(let i=0;i<100;i++){
+      const bytes=h.hostFiles.get(leasePaths(binding.host.directory,binding.id).record);
+      if(bytes)record=JSON.parse(bytes);
+      if(record?.state?.cleanupComplete)break;
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    assert.equal(record.state.cleanupComplete,true);assert.doesNotMatch(note.value,/t3-(?:inline|response):/);
+    const body=record.state.finalBody.replace(/\n+$/,'');
+    const offset=note.value.indexOf(body);
+    assert.equal(record.state.responseAnchor.length,offset);
+    assert.equal(record.state.responseAnchor.hash,contentHash(note.value.slice(0,offset)));
+    const document=note.value+'\n\nFresh idea 3\n\nImplement',start=document.lastIndexOf('Implement');
+    const prepared=await h.plugin.prepareMissingThree('Implement',path,{editor:note.editor,view:note.view,snapshot:document,anchor:{text:'Implement',start,end:start+9,before:document.slice(start-24,start),after:''}},result.threadId,project,h.plugin.connection(project));
+    assert.match(prepared.prompt,/Additional context preceding your selection:\nFresh idea 3\n\nYour selected request:\nImplement/);
+  }finally{h.plugin.onunload();}
+});
