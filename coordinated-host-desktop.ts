@@ -82,6 +82,23 @@ export class CoordinatedHost {
       const identity=record.request.id;this.failures.delete(identity);
       try{
       const id=record.request.id,notePath=record.state?.notePath??record.request.notePath;
+      if(record.relocations?.length){
+        const original=await this.journal.read(id);
+        for(const move of record.relocations){
+          deviceNoteIO(this.app).noteRelocated(id,move.before,move.after,original?.originalHash);
+          if(!original||move.before===notePath)continue;
+          const file=this.app.vault.getFileByPath(move.before);if(!file)continue;
+          const saved=await this.app.vault.read(file);
+          // A known rename plus the exact former saved snapshot proves this
+          // stale registration. Changed text remains an explicit conflict.
+          if(saved!==original.original)continue;
+          const part=responseRegion(saved,id);if(!part)continue;
+          const directory=join(this.journal.root,id,'stale-rename-preimages');await fs.mkdir(directory,{recursive:true,mode:0o700});
+          await fs.writeFile(join(directory,contentHash(move.before)+'.md'),saved,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
+          await this.recoverySave(move.before,saved,saved.slice(0,part.from)+saved.slice(part.to),id,true);
+          deviceNoteIO(this.app).noteChanged(move.before);
+        }
+      }
       this.records.set(id,record);
       // A native file notification can fail AFTER vault.process wrote the
       // exact durable intent. Recover by disk readback before marker location,
@@ -147,6 +164,7 @@ export class CoordinatedHost {
     }
   }
   io(base:HostedWriterIO):HostedWriterIO {
+    const reads=new Map<string,{epoch:number;revision:number}>();
     return {...base,
       requests:async()=>[...this.records.values()].filter(record=>record.coordinated&&!record.migrating).map(record=>hostedPaths(this.identity.directory,record.request.id).request),
       accepts:request=>!!this.records.get(request.id)?.coordinated&&!this.records.get(request.id)?.migrating&&!this.failures.has(request.id)&&!this.stopped,
@@ -154,13 +172,13 @@ export class CoordinatedHost {
       locateNote:(id,path)=>deviceNoteIO(this.app).locateNote(id,path),
       read:async path=>{
         const id=/\/([^/]+)\.json$/.exec(path)?.[1],record=id?this.records.get(id):undefined;
-        if(record&&path===hostedPaths(this.identity.directory,id!).state)return record.state?JSON.stringify(record.state):undefined;
+        if(record&&path===hostedPaths(this.identity.directory,id!).state){reads.set(id!,{epoch:record.epoch,revision:record.revision});return record.state?JSON.stringify(record.state):undefined;}
         if(record&&path===hostedPaths(this.identity.directory,id!).stop)return record.stopRequestedAt?'{}':undefined;
         return base.read(path);
       },
       write:async(path,value)=>{
         const id=/\/([^/]+)\.json$/.exec(path)?.[1];if(!id||path!==hostedPaths(this.identity.directory,id).state)return base.write(path,value);
-        const state:HostedInlineState=JSON.parse(value),record=await this.authority.checkpoint(id,state);this.records.set(id,record);
+        const state:HostedInlineState=JSON.parse(value),record=await this.authority.checkpoint(id,state,reads.get(id));reads.set(id,{epoch:record.epoch,revision:record.revision});this.records.set(id,record);
         await this.coordinator.checkpoint(id,record.revision,record.state!);await nativeResponses(this.app).receive(record);
       },
       updateNote:async(path,change)=>{
@@ -186,7 +204,54 @@ export class CoordinatedHost {
       },
     };
   }
-  async command(kind:string,id:string,hash?:string){
+  private async locations(id:string){
+    const locations:Array<{path:string;hash:string;document:string}>=[];
+    for(const file of this.app.vault.getMarkdownFiles()){
+      const document=await this.app.vault.read(file);
+      if(responseRegion(document,id))locations.push({path:file.path,hash:contentHash(document),document});
+    }
+    locations.sort((a,b)=>a.path.localeCompare(b.path));
+    return {locations,locationHash:contentHash(JSON.stringify(locations.map(({path,hash})=>({path,hash}))))};
+  }
+  private async recoverySave(path:string,before:string,after:string,id:string,detach:boolean){
+    const file=this.app.vault.getFileByPath(path);if(!file)throw Error('A reviewed note disappeared.');
+    const manager=nativeResponses(this.app),same=()=>manager.savedViews(path).every(view=>view.saved()===before);
+    if(!same())throw Error('Save the note before resolving its response destination.');
+    if(detach)manager.prepare(path,before,after,[id]);
+    try{
+      await this.app.vault.process(file,current=>{
+        if(this.stopped||file.path!==path||this.app.vault.getFileByPath(path)!==file||current!==before||!same())throw Error('A reviewed note changed during recovery. Review it again.');
+        return after;
+      });
+      if(await this.app.vault.read(file)!==after)throw Error('Recovery write was not saved.');
+      if(detach)manager.committed(path,after,[id]);
+    }finally{if(detach)manager.cancel(path);}
+  }
+  async command(kind:string,id:string,hash?:string,notePath?:string){
+    if(kind==='resolve-response-location'){
+      const review=await this.locations(id),chosen=review.locations.find(location=>location.path===notePath);
+      if(review.locationHash!==hash||!chosen)throw Error('The candidate notes changed. Review the response destination again.');
+      const raw=await this.files.read(leasePaths(this.identity.directory,id).record);if(!raw)throw Error('Unknown response binding.');
+      const lease:LeaseRecord=JSON.parse(raw);
+      if(lease.state?.finalSaved||lease.stopRequestedAt)throw Error('This response is already saved or canceled.');
+      const region=responseRegion(chosen.document,id)!;
+      const plan=chosen.document.slice(region.from,region.to)===responseAnchor(id)?undefined:planNativeMigration(lease,chosen.document);
+      if(plan&&plan.kind!=='planned')throw Error('The selected response contains unrecognized edits. Preserve and review them before recovery.');
+      const evidence=join(this.journal.root,id,`location-recovery-${review.locationHash}`);await fs.mkdir(evidence,{recursive:true,mode:0o700});
+      for(const candidate of review.locations)await fs.writeFile(join(evidence,contentHash(candidate.path)+'.md'),candidate.document,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
+      await fs.writeFile(join(evidence,'review.json'),JSON.stringify({notePath,locations:review.locations.map(({path,hash})=>({path,hash}))}),{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
+      // Detach only the markers in competing notes. Their ordinary text and
+      // retained transcript stay intact, and every exact preimage is backed up.
+      for(const candidate of review.locations)if(candidate!==chosen){
+        const part=responseRegion(candidate.document,id)!;
+        const next=candidate.document.slice(0,part.from)+part.body.replace(/^\n|\n$/g,'')+candidate.document.slice(part.to);
+        await this.recoverySave(candidate.path,candidate.document,next,id,true);
+      }
+      if(plan?.kind==='planned')await this.recoverySave(chosen.path,chosen.document,plan.after,id,false);
+      let relocated=await this.authority.relocate(id,lease.state?.notePath??lease.request.notePath,chosen.path);
+      if(relocated.state?.locationConflict||['paused','conflict'].includes(relocated.state?.status??''))relocated=await this.authority.resume(id);
+      this.records.set(id,relocated);await this.scan();return {resumed:true,bindingId:id,notePath:chosen.path,evidence};
+    }
     if(kind==='resume-response'){
       const raw=await this.files.read(leasePaths(this.identity.directory,id).record);if(!raw)throw Error('Unknown response binding.');
       const lease:LeaseRecord=JSON.parse(raw),notePath=lease.state?.notePath??lease.request.notePath;
@@ -195,7 +260,7 @@ export class CoordinatedHost {
       const resumed=await this.authority.resume(id);this.records.set(id,resumed);await this.scan();return {resumed:true,bindingId:id};
     }
     const record=await this.journal.read(id);if(!record)throw Error('Unknown coordinated response.');
-    if(kind==='response-status')return {generation:record,stagingPath:join(this.journal.root,id,'staged.md'),hostIssue:this.failures.get(id)};
+    if(kind==='response-status'){const review=await this.locations(id);return {generation:record,stagingPath:join(this.journal.root,id,'staged.md'),hostIssue:this.failures.get(id),locationHash:review.locationHash,locations:review.locations.map(({path,hash})=>({path,hash}))};}
     if(kind==='stage-note-edit'){
       const path=join(this.journal.root,id,'staged.md');await fs.writeFile(path,record.original,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});return {stagingPath:path,originalHash:record.originalHash};
     }

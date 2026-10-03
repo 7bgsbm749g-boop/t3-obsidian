@@ -12,6 +12,7 @@ import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
 import {observeIncoming,mergeProse,selectionRange,type InlineSteering} from './inline-steering';
 import type {InitialInlineInput,InlineMessage,InlineTurn,InlineBindingCheckpoint} from './inline-thread';
 import {interruptStoppedResponse,stoppedResponseBody} from './response-stop';
+import {DuplicateResponseLocation} from './response-location';
 class StopStreamRequested extends Error {}
 
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
@@ -31,6 +32,7 @@ export interface HostedInlineState {
   requestHash:string;accepted:boolean;notePath:string;turnId?:string;messageId?:string;pendingMessageId?:string;
   status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict'|'paused';
   hashes:string[];body?:string;detail?:string;updatedAt:string;
+  locationConflict?:string[];
   bindingCheckpoint?:InlineBindingCheckpoint;
   finishedAt?:string;presentationTurns?:Record<string,InlineTurn>;
   finalDocumentHash?:string;
@@ -180,6 +182,7 @@ export class HostedInlineWriter {
           const located=await this.io.locateNote(request.id,state.notePath);
           if(located===undefined){state.detail='Waiting for moved note to reach this device.';await save();return;}
           state.notePath=located;
+          if(state.locationConflict){delete state.locationConflict;delete state.detail;state.status='running';await save();}
         }
         if(state.notePath!==previousPath)await save();
         if(legacyProof){state.finalPhase=state.status as 'complete'|'interrupted';state.finalSaved=true;state.status='running';await save();}
@@ -386,6 +389,7 @@ export class HostedInlineWriter {
         logFailure('response.writer.retry',error,{jobId:request.id,notePath:state.notePath,threadId:request.threadId});
         if(state.finalSaved)state.status='running';
         state.detail=error instanceof Error?error.message:'The streaming host will retry.';
+        if(error instanceof DuplicateResponseLocation){state.status='paused';state.locationConflict=error.paths;}
         // A failed proof-save acknowledgement must not persist finalSaved via
         // this retry checkpoint: the device adapter verifies that transition.
         await save();

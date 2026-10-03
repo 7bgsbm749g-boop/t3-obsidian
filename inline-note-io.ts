@@ -38,6 +38,7 @@ export function deviceNoteIO(app:App){
     locateNote:(id:string,path:string)=>locations.locate(id,path),
     noteChanged:(path:string)=>locations.changed(path),
     noteRenamed:(before:string,after:string)=>locations.renamed(before,after),
+    noteRelocated:(id:string,before:string,after:string,previousHash?:string)=>locations.relocated(id,before,after,previousHash),
     noteDeleted:(path:string)=>locations.deleted(path),
     isOpen:(path:string)=>views(path).length>0,
     isSaved:async(path:string,hash:string,proof?:{id:string;body:string;cleaned?:boolean})=>{const file=app.vault.getFileByPath(path);if(!file)return false;let document:string;try{document=await app.vault.read(file);}catch(error){if(missingNote(error))return false;throw error;}if(file.path!==undefined&&(file.path!==path||app.vault.getFileByPath(path)!==file))return false;return proof?.cleaned?!hasResponseMarkers(document,proof.id):contentHash(document)===hash||!!proof&&hasCompletionProof(document,proof.id,proof.body);},

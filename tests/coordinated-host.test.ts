@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {CoordinatedHost} from '../coordinated-host-desktop';
 import {InlineLeaseAuthority,InlineLeaseClient,leasePaths,COORDINATED_OWNER,type LeaseFiles} from '../inline-lease';
-import {HostedInlineWriter,hostedRequestHash,type HostedInlineRequest,type HostedWriterIO} from '../hosted-inline';
+import {HostedInlineWriter,hostedRequestHash,hostedPaths,type HostedInlineRequest,type HostedWriterIO} from '../hosted-inline';
 import {initialRegion} from '../inline-thread';
 import {responseAnchor} from '../native-response-projection';
 import {contentHash} from '../completion';
@@ -20,7 +20,9 @@ async function setup(native=true,liveLease=false){
   const files:LeaseFiles={read:async path=>storage.get(path),write:async(path,value)=>{storage.set(path,value);},remove:async path=>{storage.delete(path);},list:async directory=>[...storage.keys()].filter(path=>path.startsWith(directory+'/'))};
   const authority=new InlineLeaseAuthority(identity,files),remote={...files,read:async(path:string)=>{if(path.includes('/replies/'))await authority.tick();return files.read(path);}};
   const client=new InlineLeaseClient(actor,remote,identity.directory,undefined,undefined,async()=>{await authority.tick();});
-  const app:any={workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:(path:string)=>path===file.path?file:undefined,getMarkdownFiles:()=>[file],read:async()=>notes.get(file.path),process:async(_file:any,change:any)=>{const next=change(notes.get(file.path));notes.set(file.path,next);writes++;return next;}},saveLocalStorage:()=>{}};
+  const extraFiles=new Map<string,{path:string}>();
+  const getFile=(path:string)=>{if(path===file.path)return file;if(!notes.has(path))return undefined;let extra=extraFiles.get(path);if(!extra){extra={path};extraFiles.set(path,extra);}return extra;};
+  const app:any={workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:getFile,getMarkdownFiles:()=>[...notes.keys()].map(getFile),read:async(target:any)=>notes.get(target.path),process:async(target:any,change:any)=>{const next=change(notes.get(target.path));notes.set(target.path,next);writes++;return next;}},saveLocalStorage:()=>{}};
   await client.command({kind:'register',jobId:id,request});
   if(!native){const record=JSON.parse(storage.get(leasePaths(identity.directory,id).record)!);record.state={requestHash:hostedRequestHash(request),accepted:true,notePath:file.path,status:'running',hashes:[initial.bodyHash],updatedAt:'',bindingCheckpoint:{bindings:{[request.messageId]:{turnId:'turn',kind:'start'}}},incoming:[{messageId:randomUUID(),text:'Keep data',label:'You · Author',before:[]}]};record.expiresAt=liveLease?Date.now()+25:Date.now()-3000;storage.set(leasePaths(identity.directory,id).record,JSON.stringify(record));}
   const host=await CoordinatedHost.open(app,identity,files,authority,{journalRoot:join(root,'journal')});await host.scan();
@@ -146,5 +148,44 @@ test('active delivery proceeds while completed journal observation rotates throu
   await h.host.scan();assert.equal(observed.size,4,'historical verification does not monopolize the active pass');
   h.complete();await h.writer.tick();assert.equal((await read(h.id))!.status,'verified');assert.match(h.notes.get('Note.md')!,/Added \*\*25kg\*\*/);
   await h.host.scan();assert.ok(observed.size>4,'later scans still audit historical results');
+ }finally{await h.close();}
+});
+
+test('mobile rename handoff waits for delayed Sync and retires the exact old-path resurrection',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const original=h.notes.get('Note.md')!;
+  const relocated=await h.client.command({kind:'relocate',jobId:h.id,previousNotePath:'Note.md',notePath:'Mobile title.md'});assert.equal(relocated.ok,true);
+  await h.host.scan();h.complete();await h.writer.tick();assert.equal((await h.host.journal.read(h.id))!.notePath,'Mobile title.md');
+  assert.ok(!h.notes.get('Note.md')!.includes(h.id));assert.ok(!h.notes.has('Mobile title.md'));
+  h.notes.set('Mobile title.md',original);h.notes.set('Note.md',original);await h.host.scan();await h.writer.tick();
+  const record=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
+  assert.equal(record.state.status,'complete');assert.equal(record.state.finalSaved,true);assert.equal(record.state.cleanupComplete,true);
+  assert.ok(h.notes.get('Mobile title.md')!.includes('Added **25kg**.'));assert.ok(!h.notes.get('Note.md')!.includes(h.id));
+  assert.equal(await readFile(join(h.root,'journal',h.id,'stale-rename-preimages',contentHash('Note.md')+'.md'),'utf8'),original);
+ }finally{await h.close();}
+});
+test('copied destinations show paths, require a current review and recover the same completed T3 response after restart',async()=>{
+ const h=await setup();let restarted:CoordinatedHost|undefined;try{
+  await h.writer.tick();const original=h.notes.get('Note.md')!;h.notes.set('Copy.md',original);
+  const {deviceNoteIO}=await import('../inline-note-io');deviceNoteIO(h.app).noteChanged('Copy.md');h.complete();await h.writer.tick();
+  let lease=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);assert.equal(lease.state.status,'paused');assert.deepEqual(lease.state.locationConflict,['Copy.md','Note.md']);
+  const stale:any=await h.host.command('response-status',h.id);h.notes.set('Copy.md',original+'Ordinary copied tail\n');
+  await assert.rejects(h.host.command('resolve-response-location',h.id,stale.locationHash,'Copy.md'),/changed/);assert.equal(h.notes.get('Note.md'),original);
+  h.writer.stop();h.host.stop();restarted=await CoordinatedHost.open(h.app,h.identity,h.files,h.authority,{journalRoot:join(h.root,'journal')});await restarted.scan();
+  const review:any=await restarted.command('response-status',h.id);const recovery:any=await restarted.command('resolve-response-location',h.id,review.locationHash,'Copy.md');
+  const writer=new HostedInlineWriter(h.identity,restarted.io(h.base));await writer.tick();writer.stop();
+  lease=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
+  assert.equal(lease.request.id,h.id);assert.equal(lease.request.messageId,h.request.messageId);assert.equal(lease.state.status,'complete');assert.equal(lease.state.finalSaved,true);assert.equal(lease.state.cleanupComplete,true);assert.equal(lease.state.locationConflict,undefined);
+  assert.ok(h.notes.get('Copy.md')!.includes('Added **25kg**.'));assert.ok(h.notes.get('Copy.md')!.includes('Ordinary copied tail'));assert.ok(!h.notes.get('Note.md')!.includes(h.id));
+  assert.equal(await readFile(join(recovery.evidence,contentHash('Note.md')+'.md'),'utf8'),original);
+ }finally{restarted?.stop();await h.close();}
+});
+test('a writer checkpoint read before a mobile rename cannot put the lease back at its old path',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const io=h.host.io(h.base),statePath=hostedPaths(h.identity.directory,h.id).state;const stale=(await io.read(statePath))!;
+  await h.client.command({kind:'relocate',jobId:h.id,previousNotePath:'Note.md',notePath:'First.md'});
+  await assert.rejects(io.write(statePath,stale),/revision changed/);
+  await h.client.command({kind:'relocate',jobId:h.id,previousNotePath:'First.md',notePath:'Folder/Second.md'});await h.host.scan();
+  const lease=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);assert.equal(lease.state.notePath,'Folder/Second.md');assert.equal(lease.request.notePath,'Note.md');
  }finally{await h.close();}
 });

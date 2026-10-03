@@ -23,8 +23,8 @@ await writeFile(join(vault,'Reference.md'),'# Reference\n');await writeFile(join
 await writeFile(join(vault,'.obsidian/app.json'),JSON.stringify({safeMode:false,livePreview:true,readableLineLength:false}));
 await writeFile(join(vault,'.obsidian/community-plugins.json'),JSON.stringify(['coordinated-response-lab']));
 await writeFile(join(vault,'.obsidian/core-plugins.json'),JSON.stringify(['file-explorer','command-palette']));
-await writeFile(join(plugin,'manifest.json'),JSON.stringify({id:'coordinated-response-lab',name:'Isolated native response validation',version:'0.0.1',minAppVersion:'1.8.7',description:'Source-only validation; no Sync or T3 dispatch',author:'Local validation',isDesktopOnly:true}));
+await writeFile(join(plugin,'manifest.json'),JSON.stringify({id:'coordinated-response-lab',name:'Isolated native response validation',version:'0.0.1',minAppVersion:'1.8.7',description:'Source-only validation; no Sync or T3 dispatch',author:'Local validation',isDesktopOnly:!process.argv.includes('--interaction')}));
 await writeFile(join(plugin,'styles.css'),await readFile('styles.css'));
 await writeFile(join(profile,'obsidian.json'),JSON.stringify({vaults:{[randomBytes(8).toString('hex')]:{path:vault,ts:Date.now(),open:true}}}));
-await build({entryPoints:['validation/native-response-lab.ts'],bundle:true,external:['obsidian','@codemirror/view','@codemirror/state','node:*',...builtinModules.filter(name=>name!=='buffer')],platform:'browser',format:'cjs',target:'es2022',outfile:join(plugin,'main.js')});
+await build({entryPoints:[process.argv.includes('--interaction')?'validation/stream-interaction-lab.ts':'validation/native-response-lab.ts'],bundle:true,external:['electron','obsidian','@codemirror/view','@codemirror/state','node:*',...builtinModules.filter(name=>name!=='buffer')],platform:'browser',format:'cjs',target:'es2022',outfile:join(plugin,'main.js')});
 process.stdout.write(JSON.stringify({root,vault,profile,launchArguments:[`--user-data-dir=${profile}`,'--no-sandbox']})+'\n');

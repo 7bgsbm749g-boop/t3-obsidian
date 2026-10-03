@@ -10,8 +10,8 @@ export const HEARTBEAT_MS=3000;
 export const LEASE_MARGIN_MS=2000;
 export type LeaseIdentity={vaultId:string;environmentId:string;workspaceRoot:string;directory:string};
 export const COORDINATED_OWNER="00000000-0000-5000-8000-000000000001";
-export interface LeaseRecord {coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;stopRequestedAt?:number;state?:HostedInlineState}
-export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
+export interface LeaseRecord {relocations?:Array<{before:string;after:string}>;coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;stopRequestedAt?:number;state?:HostedInlineState}
+export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'relocate'|'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';previousNotePath?:string;observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
 export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;ttlMs:number;answeredAt?:number;retryAfterMs?:number}
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -132,13 +132,18 @@ export class InlineLeaseAuthority {
       const raw=await this.files.read(path);if(!raw)continue;const record:LeaseRecord=JSON.parse(raw),current=record.state?.notePath??record.request.notePath;
       if(!record.coordinated||!(current===before||current.startsWith(before+'/')))continue;
       const notePath=after+current.slice(before.length);if(!safeNotePath(notePath))throw Error('Invalid renamed note path.');
+      record.relocations=[...record.relocations??[],{before:current,after:notePath}];
       record.state={...record.state??{requestHash:hostedRequestHash(record.request),accepted:false,status:'waiting' as const,hashes:[record.request.initialHash],updatedAt:new Date().toISOString()},notePath};record.revision++;await this.files.write(path,JSON.stringify(record));await this.publishCatalog(record);
     }
   });}
   async resume(id:string){return this.exclusive(async()=>{
     const path=leasePaths(this.identity.directory,id).record,raw=await this.files.read(path);if(!raw)throw Error('Unknown response binding.');
     const record:LeaseRecord=JSON.parse(raw);if(!record.state||!['paused','conflict'].includes(record.state.status)||record.state.finalSaved)throw Error('This response is not awaiting intact-boundary recovery.');
-    record.state={...record.state,status:'waiting'};delete record.state.detail;record.revision++;await this.files.write(path,JSON.stringify(record));await this.publishCatalog(record);return record;
+    record.state={...record.state,status:'waiting'};delete record.state.detail;delete record.state.locationConflict;record.revision++;await this.files.write(path,JSON.stringify(record));await this.publishCatalog(record);return record;
+  });}
+  async relocate(id:string,before:string,after:string){return this.exclusive(async()=>{
+    const reply=await this.apply({id:crypto.randomUUID(),jobId:id,actor:COORDINATED_OWNER,kind:'relocate',previousNotePath:before,notePath:after});
+    if(!reply.ok)throw Error(reply.error);return reply.record!;
   });}
   async migrated(id:string){return this.exclusive(async()=>{
     const path=leasePaths(this.identity.directory,id).record,raw=await this.files.read(path);if(!raw)throw Error('Missing migration record.');
@@ -167,7 +172,14 @@ export class InlineLeaseAuthority {
           await this.files.write(paths.record,JSON.stringify(record));return respond(true);
         }
         if(command.kind==='follow'&&record.state?.messageId===command.messageId&&command.previousMessageId!==command.messageId)return respond(true);
-        if(command.kind==='stop'){
+        if(command.kind==='relocate'){
+          const before=command.previousNotePath,after=command.notePath,current=record.state?.notePath??record.request.notePath;
+          if(record.stopRequestedAt)throw Error('This response was canceled.');
+          if(!record.coordinated||!safeNotePath(before)||!safeNotePath(after))throw Error('A coordinated response and exact rename paths are required.');
+          if(current===after)return respond(true);
+          if(current!==before)throw Error('The response moved again. Refresh its destination before retrying.');
+          record={...record,relocations:[...record.relocations??[],{before,after}],revision:record.revision+1,state:{...record.state??{requestHash:hostedRequestHash(record.request),accepted:false,status:'waiting',hashes:[record.request.initialHash],updatedAt:new Date().toISOString()},notePath:after}};
+        }else if(command.kind==='stop'){
           if(!record.stopRequestedAt)record={...record,stopRequestedAt:this.now(),revision:record.revision+1};
         }else if(command.kind==='steer'){
           if(record.stopRequestedAt)throw Error('The response was stopped.');
@@ -287,9 +299,9 @@ export class InlineLeaseClient {
   constructor(readonly actor:string,readonly files:InlineFiles,readonly directory:string,private now=()=>Date.now(),private monotonic=()=>performance.now(),private pause=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms))){}
   dispose(){this.stopped=true;this.grants.clear();} // Never release ownership.
   valid(id:string,epoch:number){const grant=this.grants.get(id);return !this.stopped&&grant?.epoch===epoch&&this.now()<grant.wall&&this.monotonic()<grant.monotonic;}
-  async command(input:Omit<LeaseCommand,'id'|'actor'>){
+  async command(input:Omit<LeaseCommand,'id'|'actor'>,identity?:{id:string;actor:string}){
     if(this.stopped)throw Error('Response writer stopped.');
-    const command:LeaseCommand={...input,id:crypto.randomUUID(),actor:this.actor},paths=leasePaths(this.directory,command.id),wall=this.now(),monotonic=this.monotonic();
+    const command:LeaseCommand={...input,id:identity?.id??crypto.randomUUID(),actor:identity?.actor??this.actor},paths=leasePaths(this.directory,command.id),wall=this.now(),monotonic=this.monotonic();
     const fields={jobId:input.jobId,commandId:command.id,actor:this.actor,directory:this.directory,kind:input.kind,epoch:input.epoch,revision:input.revision,messageId:input.steering?.messageId??input.request?.messageId,notePath:input.notePath??input.request?.notePath,threadId:input.request?.threadId,environmentId:input.request?.host.environmentId};
     const trace=input.kind!=='heartbeat'&&input.kind!=='claim';
     let phase='writing-command',attempts=0,writeMs=0,readMs=0,maxReadMs=0;

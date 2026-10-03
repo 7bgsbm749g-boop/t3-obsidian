@@ -1,5 +1,6 @@
 import {mergeSharedSettings} from './shared-settings';
 import {NativeConflictModal} from './native-conflict-modal';
+import {ResponseLocationModal} from './response-location-ui';
 import {stagedNoteInstruction} from './staged-note-instruction';
 import {isResponseCommand,validateResponseCommand} from './response-command';
 import {incomingLabel} from './inline-steering';
@@ -134,6 +135,7 @@ export default class SendToT3 extends Plugin {
   private mobileSelectionAction?:{dispose():void};
   diagnostics?:EventJournal;
   async onload() {
+    if(typeof this.registerDomEvent==='function')this.registerDomEvent(document,'t3-review-response-location' as any,(event:Event)=>{const id=(event as CustomEvent).detail?.bindingId;if(typeof id==='string')new ResponseLocationModal(this.app,id,command=>this.executeAgentCommand(command)).open();});
     const data = await this.loadData();
     this.lastDiskSnapshot=JSON.stringify(data);
     const local = this.app.loadLocalStorage(this.localKey);
@@ -178,7 +180,7 @@ export default class SendToT3 extends Plugin {
     const storedTargets=this.app.loadLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`);
     if(Array.isArray(storedTargets))this.inlineTargets=storedTargets.filter(target=>target&&typeof target.environmentId==='string'&&typeof target.workspaceRoot==='string'&&typeof target.directory==='string');
     if(typeof this.registerEditorExtension==='function'){const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)));}
-    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),receiveCoordinated:(record,proof)=>nativeResponses(this.app).receive(record,proof),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:environmentId=>this.inlineThreadAccess(environmentId),importReplyAsset:(reference,request,access)=>importReplyAsset(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
+    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>nativeResponses(this.app).receive(record,proof),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:environmentId=>this.inlineThreadAccess(environmentId),importReplyAsset:(reference,request,access)=>importReplyAsset(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
     if(!Platform.isMobile)this.app.workspace.onLayoutReady(()=>{
       const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
       if(root)void import('./note-command-desktop').then(module=>module.NoteCommandServer.open(root,this.app.vault.configDir||'.obsidian',command=>this.executeAgentCommand(command),()=>!this.stopped&&!this.busy)).then(async server=>{
@@ -296,7 +298,7 @@ export default class SendToT3 extends Plugin {
       this.registerEvent(this.app.vault.on('delete',file=>{this.deviceInline?.deleted(file.path);this.inlineHostService?.deleted(file.path);this.folderIndicators?.refresh();}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.inlineChat?.renamed(oldPath,file.path)));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{if(!(file instanceof TFolder))return;let changed=false;for(const link of this.settings.folderLinks)if(link.folderPath===oldPath||link.folderPath.startsWith(oldPath+'/')){link.folderPath=file.path+link.folderPath.slice(oldPath.length);changed=true;}if(changed)void this.save().catch(error=>new Notice(`T3 folder links: ${message(error)}`,10000));}));
-      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{this.inlineHostService?.renamed(oldPath,file.path);this.deviceInline?.renamed(oldPath,file.path);}));
+      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{nativeResponses(this.app).renamed(oldPath,file.path);this.inlineHostService?.renamed(oldPath,file.path);this.deviceInline?.renamed(oldPath,file.path);}));
       this.registerEvent(this.app.vault.on('delete',file=>{this.inlineChat?.deleted(file.path);this.questionPaths.delete(file.path);}));
       this.registerEvent(this.app.vault.on('modify',file=>{if(file instanceof TFile&&file.extension==='md')void this.app.vault.read(file).then(text=>{if(questionTargets(text).length||approvalTargets(text).length)this.questionPaths.add(file.path);}).catch(()=>{});}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{for(const path of [...this.questionPaths])if(path===oldPath||path.startsWith(oldPath+'/')){this.questionPaths.delete(path);this.questionPaths.add(file.path+path.slice(oldPath.length));}}));
@@ -509,8 +511,19 @@ export default class SendToT3 extends Plugin {
   async executeAgentCommand(input:import('./note-command').AgentCommand){
     if(isResponseCommand(input)){
       const command=validateResponseCommand(input);await this.refreshInlineHost();
-      if(!this.inlineHostService)throw Error('Run coordinated response commands on the vault host.');
-      return {id:command.id,ok:true,...await this.inlineHostService.responseCommand(command.kind,command.bindingId,command.hash)};
+      if(!this.inlineHostService){
+        const target=await this.inlineHostTarget(),opened=await this.inlineHostFiles(target);
+        const directory=target.directory.replace(/inline\/v1$/,'commands/v1');
+        try{
+          const path=`${directory}/requests/${command.id}.json`,bytes=JSON.stringify(command),previous=await opened.files.read(path);
+          if(previous!==undefined&&previous!==bytes)throw Error('This command ID already has different input.');
+          if(previous===undefined)await opened.files.write(path,bytes);
+          const deadline=Date.now()+60_000;
+          while(!this.stopped&&Date.now()<deadline){const raw=await opened.files.read(`${directory}/results/${command.id}.json`);if(raw){const result=JSON.parse(raw);if(!result.ok)throw Error(result.error);return result;}await new Promise(resolve=>window.setTimeout(resolve,250));}
+          throw Error(`The response host has not acknowledged command ${command.id}. Check the saved result before retrying.`);
+        }finally{opened.close();}
+      }
+      return {id:command.id,ok:true,...await this.inlineHostService.responseCommand(command.kind,command.bindingId,command.hash,command.notePath)};
     }
     if(isFolderCommand(input)){
       if(this.stopped||this.busy)throw Error('Obsidian is unavailable or sending another request.');

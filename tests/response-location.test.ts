@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {ResponseNoteLocator} from '../response-location';
+import {ResponseNoteLocator,DuplicateResponseLocation} from '../response-location';
+import {contentHash} from '../completion';
 import {initialRegion,completionProof} from '../inline-thread';
 
 function harness(){
@@ -92,4 +93,14 @@ test('changed existing files bypass fallback backoff and still detect copies',as
   assert.equal(await h.locator.locate(h.id,'Missing.md'),'Old.md');
   h.notes.set('Copy.md',h.notes.get('Old.md')!);h.locator.changed('Copy.md');
   await assert.rejects(h.locator.locate(h.id,'Old.md'),/multiple notes/);
+});
+test('proven relocation waits for Sync, follows its new path and excludes only the exact stale saved snapshot',async()=>{
+  const h=harness(),original=h.notes.get('Old.md')!;await h.locator.locate(h.id,'Old.md');
+  h.locator.relocated(h.id,'Old.md','Moved.md',contentHash(original));
+  assert.equal(await h.locator.locate(h.id,'Old.md'),undefined,'do not write the old note while the move is in transit');
+  h.notes.set('Moved.md',original);h.locator.changed('Moved.md');assert.equal(await h.locator.locate(h.id,'Old.md'),'Moved.md');
+  h.notes.set('Copy.md',original);h.locator.changed('Copy.md');
+  await assert.rejects(h.locator.locate(h.id,'Old.md'),error=>error instanceof DuplicateResponseLocation&&error.paths.join(',')==='Copy.md,Moved.md');
+  h.notes.delete('Copy.md');h.locator.deleted('Copy.md');h.notes.set('Old.md',original+'Changed copied note');h.locator.changed('Old.md');
+  await assert.rejects(h.locator.locate(h.id,'Old.md'),error=>error instanceof DuplicateResponseLocation&&error.paths.includes('Old.md'));
 });

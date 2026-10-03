@@ -15,11 +15,12 @@ def main():
     parser.add_argument('--request-id', default=None, help='Reuse this UUID to inspect/retry the same command')
     parser.add_argument('--timeout', type=float, default=90)
     parser.add_argument('--retry', action='store_true', help='Retry a failed result with the original prepared send')
-    parser.add_argument('kind', choices=['response-status', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response', 'send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination', 'subscribe-job', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
+    parser.add_argument('kind', choices=['resolve-response-location', 'response-status', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response', 'send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination', 'subscribe-job', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
     parser.add_argument('note', nargs='?', help='Vault-relative note or folder path; / means vault root')
     parser.add_argument('--destination', action='append', default=[])
     parser.add_argument('--destination-section', help='Exact unique Markdown heading for response placement')
     parser.add_argument('--binding-id', help='Exact independent response binding UUID')
+    parser.add_argument('--note-path', help='Reviewed intended destination for duplicate recovery')
     parser.add_argument('--hash', help='Reviewed original hash for staging, current saved hash for repair')
     parser.add_argument('--thread-id')
     parser.add_argument('--stream-scope', choices=['thread'], help='Explicit opt-in for thread-wide display')
@@ -58,12 +59,14 @@ def main():
         command_id = str(uuid.UUID(args.request_id)) if args.request_id else str(uuid.uuid4())
     except ValueError:
         parser.error('--request-id must be a UUID.')
-    if args.kind in ['response-status', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response']:
+    if args.kind in ['resolve-response-location', 'response-status', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response']:
         if not args.binding_id or args.note or args.destination:
             parser.error('Response commands require --binding-id and do not take note destinations.')
         command = dict(version=1, id=command_id, kind=args.kind, bindingId=args.binding_id)
         if args.hash:
             command['hash'] = args.hash
+        if args.note_path:
+            command['notePath'] = args.note_path
     elif folder_kind:
         if not args.note:
             parser.error('Folder commands require a vault-relative folder; / means the vault root.')

@@ -12,7 +12,10 @@ import {nativeCommitPath,readNativeCommitProof} from './native-response-commit';
 export const INLINE_SNAPSHOT_INTERVAL_MS=10_000;
 export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
 
+export interface PendingResponseRename {id:string;actor:string;bindingId:string;host:InlineHostTarget;before:string;after:string}
 export interface DeviceInlineIO {
+  loadRenames?():PendingResponseRename[];
+  saveRenames?(renames:PendingResponseRename[]):void;
   receiveCoordinated?(record:LeaseRecord,proofBytes?:string):void|Promise<void>;
   readSaved?(path:string):Promise<string|undefined>;
   access(environmentId:string):Promise<ThreadAccess>;
@@ -36,10 +39,13 @@ const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...s
  * only missing heartbeats allow another instance to take ownership. */
 export class DeviceInlineManager {
   private stopped=false;
+  private renames:PendingResponseRename[];
+  private renameWork?:Promise<void>;
+  private nextRenameRetry=0;
   private hosts=new Map<string,Host>();
   private jobs=new Map<string,Runtime>();
   private accesses=new Map<string,{value:Promise<ThreadAccess>;expires:number}>();
-  constructor(readonly actor:string,private vaultId:string,private io:DeviceInlineIO,private open:(target:InlineHostTarget)=>Promise<{files:InlineFiles;close():void}>,private now=()=>Date.now(),private monotonic=()=>performance.now(),private pause?:(milliseconds:number)=>Promise<void>){}
+  constructor(readonly actor:string,private vaultId:string,private io:DeviceInlineIO,private open:(target:InlineHostTarget)=>Promise<{files:InlineFiles;close():void}>,private now=()=>Date.now(),private monotonic=()=>performance.now(),private pause?:(milliseconds:number)=>Promise<void>){const saved=io.loadRenames?.();this.renames=Array.isArray(saved)?saved:[];for(const rename of this.renames)this.host(rename.host);}
   private host(target:InlineHostTarget){
     const key=hostKey(target),existing=this.hosts.get(key);if(existing)return existing;
     let connection:Promise<{files:InlineFiles;close():void}>|undefined;
@@ -72,6 +78,7 @@ export class DeviceInlineManager {
     this.receiveRecord(host,reply.record);this.tick();
   }
   async stopResponse(target:InlineHostTarget,id:string){
+    this.renames=this.renames.filter(item=>item.bindingId!==id);this.io.saveRenames?.(this.renames);
     const host=this.host(target),reply=await host.client.command({kind:'stop',jobId:id});
     if(!reply.ok||!reply.record)throw Error(reply.error??'Could not record the response stop.');
     this.receiveRecord(host,reply.record);this.tick();
@@ -227,8 +234,22 @@ export class DeviceInlineManager {
     })().catch(error=>refresh.cancel(error instanceof Error?error:Error(String(error))));
     return work;
   }
+  private flushRenames(){
+    if(this.renameWork||!this.renames.length||this.now()<this.nextRenameRetry)return;
+    const rename=this.renames[0],host=this.host(rename.host);
+    const work=(async()=>{
+      const reply=await host.client.command({kind:'relocate',jobId:rename.bindingId,previousNotePath:rename.before,notePath:rename.after},{id:rename.id,actor:rename.actor});
+      if(!reply.ok&&reply.record?.stopRequestedAt){this.renames=this.renames.filter(item=>item.bindingId!==rename.bindingId);this.io.saveRenames?.(this.renames);return;}
+      if(!reply.ok)throw Error(reply.error??'The rename was not acknowledged.');
+      if(this.stopped)return;
+      if(reply.record)this.receiveRecord(host,reply.record);
+      this.renames=this.renames.filter(item=>item.id!==rename.id);this.io.saveRenames?.(this.renames);
+    })().catch(error=>{this.nextRenameRetry=this.now()+3000;logFailure('response.rename.handoff',error,{bindingId:rename.bindingId,before:rename.before,after:rename.after});});
+    this.renameWork=work;void work.finally(()=>{this.renameWork=undefined;}).catch(()=>{});
+  }
   tick(){
     if(this.stopped)return;
+    this.flushRenames();
     for(const runtime of this.jobs.values()){
       const {record,host}=runtime,id=record.request.id;
       if(record.coordinated){
@@ -325,7 +346,21 @@ export class DeviceInlineManager {
   }
   changed(path:string){this.io.noteChanged?.(path);}
   deleted(path:string){this.io.noteDeleted?.(path);for(const host of this.hosts.values())host.responses=relocateExplorerResponses(host.responses,path);}
-  renamed(before:string,after:string){this.io.noteRenamed?.(before,after);for(const host of this.hosts.values())host.responses=relocateExplorerResponses(host.responses,before,after);for(const runtime of this.jobs.values()){runtime.writer.renamed(before,after);runtime.nextTick=0;}this.tick();}
+  renamed(before:string,after:string){
+    this.io.noteRenamed?.(before,after);
+    for(const host of this.hosts.values())host.responses=relocateExplorerResponses(host.responses,before,after);
+    for(const runtime of this.jobs.values()){
+      runtime.writer.renamed(before,after);runtime.nextTick=0;
+      const current=this.renames.filter(item=>item.bindingId===runtime.record.request.id).at(-1)?.after??runtime.record.state?.notePath??runtime.record.request.notePath;
+      if(runtime.record.coordinated&&!runtime.record.stopRequestedAt&&!terminalLease(runtime.record)&&(current===before||current.startsWith(before+'/'))){
+        this.renames.push({id:crypto.randomUUID(),actor:this.actor,bindingId:runtime.record.request.id,host:runtime.host.target,before:current,after:after+current.slice(before.length)});
+        // Preserve the exact authenticated mailbox command across offline
+        // retries and reload. Successive moves are acknowledged in order.
+        this.io.saveRenames?.(this.renames);this.nextRenameRetry=0;
+      }
+    }
+    this.tick();
+  }
   dispose(){
     this.stopped=true;
     for(const runtime of this.jobs.values()){runtime.refresh?.cancel(Error('Response writer stopped.'));runtime.monitor?.stop();runtime.writer.stop();}

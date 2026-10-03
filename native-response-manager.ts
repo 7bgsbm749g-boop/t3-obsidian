@@ -21,7 +21,24 @@ export class NativeResponseManager {
   private reads=new Map<string,Promise<void>>();
   private changedDuringRead=new Set<string>();
   private lifetime=0;
+  private relocations=new Map<string,Map<string,string>>();
+  private warnings=new Map<MarkdownView,Map<string,HTMLElement>>();
   constructor(private app:App){}
+  /** A real vault rename keeps the TFile and response identity. Host leases
+   * can lag behind that event (particularly across mobile Sync). */
+  renamed(before:string,after:string){
+    const moved=(path:string)=>path===before||path.startsWith(before+'/')?after+path.slice(before.length):path;
+    const ids=new Set([...this.provisional].filter(([,item])=>moved(item.path)!==item.path).map(([id])=>id));
+    for(const [id,record] of this.records)if(moved(record.state?.notePath??record.request.notePath)!==(record.state?.notePath??record.request.notePath))ids.add(id);
+    for(const id of ids){
+      const aliases=this.relocations.get(id)??new Map<string,string>();
+      for(const [path,destination] of aliases)aliases.set(path,moved(destination));
+      aliases.set(before,after);this.relocations.set(id,aliases);
+    }
+    for(const item of this.provisional.values())item.path=moved(item.path);
+    for(const [id,record] of this.records){const current=record.state?.notePath??record.request.notePath,next=moved(current);if(next!==current)this.records.set(id,{...record,state:{...record.state??{requestHash:'',accepted:false,status:'waiting',hashes:[],updatedAt:''},notePath:next}});}
+    this.refresh();
+  }
   view(view:MarkdownView){const adapter=this.views.get(view);return adapter&&!adapter.isDisposed()?adapter:undefined;}
   conflictedView(path:string){return [...this.views].find(([view,adapter])=>view.file?.path===path&&!adapter.isDisposed()&&adapter.conflictRecord())?.[0];}
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
@@ -29,6 +46,9 @@ export class NativeResponseManager {
     if(!record.coordinated)return;
     const old=this.records.get(record.request.id);if(old&&(old.epoch>record.epoch||old.epoch===record.epoch&&old.revision>record.revision))return;
     if(proofBytes&&record.state?.delivery)this.proofs.set(record.request.id,readNativeCommitProof(proofBytes,record.request.id,record.state.delivery));
+    const path=record.state?.notePath??record.request.notePath;
+    const move=[...this.relocations.get(record.request.id)??[]].sort((a,b)=>b[0].length-a[0].length).find(([before])=>path===before||path.startsWith(before+'/'));
+    if(move)record={...record,state:{...record.state??{requestHash:'',accepted:false,status:'waiting',hashes:[],updatedAt:''},notePath:move[1]+path.slice(move[0].length)}};
     this.provisional.delete(record.request.id);this.records.set(record.request.id,record);
     this.refresh();
     if(record.state?.delivery&&record.state.cleanupComplete)await this.changed(record.state.notePath);
@@ -74,9 +94,22 @@ export class NativeResponseManager {
   refresh(){
     const opened=new Set<string>();
     const live=new Set(this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView));
+    for(const [view,warnings] of this.warnings)if(!live.has(view)){for(const element of warnings.values())element.remove();this.warnings.delete(view);}
     for(const [view,adapter] of this.views)if(!live.has(view)||adapter.isDisposed()){if(!adapter.isDisposed())adapter.dispose();this.views.delete(view);}
     for(const view of live){
       if(!view.file||typeof view.getViewData!=='function')continue;
+      const blocked=[...this.records.values()].filter(record=>!record.stopRequestedAt&&!record.state?.cleanupComplete&&record.state?.locationConflict?.includes(view.file!.path));
+      let warnings=this.warnings.get(view);if(!warnings){warnings=new Map();this.warnings.set(view,warnings);}
+      for(const [id,element] of warnings)if(!element.isConnected||!blocked.some(record=>record.request.id===id)){element.remove();warnings.delete(id);}
+      for(const record of blocked){
+        if(warnings.has(record.request.id)||!view.contentEl)continue;
+        const banner=view.contentEl.createDiv({cls:'send-to-t3-location-conflict'});banner.setAttribute('role','alert');
+        banner.createEl('strong',{text:'Response blocked: duplicate destinations'});
+        banner.createEl('p',{text:'Choose the intended note to resume this response. The prompt will not be sent again.'});
+        const list=banner.createEl('ul');for(const path of record.state!.locationConflict!)list.createEl('li',{text:path});
+        banner.createEl('button',{text:'Review response destination…'}).onclick=()=>banner.dispatchEvent(new CustomEvent('t3-review-response-location',{bubbles:true,detail:{bindingId:record.request.id}}));
+        view.contentEl.prepend(banner);warnings.set(record.request.id,banner);
+      }
       try{
         let adapter=this.view(view),saved=adapter?adapter.saved():view.getViewData();
         const responses:LocalResponse[]=[...this.provisional.entries()].filter(([,item])=>item.path===view.file!.path).map(([id,item])=>({id,body:item.body}));
@@ -116,5 +149,5 @@ export class NativeResponseManager {
   prepare(path:string,before:string,after:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.prepareMaterialization(before,after,ids);}
   cancel(path:string){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.cancelMaterialization();}
   committed(path:string,saved:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path&&!adapter.acceptCommitted(saved,ids))throw Error('A native pane did not adopt the saved result.');}
-  dispose(){this.lifetime++;for(const adapter of this.views.values())adapter.dispose();this.views.clear();this.records.clear();this.provisional.clear();this.proofs.clear();this.reads.clear();this.changedDuringRead.clear();}
+  dispose(){this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.provisional.clear();this.proofs.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();}
 }

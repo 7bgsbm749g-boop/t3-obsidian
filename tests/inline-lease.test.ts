@@ -5,6 +5,7 @@ import {InlineLeaseAuthority,InlineLeaseClient,LEASE_MS,leasePaths,type LeaseFil
 import {hostedPaths,hostedRequestHash,type HostedInlineRequest,type HostedInlineState} from '../hosted-inline';
 import {initialRegion,completionProof} from '../inline-thread';
 import {DeviceInlineManager,INLINE_SNAPSHOT_INTERVAL_MS,INLINE_SNAPSHOT_TIMEOUT_MS} from '../leased-inline';
+import {responseAnchor} from '../native-response-projection';
 import {ResponseNoteLocator} from '../response-location';
 import {EventJournal,configureDiagnostics} from '../diagnostics';
 import {contentHash} from '../completion';
@@ -22,7 +23,7 @@ function harness(){
   const client=(owner=actor)=>new InlineLeaseClient(owner,remote,directory,()=>time,()=>time,async()=>{await authority.tick();});
   const record=():LeaseRecord=>JSON.parse(data.get(leasePaths(directory,id).record)!);
   const state:HostedInlineState={requestHash:hostedRequestHash(request),accepted:true,notePath:'Note.md',status:'running',hashes:[region.bodyHash],updatedAt:''};
-  return {actor,request,region,files,remote,data,client,record,state,now:()=>time,advance:(ms:number)=>{time+=ms;},restart:()=>{authority.stop();authority=new InlineLeaseAuthority(identity,files,()=>time);return authority.tick();}};
+  return {actor,request,region,files,remote,data,client,record,state,authority:()=>authority,now:()=>time,advance:(ms:number)=>{time+=ms;},restart:()=>{authority.stop();authority=new InlineLeaseAuthority(identity,files,()=>time);return authority.tick();}};
 }
 
 test('registration timeout and successful retry expose the exact mailbox stage and correlated host reply',async()=>{
@@ -311,7 +312,7 @@ test('a moved response overwrites changed contents and a copied block waits for 
     await phone.manager.register(h.request);await h.drain(phone.manager);
     phone.document.path='Moved.md';phone.extras.set('Copy.md',phone.document.value);phone.manager.changed('Copy.md');
     h.answer('New paragraph');h.advance(200);await h.drain(phone.manager);
-    assert.equal(h.record().state?.status,'running');assert.match(h.record().state?.detail??'',/multiple notes/);
+    assert.equal(h.record().state?.status,'paused');assert.match(h.record().state?.detail??'',/multiple notes/);assert.deepEqual(h.record().state?.locationConflict,['Copy.md','Moved.md']);
     assert.doesNotMatch(phone.document.value,/New paragraph/);
     phone.extras.delete('Copy.md');phone.manager.changed('Copy.md');
     phone.document.value=phone.document.value.replace('First paragraph','My correction');
@@ -633,5 +634,47 @@ test('native devices cache authenticated commit evidence once and acknowledge on
     h.advance(1000);await drain();assert.equal(proofReads,1);assert.ok(received.length>=2);
     saved=document;h.advance(1000);await drain();assert.deepEqual(h.record().state!.delivery!.observedBy,[h.actor]);assert.equal(proofReads,1);
     assert.equal((manager as any).jobs.size,0);
+  }finally{manager.dispose();}
+});
+
+test('mobile rename handoffs persist offline, retain mailbox identity, and replay successive moves after reload',async()=>{
+  const h=harness();h.request.nativeProjection=true;
+  await h.client().command({kind:'register',jobId:h.request.id,request:h.request});await h.authority().migrated(h.request.id);
+  let pending:import('../leased-inline').PendingResponseRename[]=[],offline=true;
+  const received:LeaseRecord[]=[];
+  const make=(actor:string)=>new DeviceInlineManager(actor,h.request.vaultId,{
+    loadRenames:()=>structuredClone(pending),saveRenames:items=>{pending=structuredClone(items);},
+    receiveCoordinated:record=>{received.push(record);},readNote:async()=>responseAnchor(h.request.id),isOpen:()=>true,updateNote:async()=>{throw Error('Relocation must not write a device document.');},
+    access:async()=>{throw Error('No redispatch or T3 read is needed for relocation.');},
+  },async()=>({files:{read:h.remote.read,write:async(path,value)=>{if(offline)throw Error('offline');await h.remote.write(path,value);}},close:()=>{}}),h.now,h.now,async()=>{await new Promise(resolve=>setImmediate(resolve));});
+  const first=make(h.actor);
+  first.discover([h.request.host]);for(let i=0;i<32;i++)await new Promise(resolve=>setImmediate(resolve));
+  first.renamed('Note.md','Renamed.md');first.renamed('Renamed.md','Folder/Final.md');
+  for(let i=0;i<16;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(pending.length,2);const identities=pending.map(item=>item.id);first.dispose();
+  offline=false;const restarted=make(randomUUID());
+  try{for(let i=0;i<80;i++){restarted.tick();await new Promise(resolve=>setImmediate(resolve));}
+    assert.equal(pending.length,0);assert.equal(h.record().state?.notePath,'Folder/Final.md');
+    assert.deepEqual(h.record().relocations,[{before:'Note.md',after:'Renamed.md'},{before:'Renamed.md',after:'Folder/Final.md'}]);
+    assert.ok(identities.every(id=>h.data.has(leasePaths(h.request.host.directory,id).reply)));
+    assert.equal(h.record().request.messageId,h.request.messageId);assert.ok(received.length);
+  }finally{restarted.dispose();}
+});
+
+test('a canceled response rejects a persisted rename without relocating or retrying it after reload',async()=>{
+  const h=harness();h.request.nativeProjection=true;
+  await h.client().command({kind:'register',jobId:h.request.id,request:h.request});await h.authority().migrated(h.request.id);
+  await h.client().command({kind:'stop',jobId:h.request.id});
+  let pending:import('../leased-inline').PendingResponseRename[]=[{id:randomUUID(),actor:h.actor,bindingId:h.request.id,host:h.request.host,before:'Note.md',after:'Renamed.md'}];
+  const commandId=pending[0].id;
+  const manager=new DeviceInlineManager(randomUUID(),h.request.vaultId,{
+    loadRenames:()=>structuredClone(pending),saveRenames:items=>{pending=structuredClone(items);},
+    receiveCoordinated:()=>{},readNote:async()=>responseAnchor(h.request.id),isOpen:()=>true,updateNote:async()=>{throw Error('Cancellation must not relocate a device document.');},access:async()=>{throw Error('Cancellation must not redispatch.');},
+  },async()=>({files:h.remote,close:()=>{}}),h.now,h.now,async()=>{await new Promise(resolve=>setImmediate(resolve));});
+  try{
+    for(let i=0;i<80;i++){manager.tick();await new Promise(resolve=>setImmediate(resolve));}
+    assert.equal(pending.length,0);assert.equal(h.record().state?.notePath??h.record().request.notePath,'Note.md');assert.equal(h.record().relocations,undefined);
+    const reply=JSON.parse(h.data.get(leasePaths(h.request.host.directory,commandId).reply)!);assert.equal(reply.ok,false);assert.match(reply.error,/canceled/);
+    manager.renamed('Note.md','Later.md');assert.equal(pending.length,0);
   }finally{manager.dispose();}
 });

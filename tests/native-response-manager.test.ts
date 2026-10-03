@@ -22,7 +22,7 @@ function fixture(panes=1){
   let leaves=views.map(view=>({view}));
   const app:any={workspace:{getLeavesOfType:()=>leaves},vault:{getFileByPath:(path:string)=>path===file.path?file:null,read:async()=>{reads++;return read();}},saveLocalStorage:(_key:string,data:any)=>conflicts.push(data)};
   const manager=new NativeResponseManager(app);
-  return {manager,views,frames,conflicts,file,visible:(pane=0)=>values[pane],edit:(text:string,pane=0)=>{values[pane]=text;},disk:(text:string)=>{disk=text;},readWith:(fn:()=>Promise<string>)=>{read=fn;},reads:()=>reads,close:()=>{leaves=[];manager.refresh();}};
+  return {manager,views,frames,conflicts,file,visible:(pane=0)=>values[pane],edit:(text:string,pane=0)=>{values[pane]=text;},disk:(text:string)=>{disk=text;},readWith:(fn:()=>Promise<string>)=>{read=fn;},reads:()=>reads,open:(view:any)=>{leaves.push({view});},close:()=>{leaves=[];manager.refresh();}};
 }
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
 async function start(h:ReturnType<typeof fixture>){await h.manager.receive(record());await h.manager.receive(record(other));for(const frames of h.frames)frames.length=0;}
@@ -92,4 +92,23 @@ test('a stale cross-pane echo cannot resurrect a completed anchor after successf
   const h=fixture();await start(h);h.disk(final);await h.manager.receive(completed());
   const echo=projectResponses(before,[{id,body},{id:other,body:otherBody}]).display;h.views[0].setViewData(echo);
   assert.ok(h.manager.view(h.views[0] as any)!.conflictRecord());assert.ok(h.visible().includes(body));neverBlank(h);
+});
+test('a verified rename retains the native reply through stale host leases, successive moves and final adoption',async()=>{
+  const h=fixture();await start(h);h.file.path='Folder/Renamed.md';h.manager.renamed('Note.md',h.file.path);
+  assert.ok(h.visible().includes(body));assert.ok(h.visible().includes(otherBody));assert.equal(h.views[0].getViewData(),before);
+  await h.manager.receive(record(id,2));assert.ok(h.visible().includes(body));
+  h.file.path='Moved/Renamed.md';h.manager.renamed('Folder','Moved');
+  await h.manager.receive({...record(id,3),state:{...record(id,3).state!,notePath:'Folder/Renamed.md'}});
+  assert.ok(h.visible().includes(body));
+  h.disk(final);await h.manager.receive(completed(4));assert.equal(h.views[0].getViewData(),final);neverBlank(h);
+});
+test('renaming back follows the same file while stale leases cannot remove its projection',async()=>{
+  const h=fixture();await start(h);h.file.path='Other.md';h.manager.renamed('Note.md','Other.md');h.file.path='Note.md';h.manager.renamed('Other.md','Note.md');
+  await h.manager.receive({...record(id,2),state:{...record(id,2).state!,notePath:'Other.md'}});assert.ok(h.visible().includes(body));assert.equal(h.views[0].getViewData(),before);neverBlank(h);
+});
+test('reusing a renamed path for an independent response keeps its own registration and projection',async()=>{
+  const h=fixture();await h.manager.receive(record());h.file.path='Moved.md';h.manager.renamed('Note.md','Moved.md');
+  let visible=responseAnchor(other);const view:any={file:{path:'Note.md'},getViewData:()=>visible,setViewData:(value:string)=>{visible=value;},getMode:()=> 'preview',save:async()=>{},requestSave:()=>{}};
+  h.open(view);await h.manager.receive(record(other));
+  assert.ok(visible.includes(otherBody));assert.equal(view.getViewData(),responseAnchor(other));assert.ok(h.visible().includes(body));assert.ok(!h.visible().includes(otherBody));
 });

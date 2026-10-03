@@ -1,5 +1,10 @@
 import {markdownCodeRanges} from './reply-html';
 import {safeNotePath} from './hosted-inline';
+import {contentHash} from './completion';
+
+export class DuplicateResponseLocation extends Error {
+  constructor(readonly paths:string[]){super(`This response block appears in multiple notes: ${paths.join('; ')}. Review the response destination to resume streaming.`);}
+}
 
 /** Locations are hints; a binding's Markdown markers are its identity. The
  * recovery scan is shared and throttled, while observed edits update the index. */
@@ -10,10 +15,13 @@ export class ResponseNoteLocator {
   private scannedAt=-Infinity;
   private recoveryDelay=60000;
   private known=new Set<string>();
+  private hashes=new Map<string,string>();
+  private relocations=new Map<string,{current:string;previous:Map<string,string>}>();
   constructor(private paths:()=>string[],private read:(path:string)=>Promise<string|undefined>,private now=()=>Date.now()){}
   remember(path:string,document:string|undefined){
     this.dirty.delete(path);
-    if(document===undefined){this.notes.delete(path);return;}
+    if(document===undefined){this.notes.delete(path);this.hashes.delete(path);return;}
+    this.hashes.set(path,contentHash(document));
     const matches=[...document.matchAll(/^<!-- (?:t3-inline|t3-response):start:([0-9a-f-]{36}) -->$/gm)];
     const code=matches.length?markdownCodeRanges(document):[];
     const ids=new Set(matches.filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to)).map(match=>match[1]));
@@ -26,6 +34,11 @@ export class ResponseNoteLocator {
       const next=after+path.slice(before.length);this.notes.delete(path);this.notes.set(next,ids);this.dirty.add(next);
     }
     this.deleted(before);this.changed(after);
+  }
+  relocated(id:string,before:string,after:string,previousHash?:string){
+    const move=this.relocations.get(id)??{current:before,previous:new Map<string,string>()};
+    if(previousHash)move.previous.set(before,previousHash);move.previous.delete(after);move.current=after;this.relocations.set(id,move);
+    this.changed(before);this.changed(after);
   }
   private async refresh(path:string){const document=await this.read(path);this.remember(path,document);return document;}
   private async refreshDirty(){await Promise.all([...this.dirty].map(path=>this.refresh(path)));}
@@ -48,6 +61,7 @@ export class ResponseNoteLocator {
     try{await work;}finally{this.scan=undefined;}
   }
   async locate(id:string,preferred:string):Promise<string|undefined>{
+    const move=this.relocations.get(id);if(move)preferred=move.current;
     const document=await this.refresh(preferred);
     await this.refreshDirty();
     let paths=this.candidates(id);
@@ -59,7 +73,8 @@ export class ResponseNoteLocator {
       // find all matches before choosing a relocated destination.
       await this.recover();paths=this.candidates(id);
     }
-    if(paths.length>1)throw Error('This response block appears in multiple notes. Remove the duplicate block to resume streaming.');
+    if(move){paths=paths.filter(path=>move.previous.get(path)!==this.hashes.get(path));if(!paths.includes(move.current))return undefined;}
+    if(paths.length>1)throw new DuplicateResponseLocation(paths.sort());
     if(paths.length)return paths[0];
     // An existing note with a removed/edited block must still reach the writer's
     // conflict guard. A missing file is a temporary move/Sync wait, not conflict.
