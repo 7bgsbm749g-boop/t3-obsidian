@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {nativeCommitPath,readNativeCommitProof,nativeCommitMatches} from '../native-response-commit';
 import {randomUUID} from 'node:crypto';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -39,6 +40,11 @@ test('production host streams only to journal, stages a table and commits the re
   h.notes.set('Note.md',before+'Ordinary edit\n');h.complete();await h.writer.tick();
   const saved=h.notes.get('Note.md')!,journal=await h.host.journal.read(h.id),record=JSON.parse((await h.files.read(leasePaths(h.request.host.directory,h.id).record))!);
   assert.equal(h.writes(),1,JSON.stringify({record,journal}));assert.ok(saved.includes('| Barb | 20 | |'));assert.ok(saved.includes('Added **25kg**.'));assert.ok(saved.endsWith('Ordinary edit\n'));assert.ok(!saved.includes('t3-inline:'));assert.equal(journal!.status,'verified');assert.equal(record.state.cleanupComplete,true);assert.deepEqual(record.state.delivery.observedBy,[]);
+  const proofPath=nativeCommitPath(h.request.host.directory,h.id,record.state.delivery.commitId),proofBytes=(await h.files.read(proofPath))!;
+  const proof=readNativeCommitProof(proofBytes,h.id,record.state.delivery);
+  assert.ok(nativeCommitMatches(proof,saved.replace('Ordinary edit','Later ordinary edit')));
+  assert.equal(nativeCommitMatches(proof,saved.replace('Added **25kg**.','Different answer')),false);
+  assert.equal(nativeCommitMatches(proof,saved.replace('25kg','30kg')),false,'staged result ranges are protected too');
   const ack=await h.client.command({kind:'observe',jobId:h.id,observed:{commitId:journal!.verified!.commitId,hash:contentHash(saved)}});assert.equal(ack.ok,true);await h.host.scan();assert.equal((await h.host.journal.read(h.id))!.acknowledgements.length,1);
   assert.equal((await h.client.command({kind:'claim',jobId:h.id})).ok,false);
  }finally{await h.close();}

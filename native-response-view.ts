@@ -15,27 +15,47 @@ export class NativeResponseView {
   private projection:ResponseProjection;
   private responses:LocalResponse[]=[];
   private base:string;
+  private diskBase:string;
   private blocked?:NativeViewConflict;
   private disposed=false;
   private file:TFile|null;
+  private materialized=new Set<string>();
+  private ownSave?:{text:string};
   private materialization?:{before:string;after:string;ids:string[]};
-  constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string){
-    this.file=view.file;this.base=saved;this.projection=projectResponses(saved,[]);
+  constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[]){
+    this.file=view.file;this.base=saved;this.diskBase=saved;this.projection=projectResponses(saved,[]);
     this.originalGet=view.getViewData;this.originalSet=view.setViewData;
     this.originalSave=view.save;
     this.getWrapper=()=>this.saved();
     this.setWrapper=(incoming,clear)=>this.incoming(incoming,clear);
     this.saveWrapper=async clear=>{
-      const intended=this.saved(),file=view.file,previousBase=this.base;
+      const file=view.file;
       const previousDisk=await this.readSaved();
+      if(this.disposed||view.file!==file)return;
+      // Obsidian's save can return before its debounce reaches disk. Recognize
+      // that exact own intent on the next read before merging a later edit or
+      // undo against the older baseline. The actual disk bytes remain proof.
+      if(this.ownSave&&previousDisk===this.ownSave.text){this.base=previousDisk;this.diskBase=previousDisk;this.ownSave=undefined;}
+      // A completed file can arrive before its native notification or lease.
+      // Check only previously saved response anchors here. Ordinary autosave
+      // can bypass view.save, and cross-pane echoes can be ahead of disk; an
+      // ordinary difference alone must never overwrite edits or native undo.
+      if(previousDisk!==undefined){
+        const lost=this.responses.some(response=>{
+          try{return !!responseRegion(this.diskBase,response.id)&&!responseRegion(previousDisk,response.id);}catch{return true;}
+        });
+        if(lost)this.incoming(previousDisk,false);
+        this.diskBase=previousDisk;
+      }
+      const intended=this.saved(),previousBase=this.base;
       // Native document changes schedule autosave for local streaming too.
       // Do not touch the file when its saved projection is already identical.
-      if(clear||previousDisk!==this.saved())await this.originalSave.call(view,clear);
+      if(clear||previousDisk!==this.saved()){this.ownSave={text:intended};await this.originalSave.call(view,clear);}
       const disk=await this.readSaved();
       // Save return alone is not proof. Without adopting a verified own save,
       // a later external edit containing the same ordinary edit could be
       // misclassified as an overlap against an old baseline.
-      if(!this.blocked&&view.file===file&&disk===intended&&this.base===previousBase)this.base=intended;
+      if(!this.blocked&&view.file===file&&disk===intended){this.diskBase=disk;if(this.base===previousBase)this.base=intended;if(this.ownSave?.text===intended)this.ownSave=undefined;}
     };
     view.getViewData=this.getWrapper;view.setViewData=this.setWrapper;view.save=this.saveWrapper;
   }
@@ -57,6 +77,7 @@ export class NativeResponseView {
     if(this.disposed)throw Error('Native response view is disposed.');
     const saved=this.saved(),projection=projectResponses(saved,responses);
     this.responses=responses.map(response=>({...response}));this.projection=projection;
+    for(const response of responses)this.materialized.delete(response.id);
     this.render(projection.display,false);
   }
   private render(display:string,clear:boolean){
@@ -73,21 +94,26 @@ export class NativeResponseView {
   private incoming(incoming:string,clear:boolean){
     if(this.disposed)return this.originalSet.call(this.view,incoming,clear);
     if(this.view.file!==this.file){this.unwrap();return this.originalSet.call(this.view,incoming,clear);}
-    if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
     // Another pane can echo the committed file with remaining local response
     // bodies still displayed. Compare the exact saved projection to the
     // durable materialization intent, rather than those transient bodies.
     if(this.normalizeIncoming){try{incoming=this.normalizeIncoming(incoming);}catch{/* Preserve ambiguous boundaries for the conflict path. */}}
     if(this.materialization?.after===incoming){
       const intent=this.materialization;
-      this.acceptCommitted(incoming,intent.ids);this.materialization=undefined;return;
+      if(this.resolveCommitted(incoming,intent.ids,clear))this.materialization=undefined;return;
     }
+    const committed=this.committedIncoming?.(incoming)??[];
+    if(committed.length){this.resolveCommitted(incoming,committed,clear);return;}
+    if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
     // Obsidian synchronizes native editor data between panes before disk
     // autosave. Its setViewData payload can therefore be a displayed document.
     // Strip only this view's exact registered marker pairs; malformed/missing
     // pairs still take the preserved-conflict path below.
     if(this.projection.ranges.length){try{incoming=savedProjection(incoming,this.projection);}catch{/* Final materialization or damaged boundaries: retain exact incoming bytes. */}}
-    const local=this.saved(),edits=changedEdits(this.base,local);
+    const local=this.saved();
+    if(this.ownSave?.text===incoming)this.base=incoming;
+    const edits=changedEdits(this.base,local);
+    if([...this.materialized].some(id=>responseRegion(incoming,id))){this.block({base:this.base,local,incoming,reason:'An incoming note resurrected an already materialized response anchor.'});return;}
     // Obsidian may load our own just-saved projection during a mode switch or
     // echo. Identical local/incoming edits are already the same revision.
     const merge=incoming===local?{ok:true as const,text:local}:mergeSavedEdits(this.base,incoming,edits);
@@ -114,15 +140,26 @@ export class NativeResponseView {
     this.projection=projectResponses(chosen,responses);this.responses=responses;this.base=saved;this.blocked=undefined;this.render(this.projection.display,false);
     if(chosen!==saved)this.view.requestSave();
   }
-  resolveCommitted(saved:string,ids:string[]){
-    if(this.blocked){
-      const conflict=this.blocked,edits=changedEdits(conflict.base,conflict.local),merge=mergeSavedEdits(conflict.base,saved,edits);
-      if(!merge.ok)return false;
-      this.blocked=undefined;
-      this.base=saved;this.responses=this.responses.filter(response=>!ids.includes(response.id));this.projection=projectResponses(merge.text,this.responses);this.render(this.projection.display,false);
-      if(merge.text!==saved)this.view.requestSave();return true;
-    }
-    this.acceptCommitted(saved,ids);return true;
+  hasMaterialized(id:string){return this.materialized.has(id);}
+  responseIds(){return this.responses.map(response=>response.id);}
+  resolveCommitted(saved:string,ids:readonly string[],clear=false){
+    if(this.disposed)return false;
+    const base=this.blocked?.base??this.base;
+    const local=this.blocked?.local??(this.displayed()===saved?this.base:this.saved());
+    const merge=mergeSavedEdits(base,saved,changedEdits(base,local));
+    if(!merge.ok){if(!this.blocked)this.block({base,local,incoming:saved,reason:merge.reason});return false;}
+    const responses=this.responses.filter(r=>!ids.includes(r.id));
+    let projection:ResponseProjection;
+    try{
+      if(ids.some(id=>responseRegion(saved,id)))throw new ProjectionConflict('The saved result still contains a response anchor.');
+      projection=projectResponses(merge.text,responses);
+    }catch(error){if(!this.blocked)this.block({base,local,incoming:saved,reason:error instanceof Error?error.message:String(error)});return false;}
+    // All validation precedes this single transition. A failed merge cannot
+    // retire a response, clear a conflict or briefly render an empty anchor.
+    this.blocked=undefined;this.base=saved;this.diskBase=saved;this.ownSave=undefined;this.responses=responses;this.projection=projection;
+    for(const id of ids)this.materialized.add(id);
+    this.render(projection.display,clear);
+    if(merge.text!==saved)this.view.requestSave();return true;
   }
   isDisposed(){return this.disposed;}
   private unwrap(){
@@ -153,12 +190,7 @@ export class NativeResponseView {
     // A native file update can load the exact verified bytes before our
     // materialization callback runs. The old projection no longer has anchors
     // in that document; it is already the authoritative committed version.
-    const local=this.displayed()===saved?this.base:this.saved(),edits=changedEdits(this.base,local),merge=mergeSavedEdits(this.base,saved,edits);
-    if(!merge.ok){this.block({base:this.base,local,incoming:saved,reason:merge.reason});return;}
-    const responses=this.responses.filter(r=>!ids.includes(r.id));
-    const projection=projectResponses(merge.text,responses);
-    this.base=saved;this.responses=responses;this.projection=projection;this.render(projection.display,false);
-    if(merge.text!==saved)this.view.requestSave();
+    return this.resolveCommitted(saved,ids);
   }
   /** Registered only on this view's native CodeMirror instance by the lab.
    * Ordinary edits, selection and history use Obsidian's normal commands. */

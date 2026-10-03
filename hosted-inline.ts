@@ -27,7 +27,7 @@ export interface HostedInlineRequest {
 }
 export interface HostedInlineState {
   assetFailures?:Array<{source:string;error:string}>;
-  delivery?:{commitId:string;hash:string;verifiedOnHost:boolean;observedBy:string[]};
+  delivery?:{commitId:string;hash:string;verifiedOnHost:boolean;observedBy:string[];proofHash?:string};
   requestHash:string;accepted:boolean;notePath:string;turnId?:string;messageId?:string;pendingMessageId?:string;
   status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict'|'paused';
   hashes:string[];body?:string;detail?:string;updatedAt:string;

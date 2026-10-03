@@ -7,12 +7,13 @@ import {readInlineEvents,readInlineSnapshot,watchThread,type ThreadAccess,type T
 import type {ReplyReference} from './reply-assets';
 import type {SteeringInput} from './inline-steering';
 import {logFailure} from './diagnostics';
+import {nativeCommitPath,readNativeCommitProof} from './native-response-commit';
 
 export const INLINE_SNAPSHOT_INTERVAL_MS=10_000;
 export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
 
 export interface DeviceInlineIO {
-  receiveCoordinated?(record:LeaseRecord):void;
+  receiveCoordinated?(record:LeaseRecord,proofBytes?:string):void|Promise<void>;
   readSaved?(path:string):Promise<string|undefined>;
   access(environmentId:string):Promise<ThreadAccess>;
   readNote(path:string):Promise<string|undefined>;
@@ -26,7 +27,7 @@ export interface DeviceInlineIO {
   importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
 type SnapshotRefresh={epoch:number;startedAt:number;work:Promise<InlineThreadState|undefined>;cancel(error:Error):void};
-type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;maintenanceFailures?:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void}};
+type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;maintenanceFailures?:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void};proof?:{hash:string;bytes:string}};
 type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;close():void;discovery?:Promise<void>;lastDiscovery:number;responses:ExplorerResponse[]};
 const hostKey=(target:InlineHostTarget)=>JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);
 const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...state,updatedAt:''}):'';
@@ -122,7 +123,7 @@ export class DeviceInlineManager {
     if(this.stopped||record.request.vaultId!==this.vaultId||hostKey(record.request.host)!==hostKey(host.target))return;
     const projected=leaseExplorerResponse(record),previous=host.responses.find(r=>r.id===projected.id);
     if(!previous||projected.epoch>previous.epoch||projected.epoch===previous.epoch&&projected.revision>previous.revision)host.responses=host.responses.filter(r=>r.id!==projected.id).concat(projected);
-    if(record.coordinated)this.io.receiveCoordinated?.(record);
+    if(record.coordinated)void Promise.resolve(this.io.receiveCoordinated?.(record)).catch(error=>logFailure('note.projection.receive',error,{bindingId:record.request.id}));
     const old=this.jobs.get(record.request.id);
     if(old){if(record.epoch>old.record.epoch||record.epoch===old.record.epoch&&record.revision>=old.record.revision){old.record=record;if(record.stopRequestedAt)old.writer.requestStop(record.request.id);}return;}
     if(terminalLease(record)&&!record.coordinated)return;
@@ -270,6 +271,15 @@ export class DeviceInlineManager {
     const {host}=runtime,raw=await host.files.read(leasePaths(host.target.directory,runtime.record.request.id).record);if(!raw||this.stopped)return;
     const record:LeaseRecord=JSON.parse(raw);this.receiveRecord(host,record);
     const delivery=record.state?.delivery;
+    if(delivery?.proofHash&&this.io.receiveCoordinated){
+      if(runtime.proof?.hash!==delivery.proofHash){
+        const bytes=await host.files.read(nativeCommitPath(host.target.directory,record.request.id,delivery.commitId));
+        if(bytes===undefined)return;
+        readNativeCommitProof(bytes,record.request.id,delivery);runtime.proof={hash:delivery.proofHash,bytes};
+      }
+      if(this.stopped||runtime.record.epoch!==record.epoch||runtime.record.revision!==record.revision)return;
+      await this.io.receiveCoordinated(record,runtime.proof.bytes);
+    }
     if(delivery&&!delivery.observedBy.includes(this.actor)&&this.io.readSaved){
       const saved=await this.io.readSaved(record.state!.notePath);
       if(saved!==undefined&&contentHash(saved)===delivery.hash)this.reply(runtime,await host.client.command({kind:'observe',jobId:record.request.id,observed:{commitId:delivery.commitId,hash:delivery.hash}}));

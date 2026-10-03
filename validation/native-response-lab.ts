@@ -1,4 +1,6 @@
 import {productionNative} from './production-native';
+import {nativeResponseHandoff} from './native-response-handoff';
+import {traceNativeView} from './native-view-trace';
 import {nativeResponses} from '../native-response-manager';
 import {Plugin,MarkdownView,MarkdownRenderChild} from 'obsidian';
 import {NativeResponseView} from '../native-response-view';
@@ -86,6 +88,7 @@ export default class NativeResponseLab extends Plugin {
     }
     this.write('rich.json',rich);
     const edges:any[]=[];
+    const trace:unknown[]=[];traceNativeView(this.adapter,trace,'edge');
     await virtual.setViewState({type:'markdown',state:{file:'Virtual.md',mode:'source',source:false}});
     this.adapter.setResponses([{id,body:'> **Bold fixture**\n\n> Response for selection.'}]);
     view.editor.replaceRange('Edited ',{line:2,ch:0});view.requestSave();
@@ -93,15 +96,17 @@ export default class NativeResponseLab extends Plugin {
     for(let attempt=0;attempt<50;attempt++){autosaved=await app.vault.adapter.read('Virtual.md');if(autosaved===expectedEdit)break;await pause(100);}
     edges.push({name:'ordinary-autosave',pass:autosaved===expectedEdit,observed:autosaved,expected:expectedEdit});
     this.adapter.setResponses([{id,body:'> **Bold fixture**\n\n> Stream updated.'}]);
-    view.editor.undo();await view.save();edges.push({name:'undo-ordinary-edit-after-stream',pass:view.getViewData()===saved&&view.editor.getValue().includes('Stream updated.')});
-    view.editor.redo();await view.save();edges.push({name:'redo-ordinary-edit-after-stream',pass:view.getViewData()===saved.replace('Before','Edited Before')&&view.editor.getValue().includes('Stream updated.')});
+    const snapshot=async()=>({saved:view.getViewData(),display:view.editor.getValue(),disk:await app.vault.read(view.file!)});
+    view.editor.undo();const undoBeforeSave=await snapshot();await view.save();edges.push({name:'undo-ordinary-edit-after-stream',pass:view.getViewData()===saved&&view.editor.getValue().includes('Stream updated.'),beforeSave:undoBeforeSave,afterSave:await snapshot()});
+    view.editor.redo();const redoBeforeSave=await snapshot();await view.save();edges.push({name:'redo-ordinary-edit-after-stream',pass:view.getViewData()===saved.replace('Before','Edited Before')&&view.editor.getValue().includes('Stream updated.'),beforeSave:redoBeforeSave,afterSave:await snapshot()});
     const editedSaved=saved.replace('Before','Edited Before');
     await virtual.setViewState({type:'markdown',state:{file:'Virtual.md',mode:'preview'}});await pause(150);
-    edges.push({name:'reading-after-edit',pass:view.getViewData()===editedSaved&&view.editor.getValue().includes('Stream updated.')});
+    edges.push({name:'reading-after-edit',pass:view.getViewData()===editedSaved&&view.editor.getValue().includes('Stream updated.'),observed:await snapshot()});
     await virtual.setViewState({type:'markdown',state:{file:'Virtual.md',mode:'source',source:true}});await pause(150);
-    edges.push({name:'source-after-edit',pass:view.getViewData()===editedSaved&&view.editor.getValue().includes('Stream updated.')});
+    edges.push({name:'source-after-edit',pass:view.getViewData()===editedSaved&&view.editor.getValue().includes('Stream updated.'),observed:await snapshot()});
     await virtual.setViewState({type:'markdown',state:{file:'Virtual.md',mode:'source',source:false}});await pause(150);
     const incoming=editedSaved.replace('After response.','External ordinary edit.');await app.vault.modify(view.file!,incoming);await pause(500);
+    this.write('edge-trace.json',trace);
     edges.push({name:'incoming-compatible-file-update',pass:view.getViewData()===incoming&&view.editor.getValue().includes('Stream updated.')});
     const at=view.editor.getValue().indexOf('Bold fixture');view.editor.setSelection(view.editor.offsetToPos(at),view.editor.offsetToPos(at+12));edges.push({name:'native-selection',pass:view.editor.getSelection()==='Bold fixture'});
     view.editor.replaceRange('Changed',view.editor.offsetToPos(at),view.editor.offsetToPos(at+12));edges.push({name:'protect-generated-text',pass:view.editor.getValue().includes('Bold fixture')});
@@ -128,6 +133,7 @@ export default class NativeResponseLab extends Plugin {
     await boundedView.onUnloadFile(file);edges.push({name:'unload-projection',pass:await app.vault.read(file)===disk});
     this.adapter.dispose();this.adapter=undefined;
     const production=await productionNative(app,this.root);this.write('production.json',production);
-    this.write('edges.json',edges);this.write('done.json',{cases:matrix.length,richCases:rich.length,allRichPassed:rich.every(test=>test.layoutEqual&&test.displayEqual&&test.buttonsEqual&&test.savedClean&&(test.mode==='source'||test.answerClicks===2)),allLayoutsEqual:matrix.every(test=>test.layoutEqual),allDisplayEqual:matrix.every(test=>test.displayEqual),allSavedClean:matrix.every(test=>test.savedClean),edges,conflicts,iphoneTested:false,liveSyncTested:false,productionFixturePassed:production.every(row=>row.pass),productionActivated:false});
+    const handoff=await nativeResponseHandoff(app,this.root);this.write('handoff.json',handoff);
+    this.write('edges.json',edges);this.write('done.json',{cases:matrix.length,richCases:rich.length,allRichPassed:rich.every(test=>test.layoutEqual&&test.displayEqual&&test.buttonsEqual&&test.savedClean&&(test.mode==='source'||test.answerClicks===2)),allLayoutsEqual:matrix.every(test=>test.layoutEqual),allDisplayEqual:matrix.every(test=>test.displayEqual),allSavedClean:matrix.every(test=>test.savedClean),edges,conflicts,iphoneTested:false,liveSyncTested:false,productionFixturePassed:production.every(row=>row.pass),handoffFixturePassed:handoff.every(row=>row.pass),productionActivated:false});
   }
 }

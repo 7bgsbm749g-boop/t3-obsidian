@@ -64,6 +64,41 @@ test('verified own saves advance the baseline before a compatible external edit 
   const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);fixture.edit(fixture.read().replace('Before','Saved edit'));await fixture.view.save();
   const incoming=saved.replace('Before','Saved edit').replace('After','External edit');fixture.view.setViewData(incoming,false);assert.equal(fixture.view.getViewData(),incoming);assert.deepEqual(fixture.conflicts,[]);
 });
+test('a debounced own-save readback advances its baseline without overwriting a later undo',async()=>{
+  let value=saved,disk=saved,pending=saved;
+  const view:any={getViewData:()=>value,setViewData:(text:string)=>{value=text;},getMode:()=> 'preview',requestSave:()=>{},save:async()=>{pending=view.getViewData();}};
+  const adapter=new NativeResponseView(view,saved,()=>assert.fail('No competing edit exists.'),async()=>disk);
+  adapter.setResponses([{id,body:'> Stream'}]);value=value.replace('Before','Edited Before');await view.save();
+  disk=pending;value=value.replace('Edited Before','Before');await view.save();
+  assert.equal(view.getViewData(),saved);assert.ok(value.includes('> Stream'));assert.equal(pending,saved);
+});
+test('unsaved cross-pane echoes do not turn an unchanged disk read into an edit deletion',async()=>{
+  let value=saved,disk=saved;
+  const view:any={getViewData:()=>value,setViewData:(text:string)=>{value=text;},getMode:()=> 'preview',requestSave:()=>{},save:async()=>{disk=view.getViewData();}};
+  const adapter=new NativeResponseView(view,saved,()=>assert.fail('No competing edit exists.'),async()=>disk);
+  adapter.setResponses([{id,body:'> Stream'}]);
+  const edited=saved+'\nUnsaved pane';view.setViewData(edited,false);await view.save();
+  assert.equal(disk,edited);assert.ok(value.includes('> Stream'));
+  view.setViewData(saved,false);await view.save();assert.equal(disk,saved);
+});
+test('a delayed own-save echo preserves a newer cross-pane undo',async()=>{
+  let value=saved,disk=saved,pending=saved;
+  const view:any={getViewData:()=>value,setViewData:(text:string)=>{value=text;},getMode:()=> 'preview',requestSave:()=>{},save:async()=>{pending=view.getViewData();}};
+  const adapter=new NativeResponseView(view,saved,()=>assert.fail('No competing edit exists.'),async()=>disk);
+  adapter.setResponses([{id,body:'> Stream'}]);
+  const edited=saved.replace('Before','Edited Before');view.setViewData(edited,false);await view.save();
+  view.setViewData(saved,false);disk=pending;view.setViewData(disk,false);
+  assert.equal(view.getViewData(),saved);await view.save();assert.equal(pending,saved);assert.ok(value.includes('> Stream'));
+});
+test('native autosave bypassing view.save cannot make its ordinary disk edit overwrite a later undo',async()=>{
+  let value=saved,disk=saved;
+  const view:any={getViewData:()=>value,setViewData:(text:string)=>{value=text;},getMode:()=> 'preview',requestSave:()=>{},save:async()=>{disk=view.getViewData();}};
+  const adapter=new NativeResponseView(view,saved,()=>assert.fail('An ordinary undo is safe.'),async()=>disk);
+  adapter.setResponses([{id,body:'> Stream'}]);
+  value=value.replace('Before','Edited Before');disk=view.getViewData(); // Native's captured autosave function.
+  value=value.replace('Edited Before','Before');await view.save();
+  assert.equal(view.getViewData(),saved);assert.equal(disk,saved);assert.ok(value.includes('> Stream'));
+});
 test('literal marker examples in fenced code are rendered and stripped structurally',()=>{
   const body=`Example:\n\n\`\`\`html\n${responseAnchor(other)}\n\`\`\``;
   const projection=projectResponses(saved,[{id,body}]);assert.ok(projection.display.includes(body));assert.equal(savedProjection(projection.display,projection),saved);

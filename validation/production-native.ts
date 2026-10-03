@@ -8,6 +8,7 @@ import {editorStream} from '../editor-stream';
 import {initialRegion} from '../inline-thread';
 import {responseAnchor} from '../native-response-projection';
 import {contentHash} from '../completion';
+import {traceNativeView} from './native-view-trace';
 const fs=require('node:fs/promises'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 export async function productionNative(app:App,root:string){
@@ -30,6 +31,7 @@ export async function productionNative(app:App,root:string){
   const writer=new HostedInlineWriter(identity,nativeIO);
   try{
     await writer.tick();await pause(200);const disk=await app.vault.read(file);
+    const trace:unknown[]=[];views.forEach((view,index)=>traceNativeView(manager.view(view)!,trace,'production-'+index));
     rows.push({name:'production-two-native-views-local-stream',pass:views.every(view=>view.editor.getValue().includes('Checking **native** streaming.'))&&!disk.includes('Checking')&&disk.indexOf('t3-inline:start')<disk.indexOf('## NEXT')});
     const secondSource={...source,id:crypto.randomUUID(),threadId:'second-thread',messageId:crypto.randomUUID()};
     const second=await editorStream(secondSource,file.path,deviceNoteIO(app),()=>true);await views[0].save();await pause(200);
@@ -50,13 +52,16 @@ export async function productionNative(app:App,root:string){
     views[1].editor.replaceRange('\nUnsaved pane',views[1].editor.offsetToPos(views[1].editor.getValue().length));
     const stage:any=await host.command('stage-note-edit',binding.id);const staged=(await fs.readFile(stage.stagingPath,'utf8')).replace('| Exercise | 20kg |','| Exercise | 20kg | 25kg |').replace('| --- | ---: |','| --- | ---: | ---: |').replace('| Barb | 20 |','| Barb | 20 | |');await fs.writeFile(stage.stagingPath,staged);await host.command('submit-note-edit',binding.id,stage.originalHash);
     complete=true;await writer.tick();rows.push({name:'production-dirty-pane-delays-final-save',pass:(await host.journal.read(binding.id))!.status==='commit-pending'&&!(await app.vault.read(file)).includes('Added **25kg**.')});
-    views.forEach((view,index)=>{view.save=saves[index];});await views[1].save();await pause(300);await writer.tick();
+    const dirtyBeforeSave=views.map(view=>({saved:view.getViewData(),display:view.editor.getValue()}));
+    views.forEach((view,index)=>{view.save=saves[index];});await views[1].save();await pause(300);
+    const dirtyAfterSave={disk:await app.vault.read(file),views:views.map(view=>({saved:view.getViewData(),display:view.editor.getValue()}))};await writer.tick();
+    await fs.writeFile(path.join(root,'production-trace.json'),JSON.stringify(trace,null,2));
     // Pending compare failure must rebase compatible ordinary changes, retaining
     // immutable results and creating a new intent rather than changing bytes.
     let result=await host.journal.read(binding.id);
     if(result?.status==='conflict')await host.command('repair-response',binding.id,contentHash(await app.vault.read(file)));
     await writer.tick();await pause(300);result=await host.journal.read(binding.id);
-    const saved=await app.vault.read(file);rows.push({name:'production-staged-table-plus-final-native-save',pass:result?.status==='verified'&&saved.includes('| Barb | 20 | |')&&saved.includes('Added **25kg**.')&&!saved.includes('Checking')&&!saved.includes(binding.id)&&saved.includes('Prefix edit')&&saved.includes('Tail edit')&&saved.includes('Unsaved pane'),commitId:result?.verified?.commitId,hash:result?.verified?.hash});
+    const saved=await app.vault.read(file);rows.push({name:'production-staged-table-plus-final-native-save',pass:result?.status==='verified'&&saved.includes('| Barb | 20 | |')&&saved.includes('Added **25kg**.')&&!saved.includes('Checking')&&!saved.includes(binding.id)&&saved.includes('Prefix edit')&&saved.includes('Tail edit')&&saved.includes('Unsaved pane'),commitId:result?.verified?.commitId,hash:result?.verified?.hash,saved,dirtyBeforeSave,dirtyAfterSave});
     rows.push({name:'production-finished-two-views',pass:views.every(view=>view.getViewData()===saved&&view.editor.getValue().includes('Independent second response.')&&!view.editor.getValue().includes('Checking'))});
     rows.push({name:'production-malformed-historical-mirror-isolated',pass:result?.status==='verified'&&saved.includes('t3-inline:end:'+historical)});
     const record=JSON.parse(bytes.get(leasePaths(directory,binding.id).record)!);if(result?.verified)await client.command({kind:'observe',jobId:binding.id,observed:{commitId:result.verified.commitId,hash:contentHash(saved)}});await host.scan();rows.push({name:'production-acknowledged-saved-read',pass:(await host.journal.read(binding.id))!.acknowledgements.length===1,delivery:record.state?.delivery});

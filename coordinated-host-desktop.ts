@@ -4,7 +4,8 @@ import {homedir} from 'node:os';
 import type {App} from 'obsidian';
 import {contentHash} from './completion';
 import {generatedEventContent} from './generated-event-content';
-import {GeneratedNoteCoordinator} from './generated-note-coordinator';
+import {GeneratedNoteCoordinator,type NoteGeneration} from './generated-note-coordinator';
+import {nativeCommitPath} from './native-response-commit';
 import {DesktopGenerationJournal} from './generation-journal-desktop';
 import {nativeResponses} from './native-response-manager';
 import {deviceNoteIO} from './inline-note-io';
@@ -24,6 +25,14 @@ export class CoordinatedHost {
   private failures=new Map<string,string>();
   private scanning?:Promise<void>;
   private terminalCursor=0;
+  private async materialization(result:NoteGeneration){
+    const proof=this.coordinator.materialization(result),bytes=JSON.stringify(proof);
+    const path=nativeCommitPath(this.identity.directory,proof.bindingId,proof.commitId);
+    const previous=await this.files.read(path);
+    if(previous!==undefined&&previous!==bytes)throw Error('An immutable native commit proof changed.');
+    if(previous===undefined)await this.files.write(path,bytes);
+    return {bytes,hash:contentHash(bytes)};
+  }
   private constructor(private app:App,private identity:LeaseIdentity,private files:LeaseFiles,private authority:InlineLeaseAuthority,readonly journal:DesktopGenerationJournal,readonly coordinator:GeneratedNoteCoordinator){}
   static async open(app:App,identity:LeaseIdentity,files:LeaseFiles,authority:InlineLeaseAuthority,options?:{journalRoot?:string}){
     const roots=[identity.workspaceRoot];
@@ -85,9 +94,10 @@ export class CoordinatedHost {
             const verified=await this.coordinator.commit(id);
             const phase=record.state?.finalPhase??(record.state?.bindingCheckpoint?.turns?.[record.state.turnId??'']?.state==='completed'?'complete':undefined);
             if(verified.status==='verified'&&verified.verified&&phase&&record.state&&!this.stopped){
+              const proof=await this.materialization(verified);
               const state={...record.state,body:verified.finalBody,finalBody:verified.finalBody,finalPhase:phase,finalSaved:true,cleanupComplete:true,status:phase,
                 finalDocumentHash:verified.verified.hash,responseAnchor:verified.verified.responseAnchor,
-                delivery:{commitId:verified.verified.commitId,hash:verified.verified.hash,verifiedOnHost:true,observedBy:record.state.delivery?.commitId===verified.verified.commitId?record.state.delivery.observedBy:[]}};
+                delivery:{commitId:verified.verified.commitId,hash:verified.verified.hash,verifiedOnHost:true,proofHash:proof.hash,observedBy:record.state.delivery?.commitId===verified.verified.commitId?record.state.delivery.observedBy:[]}};
               delete state.detail;
               record=await this.authority.checkpoint(id,state,{epoch:record.epoch,revision:record.revision});this.records.set(id,record);
             }
@@ -96,8 +106,12 @@ export class CoordinatedHost {
       }
       if(terminalLease(record)||record.state?.finalSaved){
         if(record.coordinated){
-          await nativeResponses(this.app).receive(record);
           const journal=await this.journal.read(id);
+          if(journal?.status==='verified'&&record.state?.delivery&&!record.state.delivery.proofHash){
+            const proof=await this.materialization(journal);
+            record=await this.authority.checkpoint(id,{...record.state,delivery:{...record.state.delivery,proofHash:proof.hash}},{epoch:record.epoch,revision:record.revision});this.records.set(id,record);
+          }
+          await nativeResponses(this.app).receive(record);
           if(journal){if(journal.notePath!==notePath)await this.coordinator.renamed(id,journal.notePath,notePath);await this.coordinator.observe(id);
             for(const actor of record.state?.delivery?.observedBy??[])await this.coordinator.acknowledge(id,actor,record.state!.delivery!.commitId,journal.verified!.document).catch(()=>{});
           }
@@ -165,8 +179,9 @@ export class CoordinatedHost {
         const result=await this.coordinator.commit(request.id);
         if(result.status==='conflict'){state.detail=result.conflicts.at(-1)?.reason;return false;}
         if(result.status!=='verified'||!result.verified)return false;
+        const proof=await this.materialization(result);
         state.finalDocumentHash=result.verified.hash;
-        state.delivery={commitId:result.verified.commitId,hash:result.verified.hash,verifiedOnHost:true,observedBy:[]};
+        state.delivery={commitId:result.verified.commitId,hash:result.verified.hash,verifiedOnHost:true,proofHash:proof.hash,observedBy:[]};
         state.responseAnchor=result.verified.responseAnchor;return true;
       },
     };

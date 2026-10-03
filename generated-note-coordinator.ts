@@ -4,6 +4,7 @@ import type {HostedInlineRequest,HostedInlineState} from './hosted-inline';
 import {hostedRequestHash,validateHostedRequest} from './hosted-inline';
 import {changedEdits,changedInterval,mergeSavedEdits,type SavedEdit} from './coordinated-merge';
 import {responseAnchor,responseRegion} from './native-response-projection';
+import type {NativeCommitProof} from './native-response-commit';
 
 export interface NoteGeneration {
   journalRevision?:number;
@@ -92,6 +93,16 @@ export class GeneratedNoteCoordinator {
     const final=region&&finalizeRegion(record.original,record.request.id,contentHash(region.body),record.finalBody);
     if(!final)throw Error('Response placement is ambiguous.');
     return [...changedEdits(record.original,record.staged),final];
+  }
+  materialization(record:NoteGeneration):NativeCommitProof {
+    if(record.status!=='verified'||!record.verified||!record.attempt)throw Error('Native materialization requires a verified journal commit.');
+    const merged=mergeSavedEdits(record.original,record.attempt.before,this.edits(record));
+    if(!merged.ok||merged.text!==record.verified.document)throw Error('Native materialization does not match the verified result.');
+    let shift=0;
+    const ranges=[...merged.edits].sort((a,b)=>a.from-b.from).map(edit=>{
+      const from=edit.from+shift;shift+=edit.text.length-(edit.to-edit.from);return {from,to:from+edit.text.length};
+    });
+    return {version:1,bindingId:record.request.id,commitId:record.verified.commitId,hash:record.verified.hash,document:record.verified.document,ranges};
   }
   private async conflict(record:NoteGeneration,latest:string,reason:string){
     record.status='conflict';record.conflicts.push({original:record.original,latest,proposed:record.attempt?.expected??record.staged,reason});

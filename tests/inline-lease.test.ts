@@ -7,6 +7,8 @@ import {initialRegion,completionProof} from '../inline-thread';
 import {DeviceInlineManager,INLINE_SNAPSHOT_INTERVAL_MS,INLINE_SNAPSHOT_TIMEOUT_MS} from '../leased-inline';
 import {ResponseNoteLocator} from '../response-location';
 import {EventJournal,configureDiagnostics} from '../diagnostics';
+import {contentHash} from '../completion';
+import {nativeCommitPath} from '../native-response-commit';
 
 function harness(){
   let time=100_000;
@@ -612,4 +614,24 @@ test('a device that reads a newly migrated native record does not send a legacy 
     h.advance(3000);await h.drain(other.manager);
     assert.equal([...h.data.values()].map(raw=>JSON.parse(raw)).filter(value=>value.error==='Generated changes are coordinated by the host.').length,0);
   }finally{h.dispose();}
+});
+
+test('native devices cache authenticated commit evidence once and acknowledge only matching saved bytes',async()=>{
+  const h=harness(),request={...h.request,nativeProjection:true},commitId=randomUUID(),document='Saved final response';
+  await h.client().command({kind:'register',jobId:request.id,request});
+  const key=leasePaths(request.host.directory,request.id).record;
+  const proofBytes=JSON.stringify({version:1,bindingId:request.id,commitId,hash:contentHash(document),document,ranges:[{from:0,to:document.length}]});
+  const proofPath=nativeCommitPath(request.host.directory,request.id,commitId);
+  const state:HostedInlineState={...h.state,status:'complete',finalPhase:'complete',finalSaved:true,cleanupComplete:true,finalBody:document,delivery:{commitId,hash:contentHash(document),proofHash:contentHash(proofBytes),verifiedOnHost:true,observedBy:[]}};
+  h.data.set(key,JSON.stringify({...h.record(),migrating:false,revision:1,state}));h.data.set(proofPath,proofBytes);
+  let saved='Stale note',proofReads=0;const received:string[]=[];
+  const remote={...h.remote,read:async(path:string)=>{if(path===proofPath)proofReads++;return h.remote.read(path);}};
+  const manager=new DeviceInlineManager(h.actor,request.vaultId,{receiveCoordinated:async(_record,proof)=>{if(proof)received.push(proof);},readSaved:async()=>saved,access:async()=>{throw Error('Native devices never open a T3 writer.');},isOpen:()=>true,readNote:async()=>saved,updateNote:async()=>{throw Error('Native devices never write generated text.');}},async()=>({files:remote,close:()=>{}}),h.now,h.now,async()=>{await new Promise(resolve=>setImmediate(resolve));});
+  const drain=async()=>{for(let n=0;n<20;n++){manager.tick();await new Promise(resolve=>setImmediate(resolve));}};
+  try{
+    await manager.register(request);h.advance(1000);await drain();assert.equal(proofReads,1);assert.deepEqual(h.record().state!.delivery!.observedBy,[]);
+    h.advance(1000);await drain();assert.equal(proofReads,1);assert.ok(received.length>=2);
+    saved=document;h.advance(1000);await drain();assert.deepEqual(h.record().state!.delivery!.observedBy,[h.actor]);assert.equal(proofReads,1);
+    assert.equal((manager as any).jobs.size,0);
+  }finally{manager.dispose();}
 });
