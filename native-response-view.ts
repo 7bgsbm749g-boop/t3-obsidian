@@ -74,6 +74,10 @@ export class NativeResponseView {
     if(this.disposed)return this.originalSet.call(this.view,incoming,clear);
     if(this.view.file!==this.file){this.unwrap();return this.originalSet.call(this.view,incoming,clear);}
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
+    // Another pane can echo the committed file with remaining local response
+    // bodies still displayed. Compare the exact saved projection to the
+    // durable materialization intent, rather than those transient bodies.
+    if(this.normalizeIncoming){try{incoming=this.normalizeIncoming(incoming);}catch{/* Preserve ambiguous boundaries for the conflict path. */}}
     if(this.materialization?.after===incoming){
       const intent=this.materialization;
       this.acceptCommitted(incoming,intent.ids);this.materialization=undefined;return;
@@ -82,7 +86,6 @@ export class NativeResponseView {
     // autosave. Its setViewData payload can therefore be a displayed document.
     // Strip only this view's exact registered marker pairs; malformed/missing
     // pairs still take the preserved-conflict path below.
-    if(this.normalizeIncoming){try{incoming=this.normalizeIncoming(incoming);}catch{/* Preserve ambiguous boundaries for the conflict path. */}}
     if(this.projection.ranges.length){try{incoming=savedProjection(incoming,this.projection);}catch{/* Final materialization or damaged boundaries: retain exact incoming bytes. */}}
     const local=this.saved(),edits=changedEdits(this.base,local);
     // Obsidian may load our own just-saved projection during a mode switch or
@@ -135,6 +138,11 @@ export class NativeResponseView {
    * until its independent disk readback succeeds. */
   prepareMaterialization(before:string,after:string,ids:readonly string[]){
     if(this.saved()!==before)throw new ProjectionConflict('The native saved projection changed before materialization.');
+    // The host has read this exact saved revision and checked every pane.
+    // Another pane may have saved a new registration before this pane's own
+    // save acknowledgement advanced its baseline. Materialize against that
+    // checked revision, not the earlier document without the registration.
+    this.base=before;
     this.materialization={before,after,ids:[...ids]};
   }
   cancelMaterialization(){this.materialization=undefined;}

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {displayToSaved,savedToDisplay,responseAnchor,projectResponses,savedProjection,editableDisplayRange} from '../native-response-projection';
+import {displayToSaved,savedToDisplay,responseAnchor,responseRegion,projectResponses,savedProjection,editableDisplayRange} from '../native-response-projection';
 import {renderInlineTurn} from '../inline-thread';
 import {NativeResponseView} from '../native-response-view';
 import {EditorState} from '@codemirror/state';
@@ -35,11 +35,11 @@ test('all existing progress/final choices retain exact formatter output in the n
     assert.equal(savedProjection(projection.display,projection),responseAnchor(id));
   }
 });
-function fakeView(document:string){
+function fakeView(document:string,normalizeIncoming?:(text:string)=>string){
   let value=document,saves=0;const conflicts:any[]=[];
   let disk=document;
   const view:any={getViewData:()=>value,setViewData:(data:string)=>{value=data;},getMode:()=> 'preview',requestSave:()=>{saves++;},save:async()=>{disk=view.getViewData();}};
-  const adapter=new NativeResponseView(view,document,record=>conflicts.push(record),async()=>disk);
+  const adapter=new NativeResponseView(view,document,record=>conflicts.push(record),async()=>disk,normalizeIncoming);
   return {view,adapter,conflicts,read:()=>value,edit:(data:string)=>{value=data;},saves:()=>saves};
 }
 test('incoming compatible ordinary edits preserve unsaved local edits and local response state',()=>{
@@ -129,4 +129,21 @@ test('late verified readback resolves a false view conflict without losing an in
  const final=(original+'\n'+responseAnchor(other)+'\n').replace(responseAnchor(id),'\n> Finished');
  fixture.view.setViewData(final,false);assert.ok(fixture.adapter.conflictRecord());
  assert.equal(fixture.adapter.resolveCommitted(final,[id]),true);assert.equal(fixture.view.getViewData(),final);assert.ok(fixture.read().includes('> Other'));
+});
+
+test('finalizing a newly registered response adopts the checked disk baseline before native acknowledgement',()=>{
+ const original='Before\n\n'+responseAnchor(id)+'\n\nAfter\n',fixture=fakeView(original);
+ fixture.adapter.setResponses([{id,body:'> Older response'}]);fixture.edit(fixture.read()+'\n'+responseAnchor(other)+'\n');
+ fixture.adapter.setResponses([{id,body:'> Older response'},{id:other,body:'> New response'}]);
+ const before=original+'\n'+responseAnchor(other)+'\n',final=before.replace(responseAnchor(other),'\n> New response finished');
+ fixture.adapter.prepareMaterialization(before,final,[other]);fixture.view.setViewData(final,false);fixture.adapter.acceptCommitted(final,[other]);
+ assert.deepEqual(fixture.conflicts,[]);assert.equal(fixture.view.getViewData(),final);assert.ok(fixture.read().includes('> Older response'));assert.ok(!fixture.read().includes('> New response\n'));
+});
+
+test('cross-pane final materialization recognizes its exact saved intent with another response still displayed',()=>{
+ const normalize=(document:string)=>{for(const uuid of [id,other]){const region=responseRegion(document,uuid);if(region)document=document.slice(0,region.from)+responseAnchor(uuid)+document.slice(region.to);}return document;};
+ const fixture=fakeView(saved,normalize);fixture.adapter.setResponses([{id,body:'> Older response'},{id:other,body:'> Independent stream'}]);
+ const final=saved.replace(responseAnchor(id),'\n> Finished'),echo=projectResponses(final,[{id:other,body:'> Independent stream'}]).display;
+ fixture.adapter.prepareMaterialization(saved,final,[id]);fixture.view.setViewData(echo,false);fixture.adapter.acceptCommitted(final,[id]);
+ assert.deepEqual(fixture.conflicts,[]);assert.equal(fixture.view.getViewData(),final);assert.ok(fixture.read().includes('Independent stream'));
 });
