@@ -2,15 +2,15 @@ import {contentHash} from './completion';
 import {finalizeRegion,regionBody} from './inline-thread';
 import type {HostedInlineRequest,HostedInlineState} from './hosted-inline';
 import {hostedRequestHash,validateHostedRequest} from './hosted-inline';
-import {changedInterval,mergeSavedEdits,type SavedEdit} from './coordinated-merge';
+import {changedEdits,changedInterval,mergeSavedEdits,type SavedEdit} from './coordinated-merge';
 import {responseAnchor,responseRegion} from './native-response-projection';
 
 export interface NoteGeneration {
   journalRevision?:number;
   request:HostedInlineRequest;notePath:string;original:string;originalHash:string;
-  checkpoint?:HostedInlineState;sequence?:number;staged?:string;finalBody?:string;
+  checkpoint?:HostedInlineState;sequence?:number;stagedDraft?:string;staged?:string;finalBody?:string;
   attempt?:{id:string;before:string;expected:string;hash:string;kind:'commit'|'repair'};
-  verified?:{commitId:string;hash:string;document:string};
+  verified?:{commitId:string;hash:string;document:string;responseAnchor?:{length:number;hash:string}};
   status:'accepted'|'streaming'|'result-ready'|'commit-pending'|'verified'|'conflict'|'removed';
   conflicts:Array<{original:string;latest:string;proposed?:string;reason:string}>;
   acknowledgements:Array<{deviceId:string;commitId:string;hash:string;observedAt:string}>;
@@ -28,9 +28,7 @@ export interface GeneratedNoteIO {
   compareAndSet(path:string,before:string,after:string):Promise<boolean>;
 }
 
-/** A prototype coordinator, deliberately disconnected from live registrations.
- * Runtime activation requires an enforceable agent write boundary, physical
- * iPhone validation and a fenced legacy-writer migration. */
+/** Serial checked commits for supported staged edits and generated replies. */
 export class GeneratedNoteCoordinator {
   private queues=new Map<string,Promise<unknown>>();
   constructor(private journal:GenerationJournal,private notes:GeneratedNoteIO,private id=()=>crypto.randomUUID()){}
@@ -60,6 +58,15 @@ export class GeneratedNoteCoordinator {
       await this.journal.append(id,record,'checkpoint');return record;
     });
   }
+  async stage(id:string,staged:string,originalHash:string){
+    const initial=await this.require(id);
+    return this.serial(initial.notePath,async()=>{
+      const record=await this.require(id);if(record.originalHash!==originalHash||!['accepted','streaming'].includes(record.status))throw Error('The staged original or result state changed.');
+      const region=responseRegion(staged,id),edits=changedEdits(record.original,staged);
+      if(!region||staged.slice(region.from,region.to)!==responseAnchor(id)||edits.some(edit=>/<!-- t3-(?:inline|response):/.test(record.original.slice(edit.from,edit.to)+edit.text)))throw Error('Staging changed response boundaries.');
+      record.stagedDraft=staged;await this.journal.append(id,record,'staged-edit');return record;
+    });
+  }
   async result(id:string,staged:string,finalBody:string){
     const initial=await this.require(id);
     return this.serial(initial.notePath,async()=>{
@@ -68,12 +75,12 @@ export class GeneratedNoteCoordinator {
       if(!['accepted','streaming'].includes(record.status))throw Error('This response is no longer accepting a result.');
       const originalRegion=responseRegion(record.original,id),stagedRegion=responseRegion(staged,id);
       if(!originalRegion||!stagedRegion||staged.slice(stagedRegion.from,stagedRegion.to)!==responseAnchor(id))throw Error('Staging changed the response anchor.');
-      const edit=changedInterval(record.original,staged);
+      const edits=changedEdits(record.original,staged);
       // The execution boundary will stage ordinary note changes only. No
       // staging edit may cross any active response registration's boundaries.
-      if(edit&&/<!-- t3-(?:inline|response):/.test(record.original.slice(edit.from,edit.to)))throw Error('Staged edits overlap response registrations.');
-      if(edit&&/<!-- t3-(?:inline|response):/.test(edit.text))throw Error('Staged edits cannot introduce response registrations.');
-      if(edit&&!(edit.to<originalRegion.from||edit.from>originalRegion.to))throw Error('Staged edits touch the response anchor.');
+      if(edits.some(edit=>/<!-- t3-(?:inline|response):/.test(record.original.slice(edit.from,edit.to))))throw Error('Staged edits overlap response registrations.');
+      if(edits.some(edit=>/<!-- t3-(?:inline|response):/.test(edit.text)))throw Error('Staged edits cannot introduce response registrations.');
+      if(edits.some(edit=>!(edit.to<originalRegion.from||edit.from>originalRegion.to)))throw Error('Staged edits touch the response anchor.');
       if(/<!-- t3-(?:inline|response):/.test(finalBody))throw Error('A finished response cannot introduce tracking boundaries.');
       record.staged=staged;record.finalBody=finalBody;record.status='result-ready';
       await this.journal.append(id,record,'result-ready');return record;
@@ -84,8 +91,7 @@ export class GeneratedNoteCoordinator {
     const region=regionBody(record.original,record.request.id);
     const final=region&&finalizeRegion(record.original,record.request.id,contentHash(region.body),record.finalBody);
     if(!final)throw Error('Response placement is ambiguous.');
-    const edit=changedInterval(record.original,record.staged);
-    return edit?[edit,final]:[final];
+    return [...changedEdits(record.original,record.staged),final];
   }
   private async conflict(record:NoteGeneration,latest:string,reason:string){
     record.status='conflict';record.conflicts.push({original:record.original,latest,proposed:record.attempt?.expected??record.staged,reason});
@@ -115,7 +121,10 @@ export class GeneratedNoteCoordinator {
   }
   private async verify(record:NoteGeneration,document:string){
     if(!record.attempt||contentHash(document)!==record.attempt.hash)throw Error('Commit readback does not match its journaled intent.');
-    record.verified={commitId:record.attempt.id,hash:record.attempt.hash,document};record.status='verified';
+    const merged=mergeSavedEdits(record.original,record.attempt.before,this.edits(record));
+    if(!merged.ok)throw Error('Verified placement cannot be proven.');
+    const final=merged.edits.at(-1)!,offset=final.from+1+merged.edits.filter(edit=>edit.from<final.from).reduce((delta,edit)=>delta+edit.text.length-(edit.to-edit.from),0);
+    record.verified={commitId:record.attempt.id,hash:record.attempt.hash,document,responseAnchor:{length:offset,hash:contentHash(document.slice(0,offset))}};record.status='verified';
     await this.journal.append(record.request.id,record,record.attempt.kind==='repair'?'repair-verified':'saved-and-verified');return record;
   }
   /** Device acknowledgements must originate from an authenticated device read

@@ -1,3 +1,6 @@
+import {NativeConflictModal} from './native-conflict-modal';
+import {stagedNoteInstruction} from './staged-note-instruction';
+import {isResponseCommand,validateResponseCommand} from './response-command';
 import {incomingLabel} from './inline-steering';
 import {detectMissingThree,suppliedNoteBlocks,leaseResponseEvidence,mergeNoteDeliveries,loadNoteDeliveries,withMissingThree,type NoteDelivery,type ResponseEvidence} from './missing-three';
 import {ProjectDiscovery,type ProjectSource,type ProjectSnapshot} from './project-discovery';
@@ -5,6 +8,7 @@ import {resolveJobOptions,type ResolvedJobOptions} from './job-options';
 import {intermediateMode,installResponsePresentation,finalAnswerFormat,type FinalAnswerFormat,type IntermediateMode} from './response-presentation';
 import {applyThreadItem} from './inline-thread';
 import {readInlineSnapshot,watchThread} from './thread-stream';
+import {nativeResponses} from './native-response-manager';
 import {editorStream} from './editor-stream';
 import {validateNoteCommand,isEventCommand,type NoteCommand,type NoteCommandResult} from './note-command';
 import {isFolderCommand,executeFolderCommand,type FolderCommand} from './folder-command';
@@ -166,7 +170,8 @@ export default class SendToT3 extends Plugin {
     this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>this.stopHostedInline(job.id,job.hostTarget)},()=>intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate),()=>finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat));
     const storedTargets=this.app.loadLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`);
     if(Array.isArray(storedTargets))this.inlineTargets=storedTargets.filter(target=>target&&typeof target.environmentId==='string'&&typeof target.workspaceRoot==='string'&&typeof target.directory==='string');
-    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),access:environmentId=>this.inlineThreadAccess(environmentId),importReplyAsset:(reference,request,access)=>importReplyAsset(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
+    if(typeof this.registerEditorExtension==='function'){const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)));}
+    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),receiveCoordinated:record=>{void nativeResponses(this.app).receive(record);},readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:environmentId=>this.inlineThreadAccess(environmentId),importReplyAsset:(reference,request,access)=>importReplyAsset(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
     if(!Platform.isMobile)this.app.workspace.onLayoutReady(()=>{
       const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
       if(root)void import('./note-command-desktop').then(module=>module.NoteCommandServer.open(root,this.app.vault.configDir||'.obsidian',command=>this.executeAgentCommand(command),()=>!this.stopped&&!this.busy)).then(async server=>{
@@ -175,6 +180,7 @@ export default class SendToT3 extends Plugin {
       }).catch(error=>new Notice(`T3 note commands: ${message(error)}`,10000));
       this.registerInlineInterval(()=>void this.refreshEventHost().catch(()=>{}),5000);
     });
+    this.addCommand({id:'resolve-native-response-conflict',name:'Resolve response view conflict…',checkCallback:checking=>{const view=this.app.workspace.getActiveViewOfType(MarkdownView);if(!view||!nativeResponses(this.app).view(view)?.conflictRecord())return false;if(!checking)new NativeConflictModal(this.app,view).open();return true;}});
     this.addCommand({id:'send-note-to-multiple-notes',name:'Send note with streaming destinations…',checkCallback:checking=>{
       const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;if(!file||this.busy)return false;
       if(!checking)new StreamDestinationsModal(this.app,file.path,command=>this.executeNoteCommand(command)).open();return true;
@@ -259,7 +265,7 @@ export default class SendToT3 extends Plugin {
       this.inlineChat?.resume();
     });
     this.app.workspace.onLayoutReady(()=>{
-      const tick=()=>{this.deviceInline?.tick();this.deviceInline?.discover(this.inlineTargets);};
+      const tick=()=>{nativeResponses(this.app).refresh();this.deviceInline?.tick();this.deviceInline?.discover(this.inlineTargets);};
       tick();this.registerInlineInterval(tick,150);
       const remember=()=>{if(this.settings.folderLinks.some(link=>link.folderPath==='/'))void this.inlineHostTarget().then(target=>this.rememberInlineTarget(target)).catch(()=>{});};
       remember();this.registerInterval(window.setInterval(remember,5000));
@@ -428,7 +434,7 @@ export default class SendToT3 extends Plugin {
         responseBindings:target=>this.displayResponseBindings(target),
         prepareDisplay:async(display,destination,input)=>{
           const host=await this.inlineHostTarget(),id=commandId(display.id,`response:${input.id}:${destination.id}`);
-          return {version:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat)==='raw-markdown'?3:2,finalAnswerFormat:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat),independent:true,id,initialInput:{messageId:input.id,text:input.text,label:incomingLabel(input)},initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id,{messageId:input.id,text:input.text,label:incomingLabel(input)},undefined,intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate),{startedAt:input.createdAt??display.createdAt}).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)!=='remove',intermediateMode:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)};
+          return {nativeProjection:await this.coordinatedHostAvailable(host),destinationSection:destination.section,version:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat)==='raw-markdown'?3:2,finalAnswerFormat:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat),independent:true,id,initialInput:{messageId:input.id,text:input.text,label:incomingLabel(input)},initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id,{messageId:input.id,text:input.text,label:incomingLabel(input)},undefined,intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate),{startedAt:input.createdAt??display.createdAt}).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)!=='remove',intermediateMode:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)};
         },
         attachDisplay:async(request,path)=>{
           if(this.stopped||!this.eventHostCurrent(server.identity)||!this.deviceInline)throw Error('Streaming host ownership changed.');
@@ -479,6 +485,11 @@ export default class SendToT3 extends Plugin {
     await service.renameFolder(oldPath,folder.path,notes);
   }
   async executeAgentCommand(input:import('./note-command').AgentCommand){
+    if(isResponseCommand(input)){
+      const command=validateResponseCommand(input);await this.refreshInlineHost();
+      if(!this.inlineHostService)throw Error('Run coordinated response commands on the vault host.');
+      return {id:command.id,ok:true,...await this.inlineHostService.responseCommand(command.kind,command.bindingId,command.hash)};
+    }
     if(isFolderCommand(input)){
       if(this.stopped||this.busy)throw Error('Obsidian is unavailable or sending another request.');
       this.busy=true;
@@ -967,7 +978,12 @@ export default class SendToT3 extends Plugin {
     const host=await this.inlineHostTarget();
     const threadEnvironmentId=request.connection.environmentId??await this.localInlineEnvironment();
     job.hostTarget=host;this.rememberInlineTarget(host);
-    request.inlineHost={version:finalAnswerFormat(job.finalAnswerFormat)==='raw-markdown'?3:2,finalAnswerFormat:finalAnswerFormat(job.finalAnswerFormat),independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
+    request.inlineHost={nativeProjection:await this.coordinatedHostAvailable(host),version:finalAnswerFormat(job.finalAnswerFormat)==='raw-markdown'?3:2,finalAnswerFormat:finalAnswerFormat(job.finalAnswerFormat),independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
+    request.prompt+=stagedNoteInstruction([request.inlineHost]);if(request.prompt.length>120_000)throw Error('The note and staged-edit context exceed T3’s prompt limit.');
+  }
+  private async coordinatedHostAvailable(target:InlineHostTarget){
+    const opened=await this.inlineHostFiles(target);
+    try{const raw=await opened.files.read(`${target.directory}/coordinated-capabilities.json`);return !!raw&&JSON.parse(raw).nativeProjection===true;}catch{return false;}finally{opened.close();}
   }
   private async inlineHostFiles(target:InlineHostTarget):Promise<{files:InlineFiles;close():void}>{
     const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
@@ -1546,7 +1562,7 @@ export default class SendToT3 extends Plugin {
       this.sharedBaseline=JSON.stringify(snapshot);
     });return this.saving;
   }
-  async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote;streamReply?:boolean;jobOptions?:ResolvedJobOptions;destinations?:string[];onPrepared?:(request:Request)=>Promise<void>}) {
+  async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote;streamReply?:boolean;jobOptions?:ResolvedJobOptions;destinations?:string[];destinationSection?:string;onPrepared?:(request:Request)=>Promise<void>}) {
     if (this.busy) {if(options?.throwOnError)throw Error('Obsidian is sending another request. Retry shortly.');return;}
     this.busy = true;
     let saved = false;
@@ -1579,7 +1595,7 @@ export default class SendToT3 extends Plugin {
         const blocks=suppliedNoteBlocks({document:content,...evidence,coverage:[],threadId,projectId:project.id,environmentId});
         if(blocks.length){connection.environmentId=environmentId;request.noteCoverage={notePath:file.path,blocks};}
       }
-      if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path]);
+      if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path],undefined,options?.destinationSection);
       await options?.onPrepared?.(request);
       this.settings.pending.push(request); await this.save(); saved = true;
       const sentThreadId=await this.dispatch(request,options?.quiet);
@@ -1587,11 +1603,11 @@ export default class SendToT3 extends Plugin {
     } catch(e) {if(options?.throwOnError)throw new RequestDeliveryError(message(e),saved);new Notice(`Send to T3 Code: ${message(e)} ${saved ? "See settings for saved requests." : "No thread was created."}`,12000);}
     finally {this.busy = false;}
   }
-  private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string){
+  private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string,destinationSection?:string){
     const policy=request.jobOptions?.inline??resolveJobOptions(this.settings.inlineStreaming).inline;
     const io=deviceNoteIO(this.app),host=await this.inlineHostTarget();
     for(const path of destinations){const document=await io.readNote(path);if(document===undefined)throw Error(`Destination note unavailable: ${path}`);endInsertionOffset(document);}
-    const source:HostedInlineRequest={version:policy.finalAnswerFormat==='raw-markdown'?3:2,finalAnswerFormat:policy.finalAnswerFormat,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode};
+    const source:HostedInlineRequest={destinationSection,nativeProjection:await this.coordinatedHostAvailable(host),version:policy.finalAnswerFormat==='raw-markdown'?3:2,finalAnswerFormat:policy.finalAnswerFormat,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode};
     request.inlineBindings=[];this.rememberInlineTarget(host);
     const opened=await this.inlineHostFiles(host);
     try{
@@ -1603,7 +1619,7 @@ export default class SendToT3 extends Plugin {
       }};
       for(const path of destinations)request.inlineBindings.push(await editorStream(source,path,bindingIO,()=>!this.stopped));
     }finally{opened.close();}
-    request.inlineHost=request.inlineBindings[0];
+    request.inlineHost=request.inlineBindings[0];request.prompt+=stagedNoteInstruction(request.inlineBindings);if(request.prompt.length>120_000)throw Error('The note and staged-edit context exceed T3’s prompt limit.');
   }
   private persistAgentCommand(request:Request,threadId?:string){
     const command=request.agentCommand;if(!command)return;
@@ -1626,7 +1642,7 @@ export default class SendToT3 extends Plugin {
         const thread=await runBridge(this.connection(project),['read',command.threadId!]);
         if(thread.id!==command.threadId||thread.projectId!==project.id||!thread.messages?.some((item:any)=>item.role==='user'&&item.id===command.messageId))throw Error('The source response is not in this note’s linked T3 project.');
         request={id:command.id,project,connection:this.connection(project),title:thread.title??'T3 response',prompt:'',threadId:command.threadId};
-        await this.prepareStreamBindings(request,command.destinations.length?command.destinations:[command.notePath],thread.messages.find((item:any)=>item.role==='user'&&item.id===command.messageId)?.createdAt);
+        await this.prepareStreamBindings(request,command.destinations.length?command.destinations:[command.notePath],thread.messages.find((item:any)=>item.role==='user'&&item.id===command.messageId)?.createdAt,command.destinationSection);
         for(const binding of request.inlineBindings!)binding.messageId=command.messageId!;
         persist({request});
       }
@@ -1639,7 +1655,7 @@ export default class SendToT3 extends Plugin {
     }else{
       const file=this.app.vault.getFileByPath(command.notePath);if(!file)throw Error('Source note not found.');
       const {project,link}=await this.chatTarget(file.path,undefined,true,undefined,false);
-      const sent=await this.send(file,project,{id:command.id,newThread:!command.threadId,threadId:command.threadId,folderLink:link,throwOnError:true,streamReply:command.streamReply,destinations:command.destinations,onPrepared:async prepared=>{prepared.agentCommand=command;request=prepared;persist({request:prepared});}});
+      const sent=await this.send(file,project,{id:command.id,newThread:!command.threadId,threadId:command.threadId,folderLink:link,throwOnError:true,streamReply:command.streamReply,destinations:command.destinations,destinationSection:command.destinationSection,onPrepared:async prepared=>{prepared.agentCommand=command;request=prepared;persist({request:prepared});}});
       if(!sent)throw Error('The note was not sent.');threadId=sent.threadId;request=sent.request;
     }
     const result:NoteCommandResult={id:command.id,ok:true,threadId,messageId:command.kind==='attach-response'?command.messageId:commandId(command.id,'message'),bindingIds:request?.inlineBindings?.map(binding=>binding.id)??[]};
@@ -1711,7 +1727,7 @@ export default class SendToT3 extends Plugin {
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
     }catch(error){logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});throw error;}
   }
-  onunload(){configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;

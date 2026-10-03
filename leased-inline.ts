@@ -12,6 +12,8 @@ export const INLINE_SNAPSHOT_INTERVAL_MS=10_000;
 export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
 
 export interface DeviceInlineIO {
+  receiveCoordinated?(record:LeaseRecord):void;
+  readSaved?(path:string):Promise<string|undefined>;
   access(environmentId:string):Promise<ThreadAccess>;
   readNote(path:string):Promise<string|undefined>;
   locateNote?(id:string,path:string):Promise<string|undefined>;
@@ -120,9 +122,10 @@ export class DeviceInlineManager {
     if(this.stopped||record.request.vaultId!==this.vaultId||hostKey(record.request.host)!==hostKey(host.target))return;
     const projected=leaseExplorerResponse(record),previous=host.responses.find(r=>r.id===projected.id);
     if(!previous||projected.epoch>previous.epoch||projected.epoch===previous.epoch&&projected.revision>previous.revision)host.responses=host.responses.filter(r=>r.id!==projected.id).concat(projected);
+    if(record.coordinated)this.io.receiveCoordinated?.(record);
     const old=this.jobs.get(record.request.id);
     if(old){if(record.epoch>old.record.epoch||record.epoch===old.record.epoch&&record.revision>=old.record.revision){old.record=record;if(record.stopRequestedAt)old.writer.requestStop(record.request.id);}return;}
-    if(terminalLease(record))return;
+    if(terminalLease(record)&&!record.coordinated)return;
     const runtime={} as Runtime;
     Object.assign(runtime,{record,host,lastHeartbeat:-Infinity,nextTick:0,nextSnapshot:0,snapshotFailures:0,sequence:-1});
     const paths=hostedPaths(host.target.directory,record.request.id);
@@ -219,6 +222,10 @@ export class DeviceInlineManager {
     if(this.stopped)return;
     for(const runtime of this.jobs.values()){
       const {record,host}=runtime,id=record.request.id;
+      if(record.coordinated){
+        if(!runtime.heartbeat&&this.now()-runtime.lastHeartbeat>=1000){runtime.lastHeartbeat=this.now();const work=this.observeCoordinated(runtime);runtime.heartbeat=work;void work.finally(()=>runtime.heartbeat=undefined).catch(()=>{});}
+        continue;
+      }
       if(terminalLease(record)){runtime.refresh?.cancel(Error('Response completed.'));runtime.monitor?.stop();runtime.writer.stop();this.jobs.delete(id);continue;}
       const owns=record.owner===this.actor&&host.client.valid(id,record.epoch);
       if(!runtime.heartbeat&&this.now()-runtime.lastHeartbeat>=HEARTBEAT_MS){
@@ -244,6 +251,15 @@ export class DeviceInlineManager {
         runtime.nextTick=this.now()+150;runtime.writeEpoch=record.epoch;
         const work=runtime.writer.tick();runtime.work=work;void work.finally(()=>{runtime.work=undefined;}).catch(()=>{});
       }
+    }
+  }
+  private async observeCoordinated(runtime:Runtime){
+    const {host}=runtime,raw=await host.files.read(leasePaths(host.target.directory,runtime.record.request.id).record);if(!raw||this.stopped)return;
+    const record:LeaseRecord=JSON.parse(raw);this.receiveRecord(host,record);
+    const delivery=record.state?.delivery;
+    if(delivery&&!delivery.observedBy.includes(this.actor)&&this.io.readSaved){
+      const saved=await this.io.readSaved(record.state!.notePath);
+      if(saved!==undefined&&contentHash(saved)===delivery.hash)this.reply(runtime,await host.client.command({kind:'observe',jobId:record.request.id,observed:{commitId:delivery.commitId,hash:delivery.hash}}));
     }
   }
   private async maintain(runtime:Runtime){

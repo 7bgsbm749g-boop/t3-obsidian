@@ -1,11 +1,10 @@
-import type {MarkdownView} from 'obsidian';
+import type {MarkdownView,TFile} from 'obsidian';
 import type {Extension,Transaction as CMTransaction} from '@codemirror/state';
-import {changedInterval,mergeSavedEdits} from './coordinated-merge';
-import {displayToSaved,editableDisplayRange,projectResponses,savedProjection,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
+import {changedEdits,changedInterval,mergeSavedEdits} from './coordinated-merge';
+import {displayToSaved,editableDisplayRange,projectResponses,savedProjection,responseRegion,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
 
 export interface NativeViewConflict {base:string;local:string;incoming:string;reason:string}
-/** Source-only adapter. It is not registered by main.ts until the execution,
- * migration and physical-iPhone delivery gates have actually been satisfied. */
+/** Native rendering with a separate saved projection. */
 export class NativeResponseView {
   private originalGet:MarkdownView['getViewData'];
   private originalSet:MarkdownView['setViewData'];
@@ -18,16 +17,20 @@ export class NativeResponseView {
   private base:string;
   private blocked?:NativeViewConflict;
   private disposed=false;
+  private file:TFile|null;
   private materialization?:{before:string;after:string;ids:string[]};
-  constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>){
-    this.base=saved;this.projection=projectResponses(saved,[]);
+  constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string){
+    this.file=view.file;this.base=saved;this.projection=projectResponses(saved,[]);
     this.originalGet=view.getViewData;this.originalSet=view.setViewData;
     this.originalSave=view.save;
     this.getWrapper=()=>this.saved();
     this.setWrapper=(incoming,clear)=>this.incoming(incoming,clear);
     this.saveWrapper=async clear=>{
       const intended=this.saved(),file=view.file,previousBase=this.base;
-      await this.originalSave.call(view,clear);
+      const previousDisk=await this.readSaved();
+      // Native document changes schedule autosave for local streaming too.
+      // Do not touch the file when its saved projection is already identical.
+      if(clear||previousDisk!==this.saved())await this.originalSave.call(view,clear);
       const disk=await this.readSaved();
       // Save return alone is not proof. Without adopting a verified own save,
       // a later external edit containing the same ordinary edit could be
@@ -69,15 +72,22 @@ export class NativeResponseView {
   }
   private incoming(incoming:string,clear:boolean){
     if(this.disposed)return this.originalSet.call(this.view,incoming,clear);
+    if(this.view.file!==this.file){this.unwrap();return this.originalSet.call(this.view,incoming,clear);}
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
     if(this.materialization?.after===incoming){
       const intent=this.materialization;
       this.acceptCommitted(incoming,intent.ids);this.materialization=undefined;return;
     }
-    const local=this.saved(),edit=changedInterval(this.base,local);
+    // Obsidian synchronizes native editor data between panes before disk
+    // autosave. Its setViewData payload can therefore be a displayed document.
+    // Strip only this view's exact registered marker pairs; malformed/missing
+    // pairs still take the preserved-conflict path below.
+    if(this.normalizeIncoming){try{incoming=this.normalizeIncoming(incoming);}catch{/* Preserve ambiguous boundaries for the conflict path. */}}
+    if(this.projection.ranges.length){try{incoming=savedProjection(incoming,this.projection);}catch{/* Final materialization or damaged boundaries: retain exact incoming bytes. */}}
+    const local=this.saved(),edits=changedEdits(this.base,local);
     // Obsidian may load our own just-saved projection during a mode switch or
     // echo. Identical local/incoming edits are already the same revision.
-    const merge=incoming===local?{ok:true as const,text:local}:mergeSavedEdits(this.base,incoming,edit?[edit]:[]);
+    const merge=incoming===local?{ok:true as const,text:local}:mergeSavedEdits(this.base,incoming,edits);
     if(!merge.ok){this.block({base:this.base,local,incoming,reason:merge.reason});return;}
     try{
       // A disappearance is not sufficient proof of final materialization or
@@ -88,6 +98,35 @@ export class NativeResponseView {
       this.render(projection.display,clear);
       if(merge.text!==incoming)this.view.requestSave();
     }catch(error){this.block({base:this.base,local,incoming,reason:error instanceof Error?error.message:String(error)});}
+  }
+  editSaved(saved:string){
+    if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
+    this.projection=projectResponses(saved,this.responses);this.render(this.projection.display,false);this.view.requestSave();
+  }
+  conflictRecord(){return this.blocked;}
+  resolveConflict(saved:string,choice:'saved'|'local'){
+    if(!this.blocked)throw Error('This native view has no preserved conflict.');
+    const chosen=choice==='local'?this.blocked.local:saved;
+    const responses=this.responses.filter(response=>{try{return !!responseRegion(chosen,response.id);}catch{return false;}});
+    this.projection=projectResponses(chosen,responses);this.responses=responses;this.base=saved;this.blocked=undefined;this.render(this.projection.display,false);
+    if(chosen!==saved)this.view.requestSave();
+  }
+  resolveCommitted(saved:string,ids:string[]){
+    if(this.blocked){
+      const conflict=this.blocked,edits=changedEdits(conflict.base,conflict.local),merge=mergeSavedEdits(conflict.base,saved,edits);
+      if(!merge.ok)return false;
+      this.blocked=undefined;
+      this.base=saved;this.responses=this.responses.filter(response=>!ids.includes(response.id));this.projection=projectResponses(merge.text,this.responses);this.render(this.projection.display,false);
+      if(merge.text!==saved)this.view.requestSave();return true;
+    }
+    this.acceptCommitted(saved,ids);return true;
+  }
+  isDisposed(){return this.disposed;}
+  private unwrap(){
+    if(this.view.getViewData===this.getWrapper)this.view.getViewData=this.originalGet;
+    if(this.view.setViewData===this.setWrapper)this.view.setViewData=this.originalSet;
+    if(this.view.save===this.saveWrapper)this.view.save=this.originalSave;
+    this.disposed=true;
   }
   private block(record:NativeViewConflict){this.blocked=record;this.conflict(record);}
   /** Install only AFTER the coordinator's immutable write intent is durable,
@@ -103,7 +142,7 @@ export class NativeResponseView {
    * edits still take part in the same conservative three-way merge. */
   acceptCommitted(saved:string,ids:readonly string[]){
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
-    const local=this.saved(),edit=changedInterval(this.base,local),merge=mergeSavedEdits(this.base,saved,edit?[edit]:[]);
+    const local=this.saved(),edits=changedEdits(this.base,local),merge=mergeSavedEdits(this.base,saved,edits);
     if(!merge.ok){this.block({base:this.base,local,incoming:saved,reason:merge.reason});return;}
     const responses=this.responses.filter(r=>!ids.includes(r.id));
     const projection=projectResponses(merge.text,responses);
@@ -119,7 +158,7 @@ export class NativeResponseView {
   filterTransaction(transaction:CMTransaction):CMTransaction|[] {
     if(this.disposed||!transaction.docChanged)return transaction;
     const cm=(this.view.editor as any)?.cm;
-    if(cm?.state&&cm.state!==transaction.startState)return transaction;
+    if(!cm?.state||cm.state!==transaction.startState)return transaction;
     const current=transaction.startState.doc.toString();
     const projection=projectResponses(savedProjection(current,this.projection),this.responses);
     let allowed=true;
@@ -130,11 +169,9 @@ export class NativeResponseView {
    * first be journaled/resolved; unwrapping a blocked view could save bad data. */
   dispose(){
     if(this.disposed)return;
-    if(this.blocked)throw new ProjectionConflict('Resolve and journal the view conflict before unloading the adapter.');
-    const saved=this.saved();this.responses=[];this.projection=projectResponses(saved,[]);this.render(saved,false);
-    if(this.view.getViewData===this.getWrapper)this.view.getViewData=this.originalGet;
-    if(this.view.setViewData===this.setWrapper)this.view.setViewData=this.originalSet;
-    if(this.view.save===this.saveWrapper)this.view.save=this.originalSave;
-    this.disposed=true;
+    // The competing local version is already preserved by the conflict callback.
+    // Unload must not silently save it over the incoming version.
+    const saved=this.blocked?this.blocked.incoming:this.saved();this.responses=[];this.projection=projectResponses(saved,[]);this.render(saved,false);
+    this.unwrap();
   }
 }

@@ -5,7 +5,7 @@ import {responseAnchor} from '../native-response-projection';
 import {initialRegion} from '../inline-thread';
 import type {HostedInlineRequest} from '../hosted-inline';
 import {contentHash} from '../completion';
-import {assertCoordinatedDeliveryAvailable} from '../coordinated-delivery-gates';
+import {coordinatedDeliveryLimitations} from '../coordinated-delivery-gates';
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 function request(response=id,path='Arms.md'):HostedInlineRequest{return {version:2,id:response,initialOwner:id,vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/test/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:path,threadId:'thread',messageId:id,projectId:'project',threadEnvironmentId:'host',initialHash:initialRegion(response).bodyHash,createdAt:'2026-10-02T20:00:00Z',independent:true};}
 function fixture(){
@@ -81,6 +81,6 @@ test('checkpoints retain exact metadata and sequence, and retries cannot change 
 test('renames retain immutable request identity and exact response registration',async()=>{
   const f=fixture();await f.coordinator.accept(request(),f.original);const record=await f.coordinator.renamed(id,'Arms.md','Moved/Arms.md');assert.equal(record.notePath,'Moved/Arms.md');assert.deepEqual(record.request,request());
 });
-test('delivery cannot be enabled by a settings toggle, prompt instruction or fake device evidence',()=>{
-  assert.throws(assertCoordinatedDeliveryAvailable,/write exclusion.*iPhone.*migration/);
+test('delivery limitations describe the actual out-of-band boundary and waived platform coverage',()=>{
+  assert.ok(coordinatedDeliveryLimitations.some(value=>value.includes('out-of-band')));assert.ok(coordinatedDeliveryLimitations.some(value=>value.includes('iPhone')));
 });

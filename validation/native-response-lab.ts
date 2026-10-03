@@ -1,3 +1,5 @@
+import {productionNative} from './production-native';
+import {nativeResponses} from '../native-response-manager';
 import {Plugin,MarkdownView,MarkdownRenderChild} from 'obsidian';
 import {NativeResponseView} from '../native-response-view';
 import {responseAnchor} from '../native-response-projection';
@@ -32,7 +34,7 @@ export default class NativeResponseLab extends Plugin {
     if(!fs.existsSync(path.join(this.root,'ISOLATED-NATIVE-LAB')))throw Error('An explicitly isolated, unsynced fixture vault is required.');
     this.registerEditorExtension(hiddenInlineMarkerExtension());this.register(installResponsePresentation(document));
     const {EditorState}=require('@codemirror/state');
-    this.registerEditorExtension(EditorState.transactionFilter.of((transaction:any)=>this.adapter?.filterTransaction(transaction)??transaction));
+    this.registerEditorExtension(EditorState.transactionFilter.of((transaction:any)=>(()=>{const result=this.adapter?.filterTransaction(transaction)??transaction;return Array.isArray(result)?result:nativeResponses(this.app).filter(result);})()));
     const controller:any={subscribe:()=>()=>{},view:()=>({status:'pending'})};
     this.registerEditorExtension(questionEditorExtension(controller,()=>this.answerClicks++));
     this.registerMarkdownPostProcessor((element,ctx)=>{for(const link of Array.from(element.querySelectorAll<HTMLAnchorElement>('a[href^="t3-question:"]'))){const target=parseQuestionToken((link.getAttribute('href')??'').slice(12));if(!target)continue;const control=questionButton(controller,target,()=>this.answerClicks++);link.replaceWith(control.button);const child=new MarkdownRenderChild(control.button);child.register(control.unsubscribe);ctx.addChild(child);}});
@@ -124,6 +126,8 @@ export default class NativeResponseLab extends Plugin {
     const commit=await coordinator.commit(id);if(commit.verified)this.adapter.acceptCommitted(commit.verified.document,[id]);await boundedView.save();
     const disk=await app.vault.read(file);edges.push({name:'staged-table-and-response-one-native-save',pass:commit.status==='verified'&&writes===1&&disk.includes('| Barb | 20 | |')&&disk.includes('> Added **25kg**.')&&!disk.includes('Working on the table.'),writes,commitId:commit.verified?.commitId,hash:commit.verified?.hash,acknowledgements:commit.acknowledgements,enforcedAgentBoundary:false});
     await boundedView.onUnloadFile(file);edges.push({name:'unload-projection',pass:await app.vault.read(file)===disk});
-    this.write('edges.json',edges);this.write('done.json',{cases:matrix.length,richCases:rich.length,allRichPassed:rich.every(test=>test.layoutEqual&&test.displayEqual&&test.buttonsEqual&&test.savedClean&&(test.mode==='source'||test.answerClicks===2)),allLayoutsEqual:matrix.every(test=>test.layoutEqual),allDisplayEqual:matrix.every(test=>test.displayEqual),allSavedClean:matrix.every(test=>test.savedClean),edges,conflicts,iphoneTested:false,liveSyncTested:false,productionActivated:false});
+    this.adapter.dispose();this.adapter=undefined;
+    const production=await productionNative(app,this.root);this.write('production.json',production);
+    this.write('edges.json',edges);this.write('done.json',{cases:matrix.length,richCases:rich.length,allRichPassed:rich.every(test=>test.layoutEqual&&test.displayEqual&&test.buttonsEqual&&test.savedClean&&(test.mode==='source'||test.answerClicks===2)),allLayoutsEqual:matrix.every(test=>test.layoutEqual),allDisplayEqual:matrix.every(test=>test.displayEqual),allSavedClean:matrix.every(test=>test.savedClean),edges,conflicts,iphoneTested:false,liveSyncTested:false,productionFixturePassed:production.every(row=>row.pass),productionActivated:false});
   }
 }

@@ -1,11 +1,12 @@
+import {validateDestinationSection} from './destination-section';
 import {commandId} from './direct';
 import {safeNotePath,type HostedInlineRequest} from './hosted-inline';
 import {turnForMessage,type InlineMessage,type InlineThreadState} from './inline-thread';
 import type {EventTarget} from './event-subscriptions';
 
 export const STREAM_COMMANDS=['stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination'] as const;
-export interface ThreadDisplayCommand {version:1;id:string;kind:typeof STREAM_COMMANDS[number];source?:EventTarget;destinations?:string[];subscriptionId?:string;destination?:string;scope?:'thread';start?:'future'|'history'}
-export interface DisplayDestination {id:string;path:string;removed?:boolean}
+export interface ThreadDisplayCommand {version:1;id:string;kind:typeof STREAM_COMMANDS[number];source?:EventTarget;destinationSection?:string;destinations?:string[];subscriptionId?:string;destination?:string;scope?:'thread';start?:'future'|'history'}
+export interface DisplayDestination {id:string;path:string;section?:string;removed?:boolean}
 export interface DisplayBinding {messageId:string;turnId?:string;destinationId:string;request?:HostedInlineRequest;bindingId?:string;status:'planned'|'attached'|'skipped';error?:string}
 export interface ThreadDisplay extends EventTarget {id:string;scope:'thread';enabled:boolean;cancelled?:boolean;createdAt:string;boundary:string[];destinations:DisplayDestination[];bindings:DisplayBinding[];error?:string}
 export interface DisplayHost {
@@ -19,6 +20,7 @@ export interface DisplayHost {
 }
 export function validateDisplayCommand(value:any):ThreadDisplayCommand {
   if(!STREAM_COMMANDS.includes(value?.kind)||value.version!==1||!/^[0-9a-f-]{36}$/i.test(value.id??''))throw Error('Invalid thread streaming command.');
+  validateDestinationSection(value.destinationSection);
   if(value.kind==='stream-thread'){
     if(value.scope!=='thread'||!value.source||![value.source.threadId,value.source.projectId,value.source.environmentId].every(v=>typeof v==='string'&&v.length>0&&v.length<=200))throw Error('Thread streaming requires an explicit thread scope and source thread, project, and environment.');
     if(!Array.isArray(value.destinations)||!value.destinations.length||value.destinations.length>32||value.destinations.some((p:unknown)=>!safeNotePath(p))||new Set(value.destinations).size!==value.destinations.length)throw Error('Choose 1–32 unique destination notes.');
@@ -35,7 +37,7 @@ export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisp
     for(const path of command.destinations!)await host.validateDestination(path);
     const state=await host.readThread(command.source!);
     if(!state.historyComplete)throw Error('A complete canonical history is required to establish the streaming boundary.');
-    const display:ThreadDisplay={...command.source!,id:command.id,scope:'thread',enabled:true,createdAt:new Date(now).toISOString(),boundary:command.start==='history'?[]:state.messages.filter(m=>m.role==='user').map(m=>m.id),destinations:command.destinations!.map(path=>({id:commandId(command.id,`destination:${path}`),path})),bindings:[]};
+    const display:ThreadDisplay={...command.source!,id:command.id,scope:'thread',enabled:true,createdAt:new Date(now).toISOString(),boundary:command.start==='history'?[]:state.messages.filter(m=>m.role==='user').map(m=>m.id),destinations:command.destinations!.map(path=>({id:commandId(command.id,`destination:${path}`),path,...(command.destinationSection?{section:command.destinationSection}:{})})),bindings:[]};
     displays.push(display);return {subscriptionId:display.id,display};
   }
   const display=displays.find(d=>d.id===command.subscriptionId);if(!display)throw Error('Thread streaming registration not found.');

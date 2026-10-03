@@ -13,6 +13,23 @@ export function changedInterval(before:string,after:string):SavedEdit|undefined 
   return {from,to,text:after.slice(from,end)};
 }
 
+/** Split only at unchanged lines that occur exactly once in both versions.
+ * Reordered or repeated anchors fall back to one conservative interval. */
+export function changedEdits(before:string,after:string):SavedEdit[]{
+  if(before===after)return [];
+  const lines=(text:string)=>{let offset=0;return (text.match(/[^\n]*\n|[^\n]+$/g)??[]).map(text=>{const line={text,from:offset};offset+=text.length;return line;});};
+  const left=lines(before),right=lines(after),count=(items:typeof left)=>{const counts=new Map<string,number>();for(const line of items)counts.set(line.text,(counts.get(line.text)??0)+1);return counts;};
+  const a=count(left),b=count(right),rightByText=new Map(right.map(line=>[line.text,line]));
+  const anchors=left.filter(line=>line.text.trim()&&a.get(line.text)===1&&b.get(line.text)===1).map(line=>({left:line,right:rightByText.get(line.text)!}));
+  if(anchors.some((anchor,index)=>index&&anchor.right.from<anchors[index-1].right.from))return [changedInterval(before,after)!];
+  const edits:SavedEdit[]=[];let l=0,r=0;
+  for(const anchor of [...anchors,{left:{from:before.length,text:''},right:{from:after.length,text:''}}]){
+    const edit=changedInterval(before.slice(l,anchor.left.from),after.slice(r,anchor.right.from));if(edit)edits.push({...edit,from:edit.from+l,to:edit.to+l});
+    l=anchor.left.from+anchor.left.text.length;r=anchor.right.from+anchor.right.text.length;
+  }
+  return edits;
+}
+
 export function applySavedEdits(original:string,edits:readonly SavedEdit[]):string {
   const ordered=[...edits].sort((a,b)=>a.from-b.from||a.to-b.to);
   let end=-1;
@@ -28,14 +45,14 @@ export function applySavedEdits(original:string,edits:readonly SavedEdit[]):stri
 export function mergeSavedEdits(original:string,latest:string,proposed:readonly SavedEdit[]):MergeResult {
   // Validate before considering an intervening edit.
   applySavedEdits(original,proposed);
-  const user=changedInterval(original,latest);
-  if(!user)return {ok:true,text:applySavedEdits(original,proposed),edits:[...proposed]};
-  const delta=user.text.length-(user.to-user.from),mapped:SavedEdit[]=[];
+  const users=changedEdits(original,latest);
+  if(!users.length)return {ok:true,text:applySavedEdits(original,proposed),edits:[...proposed]};
+  const mapped:SavedEdit[]=[];
   for(const edit of proposed){
     // Touching insertions and replacements are ambiguous. Avoid ordering them
     // based on arrival time, including edits exactly at a response boundary.
-    if(!(edit.to<user.from||edit.from>user.to))return {ok:false,reason:'Generated and ordinary edits overlap or touch. Both versions are preserved.'};
-    const shift=edit.from>user.to?delta:0;
+    if(users.some(user=>!(edit.to<user.from||edit.from>user.to)))return {ok:false,reason:'Generated and ordinary edits overlap or touch. Both versions are preserved.'};
+    const shift=users.filter(user=>edit.from>user.to).reduce((delta,user)=>delta+user.text.length-(user.to-user.from),0);
     mapped.push({from:edit.from+shift,to:edit.to+shift,text:edit.text});
   }
   return {ok:true,text:applySavedEdits(latest,mapped),edits:mapped};

@@ -1,3 +1,5 @@
+import {nativeResponses} from './native-response-manager';
+import {responseAnchor} from './native-response-projection';
 import type {ExplorerResponse} from './explorer-responses';
 import type {ResolvedJobOptions} from './job-options';
 import {intermediateMode,completionTime,finalAnswerFormat,type IntermediateMode,type FinalAnswerFormat} from './response-presentation';
@@ -97,7 +99,14 @@ export class InlineChatManager {
   }
   async prepare(job:InlineJob,request:Request){
     job.connection=request.connection;job.projectId=request.project.id;job.threadId=request.threadId??commandId(request.id,'thread');job.messageId=commandId(request.id,'message');this.persist();
-    if(this.hosted){await this.hosted.prepare(job,request);job.hosted=true;this.persist();}
+    if(this.hosted){await this.hosted.prepare(job,request);job.hosted=true;this.persist();
+      const source=this.runtime(job).source,view=source?.info as MarkdownView;
+      if(request.inlineHost?.nativeProjection&&source&&typeof view.getViewData==='function'){
+        const document=source.editor.getValue(),region=regionBody(document,job.id);
+        if(region){const start=document.indexOf(startMarker(job.id)),end=document.indexOf(endMarker(job.id),region.to)+endMarker(job.id).length;
+          replaceChangedText(source.editor,document,document.slice(0,start)+responseAnchor(job.id)+document.slice(end));nativeResponses(this.app).preview(view,job.id,region.body);}
+      }
+    }
   }
   deliveryFailed(job:InlineJob,uncertain:boolean){
     if(!uncertain){
@@ -253,6 +262,7 @@ export class InlineChatManager {
   private finishStopped(job:InlineJob){
     if(this.stopped)return;
     const editor=this.editorFor(job);if(!editor)return;
+    if(job.hosted&&nativeResponses(this.app).view(this.runtime(job).source?.info as MarkdownView))return;
     const document=editor.getValue();
     if(job.finalized&&!hasResponseMarkers(document,job.id))return;
     const change=stopResponseEdit(document,job.id);

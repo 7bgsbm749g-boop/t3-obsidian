@@ -88,3 +88,17 @@ test('Reading view writes the saved note rather than its hidden editor, preservi
   assert.equal(await io.isSaved('Note.md','unused',{id,body:'Final',cleaned:true}),true);
   assert.equal(writes,3);assert.equal(hidden,'Stale hidden editor');
 });
+
+test('an intact disk response with a stale open buffer retries without declaring removed markers or overwriting either version',async()=>{
+  const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',disk='Head'+initialRegion(id).text+'Tail';let buffer='Head\nTail',writes=0;
+  const file={path:'Ready.md'},view:any={file,editor:{getValue:()=>buffer,replaceRange:()=>{writes++;}}};
+  const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[{view}]},vault:{getFileByPath:()=>file,read:async()=>disk}} as any);
+  assert.equal(await io.readNote('Ready.md'),undefined);assert.equal(await io.updateNote('Ready.md',current=>current+'response',()=>true),undefined);assert.equal(writes,0);
+  buffer=disk;assert.equal(await io.readNote('Ready.md'),disk);assert.equal(await io.locateNote(id,'Ready.md'),'Ready.md');
+});
+test('equal multiple editor views receive the same minimal change; disagreement preserves all buffers',async()=>{
+  const buffers=['Head old Tail','Head old Tail'],views=buffers.map((_,i)=>({file:{path:'Note.md'},editor:{getValue:()=>buffers[i],offsetToPos:(n:number)=>n,replaceRange:(text:string,from:number,to:number)=>{buffers[i]=buffers[i].slice(0,from)+text+buffers[i].slice(to);}}}));
+  const io=deviceNoteIO({workspace:{getLeavesOfType:()=>views.map(view=>({view}))}} as any);
+  await io.updateNote('Note.md',current=>current.replace('old','new'),()=>true);assert.deepEqual(buffers,['Head new Tail','Head new Tail']);
+  buffers[1]+=' competing';assert.equal(await io.readNote('Note.md'),undefined);assert.equal(await io.updateNote('Note.md',current=>current+' overwrite',()=>true),undefined);assert.deepEqual(buffers,['Head new Tail','Head new Tail competing']);
+});

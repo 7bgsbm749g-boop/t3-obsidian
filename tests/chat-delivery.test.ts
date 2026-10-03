@@ -190,7 +190,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';
   try {
-    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','send-or-ask','send-note-to-multiple-notes','answer-t3-question'],'Manual send and multi-destination commands are available');
+    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','send-or-ask','resolve-native-response-conflict','send-note-to-multiple-notes','answer-t3-question'],'Manual send and multi-destination commands are available');
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands.length,2);
     assert.equal(h.commands[0].type,'thread.create');
@@ -1372,7 +1372,7 @@ test('agent note commands combine many threads per note, mirrored responses, att
     h.setStreaming(false);
     await new Promise(resolve=>setTimeout(resolve,2200));
     assert.equal((a.value.match(/Inline reply from T3\./g)??[]).length,3);
-    assert.equal((b.value.match(/Inline reply from T3\./g)??[]).length,2);
+    assert.equal((b.value.match(/Inline reply from T3\./g)??[]).length,2,b.value);
     assert.doesNotMatch(a.value,/t3-response:(?:start|end):/);
     assert.doesNotMatch(b.value,/t3-response:(?:start|end):/);
     assert.doesNotMatch(a.value,/t3-inline:start:|T3 · Working/);

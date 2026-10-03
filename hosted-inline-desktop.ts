@@ -3,6 +3,7 @@
 import {promises as fs} from 'node:fs';
 import {join,resolve,dirname} from 'node:path';
 import lockfile from 'proper-lockfile';
+import {CoordinatedHost} from './coordinated-host-desktop';
 import {desktopInterval} from './desktop-timers';
 import type {App} from 'obsidian';
 import {logEvent,logFailure} from './diagnostics';
@@ -30,6 +31,10 @@ export function localInlineFiles(root:string,directory:string):LeaseFiles&{reque
 
 export class DesktopInlineHost {
   private writer:HostedInlineWriter;
+  private coordinated!:CoordinatedHost;
+  private nativeWriter!:HostedInlineWriter;
+  private scanWork?:Promise<void>;
+  private writerIO!:import('./hosted-inline').HostedWriterIO;
   private authority:InlineLeaseAuthority;
   private stopAuthorityTimer:()=>void;
   private work=new Set<Promise<void>>();
@@ -39,7 +44,7 @@ export class DesktopInlineHost {
   private constructor(private release:()=>Promise<void>,app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},files:ReturnType<typeof localInlineFiles>,access:(environmentId:string)=>Promise<ThreadAccess>){
     this.authority=new InlineLeaseAuthority(identity,files);
     this.stopAuthorityTimer=desktopInterval(()=>void this.authority.tick().catch(()=>{}),100);
-    this.writer=new HostedInlineWriter(identity,{
+    this.writerIO={
       ...files,
       locateNote:deviceNoteIO(app).locateNote,
       access:async environmentId=>{
@@ -67,19 +72,23 @@ export class DesktopInlineHost {
           return next;
         });
       },
-    });
+    };
+    this.writer=new HostedInlineWriter(identity,this.writerIO);
   }
+  async responseCommand(kind:string,id:string,hash?:string){return this.coordinated.command(kind,id,hash);}
   static async open(app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},access:(environmentId:string)=>Promise<ThreadAccess>){
     logEvent('ownership.coordinator.opening',identity);
     try{
     const base=join(identity.workspaceRoot,identity.directory);await fs.mkdir(base,{recursive:true});
     let host:DesktopInlineHost|undefined;
     const release=await lockfile.lock(base,{realpath:true,stale:30_000,update:5000,onCompromised:error=>{logFailure('ownership.coordinator.lock-lost',error,identity);host?.dispose();}});
-    host=new DesktopInlineHost(release,app,identity,localInlineFiles(identity.workspaceRoot,identity.directory),access);logEvent('ownership.coordinator.opened',identity);return host;
+    host=new DesktopInlineHost(release,app,identity,localInlineFiles(identity.workspaceRoot,identity.directory),access);
+    try{host.coordinated=await CoordinatedHost.open(app,identity,localInlineFiles(identity.workspaceRoot,identity.directory),host.authority);host.nativeWriter=new HostedInlineWriter(identity,host.coordinated.io(host.writerIO));await localInlineFiles(identity.workspaceRoot,identity.directory).write(`${identity.directory}/coordinated-capabilities.json`,JSON.stringify({version:1,nativeProjection:true}));}catch(error){host.dispose();throw error;}
+    logEvent('ownership.coordinator.opened',identity);return host;
     }catch(error){logFailure('ownership.coordinator.open.failed',error,identity);throw error;}
   }
-  tick(){if(this.stopped)return Promise.resolve();const work=this.writer.tick();this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});return work;}
-  renamed(before:string,after:string){this.writer.renamed(before,after);this.authority.renamed(before,after);}
+  tick(){if(this.stopped)return Promise.resolve();const scan=this.scanWork??=this.coordinated.scan();void scan.finally(()=>{if(this.scanWork===scan)this.scanWork=undefined;}).catch(()=>{});const work=scan.then(()=>Promise.all([this.writer.tick(),this.nativeWriter.tick()])).then(()=>{});this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});return work;}
+  renamed(before:string,after:string){this.writer.renamed(before,after);this.nativeWriter?.renamed(before,after);this.authority.renamed(before,after);if(this.coordinated){const work=this.coordinated.renamed(before,after);this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});}}
   deleted(path:string){this.authority.deleted(path);}
-  dispose(){if(this.stopped)return;this.stopped=true;this.stopAuthorityTimer();this.authority.stop();this.writer.stop();void (async()=>{try{await Promise.allSettled([...this.work,this.authority.tick()]);}catch{}finally{for(const {access} of this.accesses.values())await access.close?.();this.accesses.clear();await this.release();}})().catch(()=>{});}
+  dispose(){if(this.stopped)return;this.stopped=true;this.stopAuthorityTimer();this.coordinated?.stop();this.authority.stop();this.writer.stop();this.nativeWriter?.stop();void (async()=>{try{await Promise.allSettled([...this.work,this.authority.tick()]);}catch{}finally{for(const {access} of this.accesses.values())await access.close?.();this.accesses.clear();await this.release();}})().catch(()=>{});}
 }

@@ -13,3 +13,9 @@ test('overlap, adjacent insertion and malformed offsets do not guess at a merge'
   assert.throws(()=>applySavedEdits(original,[{from:2,to:4,text:'one'},{from:3,to:5,text:'two'}]),/overlapping/);
   assert.throws(()=>applySavedEdits(original,[{from:0,to:8,text:''}]),/Invalid/);
 });
+
+test('unique unchanged line anchors prove independent ordinary edits on both sides of a generated patch',()=>{
+ const original='Before\n\nUnique left\n\nTable 20\n\nUnique right\n\nAfter\n';
+ const latest=original.replace('Before','User before').replace('After','User after');const at=original.indexOf('Table 20');
+ const result=mergeSavedEdits(original,latest,[{from:at,to:at+8,text:'Table 25'}]);assert.equal(result.ok,true);if(result.ok)assert.equal(result.text,latest.replace('Table 20','Table 25'));
+});

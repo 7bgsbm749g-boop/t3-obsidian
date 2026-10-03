@@ -9,8 +9,9 @@ export const LEASE_MS=15_000;
 export const HEARTBEAT_MS=3000;
 export const LEASE_MARGIN_MS=2000;
 export type LeaseIdentity={vaultId:string;environmentId:string;workspaceRoot:string;directory:string};
-export interface LeaseRecord {request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;stopRequestedAt?:number;state?:HostedInlineState}
-export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop';delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
+export const COORDINATED_OWNER="00000000-0000-5000-8000-000000000001";
+export interface LeaseRecord {coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;stopRequestedAt?:number;state?:HostedInlineState}
+export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
 export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;ttlMs:number;answeredAt?:number}
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -83,6 +84,43 @@ export class InlineLeaseAuthority {
       await this.files.remove(path);
     }
   }
+  async exclusive<T>(run:()=>Promise<T>):Promise<T>{
+    while(this.work)await this.work.catch(()=>{});
+    if(this.stopped)throw Error('Host authority stopped.');
+    const work=run();this.work=work.then(()=>{});
+    try{return await work;}finally{this.work=undefined;}
+  }
+  async checkpoint(id:string,state:HostedInlineState){return this.exclusive(async()=>{
+    const raw=await this.files.read(leasePaths(this.identity.directory,id).record);if(!raw)throw Error('Unknown host registration.');
+    const record:LeaseRecord=JSON.parse(raw);
+    if(!record.coordinated||record.migrating)throw Error('The native writer is not fenced and migrated.');
+    const reply=await this.apply({id:crypto.randomUUID(),jobId:id,actor:COORDINATED_OWNER,kind:'checkpoint',epoch:record.epoch,revision:record.revision,state});
+    if(!reply.ok)throw Error(reply.error);return reply.record!;
+  });}
+  async fence(id:string){return this.exclusive(async()=>{
+    const path=leasePaths(this.identity.directory,id).record,raw=await this.files.read(path);if(!raw)return;
+    let record:LeaseRecord=JSON.parse(raw);
+    if(!record.coordinated){record={...record,coordinated:true,migrating:true,legacyFenceUntil:record.expiresAt+LEASE_MARGIN_MS,owner:COORDINATED_OWNER,epoch:record.epoch+1,expiresAt:Number.MAX_SAFE_INTEGER,revision:record.revision+1};await this.files.write(path,JSON.stringify(record));await this.publishCatalog(record);}
+    return record;
+  });}
+  async renameNative(before:string,after:string){return this.exclusive(async()=>{
+    for(const path of await this.files.list(`${this.identity.directory}/leases`)){
+      const raw=await this.files.read(path);if(!raw)continue;const record:LeaseRecord=JSON.parse(raw),current=record.state?.notePath??record.request.notePath;
+      if(!record.coordinated||!(current===before||current.startsWith(before+'/')))continue;
+      const notePath=after+current.slice(before.length);if(!safeNotePath(notePath))throw Error('Invalid renamed note path.');
+      record.state={...record.state??{requestHash:hostedRequestHash(record.request),accepted:false,status:'waiting' as const,hashes:[record.request.initialHash],updatedAt:new Date().toISOString()},notePath};record.revision++;await this.files.write(path,JSON.stringify(record));await this.publishCatalog(record);
+    }
+  });}
+  async resume(id:string){return this.exclusive(async()=>{
+    const path=leasePaths(this.identity.directory,id).record,raw=await this.files.read(path);if(!raw)throw Error('Unknown response binding.');
+    const record:LeaseRecord=JSON.parse(raw);if(!record.state||!['paused','conflict'].includes(record.state.status)||record.state.finalSaved)throw Error('This response is not awaiting intact-boundary recovery.');
+    record.state={...record.state,status:'waiting'};delete record.state.detail;record.revision++;await this.files.write(path,JSON.stringify(record));await this.publishCatalog(record);return record;
+  });}
+  async migrated(id:string){return this.exclusive(async()=>{
+    const path=leasePaths(this.identity.directory,id).record,raw=await this.files.read(path);if(!raw)throw Error('Missing migration record.');
+    const record:LeaseRecord=JSON.parse(raw);if(!record.coordinated)throw Error('Writer is not fenced.');
+    record.migrating=false;record.revision++;await this.files.write(path,JSON.stringify(record));await this.publishCatalog(record);return record;
+  });}
   private async apply(command:LeaseCommand):Promise<LeaseReply>{
     const {directory}=this.identity,paths=leasePaths(directory,command.jobId);
     let record:LeaseRecord|undefined;
@@ -95,10 +133,15 @@ export class InlineLeaseAuthority {
         if(record){if(hostedRequestHash(record.request)!==hostedRequestHash(request))throw Error('This response ID already belongs to another request.');await this.publishCatalog(record);return respond(true);}
         if(command.actor!==request.initialOwner)throw Error('Only the sending instance can register a response.');
         const writer=await this.noteWriter(request.notePath,request.id);
-        record={request,owner:writer??command.actor,epoch:1,expiresAt:this.now()+LEASE_MS,revision:0};
+        record={request,owner:request.nativeProjection?COORDINATED_OWNER:writer??command.actor,epoch:1,expiresAt:request.nativeProjection?Number.MAX_SAFE_INTEGER:this.now()+LEASE_MS,revision:0,...(request.nativeProjection?{coordinated:true,migrating:true}:{})};
         await this.files.write(hostedPaths(directory,request.id).request,JSON.stringify(request));
       }else{
         if(!record)throw Error('The response is not registered.');
+        if(command.kind==='observe'){
+          if(!record.coordinated||!record.state?.delivery||command.observed?.commitId!==record.state.delivery.commitId||command.observed?.hash!==record.state.delivery.hash)throw Error('Observed delivery does not match a host-verified commit.');
+          record={...record,revision:record.revision+1,state:{...record.state,delivery:{...record.state.delivery,observedBy:[...new Set([...record.state.delivery.observedBy,command.actor])]}}};
+          await this.files.write(paths.record,JSON.stringify(record));return respond(true);
+        }
         if(command.kind==='follow'&&record.state?.messageId===command.messageId&&command.previousMessageId!==command.messageId)return respond(true);
         if(command.kind==='stop'){
           if(!record.stopRequestedAt)record={...record,stopRequestedAt:this.now(),revision:record.revision+1};
@@ -129,6 +172,7 @@ export class InlineLeaseAuthority {
           if(state.pendingMessageId&&command.notePath&&command.notePath!==state.notePath)throw Error('The continuation note changed after it was attached.');
           if(!state.pendingMessageId)record={...record,revision:record.revision+1,state:{...state,pendingMessageId:command.messageId,notePath:command.notePath??state.notePath}};
         }else if(command.kind==='claim'){
+          if(record.coordinated)return respond(false,'Generated changes are coordinated by the host.');
           if(terminalLease(record))return respond(false,'The response is finished.');
           if(record.expiresAt>this.now())return respond(false,'Another writer still owns this response.');
           // Give clients with the note open a short head start over closed-note
@@ -159,6 +203,7 @@ export class InlineLeaseAuthority {
               const next=state.steering?.find(item=>item.messageId===input.messageId);
               return !next||next.text!==input.text||JSON.stringify(next.before)!==JSON.stringify(input.before)||JSON.stringify(next.selection)!==JSON.stringify(input.selection)||input.confirmed&&!next.confirmed||input.selectionApplied&&!next.selectionApplied;
             }))throw Error('The saved steering message changed.');
+            if(record.state?.delivery&&state.delivery?.commitId===record.state.delivery.commitId&&state.delivery.hash===record.state.delivery.hash)state.delivery={...state.delivery,observedBy:[...new Set([...record.state.delivery.observedBy,...state.delivery.observedBy])]};
             const previous=record.state?.bindingCheckpoint,incoming=state.bindingCheckpoint;
             if(previous||incoming){
               const starts={...previous?.starts};

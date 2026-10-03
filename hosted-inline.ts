@@ -1,3 +1,4 @@
+import {validateDestinationSection} from './destination-section';
 import {intermediateMode,completionTime,type IntermediateMode,type FinalAnswerFormat,finalAnswerFormat} from './response-presentation';
 import {questionTargets} from './questions';
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,type InlineQuestionFollow} from './inline-questions';
@@ -18,11 +19,14 @@ export interface HostedInlineRequest {
   keepIntermediate?:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat;
   initialInput?:InitialInlineInput;
   independent?:boolean;
+  nativeProjection?:boolean;
+  destinationSection?:string;
   threadTitle?:string;
   version:1|2|3;initialOwner?:string;id:string;vaultId:string;host:InlineHostTarget;notePath:string;
   threadId:string;messageId:string;projectId:string;threadEnvironmentId:string;initialHash:string;createdAt:string;
 }
 export interface HostedInlineState {
+  delivery?:{commitId:string;hash:string;verifiedOnHost:boolean;observedBy:string[]};
   requestHash:string;accepted:boolean;notePath:string;turnId?:string;messageId?:string;pendingMessageId?:string;
   status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict'|'paused';
   hashes:string[];body?:string;detail?:string;updatedAt:string;
@@ -51,6 +55,8 @@ export function safeNotePath(path:unknown):path is string {
   return typeof path==='string'&&path.endsWith('.md')&&!path.includes('\\')&&!/[\x00-\x1f:]/.test(path)&&path.split('/').every(p=>!!p&&p!=='.'&&p!=='..'&&!p.startsWith('.'));
 }
 export function validateHostedRequest(value:any):HostedInlineRequest {
+  if(value?.nativeProjection!==undefined&&typeof value.nativeProjection!=='boolean')throw Error('Invalid native projection preference.');
+  validateDestinationSection(value?.destinationSection);
   if(value?.initialInput!==undefined&&(!uuid.test(value.initialInput?.messageId??'')||value.initialInput.messageId!==value.messageId||typeof value.initialInput.text!=='string'||!value.initialInput.text.trim()||value.initialInput.text.length>120_000||value.initialInput.label!==undefined&&(typeof value.initialInput.label!=='string'||value.initialInput.label.length>200)))throw Error('Invalid initial response input.');
   if(value?.threadTitle!==undefined&&(typeof value.threadTitle!=='string'||value.threadTitle.length>200))throw Error('Invalid thread title.');
   if(value?.independent!==undefined&&typeof value.independent!=='boolean')throw Error('Invalid binding preference.');
@@ -88,6 +94,7 @@ export async function handoffInline(files:InlineFiles,request:HostedInlineReques
 
 export interface HostedWriterIO extends InlineFiles {
   requests():Promise<string[]>;
+  commitFinal?(request:HostedInlineRequest,state:HostedInlineState,body:string):Promise<boolean>;
   access(environmentId:string):Promise<ThreadAccess>;
   // undefined means the file is missing or has unsaved editor changes. The
   // callback must execute against the latest content in an atomic vault edit.
@@ -307,6 +314,12 @@ export class HostedInlineWriter {
         if(!state.hashes.includes(nextHash))state.hashes.push(nextHash);
         state.body=next;state.status='running';delete state.detail;await save();
         if(this.stopped)return;
+        if(terminal&&this.io.commitFinal){
+          if(await this.io.commitFinal(request,state,next)){
+            state.finalBody=next;state.finalPhase=phase as 'complete'|'interrupted';state.finalSaved=true;state.cleanupComplete=true;state.status=phase;delete state.detail;
+          }else state.detail='Waiting for a checked coordinated save or conflict resolution.';
+          await save();return;
+        }
         let conflict=false,applied=false;
         const selectionsApplied:InlineSteering[]=[];
         let finalBefore:string|undefined,finalAfter:string|undefined;
@@ -372,6 +385,11 @@ export class HostedInlineWriter {
       this.interrupts.add(request.id);
       void interruptStoppedResponse(()=>this.io.access(request.threadEnvironmentId),request.id,request.threadId,state.turnId,10_000,state.messageId??request.messageId,request.projectId,request.createdAt)
         .catch(error=>logFailure('response.stop.interrupt.failed',error,{jobId:request.id,threadId:request.threadId}));
+    }
+    if(this.io.commitFinal){
+      const body=stoppedResponseBody(state.body??'');
+      if(await this.io.commitFinal(request,state,body)){state.body=body;state.finalBody=body;state.finalPhase='interrupted';state.finalSaved=true;state.cleanupComplete=true;state.status='interrupted';delete state.detail;}
+      await save();return;
     }
     let before:string|undefined,after:string|undefined;
     await this.io.updateNote(state.notePath,document=>{

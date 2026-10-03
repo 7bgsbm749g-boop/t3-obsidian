@@ -1,3 +1,5 @@
+import {destinationOffset} from './destination-section';
+import {responseAnchor} from './native-response-projection';
 import {intermediateMode} from './response-presentation';
 import {commandId} from './direct';
 import {initialRegion,endInsertionOffset,regionBody} from './inline-thread';
@@ -16,8 +18,8 @@ export async function editorStream(source:HostedInlineRequest,notePath:string,io
   if(await io.completed?.(id))return request;
   const document=await io.updateNote(notePath,current=>{
     if(regionBody(current,id)||current.includes(`<!-- t3-response:start:${id} -->`))return current;
-    const offset=endInsertionOffset(current);
-    return current.slice(0,offset)+region.text+current.slice(offset);
+    const offset=destinationOffset(current,source.destinationSection);
+    return current.slice(0,offset)+(source.nativeProjection?'\n'+responseAnchor(id)+'\n\n':region.text)+current.slice(offset);
   },allowed);
   if(document===undefined)throw Error(`Destination note unavailable: ${notePath}`);
   return request;

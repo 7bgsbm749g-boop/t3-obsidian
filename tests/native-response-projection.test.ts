@@ -54,7 +54,7 @@ test('incoming overlapping edits retain competing versions and block saves',()=>
   const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);fixture.edit(fixture.read().replace('Before','Local before'));
   fixture.view.setViewData(saved.replace('Before','External before'),false);
   assert.equal(fixture.conflicts.length,1);assert.ok(fixture.conflicts[0].local.includes('Local before'));assert.ok(fixture.conflicts[0].incoming.includes('External before'));
-  assert.throws(()=>fixture.view.getViewData(),/overlap/);assert.throws(()=>fixture.adapter.dispose(),/Resolve/);
+  assert.throws(()=>fixture.view.getViewData(),/overlap/);fixture.adapter.dispose();assert.equal(fixture.read(),saved.replace('Before','External before'));assert.ok(fixture.conflicts[0].local.includes('Local before')); // unload preserves the incoming revision and journals local edits
 });
 test('a mode switch or own-save echo adopts identical ordinary edits without a false conflict',()=>{
   const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);fixture.edit(fixture.read().replace('Before','Saved user edit'));
@@ -71,6 +71,7 @@ test('literal marker examples in fenced code are rendered and stripped structura
 test('native transaction filter prevents partial response edits while preserving ordinary editor transactions',()=>{
   const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);
   const state=EditorState.create({doc:fixture.read(),extensions:[fixture.adapter.extension()]});
+  fixture.view.editor={cm:{state}};
   const from=state.doc.toString().indexOf('Stream');assert.equal(state.update({changes:{from,to:from+6,insert:'bad'}}).state.doc.toString(),state.doc.toString());
   const ordinary=state.update({changes:{from:0,to:6,insert:'User edit'}}).state.doc.toString();
   assert.ok(ordinary.startsWith('User edit'));assert.ok(ordinary.includes('> Stream'));
@@ -84,4 +85,20 @@ test('write-ahead materialization handles a synchronous native load before the r
   const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'},{id:other,body:'> Other'}]);
   const final=saved.replace(responseAnchor(id),'\n> Finished');fixture.adapter.prepareMaterialization(saved,final,[id]);fixture.view.setViewData(final,false);
   assert.equal(fixture.view.getViewData(),final);assert.deepEqual(fixture.conflicts,[]);fixture.adapter.acceptCommitted(final,[id]);
+});
+
+test('native cross-pane displayed-data echoes are stripped before merging ordinary edits',()=>{
+ const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);
+ fixture.view.setViewData(fixture.read().replace('After','Second-pane ordinary edit'),false);
+ assert.ok(fixture.view.getViewData().includes('Second-pane ordinary edit'));assert.ok(!fixture.view.getViewData().includes('> Stream'));assert.ok(fixture.read().includes('> Stream'));assert.deepEqual(fixture.conflicts,[]);
+});
+test('a switched file unwraps the old projection before loading another note',()=>{
+ const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);fixture.view.file={path:'New.md'};fixture.view.setViewData('# Another note',true);
+ assert.equal(fixture.view.getViewData(),'# Another note');assert.equal(fixture.adapter.isDisposed(),true);
+});
+
+test('explicit view resolution preserves the competing snapshot and resumes a saved projection',()=>{
+ const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);fixture.edit(fixture.read().replace('Before','Local before'));
+ const incoming=saved.replace('Before','Remote before');fixture.view.setViewData(incoming,false);const conflict=fixture.adapter.conflictRecord()!;assert.ok(conflict.local.includes('Local before'));
+ fixture.adapter.resolveConflict(incoming,'saved');assert.equal(fixture.view.getViewData(),incoming);assert.ok(fixture.read().includes('> Stream'));assert.ok(fixture.conflicts[0].local.includes('Local before'));
 });
