@@ -11,7 +11,7 @@ export function staleApprovalFailure(activity:InlineActivity){
 }
 /** Resolution is terminal, including when requests and resolutions arrive out of order. */
 export function pendingApprovals(activities:InlineActivity[]):PendingApproval[]{
-  const closed=new Set(activities.filter(a=>a.kind==='approval.resolved'||staleApprovalFailure(a)).map(a=>a.payload?.requestId));
+  const closed=new Set(activities.filter(a=>a.kind==='approval.resolved'||a.kind==='approval.abandoned'||staleApprovalFailure(a)).map(a=>a.payload?.requestId));
   const pending=new Map<string,PendingApproval>();
   for(const a of activities){
     const p=a.payload;

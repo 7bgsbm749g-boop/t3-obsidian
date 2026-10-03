@@ -5,6 +5,7 @@ import {contentHash} from './completion';
 import type {App,Editor,MarkdownView} from 'obsidian';
 import {replaceInlineEditorText} from './inline-editor';
 import {ResponseNoteLocator} from './response-location';
+import {responseAnchor,responseRegion} from './native-response-projection';
 
 const locators=new WeakMap<App,ResponseNoteLocator>();
 const missingNote=(error:unknown)=>!!error&&typeof error==='object'&&('code' in error&&error.code==='ENOENT'||'message' in error&&typeof error.message==='string'&&error.message.startsWith('ENOENT:'));
@@ -50,7 +51,20 @@ export function deviceNoteIO(app:App){
         const current=saved(open[0]);if(!stable(open,path,current)||!await agreesWithDisk(path,current)||!stable(open,path,current))return;
         const next=change(current);
         if(!allowed())throw Error('Writer ownership expired.');
-        if(next!==current){logEvent('note.write.editor',{notePath:path,fromHash:contentHash(current),toHash:contentHash(next)});for(const view of open){const adapter=nativeResponses(app).view(view);if(adapter)adapter.editSaved(next);else replaceChangedText(view.editor,current,next);}}
+        if(next!==current){
+          logEvent('note.write.editor',{notePath:path,fromHash:contentHash(current),toHash:contentHash(next)});
+          for(const view of open){const adapter=nativeResponses(app).view(view);if(adapter)adapter.editSaved(next);else replaceChangedText(view.editor,current,next);}
+          // Registration must reach disk before a local native projection can
+          // interpret a missing anchor as an incoming deletion. Obsidian's
+          // pending autosave otherwise races the host's registration reply.
+          const newNativeAnchor=[...next.matchAll(/^<!-- t3-(?:inline|response):start:([0-9a-f-]{36}) -->$/gm)].some(match=>{
+            const id=match[1],region=responseRegion(next,id);return !responseRegion(current,id)&&!!region&&next.slice(region.from,region.to)===responseAnchor(id);
+          });
+          if(newNativeAnchor){
+            for(const view of open)await view.save();
+            if(!allowed()||!stable(open,path,next)||!await agreesWithDisk(path,next)||!stable(open,path,next))throw Error('The response boundaries were not saved. Save the note and retry.');
+          }
+        }
         locations.remember(path,next);
         return next;
       }

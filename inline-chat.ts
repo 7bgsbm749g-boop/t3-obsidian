@@ -105,7 +105,7 @@ export class InlineChatManager {
       if(request.inlineHost?.nativeProjection&&source&&typeof view.getViewData==='function'){
         const document=source.editor.getValue(),region=regionBody(document,job.id);
         if(region){const start=document.indexOf(startMarker(job.id)),end=document.indexOf(endMarker(job.id),region.to)+endMarker(job.id).length;
-          replaceChangedText(source.editor,document,document.slice(0,start)+responseAnchor(job.id)+document.slice(end));nativeResponses(this.app).preview(view,job.id,region.body);}
+          replaceChangedText(source.editor,document,document.slice(0,start)+responseAnchor(job.id)+document.slice(end));await view.save();nativeResponses(this.app).preview(view,job.id,region.body);}
       }
     }
   }

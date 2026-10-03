@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {deviceNoteIO} from '../inline-note-io';
 import {completionProof,initialRegion} from '../inline-thread';
+import {responseAnchor} from '../native-response-projection';
 
 test('completion checks distinguish saved proof from saved cleanup despite another stream changing the note',async()=>{
   const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',body='> Answer\n';
@@ -124,4 +125,22 @@ test('pane replacement during disk boundary validation retries without changing 
   const pending=io.updateNote('Note.md',current=>current+' Reply',()=>true);
   leaves=[{view:{file,editor:{getValue:()=> 'Competing pane',replaceRange:()=>{writes++;}}}}];
   release('Original');assert.equal(await pending,undefined);assert.equal(writes,0);
+});
+test('new Live Preview response anchors are saved before registration can attach a native projection',async()=>{
+  const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',file={path:'Note.md'};let buffer='Prompt\n',disk=buffer,release!:()=>void,saves=0;
+  const pendingSave=new Promise<void>(resolve=>release=resolve);
+  const editor={getValue:()=>buffer,offsetToPos:(n:number)=>n,replaceRange:(text:string,from:number,to:number)=>{buffer=buffer.slice(0,from)+text+buffer.slice(to);}};
+  const view={file,editor,getMode:()=> 'source',save:async()=>{saves++;await pendingSave;disk=buffer;}};
+  const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[{view}]},vault:{getFileByPath:()=>file,read:async()=>disk}} as any);
+  let returned=false;const work=io.updateNote(file.path,current=>current+responseAnchor(id),()=>true).then(value=>{returned=true;return value;});
+  for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(saves,1);assert.equal(returned,false);assert.equal(disk,'Prompt\n');assert.ok(!buffer.includes('Working'));
+  release();assert.equal(await work,disk);assert.ok(disk.includes(responseAnchor(id)));
+});
+test('a save that does not persist a new response anchor cannot authorize registration',async()=>{
+  const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',file={path:'Note.md'};let buffer='Prompt\n';
+  const editor={getValue:()=>buffer,offsetToPos:(n:number)=>n,replaceRange:(text:string,from:number,to:number)=>{buffer=buffer.slice(0,from)+text+buffer.slice(to);}};
+  const view={file,editor,getMode:()=> 'source',save:async()=>{}};
+  const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[{view}]},vault:{getFileByPath:()=>file,read:async()=> 'Prompt\n'}} as any);
+  await assert.rejects(io.updateNote(file.path,current=>current+responseAnchor(id),()=>true),/boundaries were not saved/);
 });

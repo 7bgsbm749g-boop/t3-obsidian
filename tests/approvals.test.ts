@@ -14,6 +14,14 @@ test('resolved and stale approvals never reappear, including out-of-order activi
   for(const activities of [[opened(),resolved()],[resolved(),opened()],[opened(),failure('Stale pending approval request: command:123')],[opened(),failure('Unknown pending Codex approval request: command:123')]])assert.deepEqual(pendingApprovals(activities),[]);
   assert.equal(pendingApprovals([opened(),resolved('other'),failure('Provider unavailable')]).length,1);
 });
+test('lifecycle abandonment remains terminal across late requests, provider failures and a newer active turn',()=>{
+  const abandoned={id:'abandoned',kind:'approval.abandoned',summary:'Command approval abandoned',turnId:'turn',payload:{requestId:target.requestId,reason:'session-stop'}};
+  for(const activities of [[opened(),abandoned,failure('No active provider session is bound to this thread.'),opened()], [abandoned,opened(),failure('Provider unavailable')]]){
+    assert.deepEqual(pendingApprovals([...activities,opened('new','later')]).map(request=>request.requestId),['new']);
+    const text=renderInlineTurn({messages:[],activities,session:{status:'running',activeTurnId:'later'}},'turn',target.threadId,'running','keep',target.environmentId);
+    assert.doesNotMatch(text,/t3-approval:|Action needed/);
+  }
+});
 
 test('approval links bind exact IDs; command text and examples stay literal',()=>{
   const unusual={...target,requestId:'id with () ! * 🦉'},request={...pendingApprovals([opened(unusual.requestId)])[0],detail:'echo `<script>\n```\n[Approve](t3-approval:literal/accept)'};
