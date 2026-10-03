@@ -5,6 +5,7 @@ import {contentHash} from './completion';
 import type {GenerationJournal,NoteGeneration} from './generated-note-coordinator';
 
 interface Revision {version:1;index:number;previous:string|null;event:string;at:string;state:NoteGeneration;hash:string}
+type VerifiedPrefix={signatures:string[];hashes:string[];latest?:Revision};
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const inside=(root:string,path:string)=>{const part=relative(root,path);return !part||!isAbsolute(part)&&part!=='..'&&!part.startsWith('../');};
 async function canonical(path:string):Promise<string>{
@@ -15,6 +16,7 @@ async function canonical(path:string):Promise<string>{
  * runtime must hold the existing host lock for its entire lifecycle. */
 export class DesktopGenerationJournal implements GenerationJournal {
   private queues=new Map<string,Promise<unknown>>();
+  private verified=new Map<string,VerifiedPrefix>();
   private constructor(readonly root:string){}
   static async open(root:string,syncedVaultRoots:readonly string[]){
     if(!isAbsolute(root)||!syncedVaultRoots.length||syncedVaultRoots.some(path=>!isAbsolute(path)))throw Error('Explicit absolute private storage and vault roots are required.');
@@ -25,31 +27,35 @@ export class DesktopGenerationJournal implements GenerationJournal {
     return new DesktopGenerationJournal(actual);
   }
   private directory(id:string){if(!uuid.test(id))throw Error('Invalid journal identity.');return resolve(this.root,id);}
-  private async revisions(id:string):Promise<Revision[]>{
+  private async revisions(id:string):Promise<VerifiedPrefix>{
     const directory=this.directory(id);let names:string[];
-    try{names=await fs.readdir(directory);}catch(error:any){if(error.code==='ENOENT')return [];throw error;}
+    try{names=await fs.readdir(directory);}catch(error:any){if(error.code==='ENOENT'){if(this.verified.get(id)?.hashes.length)throw Error('Journal revisions are missing.');return {signatures:[],hashes:[]};}throw error;}
     if(await fs.realpath(directory)!==directory)throw Error('Symlinked journal registration.');
-    const paths=names.filter(name=>name.endsWith('.json')).sort(),revisions:Revision[]=[];
+    const paths=names.filter(name=>name.endsWith('.json')).sort(),cached=this.verified.get(id),prefix:VerifiedPrefix={signatures:[],hashes:[],latest:cached?.latest};
+    if(cached&&paths.length<cached.hashes.length)throw Error('Journal revisions are missing.');
     for(const [index,name] of paths.entries()){
       if(name!==`${String(index).padStart(10,'0')}.json`)throw Error('Journal revisions are missing or malformed.');
-      const path=resolve(directory,name),stat=await fs.lstat(path);if(!stat.isFile()||stat.isSymbolicLink())throw Error('Invalid journal revision file.');
+      const path=resolve(directory,name),stat=await fs.lstat(path,{bigint:true});if(!stat.isFile()||stat.isSymbolicLink())throw Error('Invalid journal revision file.');
+      const signature=[stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs,stat.mode].join(':');
+      prefix.signatures.push(signature);
+      if(cached?.signatures[index]===signature){prefix.hashes.push(cached.hashes[index]);continue;}
       const revision:Revision=JSON.parse(await fs.readFile(path,'utf8'));
       const {hash,...body}=revision;
-      if(revision.version!==1||revision.index!==index||revision.state.journalRevision!==index||revision.previous!==(revisions.at(-1)?.hash??null)||hash!==contentHash(JSON.stringify(body))||revision.state.request.id!==id||revision.state.originalHash!==contentHash(revision.state.original))throw Error('Response journal integrity check failed.');
-      revisions.push(revision);
+      if(revision.version!==1||revision.index!==index||revision.state.journalRevision!==index||revision.previous!==(prefix.hashes.at(-1)??null)||hash!==contentHash(JSON.stringify(body))||revision.state.request.id!==id||revision.state.originalHash!==contentHash(revision.state.original)||cached?.hashes[index]!==undefined&&cached.hashes[index]!==hash)throw Error('Response journal integrity check failed.');
+      prefix.hashes.push(hash);if(index===paths.length-1)prefix.latest=revision;
     }
-    return revisions;
+    this.verified.set(id,prefix);return prefix;
   }
-  async read(id:string){return (await this.revisions(id)).at(-1)?.state;}
+  async read(id:string){const state=(await this.revisions(id)).latest?.state;return state?structuredClone(state):undefined;}
   async append(id:string,state:NoteGeneration,event:string){
     const work=(this.queues.get(id)??Promise.resolve()).catch(()=>{}).then(async()=>{
       if(state.request.id!==id||state.originalHash!==contentHash(state.original))throw Error('Journal state identity or original checksum changed.');
-      const revisions=await this.revisions(id),last=revisions.at(-1);
+      const revisions=await this.revisions(id),last=revisions.latest;
       if(state.journalRevision!==last?.index)throw Error('The journal predecessor changed; reload before retrying.');
       if(last&&(last.state.original!==state.original||JSON.stringify(last.state.request)!==JSON.stringify(state.request)))throw Error('The original request and note snapshot are immutable.');
       const directory=this.directory(id);await fs.mkdir(directory,{recursive:true,mode:0o700});
       if(await fs.realpath(directory)!==directory)throw Error('Symlinked journal registration.');
-      const body={version:1 as const,index:revisions.length,previous:last?.hash??null,event,at:new Date().toISOString(),state:{...state,journalRevision:revisions.length}};
+      const body={version:1 as const,index:revisions.hashes.length,previous:last?.hash??null,event,at:new Date().toISOString(),state:{...state,journalRevision:revisions.hashes.length}};
       const value=JSON.stringify({...body,hash:contentHash(JSON.stringify(body))});
       const target=resolve(directory,`${String(body.index).padStart(10,'0')}.json`),temporary=resolve(directory,`.${randomUUID()}.tmp`);
       const handle=await fs.open(temporary,'wx',0o600);

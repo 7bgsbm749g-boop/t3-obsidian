@@ -43,3 +43,27 @@ records must remain present; deleting the backlog is not a fix.
 Existing timed-out user requests remain saved on their originating devices.
 Do not reconstruct their prompts from current notes or send replacement IDs.
 An explicit retry uses the saved original prompt and deterministic T3 IDs.
+
+## Live-discovered response delay after 2.31.6
+
+2.31.6 fixed first registration: a new request was acknowledged about 193 ms
+after preparation, with the existing records preserved and no retry. However,
+real cold and warm replies took tens of seconds to reach their final saves.
+That latency failed live acceptance; 2.31.6 remains an incomplete superseded
+attempt rather than a certified delivery.
+
+Completed-history observation repeatedly read and hashed every revision of
+immutable generation journals, several times per record in each host scan.
+The follow-up verifies a journal prefix once per host instance, checks each
+revision's inode, size, nanosecond modification/change times and mode on every
+read, and rechecks hashes for changed/new files. Cached state is cloned before
+returning it. Changed verified hashes and truncated histories fail closed.
+History checks rotate through four completed records per pass; active records
+are processed every pass before that maintenance.
+
+Regression tests require unchanged history to incur no body rereads, preserve
+caller isolation, and verify only newly appended revisions. Same-size tampering
+with restored mtime, recomputed replacement hashes and tail truncation are
+rejected. A host regression requires active completion while the historical
+audit still has records remaining. Real delivery must again pass without retry
+and must save promptly after the exact worker turn completes.

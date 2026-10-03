@@ -128,3 +128,17 @@ test('supported repair verifies a reviewed pending commit without treating it as
   const lease=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);assert.equal(lease.state.cleanupComplete,true);
  }finally{await h.close();}
 });
+
+test('active delivery proceeds while completed journal observation rotates through bounded history batches',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const historical=new Set<string>();
+  for(let n=0;n<9;n++){
+   const id=randomUUID(),request={...h.request,id,notePath:`Historical-${n}.md`};historical.add(id);
+   h.storage.set(leasePaths(h.identity.directory,id).record,JSON.stringify({request,coordinated:true,owner:COORDINATED_OWNER,epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,state:{requestHash:hostedRequestHash(request),accepted:true,status:'complete',finalSaved:true,cleanupComplete:true,finalPhase:'complete',finalBody:'Saved old answer',notePath:request.notePath,hashes:[],updatedAt:''}}));
+  }
+  const read=h.host.journal.read.bind(h.host.journal),observed=new Set<string>();h.host.journal.read=async id=>{if(historical.has(id)){observed.add(id);return undefined;}return read(id);};
+  await h.host.scan();assert.equal(observed.size,4,'historical verification does not monopolize the active pass');
+  h.complete();await h.writer.tick();assert.equal((await read(h.id))!.status,'verified');assert.match(h.notes.get('Note.md')!,/Added \*\*25kg\*\*/);
+  await h.host.scan();assert.ok(observed.size>4,'later scans still audit historical results');
+ }finally{await h.close();}
+});

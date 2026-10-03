@@ -23,6 +23,7 @@ export class CoordinatedHost {
   private stopped=false;
   private failures=new Map<string,string>();
   private scanning?:Promise<void>;
+  private terminalCursor=0;
   private constructor(private app:App,private identity:LeaseIdentity,private files:LeaseFiles,private authority:InlineLeaseAuthority,readonly journal:DesktopGenerationJournal,readonly coordinator:GeneratedNoteCoordinator){}
   static async open(app:App,identity:LeaseIdentity,files:LeaseFiles,authority:InlineLeaseAuthority,options?:{journalRoot?:string}){
     const roots=[identity.workspaceRoot];
@@ -59,12 +60,19 @@ export class CoordinatedHost {
   }
   scan(){const work=this.scanning??=this.scanRecords();void work.finally(()=>{if(this.scanning===work)this.scanning=undefined;}).catch(()=>{});return work;}
   private async scanRecords(){
+    const active:LeaseRecord[]=[],terminal:LeaseRecord[]=[];
     for(const path of await this.files.list(`${this.identity.directory}/leases`)){
+      try{const raw=await this.files.read(path);if(!raw)continue;const record:LeaseRecord=JSON.parse(raw);this.records.set(record.request.id,record);(terminalLease(record)||record.state?.finalSaved?terminal:active).push(record);}catch{/* A malformed historical record cannot gate a healthy response. */}
+    }
+    // Serve active responses every pass. Completed-history observation is
+    // rotating maintenance, so a cold journal audit cannot delay a new run.
+    if(this.terminalCursor>=terminal.length)this.terminalCursor=0;
+    const historical=terminal.slice(this.terminalCursor,this.terminalCursor+4);this.terminalCursor+=historical.length;
+    for(let record of active.concat(historical)){
       if(this.stopped)return;
-      const identity=path.split('/').at(-1)!.replace(/\.json$/,'');this.failures.delete(identity);
+      const identity=record.request.id;this.failures.delete(identity);
       try{
-      const raw=await this.files.read(path);if(!raw)continue;
-      let record:LeaseRecord=JSON.parse(raw),id=record.request.id,notePath=record.state?.notePath??record.request.notePath;
+      const id=record.request.id,notePath=record.state?.notePath??record.request.notePath;
       this.records.set(id,record);
       // A native file notification can fail AFTER vault.process wrote the
       // exact durable intent. Recover by disk readback before marker location,

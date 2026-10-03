@@ -37,3 +37,30 @@ test('tampered or missing revisions fail closed instead of losing response evide
     await assert.rejects(journal.read(id),/integrity/);await fs.rename(file,join(journal.root,id,'0000000001.json'));await assert.rejects(journal.read(id),/missing/);
   }finally{await fs.rm(root,{recursive:true,force:true});}
 });
+
+test('verified immutable history is checked by file identity without rereading and hashing its bodies on every tick',async t=>{
+  const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-cache-'));try{
+    const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);let current=state();
+    for(let n=0;n<40;n++){current={...current,sequence:n};await journal.append(id,current,'checkpoint');}
+    await journal.read(id);let reads=0;const original=fs.readFile;t.mock.method(fs,'readFile',async(...args:any[])=>{reads++;return (original as any)(...args);});
+    const first=(await journal.read(id))!;first.conflicts.push({original:'changed',latest:'changed',reason:'caller mutation'});
+    assert.equal((await journal.read(id))!.conflicts.length,0,'callers receive an independent state');assert.equal(reads,0,'unchanged private history has no body reads');
+    await journal.append(id,{...(await journal.read(id))!,sequence:40},'checkpoint');assert.equal((await journal.read(id))!.sequence,40);assert.equal(reads,1,'only the new immutable revision is read and verified');
+  }finally{t.mock.restoreAll();await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('cached history detects same-size tampering even when the old modification time is restored',async()=>{
+  const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-cache-'));try{
+    const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);await journal.append(id,state(),'accepted');await journal.read(id);
+    const path=join(journal.root,id,'0000000000.json'),before=await fs.stat(path),raw=await fs.readFile(path,'utf8');await fs.writeFile(path,raw.replace('"status":"accepted"','"status":"verified"'));await fs.utimes(path,before.atime,before.mtime);
+    assert.equal((await fs.stat(path)).size,before.size);await assert.rejects(journal.read(id),/integrity/);
+  }finally{await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('a verified prefix rejects a rewritten valid hash and tail truncation',async()=>{
+  const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-cache-'));try{
+    const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);const current=state();await journal.append(id,current,'accepted');await journal.append(id,{...current,sequence:1},'checkpoint');await journal.read(id);
+    const path=join(journal.root,id,'0000000000.json'),raw=JSON.parse(await fs.readFile(path,'utf8'));raw.state.status='verified';const {hash,...body}=raw;raw.hash=contentHash(JSON.stringify(body));await fs.writeFile(path,JSON.stringify(raw));await assert.rejects(journal.read(id),/integrity/);
+    await fs.rm(join(journal.root,id,'0000000001.json'));await assert.rejects(journal.read(id),/missing/);
+  }finally{await fs.rm(root,{recursive:true,force:true});}
+});
