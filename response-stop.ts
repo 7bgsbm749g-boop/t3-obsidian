@@ -4,11 +4,13 @@ import {contentHash} from './completion';
 import {applyThreadItem,finalizeRegion,regionBody,turnForMessage} from './inline-thread';
 import {readInlineSnapshot} from './thread-stream';
 import {parseQuestionToken} from './questions';
+import {clearApprovalControls} from './approvals';
 import {commandId} from './direct';
 import type {ThreadAccess} from './thread-stream';
 
 /** Seal the visible transcript, without rebuilding it from a possibly stale stream. */
 export function stoppedResponseBody(body:string):string {
+  body=clearApprovalControls(body);
   const protectedCode=markdownCodeRanges(body);
   const questions=[...body.matchAll(/^<!-- t3-question:start:([^\n]+) -->\n([\s\S]*?)\n<!-- t3-question:end:\1 -->$/gm)].filter(match=>parseQuestionToken(match[1])&&!protectedCode.some(([from,to])=>match.index!>=from&&match.index!<to));
   for(const match of questions.reverse()){

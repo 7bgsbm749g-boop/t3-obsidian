@@ -151,3 +151,11 @@
   overflow: auto;
   white-space: pre-wrap;
 }
+
+.send-to-t3-approval-button {
+  font-size: var(--font-ui-small);
+  height: 1.65em;
+  padding: 0 0.45em;
+  margin-inline-start: 0.25em;
+  vertical-align: baseline;
+}

@@ -156,7 +156,7 @@ test('active clock ticks do not change rendered note bytes',()=>{
 
 test('questions and pending actions remain outside progress folds',()=>{
   const live:InlineThreadState={...state,latestTurn:{turnId:'turn',state:'running'},session:{status:'running',activeTurnId:'turn'},activities:[
-    {id:'approval',kind:'approval.requested',turnId:'turn',summary:'Approve the next action'},
+    {id:'approval',kind:'approval.requested',turnId:'turn',summary:'Approve the next action',payload:{requestId:'approval'}},
     {id:'question',kind:'user-input.requested',turnId:'turn',summary:'Question',payload:{requestId:'request',questions:[{id:'choice',header:'Choice',question:'Which option?',options:[{label:'One',description:'First'}]}]}},
   ]};
   const text=render(live,'running'),ast=unified().use(remarkParse).parse(text);

@@ -15,6 +15,7 @@ import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} 
 import type {InlineHostTarget} from './hosted-inline';
 import {replaceInlineEditorText} from './inline-editor';
 import {pendingQuestions} from './questions';
+import {pendingApprovals} from './approvals';
 import {observeIncoming,mergeProse,selectionRange,steeringBoundary,validSteeringInput,type InlineSteering,type SteeringInput} from './inline-steering';
 import type {InlineMessage,InlineBindingCheckpoint} from './inline-thread';
 import {replaceChangedText} from './inline-note-io';
@@ -174,10 +175,10 @@ export class InlineChatManager {
     }
     if(item.kind==='snapshot')runtime.sequence=Number.isSafeInteger(applied.sequence)?applied.sequence!:runtime.sequence;
     else if(applied.sequence!==undefined)runtime.sequence=applied.sequence;
-    const activity=job.turnId&&runtime.state.activities.filter(a=>a.turnId===job.turnId&&a.kind==='approval.requested').at(-1);
+    const activity=job.turnId&&pendingApprovals(runtime.state.activities).filter(a=>a.turnId===job.turnId).at(-1);
     const question=pendingQuestions(runtime.state.activities).find(q=>q.turnId===job.turnId);
     if(question&&question.requestId!==runtime.alerted){runtime.alerted=question.requestId;new Notice('T3 has a question. Use Answer in the note when you are ready.',8000);}
-    if(activity&&activity.id!==runtime.alerted){runtime.alerted=activity.id;new Notice(`T3 needs your response in thread ${job.threadId}: ${activity.summary.slice(0,140)}`,12000);}
+    if(activity&&activity.requestId!==runtime.alerted){runtime.alerted=activity.requestId;new Notice(activity.kind==='command'?'T3 needs command approval. Use Approve or Deny in the note.':`T3 needs your response in thread ${job.threadId}: ${activity.summary.slice(0,140)}`,12000);}
     const phase=job.turnId?inlineQuestionPhase(runtime.state,job.turnId,job.questionFollows):'running';
     if(job.phase==='error'&&phase==='running'&&runtime.state.latestTurn?.turnId!==job.turnId&&runtime.state.session?.activeTurnId!==job.turnId)return;
     if(job.phase==='error'&&phase==='error')return;

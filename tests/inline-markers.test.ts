@@ -32,4 +32,6 @@ test('only complete T3 tracking lines are hidden, including markers inserted aft
 test('question metadata is hidden without hiding ordinary note comments',()=>{
   const regex=inlineMarkerRegex();assert.equal(regex.test('<!-- t3-question:start:%7B%22environmentId%22%3A%22environment%22%7D -->'),true);
   regex.lastIndex=0;assert.equal(regex.test('<!-- t3-question:start:ordinary user text -->'),false);
+  regex.lastIndex=0;assert.equal(regex.test('<!-- t3-approval:start:%7B%22environmentId%22%3A%22environment%22%7D -->'),true);
+  regex.lastIndex=0;assert.equal(regex.test('<!-- t3-approval:start:ordinary user text -->'),false);
 });

@@ -92,7 +92,7 @@ test('stream deltas, final replacement, snapshots, status, and fence balancing r
   assert.match(renderInlineTurn(state,'turn','thread'),/```ts\nconst x = 1;\n```\n\n\n<span class="send-to-t3-response-activity"/);
   state=applyThreadItem(state,event(3,'Here is ```ts\nconst x = 2;\n```',false)).state;
   assert.equal(state.messages[0].text,'Here is ```ts\nconst x = 2;\n```');
-  state=applyThreadItem(state,{kind:'event',event:{sequence:4,type:'thread.activity-appended',payload:{activity:{id:'a1',kind:'approval.requested',summary:'Review the command',turnId:'turn'}}}}).state;
+  state=applyThreadItem(state,{kind:'event',event:{sequence:4,type:'thread.activity-appended',payload:{activity:{id:'a1',kind:'approval.requested',summary:'Review the command',turnId:'turn',payload:{requestId:'approval'}}}}}).state;
   assert.match(renderInlineTurn(state,'turn','thread'),/Action needed in T3: Review the command/);
   state=applyThreadItem(state,{kind:'event',event:{sequence:5,type:'thread.activity-appended',payload:{activity:{id:'a2',kind:'tool.started',summary:'Ran command started',turnId:'turn'}}}}).state;
   assert.doesNotMatch(renderInlineTurn(state,'turn','thread'),/Ran command/);

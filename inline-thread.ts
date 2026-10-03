@@ -1,6 +1,7 @@
 import {escapeReplyHtml,markdownCodeRanges} from './reply-html';
 import {contentHash} from './completion';
 import {pendingQuestions,renderQuestion} from './questions';
+import {pendingApprovals,renderApproval} from './approvals';
 import {intermediateMode,runTimer,type IntermediateMode,type RunTiming,type FinalAnswerFormat} from './response-presentation';
 import {steeringSegments,type InlineSteering} from './inline-steering';
 import {responseActivityLabel,responseActivityRow} from './response-activity';
@@ -450,6 +451,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null||conversation?.messages.some(m=>m.turnId===request.turnId)).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
+  const approvals=phase!=='complete'?pendingApprovals(state.activities).filter(request=>request.turnId===turnId).map(request=>environmentId&&request.kind==='command'?renderApproval(request,{environmentId,threadId,requestId:request.requestId}):'Action needed in T3: '+safeStatus(request.summary)).join('\n\n'):'';
   const input=initialInput?`${renderInlineInput(initialInput.text,initialInput.label)}\n\n`:'';
   if(mode==='collapse'){
     const pieces=steeringSegments(all,conversation?.steering.filter(item=>item.confirmed)??[]);
@@ -474,13 +476,11 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
       }else if(piece.text.trim())progress.push(quoteResponse(closeOpenFence(piece.text.trim())));
     }
     if(progress.length||!statusShown)flush(pieces.length);
-    const action=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
-    const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):phase!=='complete'&&action?'Action needed in T3: '+safeStatus(action.summary):'';
+    const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):approvals;
     return input+blocks.join('\n\n')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+bottom+'\n';
   }
   if(phase==='complete')return input+(prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
-  const activity=state.activities.filter(a=>a.turnId===turnId&&a.kind==='approval.requested').at(-1);
-  const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):activity?'\n\nAction needed in T3: '+safeStatus(activity.summary):'';
+  const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):approvals?'\n\n'+approvals:'';
   const body=prose?`\n\n${prose}\n`:'';
   return `${input}${followupIndex<0?heading+timer+spinner:''}${status}${body}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
 }
