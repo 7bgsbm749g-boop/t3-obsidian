@@ -16,7 +16,8 @@ test('completion checks distinguish saved proof from saved cleanup despite anoth
 test('open-editor writes use the current text and preserve an outside edit',async()=>{
   let value='User edit\nOld reply\nTail',replacement:any;
   const editor={getValue:()=>value,offsetToPos:(offset:number)=>offset,replaceRange:(text:string,from:number,to:number)=>{replacement={text,from,to};value=value.slice(0,from)+text+value.slice(to);}};
-  const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[{view:{file:{path:'Note.md'},editor}}]}} as any);
+  const view={file:{path:'Note.md'},editor};
+  const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[{view}]}} as any);
   await io.updateNote('Note.md',current=>current.replace('Old reply','New reply'),()=>true);
   assert.equal(value,'User edit\nNew reply\nTail');assert.equal(replacement.text,'New');
 });
@@ -101,4 +102,26 @@ test('equal multiple editor views receive the same minimal change; disagreement 
   const io=deviceNoteIO({workspace:{getLeavesOfType:()=>views.map(view=>({view}))}} as any);
   await io.updateNote('Note.md',current=>current.replace('old','new'),()=>true);assert.deepEqual(buffers,['Head new Tail','Head new Tail']);
   buffers[1]+=' competing';assert.equal(await io.readNote('Note.md'),undefined);assert.equal(await io.updateNote('Note.md',current=>current+' overwrite',()=>true),undefined);assert.deepEqual(buffers,['Head new Tail','Head new Tail competing']);
+});
+
+test('an editor edit during disk boundary validation invalidates the captured read and write',async()=>{
+  for(const operation of ['read','write']){
+    let buffer='Original',writes=0,release!:(text:string)=>void;
+    const file={path:'Note.md'},view={file,editor:{getValue:()=>buffer,replaceRange:()=>{writes++;}}};
+    const disk=new Promise<string>(done=>release=done);
+    const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[{view}]},vault:{getFileByPath:()=>file,read:()=>disk}} as any);
+    const pending=operation==='read'?io.readNote('Note.md'):io.updateNote('Note.md',current=>current+' Reply',()=>true);
+    buffer='Intervening ordinary edit';release('Original');assert.equal(await pending,undefined);
+    assert.equal(writes,0);assert.equal(buffer,'Intervening ordinary edit');
+  }
+});
+
+test('pane replacement during disk boundary validation retries without changing detached or competing views',async()=>{
+  let writes=0,release!:(text:string)=>void;
+  const file={path:'Note.md'},view={file,editor:{getValue:()=> 'Original',replaceRange:()=>{writes++;}}};
+  let leaves=[{view}];const disk=new Promise<string>(done=>release=done);
+  const io=deviceNoteIO({workspace:{getLeavesOfType:()=>leaves},vault:{getFileByPath:()=>file,read:()=>disk}} as any);
+  const pending=io.updateNote('Note.md',current=>current+' Reply',()=>true);
+  leaves=[{view:{file,editor:{getValue:()=> 'Competing pane',replaceRange:()=>{writes++;}}}}];
+  release('Original');assert.equal(await pending,undefined);assert.equal(writes,0);
 });

@@ -142,7 +142,10 @@ export class NativeResponseView {
    * edits still take part in the same conservative three-way merge. */
   acceptCommitted(saved:string,ids:readonly string[]){
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
-    const local=this.saved(),edits=changedEdits(this.base,local),merge=mergeSavedEdits(this.base,saved,edits);
+    // A native file update can load the exact verified bytes before our
+    // materialization callback runs. The old projection no longer has anchors
+    // in that document; it is already the authoritative committed version.
+    const local=this.displayed()===saved?this.base:this.saved(),edits=changedEdits(this.base,local),merge=mergeSavedEdits(this.base,saved,edits);
     if(!merge.ok){this.block({base:this.base,local,incoming:saved,reason:merge.reason});return;}
     const responses=this.responses.filter(r=>!ids.includes(r.id));
     const projection=projectResponses(merge.text,responses);

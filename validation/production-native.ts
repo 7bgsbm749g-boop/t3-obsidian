@@ -41,10 +41,13 @@ export async function productionNative(app:App,root:string){
     rows.push({name:'production-concurrent-ordinary-views',pass:(await app.vault.read(file)).includes('Prefix edit')&&(await app.vault.read(file)).includes('Tail edit')&&views.every(view=>view.editor.getValue().includes('Prefix edit')&&view.editor.getValue().includes('Tail edit'))});
     const current=views[0].editor.getValue(),at=current.indexOf('Outside content');views[0].editor.replaceRange('User tail',views[0].editor.offsetToPos(at),views[0].editor.offsetToPos(at+15));await writer.tick();(views[0].editor as any).undo();const undone=!views[0].editor.getValue().includes('User tail');(views[0].editor as any).redo();const redone=views[0].editor.getValue().includes('User tail');await views[0].save();await pause(300);rows.push({name:'production-stream-update-undo-redo',pass:undone&&redone});
     // Native unsaved pane disagreement cannot be converted to a host commit.
+    // Hold autosave during this bounded check so slow staging IO cannot make
+    // the deliberately dirty precondition disappear before the host compares.
+    const saves=views.map(view=>view.save);views.forEach(view=>{view.save=async()=>{};});
     views[1].editor.replaceRange('\nUnsaved pane',views[1].editor.offsetToPos(views[1].editor.getValue().length));
     const stage:any=await host.command('stage-note-edit',binding.id);const staged=(await fs.readFile(stage.stagingPath,'utf8')).replace('| Exercise | 20kg |','| Exercise | 20kg | 25kg |').replace('| --- | ---: |','| --- | ---: | ---: |').replace('| Barb | 20 |','| Barb | 20 | |');await fs.writeFile(stage.stagingPath,staged);await host.command('submit-note-edit',binding.id,stage.originalHash);
     complete=true;await writer.tick();rows.push({name:'production-dirty-pane-delays-final-save',pass:(await host.journal.read(binding.id))!.status==='commit-pending'&&!(await app.vault.read(file)).includes('Added **25kg**.')});
-    await views[1].save();await pause(300);await writer.tick();
+    views.forEach((view,index)=>{view.save=saves[index];});await views[1].save();await pause(300);await writer.tick();
     // Pending compare failure must rebase compatible ordinary changes, retaining
     // immutable results and creating a new intent rather than changing bytes.
     let result=await host.journal.read(binding.id);

@@ -18,13 +18,14 @@ export function deviceNoteIO(app:App){
   const openViews=(path:string)=>views(path).filter(view=>view.editor&&view.getMode?.()!=='preview');
   const editors=(path:string)=>openViews(path).map(view=>view.editor);
   const saved=(view:MarkdownView)=>nativeResponses(app).view(view)?.saved()??view.getViewData?.()??view.editor.getValue();
+  const stable=(open:MarkdownView[],path:string,value:string)=>{const current=openViews(path);return current.length===open.length&&open.every(view=>current.includes(view)&&saved(view)===value);};
   const boundaries=(text:string)=>[...text.matchAll(/^<!-- t3-(?:inline|response):(?:start|end):[0-9a-f-]{36} -->$/gm)].map(match=>match[0]).join('\n');
   const agreesWithDisk=async(path:string,value:string)=>{
     if(!app.vault?.getFileByPath)return true;const file=app.vault.getFileByPath(path);if(!file)return false;
     const disk=await app.vault.read(file);return boundaries(disk)===boundaries(value);
   };
   const readNote=async(path:string)=>{
-    const open=openViews(path);if(open.length){const value=saved(open[0]);return open.every(view=>saved(view)===value)&&await agreesWithDisk(path,value)?value:undefined;}
+    const open=openViews(path);if(open.length){const value=saved(open[0]);return stable(open,path,value)&&await agreesWithDisk(path,value)&&stable(open,path,value)?value:undefined;}
     const file=app.vault.getFileByPath(path);if(!file)return;
     let document:string;
     try{document=await app.vault.read(file);}catch(error){if(missingNote(error))return;throw error;}
@@ -45,7 +46,7 @@ export function deviceNoteIO(app:App){
       if(!allowed())throw Error('Writer ownership expired.');
       const open=openViews(path);
       if(open.length){
-        const current=saved(open[0]);if(!open.every(view=>saved(view)===current)||!await agreesWithDisk(path,current))return;
+        const current=saved(open[0]);if(!stable(open,path,current)||!await agreesWithDisk(path,current)||!stable(open,path,current))return;
         const next=change(current);
         if(!allowed())throw Error('Writer ownership expired.');
         if(next!==current){logEvent('note.write.editor',{notePath:path,fromHash:contentHash(current),toHash:contentHash(next)});for(const view of open){const adapter=nativeResponses(app).view(view);if(adapter)adapter.editSaved(next);else replaceChangedText(view.editor,current,next);}}

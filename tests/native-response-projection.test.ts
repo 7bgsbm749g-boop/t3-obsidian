@@ -102,3 +102,10 @@ test('explicit view resolution preserves the competing snapshot and resumes a sa
  const incoming=saved.replace('Before','Remote before');fixture.view.setViewData(incoming,false);const conflict=fixture.adapter.conflictRecord()!;assert.ok(conflict.local.includes('Local before'));
  fixture.adapter.resolveConflict(incoming,'saved');assert.equal(fixture.view.getViewData(),incoming);assert.ok(fixture.read().includes('> Stream'));assert.ok(fixture.conflicts[0].local.includes('Local before'));
 });
+
+test('an exact verified native load can settle an old projection after its completed anchor has disappeared',()=>{
+  const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'},{id:other,body:'> Other'}]);
+  const final=saved.replace(responseAnchor(id),'\n> Finished');fixture.edit(final);
+  fixture.adapter.acceptCommitted(final,[id]);assert.equal(fixture.view.getViewData(),final);
+  assert.ok(fixture.read().includes('> Other'));assert.ok(!fixture.read().includes('> Stream'));
+});
