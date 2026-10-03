@@ -19,3 +19,10 @@ test('unique unchanged line anchors prove independent ordinary edits on both sid
  const latest=original.replace('Before','User before').replace('After','User after');const at=original.indexOf('Table 20');
  const result=mergeSavedEdits(original,latest,[{from:at,to:at+8,text:'Table 25'}]);assert.equal(result.ok,true);if(result.ok)assert.equal(result.text,latest.replace('Table 20','Table 25'));
 });
+
+
+test('identical already-landed edits are deduplicated but competing touching edits remain conflicts',()=>{
+ const original='Before\nUnique\nAfter\n',latest=original+'Independent anchor\n',edit=changedInterval(original,latest)!;
+ const same=mergeSavedEdits(original,latest,[edit]);assert.equal(same.ok,true);if(same.ok)assert.equal(same.text,latest);
+ assert.equal(mergeSavedEdits(original,latest,[{...edit,text:'Different registration\n'}]).ok,false);
+});

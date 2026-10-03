@@ -49,6 +49,11 @@ export function mergeSavedEdits(original:string,latest:string,proposed:readonly 
   if(!users.length)return {ok:true,text:applySavedEdits(original,proposed),edits:[...proposed]};
   const mapped:SavedEdit[]=[];
   for(const edit of proposed){
+    // A native pane can echo an independently registered anchor (or an
+    // ordinary edit) already included in the incoming saved revision. Exact
+    // identical edits are one change, not competing changes. Other touching
+    // edits still require resolution.
+    if(users.some(user=>user.from===edit.from&&user.to===edit.to&&user.text===edit.text))continue;
     // Touching insertions and replacements are ambiguous. Avoid ordering them
     // based on arrival time, including edits exactly at a response boundary.
     if(users.some(user=>!(edit.to<user.from||edit.from>user.to)))return {ok:false,reason:'Generated and ordinary edits overlap or touch. Both versions are preserved.'};

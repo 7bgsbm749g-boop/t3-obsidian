@@ -312,7 +312,9 @@ export class HostedInlineWriter {
         // vault edit cannot turn our own output into an apparent user edit.
         const nextHash=contentHash(next);
         if(!state.hashes.includes(nextHash))state.hashes.push(nextHash);
-        state.body=next;state.status='running';delete state.detail;await save();
+        state.body=next;state.status='running';delete state.detail;
+        if(terminal&&this.io.commitFinal){state.finalBody=next;state.finalPhase=phase as 'complete'|'interrupted';}
+        await save();
         if(this.stopped)return;
         if(terminal&&this.io.commitFinal){
           if(await this.io.commitFinal(request,state,next)){

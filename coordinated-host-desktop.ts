@@ -60,6 +60,26 @@ export class CoordinatedHost {
       const raw=await this.files.read(path);if(!raw)continue;
       let record:LeaseRecord=JSON.parse(raw),id=record.request.id,notePath=record.state?.notePath??record.request.notePath;
       this.records.set(id,record);
+      // A native file notification can fail AFTER vault.process wrote the
+      // exact durable intent. Recover by disk readback before marker location,
+      // projection, or network work; those anchors have legitimately gone.
+      if(record.coordinated&&!record.migrating&&!record.state?.cleanupComplete){
+        const pending=await this.journal.read(id);
+        if(pending?.attempt&&['commit-pending','verified'].includes(pending.status)){
+          const file=this.app.vault.getFileByPath(notePath);
+          if(file&&!this.stopped&&await this.app.vault.read(file)===pending.attempt.expected){
+            const verified=await this.coordinator.commit(id);
+            const phase=record.state?.finalPhase??(record.state?.bindingCheckpoint?.turns?.[record.state.turnId??'']?.state==='completed'?'complete':undefined);
+            if(verified.status==='verified'&&verified.verified&&phase&&record.state&&!this.stopped){
+              const state={...record.state,body:verified.finalBody,finalBody:verified.finalBody,finalPhase:phase,finalSaved:true,cleanupComplete:true,status:phase,
+                finalDocumentHash:verified.verified.hash,responseAnchor:verified.verified.responseAnchor,
+                delivery:{commitId:verified.verified.commitId,hash:verified.verified.hash,verifiedOnHost:true,observedBy:record.state.delivery?.commitId===verified.verified.commitId?record.state.delivery.observedBy:[]}};
+              delete state.detail;
+              record=await this.authority.checkpoint(id,state,{epoch:record.epoch,revision:record.revision});this.records.set(id,record);
+            }
+          }
+        }
+      }
       if(terminalLease(record)||record.state?.finalSaved){
         if(record.coordinated){
           await nativeResponses(this.app).receive(record);
@@ -154,7 +174,16 @@ export class CoordinatedHost {
       const path=join(this.journal.root,id,'staged.md'),stat=await fs.lstat(path);if(!stat.isFile()||stat.isSymbolicLink())throw Error('Invalid staged file.');
       await this.coordinator.stage(id,await fs.readFile(path,'utf8'),hash!);return {staged:true};
     }
-    if(kind==='repair-response'){const repaired=await this.coordinator.restore(id,hash!);return {generation:repaired};}
+    if(kind==='repair-response'){
+      // Pending readback recovery is not an explicit conflict restoration.
+      // The caller's reviewed hash and the immutable expected bytes must agree.
+      if(record.status==='commit-pending'&&record.attempt){
+        const file=this.app.vault.getFileByPath(record.notePath),disk=file?await this.app.vault.read(file):undefined;
+        if(disk===undefined||contentHash(disk)!==hash||disk!==record.attempt.expected)throw Error('The pending result is not the exact reviewed saved commit.');
+        await this.scan();return {generation:await this.journal.read(id)};
+      }
+      const repaired=await this.coordinator.restore(id,hash!);await this.scan();return {generation:repaired};
+    }
     if(kind==='remove-response'){await this.coordinator.remove(id);return {removed:true};}
     throw Error('Unsupported response command.');
   }

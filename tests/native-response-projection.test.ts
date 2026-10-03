@@ -109,3 +109,24 @@ test('an exact verified native load can settle an old projection after its compl
   fixture.adapter.acceptCommitted(final,[id]);assert.equal(fixture.view.getViewData(),final);
   assert.ok(fixture.read().includes('> Other'));assert.ok(!fixture.read().includes('> Stream'));
 });
+
+
+test('independent response insertion already in a final native save is not an overlap or duplicated anchor',()=>{
+ const original='Before\n\n'+responseAnchor(id)+'\n\nAfter\n',fixture=fakeView(original);
+ fixture.adapter.setResponses([{id,body:'> Stream'}]);
+ fixture.edit(fixture.read()+'\nIndependent\n'+responseAnchor(other)+'\n');
+ fixture.adapter.setResponses([{id,body:'> Stream'},{id:other,body:'> Other stream'}]);
+ const before=original+'\nIndependent\n'+responseAnchor(other)+'\n',final=before.replace(responseAnchor(id),'\n> Finished');
+ fixture.adapter.prepareMaterialization(before,final,[id]);fixture.view.setViewData(final,false);fixture.adapter.acceptCommitted(final,[id]);
+ assert.deepEqual(fixture.conflicts,[]);assert.equal(fixture.view.getViewData(),final);assert.ok(fixture.read().includes('Other stream'));
+ assert.equal(fixture.view.getViewData().split(responseAnchor(other)).length,2);
+});
+
+test('late verified readback resolves a false view conflict without losing an independent registration',()=>{
+ const original='Before\n\n'+responseAnchor(id)+'\n\nAfter\n',fixture=fakeView(original);
+ fixture.adapter.setResponses([{id,body:'> Stream'}]);fixture.edit(fixture.read()+'\n'+responseAnchor(other)+'\n');
+ fixture.adapter.setResponses([{id,body:'> Stream'},{id:other,body:'> Other'}]);
+ const final=(original+'\n'+responseAnchor(other)+'\n').replace(responseAnchor(id),'\n> Finished');
+ fixture.view.setViewData(final,false);assert.ok(fixture.adapter.conflictRecord());
+ assert.equal(fixture.adapter.resolveCommitted(final,[id]),true);assert.equal(fixture.view.getViewData(),final);assert.ok(fixture.read().includes('> Other'));
+});

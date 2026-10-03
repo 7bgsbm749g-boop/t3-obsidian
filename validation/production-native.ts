@@ -21,7 +21,7 @@ export async function productionNative(app:App,root:string){
   await views[0].save();await pause(200);
   const bytes=new Map<string,string>(),files:LeaseFiles={read:async key=>bytes.get(key),write:async(key,value)=>{bytes.set(key,value);},remove:async key=>{bytes.delete(key);},list:async dir=>[...bytes.keys()].filter(key=>key.startsWith(dir+'/'))};
   const authority=new InlineLeaseAuthority(identity,files),client=new InlineLeaseClient(actor,{...files,read:async key=>{if(key.includes('/replies/'))await authority.tick();return files.read(key);}},directory,undefined,undefined,async()=>{await authority.tick();});
-  const host=await CoordinatedHost.open(app,identity,files,authority,{journalRoot:path.join(root,'production-journal')});
+  let host=await CoordinatedHost.open(app,identity,files,authority,{journalRoot:path.join(root,'production-journal')});
   const manager=nativeResponses(app);await client.command({kind:'register',jobId:binding.id,request:binding});await host.scan();
   let complete=false;
   const snapshot=()=>({thread:{id:binding.threadId,projectId:binding.projectId,messages:[{id:binding.messageId,role:'user',text:'Add 25kg',streaming:false,createdAt:binding.createdAt},{id:'answer',role:'assistant',text:complete?'Added **25kg**.':'Checking **native** streaming.',streaming:!complete,turnId:'turn'}],activities:[],latestTurn:{turnId:'turn',messageId:binding.messageId,state:complete?'completed':'running',requestedAt:binding.createdAt,assistantMessageId:'answer'},session:{status:complete?'ready':'running',activeTurnId:complete?null:'turn'}}});
@@ -60,14 +60,33 @@ export async function productionNative(app:App,root:string){
     rows.push({name:'production-finished-two-views',pass:views.every(view=>view.getViewData()===saved&&view.editor.getValue().includes('Independent second response.')&&!view.editor.getValue().includes('Checking'))});
     rows.push({name:'production-malformed-historical-mirror-isolated',pass:result?.status==='verified'&&saved.includes('t3-inline:end:'+historical)});
     const record=JSON.parse(bytes.get(leasePaths(directory,binding.id).record)!);if(result?.verified)await client.command({kind:'observe',jobId:binding.id,observed:{commitId:result.verified.commitId,hash:contentHash(saved)}});await host.scan();rows.push({name:'production-acknowledged-saved-read',pass:(await host.journal.read(binding.id))!.acknowledgements.length===1,delivery:record.state?.delivery});
-    manager.dispose();rows.push({name:'production-shutdown-saved-projection',pass:views.every(view=>!view.editor.getValue().includes('Checking'))&&(await app.vault.read(file))===saved});
+    // Complete the independent second registration, interrupt the native
+    // acknowledgement after the real save, then restart the host. No private
+    // journal or lease edits are used to recover it.
+    const secondSnapshot=()=>({thread:{id:second.threadId,projectId:second.projectId,messages:[{id:second.messageId,role:'user',text:'Second response',streaming:false,createdAt:second.createdAt},{id:'second-answer',role:'assistant',text:'Second independently completed.',streaming:false,turnId:'second-turn'}],activities:[],latestTurn:{turnId:'second-turn',messageId:second.messageId,state:'completed',requestedAt:second.createdAt,assistantMessageId:'second-answer'},session:{status:'ready',activeTurnId:null}}});
+    const secondIO=host.io({...base,access:async()=>({origin:'https://fixture',api:async()=>secondSnapshot()})}),allSecond=secondIO.requests;secondIO.requests=async()=> (await allSecond()).filter(key=>key.endsWith('/'+second.id+'.json'));
+    const secondWriter=new HostedInlineWriter(identity,secondIO),committed=manager.committed;
+    manager.committed=function(...args){committed.apply(this,args);throw Error('Fixture: late native acknowledgement interrupted');};
+    try{await secondWriter.tick();}finally{manager.committed=committed;secondWriter.stop();}
+    const pending=await host.journal.read(second.id),landed=await app.vault.read(file);
+    rows.push({name:'production-independent-completion-pending-exact-save',pass:pending?.status==='commit-pending'&&pending.attempt?.expected===landed&&!landed.includes(second.id)});
+    host.stop();host=await CoordinatedHost.open(app,identity,files,authority,{journalRoot:path.join(root,'production-journal')});await host.scan();await pause(200);
+    const recovered=await host.journal.read(second.id),recoveredLease=JSON.parse(bytes.get(leasePaths(directory,second.id).record)!);
+    if(recovered?.verified)await client.command({kind:'observe',jobId:second.id,observed:{commitId:recovered.verified.commitId,hash:contentHash(await app.vault.read(file))}});await host.scan();
+    rows.push({name:'production-restart-readback-completion-and-late-ack',pass:recovered?.status==='verified'&&recovered.verified?.commitId===pending?.attempt?.id&&recoveredLease.state?.status==='complete'&&recoveredLease.state.finalSaved&&recoveredLease.state.cleanupComplete&&(await host.journal.read(second.id))!.acknowledgements.length===1&&views.every(view=>!manager.view(view)?.conflictRecord())});
+    const third=await editorStream({...source,id:crypto.randomUUID(),messageId:crypto.randomUUID(),threadId:'third-thread'},file.path,deviceNoteIO(app),()=>true);await views[0].save();await pause(200);
+    const afterThird=await app.vault.read(file);
+    rows.push({name:'production-section-insertion-after-independent-recovery',pass:afterThird.includes(third.id)&&afterThird.indexOf(third.id)<afterThird.indexOf('## NEXT')&&afterThird.includes('Second independently completed.')&&afterThird.includes('Tail edit')});
+    manager.dispose();rows.push({name:'production-shutdown-saved-projection',pass:views.every(view=>!view.editor.getValue().includes('Checking'))&&(await app.vault.read(file))===afterThird});
   }finally{writer.stop();host.stop();authority.stop();client.dispose();manager.dispose();}
   const conflictId=crypto.randomUUID(),conflictSaved='# Before\n\n'+responseAnchor(conflictId)+'\n\nAfter\n',conflictFile=await app.vault.create('Conflict.md',conflictSaved);
   await leaves[0].openFile(conflictFile);const conflictView=leaves[0].view as MarkdownView;
   await manager.receive({request:{...binding,id:conflictId,notePath:conflictFile.path},coordinated:true,owner:actor,epoch:1,expiresAt:Number.MAX_SAFE_INTEGER,revision:1,state:{requestHash:'fixture',accepted:true,notePath:conflictFile.path,status:'running',hashes:[],body:'> Local progress',updatedAt:''}});
   conflictView.editor.replaceRange('Local before',conflictView.editor.offsetToPos(2),conflictView.editor.offsetToPos(8));
   const remote=conflictSaved.replace('Before','Remote before');await app.vault.modify(conflictFile,remote);await pause(200);
-  const preserved=manager.view(conflictView)?.conflictRecord();await manager.resolve(conflictView,remote,'saved');
+  const preserved=manager.view(conflictView)?.conflictRecord();await leaves[1].openFile(conflictFile);
+  rows.push({name:'production-background-pane-conflict-discoverable-from-active-note',pass:manager.conflictedView(conflictFile.path)===conflictView});
+  await manager.resolve(conflictView,remote,'saved');
   rows.push({name:'production-explicit-view-conflict-resolution',pass:!!preserved?.local.includes('Local before')&&conflictView.getViewData()===remote&&conflictView.editor.getValue().includes('Local progress')});manager.dispose();
   return rows;
 }

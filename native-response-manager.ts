@@ -18,6 +18,7 @@ export class NativeResponseManager {
   private records=new Map<string,LeaseRecord>();
   constructor(private app:App){}
   view(view:MarkdownView){const adapter=this.views.get(view);return adapter&&!adapter.isDisposed()?adapter:undefined;}
+  conflictedView(path:string){return [...this.views].find(([view,adapter])=>view.file?.path===path&&!adapter.isDisposed()&&adapter.conflictRecord())?.[0];}
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
   async receive(record:LeaseRecord){
     if(!record.coordinated)return;

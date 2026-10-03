@@ -180,7 +180,7 @@ export default class SendToT3 extends Plugin {
       }).catch(error=>new Notice(`T3 note commands: ${message(error)}`,10000));
       this.registerInlineInterval(()=>void this.refreshEventHost().catch(()=>{}),5000);
     });
-    this.addCommand({id:'resolve-native-response-conflict',name:'Resolve response view conflict…',checkCallback:checking=>{const view=this.app.workspace.getActiveViewOfType(MarkdownView);if(!view||!nativeResponses(this.app).view(view)?.conflictRecord())return false;if(!checking)new NativeConflictModal(this.app,view).open();return true;}});
+    this.addCommand({id:'resolve-native-response-conflict',name:'Resolve response view conflict…',checkCallback:checking=>{const active=this.app.workspace.getActiveViewOfType(MarkdownView),view=active?.file?nativeResponses(this.app).conflictedView(active.file.path):undefined;if(!view)return false;if(!checking)new NativeConflictModal(this.app,view).open();return true;}});
     this.addCommand({id:'send-note-to-multiple-notes',name:'Send note with streaming destinations…',checkCallback:checking=>{
       const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;if(!file||this.busy)return false;
       if(!checking)new StreamDestinationsModal(this.app,file.path,command=>this.executeNoteCommand(command)).open();return true;

@@ -87,12 +87,13 @@ export class InlineLeaseAuthority {
   async exclusive<T>(run:()=>Promise<T>):Promise<T>{
     while(this.work)await this.work.catch(()=>{});
     if(this.stopped)throw Error('Host authority stopped.');
-    const work=run();this.work=work.then(()=>{});
+    const work=run();this.work=work.then(()=>{},()=>{});
     try{return await work;}finally{this.work=undefined;}
   }
-  async checkpoint(id:string,state:HostedInlineState){return this.exclusive(async()=>{
+  async checkpoint(id:string,state:HostedInlineState,fence?:{epoch:number;revision:number}){return this.exclusive(async()=>{
     const raw=await this.files.read(leasePaths(this.identity.directory,id).record);if(!raw)throw Error('Unknown host registration.');
     const record:LeaseRecord=JSON.parse(raw);
+    if(fence&&(record.epoch!==fence.epoch||record.revision!==fence.revision))throw Error('The response ownership or revision changed before recovery.');
     if(!record.coordinated||record.migrating)throw Error('The native writer is not fenced and migrated.');
     const reply=await this.apply({id:crypto.randomUUID(),jobId:id,actor:COORDINATED_OWNER,kind:'checkpoint',epoch:record.epoch,revision:record.revision,state});
     if(!reply.ok)throw Error(reply.error);return reply.record!;

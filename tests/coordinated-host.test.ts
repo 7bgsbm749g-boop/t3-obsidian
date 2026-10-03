@@ -27,7 +27,7 @@ async function setup(native=true,liveLease=false){
   const snapshot=()=>({thread:{id:'thread',projectId:'project',messages:[{id:request.messageId,role:'user',streaming:false,text:'Add 25kg',createdAt:request.createdAt},{id:'answer',role:'assistant',text:completed?'Added **25kg**.':'Still working.',turnId:'turn',streaming:!completed}],activities:[],latestTurn:{turnId:'turn',messageId:request.messageId,state:completed?'completed':'running',requestedAt:request.createdAt,assistantMessageId:'answer'},session:{status:completed?'ready':'running',activeTurnId:completed?null:'turn'}}});
   const base:HostedWriterIO={...files,requests:async()=>[],access:async()=>({origin:'https://fixture',api:async()=>snapshot()}),updateNote:async()=>{throw Error('Legacy direct writes are forbidden in this fixture');}};
   const writer=new HostedInlineWriter(identity,host.io(base));
-  return {root,host,authority,client,files,storage,request,id,notes,file,writer,complete:()=>{completed=true;},writes:()=>writes,close:async()=>{writer.stop();host.stop();authority.stop();client.dispose();await rm(root,{recursive:true,force:true});}};
+  return {root,app,identity,base,host,authority,client,files,storage,request,id,notes,file,writer,complete:()=>{completed=true;},writes:()=>writes,close:async()=>{writer.stop();host.stop();authority.stop();client.dispose();await rm(root,{recursive:true,force:true});}};
 }
 
 test('production host streams only to journal, stages a table and commits the result in one save with real acknowledgements',async()=>{
@@ -86,5 +86,45 @@ test('malformed historical paused mirror boundaries cannot block another coordin
 test('one malformed lease file is isolated while independent response scanning and delivery continue',async()=>{
  const h=await setup();try{
   h.storage.set(leasePaths(h.request.host.directory,randomUUID()).record,'{ malformed');await h.host.scan();h.complete();await h.writer.tick();assert.equal((await h.host.journal.read(h.id))!.status,'verified');
+ }finally{await h.close();}
+});
+
+
+test('restart verifies an already-landed native intent before locating removed anchors and propagates fenced completion',async()=>{
+ const h=await setup();let restarted:CoordinatedHost|undefined;try{
+  await h.writer.tick();const other=randomUUID(),request={...h.request,id:other,messageId:randomUUID()};
+  h.notes.set('Note.md',h.notes.get('Note.md')+'\nIndependent registration\n'+responseAnchor(other)+'\n');
+  await h.client.command({kind:'register',jobId:other,request});await h.host.scan();
+  const process=h.app.vault.process;h.app.vault.process=async(...args:any[])=>{await process(...args);throw Error('Native materialization acknowledgement interrupted after save');};
+  h.complete();await h.writer.tick();
+  const pending=await h.host.journal.read(h.id);assert.equal(pending!.status,'commit-pending');assert.equal(pending!.attempt!.expected,h.notes.get('Note.md'));assert.equal(pending!.verified,undefined);
+  h.writer.stop();h.host.stop();h.app.vault.process=process;
+  restarted=await CoordinatedHost.open(h.app,h.identity,h.files,h.authority,{journalRoot:join(h.root,'journal')});await restarted.scan();
+  const recovered=await restarted.journal.read(h.id),lease=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
+  assert.equal(recovered!.status,'verified');assert.equal(recovered!.verified!.commitId,pending!.attempt!.id);assert.equal(h.writes(),1);
+  assert.equal(lease.state.status,'complete');assert.equal(lease.state.finalSaved,true);assert.equal(lease.state.cleanupComplete,true);assert.equal(lease.state.detail,undefined);
+  assert.ok(h.notes.get('Note.md')!.includes(responseAnchor(other)));assert.deepEqual(lease.state.delivery.observedBy,[]);
+  assert.equal((await h.client.command({kind:'observe',jobId:h.id,observed:{commitId:recovered!.verified!.commitId,hash:contentHash(h.notes.get('Note.md')!)}})).ok,true);
+  await restarted.scan();assert.equal((await restarted.journal.read(h.id))!.acknowledgements.length,1);
+  await restarted.scan();assert.equal(h.writes(),1);
+ }finally{restarted?.stop();await h.close();}
+});
+
+test('completion recovery rejects a changed ownership revision instead of publishing stale state',async()=>{
+ const h=await setup();try{
+  const record=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
+  await h.authority.checkpoint(h.id,{requestHash:hostedRequestHash(h.request),accepted:true,notePath:'Note.md',status:'running',hashes:[],updatedAt:''});
+  await assert.rejects(h.authority.checkpoint(h.id,record.state??{}, {epoch:record.epoch,revision:record.revision}),/ownership or revision changed/);
+ }finally{await h.close();}
+});
+
+
+test('supported repair verifies a reviewed pending commit without treating it as a conflict',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const process=h.app.vault.process;h.app.vault.process=async(...args:any[])=>{await process(...args);throw Error('Lost native acknowledgement');};h.complete();await h.writer.tick();h.app.vault.process=process;
+  const pending=await h.host.journal.read(h.id);assert.equal(pending!.status,'commit-pending');assert.deepEqual(pending!.conflicts,[]);
+  await assert.rejects(h.host.command('repair-response',h.id,'0'.repeat(64)),/exact reviewed saved commit/);
+  const result:any=await h.host.command('repair-response',h.id,contentHash(h.notes.get('Note.md')!));assert.equal(result.generation.status,'verified');assert.equal(h.writes(),1);
+  const lease=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);assert.equal(lease.state.cleanupComplete,true);
  }finally{await h.close();}
 });
