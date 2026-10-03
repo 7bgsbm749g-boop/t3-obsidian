@@ -466,6 +466,31 @@ for(const version of [1,2,3] as const)for(const dismiss of [false,true])test(`ho
   assert.doesNotMatch(finished,/· Working|send-to-t3-inline-spinner/);
 });
 
+test('recovery replays an exact historical late-answer binding omitted by canonical latestTurn without adopting unrelated work',async()=>{
+ const h=independent(harness());h.dispatch();await h.create().tick();
+ const at='2026-10-03T14:40:50.423Z';
+ const current:InlineThreadState={historyComplete:true,messages:[
+  {id:h.request.messageId,role:'user',text:'Begin',turnId:null,streaming:false,createdAt:h.request.createdAt},
+  {id:'first',role:'assistant',text:'First final.',turnId:'turn',streaming:false},
+  {id:'async-answer:recovered',role:'user',text:'Yes',turnId:null,streaming:false,createdAt:at},
+  {id:'follow-final',role:'assistant',text:'Recovered follow-up.',turnId:'answer-turn',streaming:false},
+  {id:'other-final',role:'assistant',text:'Unrelated work.',turnId:'unrelated',streaming:false}],
+  activities:[{id:'q',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'recovered',responseMode:'message'}},{id:'r',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',payload:{requestId:'recovered',answers:{choice:'Yes'}}}],
+  checkpoints:[{turnId:'turn',status:'ready',checkpointRef:'refs/t3/checkpoints/one',assistantMessageId:'first',completedAt:'2026-10-03T14:38:20Z'},{turnId:'answer-turn',status:'ready',checkpointRef:'refs/t3/checkpoints/two',assistantMessageId:'follow-final',completedAt:'2026-10-03T14:40:59Z'}],
+  latestTurn:{turnId:'unrelated',state:'completed'},session:{status:'ready',activeTurnId:null}};
+ h.io.threadState=async()=>current;let replays=0;
+ h.io.replayBindings=async(_request,_access,signal)=>{assert.equal(signal.aborted,false);replays++;return [
+  {kind:'event',event:{sequence:1,type:'thread.activity-appended',payload:{activity:{id:'resolution',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',createdAt:at,payload:{requestId:'recovered',responseMode:'message',answers:{choice:'Yes'}}}}}},
+  {kind:'event',event:{sequence:2,type:'thread.message-sent',payload:{messageId:'async-answer:recovered',role:'user',text:'Yes',createdAt:at}}},
+  {kind:'event',event:{sequence:3,type:'thread.session-set',payload:{session:{status:'starting',activeTurnId:null,updatedAt:at}}}},
+  {kind:'event',event:{sequence:4,type:'thread.session-set',payload:{session:{status:'running',activeTurnId:'answer-turn',updatedAt:at}}}},
+  {kind:'event',event:{sequence:5,type:'thread.session-set',payload:{session:{status:'ready',activeTurnId:null,updatedAt:'2026-10-03T14:40:59Z'}}}}];};
+ await h.create().tick();
+ assert.equal(replays,1);assert.equal(h.state.turnId,'answer-turn');assert.equal(h.state.status,'complete');assert.equal(h.state.finalSaved,true);assert.equal(h.state.cleanupComplete,true);
+ assert.match(h.document,/First final[\s\S]*Yes[\s\S]*Recovered follow-up/);assert.doesNotMatch(h.document,/Unrelated work|· Working|t3-inline:/);
+ assert.ok(!h.calls.some(call=>call.type),'history recovery never dispatches a prompt or approval');
+});
+
 for(const version of [1,2,3] as const)test(`hosted v${version} completes a mid-turn async answer and repairs persisted Working after restart`,async()=>{
   const h=harness();h.request.version=version;
   h.request.createdAt='2026-10-02T08:42:00.000Z';

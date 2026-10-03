@@ -12,7 +12,7 @@ import {importReplyAsset} from './reply-import';
 import {deviceNoteIO} from './inline-note-io';
 export {importReplyAsset} from './reply-import';
 import {HostedInlineWriter,type HostedInlineRequest,type InlineFiles} from './hosted-inline';
-import type {ThreadAccess} from './thread-stream';
+import {readInlineEvents,type ThreadAccess} from './thread-stream';
 
 export function localInlineFiles(root:string,directory:string):LeaseFiles&{requests():Promise<string[]>}{
   const base=resolve(root,directory);
@@ -47,6 +47,7 @@ export class DesktopInlineHost {
     this.writerIO={
       ...files,
       locateNote:deviceNoteIO(app).locateNote,
+      replayBindings:(request,access,signal,afterSequence)=>readInlineEvents(access,request.threadId,afterSequence,signal),
       access:async environmentId=>{
         const cached=this.accesses.get(environmentId);
         if(cached&&cached.expires>Date.now())return cached.access;

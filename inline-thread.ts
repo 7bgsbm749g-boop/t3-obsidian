@@ -200,6 +200,15 @@ export function applyThreadItem(previous:InlineThreadState,item:any):{state:Inli
     const message:InlineMessage={id:p.messageId,role:p.role,turnId:p.turnId??null,streaming:p.streaming===true,text:old?(p.streaming?old.text+p.text:p.text||old.text):p.text,createdAt:old?.createdAt??p.createdAt,context:p.context??old?.context};
     const latestTurn=p.role==='assistant'&&p.turnId&&state.latestTurn&&state.latestTurn.turnId===p.turnId?{...state.latestTurn,assistantMessageId:p.messageId}:state.latestTurn;
     const starts={...state.starts};
+    // T3's detail stream omits turn-start-requested. A message-mode question
+    // resolution and its exact async-answer message carry the same accepted
+    // start identity; retain it for the subsequent provider lifecycle. Native
+    // answers, bare appended messages and mismatched timestamps prove no start.
+    if(p.role==='user'&&p.messageId.startsWith('async-answer:')&&typeof p.createdAt==='string'&&Number.isFinite(Date.parse(p.createdAt))&&!starts[p.messageId]){
+      const requestId=p.messageId.slice('async-answer:'.length);
+      const resolved=state.activities.find(activity=>activity.kind==='user-input.resolved'&&activity.payload?.requestId===requestId&&activity.payload?.responseMode==='message'&&activity.payload?.answers&&activity.createdAt===p.createdAt);
+      if(resolved)starts[p.messageId]={messageId:p.messageId,requestedAt:p.createdAt,sequence:event.sequence,activeTurnId:state.session?.status==='running'?state.session.activeTurnId??undefined:undefined};
+    }
     // A projected prompt plus its start request while the same primary run is
     // active can follow that run's subsequent output. Never use a late prior
     // run, a bare user append, or output created before the request.

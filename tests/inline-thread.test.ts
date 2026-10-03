@@ -4,6 +4,18 @@ import assert from 'node:assert/strict';
 import {contentHash} from '../completion';
 import {activeInlineIds,applyThreadItem,endInsertionOffset,failedInlineIds,finalizeRegion,initialRegion,insertionOffset,inlineSteeringTarget,selectionOverlapsInlineResponse,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
 
+test('async-answer replay requires message-mode resolution and exact timestamp, and refuses competing starts',()=>{
+ const at='2026-10-03T14:40:50Z';
+ for(const variant of ['native','mismatch','missing','competing']){
+  let state:any={messages:[],activities:[],session:{status:'ready',activeTurnId:null}};
+  if(variant!=='missing')state=applyThreadItem(state,{kind:'event',event:{sequence:1,type:'thread.activity-appended',payload:{activity:{id:'resolved',kind:'user-input.resolved',summary:'Resolved',turnId:'old',createdAt:variant==='mismatch'?'2026-10-03T14:40:49Z':at,payload:{requestId:'answer',responseMode:variant==='native'?'native':'message',answers:{choice:'Yes'}}}}}}).state;
+  state=applyThreadItem(state,{kind:'event',event:{sequence:2,type:'thread.message-sent',payload:{messageId:'async-answer:answer',role:'user',text:'Yes',createdAt:at}}}).state;
+  if(variant==='competing')state=applyThreadItem(state,{kind:'event',event:{sequence:3,type:'thread.turn-start-requested',payload:{messageId:'other',createdAt:at}}}).state;
+  state=applyThreadItem(state,{kind:'event',event:{sequence:4,type:'thread.session-set',payload:{session:{status:'running',activeTurnId:'newer',updatedAt:at}}}}).state;
+  assert.equal(turnForMessage(state,'async-answer:answer'),undefined,variant);
+ }
+});
+
 test('follow-up steering targets the sole running reply outside its block and scopes multiple replies explicitly',()=>{
   const a='f95a3b36-7393-4508-9fb3-38aa2da3590f',b='915e8577-9bbc-463c-88c6-e6c2d3e24c3b';
   const single='Follow-up before\n'+initialRegion(a).text+'Follow-up after';

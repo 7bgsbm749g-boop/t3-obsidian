@@ -6,7 +6,7 @@ import {logEvent,logFailure} from './diagnostics';
 import {contentHash} from './completion';
 import {commandId} from './direct';
 import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,completionProof,hasCompletionProof,hasResponseMarkers,removeCompletionProof,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
-import {needsInlineHistory,readInlineSnapshot,type ThreadAccess} from './thread-stream';
+import {needsInlineHistory,readInlineSnapshot,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
 import {observeIncoming,mergeProse,selectionRange,type InlineSteering} from './inline-steering';
@@ -104,6 +104,7 @@ export interface HostedWriterIO extends InlineFiles {
   updateNote(path:string,change:(current:string)=>string):Promise<string|undefined>;
   locateNote?(id:string,path:string):Promise<string|undefined>;
   threadState?(request:HostedInlineRequest,access:ThreadAccess,refresh?:boolean):Promise<import('./inline-thread').InlineThreadState|undefined>;
+  replayBindings?(request:HostedInlineRequest,access:ThreadAccess,signal:AbortSignal,afterSequence:number):Promise<ThreadStreamItem[]>;
   monotonic?():number;
   accepts?(request:HostedInlineRequest):boolean;
   /** Keep missing-boundary jobs recoverable while their editor is open. */
@@ -125,6 +126,7 @@ export class HostedInlineWriter {
   private renameOffsets=new Map<string,number>();
   private renames:Array<{before:string;after:string}>=[];
   private history=new Map<string,{key:string;expires:number;state:import('./inline-thread').InlineThreadState}>();
+  private bindingReplayAt=new Map<string,number>();
   constructor(private identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},private io:HostedWriterIO){}
   stop(){this.stopped=true;for(const cancel of this.networkCancels.values())cancel();}
   requestStop(id:string){this.stopIntents.add(id);this.networkCancels.get(hostedPaths(this.identity.directory,id).request)?.();}
@@ -275,6 +277,24 @@ export class HostedInlineWriter {
           if(nextTurn){state.turnId=nextTurn;if(!state.turnIds.includes(nextTurn))state.turnIds.push(nextTurn);}
         }
         let questions=followInlineQuestions(current,state.turnIds,state.questionFollows,state.prose);
+        const missingAnswers=questions.follows.filter(item=>item.answered&&!item.dismissed&&!item.replyTurnId&&item.responseMode==='message'&&current!.messages.some(message=>message.id===`async-answer:${item.requestId}`));
+        if(missingAnswers.length&&this.io.replayBindings&&this.monotonic()>=(this.bindingReplayAt.get(path)??0)){
+          this.bindingReplayAt.set(path,this.monotonic()+15_000);
+          const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),15_000);
+          try{
+            const starts=Object.values(state.bindingCheckpoint?.starts??{}).map(start=>start.sequence).filter(Number.isSafeInteger);
+            const afterSequence=starts.length?Math.max(0,Math.min(...starts)-1):0;
+            const items=await this.network(path,()=>this.io.replayBindings!(request,access,abort.signal,afterSequence));
+            // Replay supplies exact start/lifecycle associations only. Keep the
+            // canonical transcript and current session; never adopt an unrelated
+            // newer turn just because its answer is present in the same thread.
+            let evidence:import('./inline-thread').InlineThreadState={messages:current.messages.filter(message=>message.role==='user'),activities:[]};
+            for(const item of items)evidence=applyThreadItem(evidence,item).state;
+            const binding=inlineBindingCheckpoint(evidence);delete binding.sequence;
+            current=restoreInlineBindings({...current,turns:{...current.turns,...evidence.turns}},binding);
+            questions=followInlineQuestions(current,state.turnIds,state.questionFollows,state.prose);
+          }finally{clearTimeout(timer);abort.abort();}
+        }
         state.questionFollows=questions.follows;state.turnIds=questions.turnIds;state.turnId=questions.turnId!;
         state.incoming=observeIncoming(current,state.turnIds,state.incoming,state.steering,[request.messageId,request.initialInput?.messageId??'',...Object.values(current.turns??{}).filter(turn=>state.turnIds!.includes(turn.turnId)).map(turn=>turn.messageId??''),...state.questionFollows.flatMap(follow=>follow.input?[follow.input.messageId]:[])]);
         state.prose=mergeProse(state.prose??[],current.messages,state.turnIds);
