@@ -26,14 +26,14 @@ test('direct sends use current T3 defaults, then persist model and commands acro
   if(u.endsWith('/.well-known/t3/environment'))return response(descriptor);
   assert.equal(o.headers.Authorization,'Bearer device-token');
   if(u.endsWith('/websocket-ticket'))return response({ticket:'ephemeral'});
-  if(u.endsWith('/shell'))return response({projects:[{id:'p',defaultModelSelection:{instanceId:'codex',model:'stale'}}],threads:[{projectId:'p',updatedAt:'2026-09-19',modelSelection:{instanceId:'codex',model:'gpt-6-astra',options:[{id:'reasoningEffort',value:'xhigh'}]}}]});
+  if(u.endsWith('/shell'))return response({projects:[{id:'p',defaultModelSelection:{instanceId:'codex',model:'stale'}}],threads:[{projectId:'unrelated',runtimeMode:'full-access',updatedAt:'2026-09-19',modelSelection:{instanceId:'codex',model:'gpt-6-astra',options:[{id:'reasoningEffort',value:'xhigh'}]}}]});
   assert.ok(saved>0);const cmd=JSON.parse(o.body);commands.push(cmd);
   if(cmd.type==='thread.turn.start'&&lose){lose=false;throw Error('lost reply');}return response({});
  };
  const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',connectionId:'c',environmentId:eid,url,host:'direct',executable:''},title:'literal $(whoami)',prompt:'image here',attachments:[{type:'image',id:'i',name:'i.png',mimeType:'image/png',sizeBytes:1,dataUrl:'data:image/png;base64,YQ=='}]};
  const save=async()=>{saved++;};
  await assert.rejects(sendDirect(request,session,save,fetcher as any),/Cannot reach/);
- assert.equal(reads,1);assert.deepEqual(commands[0].modelSelection,config.settings.defaultModelSelection);assert.deepEqual(commands[1].modelSelection,commands[0].modelSelection);
+ assert.equal(reads,1);assert.equal(commands[0].runtimeMode,'approval-required');assert.equal(commands[1].runtimeMode,'approval-required');assert.deepEqual(commands[0].modelSelection,config.settings.defaultModelSelection);assert.deepEqual(commands[1].modelSelection,commands[0].modelSelection);
  config.settings.defaultModelSelection.model='changed-default';
  const restored=JSON.parse(JSON.stringify(request));const result=await sendDirect(restored,session,save,fetcher as any);assert.equal(result.threadId,commandId(request.id,'thread'));assert.equal(commands.length,3);assert.deepEqual(commands[1],commands[2]);
  assert.equal(reads,1,'Saved retries must not reselect the model');

@@ -76,6 +76,7 @@ export class DesktopInlineHost {
     this.writer=new HostedInlineWriter(identity,this.writerIO);
   }
   async responseCommand(kind:string,id:string,hash?:string){return this.coordinated.command(kind,id,hash);}
+  eventContent(path:string,content:string){return this.coordinated.eventContent(path,content);}
   static async open(app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},access:(environmentId:string)=>Promise<ThreadAccess>){
     logEvent('ownership.coordinator.opening',identity);
     try{

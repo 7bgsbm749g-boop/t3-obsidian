@@ -32,14 +32,16 @@ class ReleasePipelineTests(unittest.TestCase):
             plugin.mkdir()
             (plugin / 'manifest.json').write_text('{"version":"3.4.5"}')
             (plugin / 'main.js').write_bytes(b'bundle')
+            for name in release.RELEASE_FILES:
+                if not (plugin / name).exists(): (plugin / name).write_bytes(name.encode())
             receipts = root / 'releases'
             deployed = receipts / '3.4.5'
             deployed.mkdir(parents=True)
-            (deployed / 'deployment.json').write_text('{"version":"3.4.5","status":"awaiting-live-smoke"}')
+            (deployed / 'deployment.json').write_text(json.dumps({'version':'3.4.5','status':'awaiting-live-smoke','releaseFileSha256':{name:release.sha256_file(plugin / name) for name in release.RELEASE_FILES}}))
             evidence = root / 'live.json'
             original = b'{"realClient":"QLO2","verified":true}'
             evidence.write_bytes(original)
-            with patch.object(release, 'canonical_root_required'), patch.object(release, 'RECEIPTS', receipts), patch.object(release, 'QLO2_PLUGIN', plugin):
+            with patch.object(release, 'canonical_root_required'), patch.object(release, 'RECEIPTS', receipts), patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'DEV_PLUGIN', plugin):
                 release.complete_smoke('3.4.5', 'vps', evidence, 'Verified real client')
                 receipt_path = deployed / 'smoke-vps.json'
                 receipt = json.loads(receipt_path.read_text())
@@ -51,6 +53,47 @@ class ReleasePipelineTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     release.complete_smoke('3.4.5', 'vps', evidence, 'Retry')
                 self.assertEqual({path.name: path.read_bytes() for path in deployed.iterdir()}, manifest)
+
+    def test_smoke_rejects_every_same_version_artifact_mismatch_before_creating_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plugin = root / 'plugin'; plugin.mkdir()
+            files = {name:name.encode() for name in release.RELEASE_FILES}
+            files['manifest.json'] = b'{"version":"3.4.5"}'
+            for name, value in files.items(): (plugin / name).write_bytes(value)
+            receipts = root / 'releases'; deployed = receipts / '3.4.5'; deployed.mkdir(parents=True)
+            (deployed / 'deployment.json').write_text(json.dumps({'version':'3.4.5','status':'awaiting-live-smoke','releaseFileSha256':{name:release.sha256_bytes(value) for name,value in files.items()}}))
+            evidence = root / 'live.json'; evidence.write_text('{}')
+            with patch.object(release, 'canonical_root_required'), patch.object(release, 'RECEIPTS', receipts), patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'DEV_PLUGIN', plugin):
+                for name in release.RELEASE_FILES:
+                    tampered = b'{"version":"3.4.5","tampered":true}' if name == 'manifest.json' else b'tampered'
+                    (plugin / name).write_bytes(tampered)
+                    with self.assertRaisesRegex(SystemExit, 'does not match'): release.complete_smoke('3.4.5','vps',evidence,'Verified')
+                    self.assertEqual([p.name for p in deployed.iterdir()], ['deployment.json'])
+                    (plugin / name).write_bytes(files[name])
+
+    def test_plain_resume_accepts_only_release_generated_version_edits_and_uses_archive_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'dist').mkdir()
+            for name in release.RELEASE_FILES:
+                (root / ('dist/main.js' if name == 'main.js' else name)).write_bytes(name.encode())
+            (root / 'manifest.json').write_text('{"version":"1.0.0","minAppVersion":"1.8.7"}')
+            (root / 'package.json').write_text('{"version":"1.0.0"}')
+            (root / 'package-lock.json').write_text('{"version":"1.0.0","packages":{"":{"version":"1.0.0"}}}')
+            (root / 'versions.json').write_text('{"1.0.0":"1.8.7"}')
+            subprocess.run(['git','init','-q',str(root)],check=True)
+            subprocess.run(['git','-C',str(root),'add','.'],check=True)
+            subprocess.run(['git','-C',str(root),'-c','user.name=Test','-c','user.email=test@example.com','commit','-qm','Original'],check=True)
+            commit = subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
+            with patch.object(release,'ROOT',root), patch.object(release,'RECEIPTS',root/'receipts'), patch.object(release,'QLO2_PLUGIN',root/'missing-plugin'), patch.object(release,'canonical_root_required'), patch.object(release,'run'), patch.object(release,'git_state',return_value=(commit,[])), patch.object(release,'publish_release',side_effect=RuntimeError('Sync failure')):
+                with self.assertRaisesRegex(RuntimeError,'Sync failure'): release.new_release('patch',False)
+            dirty = [' M '+name for name in ('package.json','package-lock.json','manifest.json','versions.json')]
+            with patch.object(release,'ROOT',root), patch.object(release,'RECEIPTS',root/'receipts'), patch.object(release,'canonical_root_required'), patch.object(release,'git_state',return_value=(commit,dirty)), patch.object(release,'publish_release') as publish:
+                release.resume_release('1.0.1',False); self.assertTrue(publish.call_args.kwargs['resumed'])
+                with patch.object(release,'git_state',return_value=(commit,dirty+[' M main.ts'])):
+                    with self.assertRaisesRegex(SystemExit,'Unrelated'): release.resume_release('1.0.1',False)
+                (root/'package.json').write_text('{"version":"1.0.1","changed":true}')
+                with self.assertRaisesRegex(SystemExit,'version bytes changed'): release.resume_release('1.0.1',False)
 
     def test_semver_bumps_are_strict(self) -> None:
         self.assertEqual(release.bump_version('2.12.1', 'patch'), '2.12.2')

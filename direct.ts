@@ -85,9 +85,8 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
    r.directPlan={hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{
   const shell=await api('shell');const project=shell.projects.find((p:any)=>p.id===r.project.id);if(!project)throw Error('Project no longer exists. Scan this connection again.');
-  const candidates=[...shell.threads].sort((a:any,b:any)=>b.updatedAt.localeCompare(a.updatedAt));const inherited=candidates.find((t:any)=>t.projectId===project.id)??candidates[0]??{};
   const model=await readNewThreadModel(environment,endpoint(r.connection.url||''),project);
-  const common={threadId:commandId(r.id,'thread'),modelSelection:model,runtimeMode:inherited.runtimeMode??'approval-required',interactionMode:'default',createdAt:new Date().toISOString()};
+  const common={threadId:commandId(r.id,'thread'),modelSelection:model,runtimeMode:'approval-required',interactionMode:'default',createdAt:new Date().toISOString()};
   r.directPlan={hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title:r.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
   }
  }

@@ -26,6 +26,7 @@ export interface HostedInlineRequest {
   threadId:string;messageId:string;projectId:string;threadEnvironmentId:string;initialHash:string;createdAt:string;
 }
 export interface HostedInlineState {
+  assetFailures?:Array<{source:string;error:string}>;
   delivery?:{commitId:string;hash:string;verifiedOnHost:boolean;observedBy:string[]};
   requestHash:string;accepted:boolean;notePath:string;turnId?:string;messageId?:string;pendingMessageId?:string;
   status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict'|'paused';
@@ -299,14 +300,24 @@ export class HostedInlineWriter {
         state.bindingCheckpoint=inlineBindingCheckpoint(current);
         const inputs=questionConversationInputs(current,state.incoming??[],state.questionFollows,state.prose);
         const conversation=state.turnIds.length>1||inputs.length?{messages:state.prose,steering:inputs,preserveHistory:questions.continued}:undefined;
+        const importAsset=async(reference:ReplyReference)=>{
+          try{return await this.io.importReplyAsset!(reference,request,access);}
+          catch(error){
+            state.assetFailures??=[];
+            if(state.assetFailures.length<32&&!state.assetFailures.some(item=>item.source===reference.source))state.assetFailures.push({source:reference.source.slice(0,500),error:'Import unavailable; original link preserved.'});
+            return undefined;
+          }
+        };
+        if(phase==='complete')state.assetFailures=[];
         if(phase==='complete'&&this.io.importReplyAsset&&!conversation){
           for(const message of inlineTurnMessages(current,state.turnId,intermediateMode(request.intermediateMode,request.keepIntermediate)!=='remove')){
-            message.text=await this.network(path,()=>rewriteReplyReferences(message.text,reference=>this.io.importReplyAsset!(reference,request,access)));
+            message.text=await this.network(path,()=>rewriteReplyReferences(message.text,importAsset));
           }
         }
         if(phase==='complete'||phase==='interrupted')state.finishedAt??=completionTime(current,state.turnId);else delete state.finishedAt;
         let next=renderInlineTurn(current,state.turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,request.threadTitle,{startedAt:request.createdAt,finishedAt:state.finishedAt},finalAnswerFormat(request.finalAnswerFormat));
-        if(phase==='complete'&&conversation&&this.io.importReplyAsset)next=await this.network(path,()=>rewriteReplyReferences(next,reference=>this.io.importReplyAsset!(reference,request,access)));
+        if(phase==='complete'&&conversation&&this.io.importReplyAsset)next=await this.network(path,()=>rewriteReplyReferences(next,importAsset));
+        if(state.assetFailures?.length)next+='\n\n> Some linked files could not be imported. Their original links are preserved. Attach this response again to retry importing the files.';
         const terminal=phase==='complete'&&!questions.waiting||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the
         // vault edit cannot turn our own output into an apparent user edit.

@@ -3,6 +3,7 @@ import {join} from 'node:path';
 import {homedir} from 'node:os';
 import type {App} from 'obsidian';
 import {contentHash} from './completion';
+import {generatedEventContent} from './generated-event-content';
 import {GeneratedNoteCoordinator} from './generated-note-coordinator';
 import {DesktopGenerationJournal} from './generation-journal-desktop';
 import {nativeResponses} from './native-response-manager';
@@ -50,6 +51,11 @@ export class CoordinatedHost {
       if(disk!==after)return false;
       manager.committed(path,disk,ids);return true;
     }finally{manager.cancel(path);}
+  }
+  async eventContent(path:string,content:string){
+    const leases=[...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===path);
+    const records=await Promise.all(leases.map(record=>this.journal.read(record.request.id)));
+    return generatedEventContent(content,records.filter((record):record is NonNullable<typeof record>=>!!record),leases.filter(record=>!record.coordinated&&record.state).map(record=>record.state!));
   }
   scan(){const work=this.scanning??=this.scanRecords();void work.finally(()=>{if(this.scanning===work)this.scanning=undefined;}).catch(()=>{});return work;}
   private async scanRecords(){

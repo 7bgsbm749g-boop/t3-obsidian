@@ -4,6 +4,7 @@ import {applyThreadItem,type InlineThreadState} from './inline-thread';
 import {sha256} from '@noble/hashes/sha256';
 import {safeNotePath} from './hosted-inline';
 import {isLogPath} from './synced-event-logs';
+import {markdownCodeRanges} from './reply-html';
 
 export const EVENT_KINDS=['create','modify','property','rename','delete'] as const;
 export type EventKind=typeof EVENT_KINDS[number];
@@ -66,7 +67,8 @@ export function validateEventCommand(value:any):EventSubscriptionCommand {
 }
 export function eventContent(content:string):string {
   // Stream insertions and completed replies never become note-change events.
-  return content.replace(/<!-- t3-(inline|response):start:([^\s]+) -->[\s\S]*?<!-- t3-\1:end:\2 -->/g,'').replace(/\n+$/,'');
+  const code=content.includes('<!-- t3-')?markdownCodeRanges(content):[];
+  return content.replace(/<!-- t3-(inline|response):start:([^\s]+) -->[\s\S]*?<!-- t3-\1:end:\2 -->/g,(text,_kind,_id,offset:number)=>code.some(([from,to])=>offset>=from&&offset<to)?text:'').replace(/\n+$/,'');
 }
 function canonical(value:unknown):string {if(value===undefined)return 'undefined';if(value===null||typeof value!=='object')return JSON.stringify(value);if(Array.isArray(value))return '['+value.map(canonical).join(',')+']';return '{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+canonical((value as any)[key])).join(',')+'}';}
 function hash(text:string){return Array.from(sha256(new TextEncoder().encode(text)),byte=>byte.toString(16).padStart(2,'0')).join('');}

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {mkdtemp,rm,writeFile,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
@@ -18,15 +18,16 @@ test('durable native retry replays identical commands after a lost response',asy
  const dir=await mkdtemp(join(tmpdir(),'native-ledger-'));let fail=true;const calls:any[]=[];
  const config=modelConfig();let reads=0;
  const loadModel=async(project:any)=>{reads++;return resolveNewThreadModel(config,project);};
- const api=async(path:string,payload?:any)=>{if(path==='shell')return {projects:[{id:'p',defaultModelSelection:{instanceId:'codex',model:'stale'}}],threads:[{projectId:'p',updatedAt:'2026-09-19',modelSelection:{instanceId:'codex',model:'gpt-6-astra',options:[{id:'reasoningEffort',value:'xhigh'}]}}]};calls.push(payload);if(payload.type==='thread.turn.start'&&fail){fail=false;throw Error('lost ack');}return {};};
+ const api=async(path:string,payload?:any)=>{if(path==='shell')return {projects:[{id:'p',defaultModelSelection:{instanceId:'codex',model:'stale'}}],threads:[{projectId:'unrelated',runtimeMode:'full-access',updatedAt:'2026-09-19',modelSelection:{instanceId:'codex',model:'gpt-6-astra',options:[{id:'reasoningEffort',value:'xhigh'}]}}]};calls.push(payload);if(payload.type==='thread.turn.start'&&fail){fail=false;throw Error('lost ack');}return {};};
  const req={action:'start',requestId:id,project:'p',title:'T',prompt:'🧪',attachments:[{id:'i',dataUrl:'data:image/png;base64,YQ=='}],context:{version:1}};
  try{
  await assert.rejects(start(api,req,dir,loadModel),/lost ack/);
- assert.deepEqual(calls[0].modelSelection,config.settings.defaultModelSelection);assert.deepEqual(calls[1].modelSelection,calls[0].modelSelection);
+ assert.equal(calls[0].runtimeMode,'approval-required');assert.equal(calls[1].runtimeMode,'approval-required');assert.deepEqual(calls[0].modelSelection,config.settings.defaultModelSelection);assert.deepEqual(calls[1].modelSelection,calls[0].modelSelection);
  config.settings.defaultModelSelection.model='changed-default';
  const result=await start(api,req,dir);assert.equal(result.phase,'started');assert.equal(calls.length,3);assert.deepEqual(calls[1],calls[2]);assert.deepEqual(calls[2].message.attachments,req.attachments);
  assert.equal(reads,1);
  await start(api,req,dir);assert.equal(calls.length,3);
+ const terminal=JSON.parse(await readFile(join(dir,'requests',id+'.json'),'utf8'));assert.equal(terminal.turn,undefined);assert.equal(terminal.create,undefined);assert.ok(terminal.requestHash);
  await assert.rejects(start(api,{...req,prompt:'changed'},dir),/different parameters/);
  await start(api,{...req,requestId:'7619d88f-320d-4882-8824-e45d930715db'},dir,loadModel);assert.equal(calls.at(-1).modelSelection.model,'changed-default');
  }finally{await rm(dir,{recursive:true,force:true});}

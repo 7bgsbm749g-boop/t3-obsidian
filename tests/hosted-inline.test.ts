@@ -209,15 +209,15 @@ test('a crashed T3 server may resume the original turn without another user mess
   await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/Recovered on the same turn/);
 });
 
-test('final reply imports referenced files before replacing the response, then retries a failed import',async()=>{
+test('failed imports preserve final text and original links without blocking completion',async()=>{
   const h=harness();h.dispatch();h.answer('See ![plot](/tmp/plot.png) and [data](/tmp/data.pdf).',true);
-  let fail=true;const sources:string[]=[];
-  h.io.importReplyAsset=async reference=>{sources.push(reference.source);if(fail)throw Error('asset unavailable');return `${reference.image?'!':''}[[T3 Code Attachments/${reference.source.split('/').at(-1)}]]`;};
-  await h.create().tick();assert.match(h.document,/t3-inline:start/);assert.doesNotMatch(h.document,/plot\.png/);assert.match(h.state.detail!,/asset unavailable/);
-  fail=false;await h.create().tick();assert.equal(h.state.status,'complete');
-  assert.match(h.document,/!\[\[T3 Code Attachments\/plot\.png\]\]/);
-  assert.match(h.document,/\[\[T3 Code Attachments\/data\.pdf\]\]/);
-  assert.deepEqual(sources,['/tmp/plot.png','/tmp/plot.png','/tmp/data.pdf']);
+  const sources:string[]=[];
+  h.io.importReplyAsset=async reference=>{sources.push(reference.source);if(reference.image)throw Error('asset unavailable');return '[[T3 Code Attachments/data.pdf]]';};
+  await h.create().tick();assert.equal(h.state.status,'complete');
+  assert.match(h.document,/!\[plot\]\(\/tmp\/plot.png\)/);assert.match(h.document,/\[\[T3 Code Attachments\/data.pdf\]\]/);
+  assert.match(h.document,/original links are preserved/);assert.doesNotMatch(h.document,/t3-inline:start/);
+  assert.equal(h.state.assetFailures?.length,1);
+  await h.create().tick();assert.deepEqual(sources,['/tmp/plot.png','/tmp/data.pdf'],'Terminal replies must not repeatedly retry unavailable files');
 });
 
 for(const complete of [false,true])test(`changed active contents are overwritten during ${complete?'completion':'streaming'} while surroundings survive`,async()=>{

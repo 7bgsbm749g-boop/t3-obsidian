@@ -6,6 +6,8 @@ import {initialRegion} from '../inline-thread';
 import type {HostedInlineRequest} from '../hosted-inline';
 import {contentHash} from '../completion';
 import {coordinatedDeliveryLimitations} from '../coordinated-delivery-gates';
+import {generatedEventContent} from '../generated-event-content';
+import {eventContent} from '../event-subscriptions';
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 function request(response=id,path='Arms.md'):HostedInlineRequest{return {version:2,id:response,initialOwner:id,vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/test/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:path,threadId:'thread',messageId:id,projectId:'project',threadEnvironmentId:'host',initialHash:initialRegion(response).bodyHash,createdAt:'2026-10-02T20:00:00Z',independent:true};}
 function fixture(){
@@ -16,6 +18,35 @@ function fixture(){
   return {journal,notes,events,records,coordinator:new GeneratedNoteCoordinator(journal,notes),original:document,get:()=>document,set:(value:string)=>{document=value;},writes:()=>writes,failCAS:()=>{casFailure=true;},afterWrite:(fn:(text:string)=>string)=>{afterWrite=fn;}};
 }
 const staged=(text:string)=>text.replace('| Exercise | 20kg |','| Exercise | 20kg | 25kg |').replace('| --- | ---: |','| --- | ---: | ---: |').replace('| Barb | 20 |','| Barb | 20 | |');
+test('native materialization intents exclude generated text but preserve staged and surrounding user changes',async()=>{
+  const f=fixture();await f.coordinator.accept(request(),f.original);await f.coordinator.result(id,f.original,'> Answer');const completed=await f.coordinator.commit(id);
+  const baseline=eventContent(f.original);
+  assert.equal(eventContent(generatedEventContent(f.get(),[completed])),baseline);
+  const pending=f.events.find(event=>event.event==='commit-pending').state;
+  assert.equal(eventContent(generatedEventContent(f.get(),[pending])),baseline,'File events can precede verified checkpoint propagation');
+  const edited=f.get().replace('Workout','User workout').replace('Tail','User tail');
+  assert.equal(eventContent(generatedEventContent(edited,[completed])),baseline.replace('Workout','User workout').replace('Tail','User tail'));
+  assert.match(generatedEventContent(f.get().replace('> Answer','> My edit'),[completed]),/My edit/,'Edited generated content must count as user content');
+  const g=fixture();await g.coordinator.accept(request(),g.original);await g.coordinator.result(id,staged(g.original),'> Answer');const result=await g.coordinator.commit(id);
+  assert.equal(eventContent(generatedEventContent(g.get(),[result])),eventContent(staged(g.original)),'Authorized staged edits remain observable');
+});
+test('independent generated ranges and code examples remain distinct after restart',async()=>{
+  const f=fixture(),original=f.original.replace('Tail',`${responseAnchor(other)}\n\nTail`);f.set(original);
+  await f.coordinator.accept(request(),original);await f.coordinator.accept(request(other),original);
+  await f.coordinator.result(id,original,'> Same answer');await f.coordinator.commit(id);
+  await f.coordinator.result(other,original,'> Same answer');await f.coordinator.commit(other);
+  const records=JSON.parse(JSON.stringify([...f.records.values()]));
+  assert.equal(eventContent(generatedEventContent(f.get(),records)),eventContent(original));
+  const example='```html\n<!-- t3-inline:start:example -->\nreal user example\n<!-- t3-inline:end:example -->\n```';
+  assert.equal(eventContent(example),example);
+});
+test('legacy cleanup uses an exact saved position proof and refuses changed prefixes or bodies',()=>{
+  const body='> Legacy answer',prefix='Before\n\n',document=prefix+body+'\n\nAfter';
+  const state:any={finalSaved:true,finalBody:body,responseAnchor:{length:prefix.length,hash:contentHash(prefix)}};
+  assert.equal(eventContent(generatedEventContent(document,[],[state])),eventContent('Before\n\nAfter'));
+  assert.equal(generatedEventContent(document.replace('Before','Edited'),[],[state]),document.replace('Before','Edited'));
+  assert.equal(generatedEventContent(document.replace('answer','user edit'),[],[state]),document.replace('answer','user edit'));
+});
 test('staged table patch and final response land in one checked save with durable intent and readback',async()=>{
   const f=fixture();await f.coordinator.accept(request(),f.original);
   await f.coordinator.result(id,staged(f.original),'> Added 25kg.');

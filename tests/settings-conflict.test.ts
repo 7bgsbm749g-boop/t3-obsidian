@@ -38,6 +38,33 @@ test('shared saves preserve a disk folder link not edited in the local snapshot'
   assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.folderLinks)),[link]);
 });
 
+test('external refresh adopts all shared preferences and unrelated saves preserve them',async()=>{
+  const h=await harness({vaultId:'vault'});
+  h.setCurrent({...h.current(),inlineStreaming:{enabled:false,keepIntermediate:true,intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'},orchestration:{waitForOtherThreads:true},completion:{action:'archive',archiveFolder:'Remote'}});
+  await h.plugin.onExternalSettingsChange();
+  assert.equal(h.plugin.settings.inlineStreaming.enabled,false);assert.equal(h.plugin.settings.orchestration.waitForOtherThreads,true);
+  h.plugin.settings.completion.archiveFolder='Local';await h.plugin.save();
+  assert.equal(h.current().inlineStreaming.enabled,false);assert.equal(h.current().inlineStreaming.finalAnswerFormat,'raw-markdown');assert.equal(h.current().completion.action,'archive');
+});
+
+test('concurrent distinct nested edits merge while a same-field conflict prefers disk',async()=>{
+  const h=await harness({vaultId:'vault',inlineStreaming:{enabled:true,finalAnswerFormat:'formatted',intermediateMode:'remove'}});
+  h.plugin.settings.inlineStreaming.finalAnswerFormat='raw-markdown';
+  h.setCurrent({...h.current(),inlineStreaming:{enabled:false,finalAnswerFormat:'formatted',intermediateMode:'collapse'}});
+  await h.plugin.save();
+  assert.equal(h.current().inlineStreaming.enabled,false);assert.equal(h.current().inlineStreaming.intermediateMode,'collapse');assert.equal(h.current().inlineStreaming.finalAnswerFormat,'raw-markdown');
+  h.plugin.settings.inlineStreaming.intermediateMode='keep';
+  h.setCurrent({...h.current(),inlineStreaming:{...h.current().inlineStreaming,intermediateMode:'remove'}});
+  await h.plugin.save();assert.equal(h.current().inlineStreaming.intermediateMode,'remove');assert.equal(h.plugin.settings.inlineStreaming.intermediateMode,'remove');
+});
+
+test('queued local saves preserve the latest intent even when it returns to the original value',async()=>{
+  const h=await harness({vaultId:'vault'});
+  h.plugin.settings.inlineStreaming.enabled=false;const first=h.plugin.save();
+  h.plugin.settings.inlineStreaming.enabled=true;const second=h.plugin.save();
+  await Promise.all([first,second]);assert.equal(h.current().inlineStreaming.enabled,true);assert.equal(h.plugin.settings.inlineStreaming.enabled,true);
+});
+
 test('UI folder edits and unlink tombstones survive stale Sync snapshots and accept newer remote edits',async()=>{
   const h=await harness({vaultId:'vault'}),stale={...h.current()};
   const link={id:'link',folderPath:'Notes',projectId:'project',projectTitle:'Repository',connectionId:'c',workspaceRoot:'/repo',self:false};

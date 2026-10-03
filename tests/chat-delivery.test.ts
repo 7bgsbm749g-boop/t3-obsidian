@@ -13,6 +13,12 @@ import {contentHash} from '../completion';
 
 const project={id:'chat-project',title:'Personal notes',workspaceRoot:'/projects/notes',connectionId:'chat-connection',connectionName:'Laptop'};
 
+async function waitForReply(check:()=>boolean,description:string,timeout=6000){
+  const deadline=Date.now()+timeout;
+  while(!check()&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(check(),description);
+}
+
 async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   let local:any={mode:'direct',pairedSessions:{'chat-connection':{url:'https://chat.example',environmentId:'chat-env',token:'dummy-chat-session',expiresAt:Date.now()+600_000}}};
   const localStorage=new Map<string,any>();
@@ -142,7 +148,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   runInNewContext(await readFile('dist/main.js','utf8'),{
     module,exports:module.exports,
     require:(name:string)=>{assert.equal(name,'obsidian','Mobile chat must never import Node APIs');return api;},
-    indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
+    window:{localStorage:{get length(){return localStorage.size;},key:(i:number)=>[...localStorage.keys()][i]??null},setInterval,clearInterval,setTimeout,clearTimeout},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
     fetch:fetcher,WebSocket:Socket,Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,performance,setTimeout,clearTimeout,console,
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();const timer=setInterval(()=>plugin.deviceInline?.tick(),20);const unload=plugin.onunload.bind(plugin);plugin.onunload=()=>{clearInterval(timer);unload();};return plugin;};
@@ -1216,8 +1222,8 @@ for(const streaming of [false,true])test(`selection questions attach local image
     assert.match(first.message.text,/Before\n\[.*\]\(t3-context:\/\/.*\)\n\[.*\]\(t3-context:\/\/.*\)\nAfter/);
     assert.doesNotMatch(first.message.text,/Tail/,'Unselected text stays out of the request');
     assert.equal(resolved[0].source,'Notes/Image selection.md');
-    if(streaming)await new Promise(resolve=>setTimeout(resolve,500));
-    h.attachEditor('Notes/Palette images.md',selected+'\nUnselected ![[outside.png]]');
+    if(streaming)await waitForReply(()=>context.value.includes('Inline reply from T3.')&&!context.value.includes('t3-inline:start:'),'Selected-image reply completes');
+    const palette=h.attachEditor('Notes/Palette images.md',selected+'\nUnselected ![[outside.png]]');
     await h.plugin.openPaletteAction('Describe it.',selected);
     await h.modals.at(-1).choose(false);
     const next=h.commands.filter(command=>command.type==='thread.turn.start').at(-1);
@@ -1225,7 +1231,7 @@ for(const streaming of [false,true])test(`selection questions attach local image
     assert.match(next.message.text,/Selected text:\nBefore/);
     assert.match(next.message.text,/Question:\nDescribe it\./);
     assert.equal(resolved.at(-1).source,'Notes/Palette images.md');
-    if(streaming)await new Promise(resolve=>setTimeout(resolve,500));
+    if(streaming)await waitForReply(()=>palette.value.includes('Inline reply from T3.')&&!palette.value.includes('t3-inline:start:'),'Palette-image reply completes');
     const hotkey=h.attachEditor('Notes/Hotkey images.md',selected+'\nUnselected ![[outside.png]]');
     hotkey.editor.getSelection=()=>selected;
     hotkey.editor.getCursor=(side:string)=>hotkey.editor.offsetToPos(side==='from'?0:selected.length);
@@ -1353,6 +1359,8 @@ test('agent note commands combine many threads per note, mirrored responses, att
     const first={version:1,id:webcrypto.randomUUID(),kind:'send-note',notePath:a.file.path,destinations:[a.file.path,b.file.path],streamReply:true};
     const x=await h.plugin.executeNoteCommand(first);
     assert.equal(x.ok,true);assert.equal(x.bindingIds.length,2);
+    const receipt=h.plugin.app.loadLocalStorage(`send-to-t3-code-device-v1-note-command-${first.id}`);
+    assert.equal(receipt.request,undefined,'Terminal receipt must not retain prepared prompt or attachments');
     const y=await h.plugin.executeNoteCommand({...first,id:webcrypto.randomUUID(),notePath:b.file.path});
     assert.notEqual(x.threadId,y.threadId);assert.equal(y.bindingIds.length,2);
     await new Promise(resolve=>setTimeout(resolve,250));
@@ -1371,7 +1379,7 @@ test('agent note commands combine many threads per note, mirrored responses, att
     assert.equal(attached.bindingIds.length,1);assert.equal(h.commands.length,count,'Attachment never sends a prompt');
     assert.equal((a.value.match(/t3-inline:start:/g)??[]).length,3);
     h.setStreaming(false);
-    await new Promise(resolve=>setTimeout(resolve,2200));
+    await waitForReply(()=>!a.value.includes('t3-inline:start:')&&!b.value.includes('t3-inline:start:'),'All independent mirror destinations complete');
     assert.equal((a.value.match(/Inline reply from T3\./g)??[]).length,3);
     assert.equal((b.value.match(/Inline reply from T3\./g)??[]).length,2,b.value);
     assert.doesNotMatch(a.value,/t3-response:(?:start|end):/);
@@ -1383,6 +1391,33 @@ test('agent note commands combine many threads per note, mirrored responses, att
     const jobs=h.plugin.settings.settlementJobs;
     assert.equal(jobs.length,2);
     for(const job of jobs)assert.equal(await h.plugin.inlineSettlementStatus(job),'ready');
+  }finally{h.plugin.onunload();}
+});
+
+test('reload compacts legacy terminal receipts while preserving unresolved payloads',async()=>{
+  const h=await chatHarness();let restarted:any;
+  try{
+    const command={version:1,id:webcrypto.randomUUID(),kind:'send-note',notePath:'Notes/Old.md',destinations:[],streamReply:false};
+    const terminalKey=`send-to-t3-code-device-v1-note-command-${command.id}`,pendingKey=`send-to-t3-code-device-v1-note-command-${webcrypto.randomUUID()}`;
+    h.plugin.app.saveLocalStorage(terminalKey,{command,request:{prompt:'OLD_PRIVATE_BODY',attachments:[{dataUrl:'PRIVATE_IMAGE'}]},result:{id:command.id,ok:true,threadId:'thread',messageId:'message',bindingIds:[]}});
+    h.plugin.app.saveLocalStorage(pendingKey,{command:{...command,id:pendingKey.slice(-36)},request:{prompt:'UNRESOLVED_PRIVATE_BODY'}});
+    h.plugin.onunload();restarted=await h.start();
+    assert.equal(restarted.app.loadLocalStorage(terminalKey).request,undefined);
+    assert.equal(restarted.app.loadLocalStorage(pendingKey).request.prompt,'UNRESOLVED_PRIVATE_BODY');
+  }finally{restarted?.onunload();h.plugin.onunload();}
+});
+
+test('discarding an unconfirmed agent command compacts its payload and refuses replay',async()=>{
+  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')throw Error('lost acknowledgement');});
+  try{
+    const note=h.attachEditor('Notes/Discard.md','Private note body.');Object.assign(note.file,{basename:'Discard',stat:{ctime:123}});h.plugin.app.vault.getFileByPath=()=>note.file;
+    const command={version:1,id:webcrypto.randomUUID(),kind:'send-note',notePath:note.file.path,destinations:[],streamReply:false};
+    await assert.rejects(h.plugin.executeNoteCommand(command));
+    const request=h.plugin.settings.pending.find((r:any)=>r.id===command.id);assert.ok(request);
+    await h.plugin.discardRequest(request);
+    const receipt=h.plugin.app.loadLocalStorage(`send-to-t3-code-device-v1-note-command-${command.id}`);
+    assert.equal(receipt.request,undefined);assert.equal(receipt.discarded,true);
+    const count=h.commands.length;await assert.rejects(h.plugin.executeNoteCommand(command),/discarded/);assert.equal(h.commands.length,count);
   }finally{h.plugin.onunload();}
 });
 

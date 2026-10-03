@@ -154,7 +154,7 @@ def validate_version_alignment(expected: str) -> None:
         raise SystemExit(f'versions.json does not describe {expected}.')
 
 
-def install_runtime(plugin: Path, *, strict_dev: bool) -> dict[str, str]:
+def install_runtime(plugin: Path, *, strict_dev: bool, runtime: dict[str, bytes] | None = None) -> dict[str, str]:
     if strict_dev:
         plugin.mkdir(parents=True, exist_ok=True)
         unexpected = {path.name for path in plugin.iterdir()} - DEV_ALLOWED
@@ -173,7 +173,7 @@ def install_runtime(plugin: Path, *, strict_dev: bool) -> dict[str, str]:
 
     hashes: dict[str, str] = {}
     for name in RUNTIME_FILES:
-        value = source_bytes(name)
+        value = runtime[name] if runtime is not None else source_bytes(name)
         atomic_write(plugin / name, value)
         hashes[name] = sha256_bytes(value)
     if settings is not None and data_path.read_bytes() != settings:
@@ -206,7 +206,7 @@ def create_archive(version: str) -> Path:
     return archive
 
 
-def validate_archive(archive: Path, version: str) -> dict[str, str]:
+def validate_archive(archive: Path, version: str, *, compare_source: bool = True) -> dict[str, str]:
     expected = {f'send-to-t3-code/{name}' for name in RELEASE_FILES}
     hashes: dict[str, str] = {}
     with zipfile.ZipFile(archive) as bundle:
@@ -215,7 +215,7 @@ def validate_archive(archive: Path, version: str) -> dict[str, str]:
         for name in RELEASE_FILES:
             value = bundle.read(f'send-to-t3-code/{name}')
             hashes[name] = sha256_bytes(value)
-            if value != source_bytes(name):
+            if compare_source and value != source_bytes(name):
                 raise SystemExit(f'{archive} does not match the current tested {name}.')
         manifest = json.loads(bundle.read('send-to-t3-code/manifest.json'))
         if manifest['version'] != version:
@@ -318,8 +318,10 @@ def publish_release(
     *,
     resumed: bool,
 ) -> None:
-    archive_hashes = validate_archive(archive, version)
-    dev_hashes = install_runtime(DEV_PLUGIN, strict_dev=True)
+    archive_hashes = validate_archive(archive, version, compare_source=not resumed)
+    with zipfile.ZipFile(archive) as bundle:
+        runtime = {name: bundle.read(f'send-to-t3-code/{name}') for name in RUNTIME_FILES}
+    dev_hashes = install_runtime(DEV_PLUGIN, strict_dev=True, runtime=runtime)
     deployment = deploy_qlo2(
         archive,
         version,
@@ -362,6 +364,13 @@ def complete_smoke(version: str, device: str, evidence: Path, notes: str) -> Non
         raise SystemExit(f'{version} is not awaiting a live smoke test.')
     if read_json(QLO2_PLUGIN / 'manifest.json')['version'] != version:
         raise SystemExit(f'QLO2 is not currently installed at {version}.')
+    expected = deployment.get('releaseFileSha256', {})
+    for name in RELEASE_FILES:
+        if name not in expected or not (QLO2_PLUGIN / name).is_file() or sha256_file(QLO2_PLUGIN / name) != expected[name]:
+            raise SystemExit(f'QLO2 {name} does not match the immutable deployment; smoke completion refused.')
+    for name in RUNTIME_FILES:
+        if not (DEV_PLUGIN / name).is_file() or sha256_file(DEV_PLUGIN / name) != expected[name]:
+            raise SystemExit(f'Development {name} does not match the immutable deployment; smoke completion refused.')
     if not evidence.is_file():
         raise SystemExit(f'Smoke evidence does not exist: {evidence}')
     smoke = directory / f'smoke-{device}.json'
@@ -410,6 +419,16 @@ def new_release(bump: str | None, allow_dirty: bool, requested_version: str | No
         run(['npm', 'run', 'build'])
         run(['npm', 'test'])
         archive = create_archive(version)
+        provenance = {
+            'version': version, 'gitCommit': commit,
+            'archiveSha256': sha256_file(archive),
+            'versionFileSha256': {str(path.relative_to(ROOT)): sha256_file(path) for path in originals},
+            'originalVersionFileSha256': {str(path.relative_to(ROOT)): sha256_bytes(value) for path, value in originals.items()},
+            'dirtySourceAuthorized': bool(dirty),
+        }
+        provenance_path = archive.with_suffix('.provenance.json')
+        with provenance_path.open('xb') as stream:
+            stream.write((json.dumps(provenance, indent=2) + '\n').encode())
     except BaseException:
         if archive is None:
             for path, value in originals.items():
@@ -422,15 +441,29 @@ def new_release(bump: str | None, allow_dirty: bool, requested_version: str | No
 def resume_release(version: str, allow_dirty: bool) -> None:
     canonical_root_required()
     commit, dirty = git_state()
-    if dirty and not allow_dirty:
-        raise SystemExit(
-            'The worktree is dirty. A resume may use --allow-dirty only when the current source was reviewed '
-            'and still matches the immutable archive.'
-        )
-    validate_version_alignment(version)
     archive = archive_path(version)
     if not archive.is_file():
         raise SystemExit(f'Cannot resume; immutable archive is missing: {archive}')
+    provenance_path = archive.with_suffix('.provenance.json')
+    if provenance_path.is_file():
+        provenance = read_json(provenance_path)
+        if provenance['version'] != version or provenance['gitCommit'] != commit or provenance['archiveSha256'] != sha256_file(archive):
+            raise SystemExit('Resume provenance or source commit does not match the immutable release.')
+        expected = provenance['versionFileSha256']
+        if any(sha256_file(ROOT / name) != checksum for name, checksum in expected.items()):
+            raise SystemExit('Release-generated version bytes changed; resume refused.')
+        if not allow_dirty and (provenance['dirtySourceAuthorized'] or any(line[:3] != ' M ' or line[3:] not in expected for line in dirty)):
+            raise SystemExit('Unrelated worktree changes prevent immutable resume.')
+        # Verify that these are exactly the original committed version inputs.
+        for name, checksum in provenance['originalVersionFileSha256'].items():
+            committed = subprocess.run(['git', 'show', f'{commit}:{name}'], cwd=ROOT, check=True, capture_output=True).stdout
+            if sha256_bytes(committed) != checksum and not allow_dirty:
+                raise SystemExit('Original version inputs did not match the reviewed commit.')
+    else:
+        if dirty and not allow_dirty:
+            raise SystemExit('Legacy archive has no provenance. Commit reviewed version changes before resuming.')
+        validate_archive(archive, version)
+    validate_version_alignment(version)
     if release_receipt_dir(version).exists():
         raise SystemExit(f'Release {version} already has an immutable deployment receipt.')
     publish_release(version, archive, commit, dirty, resumed=True)

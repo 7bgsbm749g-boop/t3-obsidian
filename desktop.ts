@@ -95,10 +95,9 @@ export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any
     await save(path,ledger);
    }else{
    const shell=await api('shell');const project=shell.projects.find((p:any)=>p.id===req.project);if(!project)throw new Error('Project no longer exists. Scan projects again.');
-   const candidates=[...shell.threads].sort((a:any,b:any)=>b.updatedAt.localeCompare(a.updatedAt));const inherited=candidates.find((t:any)=>t.projectId===project.id)??candidates[0]??{};
    if(!loadModel)throw new Error('Cannot read T3 model defaults. Retry from the updated plugin.');
    const model=await loadModel(project);
-   const runtime=inherited.runtimeMode??'approval-required';const stamp=new Date().toISOString();const threadId=uuid5(id,'thread');
+   const runtime='approval-required';const stamp=new Date().toISOString();const threadId=uuid5(id,'thread');
    const common={threadId,modelSelection:model,runtimeMode:runtime,interactionMode:'default',createdAt:stamp};
    ledger={requestHash:hash,requestId:id,threadId,project,phase:'prepared',create:{...common,type:'thread.create',commandId:uuid5(id,'create'),projectId:project.id,title:req.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:uuid5(id,'turn'),message:{messageId:uuid5(id,'message'),role:'user',text:req.prompt,attachments:req.attachments??[],...(req.context?{context:req.context}:{})}}};await save(path,ledger);
    }
@@ -107,6 +106,9 @@ export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any
   if(ledger.phase==='prepared'){await api('dispatch',ledger.create);ledger.phase='created';await save(path,ledger);}
   if(compromised)throw compromised;
   if(ledger.phase==='created'){await api('dispatch',ledger.turn);ledger.phase='started';await save(path,ledger);}
+  if(ledger.phase==='started'&&(ledger.create||ledger.turn)){
+   ledger={requestHash:ledger.requestHash,requestId:ledger.requestId,threadId:ledger.threadId,project:{id:ledger.project.id},phase:'started'};await save(path,ledger);
+  }
   return {ok:true,requestId:id,threadId:ledger.threadId,projectId:ledger.project.id,phase:ledger.phase};
   }finally{await release();}
  })();locks.set(path,work);try{return await work;}finally{locks.delete(path);}
