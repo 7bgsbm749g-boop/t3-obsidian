@@ -189,3 +189,21 @@ test('a writer checkpoint read before a mobile rename cannot put the lease back 
   const lease=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);assert.equal(lease.state.notePath,'Folder/Second.md');assert.equal(lease.request.notePath,'Note.md');
  }finally{await h.close();}
 });
+
+test('reviewed duplicate recovery normalizes a known legacy Working checkpoint and refuses edited text',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const original=h.notes.get('Note.md')!,legacy=original.replace(responseAnchor(h.id),initialRegion(h.id).text.trim());
+  h.notes.set('Renamed.md',legacy);const {deviceNoteIO}=await import('../inline-note-io');deviceNoteIO(h.app).noteChanged('Renamed.md');
+  h.complete();await h.writer.tick();
+  let lease=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);assert.equal(lease.state.status,'paused');
+  const edited=legacy.replace('Working','User edited');h.notes.set('Renamed.md',edited);
+  const bad:any=await h.host.command('response-status',h.id);
+  await assert.rejects(h.host.command('resolve-response-location',h.id,bad.locationHash,'Renamed.md'),/not a known checkpoint/);
+  assert.equal(h.notes.get('Note.md'),original);assert.equal(h.notes.get('Renamed.md'),edited);
+  h.notes.set('Renamed.md',legacy);const review:any=await h.host.command('response-status',h.id);
+  await h.host.command('resolve-response-location',h.id,review.locationHash,'Renamed.md');await h.writer.tick();
+  lease=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
+  assert.equal(lease.request.messageId,h.request.messageId);assert.equal(lease.state.status,'complete',JSON.stringify({lease,journal:await h.host.journal.read(h.id),notes:[...h.notes]}));assert.equal(lease.state.finalSaved,true);assert.equal(lease.state.cleanupComplete,true);
+  assert.match(h.notes.get('Renamed.md')!,/Added \*\*25kg\*\*/);assert.ok(!h.notes.get('Note.md')!.includes(h.id));
+ }finally{await h.close();}
+});

@@ -235,8 +235,8 @@ export class CoordinatedHost {
       const lease:LeaseRecord=JSON.parse(raw);
       if(lease.state?.finalSaved||lease.stopRequestedAt)throw Error('This response is already saved or canceled.');
       const region=responseRegion(chosen.document,id)!;
-      const plan=chosen.document.slice(region.from,region.to)===responseAnchor(id)?undefined:planNativeMigration(lease,chosen.document);
-      if(plan&&plan.kind!=='planned')throw Error('The selected response contains unrecognized edits. Preserve and review them before recovery.');
+      const plan=chosen.document.slice(region.from,region.to)===responseAnchor(id)?undefined:planNativeMigration(lease,chosen.document,{reviewedLocationConflict:true});
+      if(plan&&plan.kind!=='planned')throw Error(`The selected response cannot be normalized: ${plan.reason} Preserve and review it before recovery.`);
       const evidence=join(this.journal.root,id,`location-recovery-${review.locationHash}`);await fs.mkdir(evidence,{recursive:true,mode:0o700});
       for(const candidate of review.locations)await fs.writeFile(join(evidence,contentHash(candidate.path)+'.md'),candidate.document,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
       await fs.writeFile(join(evidence,'review.json'),JSON.stringify({notePath,locations:review.locations.map(({path,hash})=>({path,hash}))}),{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
