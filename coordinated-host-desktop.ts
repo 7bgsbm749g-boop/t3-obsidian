@@ -10,6 +10,7 @@ import {deviceNoteIO} from './inline-note-io';
 import {planNativeMigration} from './coordinated-migration';
 import {projectResponses,responseAnchor,responseRegion,savedProjection} from './native-response-projection';
 import {regionBody,initialRegion} from './inline-thread';
+import {logFailure} from './diagnostics';
 import {hostedPaths,type HostedInlineRequest,type HostedInlineState,type HostedWriterIO} from './hosted-inline';
 import {leasePaths,terminalLease,type InlineLeaseAuthority,type LeaseRecord,type LeaseIdentity,type LeaseFiles} from './inline-lease';
 
@@ -19,6 +20,7 @@ import {leasePaths,terminalLease,type InlineLeaseAuthority,type LeaseRecord,type
 export class CoordinatedHost {
   private records=new Map<string,LeaseRecord>();
   private stopped=false;
+  private failures=new Map<string,string>();
   private scanning?:Promise<void>;
   private constructor(private app:App,private identity:LeaseIdentity,private files:LeaseFiles,private authority:InlineLeaseAuthority,readonly journal:DesktopGenerationJournal,readonly coordinator:GeneratedNoteCoordinator){}
   static async open(app:App,identity:LeaseIdentity,files:LeaseFiles,authority:InlineLeaseAuthority,options?:{journalRoot?:string}){
@@ -37,7 +39,7 @@ export class CoordinatedHost {
     const manager=nativeResponses(this.app);
     const same=()=>manager.savedViews(path).every(view=>view.saved()===before);
     if(!same()||await this.app.vault.read(file)!==before)return false;
-    const ids=[...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===path&&responseRegion(before,record.request.id)&&!responseRegion(after,record.request.id)).map(record=>record.request.id);
+    const ids=[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&!record.state?.cleanupComplete&&(record.state?.notePath??record.request.notePath)===path&&responseRegion(before,record.request.id)&&!responseRegion(after,record.request.id)).map(record=>record.request.id);
     manager.prepare(path,before,after,ids);
     try{
       await this.app.vault.process(file,current=>{
@@ -53,6 +55,8 @@ export class CoordinatedHost {
   private async scanRecords(){
     for(const path of await this.files.list(`${this.identity.directory}/leases`)){
       if(this.stopped)return;
+      const identity=path.split('/').at(-1)!.replace(/\.json$/,'');this.failures.delete(identity);
+      try{
       const raw=await this.files.read(path);if(!raw)continue;
       let record:LeaseRecord=JSON.parse(raw),id=record.request.id,notePath=record.state?.notePath??record.request.notePath;
       this.records.set(id,record);
@@ -91,12 +95,13 @@ export class CoordinatedHost {
       const journal=await this.journal.read(id);
       if(journal&&journal.notePath!==notePath)await this.coordinator.renamed(id,journal.notePath,notePath);
       await nativeResponses(this.app).receive(record);
+      }catch(error){const detail=error instanceof Error?error.message:String(error);this.failures.set(identity,detail);logFailure('response.coordinator.scan-conflict',error,{bindingId:identity});}
     }
   }
   io(base:HostedWriterIO):HostedWriterIO {
     return {...base,
       requests:async()=>[...this.records.values()].filter(record=>record.coordinated&&!record.migrating).map(record=>hostedPaths(this.identity.directory,record.request.id).request),
-      accepts:request=>!!this.records.get(request.id)?.coordinated&&!this.records.get(request.id)?.migrating&&!this.stopped,
+      accepts:request=>!!this.records.get(request.id)?.coordinated&&!this.records.get(request.id)?.migrating&&!this.failures.has(request.id)&&!this.stopped,
       canResume:()=>true,
       locateNote:(id,path)=>deviceNoteIO(this.app).locateNote(id,path),
       read:async path=>{
@@ -141,7 +146,7 @@ export class CoordinatedHost {
       const resumed=await this.authority.resume(id);this.records.set(id,resumed);await this.scan();return {resumed:true,bindingId:id};
     }
     const record=await this.journal.read(id);if(!record)throw Error('Unknown coordinated response.');
-    if(kind==='response-status')return {generation:record,stagingPath:join(this.journal.root,id,'staged.md')};
+    if(kind==='response-status')return {generation:record,stagingPath:join(this.journal.root,id,'staged.md'),hostIssue:this.failures.get(id)};
     if(kind==='stage-note-edit'){
       const path=join(this.journal.root,id,'staged.md');await fs.writeFile(path,record.original,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});return {stagingPath:path,originalHash:record.originalHash};
     }

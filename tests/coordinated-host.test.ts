@@ -73,3 +73,18 @@ test('native note rename preserves immutable registration and moves coordinated 
   const journal=await h.host.journal.read(h.id),record=JSON.parse((await h.files.read(leasePaths(h.request.host.directory,h.id).record))!);assert.equal(journal!.notePath,'Renamed.md');assert.equal(journal!.request.notePath,'Note.md');assert.equal(journal!.status,'verified');assert.equal(record.state.notePath,'Renamed.md');assert.ok(h.notes.get('Renamed.md')!.includes('Added **25kg**.'));
  }finally{await h.close();}
 });
+
+test('malformed historical paused mirror boundaries cannot block another coordinated commit',async()=>{
+ const h=await setup();try{
+  const old=randomUUID(),request={...h.request,id:old,nativeProjection:false};
+  await h.client.command({kind:'register',jobId:old,request});const key=leasePaths(h.request.host.directory,old).record;
+  const record=JSON.parse(h.storage.get(key)!);record.state={requestHash:hostedRequestHash(request),accepted:true,notePath:'Note.md',status:'paused',hashes:[],updatedAt:'',detail:'Restored boundary required'};h.storage.set(key,JSON.stringify(record));
+  h.notes.set('Note.md',h.notes.get('Note.md')+'\n<!-- t3-inline:end:'+old+' -->\n');await h.host.scan();h.complete();await h.writer.tick();
+  assert.equal((await h.host.journal.read(h.id))!.status,'verified');assert.ok(h.notes.get('Note.md')!.includes('Added **25kg**.'));assert.ok(h.notes.get('Note.md')!.includes('t3-inline:end:'+old));
+ }finally{await h.close();}
+});
+test('one malformed lease file is isolated while independent response scanning and delivery continue',async()=>{
+ const h=await setup();try{
+  h.storage.set(leasePaths(h.request.host.directory,randomUUID()).record,'{ malformed');await h.host.scan();h.complete();await h.writer.tick();assert.equal((await h.host.journal.read(h.id))!.status,'verified');
+ }finally{await h.close();}
+});
