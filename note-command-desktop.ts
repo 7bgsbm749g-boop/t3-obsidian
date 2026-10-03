@@ -6,6 +6,7 @@ import {validateAgentCommand,type AgentCommand,type AgentCommandResult} from './
 /** Local, private, unsynced mailbox. One plugin instance consumes it. */
 export class NoteCommandServer {
   private stopped=false;private work?:Promise<void>;private stopTimer:()=>void;
+  get active(){return !this.stopped;}
   private constructor(private base:string,private release:()=>Promise<void>,private execute:(command:AgentCommand)=>Promise<AgentCommandResult>,private ready:()=>boolean,private onStopped?:()=>void){
     this.stopTimer=desktopInterval(()=>void this.tick().catch(()=>{}),250);
   }

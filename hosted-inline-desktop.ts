@@ -40,6 +40,8 @@ export class DesktopInlineHost {
   private work=new Set<Promise<void>>();
   private opening=new Map<string,Promise<ThreadAccess>>();
   private stopped=false;
+  private closing?:Promise<void>;
+  get active(){return !this.stopped;}
   private accesses=new Map<string,{access:ThreadAccess;expires:number}>();
   private constructor(private release:()=>Promise<void>,app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},files:ReturnType<typeof localInlineFiles>,access:(environmentId:string)=>Promise<ThreadAccess>){
     this.authority=new InlineLeaseAuthority(identity,files);
@@ -92,5 +94,15 @@ export class DesktopInlineHost {
   tick(){if(this.stopped)return Promise.resolve();const scan=this.scanWork??=this.coordinated.scan();void scan.finally(()=>{if(this.scanWork===scan)this.scanWork=undefined;}).catch(()=>{});const work=scan.then(()=>Promise.all([this.writer.tick(),this.nativeWriter.tick()])).then(()=>{});this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});return work;}
   renamed(before:string,after:string){this.writer.renamed(before,after);this.nativeWriter?.renamed(before,after);this.authority.renamed(before,after);if(this.coordinated){const work=this.coordinated.renamed(before,after);this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});}}
   deleted(path:string){this.authority.deleted(path);}
-  dispose(){if(this.stopped)return;this.stopped=true;this.stopAuthorityTimer();this.coordinated?.stop();this.authority.stop();this.writer.stop();this.nativeWriter?.stop();void (async()=>{try{await Promise.allSettled([...this.work,this.authority.tick()]);}catch{}finally{for(const {access} of this.accesses.values())await access.close?.();this.accesses.clear();await this.release();}})().catch(()=>{});}
+  dispose(){
+    if(this.closing)return this.closing;
+    this.stopped=true;this.stopAuthorityTimer();this.coordinated?.stop();this.authority.stop();this.writer.stop();this.nativeWriter?.stop();
+    this.closing=(async()=>{
+      try{
+        await Promise.allSettled([...this.work,this.authority.tick()]);
+        await Promise.allSettled([...this.accesses.values()].map(({access})=>Promise.resolve().then(()=>access.close?.())));
+      }finally{this.accesses.clear();await this.release();}
+    })();
+    void this.closing.catch(()=>{});return this.closing;
+  }
 }

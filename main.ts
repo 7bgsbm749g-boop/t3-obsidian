@@ -130,6 +130,7 @@ export default class SendToT3 extends Plugin {
   private inlineHostService?:import('./hosted-inline-desktop').DesktopInlineHost;
   private inlineHostKey='';
   private inlineHostRefresh?:Promise<void>;
+  private noteCommandOpening?:Promise<void>;
   private inlineEnvironment?:Promise<string>;
   private eventLocalEnvironmentId?:string;
   private mobileSelectionAction?:{dispose():void};
@@ -182,12 +183,8 @@ export default class SendToT3 extends Plugin {
     if(typeof this.registerEditorExtension==='function'){const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)));}
     this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>nativeResponses(this.app).receive(record,proof),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:environmentId=>this.inlineThreadAccess(environmentId),importReplyAsset:(reference,request,access)=>importReplyAsset(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
     if(!Platform.isMobile)this.app.workspace.onLayoutReady(()=>{
-      const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
-      if(root)void import('./note-command-desktop').then(module=>module.NoteCommandServer.open(root,this.app.vault.configDir||'.obsidian',command=>this.executeAgentCommand(command),()=>!this.stopped&&!this.busy)).then(async server=>{
-        if(this.stopped){await server.dispose();return;}this.noteCommandServer=server;
-        try{await this.refreshEventHost();}catch(error){new Notice(`T3 subscriptions: ${message(error)}`,10000);}
-      }).catch(error=>new Notice(`T3 note commands: ${message(error)}`,10000));
-      this.registerInlineInterval(()=>void this.refreshEventHost().catch(()=>{}),5000);
+      const refresh=()=>{void this.refreshNoteCommandHost().catch(()=>{});void this.refreshEventHost().catch(()=>{});};
+      refresh();this.registerInlineInterval(refresh,5000);
     });
     this.addCommand({id:'resolve-native-response-conflict',name:'Resolve response view conflict…',checkCallback:checking=>{const active=this.app.workspace.getActiveViewOfType(MarkdownView),view=active?.file?nativeResponses(this.app).conflictedView(active.file.path):undefined;if(!view)return false;if(!checking)new NativeConflictModal(this.app,view).open();return true;}});
     this.addCommand({id:'send-note-to-multiple-notes',name:'Send note with streaming destinations…',checkCallback:checking=>{
@@ -979,6 +976,19 @@ export default class SendToT3 extends Plugin {
       if(!this.stopped)this.register(desktopInterval(callback,milliseconds));
     });
   }
+  private async refreshNoteCommandHost():Promise<void>{
+    if(Platform.isMobile||this.stopped)return;
+    if(this.noteCommandOpening)return this.noteCommandOpening;
+    const work=(async()=>{
+      if(this.noteCommandServer?.active)return;
+      const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
+      if(!root)return;
+      const {NoteCommandServer}=await import('./note-command-desktop');
+      const server=await NoteCommandServer.open(root,this.app.vault.configDir||'.obsidian',command=>this.executeAgentCommand(command),()=>!this.stopped&&!this.busy);
+      if(this.stopped){await server.dispose();return;}this.noteCommandServer=server;
+    })();
+    this.noteCommandOpening=work;try{await work;}finally{if(this.noteCommandOpening===work)this.noteCommandOpening=undefined;}
+  }
   private async refreshInlineHost():Promise<void>{
     if(Platform.isMobile||this.stopped)return;
     if(this.inlineHostRefresh)return this.inlineHostRefresh;
@@ -989,7 +999,10 @@ export default class SendToT3 extends Plugin {
       // environment and vault path. A new default host does not strand jobs
       // already handed to the old host.
       const key=localRoot?JSON.stringify([localRoot,this.settings.vaultId,this.app.vault.configDir]):'';
-      if(this.inlineHostKey!==key){this.inlineHostService?.dispose();this.inlineHostService=undefined;this.inlineHostKey='';}
+      if(this.inlineHostService&&(!this.inlineHostService.active||this.inlineHostKey!==key)){
+        const previous=this.inlineHostService;this.inlineHostService=undefined;this.inlineHostKey='';
+        await previous.dispose().catch(()=>{});
+      }
       if(!key||!localRoot||this.inlineHostService)return;
       const environmentId=await this.localInlineEnvironment();
       if(this.stopped)return;
