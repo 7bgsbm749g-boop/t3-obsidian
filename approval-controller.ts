@@ -1,5 +1,5 @@
 import {logEvent,logFailure} from './diagnostics';
-import {approvalKey,pendingApprovals,staleApprovalFailure,type ApprovalTarget,type ApprovalDecision,type PendingApproval} from './approvals';
+import {approvalKey,pendingApprovals,closedThreadApprovals,staleApprovalFailure,type ApprovalTarget,type ApprovalDecision,type PendingApproval} from './approvals';
 import type {InlineActivity} from './inline-thread';
 import type {ThreadAccess} from './thread-stream';
 
@@ -55,11 +55,11 @@ export class ApprovalController {
       const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(first.threadId)}`);
       if(snapshot?.thread?.id!==first.threadId||!Array.isArray(snapshot.thread.activities))throw Error('T3 returned an invalid approval snapshot.');
       if(this.stopped)return;
-      const activities:InlineActivity[]=snapshot.thread.activities,pending=pendingApprovals(activities);
+      const activities:InlineActivity[]=snapshot.thread.activities,pending=pendingApprovals(activities),closed=closedThreadApprovals(snapshot.thread);
       for(const target of targets){
         const key=approvalKey(target),record=this.record(target),request=pending.find(a=>a.requestId===target.requestId&&a.kind==='command');
         const related=activities.filter(a=>a.payload?.requestId===target.requestId);
-        const terminal=related.some(a=>a.kind==='approval.resolved'||staleApprovalFailure(a));
+        const terminal=closed.has(target.requestId)||related.some(a=>a.kind==='approval.resolved'||staleApprovalFailure(a));
         const failure=related.find(a=>a.kind==='provider.approval.respond.failed'&&!staleApprovalFailure(a)&&record.command&&!record.failureIds?.includes(a.id));
         if(terminal||record.resolved){record.resolved=true;delete record.command;delete record.failureIds;delete record.uncertain;this.views.set(key,{status:'resolved',fresh:true});}
         else if(failure){delete record.command;delete record.failureIds;delete record.uncertain;this.views.set(key,{request,status:'error',fresh:true,detail:String(failure.payload?.detail??'T3 could not apply the decision. Try again.')});}
@@ -89,7 +89,7 @@ export class ApprovalController {
         const snapshot=await access.api(`/api/orchestration/threads/${encodeURIComponent(target.threadId)}`);
         if(snapshot?.thread?.id!==target.threadId||!Array.isArray(snapshot.thread.activities))throw Error('T3 returned an invalid approval snapshot.');
         const activities:InlineActivity[]=snapshot.thread.activities;
-        if(this.stopped||record.resolved||!pendingApprovals(activities).some(a=>a.requestId===target.requestId&&a.kind==='command')){await this.refresh([target]);return;}
+        if(this.stopped||record.resolved||closedThreadApprovals(snapshot.thread).has(target.requestId)||!pendingApprovals(activities).some(a=>a.requestId===target.requestId&&a.kind==='command')){await this.refresh([target]);return;}
         record.command={type:'thread.approval.respond',commandId:this.newId(),threadId:target.threadId,requestId:target.requestId,decision,createdAt:this.now()};
         record.uncertain=true;
         // Existing failures must not be mistaken for failures of this new command.

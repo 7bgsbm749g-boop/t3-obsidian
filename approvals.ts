@@ -20,6 +20,12 @@ export function pendingApprovals(activities:InlineActivity[]):PendingApproval[]{
   }
   return [...pending.values()];
 }
+/** A stopped session cannot apply its old decisions, even if T3 retains pending activities. */
+export function closedThreadApprovals(thread:{activities:InlineActivity[];session?:{status:string}|null;latestTurn?:{turnId:string;state:string}|null}):Set<string>{
+  const stopped=thread.session?.status==='stopped'||thread.session?.status==='interrupted';
+  const turn=thread.latestTurn,terminal=turn&&['completed','interrupted','cancelled'].includes(turn.state);
+  return new Set(pendingApprovals(thread.activities).filter(request=>stopped||terminal&&request.turnId===turn.turnId).map(request=>request.requestId));
+}
 export const approvalUrl=(target:ApprovalTarget,decision:ApprovalDecision)=>`t3-approval:${questionToken(target)}/${decision}`;
 export function parseApprovalUrl(url:string):{target:ApprovalTarget;decision:ApprovalDecision}|undefined {
   const match=/^t3-approval:([^\s]+)\/(accept|decline)$/.exec(url);

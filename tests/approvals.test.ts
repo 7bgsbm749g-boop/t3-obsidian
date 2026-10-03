@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {pendingApprovals,approvalTargets,approvalUrl,parseApprovalUrl,renderApproval,clearApprovalControls,type ApprovalTarget} from '../approvals';
+import {pendingApprovals,closedThreadApprovals,approvalTargets,approvalUrl,parseApprovalUrl,renderApproval,clearApprovalControls,type ApprovalTarget} from '../approvals';
 import {ApprovalController,type ApprovalRecord} from '../approval-controller';
 import {renderInlineTurn} from '../inline-thread';
 import {stoppedResponseBody} from '../response-stop';
@@ -38,6 +38,43 @@ test('all presentation modes show each pending command once and remove resolved 
     const done=renderInlineTurn({...state,activities:[...state.activities,resolved(),resolved('second'),resolved('file')]},'turn',target.threadId,'running',mode,target.environmentId);
     assert.doesNotMatch(done,/Action needed|t3-approval:/);
   }
+});
+
+test('terminal responses never materialize stale approval controls in any presentation',()=>{
+  const state={messages:[],activities:[opened()]};
+  for(const mode of ['remove','keep','collapse'] as const)for(const phase of ['interrupted','cancelled','complete'] as const){
+    const text=renderInlineTurn(state,'turn',target.threadId,phase,mode,target.environmentId);
+    assert.doesNotMatch(text,/Action needed|t3-approval:/);
+  }
+});
+
+test('closed turns clear only their approvals while stopped sessions clear their abandoned requests',()=>{
+  const thread={activities:[opened(),opened('new','later')],session:{status:'running'},latestTurn:{turnId:'turn',state:'interrupted'}};
+  assert.deepEqual([...closedThreadApprovals(thread)],[target.requestId]);
+  assert.deepEqual([...closedThreadApprovals({...thread,latestTurn:{turnId:'later',state:'running'}})],[]);
+  assert.deepEqual([...closedThreadApprovals({...thread,session:{status:'stopped'}})],[target.requestId,'new']);
+});
+
+test('stopped-session controls are cleaned after restart and cannot dispatch a stale decision',async()=>{
+  let saved:ApprovalRecord[]=[{target,command:{type:'thread.approval.respond',commandId:'old',threadId:target.threadId,requestId:target.requestId,decision:'accept',createdAt:'2026-10-03T14:00:00Z'},uncertain:true}];
+  const dispatched:any[]=[];
+  const access=async()=>({origin:'https://example',api:async(_path:string,payload?:any)=>{if(payload)dispatched.push(payload);return {thread:{id:target.threadId,activities:[opened(),failure('No active provider session is bound to this thread.')],session:{status:'stopped'},latestTurn:{turnId:'turn',state:'interrupted'}}};}});
+  const controller=new ApprovalController(access,{load:()=>saved,save:records=>{saved=structuredClone(records);}},()=> 'new');
+  await controller.refresh([target]);
+  assert.equal(controller.view(target).status,'resolved');assert.equal(saved[0].command,undefined);assert.equal(saved[0].uncertain,undefined);
+  assert.doesNotMatch(clearApprovalControls(renderApproval(pendingApprovals([opened()])[0],target),target),/t3-approval:|Action needed/);
+  await controller.submit(target,'accept');assert.deepEqual(dispatched,[]);
+  controller.dispose();const restarted=new ApprovalController(access,{load:()=>saved,save:()=>{}},()=> 'new');
+  assert.equal(restarted.view(target).status,'resolved');
+});
+
+test('a session stopping between approval refresh and command creation prevents dispatch',async()=>{
+  let reads=0;const dispatched:any[]=[];
+  const controller=new ApprovalController(async()=>({origin:'https://example',api:async(_path:string,payload?:any)=>{
+    if(payload)dispatched.push(payload);
+    return {thread:{id:target.threadId,activities:[opened()],session:{status:++reads===1?'running':'stopped'}}};
+  }}),{load:()=>[],save:()=>{}},()=> 'new');
+  await controller.submit(target,'accept');assert.deepEqual(dispatched,[]);assert.equal(controller.view(target).status,'resolved');
 });
 
 function harness(){

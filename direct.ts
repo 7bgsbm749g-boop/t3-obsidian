@@ -5,7 +5,7 @@ import {proofKey,proof} from './dpop';
 import type {Connection,Request} from './bridge';
 import type {InlineStartRequest} from './inline-thread';
 import {existingThreadTurn} from './thread-target';
-import {readNewThreadModel} from './model-defaults';
+import {readNewThreadDefaults} from './model-defaults';
 export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean}
 export interface PairedSession {token:string;expiresAt:number;environmentId:string;url:string;dpopKeyId?:string;accountId?:string}
 export interface DirectPlan {hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:any;turn:any;observedActiveTurnId?:string;delivery?:InlineStartRequest}
@@ -85,8 +85,8 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
    r.directPlan={hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{
   const shell=await api('shell');const project=shell.projects.find((p:any)=>p.id===r.project.id);if(!project)throw Error('Project no longer exists. Scan this connection again.');
-  const model=await readNewThreadModel(environment,endpoint(r.connection.url||''),project);
-  const common={threadId:commandId(r.id,'thread'),modelSelection:model,runtimeMode:'approval-required',interactionMode:'default',createdAt:new Date().toISOString()};
+  const defaults=await readNewThreadDefaults(environment,endpoint(r.connection.url||''),project);
+  const common={threadId:commandId(r.id,'thread'),...defaults,interactionMode:'default',createdAt:new Date().toISOString()};
   r.directPlan={hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title:r.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
   }
  }

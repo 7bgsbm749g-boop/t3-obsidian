@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
 import {uuid5,canonical,start,cli,parseOperation,requestJson} from '../desktop';
-import {resolveNewThreadModel} from '../model-defaults';
+import {resolveNewThreadDefaults} from '../model-defaults';
 import {modelConfig} from './rpc-fixture';
 const id='98e4d70e-cbd5-4a23-aad0-a50732a59bf2';
 test('native IDs and fingerprints match old durable requests',()=>{
@@ -17,19 +17,20 @@ test('native IDs and fingerprints match old durable requests',()=>{
 test('durable native retry replays identical commands after a lost response',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'native-ledger-'));let fail=true;const calls:any[]=[];
  const config=modelConfig();let reads=0;
- const loadModel=async(project:any)=>{reads++;return resolveNewThreadModel(config,project);};
- const api=async(path:string,payload?:any)=>{if(path==='shell')return {projects:[{id:'p',defaultModelSelection:{instanceId:'codex',model:'stale'}}],threads:[{projectId:'unrelated',runtimeMode:'full-access',updatedAt:'2026-09-19',modelSelection:{instanceId:'codex',model:'gpt-6-astra',options:[{id:'reasoningEffort',value:'xhigh'}]}}]};calls.push(payload);if(payload.type==='thread.turn.start'&&fail){fail=false;throw Error('lost ack');}return {};};
+ const loadModel=async(project:any)=>{reads++;return resolveNewThreadDefaults(config,project);};
+ const api=async(path:string,payload?:any)=>{if(path==='shell')return {projects:[{id:'p',defaultModelSelection:{instanceId:'codex',model:'stale'}}],threads:[{projectId:'unrelated',runtimeMode:'approval-required',updatedAt:'2026-09-19',modelSelection:{instanceId:'codex',model:'gpt-6-astra',options:[{id:'reasoningEffort',value:'xhigh'}]}}]};calls.push(payload);if(payload.type==='thread.turn.start'&&fail){fail=false;throw Error('lost ack');}return {};};
  const req={action:'start',requestId:id,project:'p',title:'T',prompt:'🧪',attachments:[{id:'i',dataUrl:'data:image/png;base64,YQ=='}],context:{version:1}};
  try{
  await assert.rejects(start(api,req,dir,loadModel),/lost ack/);
- assert.equal(calls[0].runtimeMode,'approval-required');assert.equal(calls[1].runtimeMode,'approval-required');assert.deepEqual(calls[0].modelSelection,config.settings.defaultModelSelection);assert.deepEqual(calls[1].modelSelection,calls[0].modelSelection);
+ assert.equal(calls[0].runtimeMode,'full-access');assert.equal(calls[1].runtimeMode,'full-access');assert.deepEqual(calls[0].modelSelection,config.settings.defaultModelSelection);assert.deepEqual(calls[1].modelSelection,calls[0].modelSelection);
  config.settings.defaultModelSelection.model='changed-default';
+ config.settings.defaultRuntimeMode='approval-required';
  const result=await start(api,req,dir);assert.equal(result.phase,'started');assert.equal(calls.length,3);assert.deepEqual(calls[1],calls[2]);assert.deepEqual(calls[2].message.attachments,req.attachments);
  assert.equal(reads,1);
  await start(api,req,dir);assert.equal(calls.length,3);
  const terminal=JSON.parse(await readFile(join(dir,'requests',id+'.json'),'utf8'));assert.equal(terminal.turn,undefined);assert.equal(terminal.create,undefined);assert.ok(terminal.requestHash);
  await assert.rejects(start(api,{...req,prompt:'changed'},dir),/different parameters/);
- await start(api,{...req,requestId:'7619d88f-320d-4882-8824-e45d930715db'},dir,loadModel);assert.equal(calls.at(-1).modelSelection.model,'changed-default');
+ await start(api,{...req,requestId:'7619d88f-320d-4882-8824-e45d930715db'},dir,loadModel);assert.equal(calls.at(-1).modelSelection.model,'changed-default');assert.equal(calls.at(-1).runtimeMode,'approval-required');
  }finally{await rm(dir,{recursive:true,force:true});}
 });
 test('native settings failures leave no plan and retry reads the current default',async()=>{
@@ -39,7 +40,7 @@ test('native settings failures leave no plan and retry reads the current default
  try{
   await assert.rejects(start(api,req,dir,async()=>{throw Error('Settings unavailable');}),/Settings unavailable/);
   assert.equal(calls.length,0);
-  await start(api,req,dir,async project=>resolveNewThreadModel(modelConfig(),project));
+  await start(api,req,dir,async project=>resolveNewThreadDefaults(modelConfig(),project));
   assert.equal(calls.length,2);assert.equal(calls[0].modelSelection.model,'gpt-5.6-sol');
  }finally{await rm(dir,{recursive:true,force:true});}
 });

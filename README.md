@@ -86,7 +86,7 @@ Desktop users can choose **This computer only (advanced)** to use local T3 witho
 
 The destination must remain online. There is no offline queue or automatic resend. An interrupted send is saved for **manual Retry** with its exact original commands, preventing duplicate threads after a lost response. Completion monitoring uses the same connection while Obsidian is active.
 
-New threads use the selected machine's T3 model defaults: an explicit project override takes precedence over the environment default. Configured model options, including reasoning effort, are preserved; previous threads do not supply the model or reasoning settings. If T3 is set to automatic selection, the plugin uses an enabled provider's advertised default model. New threads always use approval-required runtime permissions; they never inherit permissions from previous threads in any project. Existing-thread sends retain that conversation's model and permissions. Saved retries replay their original model and commands even if defaults have since changed.
+New threads use the selected machine's T3 model and access defaults: an explicit project override takes precedence over the environment default. Configured model options, including reasoning effort, are preserved; previous threads do not supply model, reasoning, or access settings. If T3 is set to automatic model selection, the plugin uses an enabled provider's advertised default model. When an older T3 configuration omits the access setting, new threads use T3's Full Access default. Existing-thread sends retain that conversation's model and permissions. Saved retries replay their original model, access mode, and commands even if defaults have since changed.
 
 ## What belongs to T3, and what belongs to this plugin?
 

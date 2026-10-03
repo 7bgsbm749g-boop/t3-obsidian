@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 export function modelConfig(){return {
-  settings:{defaultModelSelection:{instanceId:'codex',model:'gpt-5.6-sol'},projectSettingsFolded:true,projectSettingsOverrides:{}},
+  settings:{defaultModelSelection:{instanceId:'codex',model:'gpt-5.6-sol'},defaultRuntimeMode:'full-access',projectSettingsFolded:true,projectSettingsOverrides:{}},
   providers:[{instanceId:'codex',enabled:true,status:'ready',models:[{slug:'automatic-model',isDefault:true}]}],
 };}
 

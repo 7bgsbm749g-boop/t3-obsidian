@@ -451,7 +451,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null||conversation?.messages.some(m=>m.turnId===request.turnId)).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
-  const approvals=phase!=='complete'?pendingApprovals(state.activities).filter(request=>request.turnId===turnId).map(request=>environmentId&&request.kind==='command'?renderApproval(request,{environmentId,threadId,requestId:request.requestId}):'Action needed in T3: '+safeStatus(request.summary)).join('\n\n'):'';
+  const approvals=!['complete','interrupted','cancelled'].includes(phase)?pendingApprovals(state.activities).filter(request=>request.turnId===turnId).map(request=>environmentId&&request.kind==='command'?renderApproval(request,{environmentId,threadId,requestId:request.requestId}):'Action needed in T3: '+safeStatus(request.summary)).join('\n\n'):'';
   const input=initialInput?`${renderInlineInput(initialInput.text,initialInput.label)}\n\n`:'';
   if(mode==='collapse'){
     const pieces=steeringSegments(all,conversation?.steering.filter(item=>item.confirmed)??[]);

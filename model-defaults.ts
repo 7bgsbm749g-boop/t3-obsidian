@@ -1,6 +1,8 @@
 import {connectT3Rpc,type T3Api,type SocketFactory} from './t3-rpc';
 
 export interface ModelSelection {instanceId:string;model:string;options?:{id:string;value:unknown}[]}
+export type RuntimeMode='approval-required'|'auto-accept-edits'|'auto'|'full-access';
+export interface NewThreadDefaults {modelSelection:ModelSelection;runtimeMode:RuntimeMode}
 interface Provider {instanceId:string;enabled:boolean;availability?:string;status:string;models:{slug:string;isDefault?:boolean;isCustom?:boolean}[]}
 interface Project {id:string;defaultModelSelection?:ModelSelection|null}
 
@@ -28,6 +30,22 @@ export function resolveNewThreadModel(config:any,project:Project):ModelSelection
   const model=models.find(m=>m.isDefault&&!m.isCustom)?.slug??models.find(m=>!m.isCustom)?.slug??models[0]?.slug;
   if(!provider||!model)throw Error('No default model is available on this T3 machine. Choose an enabled provider and default model in T3 settings, then retry.');
   return {instanceId:provider.instanceId,model};
+}
+
+/** Use the same project/environment access setting as T3's new-thread UI.
+ * Older configurations omit this key; T3's own default is Full Access. */
+export function resolveNewThreadDefaults(config:any,project:Project):NewThreadDefaults {
+  const modelSelection=resolveNewThreadModel(config,project);
+  const overrides=config.settings.projectSettingsOverrides?.[project.id];
+  const runtimeMode=overrides?.defaultRuntimeMode!==undefined?overrides.defaultRuntimeMode:config.settings.defaultRuntimeMode!==undefined?config.settings.defaultRuntimeMode:'full-access';
+  if(!['approval-required','auto-accept-edits','auto','full-access'].includes(runtimeMode))throw Error('T3 returned an invalid access default. Choose an access mode in T3 settings and retry.');
+  return {modelSelection,runtimeMode};
+}
+
+export async function readNewThreadDefaults(api:T3Api,origin:string,project:Project,makeSocket?:SocketFactory):Promise<NewThreadDefaults>{
+  const rpc=await connectT3Rpc(api,origin,makeSocket);
+  try{return resolveNewThreadDefaults(await rpc.call('server.getConfig',{}),project);}
+  finally{rpc.close();}
 }
 
 export async function readNewThreadModel(api:T3Api,origin:string,project:Project,makeSocket?:SocketFactory):Promise<ModelSelection>{

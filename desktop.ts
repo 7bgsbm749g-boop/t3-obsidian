@@ -10,7 +10,7 @@ import lockfile from 'proper-lockfile';
 import type {Connection} from './bridge';
 import type {ThreadAccess} from './thread-stream';
 import {existingThreadTurn} from './thread-target';
-import {readNewThreadModel,type ModelSelection} from './model-defaults';
+import {readNewThreadDefaults,type NewThreadDefaults} from './model-defaults';
 
 export function desktopDefaults():Connection {return {executable:'',host:'local',native:true,baseDir:join(homedir(),'.t3')};}
 export function cli(command:string[],args:string[]):Promise<string> {
@@ -77,7 +77,7 @@ export function requestJson(origin:string,token:string,path:string,payload?:any)
 }
 async function save(path:string,value:any){const temp=path+'.tmp';const f=await fs.open(temp,'w',0o600);try{await f.writeFile(JSON.stringify(value));await f.sync();}finally{await f.close();}await fs.rename(temp,path);}
 const locks=new Map<string,Promise<any>>();
-export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any,stateDir:string,loadModel?:(project:any)=>Promise<ModelSelection>){
+export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any,stateDir:string,loadDefaults?:(project:any)=>Promise<NewThreadDefaults>){
  const id=req.requestId;const path=join(stateDir,'requests',id+'.json');
  if(locks.has(path))throw new Error('This request is in progress. Retry its original ID later.');
  const work=(async()=>{
@@ -95,10 +95,10 @@ export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any
     await save(path,ledger);
    }else{
    const shell=await api('shell');const project=shell.projects.find((p:any)=>p.id===req.project);if(!project)throw new Error('Project no longer exists. Scan projects again.');
-   if(!loadModel)throw new Error('Cannot read T3 model defaults. Retry from the updated plugin.');
-   const model=await loadModel(project);
-   const runtime='approval-required';const stamp=new Date().toISOString();const threadId=uuid5(id,'thread');
-   const common={threadId,modelSelection:model,runtimeMode:runtime,interactionMode:'default',createdAt:stamp};
+   if(!loadDefaults)throw new Error('Cannot read T3 thread defaults. Retry from the updated plugin.');
+   const defaults=await loadDefaults(project);
+   const stamp=new Date().toISOString();const threadId=uuid5(id,'thread');
+   const common={threadId,...defaults,interactionMode:'default',createdAt:stamp};
    ledger={requestHash:hash,requestId:id,threadId,project,phase:'prepared',create:{...common,type:'thread.create',commandId:uuid5(id,'create'),projectId:project.id,title:req.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:uuid5(id,'turn'),message:{messageId:uuid5(id,'message'),role:'user',text:req.prompt,attachments:req.attachments??[],...(req.context?{context:req.context}:{})}}};await save(path,ledger);
    }
   }
@@ -124,7 +124,7 @@ export async function runDesktop(connection:Connection,args:string[],input=''):P
   try{session=JSON.parse(issued);}catch{throw new Error('Invalid T3 session response; credential output withheld.');}
   if(!session.token || !session.sessionId)throw new Error('Unexpected T3 session response.');
   const api=(path:string,payload?:any)=>requestJson(runtime.origin,session.token,path,payload);
-  if(req.action==='start')return await start(api,req,connection.stateDir||join(base,'send-to-t3-code','desktop'),project=>readNewThreadModel(api,runtime.origin,project));
+  if(req.action==='start')return await start(api,req,connection.stateDir||join(base,'send-to-t3-code','desktop'),project=>readNewThreadDefaults(api,runtime.origin,project));
   if(req.action==='read')return (await api('threads/'+encodeURIComponent(req.threadId)+'?turnLimit=10')).thread;
   const shell=await api('shell');if(req.action==='projects')return {projects:shell.projects};
   return {threads:shell.threads.filter((t:any)=>t.projectId===req.project)};
