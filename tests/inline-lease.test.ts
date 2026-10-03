@@ -589,3 +589,27 @@ test('an independent mid-run destination recovers from acknowledged delivery wit
     assert.equal(record().state.status,'complete');assert.equal(record().state.cleanupComplete,true);assert.equal(record().epoch,1);assert.match(device.document.value,/Mid-run final/);assert.doesNotMatch(device.document.value,/Working|<!-- t3-(?:inline|response):/);
   }finally{h.dispose();}
 });
+
+test('a competing device waits for the denied grant expiry instead of sending another claim every heartbeat',async()=>{
+  const h=devices(),owner=h.create(h.actor),other=h.create(randomUUID());
+  try{
+    await owner.manager.register(h.request);await h.drain(owner.manager);
+    await other.manager.register(h.request);h.advance(3000);await h.drain(other.manager);
+    const claimed=()=>[...h.data.values()].map(raw=>JSON.parse(raw)).filter(value=>value.error==='Another writer still owns this response.').length;
+    const before=claimed();assert.ok(before>0);
+    for(let n=0;n<3;n++){h.advance(3000);await h.drain(owner.manager,other.manager);}
+    assert.equal(claimed(),before,'denied writer waits for the grant that blocked it');
+  }finally{h.dispose();}
+});
+
+test('a device that reads a newly migrated native record does not send a legacy ownership claim',async()=>{
+  const h=devices(),owner=h.create(h.actor),other=h.create(randomUUID());
+  try{
+    await owner.manager.register(h.request);await h.drain(owner.manager);
+    await other.manager.register(h.request);
+    const key=leasePaths(h.request.host.directory,h.request.id).record,record=h.record();
+    h.data.set(key,JSON.stringify({...record,coordinated:true,owner:'00000000-0000-5000-8000-000000000001',expiresAt:Number.MAX_SAFE_INTEGER,epoch:record.epoch+1}));
+    h.advance(3000);await h.drain(other.manager);
+    assert.equal([...h.data.values()].map(raw=>JSON.parse(raw)).filter(value=>value.error==='Generated changes are coordinated by the host.').length,0);
+  }finally{h.dispose();}
+});

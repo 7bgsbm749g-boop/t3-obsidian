@@ -26,7 +26,7 @@ export interface DeviceInlineIO {
   importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
 type SnapshotRefresh={epoch:number;startedAt:number;work:Promise<InlineThreadState|undefined>;cancel(error:Error):void};
-type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void}};
+type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;maintenanceFailures?:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void}};
 type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;close():void;discovery?:Promise<void>;lastDiscovery:number;responses:ExplorerResponse[]};
 const hostKey=(target:InlineHostTarget)=>JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);
 const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...state,updatedAt:''}):'';
@@ -173,7 +173,15 @@ export class DeviceInlineManager {
     });
     this.jobs.set(record.request.id,runtime);
   }
-  private reply(runtime:Runtime,reply:LeaseReply){if(reply.record)this.receiveRecord(runtime.host,reply.record);}
+  private reply(runtime:Runtime,reply:LeaseReply){
+    if(reply.record)this.receiveRecord(runtime.host,reply.record);
+    if(reply.ok)runtime.maintenanceFailures=0;
+    else {
+      runtime.maintenanceFailures=(runtime.maintenanceFailures??0)+1;
+      const delay=Number.isFinite(reply.retryAfterMs)?Math.max(HEARTBEAT_MS,Math.min(30_000,reply.retryAfterMs!)):Math.min(30_000,HEARTBEAT_MS*2**Math.min(runtime.maintenanceFailures,4));
+      runtime.lastHeartbeat=this.now()+delay-HEARTBEAT_MS;
+    }
+  }
   private owns(runtime:Runtime){return !this.stopped&&!runtime.record.stopRequestedAt&&runtime.record.owner===this.actor&&runtime.host.client.valid(runtime.record.request.id,runtime.record.epoch);}
   /** Driven by the same desktop tick as lease renewal, independently of the
    * stream's browser polling/reconnect timers and cached running/complete phase.
@@ -223,6 +231,8 @@ export class DeviceInlineManager {
     for(const runtime of this.jobs.values()){
       const {record,host}=runtime,id=record.request.id;
       if(record.coordinated){
+        runtime.refresh?.cancel(Error('Generated changes are coordinated by the host.'));runtime.monitor?.stop();runtime.monitor=undefined;runtime.writer.stop();
+        if(record.state?.cleanupComplete&&record.state.delivery?.observedBy.includes(this.actor)){this.jobs.delete(id);continue;}
         if(!runtime.heartbeat&&this.now()-runtime.lastHeartbeat>=1000){runtime.lastHeartbeat=this.now();const work=this.observeCoordinated(runtime);runtime.heartbeat=work;void work.finally(()=>runtime.heartbeat=undefined).catch(()=>{});}
         continue;
       }
@@ -230,7 +240,10 @@ export class DeviceInlineManager {
       const owns=record.owner===this.actor&&host.client.valid(id,record.epoch);
       if(!runtime.heartbeat&&this.now()-runtime.lastHeartbeat>=HEARTBEAT_MS){
         runtime.lastHeartbeat=this.now();
-        const work=this.maintain(runtime);runtime.heartbeat=work;void work.finally(()=>{runtime.heartbeat=undefined;}).catch(()=>{});
+        const work=this.maintain(runtime).catch(()=>{
+          runtime.maintenanceFailures=(runtime.maintenanceFailures??0)+1;
+          runtime.lastHeartbeat=this.now()+Math.min(30_000,HEARTBEAT_MS*2**Math.min(runtime.maintenanceFailures,4))-HEARTBEAT_MS;
+        });runtime.heartbeat=work;void work.finally(()=>{runtime.heartbeat=undefined;}).catch(()=>{});
       }
       if(!owns){runtime.refresh?.cancel(Error('Response ownership changed.'));runtime.monitor?.stop();runtime.monitor=undefined;runtime.state=undefined;runtime.sequence=-1;runtime.nextSnapshot=0;continue;}
       if(record.stopRequestedAt){runtime.refresh?.cancel(Error('Response stopped.'));runtime.monitor?.stop();runtime.monitor=undefined;runtime.writer.requestStop(id);}
@@ -269,6 +282,7 @@ export class DeviceInlineManager {
     const raw=await host.files.read(leasePaths(host.target.directory,record.request.id).record);
     if(!raw||this.stopped)return;
     record=JSON.parse(raw);this.receiveRecord(host,record);
+    if(record.coordinated)return;
     if(terminalLease(record))return;
     const renewing=record.owner===this.actor&&host.client.valid(record.request.id,record.epoch);
     // A healthy owner retains its grant while a move is arriving through Sync.

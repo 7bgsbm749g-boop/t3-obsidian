@@ -113,3 +113,20 @@ test('one desktop host owns a vault and writes closed notes while deferring unsa
   }finally{host.dispose();for(let n=0;n<30&&!closed;n++)await new Promise(r=>setTimeout(r,10));await rm(root,{recursive:true,force:true});}
   assert.equal(closed,true);
 });
+
+test('real desktop storage acknowledges a first native registration while 400 legacy claims and 417 historical leases remain',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3-backlog-')),directory='.obsidian/t3-code/inline/v1',identity={workspaceRoot:root,directory,environmentId:'host',vaultId:'vault'},files=localInlineFiles(root,directory),actor=randomUUID(),id=randomUUID();
+  const request:HostedInlineRequest={version:2,nativeProjection:true,independent:true,id,initialOwner:actor,vaultId:identity.vaultId,host:identity,notePath:'New.md',threadId:randomUUID(),messageId:randomUUID(),projectId:'p',threadEnvironmentId:'host',initialHash:initialRegion(id).bodyHash,createdAt:new Date().toISOString()};
+  const legacyIds:string[]=[];
+  await Promise.all(Array.from({length:417},async(_,n)=>{const old={...request,id:randomUUID(),nativeProjection:false,notePath:`Old-${n}.md`};legacyIds.push(old.id);await files.write(leasePaths(directory,old.id).record,JSON.stringify({request:old,owner:randomUUID(),epoch:1,revision:0,expiresAt:0,state:{requestHash:'0'.repeat(64),accepted:true,notePath:old.notePath,status:n<390?'complete':'running',hashes:[],updatedAt:'',body:'Historical answer '.repeat(400)}}));}));
+  await Promise.all(Array.from({length:400},async(_,n)=>{const commandId=randomUUID();await files.write(leasePaths(directory,commandId).command,JSON.stringify({id:commandId,jobId:legacyIds[390+n%27],actor:randomUUID(),kind:'claim'}));}));
+  const app:any={workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:()=>undefined}};
+  const host=await DesktopInlineHost.open(app,identity,async()=>{throw Error('No external delivery in this storage test.');});
+  const {InlineLeaseClient}=await import('../inline-lease');const client=new InlineLeaseClient(actor,files,directory,undefined,undefined,ms=>pause(ms));
+  try{
+    const started=performance.now();let timeout:ReturnType<typeof setTimeout>|undefined;
+    const reply=await Promise.race([client.command({kind:'register',jobId:id,request}),new Promise<never>((_,reject)=>{timeout=setTimeout(()=>reject(Error('First native registration exceeded the existing send deadline.')),4500);})]).finally(()=>{if(timeout)clearTimeout(timeout);});
+    assert.equal(reply.ok,true);assert.ok(performance.now()-started<4500);assert.equal(reply.record?.coordinated,true);
+    assert.ok((await files.list(directory+'/mailbox')).length>300,'first send succeeds before draining legacy claims');
+  }finally{client.dispose();host.dispose();await pause(200);await rm(root,{recursive:true,force:true});}
+});

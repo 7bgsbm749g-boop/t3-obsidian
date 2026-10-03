@@ -12,7 +12,7 @@ export type LeaseIdentity={vaultId:string;environmentId:string;workspaceRoot:str
 export const COORDINATED_OWNER="00000000-0000-5000-8000-000000000001";
 export interface LeaseRecord {coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;stopRequestedAt?:number;state?:HostedInlineState}
 export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
-export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;ttlMs:number;answeredAt?:number}
+export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;ttlMs:number;answeredAt?:number;retryAfterMs?:number}
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export const leasePaths=(directory:string,id:string)=>({record:`${directory}/leases/${id}.json`,command:`${directory}/mailbox/${id}.json`,reply:`${directory}/replies/${id}.json`,catalog:`${directory}/lease-catalog.json`});
@@ -25,10 +25,13 @@ export class InlineLeaseAuthority {
   private stopped=false;
   private recovered=false;
   private explorerResponses:ExplorerResponse[]=[];
+  private records=new Map<string,LeaseRecord>();
+  private catalog=new Map<string,HostedInlineRequest>();
+  private explorerDirty=false;private catalogDirty=false;
   private relocations:Array<{before:string;after?:string}>=[];
   renamed(before:string,after:string){this.relocations.push({before,after});}
   deleted(before:string){this.relocations.push({before});}
-  private lastCleanup=0;
+  private lastCleanup=0;private cleanupCursor=0;
   private scanFailed=false;private lastScanFailure=0;
   constructor(private identity:LeaseIdentity,private files:LeaseFiles,private now=()=>Date.now()){}
   stop(){this.stopped=true;}
@@ -44,11 +47,16 @@ export class InlineLeaseAuthority {
     const directory=this.identity.directory;
     if(!this.recovered){
       try{this.explorerResponses=loadExplorerResponses(JSON.parse((await this.files.read(explorerResponsePath(directory)))??'[]'));}catch{this.explorerResponses=[];}
+      const catalog=JSON.parse((await this.files.read(leasePaths(directory,'').catalog))??'[]') as HostedInlineRequest[];
+      this.catalog=new Map(catalog.map(request=>[request.id,request]));
       // Repair a crash between the durable grant and its discovery index.
+      // Build both indexes once; rewriting them for every historical lease
+      // delays the first interactive registration after a cold start.
       for(const path of await this.files.list(`${directory}/leases`)){
         if(this.stopped)return;
-        const raw=await this.files.read(path);if(raw)await this.publishCatalog(JSON.parse(raw));
+        const raw=await this.files.read(path);if(raw)this.indexRecord(JSON.parse(raw));
       }
+      await this.flushIndexes();
       this.recovered=true;
     }
     while(this.relocations.length){
@@ -57,20 +65,23 @@ export class InlineLeaseAuthority {
       await this.files.write(explorerResponsePath(directory),JSON.stringify(next));
       this.explorerResponses=next;this.relocations.shift();
     }
-    if(this.now()-this.lastCleanup>30_000){
-      this.lastCleanup=this.now();
-      for(const path of await this.files.list(`${directory}/replies`)){
-        if(this.stopped)return;
-        const raw=await this.files.read(path);if(!raw)continue;
-        try{const reply:LeaseReply=JSON.parse(raw);if(reply.answeredAt!==undefined&&reply.answeredAt<this.now()-60_000&&!await this.files.read(leasePaths(directory,reply.id).command))await this.files.remove(path);}catch{/* Leave unfamiliar files alone. */}
-      }
-    }
     const mailbox=await this.files.list(`${directory}/mailbox`);
+    const commands:Array<{path:string;command:LeaseCommand}>=[];
     for(const path of mailbox){
       if(this.stopped)return;
       let command:LeaseCommand;
       try{command=JSON.parse((await this.files.read(path))??'');}catch{continue;}
       if(![command.id,command.jobId,command.actor].every(value=>uuid.test(value))||path!==leasePaths(directory,command.id).command)continue;
+      commands.push({path,command});
+    }
+    // A legacy claim backlog must not gate sends or hold the authority lock
+    // for an entire mailbox. Leave background capacity in every batch.
+    const interactive=(command:LeaseCommand)=>!['claim','heartbeat'].includes(command.kind);
+    const foreground=commands.filter(({command})=>interactive(command));
+    const background=commands.filter(({command})=>!interactive(command));
+    const batch=foreground.slice(0,24).concat(background.slice(0,8));
+    for(const {path,command} of batch){
+      if(this.stopped)return;
       const replyPath=leasePaths(directory,command.id).reply;
       if(!await this.files.read(replyPath)){
         const started=this.now(),trace=['register','follow','steer'].includes(command.kind);
@@ -82,6 +93,18 @@ export class InlineLeaseAuthority {
         if(trace||command.kind==='claim'&&reply.ok)logEvent('ownership.coordinator.replied',{...fields,ok:reply.ok,error:reply.error,durationMs:this.now()-started,epoch:reply.record?.epoch,revision:reply.record?.revision,owner:reply.record?.owner},reply.ok?'info':'warning');
       }
       await this.files.remove(path);
+    }
+    // Receipt cleanup is maintenance, never a prerequisite for answering a
+    // send. Rotate a bounded slice so retained replies cannot stall the lock.
+    if(this.now()-this.lastCleanup>30_000){
+      this.lastCleanup=this.now();const replies=await this.files.list(`${directory}/replies`);
+      if(this.cleanupCursor>=replies.length)this.cleanupCursor=0;
+      const slice=replies.slice(this.cleanupCursor,this.cleanupCursor+32);this.cleanupCursor+=slice.length;
+      for(const path of slice){
+        if(this.stopped)return;
+        const raw=await this.files.read(path);if(!raw)continue;
+        try{const reply:LeaseReply=JSON.parse(raw);if(reply.answeredAt!==undefined&&reply.answeredAt<this.now()-60_000&&!await this.files.read(leasePaths(directory,reply.id).command))await this.files.remove(path);}catch{/* Leave unfamiliar files alone. */}
+      }
     }
   }
   async exclusive<T>(run:()=>Promise<T>):Promise<T>{
@@ -133,7 +156,7 @@ export class InlineLeaseAuthority {
         if(![2,3].includes(request.version)||request.id!==command.jobId||request.vaultId!==this.identity.vaultId||request.host.environmentId!==this.identity.environmentId||!sameWorkspacePath(request.host.workspaceRoot,this.identity.workspaceRoot)||request.host.directory!==directory)throw Error('The response belongs to another host or vault.');
         if(record){if(hostedRequestHash(record.request)!==hostedRequestHash(request))throw Error('This response ID already belongs to another request.');await this.publishCatalog(record);return respond(true);}
         if(command.actor!==request.initialOwner)throw Error('Only the sending instance can register a response.');
-        const writer=await this.noteWriter(request.notePath,request.id);
+        const writer=request.nativeProjection?undefined:this.noteWriter(request.notePath,request.id);
         record={request,owner:request.nativeProjection?COORDINATED_OWNER:writer??command.actor,epoch:1,expiresAt:request.nativeProjection?Number.MAX_SAFE_INTEGER:this.now()+LEASE_MS,revision:0,...(request.nativeProjection?{coordinated:true,migrating:true}:{})};
         await this.files.write(hostedPaths(directory,request.id).request,JSON.stringify(request));
       }else{
@@ -175,14 +198,14 @@ export class InlineLeaseAuthority {
         }else if(command.kind==='claim'){
           if(record.coordinated)return respond(false,'Generated changes are coordinated by the host.');
           if(terminalLease(record))return respond(false,'The response is finished.');
-          if(record.expiresAt>this.now())return respond(false,'Another writer still owns this response.');
+          if(record.expiresAt>this.now())return {...respond(false,'Another writer still owns this response.'),retryAfterMs:record.expiresAt-this.now()};
           // Give clients with the note open a short head start over closed-note
           // fallback writers. Healthy ownership is never preempted.
-          if(command.fallback&&record.expiresAt+2000>this.now())return respond(false,'Waiting for an open-note writer.');
+          if(command.fallback&&record.expiresAt+2000>this.now())return {...respond(false,'Waiting for an open-note writer.'),retryAfterMs:record.expiresAt+2000-this.now()};
           const notePath=command.notePath??record.state?.notePath??record.request.notePath;
           if(!safeNotePath(notePath))throw Error('Invalid response note path.');
-          const writer=await this.noteWriter(notePath,record.request.id);
-          if(writer&&writer!==command.actor)return respond(false,'Another device owns a response in this note.');
+          const writer=this.noteWriter(notePath,record.request.id);
+          if(writer&&writer!==command.actor)return {...respond(false,'Another device owns a response in this note.'),retryAfterMs:LEASE_MS};
           const moved=notePath!==(record.state?.notePath??record.request.notePath);
           record={...record,owner:command.actor,epoch:record.epoch+1,expiresAt:this.now()+LEASE_MS,
             ...(moved?{revision:record.revision+1,state:{...record.state??{requestHash:hostedRequestHash(record.request),accepted:false,status:'waiting' as const,hashes:[record.request.initialHash],updatedAt:new Date(this.now()).toISOString()},notePath}}:{})};
@@ -225,14 +248,18 @@ export class InlineLeaseAuthority {
       return respond(true);
     }catch(error){return respond(false,error instanceof Error?error.message:'Ownership command failed.');}
   }
-  private async noteWriter(notePath:string,except:string):Promise<string|undefined>{
-    for(const path of await this.files.list(`${this.identity.directory}/leases`)){
-      const raw=await this.files.read(path);if(!raw)continue;
-      const record:LeaseRecord=JSON.parse(raw);
+  private noteWriter(notePath:string,except:string):string|undefined{
+    // This authority is the sole lease writer under the host lock. Its index
+    // is rebuilt from durable records on restart and updated after every write.
+    for(const record of this.records.values()){
       if(record.request.id!==except&&!terminalLease(record)&&record.expiresAt>this.now()&&(record.state?.notePath??record.request.notePath)===notePath)return record.owner;
     }
   }
   private async publishCatalog(record:LeaseRecord){
+    this.indexRecord(record);await this.flushIndexes();
+  }
+  private indexRecord(record:LeaseRecord){
+    this.records.set(record.request.id,record);
     const projected=leaseExplorerResponse(record),previous=this.explorerResponses.find(r=>r.id===projected.id);
     // Keep vault rename/delete observations across recovery until a newer
     // writer checkpoint supplies its canonical destination location.
@@ -240,16 +267,15 @@ export class InlineLeaseAuthority {
     const response={...projected,...(moved?{notePath:previous.notePath,sourceNotePath:previous.sourceNotePath}:{}),...(previous?.deleted?{deleted:true}:{})};
     if(JSON.stringify(previous)!==JSON.stringify(response)){
       const next=this.explorerResponses.filter(r=>r.id!==response.id).concat(response);
-      await this.files.write(explorerResponsePath(this.identity.directory),JSON.stringify(next));
-      this.explorerResponses=next;
+      this.explorerResponses=next;this.explorerDirty=true;
     }
-    const path=leasePaths(this.identity.directory,record.request.id).catalog;
-    const raw=await this.files.read(path),catalog:HostedInlineRequest[]=raw?JSON.parse(raw):[];
     const discoverable=!terminalLease(record);
-    if(discoverable&&catalog.some(item=>item.id===record.request.id))return;
-    const next=catalog.filter(item=>item.id!==record.request.id);
-    if(discoverable)next.push(record.request);
-    if(JSON.stringify(next)!==JSON.stringify(catalog))await this.files.write(path,JSON.stringify(next));
+    if(discoverable&&!this.catalog.has(record.request.id)){this.catalog.set(record.request.id,record.request);this.catalogDirty=true;}
+    else if(!discoverable&&this.catalog.delete(record.request.id))this.catalogDirty=true;
+  }
+  private async flushIndexes(){
+    if(this.explorerDirty){await this.files.write(explorerResponsePath(this.identity.directory),JSON.stringify(this.explorerResponses));this.explorerDirty=false;}
+    if(this.catalogDirty){await this.files.write(leasePaths(this.identity.directory,'').catalog,JSON.stringify([...this.catalog.values()]));this.catalogDirty=false;}
   }
 }
 
@@ -293,7 +319,7 @@ export class InlineLeaseClient {
       }
       await this.pause(100);
     }
-    throw Error('The ownership coordinator did not answer. The saved request can be retried.');
+    throw Error(input.request?.nativeProjection?'The response host did not acknowledge registration. The saved request can be retried.':'The ownership coordinator did not answer. The saved request can be retried.');
     }catch(error){logFailure('ownership.command.failed',error,{...fields,...timing()});throw error;}
   }
 }
