@@ -59,3 +59,9 @@ The retired `scripts/deploy-qlo2.py` must continue to refuse direct use. Never h
 - This repository may contain user changes. Preserve unrelated edits and inspect overlap before patching.
 - A user request for the full QLO2 product-change delivery path authorizes the pre-release commit of reviewed changes for that request. Do not commit unrelated user edits. Do not push, reset, or discard changes unless the user explicitly requests it.
 - Backups live outside synced vaults under `/home/ubuntu/backups/send-to-t3-code`.
+
+## Real Sync testing capability
+
+- The VPS has two independent desktop test clients and local vaults, **Sync Test A** and **Sync Test B**, connected to the dedicated **T3 Sync Test Lab** remote vault through official Obsidian Headless Sync. Use [docs/obsidian-sync-test-lab.md](docs/obsidian-sync-test-lab.md) and `scripts/obsidian-sync-lab.py` when investigating Sync races; do not substitute two windows on one local folder.
+- Keep lab content synthetic and preserve production QLO2, settings, and unrelated clients. Prepare the reviewed plugin and supported connection separately before testing its behavior; never clone production private response records into the lab.
+- Report real file propagation, visible editor behavior, desktop core Sync engine behavior, and native mobile coverage separately. This lab does not prove native iPhone or Android behavior. Mobile emulation feasibility and its remaining prerequisites are recorded in the runbook.
