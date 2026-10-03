@@ -68,7 +68,7 @@ export function validateEventCommand(value:any):EventSubscriptionCommand {
 export function eventContent(content:string):string {
   // Stream insertions and completed replies never become note-change events.
   const code=content.includes('<!-- t3-')?markdownCodeRanges(content):[];
-  return content.replace(/<!-- t3-(inline|response):start:([^\s]+) -->[\s\S]*?<!-- t3-\1:end:\2 -->/g,(text,_kind,_id,offset:number)=>code.some(([from,to])=>offset>=from&&offset<to)?text:'').replace(/\n+$/,'');
+  return content.replace(/<!-- t3-(inline|response):start:([^\s]+) -->[\s\S]*?<!-- t3-\1:end:\2 -->(?:\r?\n)?/g,(text,_kind,_id,offset:number)=>code.some(([from,to])=>offset>=from&&offset<to)?text:'').replace(/\n+$/,'');
 }
 function canonical(value:unknown):string {if(value===undefined)return 'undefined';if(value===null||typeof value!=='object')return JSON.stringify(value);if(Array.isArray(value))return '['+value.map(canonical).join(',')+']';return '{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+canonical((value as any)[key])).join(',')+'}';}
 function hash(text:string){return Array.from(sha256(new TextEncoder().encode(text)),byte=>byte.toString(16).padStart(2,'0')).join('');}

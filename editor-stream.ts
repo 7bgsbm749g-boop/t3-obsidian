@@ -19,7 +19,8 @@ export async function editorStream(source:HostedInlineRequest,notePath:string,io
   const document=await io.updateNote(notePath,current=>{
     if(regionBody(current,id)||current.includes(`<!-- t3-response:start:${id} -->`))return current;
     const offset=destinationOffset(current,source.destinationSection);
-    return current.slice(0,offset)+(source.nativeProjection?'\n'+responseAnchor(id)+'\n\n':region.text)+current.slice(offset);
+    const before=current.slice(0,offset);
+    return before+(source.nativeProjection?(before&&!before.endsWith('\n')?'\n':'')+responseAnchor(id)+'\n':region.text)+current.slice(offset);
   },allowed);
   if(document===undefined)throw Error(`Destination note unavailable: ${notePath}`);
   return request;

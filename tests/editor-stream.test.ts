@@ -5,8 +5,15 @@ import {editorStream} from '../editor-stream';
 import {initialRegion,inlineTargetAt,regionBody,completionProof,hasCompletionProof} from '../inline-thread';
 import {validateNoteCommand} from '../note-command';
 import type {HostedInlineRequest} from '../hosted-inline';
+import {eventContent} from '../event-subscriptions';
 
 const source=():HostedInlineRequest=>({version:2,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'machine',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:'A.md',threadId:randomUUID(),messageId:randomUUID(),projectId:'project',threadEnvironmentId:'machine',initialHash:initialRegion(randomUUID()).bodyHash,createdAt:new Date().toISOString()});
+test('native section registration preserves the watcher baseline without adding ordinary blank lines',async()=>{
+  const original='# Note\n\n## CURRENT\n\n## AFTER\n\nTail\n';let document=original;
+  await editorStream({...source(),nativeProjection:true,destinationSection:'CURRENT'},'A.md',{updateNote:async(_path,change)=>document=change(document)},()=>true);
+  assert.equal(eventContent(document),eventContent(original));
+  assert.equal((document.match(/## AFTER/g)??[]).length,1);
+});
 test('bindings have independent destination IDs and retain one source message; replay never duplicates a block',async()=>{
   const documents=new Map([['A.md','Keep A'],['B.md','Keep B']]);
   const io={updateNote:async(path:string,change:(document:string)=>string,allowed:()=>boolean)=>{assert.ok(allowed());const value=documents.get(path);if(value===undefined)return;const next=change(value);documents.set(path,next);return next;}};

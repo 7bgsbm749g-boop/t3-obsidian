@@ -91,7 +91,7 @@ test('active and completed streamed response blocks never trigger events',async(
   const h=await harness();await h.service.command(subscription());
   await h.service.observe('modify','Gym/A.md',note('Gym/A.md','old\n\n<!-- t3-inline:start:id -->\nreply\n<!-- t3-inline:end:id -->\n'));
   await h.service.observe('modify','Gym/A.md',note('Gym/A.md','old\n\n<!-- t3-response:start:id -->\nfinished\n<!-- t3-response:end:id -->\n'));
-  assert.equal(h.service.snapshot.notifications.length,0);assert.equal(eventContent('A\n<!-- t3-inline:start:a -->body<!-- t3-inline:end:a -->\nB'),'A\n\nB');
+  assert.equal(h.service.snapshot.notifications.length,0);assert.equal(eventContent('A\n<!-- t3-inline:start:a -->body<!-- t3-inline:end:a -->\nB'),'A\nB');
 });
 test('notification turns suppress their own edits and rebaseline when idle',async()=>{
   const h=await harness();await h.service.command(subscription());await h.service.observe('modify','Gym/A.md',note('Gym/A.md','user'));h.advance();await h.service.tick();
