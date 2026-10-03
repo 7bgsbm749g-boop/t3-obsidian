@@ -15,6 +15,7 @@ export class ApprovalController {
   private listeners=new Set<()=>void>();
   private reads=new Map<string,Promise<void>>();
   private sends=new Map<string,Promise<void>>();
+  private watched=new Map<string,{target:ApprovalTarget;count:number}>();
   private stopped=false;
   constructor(private access:(environmentId:string)=>Promise<ThreadAccess>,private store:ApprovalStore,private newId:()=>string,private now=()=>new Date().toISOString()){
     for(const record of store.load()){
@@ -24,8 +25,17 @@ export class ApprovalController {
       this.records.set(approvalKey(record.target),record);
     }
   }
-  dispose(){this.stopped=true;this.listeners.clear();}
+  dispose(){this.stopped=true;this.listeners.clear();this.watched.clear();}
   subscribe(listener:()=>void){this.listeners.add(listener);return ()=>{this.listeners.delete(listener);};}
+  /** Native response projections need controls refreshed before their text reaches disk. */
+  watch(target:ApprovalTarget){
+    const key=approvalKey(target),old=this.watched.get(key);
+    if(old)old.count++;
+    else{this.watched.set(key,{target,count:1});void this.refresh([target]);}
+    let closed=false;
+    return ()=>{if(closed)return;closed=true;const entry=this.watched.get(key);if(entry&&--entry.count===0)this.watched.delete(key);};
+  }
+  watchedTargets(){return [...this.watched.values()].map(entry=>entry.target);}
   private notify(){if(!this.stopped)for(const listener of this.listeners)listener();}
   private persist(){this.store.save([...this.records.values()]);}
   record(target:ApprovalTarget){const key=approvalKey(target);let record=this.records.get(key);if(!record){record={target};this.records.set(key,record);}return record;}

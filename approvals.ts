@@ -37,11 +37,11 @@ export function approvalTargets(document:string):ApprovalTarget[]{
 }
 export function renderApproval(request:PendingApproval,target:ApprovalTarget):string {
   const token=questionToken(target);
-  // Quoted fences keep arbitrary commands readable without interpreting their Markdown/HTML.
+  // Native fenced blocks keep arbitrary commands readable without interpreting their Markdown/HTML.
   const detail=request.detail?.replace(/\r\n?/g,'\n');let fenceLength=3;
   for(const match of (detail??'').matchAll(/`+/g))fenceLength=Math.max(fenceLength,match[0].length+1);
   const fence='`'.repeat(fenceLength);
-  return [`<!-- t3-approval:start:${token} -->`,`Action needed: Command approval requested [Approve](${approvalUrl(target,'accept')}) [Deny](${approvalUrl(target,'decline')})`,...(detail?['',`> ${fence}sh`,...detail.split('\n').map(line=>`> ${line}`),`> ${fence}`]:[]),`<!-- t3-approval:end:${token} -->`].join('\n');
+  return [`<!-- t3-approval:start:${token} -->`,`Action needed: Command approval requested [Approve](${approvalUrl(target,'accept')}) [Deny](${approvalUrl(target,'decline')})`,...(detail?['',`${fence}sh`,detail,fence]:[]),`<!-- t3-approval:end:${token} -->`].join('\n');
 }
 /** Preserve the command as ordinary text when a response is stopped or no longer live. */
 export function clearApprovalControls(document:string,target?:ApprovalTarget):string {

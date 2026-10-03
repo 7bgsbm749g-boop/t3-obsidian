@@ -21,7 +21,7 @@ test('approval links bind exact IDs; command text and examples stay literal',()=
   assert.deepEqual(parseApprovalUrl(approvalUrl(unusual,'decline')),{target:unusual,decision:'decline'});
   assert.equal(parseApprovalUrl(approvalUrl(unusual,'accept').replace('/accept','/acceptForSession')),undefined);
   assert.equal(parseApprovalUrl('t3-approval:%bad/accept'),undefined);
-  assert.deepEqual(approvalTargets(section),[unusual]);assert.match(section,/> ````sh\n> echo `<script>/);
+  assert.deepEqual(approvalTargets(section),[unusual]);assert.match(section,/````sh\necho `<script>/);
   assert.deepEqual(approvalTargets('```text\n'+section+'\n```'),[]);
   const cleared=clearApprovalControls(section,unusual);assert.doesNotMatch(cleared,/Action needed|\[Deny\]|t3-approval:start/);assert.match(cleared,/echo `<script>/);
   const live=`<!-- t3-inline:start:25158e9b-7a9b-40bb-9866-e777549652b4 -->\n${section}\n<!-- t3-inline:end:25158e9b-7a9b-40bb-9866-e777549652b4 -->`;

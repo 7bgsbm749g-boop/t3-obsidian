@@ -18,7 +18,8 @@ export function approvalButton(controller:ApprovalController,target:ApprovalTarg
     event.preventDefault();event.stopPropagation();
     void controller.submit(target,decision).catch(error=>new Notice(error instanceof Error?error.message:'Cannot send the approval decision.',8000));
   });
-  const unsubscribe=controller.subscribe(update);return {button,unsubscribe};
+  const unsubscribe=controller.subscribe(update),unwatch=controller.watch(target);
+  return {button,unsubscribe:()=>{unsubscribe();unwatch();}};
 }
 
 /** Source mode retains links; Live Preview replaces only valid approval controls. */

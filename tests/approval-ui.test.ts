@@ -26,12 +26,14 @@ async function harness(){
 test('buttons send only the chosen decision, lock on acknowledgement and resolve on external confirmation',async()=>{
   const h=await harness(),approve=h.module.exports.approvalButton(h.controller,target,'accept'),deny=h.module.exports.approvalButton(h.controller,target,'decline');
   assert.equal(approve.button.disabled,true);assert.equal(deny.button.disabled,true);
-  await h.controller.refresh([target]);assert.equal(approve.button.disabled,false);assert.equal(deny.button.disabled,false);assert.equal(h.sent.length,0);
+  // Projected controls may have no saved note text. Mounting must fetch their request itself.
+  for(let attempt=0;approve.button.disabled&&attempt<50;attempt++)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(approve.button.disabled,false);assert.equal(deny.button.disabled,false);assert.equal(h.sent.length,0);assert.equal(h.controller.watchedTargets().length,1);
   deny.button.click();await h.controller.submit(target,'decline');
   assert.equal(h.sent.length,1);assert.equal(h.sent[0].decision,'decline');assert.equal(deny.button.textContent,'Sending…');assert.equal(approve.button.disabled,true);assert.equal(deny.button.disabled,true);
   h.activities.push({id:'resolved',kind:'approval.resolved',payload:{requestId:'request'}});await h.controller.refresh([target]);
   assert.equal(approve.button.textContent,'Resolved');assert.equal(approve.button.disabled,true);assert.equal(deny.button.disabled,true);
-  approve.unsubscribe();deny.unsubscribe();h.controller.dispose();
+  approve.unsubscribe();assert.equal(h.controller.watchedTargets().length,1);deny.unsubscribe();assert.equal(h.controller.watchedTargets().length,0);h.controller.dispose();
 });
 
 test('lost acknowledgement offers only the saved decision as a retry',async()=>{

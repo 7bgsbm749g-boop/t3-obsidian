@@ -350,7 +350,7 @@ export default class SendToT3 extends Plugin {
       for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file)this.questionPaths.add(view.file.path);}
       const io=deviceNoteIO(this.app),notes=new Map<string,QuestionTarget[]>(),approvalNotes=new Map<string,ApprovalTarget[]>();
       for(const path of this.questionPaths){const text=await io.readNote(path),targets=text===undefined?[]:questionTargets(text),approvals=text===undefined?[]:approvalTargets(text);if(targets.length)notes.set(path,targets);if(approvals.length)approvalNotes.set(path,approvals);if(!targets.length&&!approvals.length)this.questionPaths.delete(path);}
-      await Promise.all([this.questions.refresh([...notes.values()].flat()),this.approvals.refresh([...approvalNotes.values()].flat())]);
+      await Promise.all([this.questions.refresh([...notes.values()].flat()),this.approvals.refresh([...approvalNotes.values()].flat().concat(this.approvals.watchedTargets()))]);
       for(const [path,targets] of notes){
         const resolved=targets.filter(target=>this.questions!.view(target).status==='resolved');
         if(resolved.length)await io.updateNote(path,current=>resolved.reduce((text,target)=>clearResolvedQuestion(text,target),current),()=>!this.stopped);
