@@ -58,7 +58,9 @@ export function installResponsePresentation(root:Document):()=>void {
       // without changing note bytes or Obsidian's native fold implementation.
       heading.tabIndex=0;
       const block=fold.closest<HTMLElement>('.cm-embed-block');
-      const actions=block?.querySelector(':scope > .callout[data-callout="t3-progress"]')===fold?block.querySelector<HTMLElement>(':scope > .embed-actions'):undefined;
+      // Native callouts live inside a markdown-rendered wrapper. Only the
+      // outer callout owns this widget's action; nested examples do not.
+      const actions=block?.querySelector('.callout')===fold?block.querySelector<HTMLElement>(':scope > .embed-actions'):undefined;
       if(actions?.querySelector('.edit-block-button')){
         const parent=(actions.offsetParent as HTMLElement|null)??block!;
         layout.add(heading);layout.add(parent);actionsInUse.add(actions);

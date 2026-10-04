@@ -214,7 +214,7 @@ test('native edit actions follow the header through expansion, wrapping and remo
   let reflow:()=>void=()=>{},mutation:(records:any[])=>void=()=>{},disconnected=false;
   const observed=new Set<Element>(),values=new Map<string,string>(),classes=new Set<string>();
   let containerTop=100,containerHeight=32,headerHeight=20;
-  const block:any={clientTop:1,getBoundingClientRect:()=>({top:containerTop,height:containerHeight}),querySelector:(selector:string)=>selector.includes('.callout')?fold:actions};
+  const block:any={clientTop:1,getBoundingClientRect:()=>({top:containerTop,height:containerHeight}),querySelector:(selector:string)=>selector==='.callout'?fold:selector===':scope > .embed-actions'?actions:null};
   const actions:any={offsetParent:block,querySelector:()=>({}),style:{getPropertyValue:(key:string)=>values.get(key)??'',setProperty:(key:string,value:string)=>values.set(key,value),removeProperty:(key:string)=>values.delete(key)},classList:{add:(key:string)=>classes.add(key),remove:(key:string)=>classes.delete(key)}};
   const heading:any={setAttribute:()=>{},getBoundingClientRect:()=>({top:containerTop+7,height:headerHeight})};
   const fold:any={closest:(selector:string)=>selector==='.cm-embed-block'?block:null,querySelector:(selector:string)=>selector.includes('callout-title')?heading:null,classList:{contains:()=>false}};
