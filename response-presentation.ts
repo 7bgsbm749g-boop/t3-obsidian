@@ -39,9 +39,11 @@ export function installResponsePresentation(root:Document):()=>void {
   const key=(element:Element)=>element.querySelector<HTMLElement>('.send-to-t3-fold-key')?.dataset.t3Fold;
   const title=(element:Element)=>element.querySelector<HTMLElement>(':scope > .callout-title');
   const seen=new WeakMap<Element,{heading:HTMLElement;key:string|undefined}>();
+  const watched=new Set<Element>(),aligned=new Set<HTMLElement>();
   let restoring=false,queued:ReturnType<typeof setTimeout>|undefined,disposed=false;
   const refresh=()=>{
     queued=undefined;if(disposed)return;
+    const layout=new Set<Element>(),actionsInUse=new Set<HTMLElement>();
     for(const timer of Array.from(root.querySelectorAll<HTMLElement>('.send-to-t3-run-timer[data-t3-start]'))){
       const start=Number(timer.dataset.t3Start),end=timer.dataset.t3End;
       if(!Number.isFinite(start))continue;
@@ -55,6 +57,18 @@ export function installResponsePresentation(root:Document):()=>void {
       // Native callout titles support pointer input. Also offer keyboard input
       // without changing note bytes or Obsidian's native fold implementation.
       heading.tabIndex=0;
+      const block=fold.closest<HTMLElement>('.cm-embed-block');
+      const actions=block?.querySelector(':scope > .callout[data-callout="t3-progress"]')===fold?block.querySelector<HTMLElement>(':scope > .embed-actions'):undefined;
+      if(actions?.querySelector('.edit-block-button')){
+        const parent=(actions.offsetParent as HTMLElement|null)??block!;
+        layout.add(heading);layout.add(parent);actionsInUse.add(actions);
+        const header=heading.getBoundingClientRect(),container=parent.getBoundingClientRect();
+        if(header.height>0){
+          const center=`${header.top-container.top-parent.clientTop+header.height/2}px`;
+          if(actions.style.getPropertyValue('--send-to-t3-header-center')!==center)actions.style.setProperty('--send-to-t3-header-center',center);
+          actions.classList.add('send-to-t3-progress-actions');aligned.add(actions);
+        }
+      }
       const id=key(fold),previous=seen.get(fold),fresh=previous?.heading!==heading||previous?.key!==id;
       seen.set(fold,{heading,key:id});
       const expanded=id?choices.get(owner(fold))?.get(id):undefined;
@@ -66,8 +80,12 @@ export function installResponsePresentation(root:Document):()=>void {
         heading.setAttribute('aria-expanded',String(!fold.classList.contains('is-collapsed')));
       }
     }
+    for(const element of watched)if(!layout.has(element)){resize?.unobserve(element);watched.delete(element);}
+    for(const element of layout)if(!watched.has(element)){resize?.observe(element);watched.add(element);}
+    for(const actions of aligned)if(!actionsInUse.has(actions)){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');aligned.delete(actions);}
   };
   const schedule=()=>{if(queued===undefined&&!disposed)queued=setTimeout(refresh,0);};
+  const resize=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(schedule);
   const remember=(event:Event)=>{
     if(restoring)return;
     const target=event.target instanceof Element?event.target.closest('.callout-title'):null;
@@ -85,5 +103,5 @@ export function installResponsePresentation(root:Document):()=>void {
   observer.observe(root.body,{childList:true,subtree:true});
   root.addEventListener('click',remember,true);root.addEventListener('keydown',keyboard);
   const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;observer.disconnect();if(queued!==undefined)clearTimeout(queued);clearInterval(timer);root.removeEventListener('click',remember,true);root.removeEventListener('keydown',keyboard);};
+  return ()=>{disposed=true;observer.disconnect();resize?.disconnect();for(const actions of aligned){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');}if(queued!==undefined)clearTimeout(queued);clearInterval(timer);root.removeEventListener('click',remember,true);root.removeEventListener('keydown',keyboard);};
 }

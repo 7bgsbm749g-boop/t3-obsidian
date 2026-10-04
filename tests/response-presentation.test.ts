@@ -207,3 +207,33 @@ test('native fold transitions finish, hidden clones do not cause repeated clicks
     assert.equal(fresh.collapsed,false,'replacement retains the explicit expansion');assert.equal(clicks,2,'restoration runs once despite transition mutations');
   }finally{dispose();(globalThis as any).Element=savedElement;(globalThis as any).MutationObserver=savedObserver;}
 });
+
+test('native edit actions follow the header through expansion, wrapping and removal',async()=>{
+  const {installResponsePresentation}=await import('../response-presentation');
+  const savedObserver=globalThis.MutationObserver,savedResize=globalThis.ResizeObserver;
+  let reflow:()=>void=()=>{},mutation:(records:any[])=>void=()=>{},disconnected=false;
+  const observed=new Set<Element>(),values=new Map<string,string>(),classes=new Set<string>();
+  let containerTop=100,containerHeight=32,headerHeight=20;
+  const block:any={clientTop:1,getBoundingClientRect:()=>({top:containerTop,height:containerHeight}),querySelector:(selector:string)=>selector.includes('.callout')?fold:actions};
+  const actions:any={offsetParent:block,querySelector:()=>({}),style:{getPropertyValue:(key:string)=>values.get(key)??'',setProperty:(key:string,value:string)=>values.set(key,value),removeProperty:(key:string)=>values.delete(key)},classList:{add:(key:string)=>classes.add(key),remove:(key:string)=>classes.delete(key)}};
+  const heading:any={setAttribute:()=>{},getBoundingClientRect:()=>({top:containerTop+7,height:headerHeight})};
+  const fold:any={closest:(selector:string)=>selector==='.cm-embed-block'?block:null,querySelector:(selector:string)=>selector.includes('callout-title')?heading:null,classList:{contains:()=>false}};
+  const root:any={body:{},documentElement:{},folds:[fold],querySelectorAll:(selector:string)=>selector.startsWith('.callout')?root.folds:[],addEventListener:()=>{},removeEventListener:()=>{}};
+  (globalThis as any).MutationObserver=class {constructor(callback:any){mutation=callback;}observe(){}disconnect(){}};
+  (globalThis as any).ResizeObserver=class {constructor(callback:any){reflow=callback;}observe(element:Element){observed.add(element);}unobserve(element:Element){observed.delete(element);}disconnect(){disconnected=true;}};
+  let dispose=()=>{};
+  try{
+    dispose=installResponsePresentation(root);
+    assert.equal(values.get('--send-to-t3-header-center'),'16px');
+    assert.ok(classes.has('send-to-t3-progress-actions'));assert.ok(observed.has(heading));
+    // Expansion and scrolling move the container but do not center the icon
+    // in the entire history. Wrapping instead changes the header midpoint.
+    containerTop=250;containerHeight=240;reflow();await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(values.get('--send-to-t3-header-center'),'16px');
+    headerHeight=44;reflow();await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(values.get('--send-to-t3-header-center'),'28px');
+    root.folds=[];mutation([{addedNodes:[],removedNodes:[{nodeType:1}]}]);await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(observed.size,0);assert.equal(classes.size,0);assert.equal(values.size,0);
+  }finally{dispose();globalThis.MutationObserver=savedObserver;globalThis.ResizeObserver=savedResize;}
+  assert.equal(disconnected,true);
+});

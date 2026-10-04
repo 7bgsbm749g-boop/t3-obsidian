@@ -127,6 +127,11 @@
   cursor: pointer;
 }
 .callout[data-callout="t3-progress"] > .callout-title > .callout-icon { display: none; }
+/* Align the native editor action with the header, including wrapped titles. */
+.markdown-source-view.mod-cm6 .embed-actions.send-to-t3-progress-actions {
+  top: var(--send-to-t3-header-center);
+  transform: translateY(-50%);
+}
 .callout[data-callout="t3-progress"] > .callout-content {
   position: relative;
   padding-inline-start: 1em;
