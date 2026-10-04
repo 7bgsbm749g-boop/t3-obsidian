@@ -4,7 +4,8 @@ import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 import {EditorState} from '@codemirror/state';
-import {questionUrl} from '../questions';
+import {questionUrl,renderQuestion,pendingQuestions} from '../questions';
+import {projectResponses,responseAnchor} from '../native-response-projection';
 
 class Element {
   children:Element[]=[];textContent='';value='';checked=false;disabled=false;hidden=false;name='';type='';selectionStart=0;dataset:Record<string,string>={};onclick?:()=>void;oninput?:()=>void;onchange?:()=>void;onfocus?:()=>void;
@@ -40,9 +41,26 @@ test('dialog shows descriptions and keeps drafts, input DOM, and selection throu
   await h.controller.submit(target);assert.equal(h.sent.length,1);assert.deepEqual(JSON.parse(JSON.stringify(h.sent[0].answers)),{choice:'native-first',multi:['A','B'],text:'My draft'});
   assert.match(h.modal.contentEl.querySelectorAll('p')[0].textContent,/Submitting/);assert.ok(h.modal.contentEl.querySelectorAll('textarea').every((e:Element)=>e.disabled));
   assert.equal(h.modal.isOpen,true,'dispatch acknowledgement alone must not close the dialog');
-  h.activities.push({id:'resolved',kind:'user-input.resolved',payload:{requestId:'request'}});await h.controller.refresh([target]);assert.equal(h.controller.view(target).status,'resolved');assert.equal(h.sent.length,1);
+  h.activities.push({id:'resolved',kind:'user-input.resolved',payload:{requestId:'request',answers:{text:'My draft'}}});await h.controller.refresh([target]);assert.equal(h.controller.view(target).status,'resolved');assert.equal(h.sent.length,1);
   assert.equal(h.modal.isOpen,false);assert.equal(h.modal.contentEl.children.length,0);assert.ok(h.notices.includes('T3 question resolved.'));
   h.modal.close();h.controller.dispose();
+});
+
+test('Dismiss closes synchronously and hides the whole question in native projection and source mode before remote reads finish',async()=>{
+  const h=await harness(),section=renderQuestion(pendingQuestions(h.activities)[0],target),id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const projection=projectResponses('Before\n'+responseAnchor(id)+'\nAfter',[{id,body:'> Retained answer\n\n'+section}]);
+  const extension=h.module.exports.questionEditorExtension(h.controller,()=>{}),field=extension[2];
+  let state=EditorState.create({doc:projection.display,extensions:[field]}),reads=0;
+  const subscription=extension[3].create({dispatch:(spec:any)=>{state=state.update(spec).state;}});
+  h.controller.access=()=>{reads++;return new Promise(()=>{});};
+  assert.equal(state.field<any>(field).size,0);
+  const button=h.modal.contentEl.querySelectorAll('button').find((el:Element)=>el.textContent==='Dismiss')!;button.onclick!();
+  assert.equal(h.modal.isOpen,false);assert.equal(h.controller.isDismissed(target),true);assert.equal(state.field<any>(field).size,1);
+  const hidden:string[]=[];state.field<any>(field).between(0,state.doc.length,(from:number,to:number)=>hidden.push(state.doc.sliceString(from,to)));assert.deepEqual(hidden,[section]);
+  assert.equal(state.doc.toString(),projection.display,'Keep saved anchors and live writer hashes intact');
+  state=state.update({changes:{from:0,insert:'New outside edit\n'}}).state;assert.equal(state.field<any>(field).size,1,'A new projection cannot restore dismissed controls');
+  assert.ok(h.saved.at(-1)[0].dismissed);assert.equal(h.sent.length,0);assert.ok(h.notices.includes('T3 question dismissed.'));
+  await Promise.resolve();assert.equal(reads,1);subscription.destroy();h.controller.dispose();
 });
 
 test('external resolution closes the dialog once while failed submission preserves its draft',async()=>{

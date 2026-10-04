@@ -1,13 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {pendingQuestions,questionAnswers,questionTargets,questionToken,parseQuestionToken,renderQuestion,clearResolvedQuestion,type QuestionTarget} from '../questions';
+import {pendingQuestions,questionAnswers,questionTargets,questionToken,parseQuestionToken,renderQuestion,clearResolvedQuestion,removeDismissedQuestions,questionSections,type QuestionTarget} from '../questions';
 import {QuestionController,type QuestionRecord} from '../question-controller';
 import {applyThreadItem,renderInlineTurn,initialRegion,finalizeRegion} from '../inline-thread';
 import {contentHash} from '../completion';
 const target:QuestionTarget={environmentId:'original-machine',threadId:'original-thread',requestId:'native:123'};
 const questions=[{id:' exact id ',header:'Choice',question:'Which option?',multiSelect:false,options:[{label:' Label ',description:'Description',value:' exact value '},{label:'Second',description:''}]}];
 const opened=(requestId=target.requestId,responseMode?:'message')=>({id:'opened-'+requestId,kind:'user-input.requested',summary:'Input needed',turnId:'turn',createdAt:'2026-09-30T00:00:00Z',payload:{requestId,questions,...(responseMode?{responseMode}:{})}});
-const resolved=(requestId=target.requestId)=>({id:'resolved-'+requestId,kind:'user-input.resolved',summary:'Answered',turnId:'turn',payload:{requestId}});
+const resolved=(requestId=target.requestId)=>({id:'resolved-'+requestId,kind:'user-input.resolved',summary:'Answered',turnId:'turn',payload:{requestId,answers:{' exact id ':'answer'}}});
 const failure=(detail:string,id='failed')=>({id,kind:'provider.user-input.respond.failed',summary:'Failed',turnId:'turn',payload:{requestId:target.requestId,detail}});
 
 test('terminal request IDs cannot reappear after out-of-order events or reconnects',()=>{
@@ -95,4 +95,43 @@ test('async requests remain answerable after completion; only message-mode reque
 test('failed refresh never submits stale state or clears a question merely absent from a snapshot',async()=>{
   const h=harness(),controller=h.create();await controller.refresh([target]);controller.draft(target,' exact id ',{text:'draft'});h.offline(true);await assert.rejects(controller.submit(target),/Disconnected/);assert.equal(h.dispatches.length,0);
   h.offline(false);h.activities.splice(0);await controller.refresh([target]);assert.equal(controller.view(target).status,'unavailable');
+});
+
+test('dismissal is saved and observable before any remote refresh, survives offline reload and safely retries',async()=>{
+  const h=harness();h.activities.splice(0,1,opened(target.requestId,'message'));const first=h.create();await first.refresh([target]);h.offline(true);
+  const work=first.submit(target,true);
+  assert.equal(first.isDismissed(target),true);assert.equal(h.saved[0].dismissed,true);assert.equal(h.saved[0].command?.type,'thread.user-input.dismiss');assert.equal(h.dispatches.length,0);
+  await assert.rejects(work,/Disconnected/);const bytes=JSON.stringify(h.saved[0].command);first.dispose();
+  const next=h.create();assert.equal(next.isDismissed(target),true);assert.deepEqual(next.pendingDismissals(),[target]);
+  h.offline(false);await next.refresh([target]);next.retryDismissals();await next.submit(target,true);assert.equal(JSON.stringify(h.dispatches[0]),bytes);assert.equal(h.dispatches.length,1);
+  h.activities.push({...resolved(),payload:{requestId:target.requestId}});await next.refresh([target]);
+  assert.equal(next.isDismissed(target),true);assert.deepEqual(next.pendingDismissals(),[]);assert.equal(next.record(target).command,undefined);
+  next.dispose();assert.equal(h.create().isDismissed(target),true);
+});
+
+test('native questions and failed write-ahead storage never hide a question or dispatch dismissal',async()=>{
+  const native=harness(),first=native.create();await first.refresh([target]);await assert.rejects(first.submit(target,true),/cannot be dismissed/);assert.equal(first.isDismissed(target),false);
+  const h=harness();h.activities.splice(0,1,opened(target.requestId,'message'));const c=h.create();await c.refresh([target]);h.failSave(true);
+  await assert.rejects(c.submit(target,true),/Storage unavailable/);assert.equal(c.isDismissed(target),false);assert.equal(h.dispatches.length,0);
+});
+
+test('another-client dismissal is hidden while answered questions retain their transcript',async()=>{
+  for(const dismissed of [true,false]){
+    const h=harness(),c=h.create();h.activities.push(dismissed?{...resolved(),payload:{requestId:target.requestId}}:resolved());await c.refresh([target]);
+    assert.equal(c.isDismissed(target),dismissed);assert.equal(c.view(target).status,'resolved');
+  }
+});
+
+test('dismissed section cleanup preserves answers, other questions, code examples and live writer hashes',()=>{
+  const section=renderQuestion(pendingQuestions([opened(target.requestId,'message')])[0],target),other={...target,requestId:'other'},otherSection=renderQuestion(pendingQuestions([opened('other','message')])[0],other);
+  const example='```md\n'+section+'\n```',document='Before\n\n'+section+'\n\n'+otherSection+'\n\nAfter';
+  const dismissed=(value:QuestionTarget)=>value.requestId===target.requestId;
+  assert.equal(removeDismissedQuestions(document,dismissed),'Before\n\n\n\n'+otherSection+'\n\nAfter');
+  assert.equal(removeDismissedQuestions(example,dismissed),example);
+  assert.equal(removeDismissedQuestions(section+'\n\n'+example,dismissed),'\n\n'+example);
+  const live='<!-- t3-inline:start:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee -->\n'+section+'\n<!-- t3-inline:end:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee -->';
+  assert.equal(removeDismissedQuestions(live,dismissed),live);assert.equal(questionSections(live).length,1);
+  assert.equal(removeDismissedQuestions(live.replaceAll('t3-inline:','t3-response:'),dismissed),live.replaceAll('t3-inline:','t3-response:'));
+  assert.equal(removeDismissedQuestions(section.replace('t3-question:end:','broken:end:'),dismissed),section.replace('t3-question:end:','broken:end:'));
+  assert.match(clearResolvedQuestion(section,target),/Question answered/);
 });

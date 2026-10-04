@@ -54,7 +54,7 @@ import {hiddenInlineMarkerExtension} from './inline-markers';
 import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,selectionOverlapsInlineResponse,initialRegion,endInsertionOffset,endMarker,failedInlineIds,regionBody,startMarker,type SelectionAnchor} from './inline-thread';
 import {QuestionController} from './question-controller';
 import {QuestionModal,questionButton,questionEditorExtension} from './question-ui';
-import {questionTargets,parseQuestionToken,clearResolvedQuestion,type QuestionTarget} from './questions';
+import {questionTargets,parseQuestionToken,clearResolvedQuestion,removeDismissedQuestions,type QuestionTarget} from './questions';
 import {ApprovalController} from './approval-controller';
 import {approvalButton,approvalEditorExtension} from './approval-ui';
 import {approvalTargets,parseApprovalUrl,clearApprovalControls,type ApprovalTarget} from './approvals';
@@ -198,11 +198,13 @@ export default class SendToT3 extends Plugin {
     const approvalStorage=`${this.localKey}-approvals-${this.settings.vaultId}`;
     this.approvals=new ApprovalController(environmentId=>this.inlineThreadAccess(environmentId),{load:()=>{const saved=this.app.loadLocalStorage(approvalStorage);return Array.isArray(saved)?saved:[];},save:records=>this.app.saveLocalStorage(approvalStorage,records)},randomId);
     const questionPaths=this.app.loadLocalStorage(`${questionStorage}-paths`);if(Array.isArray(questionPaths))for(const path of questionPaths)if(typeof path==='string')this.questionPaths.add(path);
+    this.questions.subscribe(()=>{void this.cleanDismissedQuestions();});
     if(typeof this.registerEditorExtension==='function'){this.registerEditorExtension(hiddenInlineMarkerExtension());this.registerEditorExtension(questionEditorExtension(this.questions,target=>this.openQuestion(target)));this.registerEditorExtension(approvalEditorExtension(this.approvals));}
     if(typeof this.registerMarkdownPostProcessor==='function')this.registerMarkdownPostProcessor((element,ctx)=>{
       for(const link of Array.from(element.querySelectorAll<HTMLAnchorElement>('a[href^="t3-question:"]'))){
         const target=parseQuestionToken((link.getAttribute('href')??'').slice('t3-question:'.length));if(!target)continue;
         const control=questionButton(this.questions!,target,value=>this.openQuestion(value));link.replaceWith(control.button);
+        const quote=control.button.closest('blockquote');if(quote)quote.hidden=this.questions!.isDismissed(target);
         const child=new MarkdownRenderChild(control.button);child.register(control.unsubscribe);ctx.addChild(child);
         this.questionPaths.add(ctx.sourcePath);
       }
@@ -214,7 +216,7 @@ export default class SendToT3 extends Plugin {
       }
     });
     this.addCommand({id:'answer-t3-question',name:'Answer T3 question…',checkCallback:checking=>{
-      const view=this.app.workspace.getActiveViewOfType(MarkdownView);const targets=view?questionTargets(view.editor?.getValue()??''):[];
+      const view=this.app.workspace.getActiveViewOfType(MarkdownView);const targets=view?questionTargets(view.editor?.getValue()??'').filter(target=>!this.questions!.isDismissed(target)):[];
       if(!targets.length)return false;if(!checking)this.openQuestion(targets[0]);return true;
     }});
     this.app.workspace.onLayoutReady(()=>{void this.refreshQuestions();this.registerInterval(window.setInterval(()=>void this.refreshQuestions(),1500));});
@@ -319,7 +321,7 @@ export default class SendToT3 extends Plugin {
       const selection=editor.getSelection();
       const file=view.file;
       if(!file||file.extension.toLowerCase()!=='md')return;
-      const targets=questionTargets(editor.getValue());
+      const targets=questionTargets(editor.getValue()).filter(target=>!this.questions?.isDismissed(target));
       if(targets.length)menu.addItem(item=>item.setTitle('Answer T3 question…').setIcon('message-circle-question').onClick(()=>this.openQuestion(targets[0])));
       const active=this.inlineChat?.activeFor(file.path)??[];
       const ids=[...new Set([...active.map(job=>job.id),...activeInlineIds(editor.getValue()),...failedInlineIds(editor.getValue())])];
@@ -341,18 +343,30 @@ export default class SendToT3 extends Plugin {
     }));
   }
   private openQuestion(target:QuestionTarget){
-    if(!this.questions)return;
+    if(!this.questions||this.questions.isDismissed(target))return;
     this.questionModal?.close();this.questionModal=new QuestionModal(this.app,this.questions,target);this.questionModal.open();
+  }
+  private cleaningDismissedQuestions=false;
+  private async cleanDismissedQuestions(){
+    if(this.stopped||!this.questions?.hasDismissals()||this.cleaningDismissedQuestions)return;
+    this.cleaningDismissedQuestions=true;
+    try{
+      const paths=new Set([...this.questionPaths,...this.app.workspace.getLeavesOfType('markdown').map(leaf=>(leaf.view as MarkdownView).file?.path).filter((path):path is string=>!!path)]);
+      const io=deviceNoteIO(this.app);
+      for(const path of paths)try{await io.updateNote(path,current=>removeDismissedQuestions(current,target=>this.questions!.isDismissed(target)),()=>!this.stopped);}catch{/* Saved cleanup retries; editor decorations already hide the question. */}
+    }finally{this.cleaningDismissedQuestions=false;}
   }
   private async refreshQuestions(){
     if(this.stopped||this.refreshingQuestions||!this.questions||!this.approvals)return;this.refreshingQuestions=true;
     try{
+      await this.cleanDismissedQuestions();
       for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file)this.questionPaths.add(view.file.path);}
       const io=deviceNoteIO(this.app),notes=new Map<string,QuestionTarget[]>(),approvalNotes=new Map<string,ApprovalTarget[]>();
       for(const path of this.questionPaths){const text=await io.readNote(path),targets=text===undefined?[]:questionTargets(text),approvals=text===undefined?[]:approvalTargets(text);if(targets.length)notes.set(path,targets);if(approvals.length)approvalNotes.set(path,approvals);if(!targets.length&&!approvals.length)this.questionPaths.delete(path);}
-      await Promise.all([this.questions.refresh([...notes.values()].flat()),this.approvals.refresh([...approvalNotes.values()].flat().concat(this.approvals.watchedTargets()))]);
+      await Promise.all([this.questions.refresh([...notes.values()].flat().concat(this.questions.pendingDismissals())),this.approvals.refresh([...approvalNotes.values()].flat().concat(this.approvals.watchedTargets()))]);
+      this.questions.retryDismissals();
       for(const [path,targets] of notes){
-        const resolved=targets.filter(target=>this.questions!.view(target).status==='resolved');
+        const resolved=targets.filter(target=>this.questions!.view(target).status==='resolved'&&!this.questions!.isDismissed(target));
         if(resolved.length)await io.updateNote(path,current=>resolved.reduce((text,target)=>clearResolvedQuestion(text,target),current),()=>!this.stopped);
       }
       for(const [path,targets] of approvalNotes){

@@ -1,4 +1,5 @@
 import type {InlineActivity} from './inline-thread';
+import {markdownCodeRanges} from './reply-html';
 
 export interface QuestionOption {label:string;description:string;value?:string}
 export interface Question {id:string;header:string;question:string;options:QuestionOption[];multiSelect:boolean;allowCustomAnswer?:boolean}
@@ -50,6 +51,31 @@ const markdownText=(value:string)=>value.replace(/[\\`*_{}\[\]()#+.!>|<>]/g,'\\$
 export function renderQuestion(request:PendingQuestion,target:QuestionTarget):string {
   const token=questionToken(target);
   return [`<!-- t3-question:start:${token} -->`,request.responseMode==='message'?'> **T3 · Question pending**':'> **T3 · Answer needed**',...request.questions.flatMap(q=>['>',`> **${markdownText(q.header)}**`, `> ${markdownText(q.question)}`,...(q.options.length?['>']:[]),...q.options.map(o=>`> - ${markdownText(o.label)}${o.description?`: ${markdownText(o.description)}`:''}`)]),'>',`> [Answer](${questionUrl(target)})`,`<!-- t3-question:end:${token} -->`].join('\n');
+}
+/** Exact generated sections only; examples inside code remain ordinary text. */
+export function questionSections(document:string):{from:number;to:number;target:QuestionTarget}[]{
+  const code=markdownCodeRanges(document),sections=[];
+  const markers=[...document.matchAll(/^<!-- t3-question:(start|end):([^\s]+) -->$/gm)].filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to));
+  for(const match of markers){
+    if(match[1]!=='start')continue;
+    const from=match.index!,target=parseQuestionToken(match[2]),own=markers.filter(marker=>marker[2]===match[2]);
+    if(!target||own.length!==2||own[0]!==match||own[1][1]!=='end')continue;
+    const endAt=own[1].index!,to=endAt+own[1][0].length;
+    if(markers.some(marker=>marker.index!>from&&marker.index!<endAt))continue;
+    sections.push({from,to,target});
+  }
+  return sections;
+}
+/** Saved cleanup stays outside live responses, whose hashes belong to a writer. */
+export function removeDismissedQuestions(document:string,dismissed:(target:QuestionTarget)=>boolean):string {
+  const code=markdownCodeRanges(document);
+  for(const section of questionSections(document).reverse()){
+    if(!dismissed(section.target))continue;
+    const boundaries=[...document.slice(0,section.from).matchAll(/^<!-- t3-(?:inline|response):(start|end):[0-9a-fA-F-]{36} -->$/gm)].filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to));
+    if(boundaries.at(-1)?.[1]==='start')continue;
+    document=document.slice(0,section.from)+document.slice(section.to);
+  }
+  return document;
 }
 /** Only remove a resolved question outside a live response. Never invalidate a writer hash. */
 export function clearResolvedQuestion(document:string,target:QuestionTarget):string {

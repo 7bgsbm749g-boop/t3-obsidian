@@ -4,7 +4,7 @@ import type {InlineActivity} from './inline-thread';
 import type {ThreadAccess} from './thread-stream';
 
 export interface QuestionCommand {type:'thread.user-input.respond'|'thread.user-input.dismiss';commandId:string;threadId:string;requestId:string;answers?:Record<string,string|string[]>;createdAt:string}
-export interface QuestionRecord {target:QuestionTarget;drafts:QuestionDrafts;command?:QuestionCommand;failureIds?:string[];uncertain?:boolean;resolved?:boolean}
+export interface QuestionRecord {target:QuestionTarget;drafts:QuestionDrafts;command?:QuestionCommand;failureIds?:string[];uncertain?:boolean;resolved?:boolean;dismissed?:boolean}
 export interface QuestionView {request?:PendingQuestion;status:'loading'|'pending'|'submitting'|'resolved'|'unavailable'|'error';detail?:string;fresh?:boolean}
 export interface QuestionStore {load():QuestionRecord[];save(records:QuestionRecord[]):void}
 
@@ -15,6 +15,7 @@ export class QuestionController {
   private listeners=new Set<()=>void>();
   private reads=new Map<string,Promise<void>>();
   private sends=new Map<string,Promise<void>>();
+  private dismissalRetries=new Map<string,number>();
   private stopped=false;
   constructor(private access:(environmentId:string)=>Promise<ThreadAccess>,private store:QuestionStore,private newId:()=>string,private now=()=>new Date().toISOString()){
     for(const record of store.load())if(record?.target&&typeof record.target.environmentId==='string'&&typeof record.target.threadId==='string'&&typeof record.target.requestId==='string'&&record.drafts&&typeof record.drafts==='object')this.records.set(questionKey(record.target),{...record,drafts:Object.assign(Object.create(null),record.drafts)});
@@ -25,6 +26,11 @@ export class QuestionController {
   private persist(){this.store.save([...this.records.values()]);}
   record(target:QuestionTarget){const key=questionKey(target);let record=this.records.get(key);if(!record){record={target,drafts:Object.create(null)};this.records.set(key,record);}return record;}
   view(target:QuestionTarget):QuestionView{return this.views.get(questionKey(target))??(this.records.get(questionKey(target))?.resolved?{status:'resolved'}:{status:'loading'});}
+  isDismissed(target:QuestionTarget){const record=this.records.get(questionKey(target));return !!(record?.dismissed||record?.command?.type==='thread.user-input.dismiss');}
+  hasDismissals(){return [...this.records.values()].some(record=>this.isDismissed(record.target));}
+  pendingDismissals(){return [...this.records.values()].filter(record=>this.isDismissed(record.target)&&!record.resolved).map(record=>record.target);}
+  /** Dismiss is an explicit durable intent, safe to finish without another click. */
+  retryDismissals(){for(const target of this.pendingDismissals())if((this.dismissalRetries.get(questionKey(target))??0)<=Date.now())void this.submit(target,true).catch(()=>{});}
   draft(target:QuestionTarget,questionId:string,value:QuestionDraft){
     const record=this.record(target);if(record.command)throw Error('Retry the saved submission before changing this answer.');
     record.drafts[questionId]=value;this.persist();
@@ -52,9 +58,9 @@ export class QuestionController {
         const related=activities.filter(a=>a.payload?.requestId===target.requestId);
         const terminal=related.some(a=>a.kind==='user-input.resolved'||staleQuestionFailure(a));
         const failure=related.find(a=>a.kind==='provider.user-input.respond.failed'&&!staleQuestionFailure(a)&&record.command&&!record.failureIds?.includes(a.id));
-        if(terminal||record.resolved){if(!record.resolved)logEvent('question.resolved',{...target});record.resolved=true;delete record.command;delete record.failureIds;delete record.uncertain;record.drafts=Object.create(null);this.views.set(key,{status:'resolved',fresh:true});}
+        if(terminal||record.resolved){if(!record.resolved)logEvent('question.resolved',{...target});if(related.some(a=>a.kind==='user-input.resolved'&&!a.payload?.answers||staleQuestionFailure(a)))record.dismissed=true;record.resolved=true;delete record.command;delete record.failureIds;delete record.uncertain;record.drafts=Object.create(null);this.views.set(key,{status:'resolved',fresh:true});}
         else if(failure){delete record.command;delete record.failureIds;delete record.uncertain;this.views.set(key,{request,status:'error',fresh:true,detail:String(failure.payload?.detail??'T3 could not submit the answer. Your draft is saved.')});}
-        else this.views.set(key,{request,fresh:true,status:request?(record.command?(record.uncertain&&!this.sends.has(key)?'error':'submitting'):'pending'):'unavailable',...(record.uncertain?{detail:'Connection lost during submission. Your answer is saved; retry safely.'}:!request?{detail:'This question is unavailable. Refresh the thread in T3.'}:{})});
+        else this.views.set(key,{request,fresh:true,status:request?(record.command?(record.uncertain&&!this.sends.has(key)?'error':'submitting'):'pending'):'unavailable',...(record.uncertain?{detail:this.isDismissed(target)?'Dismissal saved; waiting for T3.':'Connection lost during submission. Your answer is saved; retry safely.'}:!request?{detail:'This question is unavailable. Refresh the thread in T3.'}:{})});
       }
       this.persist();
     }catch(error){if(!this.stopped)for(const target of targets){const old=this.view(target);if(old.status==='resolved')continue;this.views.set(questionKey(target),{...old,status:'error',fresh:false,detail:error instanceof Error?error.message:'Cannot refresh T3 questions.'});}}
@@ -62,6 +68,18 @@ export class QuestionController {
   }
   submit(target:QuestionTarget,dismiss=false):Promise<void>{
     const key=questionKey(target),old=this.sends.get(key);if(old)return old;
+    if(dismiss){
+      const record=this.record(target),view=this.view(target);
+      if(view.status==='resolved')return Promise.resolve();
+      if(record.command&&record.command.type!=='thread.user-input.dismiss')return Promise.reject(Error('Retry the saved answer before dismissing this question.'));
+      if(!this.isDismissed(target)){
+        if(view.request?.responseMode!=='message')return Promise.reject(Error('This blocking question cannot be dismissed.'));
+        record.command={type:'thread.user-input.dismiss',commandId:this.newId(),threadId:target.threadId,requestId:target.requestId,createdAt:this.now()};record.dismissed=true;record.uncertain=true;
+        try{this.persist();}catch(error){delete record.command;delete record.dismissed;delete record.uncertain;return Promise.reject(error);}
+        this.notify();
+      }
+      this.dismissalRetries.set(key,Date.now()+30_000);
+    }
     logEvent('question.submit.requested',{...target,dismiss});
     const work=this.send(target,dismiss);this.sends.set(key,work);
     void work.finally(()=>{if(this.sends.get(key)===work)this.sends.delete(key);}).catch(()=>{});return work;
@@ -71,6 +89,7 @@ export class QuestionController {
     const view=this.view(target),record=this.record(target);
     if(view.status==='resolved')return;
     if(!view.request||!view.fresh||view.status==='unavailable')throw Error(view.detail??'Refresh this question before answering.');
+    if(record.command?.type==='thread.user-input.dismiss'&&view.request.responseMode!=='message')throw Error('This blocking question cannot be dismissed.');
     // Transport retries reuse the exact accepted-or-not command, including timestamp.
     if(!record.command){
       if(dismiss&&view.request.responseMode!=='message')throw Error('This blocking question cannot be dismissed.');

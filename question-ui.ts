@@ -1,13 +1,13 @@
 import {Modal,Notice,type App} from 'obsidian';
 import type {Extension} from '@codemirror/state';
 import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
-import {parseQuestionToken,questionKey,type QuestionTarget} from './questions';
+import {parseQuestionToken,questionKey,questionSections,type QuestionTarget} from './questions';
 import {QuestionController} from './question-controller';
 
 function buttonLabel(controller:QuestionController,target:QuestionTarget){const view=controller.view(target);return view.status==='submitting'?'Submitting…':view.status==='resolved'?'Answered':'Answer';}
 export function questionButton(controller:QuestionController,target:QuestionTarget,open:(target:QuestionTarget)=>void){
   const button=document.createElement('button');button.className='send-to-t3-question-answer';
-  const update=()=>{button.textContent=buttonLabel(controller,target);button.disabled=controller.view(target).status==='resolved';};
+  const update=()=>{button.textContent=buttonLabel(controller,target);button.disabled=controller.view(target).status==='resolved';const quote=button.closest('blockquote');if(quote)quote.hidden=controller.isDismissed(target);};
   update();button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();open(target);});
   const unsubscribe=controller.subscribe(update);return {button,unsubscribe};
 }
@@ -36,6 +36,7 @@ export class QuestionModal extends Modal {
   private update(){
     if(!this.opened)return;
     const view=this.controller.view(this.target),record=this.controller.record(this.target);
+    if(this.controller.isDismissed(this.target)){this.close();new Notice('T3 question dismissed.');return;}
     if(view.status==='resolved'){this.close();new Notice('T3 question resolved.');return;}
     this.status!.textContent=view.status==='submitting'?'Submitting… Waiting for T3 to confirm.':view.detail??(view.request?.responseMode==='message'?'Question pending. T3 can keep working while you answer.':view.request?'T3 is waiting for your answer.':'Loading question…');
     const signature=JSON.stringify(view.request?.questions??[]);
@@ -90,6 +91,21 @@ export class QuestionModal extends Modal {
 /** Replace the readable Markdown answer link with a real Live Preview button. */
 export function questionEditorExtension(controller:QuestionController,open:(target:QuestionTarget)=>void):Extension {
   const {Decoration,EditorView,ViewPlugin,WidgetType}=require('@codemirror/view') as typeof import('@codemirror/view');
+  const {StateEffect,StateField}=require('@codemirror/state') as typeof import('@codemirror/state');
+  const refreshDismissed=StateEffect.define<void>();
+  const hidden=(document:string)=>controller.hasDismissals()?Decoration.set(questionSections(document).filter(section=>controller.isDismissed(section.target)).map(section=>Decoration.replace({block:true}).range(section.from,section.to))):Decoration.none;
+  // Direct StateField decorations can hide complete multiline sections. The
+  // underlying live response remains untouched, preserving its writer hash.
+  const dismissed=StateField.define<DecorationSet>({
+    create:state=>hidden(state.doc.toString()),
+    update:(value,transaction)=>transaction.docChanged||transaction.effects.some(effect=>effect.is(refreshDismissed))?hidden(transaction.state.doc.toString()):value,
+    provide:field=>[EditorView.decorations.from(field),EditorView.atomicRanges.of(view=>view.state.field(field))],
+  });
+  const dismissalUpdates=ViewPlugin.fromClass(class {
+    private unsubscribe:()=>void;
+    constructor(view:EditorView){this.unsubscribe=controller.subscribe(()=>view.dispatch({effects:refreshDismissed.of(undefined)}));}
+    destroy(){this.unsubscribe();}
+  });
   class AnswerWidget extends WidgetType {
     private unsubscribe?:()=>void;
     constructor(readonly target:QuestionTarget){super();}
@@ -104,13 +120,13 @@ export function questionEditorExtension(controller:QuestionController,open:(targ
     const live=(view as any).contentDOM?.closest('.markdown-source-view')?.classList.contains('is-live-preview');
     if(!live)return Decoration.none;
     const regexp=/^> \[Answer\]\(t3-question:([^\s)]+)\)$/gm;
-    for(const match of doc.matchAll(regexp)){const target=parseQuestionToken(match[1]);if(target)ranges.push(Decoration.replace({widget:new AnswerWidget(target)}).range(match.index!+2,match.index!+match[0].length));}
+    for(const match of doc.matchAll(regexp)){const target=parseQuestionToken(match[1]);if(target&&!controller.isDismissed(target))ranges.push(Decoration.replace({widget:new AnswerWidget(target)}).range(match.index!+2,match.index!+match[0].length));}
     return Decoration.set(ranges);
   };
   const plugin=ViewPlugin.fromClass(class {
     decorations:DecorationSet;
     constructor(view:EditorView){this.decorations=build(view);}
-    update(update:ViewUpdate){if(update.docChanged||update.viewportChanged)this.decorations=build(update.view);}
+    update(update:ViewUpdate){if(update.docChanged||update.viewportChanged||update.transactions.some(transaction=>transaction.effects.some(effect=>effect.is(refreshDismissed))))this.decorations=build(update.view);}
   },{decorations:value=>value.decorations});
-  return [plugin,EditorView.atomicRanges.of(view=>view.plugin(plugin)?.decorations??Decoration.none)];
+  return [plugin,EditorView.atomicRanges.of(view=>view.plugin(plugin)?.decorations??Decoration.none),dismissed,dismissalUpdates];
 }
