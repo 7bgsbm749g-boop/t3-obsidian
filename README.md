@@ -408,6 +408,61 @@ For an explicitly requested version, use `npm run release:qlo2 -- --version 2.28
 
 Agent-triggered `send-note` and `attach-note` commands require an existing folder link when a note would otherwise create a new folder project. Use `link-folder` first; these commands cannot open the interactive workspace picker.
 
+### Direct event actions
+
+`subscribe` and `subscribe-job` accept `--action` JSON in place of receiving
+`--thread-id`, `--project-id`, and `--environment-id`. Direct actions execute
+on the designated vault project machine while its Obsidian client is open;
+they create no T3 message or agent turn. Existing thread subscriptions keep
+working as before.
+
+To move each note whose `status` becomes the string `ready`:
+
+```sh
+python3 scripts/obsidian-command.py --vault /home/ubuntu/vaults/QLO2 \
+  subscribe --scope 'Jobs/Priority/Draft' --scope-kind folder \
+  --event property --property status --equals '"ready"' \
+  --action '{"kind":"move-note","folder":"Jobs/Priority/Ready"}'
+```
+
+To set a property when a note is created:
+
+```sh
+python3 scripts/obsidian-command.py --vault /home/ubuntu/vaults/QLO2 \
+  subscribe --scope 'Jobs/Priority/Draft' --scope-kind folder --event create \
+  --action '{"kind":"set-property","property":"status","value":"draft"}'
+```
+
+Supported actions are `move-note` (`folder`) and `set-property` (`property`
+and a JSON `value`). They act on the observed note unless `notePath` names an
+explicit vault-relative Markdown note. Move preserves the filename, creates
+missing destination folders, and refuses existing destinations. Set-property
+preserves the body and rewrites frontmatter using Obsidian's YAML formatter;
+frontmatter comments/formatting may change. Hidden paths and plugin logs are
+excluded. A delete event needs an explicit `notePath`, since the observed note
+no longer exists.
+
+For `subscribe-job`, keep the exact worker job arguments documented below,
+replace the receiving thread arguments with `--action`, and include `notePath`
+in that action. Job actions default to `completed`; repeat `--job-state` to
+select other lifecycle transitions. Completion remains an execution signal,
+not proof of product delivery.
+
+Actions are immutable per subscription. Scope/filter updates, pause, resume,
+and cancel use the existing management commands. `subscriptions` includes
+pending errors and bounded completed/skipped action receipts (`delivered` or
+`cancelled`). Pause/cancel stops queued work but cannot undo an applied action.
+
+The host persists exact action inputs and outputs before writing, verifies
+results, and recognizes the same output on retry. It refuses conflicting note
+changes and unsaved editor text rather than overwriting them. Fix a conflict
+or cancel and register a new subscription. A property trigger that has reverted
+before preparation is skipped. Matching action-generated editor events are
+suppressed across subscriptions for a bounded window; later user edits still
+trigger. Actions do not automatically chain through other subscriptions.
+Unresolved plans retain note text privately; terminal action receipts retain
+only paths, action metadata and hashes.
+
 ### Job lifecycle notifications and thread display registrations (2.30)
 
 These registrations are independent of sends, folder links, Previous thread,

@@ -43,6 +43,8 @@ def main():
     parser.add_argument('--project-id')
     parser.add_argument('--environment-id')
     parser.add_argument('--subscription-id')
+    parser.add_argument('--action', help='Direct action JSON: move-note or set-property; replaces the receiving thread')
+    parser.add_argument('--job-state', action='append', choices=['running', 'waiting-approval', 'waiting-input', 'completed', 'failed', 'interrupted', 'cancelled'], help='Job action transition (default: completed)')
     parser.add_argument('--connection-id', help='Exact paired connection ID, or local for this desktop')
     parser.add_argument('--mode', choices=['project', 'self'], help='Link mode (default: project); self requires an existing project at the folder')
     parser.add_argument('--relink', action='store_true', help='Deliberately replace a different direct folder link')
@@ -52,6 +54,20 @@ def main():
             or '\\' in args.config_dir or ':' in args.config_dir
             or any(ord(char) < 32 or ord(char) == 127 for char in args.config_dir)):
         parser.error('--config-dir must be a directory inside the requested vault.')
+    if args.action is not None and args.kind not in ['subscribe', 'subscribe-job']:
+        parser.error('--action requires subscribe or subscribe-job.')
+    if args.job_state and (args.kind != 'subscribe-job' or args.action is None):
+        parser.error('--job-state requires a direct job action.')
+    direct_action = None
+    if args.action is not None:
+        try:
+            direct_action = json.loads(args.action)
+        except ValueError:
+            parser.error('--action must contain valid JSON.')
+        if not isinstance(direct_action, dict):
+            parser.error('--action must be a JSON object.')
+        if any([args.thread_id, args.project_id, args.environment_id]):
+            parser.error('Choose an action or a receiving thread, not both.')
     folder_kind = args.kind in ['inspect-folder', 'link-folder', 'unlink-folder']
     if not folder_kind and (args.connection_id is not None or args.mode is not None or args.relink):
         parser.error('Folder linking options require a folder command.')
@@ -112,9 +128,16 @@ def main():
             parser.error('Subscription commands do not take notes or streaming destinations.')
         command = dict(version=1, id=command_id, kind=args.kind)
         if args.kind in ['subscribe', 'subscribe-job']:
-            if not all([args.thread_id, args.project_id, args.environment_id]) or args.kind == 'subscribe' and not all([args.scope, args.scope_kind]):
-                parser.error('subscribe requires --scope, --scope-kind, --thread-id, --project-id, and --environment-id.')
-            command['target'] = dict(threadId=args.thread_id, projectId=args.project_id, environmentId=args.environment_id)
+            if args.kind == 'subscribe' and not all([args.scope, args.scope_kind]):
+                parser.error('subscribe requires --scope and --scope-kind.')
+            if direct_action is not None:
+                command['action'] = direct_action
+                if args.job_state:
+                    command['jobStates'] = list(dict.fromkeys(args.job_state))
+            else:
+                if not all([args.thread_id, args.project_id, args.environment_id]):
+                    parser.error('subscribe requires receiving --thread-id, --project-id, and --environment-id, or --action.')
+                command['target'] = dict(threadId=args.thread_id, projectId=args.project_id, environmentId=args.environment_id)
         elif args.kind != 'subscriptions':
             if not args.subscription_id:
                 parser.error('This command requires --subscription-id.')

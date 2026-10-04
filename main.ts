@@ -1,3 +1,4 @@
+import {prepareEventAction,executeEventAction,type ActionIO,type ActionPlan} from './event-actions';
 import {mergeSharedSettings} from './shared-settings';
 import {NativeConflictModal} from './native-conflict-modal';
 import {ResponseLocationModal} from './response-location-ui';
@@ -19,7 +20,7 @@ import {clearVaultDiagnostics} from './disabled-diagnostics';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from './cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from './native-account';
 import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from './direct';
-import { App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, parseYaml } from 'obsidian';
+import { App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, parseYaml, stringifyYaml } from 'obsidian';
 import { Buffer } from 'buffer';
 import { deviceState,clearDeviceDiagnostics } from './device-state';
 import { downloadImage,nativeAccountFetch } from './network';
@@ -41,7 +42,7 @@ import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,wa
 import {ProjectCreateModal,ProjectCreationCancelled,workspaceInsideVault,type ProjectLocation} from './project-create-ui';
 import {workspaceChildPath} from './workspace-picker';
 import {VaultSetupModal,VaultSetupCancelled,type VaultMachine} from './vault-setup-ui';
-import {EventSubscriptions,type EventTarget,type NoteEventSnapshot,notificationPrompt,inEventScope} from './event-subscriptions';
+import {EventSubscriptions,type EventTarget,type NoteEventSnapshot,notificationPrompt,inEventScope,observedPropertyEquals} from './event-subscriptions';
 import {existingThreadTurn,threadIsActive} from './thread-target';
 import {DeviceInlineManager} from './leased-inline';
 import {deviceNoteIO} from './inline-note-io';
@@ -438,6 +439,28 @@ export default class SendToT3 extends Plugin {
       return {files:{read:path=>remote.readFile(host.workspaceRoot,path),write:(path,value)=>remote.writeFile(host.workspaceRoot,path,value),remove:path=>remote.deleteFile(host.workspaceRoot,path)},close:()=>remote.close()};
     }catch(error){remote.close();throw error;}
   }
+  private eventActionIO():ActionIO {
+    const file=(path:string)=>{const value=this.app.vault.getAbstractFileByPath(path);return value instanceof TFile?value:undefined;};
+    const checkEditor=(path:string,expected:string)=>{
+      for(const leaf of this.app.workspace.getLeavesOfType('markdown')){
+        const view=leaf.view as MarkdownView;
+        if(view.file?.path===path&&view.getMode()==='source'&&view.editor.getValue()!==expected)throw Error('Action note has unsaved editor changes.');
+      }
+    };
+    return {
+      read:async path=>{const value=file(path);return value?this.app.vault.read(value):undefined;},
+      parse:parseYaml,stringify:stringifyYaml,
+      write:async(path,expected,content)=>{const value=file(path);if(!value)throw Error('Action note is unavailable.');checkEditor(path,expected);await this.app.vault.process(value,current=>{if(current!==expected)throw Error('Action note changed after preparation.');return content;});},
+      move:async(path,destination,expected)=>{
+        const value=file(path);if(!value)throw Error('Action note is unavailable.');checkEditor(path,expected);
+        const parts=destination.split('/').slice(0,-1);let folder='';
+        for(const part of parts){folder=folder?folder+'/'+part:part;const existing=this.app.vault.getAbstractFileByPath(folder);if(existing&&!(existing instanceof TFolder))throw Error('Action folder conflicts with a file.');if(!existing)await this.app.vault.createFolder(folder);}
+        if(await this.app.vault.read(value)!==expected)throw Error('Action note changed after preparation.');
+        checkEditor(path,expected);if(this.app.vault.getAbstractFileByPath(destination))throw Error('Action destination already exists.');
+        await this.app.vault.rename(value,destination);
+      },
+    };
+  }
   private async startEventSubscriptions(server:import('./event-host-desktop').EventHostServer){
     if(this.eventSubscriptions||this.stopped||Platform.isMobile)return;
     await this.refreshInlineHost();
@@ -452,15 +475,17 @@ export default class SendToT3 extends Plugin {
       },
       validateTarget:async target=>{await this.eventThread(target);},
       isBusy:async target=>threadIsActive(await this.eventThread(target)),
-      prepare:async notification=>existingThreadTurn(await this.eventThread(notification.target),notification.target,commandId(notification.id,'turn'),{messageId:commandId(notification.id,'message'),role:'user',text:notificationPrompt(notification,this.app.vault.getName()),attachments:[]}),
+      prepare:async notification=>existingThreadTurn(await this.eventThread(notification.target!),notification.target!,commandId(notification.id,'turn'),{messageId:commandId(notification.id,'message'),role:'user',text:notificationPrompt(notification,this.app.vault.getName()),attachments:[]}),
       deliver:async notification=>{
         if(!this.eventHostCurrent(server.identity))throw Error('Subscription host ownership changed.');
-        const thread=await this.eventThread(notification.target);
+        const thread=await this.eventThread(notification.target!);
         if(thread.messages?.some((entry:any)=>entry.id===commandId(notification.id,'message')&&entry.role==='user'))return 'delivered';
         if(threadIsActive(thread))return 'busy';
-        const access=await this.inlineThreadAccess(notification.target.environmentId);
+        const access=await this.inlineThreadAccess(notification.target!.environmentId);
         try{if(!this.eventHostCurrent(server.identity))throw Error('Subscription host ownership changed.');await access.api('/api/orchestration/dispatch',notification.command);return 'delivered';}finally{await access.close?.();}
       },
+      prepareAction:notification=>{const event=notification.events.at(-1)!;return prepareEventAction(notification.action!,event.kind==='job'?undefined:event.path,this.eventActionIO(),event.kind==='property'?{property:event.property!,after:event.after,matches:value=>observedPropertyEquals(value,event.after)}:undefined);},
+      deliverAction:async notification=>{if(!this.eventHostCurrent(server.identity))throw Error('Subscription host ownership changed.');await executeEventAction(notification.command as ActionPlan,this.eventActionIO());},
       readThread:async target=>{const thread=await this.eventThread(target);return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread}}).state;},
       watchThread:(target,item,sequence)=>{
         return watchThread(target.threadId,()=>this.inlineThreadAccess(target.environmentId),{item:value=>{if(value.kind==='snapshot'&&value.snapshot?.thread?.projectId!==target.projectId)return;item(value);},reconnecting:error=>logFailure('subscriptions.thread.reconnecting',error,{...target})},undefined,undefined,{afterSequence:sequence});

@@ -58,3 +58,17 @@ test('folder CLI requires exact identities, preserves modes, and replays immutab
     const invalid=await run([...base,'inspect-folder','../private']);assert.equal(invalid.code,1);assert.match(invalid.out,/vault-relative/);
   }finally{await server.dispose();await rm(root,{recursive:true,force:true});}
 });
+
+test('direct action CLI registers without a thread, preserves JSON values and rejects mixed targets',{timeout:15000},async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3-action-command-')),received:any[]=[];
+  const server=await NoteCommandServer.open(root,'.obsidian',async command=>{received.push(command);return {id:command.id,ok:true};},()=>true);
+  try{
+    const base=['--vault',root,'subscribe','--scope','Jobs','--scope-kind','folder','--action','{"kind":"set-property","property":"done","value":true}'];
+    assert.equal((await run(base)).code,0);assert.equal(received[0].target,undefined);assert.deepEqual(received[0].action,{kind:'set-property',property:'done',value:true});
+    assert.equal((await run([...base,'--thread-id','t','--project-id','p','--environment-id','e'])).code,2);
+    assert.equal((await run([...base.slice(0,-1),'null'])).code,2);
+    assert.equal((await run([...base.slice(0,-1),'{"kind":"move-note","folder":"../private"}'])).code,1);
+    const job=['--vault',root,'subscribe-job','--job-id','j','--job-request-id','r','--message-id','m','--job-thread-id','worker','--job-project-id','p','--job-environment-id','e','--job-state','failed','--action','{"kind":"set-property","notePath":"Jobs/A.md","property":"status","value":"failed"}'];
+    assert.equal((await run(job)).code,0);assert.deepEqual(received.at(-1).jobStates,['failed']);assert.equal(received.at(-1).target,undefined);
+  }finally{await server.dispose();await rm(root,{recursive:true,force:true});}
+});
