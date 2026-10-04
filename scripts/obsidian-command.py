@@ -15,7 +15,9 @@ def main():
     parser.add_argument('--request-id', default=None, help='Reuse this UUID to inspect/retry the same command')
     parser.add_argument('--timeout', type=float, default=90)
     parser.add_argument('--retry', action='store_true', help='Retry a failed result with the original prepared send')
-    parser.add_argument('kind', choices=['resolve-response-location', 'response-status', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response', 'send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination', 'subscribe-job', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
+    parser.add_argument('kind', choices=['client-status', 'reload-client', 'resolve-response-location', 'response-status', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response', 'send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination', 'subscribe-job', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
+    parser.add_argument('--release-version', help='Exact immutable release for reload-client')
+    parser.add_argument('--runtime-hashes', help='JSON object of exact release runtime SHA-256 hashes')
     parser.add_argument('note', nargs='?', help='Vault-relative note or folder path; / means vault root')
     parser.add_argument('--destination', action='append', default=[])
     parser.add_argument('--destination-section', help='Exact unique Markdown heading for response placement')
@@ -75,7 +77,20 @@ def main():
         command_id = str(uuid.UUID(args.request_id)) if args.request_id else str(uuid.uuid4())
     except ValueError:
         parser.error('--request-id must be a UUID.')
-    if args.kind in ['resolve-response-location', 'response-status', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response']:
+    if args.kind in ['client-status', 'reload-client']:
+        if any([args.note, args.destination, args.thread_id, args.message_id, args.binding_id, args.scope, args.event]):
+            parser.error('Client commands do not send notes, prompts, or subscriptions.')
+        command = dict(version=1, id=command_id, kind=args.kind)
+        if args.kind == 'reload-client':
+            if not args.release_version or not args.runtime_hashes:
+                parser.error('reload-client requires --release-version and --runtime-hashes.')
+            try:
+                command.update(releaseVersion=args.release_version, runtimeSha256=json.loads(args.runtime_hashes))
+            except ValueError:
+                parser.error('--runtime-hashes must be valid JSON.')
+        elif args.release_version or args.runtime_hashes:
+            parser.error('client-status does not reload the client.')
+    elif args.kind in ['resolve-response-location', 'response-status', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response']:
         if not args.binding_id or args.note or args.destination:
             parser.error('Response commands require --binding-id and do not take note destinations.')
         command = dict(version=1, id=command_id, kind=args.kind, bindingId=args.binding_id)

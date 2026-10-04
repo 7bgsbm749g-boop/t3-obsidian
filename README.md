@@ -317,6 +317,20 @@ npm run release:qlo2 -- --complete-smoke VERSION \
 
 A change is not live or complete until that immutable smoke receipt exists. Backups and receipts live outside the synced vault under `/home/ubuntu/backups/send-to-t3-code`. Direct `scripts/deploy-qlo2.py` use is retired so old instructions cannot bypass versioning, tests, packaging, or smoke evidence. Do not route QLO2 installation through the Windows laptop.
 
+The optional laptop update hook uses the plugin's private command mailbox over
+Tailscale SSH. Configure it once with `python3 scripts/laptop-reload.py --install`.
+Each published immutable receipt queues the newest release; a user timer retries
+when the laptop is offline. QLO2 must be open with a version containing the client
+maintenance commands (one initial native reload is needed when upgrading from an
+older version). `client-status` reports a per-load instance ID and the version
+embedded in the running bundle. `reload-client` requires the exact release version
+and SHA-256 hashes for all three runtime files, waits for Sync and saved ordinary
+edits, and invokes Obsidian's **Reload app without saving** after its acknowledgement
+is durable. A new instance reporting the target version supplies the loaded-version
+receipt; an acknowledgement alone leaves the update pending. Release smoke testing
+stays on the VPS. The hook never closes or force-kills Obsidian, copies plugin files
+to the laptop, or changes its `data.json`.
+
 Git tracks the TypeScript source, tests, release tooling, and dependency lockfile. Generated `dist/`, packaged releases, local validation artifacts, and Python caches are ignored.
 
 This is a local community-plugin-format build; it has not been submitted to or approved for the public community directory.

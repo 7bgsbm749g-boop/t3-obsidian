@@ -351,6 +351,13 @@ def publish_release(
     }
     receipt_path = write_release_receipt(version, receipt)
     print(json.dumps({**receipt, 'receipt': str(receipt_path)}, indent=2))
+    # Publishing remains on the VPS. A private laptop mailbox performs the
+    # native reload only after matching Sync files, with a timer for offline
+    # recovery. This is loaded-version verification, not laptop smoke testing.
+    try:
+        run([sys.executable, str(ROOT / 'scripts/laptop-reload.py'), '--retry'], timeout=55)
+    except (subprocess.SubprocessError, OSError):
+        print('Laptop reload deferred to the retry timer.', file=sys.stderr)
 
 
 def complete_smoke(version: str, device: str, evidence: Path, notes: str) -> None:

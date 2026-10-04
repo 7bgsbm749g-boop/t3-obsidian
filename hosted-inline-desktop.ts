@@ -33,7 +33,6 @@ export class DesktopInlineHost {
   private writer:HostedInlineWriter;
   private coordinated!:CoordinatedHost;
   private nativeWriter!:HostedInlineWriter;
-  private scanWork?:Promise<void>;
   private writerIO!:import('./hosted-inline').HostedWriterIO;
   private authority:InlineLeaseAuthority;
   private stopAuthorityTimer:()=>void;
@@ -91,7 +90,14 @@ export class DesktopInlineHost {
     logEvent('ownership.coordinator.opened',identity);return host;
     }catch(error){logFailure('ownership.coordinator.open.failed',error,identity);throw error;}
   }
-  tick(){if(this.stopped)return Promise.resolve();const scan=this.scanWork??=this.coordinated.scan();void scan.finally(()=>{if(this.scanWork===scan)this.scanWork=undefined;}).catch(()=>{});const work=scan.then(()=>Promise.all([this.writer.tick(),this.nativeWriter.tick()])).then(()=>{});this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});return work;}
+  tick(){
+    if(this.stopped)return Promise.resolve();
+    // Discovery and each response already coalesce their own work. Holding
+    // the entire scan here would prevent later ticks from serving healthy
+    // responses or expiring network requests while one note is stalled.
+    const work=this.coordinated.scan().then(()=>Promise.all([this.writer.tick(),this.nativeWriter.tick()])).then(()=>{});
+    this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});return work;
+  }
   renamed(before:string,after:string){this.writer.renamed(before,after);this.nativeWriter?.renamed(before,after);this.authority.renamed(before,after);if(this.coordinated){const work=this.coordinated.renamed(before,after);this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});}}
   deleted(path:string){this.authority.deleted(path);}
   dispose(){

@@ -1,4 +1,6 @@
 import {prepareEventAction,executeEventAction,type ActionIO,type ActionPlan} from './event-actions';
+import {isClientCommand} from './client-command';
+import pluginManifest from './manifest.json';
 import {mergeSharedSettings} from './shared-settings';
 import {noteThreadTitle,threadTitleGeneration,type ThreadTitleGeneration} from './thread-title';
 import {NativeConflictModal} from './native-conflict-modal';
@@ -105,6 +107,7 @@ export default class SendToT3 extends Plugin {
   private stopped = false;
   private projectCreateModal?:ProjectCreateModal;
   private noteCommandServer?:import('./note-command-desktop').NoteCommandServer;
+  private clientMaintenance?:import('./client-maintenance-desktop').DesktopClientMaintenance;
   private saving = Promise.resolve();
   private sharedBaseline='';
   private lastDiskSnapshot='';
@@ -547,6 +550,11 @@ export default class SendToT3 extends Plugin {
     await service.renameFolder(oldPath,folder.path,notes);
   }
   async executeAgentCommand(input:import('./note-command').AgentCommand){
+    if(isClientCommand(input)){
+      await this.refreshNoteCommandHost();
+      if(!this.clientMaintenance||this.stopped)throw Error('Desktop client maintenance is unavailable.');
+      return this.clientMaintenance.execute(input);
+    }
     if(isResponseCommand(input)){
       const command=validateResponseCommand(input);await this.refreshInlineHost();
       if(!this.inlineHostService){
@@ -1025,7 +1033,9 @@ export default class SendToT3 extends Plugin {
       const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
       if(!root)return;
       const {NoteCommandServer}=await import('./note-command-desktop');
-      const server=await NoteCommandServer.open(root,this.app.vault.configDir||'.obsidian',command=>this.executeAgentCommand(command),()=>!this.stopped&&!this.busy);
+      const configDir=this.app.vault.configDir||'.obsidian';
+      this.clientMaintenance??=new (await import('./client-maintenance-desktop')).DesktopClientMaintenance(this.app,root,configDir,pluginManifest.version);
+      const server=await NoteCommandServer.open(root,configDir,command=>this.executeAgentCommand(command),()=>!this.stopped&&!this.busy,undefined,async(command,result)=>isClientCommand(command)?this.clientMaintenance!.acknowledged(command,result):false);
       if(this.stopped){await server.dispose();return;}this.noteCommandServer=server;
     })();
     this.noteCommandOpening=work;try{await work;}finally{if(this.noteCommandOpening===work)this.noteCommandOpening=undefined;}
