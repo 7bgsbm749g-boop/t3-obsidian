@@ -8,6 +8,7 @@ import type {ReplyReference} from './reply-assets';
 import type {SteeringInput} from './inline-steering';
 import {logFailure} from './diagnostics';
 import {nativeCommitPath,readNativeCommitProof} from './native-response-commit';
+import {ThreadTitleFeed} from './thread-title-feed';
 
 export const INLINE_SNAPSHOT_INTERVAL_MS=10_000;
 export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
@@ -17,6 +18,7 @@ export interface DeviceInlineIO {
   loadRenames?():PendingResponseRename[];
   saveRenames?(renames:PendingResponseRename[]):void;
   receiveCoordinated?(record:LeaseRecord,proofBytes?:string):void|Promise<void>;
+  receiveThreadTitle?(id:string,title:string):void;
   readSaved?(path:string):Promise<string|undefined>;
   access(environmentId:string):Promise<ThreadAccess>;
   readNote(path:string):Promise<string|undefined>;
@@ -45,7 +47,8 @@ export class DeviceInlineManager {
   private hosts=new Map<string,Host>();
   private jobs=new Map<string,Runtime>();
   private accesses=new Map<string,{value:Promise<ThreadAccess>;expires:number}>();
-  constructor(readonly actor:string,private vaultId:string,private io:DeviceInlineIO,private open:(target:InlineHostTarget)=>Promise<{files:InlineFiles;close():void}>,private now=()=>Date.now(),private monotonic=()=>performance.now(),private pause?:(milliseconds:number)=>Promise<void>){const saved=io.loadRenames?.();this.renames=Array.isArray(saved)?saved:[];for(const rename of this.renames)this.host(rename.host);}
+  private titles?:ThreadTitleFeed;
+  constructor(readonly actor:string,private vaultId:string,private io:DeviceInlineIO,private open:(target:InlineHostTarget)=>Promise<{files:InlineFiles;close():void}>,private now=()=>Date.now(),private monotonic=()=>performance.now(),private pause?:(milliseconds:number)=>Promise<void>){const saved=io.loadRenames?.();this.renames=Array.isArray(saved)?saved:[];for(const rename of this.renames)this.host(rename.host);if(io.receiveThreadTitle)this.titles=new ThreadTitleFeed(environmentId=>io.access(environmentId),(id,title)=>io.receiveThreadTitle!(id,title));}
   private host(target:InlineHostTarget){
     const key=hostKey(target),existing=this.hosts.get(key);if(existing)return existing;
     let connection:Promise<{files:InlineFiles;close():void}>|undefined;
@@ -249,6 +252,7 @@ export class DeviceInlineManager {
   }
   tick(){
     if(this.stopped)return;
+    this.titles?.sync([...this.jobs.values()].filter(({record})=>record.coordinated&&!record.stopRequestedAt&&!terminalLease(record)&&this.io.isOpen(record.state?.notePath??record.request.notePath)).map(({record})=>record.request));
     this.flushRenames();
     for(const runtime of this.jobs.values()){
       const {record,host}=runtime,id=record.request.id;
@@ -363,6 +367,7 @@ export class DeviceInlineManager {
   }
   dispose(){
     this.stopped=true;
+    this.titles?.dispose();
     for(const runtime of this.jobs.values()){runtime.refresh?.cancel(Error('Response writer stopped.'));runtime.monitor?.stop();runtime.writer.stop();}
     for(const host of this.hosts.values())host.close();
     for(const access of this.accesses.values())void access.value.then(value=>value.close?.()).catch(()=>{});

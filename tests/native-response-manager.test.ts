@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {NativeResponseManager} from '../native-response-manager';
 import {responseAnchor,projectResponses} from '../native-response-projection';
+import {initialRegion,regionBody} from '../inline-thread';
 import {contentHash} from '../completion';
 import {readNativeCommitProof,type NativeCommitProof} from '../native-response-commit';
 import type {LeaseRecord} from '../inline-lease';
@@ -27,6 +28,18 @@ function fixture(panes=1){
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
 async function start(h:ReturnType<typeof fixture>){await h.manager.receive(record());await h.manager.receive(record(other));for(const frames of h.frames)frames.length=0;}
 function neverBlank(h:ReturnType<typeof fixture>){for(const frames of h.frames)assert.ok(frames.every(frame=>frame.includes(body)),JSON.stringify(frames));}
+
+test('live title metadata updates provisional and migrating headers without changing saved notes or waiting for host output',async()=>{
+ const h=fixture(2),initial=regionBody(initialRegion(id,undefined,'New thread').text,id)!.body;
+ h.manager.preview(h.views[0] as any,id,initial);h.manager.title(id,'Generated **title**');
+ assert.ok(h.visible().includes('Generated \\*\\*title\\*\\* · Working'));
+ assert.ok(h.views.every(view=>view.getViewData()===before));
+ const migrating=record();migrating.migrating=true;migrating.state!.accepted=false;migrating.state!.body=undefined;migrating.request.threadTitle='New thread';
+ await h.manager.receive(migrating);assert.ok(h.visible().includes('Generated \\*\\*title\\*\\* · Working'));
+ h.manager.title(id,'Latest title');await h.manager.receive({...migrating,revision:2});
+ assert.ok(h.visible().includes('Latest title · Working'));assert.ok(h.views.every(view=>view.getViewData()===before));
+ h.manager.dispose();
+});
 
 test('host completion retains final text throughout delayed Sync and adopts incoming saved bytes atomically',async()=>{
   const h=fixture(2);await start(h);await h.manager.receive(completed());

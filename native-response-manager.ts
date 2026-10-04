@@ -4,7 +4,7 @@ import type {Transaction} from '@codemirror/state';
 import {NativeResponseView} from './native-response-view';
 import {responseAnchor,responseRegion,type LocalResponse} from './native-response-projection';
 import type {LeaseRecord} from './inline-lease';
-import {regionBody,initialRegion,startMarker,endMarker} from './inline-thread';
+import {regionBody,initialRegion,startMarker,endMarker,renameInlineHeader} from './inline-thread';
 import {logFailure} from './diagnostics';
 import {nativeCommitMatches,readNativeCommitProof,type NativeCommitProof} from './native-response-commit';
 
@@ -17,6 +17,7 @@ export class NativeResponseManager {
   private views=new Map<MarkdownView,NativeResponseView>();
   private provisional=new Map<string,{path:string;body:string}>();
   private records=new Map<string,LeaseRecord>();
+  private titles=new Map<string,string>();
   private proofs=new Map<string,NativeCommitProof>();
   private reads=new Map<string,Promise<void>>();
   private changedDuringRead=new Set<string>();
@@ -42,6 +43,8 @@ export class NativeResponseManager {
   view(view:MarkdownView){const adapter=this.views.get(view);return adapter&&!adapter.isDisposed()?adapter:undefined;}
   conflictedView(path:string){return [...this.views].find(([view,adapter])=>view.file?.path===path&&!adapter.isDisposed()&&adapter.conflictRecord())?.[0];}
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
+  title(id:string,title:string){if(!title.trim()||this.titles.get(id)===title)return;this.titles.set(id,title);this.refresh();}
+  private titled(id:string,body:string){const title=this.titles.get(id);return title?renameInlineHeader(body,title):body;}
   async receive(record:LeaseRecord,proofBytes?:string){
     if(!record.coordinated)return;
     const old=this.records.get(record.request.id);if(old&&(old.epoch>record.epoch||old.epoch===record.epoch&&old.revision>record.revision))return;
@@ -112,7 +115,7 @@ export class NativeResponseManager {
       }
       try{
         let adapter=this.view(view),saved=adapter?adapter.saved():view.getViewData();
-        const responses:LocalResponse[]=[...this.provisional.entries()].filter(([,item])=>item.path===view.file!.path).map(([id,item])=>({id,body:item.body}));
+        const responses:LocalResponse[]=[...this.provisional.entries()].filter(([,item])=>item.path===view.file!.path).map(([id,item])=>({id,body:this.titled(id,item.body)}));
         for(const record of this.records.values()){
           if((record.state?.notePath??record.request.notePath)!==view.file.path)continue;
           const id=record.request.id;
@@ -120,7 +123,8 @@ export class NativeResponseManager {
           const region=responseRegion(saved,id);
           if(!region||saved.slice(region.from,region.to)!==responseAnchor(id))continue;
           if(record.state?.cleanupComplete&&adapter?.hasMaterialized(id))continue;
-          responses.push({id,body:(record.state?.cleanupComplete?record.state.finalBody:undefined)??record.state?.body??regionBody(initialRegion(id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,id)!.body});
+          const body=(record.state?.cleanupComplete?record.state.finalBody:undefined)??record.state?.body??regionBody(initialRegion(id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,id)!.body;
+          responses.push({id,body:record.state?.cleanupComplete?body:this.titled(id,body)});
         }
         if(!adapter&&responses.length){
           const file=view.file;
@@ -149,5 +153,5 @@ export class NativeResponseManager {
   prepare(path:string,before:string,after:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.prepareMaterialization(before,after,ids);}
   cancel(path:string){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.cancelMaterialization();}
   committed(path:string,saved:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path&&!adapter.acceptCommitted(saved,ids))throw Error('A native pane did not adopt the saved result.');}
-  dispose(){this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.provisional.clear();this.proofs.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();}
+  dispose(){this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.proofs.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();}
 }

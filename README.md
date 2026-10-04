@@ -403,6 +403,8 @@ Commands use a private local mailbox under `<configDir>/t3-code/commands/v1/`, n
 
 Send and Ask use the note name for new thread titles. `Untitled`, `Untitled 1`, and other numbered untitled notes let T3 generate a title. Under **Threads → Thread title generation**, choose **Always use T3** to generate titles for every new thread. Messages without a note also use T3 generation. Existing threads keep their titles, and their canonical name labels the response from the start.
 
+Open editors follow T3 title metadata directly, so generated titles do not wait for an assistant message or a host response commit.
+
 Streaming headers display the thread name, such as **Alpha plan · Working**, and update from the canonical thread title. The thread-name header disappears when the reply completes. Titles are escaped as plain text. Before the thread is available, the prepared send title labels its block. Multi-response controls show the name and short block ID.
 
 
