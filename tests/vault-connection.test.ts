@@ -6,7 +6,7 @@ import {randomUUID} from 'node:crypto';
 function harness(){
   const id=randomUUID(),c={host:'direct',executable:'',transport:'direct' as const,url:'https://laptop.example',environmentId:'laptop-env'};
   const session={url:c.url,environmentId:c.environmentId,token:'private-token',expiresAt:Date.now()+600_000};
-  let projects:any[]=[],lose=false,closed=0,noteChecks=0;
+  let projects:any[]=[],lose=false,closed=0,noteChecks=0,folderEntries:any[]|undefined;
   const files=new Map<string,string>();
   const commands:any[]=[],rpc:any[]=[],requests:string[]=[];
   const fetcher=async(url:any,options:any)=>{
@@ -36,11 +36,12 @@ function harness(){
         value={contents:contents??JSON.stringify({vaultId:req.payload.cwd==='wrong'?'another-vault':id}),truncated:false};
       }else if(req.tag==='projects.writeFile'){files.set(req.payload.relativePath,req.payload.contents);value={relativePath:req.payload.relativePath};}
       else if(req.tag==='projects.deleteEntry'){files.delete(req.payload.relativePath);value={relativePath:req.payload.relativePath};}
+      else if(req.tag==='projects.listEntries'&&folderEntries!==undefined)value={entries:folderEntries,truncated:false};
       else {noteChecks++;value={entries:noteChecks<2?[]:[{path:'Notes/Draft.md',kind:'file'}]};}
       queueMicrotask(()=>ws.onmessage({data:JSON.stringify([{_tag:'Exit',requestId:req.id,exit:{_tag:'Success',value}}])}));
     }};queueMicrotask(()=>ws.onopen());return ws as WebSocket;
   };
-  return {id,c,session,commands,rpc,requests,files,connect:()=>connectVaultRemote(c,session,fetcher,socket),lose:()=>{lose=true;},setProjects:(p:any[])=>{projects=p;},closed:()=>closed};
+  return {id,c,session,commands,rpc,requests,files,connect:()=>connectVaultRemote(c,session,fetcher,socket),lose:()=>{lose=true;},setProjects:(p:any[])=>{projects=p;},setFolderEntries:(entries:any[])=>{folderEntries=entries;},closed:()=>closed};
 }
 
 test('remote vault discovery uses identity across different folder names and handles missing settings',async()=>{
@@ -92,4 +93,31 @@ test('remote vault access refuses credentials from another environment before op
   const h=harness();let calls=0;
   await assert.rejects(connectVaultRemote(h.c,{...h.session,environmentId:'other'},async()=>{calls++;return new Response('{}');},()=>{throw Error('must not open');}),/Pair this connection/);
   assert.equal(calls,0);
+});
+
+test('new remote workspace uses explicit directory creation and recovers a lost response',async()=>{
+  const h=harness(),r=await h.connect();
+  try{
+    h.setFolderEntries([{path:'unrelated:linux-name',kind:'directory'}]);
+    const folder={parentPath:'C:\\Users\\Alex',name:'New workspace'};
+    const registration=vaultRegistration(h.c.environmentId,'C:\\Users\\Alex\\New workspace',h.id,'New project');
+    h.lose();await assert.rejects(r.ensureProject(registration,folder),/Cannot reach T3/);
+    const project=await r.ensureProject(registration,folder);
+    assert.equal(project.workspaceRoot,registration.workspaceRoot);assert.equal(h.commands.length,1);
+    assert.equal(h.commands[0].createWorkspaceRootIfMissing,true);
+    assert.deepEqual(h.rpc[0].payload,{cwd:folder.parentPath,directoryPath:''});
+    assert.equal(h.rpc.length,1,'A retry with an existing project must not try to create its directory again');
+  }finally{r.close();}
+});
+
+for(const kind of ['file','directory'])test(`new remote folder rejects an existing ${kind} before dispatch`,async()=>{
+  const h=harness(),r=await h.connect();
+  try{
+    h.setFolderEntries([{path:'NEW',kind}]);
+    const registration=vaultRegistration(h.c.environmentId,'C:/Work/new',h.id,'New');
+    await assert.rejects(r.ensureProject(registration,{parentPath:'C:/Work',name:'new'}),/already exists/);
+    assert.equal(h.commands.length,0);
+    await assert.rejects(r.ensureProject(registration,{parentPath:'C:/Other',name:'new'}),/does not match/);
+    assert.equal(h.commands.length,0);
+  }finally{r.close();}
 });

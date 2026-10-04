@@ -68,6 +68,10 @@
 .send-to-t3-question-option { display: grid; grid-template-columns: auto 1fr; gap: 0.35em 0.7em; padding: 0.5em 0; cursor: pointer; }
 .send-to-t3-question-option small { grid-column: 2; color: var(--text-muted); }
 .send-to-t3-question-dialog textarea { width: 100%; min-height: 5em; margin-top: 0.6em; }
+.send-to-t3-question-dialog textarea[data-answer-active] { border-width: 2px; transition: border-color 120ms, box-shadow 120ms, opacity 120ms; }
+.send-to-t3-question-dialog textarea[data-answer-active="true"] { border-color: var(--interactive-accent); box-shadow: 0 0 0 1px var(--interactive-accent), 0 0 12px color-mix(in srgb, var(--interactive-accent) 55%, transparent); }
+.send-to-t3-question-dialog textarea[data-answer-active="false"] { color: var(--text-muted); opacity: 0.65; box-shadow: none; }
+.send-to-t3-custom-answer-hint { display: block; margin-top: 0.4em; color: var(--text-muted); }
 .send-to-t3-question-actions { display: flex; flex-wrap: wrap; gap: 0.7em; justify-content: flex-end; }
 /* Obsidian's button display rules override the browser's default hidden rule. */
 .send-to-t3-question-actions button[hidden] { display: none !important; }
@@ -171,3 +175,4 @@
   vertical-align: baseline;
 }
  .send-to-t3-location-conflict { margin: 8px 16px; padding: 12px; border: 1px solid var(--text-warning); border-radius: 6px; background: var(--background-secondary); overflow-wrap: anywhere; }
+.send-to-t3-workspace-folders { max-height: 30vh; overflow-y: auto; }

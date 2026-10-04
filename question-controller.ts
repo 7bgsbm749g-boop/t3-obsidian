@@ -1,5 +1,5 @@
 import {logEvent,logFailure} from './diagnostics';
-import {pendingQuestions,questionAnswers,questionKey,staleQuestionFailure,type PendingQuestion,type QuestionTarget,type QuestionDrafts} from './questions';
+import {pendingQuestions,questionAnswers,questionKey,staleQuestionFailure,type PendingQuestion,type QuestionTarget,type QuestionDraft,type QuestionDrafts} from './questions';
 import type {InlineActivity} from './inline-thread';
 import type {ThreadAccess} from './thread-stream';
 
@@ -25,7 +25,7 @@ export class QuestionController {
   private persist(){this.store.save([...this.records.values()]);}
   record(target:QuestionTarget){const key=questionKey(target);let record=this.records.get(key);if(!record){record={target,drafts:Object.create(null)};this.records.set(key,record);}return record;}
   view(target:QuestionTarget):QuestionView{return this.views.get(questionKey(target))??(this.records.get(questionKey(target))?.resolved?{status:'resolved'}:{status:'loading'});}
-  draft(target:QuestionTarget,questionId:string,value:{selected?:string[];text?:string}){
+  draft(target:QuestionTarget,questionId:string,value:QuestionDraft){
     const record=this.record(target);if(record.command)throw Error('Retry the saved submission before changing this answer.');
     record.drafts[questionId]=value;this.persist();
   }

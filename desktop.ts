@@ -11,6 +11,7 @@ import type {Connection} from './bridge';
 import type {ThreadAccess} from './thread-stream';
 import {existingThreadTurn} from './thread-target';
 import {readNewThreadDefaults,type NewThreadDefaults} from './model-defaults';
+import {workspaceChildPath} from './workspace-picker';
 
 export function desktopDefaults():Connection {return {executable:'',host:'local',native:true,baseDir:join(homedir(),'.t3')};}
 export function cli(command:string[],args:string[]):Promise<string> {
@@ -40,6 +41,16 @@ export async function browseDesktopFolder(path:string){
  const root=await fs.realpath(path==='~'?homedir():path);
  const entries=(await fs.readdir(root,{withFileTypes:true})).filter(entry=>entry.isDirectory()).sort((a,b)=>a.name.localeCompare(b.name));
  return {parentPath:root,entries:entries.map(entry=>({name:entry.name,fullPath:join(root,entry.name)}))};
+}
+export async function createDesktopFolder(parentPath:string,name:string):Promise<string>{
+ const parent=await fs.realpath(parentPath);
+ const path=workspaceChildPath(parent,name);
+ try{await fs.mkdir(path);}catch(error:any){
+  if(error.code==='EEXIST')throw Error('A file or folder with this name already exists.');
+  if(error.code==='EACCES'||error.code==='EPERM')throw Error('You do not have permission to create a folder here.');
+  throw Error('Cannot create this folder. Check the parent folder and try again.');
+ }
+ return path;
 }
 export function uuid5(id:string,name:string):string {
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))throw new Error('Invalid request ID.');

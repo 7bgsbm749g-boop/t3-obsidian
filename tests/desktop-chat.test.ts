@@ -134,3 +134,19 @@ test('desktop unlinked notes choose an external workspace and persist the link o
     assert.equal((await h.cliCalls()).filter(args=>args[0]==='project').length,1);
   }finally{await h.dispose();}
 });
+
+test('desktop new workspace creation checks vault exclusion before making a directory',{timeout:20_000},async()=>{
+  const h=await harness(true);
+  try{
+    const parent=join(h.vaultRoot,'..'),root=join(parent,'New workspace');
+    const location=await h.plugin.projectLocation({id:'local',name:'This computer',local:true});
+    const project=await location.create(root,'Created workspace',{parentPath:parent,name:'New workspace'});
+    assert.equal(project.workspaceRoot,root);
+    assert.equal((await location.browse(root)).parentPath,root);
+    const retry=await location.create(root,'Created workspace',{parentPath:parent,name:'New workspace'});
+    assert.equal(retry.id,project.id);assert.equal((await h.cliCalls()).filter(args=>args[0]==='project').length,1);
+    const blocked=join(h.vaultRoot,'blocked');
+    await assert.rejects(location.create(blocked,'Blocked',{parentPath:h.vaultRoot,name:'blocked'}),/outside the Obsidian vault/);
+    assert.ok(!(await location.browse(h.vaultRoot)).entries.some((entry:any)=>entry.name==='blocked'));
+  }finally{await h.dispose();}
+});

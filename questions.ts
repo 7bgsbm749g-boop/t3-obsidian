@@ -4,7 +4,7 @@ export interface QuestionOption {label:string;description:string;value?:string}
 export interface Question {id:string;header:string;question:string;options:QuestionOption[];multiSelect:boolean;allowCustomAnswer?:boolean}
 export interface PendingQuestion {requestId:string;questions:Question[];turnId:string|null;responseMode?:'message';createdAt:string}
 export interface QuestionTarget {environmentId:string;threadId:string;requestId:string}
-export interface QuestionDraft {selected?:string[];text?:string}
+export interface QuestionDraft {selected?:string[];text?:string;mode?:'custom'|'options'}
 export type QuestionDrafts=Record<string,QuestionDraft>;
 const staleDetails=['stale pending user-input request','unknown pending user-input request','unknown pending user input request','unknown pending codex user input request'];
 export function staleQuestionFailure(activity:InlineActivity){return activity.kind==='provider.user-input.respond.failed'&&staleDetails.some(fragment=>String(activity.payload?.detail??'').toLowerCase().includes(fragment));}
@@ -28,7 +28,7 @@ export function pendingQuestions(activities:InlineActivity[]):PendingQuestion[]{
 }
 export function questionAnswers(request:PendingQuestion,drafts:QuestionDrafts):Record<string,string|string[]> {
   const entries=request.questions.map(q=>{
-    const draft=drafts[q.id],text=q.allowCustomAnswer!==false?draft?.text?.trim():undefined;
+    const draft=drafts[q.id],text=q.allowCustomAnswer!==false&&draft?.mode!=='options'?draft?.text?.trim():undefined;
     const selected=[...new Set(draft?.selected??[])].filter(value=>q.options.some(o=>(o.value??o.label)===value));
     const answer=text||(q.multiSelect?(selected.length?selected:undefined):selected[0]);
     if(answer===undefined)throw Error(`Answer “${q.header}” before submitting.`);

@@ -52,10 +52,21 @@ export class QuestionModal extends Modal {
           // A default choice is a draft only, never an implicit submission.
           if(input.checked&&!draft.selected?.length){draft={...draft,selected:[input.value]};if(!record.command)this.controller.draft(this.target,question.id,draft);}
           inputs.push(input);label.createEl('span',{text:option.label});if(option.description)label.createEl('small',{text:option.description});
-          input.onchange=()=>{draft={selected:inputs.filter(i=>i.checked).map(i=>i.value),text:''};if(textarea)textarea.value='';this.controller.draft(this.target,question.id,draft);};
+          input.onchange=()=>{draft={...draft,selected:inputs.filter(i=>i.checked).map(i=>i.value),mode:'options'};this.controller.draft(this.target,question.id,draft);updateCustom();};
         }
         const textarea=question.allowCustomAnswer!==false?section.createEl('textarea',{attr:{'aria-label':question.options.length?`Custom answer for ${question.header}`:question.header,placeholder:question.options.length?'Or write your own answer':'Your answer'}}):undefined;
-        if(textarea){textarea.value=draft.text??'';textarea.oninput=()=>{draft={text:textarea.value,selected:[]};for(const input of inputs)input.checked=false;this.controller.draft(this.target,question.id,draft);};}
+        const hint=textarea?section.createEl('small',{cls:'send-to-t3-custom-answer-hint'}):undefined;
+        const updateCustom=()=>{
+          if(!textarea)return;
+          const active=draft.mode==='custom'||(draft.mode!=='options'&&(!!draft.text||!question.options.length));
+          textarea.dataset.answerActive=String(active);
+          hint!.textContent=!active&&draft.text?'Draft saved. The selected option will be submitted.':'';
+        };
+        if(textarea){
+          textarea.value=draft.text??'';
+          const activate=()=>{draft={text:textarea.value,selected:[],mode:'custom'};for(const input of inputs)input.checked=false;this.controller.draft(this.target,question.id,draft);updateCustom();};
+          textarea.onfocus=activate;textarea.oninput=activate;updateCustom();
+        }
       }
     }
     const locked=!!record.command||!view.request;

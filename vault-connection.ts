@@ -4,6 +4,7 @@ import type {Connection,Project} from './bridge';
 import {parseProjects} from './bridge';
 import {environmentApi,endpoint,commandId,type PairedSession,type Fetcher} from './direct';
 import {sameWorkspacePath} from './folder-link';
+import {workspaceChildPath,type NewWorkspaceFolder} from './workspace-picker';
 
 export interface VaultLocation {environmentId:string;workspaceRoot:string}
 export interface VaultRegistration {type:'project.create';commandId:string;projectId:string;title:string;workspaceRoot:string;createdAt:string}
@@ -23,7 +24,7 @@ export interface VaultRemote {
   readFile(root:string,path:string):Promise<string|undefined>;
   writeFile(root:string,path:string,contents:string):Promise<void>;
   deleteFile(root:string,path:string):Promise<void>;
-  ensureProject(registration:VaultRegistration):Promise<Project>;
+  ensureProject(registration:VaultRegistration,newFolder?:NewWorkspaceFolder):Promise<Project>;
   close():void;
 }
 
@@ -50,10 +51,16 @@ export async function connectVaultRemote(c:Connection,s:PairedSession|undefined,
     },
     writeFile:async(root,path,contents)=>{await rpc('projects.writeFile',{cwd:root,relativePath:path,contents});},
     deleteFile:async(root,path)=>{await rpc('projects.deleteEntry',{cwd:root,relativePath:path});},
-    ensureProject:async registration=>{
+    ensureProject:async(registration,newFolder)=>{
       const root=registration.workspaceRoot;
+      if(newFolder&&!sameWorkspacePath(root,workspaceChildPath(newFolder.parentPath,newFolder.name)))throw Error('The new workspace folder does not match its parent.');
       const existing=(await projects()).find(p=>sameWorkspacePath(p.workspaceRoot,root));if(existing)return existing;
-      await api('/api/orchestration/dispatch',registration);
+      if(newFolder){
+        const result=await rpc('projects.listEntries',{cwd:newFolder.parentPath,directoryPath:''});
+        if(!Array.isArray(result?.entries)||result.truncated||result.entries.some((entry:any)=>typeof entry.path!=='string'))throw Error('Cannot check this parent folder. Browse again before creating a folder.');
+        if(result.entries.some((entry:any)=>sameWorkspacePath(newFolder.parentPath.replace(/[\\/]+$/,'')+'/'+entry.path,root)))throw Error('A file or folder with this name already exists.');
+      }
+      await api('/api/orchestration/dispatch',newFolder?{...registration,createWorkspaceRootIfMissing:true}:registration);
       const project=(await projects()).find(p=>sameWorkspacePath(p.workspaceRoot,root));if(!project)throw Error('The project was created, but discovery has not returned it yet. Try again.');return project;
     },
     close:transport.close,

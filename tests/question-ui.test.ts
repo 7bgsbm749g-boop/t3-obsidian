@@ -7,7 +7,7 @@ import {EditorState} from '@codemirror/state';
 import {questionUrl} from '../questions';
 
 class Element {
-  children:Element[]=[];textContent='';value='';checked=false;disabled=false;hidden=false;name='';type='';selectionStart=0;onclick?:()=>void;oninput?:()=>void;onchange?:()=>void;
+  children:Element[]=[];textContent='';value='';checked=false;disabled=false;hidden=false;name='';type='';selectionStart=0;dataset:Record<string,string>={};onclick?:()=>void;oninput?:()=>void;onchange?:()=>void;onfocus?:()=>void;
   constructor(public tag='div',public options:any={}){this.textContent=options.text??'';this.type=options.type??'';}
   addClass(){} addEventListener(){} empty(){this.children=[];}replaceChildren(){this.children=[];}
   createEl(tag:string,options?:any){const child=new Element(tag,options);this.children.push(child);return child;}
@@ -70,4 +70,23 @@ test('closing a resolved dialog preserves editor scroll while Obsidian restores 
   h.modal.app.restoreFocus=()=>{scroll={top:0,left:0};};
   h.activities.push({id:'resolved',kind:'user-input.resolved',payload:{requestId:'request'}});
   await h.controller.refresh([target]);assert.equal(h.modal.isOpen,false);assert.deepEqual(scroll,{top:800,left:12});h.controller.dispose();
+});
+
+test('choosing an option preserves the inactive custom draft across refresh and reopening',async()=>{
+  const h=await harness();let areas=h.modal.contentEl.querySelectorAll('textarea'),inputs=h.modal.contentEl.querySelectorAll('input');
+  areas[0].value='Keep this custom answer';areas[0].oninput!();
+  assert.equal(areas[0].dataset.answerActive,'true');assert.ok(!inputs[0].checked);
+  inputs[1].checked=true;inputs[1].onchange!();
+  assert.equal(areas[0].value,'Keep this custom answer');assert.equal(areas[0].dataset.answerActive,'false');
+  assert.match(h.modal.contentEl.querySelectorAll('small').map((el:Element)=>el.textContent).join(' '),/selected option will be submitted/);
+  await h.controller.refresh([target]);assert.equal(areas[0].value,'Keep this custom answer');
+  h.modal.close();h.modal.open();await h.controller.refresh([target]);
+  areas=h.modal.contentEl.querySelectorAll('textarea');inputs=h.modal.contentEl.querySelectorAll('input');
+  assert.equal(areas[0].value,'Keep this custom answer');assert.equal(areas[0].dataset.answerActive,'false');assert.equal(inputs[1].checked,true);
+  areas[0].onfocus!();assert.equal(areas[0].dataset.answerActive,'true');assert.ok(!inputs[1].checked);
+  inputs[1].checked=true;inputs[1].onchange!();
+  areas[2].value='Details';areas[2].oninput!();inputs[2].checked=true;inputs[2].onchange!();
+  await h.controller.submit(target);assert.equal(h.sent[0].answers.choice,'Second');
+  assert.equal(areas[0].value,'Keep this custom answer','Only the active answer is submitted; the draft remains visible');
+  h.modal.close();h.controller.dispose();
 });

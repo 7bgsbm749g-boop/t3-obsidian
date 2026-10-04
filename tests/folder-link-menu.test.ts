@@ -12,13 +12,13 @@ async function folderMenuHarness(){
   let shownMenu:any,threadsReply:any[]|undefined,projectsReply:any[]|undefined;
   let fileMenu:(...args:any[])=>void=()=>{},failSave=false,networkRequests=0;
   class Element {
-    text='';settings:any[]=[];children:Element[]=[];
+    text='';cls='';settings:any[]=[];children:Element[]=[];
     empty(){this.settings=[];this.children=[];}
     setText(value:string){this.text=value;}
     events:Record<string,Function>={};
     addEventListener(name:string,callback:Function){this.events[name]=callback;}
     click(){return this.events.click?.();}
-    createEl(_tag:string,options?:{text?:string}){const child=new Element();child.text=options?.text??'';this.children.push(child);return child;}
+    createEl(_tag:string,options?:{text?:string;cls?:string}){const child=new Element();child.text=options?.text??'';child.cls=options?.cls??'';this.children.push(child);return child;}
   }
   class Control {
     value:any;disabled=false;text='';handler:(value?:any)=>any=()=>{};
@@ -338,5 +338,58 @@ test('workspace exclusion respects Windows case, separators and directory bounda
     assert.throws(()=>h.plugin.checkProjectWorkspace({id:'c'},'C:/Users/Jack/Other/../QLO2/Code'),/outside/);
     assert.doesNotThrow(()=>h.plugin.checkProjectWorkspace({id:'c'},'C:/Users/Jack/QLO2-code'));
     assert.doesNotThrow(()=>h.plugin.checkProjectWorkspace({id:'another-machine'},'C:/Users/Jack/QLO2/Code'));
+  }finally{h.plugin.onunload();}
+});
+
+test('workspace folder search updates only the list and resets on navigation',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    let browses=0;
+    h.plugin.projectLocation=async()=>({browse:async(path:string)=>{browses++;return {parentPath:path==='~'?'/work':path,entries:['Alpha','beta','alphabet'].map(name=>({name,fullPath:'/work/'+name}))};},close:()=>{}});
+    h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);
+    await h.button(modal,'Home').click();
+    const search=h.setting(modal,'Search folders').controls[0];
+    const list=modal.contentEl.children.find((el:any)=>el.cls==='send-to-t3-workspace-folders');
+    assert.deepEqual(list.settings.map((row:any)=>row.name),['Alpha','beta','alphabet']);
+    search.change('ALP');
+    assert.equal(h.setting(modal,'Search folders').controls[0],search,'Keep the input and its focus while typing');
+    assert.deepEqual(list.settings.map((row:any)=>row.name),['Alpha','alphabet']);
+    search.change('missing');assert.equal(list.settings.length,0);assert.equal(list.children[0].text,'No matching folders');
+    search.change('');assert.equal(list.settings.length,3);assert.equal(browses,1,'Filtering must not make remote requests');
+    search.change('beta');await list.settings[0].controls[0].click();
+    assert.equal(h.setting(modal,'Search folders').controls[0].value,'');assert.equal(h.setting(modal,'Workspace location').controls[0].value,'/work/beta');
+    modal.close();
+  }finally{h.plugin.onunload();}
+});
+
+for(const cancel of [true,false])test(`new workspace folder is ${cancel?'cancelled without creation':'created only on final confirmation'}`,async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const creates:any[]=[];
+    h.plugin.projectLocation=async()=>({browse:async()=>({parentPath:'/work',entries:[{name:'existing',fullPath:'/work/existing'}]}),create:async(path:string,title:string,newFolder:any)=>{creates.push({path,title,newFolder});return {...h.project,workspaceRoot:path};},close:()=>{}});
+    h.plugin.createFolderProject(h.plugin.app.vault.getAbstractFileByPath('Notes'));const modal=h.modals.at(-1);
+    h.setting(modal,'Project name').controls[0].change('My project');
+    await h.button(modal,'New folder').click();
+    h.setting(modal,'New folder name').controls[0].change('../escape');await h.button(modal,'Use new folder').click();
+    assert.equal(h.setting(modal,'Workspace location').controls[0].value,'/work');assert.equal(creates.length,0);
+    h.setting(modal,'New folder name').controls[0].change('existing');await h.button(modal,'Use new folder').click();
+    assert.ok(modal.contentEl.children.some((el:any)=>el.text==='A folder with this name already exists.'));
+    h.setting(modal,'New folder name').controls[0].change('New workspace');await h.button(modal,'Use new folder').click();
+    assert.equal(h.setting(modal,'Workspace location').controls[0].value,'/work/New workspace');assert.equal(creates.length,0);
+    if(cancel){await h.button(modal,'Cancel').click();assert.equal(creates.length,0);assert.equal(h.plugin.settings.folderLinks.length,0);}
+    else{await h.button(modal,'Create and link').click();assert.deepEqual(JSON.parse(JSON.stringify(creates)),[{path:'/work/New workspace',title:'My project',newFolder:{parentPath:'/work',name:'New workspace'}}]);assert.equal(modal.closed,true);assert.equal(h.plugin.settings.folderLinks[0].workspaceRoot,'/work/New workspace');}
+  }finally{h.plugin.onunload();}
+});
+
+test('switching machines clears a prepared new folder and search',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    h.plugin.vaultMachines=()=>[{id:'c',name:'Laptop'},{id:'other',name:'Other'}];
+    h.plugin.projectLocation=async()=>({browse:async()=>({parentPath:'/work',entries:[]}),close:()=>{}});
+    h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);
+    await h.button(modal,'New folder').click();await h.button(modal,'Use new folder').click();
+    h.setting(modal,'Search folders').controls[0].change('test');h.setting(modal,'Machine').controls[0].change('other');
+    assert.equal(h.setting(modal,'Workspace location').controls[0].value,'~');assert.equal(h.setting(modal,'Search folders').controls[0].value,'');
+    assert.ok(!modal.contentEl.children.some((el:any)=>el.text==='This folder will be created when you select Create and link.'));modal.close();
   }finally{h.plugin.onunload();}
 });

@@ -39,6 +39,7 @@ import {folderNotePath,type FolderNotesSettings} from './folder-note-adapter';
 import {installFolderIndicators,type FolderIndicatorController} from './folder-indicator';
 import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,waitForVaultNote,type VaultLocation,type VaultRegistration} from './vault-connection';
 import {ProjectCreateModal,ProjectCreationCancelled,workspaceInsideVault,type ProjectLocation} from './project-create-ui';
+import {workspaceChildPath} from './workspace-picker';
 import {VaultSetupModal,VaultSetupCancelled,type VaultMachine} from './vault-setup-ui';
 import {EventSubscriptions,type EventTarget,type NoteEventSnapshot,notificationPrompt,inEventScope} from './event-subscriptions';
 import {existingThreadTurn,threadIsActive} from './thread-target';
@@ -1543,11 +1544,20 @@ export default class SendToT3 extends Plugin {
     if(machine.local){
       const desktop=await import('./desktop');
       const connection={...this.settings.connection,host:'local',transport:'desktop' as const};
+      const createdFolders=new Set<string>();
       return {
         browse:desktop.browseDesktopFolder,
-        create:async(root,title)=>{
+        create:async(root,title,newFolder)=>{
+          if(newFolder&&!sameWorkspacePath(root,workspaceChildPath(newFolder.parentPath,newFolder.name)))throw Error('The new workspace folder does not match its parent.');
           this.checkProjectWorkspace(machine,root);
           let project=parseProjects(await runBridge(connection,['projects'])).find(p=>sameWorkspacePath(p.workspaceRoot,root));
+          if(newFolder&&!project&&!createdFolders.has(root)){
+            const parent=(await desktop.browseDesktopFolder(newFolder.parentPath)).parentPath;
+            const canonical=workspaceChildPath(parent,newFolder.name);
+            if(!sameWorkspacePath(root,canonical))throw Error('The parent folder changed. Choose the new folder again.');
+            this.checkProjectWorkspace(machine,canonical);
+            await desktop.createDesktopFolder(parent,newFolder.name);createdFolders.add(root);
+          }
           if(!project){const id=await desktop.addDesktopProject(connection,root,title);project=parseProjects(await runBridge(connection,['projects'])).find(p=>p.id===id);}
           if(!project)throw Error('T3 created the project, but discovery has not returned it yet. Try again.');
           return project;
@@ -1558,12 +1568,12 @@ export default class SendToT3 extends Plugin {
     const c=this.settings.paired.find(c=>c.id===machine.id||'environment:'+c.environmentId===machine.id);
     if(!c)throw Error('This machine connection changed. Open the dialog again.');
     const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:c.url,environmentId:c.environmentId,connectionId:c.id},await this.sessionFor(c.id));
-    return {browse:path=>remote.browse(path),close:()=>remote.close(),create:async(root,title)=>{
+    return {browse:path=>remote.browse(path),close:()=>remote.close(),create:async(root,title,newFolder)=>{
       this.checkProjectWorkspace(machine,root);
       const proposed=vaultRegistration(c.environmentId,root,this.settings.vaultId+':workspace',title);
       const registration=this.vaultRegistrations[proposed.commandId]??proposed;
       this.vaultRegistrations[proposed.commandId]=registration;await this.save();
-      return {...await remote.ensureProject(registration),connectionId:c.id,connectionName:c.name};
+      return {...await remote.ensureProject(registration,newFolder),connectionId:c.id,connectionName:c.name};
     }};
   }
   async signOutCloud(){
