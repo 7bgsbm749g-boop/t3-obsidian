@@ -53,6 +53,20 @@ function stranded(h:ReturnType<typeof harness>){
 
 function independent(h:ReturnType<typeof harness>){h.request.independent=true;h.files.set(h.paths.request,JSON.stringify(h.request));return h;}
 
+test('canonical title-only state updates the waiting header before any message or turn is bound',async()=>{
+  const h=harness('Original question');h.dispatch();
+  let title='Generated plan';
+  h.io.threadState=async()=>({title,messages:[],activities:[],historyComplete:true});
+  const writer=h.create();await writer.tick();
+  assert.match(h.document,/Generated plan · Working/);
+  assert.match(h.document,/Original question/);assert.equal(h.state.turnId,undefined);
+  assert.match(h.document,/User introduction/);assert.match(h.document,/User tail/);
+  title='Renamed **plan**';await writer.tick();
+  assert.ok(h.document.includes('Renamed \\*\\*plan\\*\\*'));
+  assert.doesNotMatch(h.document,/Generated plan/);
+  assert.equal(h.state.hashes.at(-1),contentHash(regionBody(h.document,h.request.id)!.body));
+});
+
 for(const crash of ['none','proof','cleanup'])test(`independent reply removes all tracking boundaries and survives ${crash} crash`,async()=>{
   const h=independent(harness());h.dispatch();await h.create().tick();h.answer('Final reply',true);
   if(crash==='proof')h.crash(true);

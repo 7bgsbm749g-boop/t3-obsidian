@@ -176,6 +176,50 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },vaultAccesses:()=>vaultAccesses};
 }
 
+for(const mode of ['untitled-only','always'])for(const name of ['Release plan','Untitled 1'])test(`Send and Ask share ${mode} naming for ${name}`,async()=>{
+  const h=await chatHarness(),path=`Notes/${name}.md`;
+  try{
+    h.plugin.settings.threadTitleGeneration=mode;
+    await h.plugin.sendChat('This question must not become the title',{path},{newThread:true});
+    const expected=mode==='always'||name==='Untitled 1'?'New thread':name;
+    assert.equal(h.commands[0].title,expected);
+    h.plugin.app.vault.read=async()=> 'Bounded note contents';
+    const sent=await h.plugin.send({path,basename:name,stat:{ctime:123}},project,{newThread:true,streamReply:false,throwOnError:true});
+    assert.equal(sent.request.title,expected);assert.equal(h.commands[2].title,expected);
+  }finally{h.plugin.onunload();}
+});
+
+test('existing Ask header uses the canonical name before a delayed turn acknowledgement',async()=>{
+  let release!:()=>void,entered!:()=>void;
+  const acknowledgement=new Promise<void>(resolve=>{release=resolve;}),dispatched=new Promise<void>(resolve=>{entered=resolve;});
+  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'){entered();await acknowledgement;}});
+  try{
+    h.setStreaming(true);h.plugin.settings.threadTitleGeneration='always';
+    h.setThreads([{id:'existing',projectId:project.id,title:'Canonical existing title',runtimeMode:'approval-required',interactionMode:'default'}]);
+    const path='Notes/Untitled 1.md',note=h.attachEditor(path,'Ordinary content');
+    const sending=h.plugin.sendInlineChat('implement',{path},{view:note.view,editor:note.editor},{threadId:'existing'});
+    await dispatched;
+    assert.match(note.value,/Canonical existing title · Working/);
+    assert.doesNotMatch(note.value,/implement · Working|New thread · Working/);
+    assert.equal(h.commands.length,1);assert.equal(h.commands[0].type,'thread.turn.start');
+    release();await sending;
+  }finally{release?.();h.plugin.onunload();}
+});
+
+test('failed requests freeze their chosen title across setting changes and reload',async()=>{
+  let lose=true;
+  const h=await chatHarness(async command=>{if(command.type==='thread.create'&&lose){lose=false;throw Error('lost reply');}});
+  let plugin=h.plugin;
+  try{
+    await assert.rejects(plugin.sendChat('Ask text',{path:'Notes/Release plan.md'},{newThread:true}));
+    const create=h.commands[0];assert.equal(create.title,'Release plan');
+    plugin.settings.threadTitleGeneration='always';await plugin.save();
+    plugin.onunload();plugin=await h.start();
+    await plugin.retry(plugin.settings.pending[0]);
+    assert.deepEqual(h.commands[1],create);assert.equal(plugin.settings.pending.length,0);
+  }finally{plugin.onunload();}
+});
+
 test('disabled logging leaves failed-send recovery and original-ID retries intact across reload',async()=>{
   let lose=true;
   const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'&&lose){lose=false;throw Error('lost reply');}});
@@ -202,7 +246,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
     assert.equal(h.commands.length,2);
     assert.equal(h.commands[0].type,'thread.create');
     assert.equal(h.commands[0].projectId,project.id);
-    assert.equal(h.commands[0].title,'Plan my café 🧪 notes');
+    assert.equal(h.commands[0].title,'New thread');
     assert.equal(h.commands[1].type,'thread.turn.start');
     assert.ok(h.commands[1].message.text.startsWith(prompt));
     assert.doesNotMatch(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
@@ -353,7 +397,7 @@ test('chat validates text before creating a thread and applies enabled orchestra
     assert.equal(h.plugin.busy,false);
     const firstLine='A'.repeat(180), prompt='\n'+firstLine+'\nContinue with this line.';
     await h.plugin.sendChat(prompt);
-    assert.equal(h.commands[0].title,'A'.repeat(160));
+    assert.equal(h.commands[0].title,'New thread');
     assert.ok(h.commands[1].message.text.startsWith(WAIT_FOR_OTHER_THREADS_INSTRUCTION+'\n\n'+prompt));
     assert.doesNotMatch(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal(h.plugin.settings.completionJobs.length,0);
@@ -390,7 +434,7 @@ test('palette chat sends the visible note path through its nearest link without 
     assert.equal(h.commands.length,0,'Selecting the live palette row must ask for a destination before sending');
     await h.modals.at(-1).choose(false);
     assert.equal(h.commands[0].projectId,project.id);
-    assert.equal(h.commands[0].title,'Work on this note.');
+    assert.equal(h.commands[0].title,'café "draft"');
     assert.ok(h.commands[1].message.text.startsWith(prompt+'\n\nSent from Obsidian.\nObsidian vault: "Notes"\nDestination note path: "/projects/notes/Notes/Inner/café \\"draft\\".md"'));
     assert.doesNotMatch(h.commands[1].message.text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal(h.commands[1].message.attachments.length,0);
@@ -633,7 +677,7 @@ test('editor selection menu streams a T3 reply into its original note for new an
     await entry!.callback();
     const destination=h.modals.at(-1);assert.equal(destination.constructor.name,'SendDestinationModal');
     h.setActiveNote('Notes/Different.md');await destination.choose(false);
-    assert.equal(h.commands[0].type,'thread.create');assert.equal(h.commands[0].title,'Explain why **this claim** follows.');
+    assert.equal(h.commands[0].type,'thread.create');assert.equal(h.commands[0].title,'Original');
     const newThreadText=h.commands[1].message.text;
     assert.ok(newThreadText.startsWith(selection));assert.match(newThreadText,/Answer in the T3 thread\. The Obsidian plugin will insert your reply\./);assert.doesNotMatch(newThreadText,/Do not edit the Obsidian note|Reply in the Obsidian note itself/);
     assert.match(newThreadText,/Destination note path: "\/projects\/notes\/Notes\/Original.md"/);assert.doesNotMatch(newThreadText,/Different.md/);

@@ -265,3 +265,11 @@ test('selection overlap includes any tracked block and its boundaries, but exclu
   assert.equal(selectionOverlapsInlineResponse(document,{start:0,end:6}),false);
   assert.equal(selectionOverlapsInlineResponse(document,{start:document.length-5,end:document.length}),false);
 });
+
+test('a title-only event replaces the prepared header without requiring answer text',()=>{
+  const initial={title:'New thread',messages:[],activities:[]};
+  const updated=applyThreadItem(initial,{kind:'event',event:{sequence:2,type:'thread.metadata-updated',payload:{title:'Generated canonical title'}}}).state;
+  assert.match(renderInlineTurn(updated,'','thread'),/^\*\*Generated canonical title · Working/);
+  const restored=applyThreadItem(initial,{kind:'snapshot',snapshot:{thread:{title:'Generated canonical title',messages:[],activities:[]}}}).state;
+  assert.match(renderInlineTurn(restored,'','thread'),/^\*\*Generated canonical title · Working/);
+});

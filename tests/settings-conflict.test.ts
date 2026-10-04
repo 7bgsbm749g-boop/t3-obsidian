@@ -47,6 +47,19 @@ test('external refresh adopts all shared preferences and unrelated saves preserv
   assert.equal(h.current().inlineStreaming.enabled,false);assert.equal(h.current().inlineStreaming.finalAnswerFormat,'raw-markdown');assert.equal(h.current().completion.action,'archive');
 });
 
+test('title generation defaults safely and follows synced settings without losing local edits',async()=>{
+  const h=await harness({vaultId:'vault',threadTitleGeneration:'invalid'});
+  assert.equal(h.plugin.settings.threadTitleGeneration,'untitled-only');
+  h.setCurrent({...h.current(),threadTitleGeneration:'always'});
+  await h.plugin.onExternalSettingsChange();
+  assert.equal(h.plugin.settings.threadTitleGeneration,'always');
+  h.plugin.settings.completion.archiveFolder='Local';await h.plugin.save();
+  assert.equal(h.current().threadTitleGeneration,'always');
+  h.plugin.settings.threadTitleGeneration='untitled-only';await h.plugin.save();
+  const restarted=await harness(h.current());
+  assert.equal(restarted.plugin.settings.threadTitleGeneration,'untitled-only');
+});
+
 test('concurrent distinct nested edits merge while a same-field conflict prefers disk',async()=>{
   const h=await harness({vaultId:'vault',inlineStreaming:{enabled:true,finalAnswerFormat:'formatted',intermediateMode:'remove'}});
   h.plugin.settings.inlineStreaming.finalAnswerFormat='raw-markdown';

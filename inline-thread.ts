@@ -87,6 +87,11 @@ export function initialRegion(id:string,initialInput?:InitialInlineInput,threadT
   return {text:`\n${startMarker(id)}\n${body}\n${endMarker(id)}\n\n`,bodyHash:contentHash(body)};
 }
 
+/** Update a waiting header without rebuilding an unbound response's contents. */
+export function renameInlineHeader(body:string,title:string):string {
+  return body.replace(/^((?:> \[!t3-progress\]- )?\*\*)[^\n]*( · (?:Working|Reconnecting)\*\*)/m,(_match,prefix,suffix)=>`${prefix}${inlineThreadLabel(title)}${suffix}`);
+}
+
 export function regionBody(document:string,id:string):{from:number;to:number;body:string}|null {
   return trackedRegion(document,id,'t3-inline');
 }

@@ -87,7 +87,7 @@ for(const existing of [false,true])test(`desktop chat ${existing?'reuses':'creat
   try{
     h.setNote('draft.md');await h.plugin.sendChat('Edit this note',{path:'draft.md',absolutePath:join(h.vaultRoot,'draft.md')});
     assert.equal(h.commands[0].projectId,h.project.id);
-    assert.equal(h.commands[0].title,'Edit this note');
+    assert.equal(h.commands[0].title,'draft');
     assert.match(h.commands[1].message.text,/draft.md/);
     assert.ok(h.commands[1].message.text.includes(JSON.stringify(join(h.vaultRoot,'draft.md'))));
     assert.equal(h.commands[1].message.attachments.length,0);

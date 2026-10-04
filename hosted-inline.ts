@@ -5,7 +5,7 @@ import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,typ
 import {logEvent,logFailure} from './diagnostics';
 import {contentHash} from './completion';
 import {commandId} from './direct';
-import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,completionProof,hasCompletionProof,hasResponseMarkers,removeCompletionProof,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
+import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,completionProof,hasCompletionProof,hasResponseMarkers,removeCompletionProof,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,renameInlineHeader,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
 import {needsInlineHistory,readInlineSnapshot,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
@@ -130,6 +130,28 @@ export class HostedInlineWriter {
   constructor(private identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},private io:HostedWriterIO){}
   stop(){this.stopped=true;for(const cancel of this.networkCancels.values())cancel();}
   requestStop(id:string){this.stopIntents.add(id);this.networkCancels.get(hostedPaths(this.identity.directory,id).request)?.();}
+  private async waitingTitle(request:HostedInlineRequest,state:HostedInlineState,title:string|undefined,save:()=>Promise<void>){
+    if(!title)return;
+    let changed=false;
+    await this.io.updateNote(state.notePath,document=>{
+      const region=regionBody(document,request.id);if(!region)return document;
+      const next=renameInlineHeader(region.body,title);if(next===region.body)return document;
+      changed=true;state.body=next;
+      const hash=contentHash(next);if(!state.hashes.includes(hash))state.hashes.push(hash);
+      // Persist the proposed body before replacing the waiting header.
+      return document;
+    });
+    if(!changed)return;
+    await save();
+    if(this.stopped)return;
+    await this.io.updateNote(state.notePath,document=>{
+      const region=regionBody(document,request.id);if(!region)return document;
+      const next=renameInlineHeader(region.body,title);
+      if(next!==state.body)return document;
+      const edit=replaceRegion(document,request.id,contentHash(region.body),next);
+      return edit?document.slice(0,edit.from)+edit.text+document.slice(edit.to):document;
+    });
+  }
   private async network<T>(path:string,work:()=>Promise<T>):Promise<T>{
     const id=path.slice(path.lastIndexOf('/')+1,-5);
     if(this.stopped||this.stopIntents.has(id))throw new StopStreamRequested();
@@ -253,9 +275,9 @@ export class HostedInlineWriter {
         const previousBinding=state.bindingCheckpoint?.bindings?.[messageId];
         const checkpoint=inlineBindingCheckpoint(current);
         if(JSON.stringify(checkpoint)!==JSON.stringify(state.bindingCheckpoint)){state.bindingCheckpoint=checkpoint;await save();}
-        if(!current.messages.length)return;
+        if(!current.messages.length){await this.waitingTitle(request,state,current.title,save);return;}
         if(request.finalAnswerFormat==='raw-markdown')current={...current,turns:{...state.presentationTurns,...current.turns}};
-        if((!state.turnId||state.pendingMessageId)&&!current.messages.some(m=>m.id===messageId&&m.role==='user'))return;
+        if((!state.turnId||state.pendingMessageId)&&!current.messages.some(m=>m.id===messageId&&m.role==='user')){await this.waitingTitle(request,state,current.title,save);return;}
         if(state.pendingMessageId){
           const nextTurn=turnForMessage(current,messageId);
           if(!nextTurn||nextTurn===state.turnId)return;
@@ -263,7 +285,7 @@ export class HostedInlineWriter {
         }
         const bound=turnForMessage(current,messageId);
         if(bound&&(!state.turnId||previousBinding?.kind==='steer'&&previousBinding.turnId!==bound))state.turnId=bound;
-        if(!state.turnId)return;
+        if(!state.turnId){await this.waitingTitle(request,state,current.title,save);return;}
         state.turnIds??=[state.turnId];
         // Follow changes turnId independently of steering. Repair old checkpoints
         // too, before filtering incoming prose by the explicitly adopted turns.
