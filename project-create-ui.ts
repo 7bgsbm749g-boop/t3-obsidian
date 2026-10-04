@@ -58,7 +58,7 @@ export class ProjectCreateModal extends Modal {
       .addButton(b=>b.setButtonText('Parent folder').setDisabled(this.working||!this.location).onClick(()=>this.browse(this.folder.replace(/[\\/]+$/,'')+'/..')))
       .addButton(b=>b.setButtonText('New folder').setDisabled(this.working||!this.machineId).onClick(()=>this.beginNewFolder()));
     if(this.namingFolder){
-      new Setting(this.contentEl).setName('New folder name').addText(t=>t.setValue(this.folderName).setPlaceholder('Folder name').setDisabled(this.working).onChange(value=>{this.folderName=value;}))
+      new Setting(this.contentEl).setClass('send-to-t3-new-folder').setName('New folder name').addText(t=>t.setValue(this.folderName).setPlaceholder('Folder name').setDisabled(this.working).onChange(value=>{this.folderName=value;}))
         .addButton(b=>b.setButtonText('Use new folder').setDisabled(this.working).onClick(()=>this.chooseNewFolder()))
         .addButton(b=>b.setButtonText('Cancel new folder').setDisabled(this.working).onClick(()=>{this.namingFolder=false;this.status='';this.draw();}));
     }
