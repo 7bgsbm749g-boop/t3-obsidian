@@ -124,8 +124,19 @@
 }
 .callout[data-callout="t3-progress"] > .callout-title > .callout-icon { display: none; }
 .callout[data-callout="t3-progress"] > .callout-content {
+  position: relative;
   padding-inline-start: 1em;
+  border-inline-start: 1px solid transparent;
+}
+/* Give the header's first letter some breathing room without moving the text. */
+.callout[data-callout="t3-progress"] > .callout-content::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 0.4em;
+  inset-block-end: 0;
+  inset-inline-start: -1px;
   border-inline-start: 1px solid var(--background-modifier-border);
+  pointer-events: none;
 }
 .send-to-t3-run-timer { font-variant-numeric: tabular-nums; color: var(--text-muted); font-weight: normal; }
 .send-to-t3-fold-key { display: none; }
