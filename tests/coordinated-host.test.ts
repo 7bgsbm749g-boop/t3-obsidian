@@ -151,6 +151,24 @@ test('active delivery proceeds while completed journal observation rotates throu
  }finally{await h.close();}
 });
 
+test('a stalled older response cannot gate newly registered responses or duplicate its worker',async()=>{
+ const h=await setup();let release!:()=>void;let first:Promise<void>|undefined;
+ try{
+  const blocked=randomUUID(),old={...h.request,id:blocked,notePath:'Older.md'};
+  h.notes.set(old.notePath,responseAnchor(blocked));await h.client.command({kind:'register',jobId:blocked,request:old});
+  const read=h.host.journal.read.bind(h.host.journal);let calls=0,started!:()=>void;
+  const entered=new Promise<void>(resolve=>{started=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;});
+  h.host.journal.read=async id=>{if(id===blocked){calls++;started();await gate;}return read(id);};
+  first=h.host.scan();await entered;
+  const id=randomUUID(),fresh={...h.request,id,notePath:'Fresh.md'};
+  h.notes.set(fresh.notePath,responseAnchor(id));await h.client.command({kind:'register',jobId:id,request:fresh});
+  await h.host.scan();assert.equal(calls,1,'the stalled registration has only one serial worker');
+  assert.equal((await read(id))!.status,'accepted');
+  h.complete();await h.writer.tick();assert.equal((await read(id))!.status,'verified');
+  assert.match(h.notes.get(fresh.notePath)!,/Added \*\*25kg\*\*/);
+ }finally{release?.();await first;await h.close();}
+});
+
 test('mobile rename handoff waits for delayed Sync and retires the exact old-path resurrection',async()=>{
  const h=await setup();try{
   await h.writer.tick();const original=h.notes.get('Note.md')!;

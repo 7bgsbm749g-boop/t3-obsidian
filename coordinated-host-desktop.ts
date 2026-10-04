@@ -23,7 +23,8 @@ export class CoordinatedHost {
   private records=new Map<string,LeaseRecord>();
   private stopped=false;
   private failures=new Map<string,string>();
-  private scanning?:Promise<void>;
+  private scanning?:Promise<LeaseRecord[]>;
+  private work=new Map<string,Promise<void>>();
   private terminalCursor=0;
   private async materialization(result:NoteGeneration){
     const proof=this.coordinator.materialization(result),bytes=JSON.stringify(proof);
@@ -67,17 +68,30 @@ export class CoordinatedHost {
     const records=await Promise.all(leases.map(record=>this.journal.read(record.request.id)));
     return generatedEventContent(content,records.filter((record):record is NonNullable<typeof record>=>!!record),leases.filter(record=>!record.coordinated&&record.state).map(record=>record.state!));
   }
-  scan(){const work=this.scanning??=this.scanRecords();void work.finally(()=>{if(this.scanning===work)this.scanning=undefined;}).catch(()=>{});return work;}
+  async scan(){
+    // Coalesce discovery, not the lifetime of every response. A native save
+    // or journal operation stuck on one note must not gate later arrivals.
+    const loading=this.scanning??=this.scanRecords();
+    void loading.finally(()=>{if(this.scanning===loading)this.scanning=undefined;}).catch(()=>{});
+    const records=await loading;
+    await Promise.all(records.map(record=>{
+      if(this.stopped||this.work.has(record.request.id))return;
+      const work=this.scanRecord(record);this.work.set(record.request.id,work);
+      return work.finally(()=>{if(this.work.get(record.request.id)===work)this.work.delete(record.request.id);});
+    }));
+  }
   private async scanRecords(){
     const active:LeaseRecord[]=[],terminal:LeaseRecord[]=[];
     for(const path of await this.files.list(`${this.identity.directory}/leases`)){
-      try{const raw=await this.files.read(path);if(!raw)continue;const record:LeaseRecord=JSON.parse(raw);this.records.set(record.request.id,record);(terminalLease(record)||record.state?.finalSaved?terminal:active).push(record);}catch{/* A malformed historical record cannot gate a healthy response. */}
+      try{const raw=await this.files.read(path);if(!raw)continue;const record:LeaseRecord=JSON.parse(raw);if(!this.work.has(record.request.id))this.records.set(record.request.id,record);(terminalLease(record)||record.state?.finalSaved?terminal:active).push(record);}catch{/* A malformed historical record cannot gate a healthy response. */}
     }
     // Serve active responses every pass. Completed-history observation is
     // rotating maintenance, so a cold journal audit cannot delay a new run.
     if(this.terminalCursor>=terminal.length)this.terminalCursor=0;
     const historical=terminal.slice(this.terminalCursor,this.terminalCursor+4);this.terminalCursor+=historical.length;
-    for(let record of active.concat(historical)){
+    return active.concat(historical);
+  }
+  private async scanRecord(record:LeaseRecord){
       if(this.stopped)return;
       const identity=record.request.id;this.failures.delete(identity);
       try{
@@ -133,35 +147,34 @@ export class CoordinatedHost {
             for(const actor of record.state?.delivery?.observedBy??[])await this.coordinator.acknowledge(id,actor,record.state!.delivery!.commitId,journal.verified!.document).catch(()=>{});
           }
         }
-        continue;
+        return;
       }
       if(!record.coordinated||record.migrating){
-        const file=this.app.vault.getFileByPath(notePath);if(!file)continue;
+        const file=this.app.vault.getFileByPath(notePath);if(!file)return;
         const saved=await this.app.vault.read(file),region=responseRegion(saved,id);
-        if(!region)continue;
+        if(!region)return;
         const already=saved.slice(region.from,region.to)===responseAnchor(id);
         const plan=already?undefined:planNativeMigration(record,saved);
-        if(!already&&plan?.kind!=='planned')continue;
+        if(!already&&plan?.kind!=='planned')return;
         // No raw move: disagreeing or dirty native views delay migration.
-        if(!nativeResponses(this.app).savedViews(notePath).every(view=>view.saved()===saved))continue;
+        if(!nativeResponses(this.app).savedViews(notePath).every(view=>view.saved()===saved))return;
         record=(await this.authority.fence(id))!;this.records.set(id,record);
         // Existing clients may still hold a cached, previously granted TTL.
         // Reject renewals now and wait out that grant before stripping bytes.
-        if((record.legacyFenceUntil??0)>Date.now())continue;
+        if((record.legacyFenceUntil??0)>Date.now())return;
         const anchored=already?saved:(plan as Extract<ReturnType<typeof planNativeMigration>,{kind:'planned'}>).after;
         // Persist the original migration bytes before stripping. Exclusive
         // create makes a crash/retry preserve the first competing version.
         const evidence=join(this.journal.root,id);await fs.mkdir(evidence,{recursive:true,mode:0o700});
         await fs.writeFile(join(evidence,'migration-original.md'),saved,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
         const old=await this.journal.read(id);if(!old)await this.coordinator.accept(record.request,anchored);
-        if(anchored!==saved&&!await this.checkedSave(notePath,saved,anchored))continue;
+        if(anchored!==saved&&!await this.checkedSave(notePath,saved,anchored))return;
         record=await this.authority.migrated(id);this.records.set(id,record);
       }
       const journal=await this.journal.read(id);
       if(journal&&journal.notePath!==notePath)await this.coordinator.renamed(id,journal.notePath,notePath);
       await nativeResponses(this.app).receive(record);
       }catch(error){const detail=error instanceof Error?error.message:String(error);this.failures.set(identity,detail);logFailure('response.coordinator.scan-conflict',error,{bindingId:identity});}
-    }
   }
   io(base:HostedWriterIO):HostedWriterIO {
     const reads=new Map<string,{epoch:number;revision:number}>();
