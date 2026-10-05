@@ -1,0 +1,722 @@
+{
+  "canonical": {
+    "snapshotSequence": 194895,
+    "thread": {
+      "id": "synthetic-id-3",
+      "session": {
+        "status": "running",
+        "activeTurnId": "unrelated"
+      },
+      "latestTurn": {
+        "turnId": "unrelated",
+        "state": "running",
+        "requestedAt": "2026-10-05T00:27:26.411Z",
+        "startedAt": "2026-10-05T00:27:26.411Z",
+        "completedAt": null
+      },
+      "checkpoints": [],
+      "messages": [
+        {
+          "id": "synthetic-id-4",
+          "role": "user",
+          "turnId": null,
+          "streaming": false,
+          "createdAt": "2026-10-05T00:16:12.834Z",
+          "text": "Synthetic user message"
+        },
+        {
+          "id": "assistant:msg_0a6dbd6400ce575b016ac2ec50e6f487d29cd8c49a4152e65a",
+          "role": "assistant",
+          "turnId": "source",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:16:16.920Z",
+          "text": "Synthetic assistant message"
+        },
+        {
+          "id": "assistant:msg_0a6dbd6400ce575b016ac2ec6c544087d2aa955fa8fd7af66e",
+          "role": "assistant",
+          "turnId": "source",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:16:44.436Z",
+          "text": "Synthetic assistant message"
+        },
+        {
+          "id": "assistant:msg_0a6dbd6400ce575b016ac2ecacbde887d2997b0944a4ec7ac0",
+          "role": "assistant",
+          "turnId": "source",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:17:48.784Z",
+          "text": "Synthetic assistant message"
+        },
+        {
+          "id": "async-answer:codex-async:synthetic-id-3:synthetic-id-5",
+          "role": "user",
+          "turnId": null,
+          "streaming": false,
+          "createdAt": "2026-10-05T00:19:32.326Z",
+          "text": "Synthetic user message"
+        },
+        {
+          "id": "assistant:msg_0a6dbd6400ce575b016ac2ed1b86a087d29a3c210cedd932df",
+          "role": "assistant",
+          "turnId": "source",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:19:39.590Z",
+          "text": "Synthetic assistant message"
+        },
+        {
+          "id": "assistant:msg_0a6dbd6400ce575b016ac2ed43040c87d2874f9cc525e4fa55",
+          "role": "assistant",
+          "turnId": "source",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:20:19.045Z",
+          "text": "Synthetic assistant message"
+        },
+        {
+          "id": "assistant:msg_0a6dbd6400ce575b016ac2ed97b9d087d292eac450f2bc4af0",
+          "role": "assistant",
+          "turnId": "source",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:21:43.752Z",
+          "text": "Synthetic assistant message"
+        },
+        {
+          "id": "async-answer:codex-async:synthetic-id-3:synthetic-id-6",
+          "role": "user",
+          "turnId": null,
+          "streaming": false,
+          "createdAt": "2026-10-05T00:26:19.932Z",
+          "text": "Synthetic user message"
+        },
+        {
+          "id": "assistant:msg_0a6dbd6400ce575b016ac2eeafab1887d2844244413a3644dc",
+          "role": "assistant",
+          "turnId": "continuation",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:26:23.693Z",
+          "text": "Synthetic assistant message"
+        },
+        {
+          "id": "assistant:msg_0a6dbd6400ce575b016ac2eebad60887d2983d8ac6f2ad446d",
+          "role": "assistant",
+          "turnId": "continuation",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:26:34.870Z",
+          "text": "Synthetic assistant message"
+        },
+        {
+          "id": "synthetic-id-7",
+          "role": "user",
+          "turnId": null,
+          "streaming": false,
+          "createdAt": "2026-10-05T00:27:26.411Z",
+          "text": "Synthetic user message"
+        },
+        {
+          "id": "assistant:msg_0a6dbd6400ce575b016ac2eef25c7887d28cdcb269c4d22ecd",
+          "role": "assistant",
+          "turnId": "unrelated",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:27:30.415Z",
+          "text": "Synthetic assistant message"
+        },
+        {
+          "id": "assistant:msg_0a6dbd6400ce575b016ac2eefc09d487d2af4846b2bd3f972b",
+          "role": "assistant",
+          "turnId": "unrelated",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:27:40.066Z",
+          "text": "Synthetic assistant message"
+        },
+        {
+          "id": "assistant:msg_0a6dbd6400ce575b016ac2ef39b5d887d2928b1ef793306d5a",
+          "role": "assistant",
+          "turnId": "unrelated",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:28:41.738Z",
+          "text": "Synthetic assistant message"
+        }
+      ],
+      "activities": [
+        {
+          "id": "codex-async:synthetic-id-3:synthetic-id-5",
+          "kind": "user-input.requested",
+          "turnId": "source",
+          "createdAt": "2026-10-05T00:16:50.116Z",
+          "summary": "Synthetic question activity",
+          "payload": {
+            "requestId": "codex-async:synthetic-id-3:synthetic-id-5",
+            "responseMode": "message"
+          }
+        },
+        {
+          "id": "async-answer:codex-async:synthetic-id-3:synthetic-id-5",
+          "kind": "user-input.resolved",
+          "turnId": "source",
+          "createdAt": "2026-10-05T00:19:32.326Z",
+          "summary": "Synthetic question activity",
+          "payload": {
+            "requestId": "codex-async:synthetic-id-3:synthetic-id-5",
+            "responseMode": "message",
+            "answers": {
+              "choice": "Synthetic yes"
+            }
+          }
+        },
+        {
+          "id": "codex-async:synthetic-id-3:synthetic-id-6",
+          "kind": "user-input.requested",
+          "turnId": "source",
+          "createdAt": "2026-10-05T00:19:56.229Z",
+          "summary": "Synthetic question activity",
+          "payload": {
+            "requestId": "codex-async:synthetic-id-3:synthetic-id-6",
+            "responseMode": "message"
+          }
+        },
+        {
+          "id": "async-answer:codex-async:synthetic-id-3:synthetic-id-6",
+          "kind": "user-input.resolved",
+          "turnId": "source",
+          "createdAt": "2026-10-05T00:26:19.932Z",
+          "summary": "Synthetic question activity",
+          "payload": {
+            "requestId": "codex-async:synthetic-id-3:synthetic-id-6",
+            "responseMode": "message",
+            "answers": {
+              "choice": "Synthetic yes"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "checkpoint": {
+    "sequence": 194039,
+    "bindings": {
+      "synthetic-id-4": {
+        "turnId": "source",
+        "kind": "start",
+        "sequence": 194039
+      }
+    },
+    "starts": {
+      "synthetic-id-4": {
+        "messageId": "synthetic-id-4",
+        "requestedAt": "2026-10-05T00:16:12.450Z",
+        "sequence": 193711,
+        "turnId": "source"
+      }
+    },
+    "turns": {
+      "source": {
+        "turnId": "source",
+        "messageId": "synthetic-id-4",
+        "state": "running",
+        "assistantMessageId": "assistant:msg_0a6dbd6400ce575b016ac2ecacbde887d2997b0944a4ec7ac0",
+        "requestedAt": "2026-10-05T00:16:12.450Z",
+        "startedAt": "2026-10-05T00:16:12.834Z",
+        "completedAt": null
+      }
+    }
+  },
+  "sourceProse": [
+    {
+      "id": "assistant:msg_0a6dbd6400ce575b016ac2ec50e6f487d29cd8c49a4152e65a",
+      "role": "assistant",
+      "turnId": "source",
+      "streaming": false,
+      "createdAt": "2026-10-05T00:16:16.920Z",
+      "text": "Synthetic assistant message"
+    },
+    {
+      "id": "assistant:msg_0a6dbd6400ce575b016ac2ec6c544087d2aa955fa8fd7af66e",
+      "role": "assistant",
+      "turnId": "source",
+      "streaming": false,
+      "createdAt": "2026-10-05T00:16:44.436Z",
+      "text": "Synthetic assistant message"
+    },
+    {
+      "id": "assistant:msg_0a6dbd6400ce575b016ac2ecacbde887d2997b0944a4ec7ac0",
+      "role": "assistant",
+      "turnId": "source",
+      "streaming": false,
+      "createdAt": "2026-10-05T00:17:48.784Z",
+      "text": "Synthetic assistant message"
+    }
+  ],
+  "follows": [
+    {
+      "requestId": "codex-async:synthetic-id-3:synthetic-id-5",
+      "turnId": "source",
+      "responseMode": "message"
+    }
+  ],
+  "events": [
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 193712,
+        "type": "thread.session-set",
+        "payload": {
+          "session": {
+            "status": "starting",
+            "activeTurnId": null,
+            "updatedAt": "2026-10-05T00:16:12.834Z"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 193713,
+        "type": "thread.session-set",
+        "payload": {
+          "session": {
+            "status": "starting",
+            "activeTurnId": null,
+            "updatedAt": "2026-10-05T00:16:12.909Z"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 193714,
+        "type": "thread.session-set",
+        "payload": {
+          "session": {
+            "status": "starting",
+            "activeTurnId": null,
+            "updatedAt": "2026-10-05T00:16:13.554Z"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 193715,
+        "type": "thread.session-set",
+        "payload": {
+          "session": {
+            "status": "starting",
+            "activeTurnId": null,
+            "updatedAt": "2026-10-05T00:16:13.554Z"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 193716,
+        "type": "thread.session-set",
+        "payload": {
+          "session": {
+            "status": "starting",
+            "activeTurnId": null,
+            "updatedAt": "2026-10-05T00:16:13.560Z"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 193717,
+        "type": "thread.session-set",
+        "payload": {
+          "session": {
+            "status": "running",
+            "activeTurnId": "source",
+            "updatedAt": "2026-10-05T00:16:14.026Z"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 193749,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "assistant:msg_0a6dbd6400ce575b016ac2ec50e6f487d29cd8c49a4152e65a",
+          "role": "assistant",
+          "turnId": "source",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:16:18.223Z",
+          "text": "Synthetic assistant message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 193878,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "assistant:msg_0a6dbd6400ce575b016ac2ec6c544087d2aa955fa8fd7af66e",
+          "role": "assistant",
+          "turnId": "source",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:16:47.566Z",
+          "text": "Synthetic assistant message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 193884,
+        "type": "thread.activity-appended",
+        "payload": {
+          "activity": {
+            "id": "codex-async:synthetic-id-3:synthetic-id-5",
+            "kind": "user-input.requested",
+            "turnId": "source",
+            "createdAt": "2026-10-05T00:16:50.116Z",
+            "summary": "Synthetic question activity",
+            "payload": {
+              "requestId": "codex-async:synthetic-id-3:synthetic-id-5",
+              "responseMode": "message"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 193986,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "assistant:msg_0a6dbd6400ce575b016ac2ecacbde887d2997b0944a4ec7ac0",
+          "role": "assistant",
+          "turnId": "source",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:17:50.346Z",
+          "text": "Synthetic assistant message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194108,
+        "type": "thread.activity-appended",
+        "payload": {
+          "activity": {
+            "id": "async-answer:codex-async:synthetic-id-3:synthetic-id-5",
+            "kind": "user-input.resolved",
+            "turnId": "source",
+            "createdAt": "2026-10-05T00:19:32.326Z",
+            "summary": "Synthetic question activity",
+            "payload": {
+              "requestId": "codex-async:synthetic-id-3:synthetic-id-5",
+              "responseMode": "message",
+              "answers": {
+                "choice": "Synthetic yes"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194109,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "async-answer:codex-async:synthetic-id-3:synthetic-id-5",
+          "role": "user",
+          "turnId": null,
+          "streaming": false,
+          "createdAt": "2026-10-05T00:19:32.326Z",
+          "text": "Synthetic user message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194155,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "assistant:msg_0a6dbd6400ce575b016ac2ed1b86a087d29a3c210cedd932df",
+          "role": "assistant",
+          "turnId": "source",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:19:41.077Z",
+          "text": "Synthetic assistant message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194169,
+        "type": "thread.activity-appended",
+        "payload": {
+          "activity": {
+            "id": "codex-async:synthetic-id-3:synthetic-id-6",
+            "kind": "user-input.requested",
+            "turnId": "source",
+            "createdAt": "2026-10-05T00:19:56.229Z",
+            "summary": "Synthetic question activity",
+            "payload": {
+              "requestId": "codex-async:synthetic-id-3:synthetic-id-6",
+              "responseMode": "message"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194289,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "assistant:msg_0a6dbd6400ce575b016ac2ed43040c87d2874f9cc525e4fa55",
+          "role": "assistant",
+          "turnId": "source",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:20:21.121Z",
+          "text": "Synthetic assistant message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194437,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "assistant:msg_0a6dbd6400ce575b016ac2ed97b9d087d292eac450f2bc4af0",
+          "role": "assistant",
+          "turnId": "source",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:21:47.249Z",
+          "text": "Synthetic assistant message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194439,
+        "type": "thread.session-set",
+        "payload": {
+          "session": {
+            "status": "ready",
+            "activeTurnId": null,
+            "updatedAt": "2026-10-05T00:21:47.300Z"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194625,
+        "type": "thread.activity-appended",
+        "payload": {
+          "activity": {
+            "id": "async-answer:codex-async:synthetic-id-3:synthetic-id-6",
+            "kind": "user-input.resolved",
+            "turnId": "source",
+            "createdAt": "2026-10-05T00:26:19.932Z",
+            "summary": "Synthetic question activity",
+            "payload": {
+              "requestId": "codex-async:synthetic-id-3:synthetic-id-6",
+              "responseMode": "message",
+              "answers": {
+                "choice": "Synthetic yes"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194626,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "async-answer:codex-async:synthetic-id-3:synthetic-id-6",
+          "role": "user",
+          "turnId": null,
+          "streaming": false,
+          "createdAt": "2026-10-05T00:26:19.932Z",
+          "text": "Synthetic user message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194628,
+        "type": "thread.session-set",
+        "payload": {
+          "session": {
+            "status": "starting",
+            "activeTurnId": null,
+            "updatedAt": "2026-10-05T00:26:19.932Z"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194629,
+        "type": "thread.session-set",
+        "payload": {
+          "session": {
+            "status": "running",
+            "activeTurnId": "continuation",
+            "updatedAt": "2026-10-05T00:26:20.097Z"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194652,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "assistant:msg_0a6dbd6400ce575b016ac2eeafab1887d2844244413a3644dc",
+          "role": "assistant",
+          "turnId": "continuation",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:26:24.707Z",
+          "text": "Synthetic assistant message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194736,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "assistant:msg_0a6dbd6400ce575b016ac2eebad60887d2983d8ac6f2ad446d",
+          "role": "assistant",
+          "turnId": "continuation",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:26:37.128Z",
+          "text": "Synthetic assistant message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194738,
+        "type": "thread.session-set",
+        "payload": {
+          "session": {
+            "status": "ready",
+            "activeTurnId": null,
+            "updatedAt": "2026-10-05T00:26:37.172Z"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194739,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "synthetic-id-7",
+          "role": "user",
+          "turnId": null,
+          "streaming": false,
+          "createdAt": "2026-10-05T00:27:26.411Z",
+          "text": "Synthetic user message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194741,
+        "type": "thread.session-set",
+        "payload": {
+          "session": {
+            "status": "starting",
+            "activeTurnId": null,
+            "updatedAt": "2026-10-05T00:27:26.411Z"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194742,
+        "type": "thread.session-set",
+        "payload": {
+          "session": {
+            "status": "running",
+            "activeTurnId": "unrelated",
+            "updatedAt": "2026-10-05T00:27:26.560Z"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194775,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "assistant:msg_0a6dbd6400ce575b016ac2eef25c7887d28cdcb269c4d22ecd",
+          "role": "assistant",
+          "turnId": "unrelated",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:27:31.694Z",
+          "text": "Synthetic assistant message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194821,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "assistant:msg_0a6dbd6400ce575b016ac2eefc09d487d2af4846b2bd3f972b",
+          "role": "assistant",
+          "turnId": "unrelated",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:27:41.535Z",
+          "text": "Synthetic assistant message"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "event": {
+        "sequence": 194895,
+        "type": "thread.message-sent",
+        "payload": {
+          "messageId": "assistant:msg_0a6dbd6400ce575b016ac2ef39b5d887d2928b1ef793306d5a",
+          "role": "assistant",
+          "turnId": "unrelated",
+          "streaming": false,
+          "createdAt": "2026-10-05T00:28:43.429Z",
+          "text": "Synthetic assistant message"
+        }
+      }
+    }
+  ]
+}

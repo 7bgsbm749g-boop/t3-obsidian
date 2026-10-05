@@ -34,6 +34,7 @@ export class InlineLeaseAuthority {
   private lastCleanup=0;private cleanupCursor=0;
   private scanFailed=false;private lastScanFailure=0;
   constructor(private identity:LeaseIdentity,private files:LeaseFiles,private now=()=>Date.now()){}
+  status(){return {busy:!!this.work,stopped:this.stopped,recovered:this.recovered};}
   stop(){this.stopped=true;}
   tick(){
     if(this.work)return this.work;if(this.stopped)return Promise.resolve();

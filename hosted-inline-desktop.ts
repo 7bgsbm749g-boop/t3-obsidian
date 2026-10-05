@@ -5,6 +5,7 @@ import {join,resolve,dirname} from 'node:path';
 import lockfile from 'proper-lockfile';
 import {CoordinatedHost} from './coordinated-host-desktop';
 import {desktopInterval} from './desktop-timers';
+import {interruptibleAuthorityFiles} from './authority-storage-desktop';
 import type {App} from 'obsidian';
 import {logEvent,logFailure} from './diagnostics';
 import {InlineLeaseAuthority,type LeaseFiles} from './inline-lease';
@@ -35,6 +36,9 @@ export class DesktopInlineHost {
   private nativeWriter!:HostedInlineWriter;
   private writerIO!:import('./hosted-inline').HostedWriterIO;
   private authority:InlineLeaseAuthority;
+  private stopAuthorityReads:()=>void;
+  private authorityStorage:ReturnType<typeof interruptibleAuthorityFiles>;
+  status(){return {active:this.active,authority:this.authority.status(),storage:this.authorityStorage.status()};}
   private stopAuthorityTimer:()=>void;
   private work=new Set<Promise<void>>();
   private opening=new Map<string,Promise<ThreadAccess>>();
@@ -43,7 +47,9 @@ export class DesktopInlineHost {
   get active(){return !this.stopped;}
   private accesses=new Map<string,{access:ThreadAccess;expires:number}>();
   private constructor(private release:()=>Promise<void>,app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},files:ReturnType<typeof localInlineFiles>,access:(environmentId:string)=>Promise<ThreadAccess>){
-    this.authority=new InlineLeaseAuthority(identity,files);
+    const storage=this.authorityStorage=interruptibleAuthorityFiles(files);
+    this.stopAuthorityReads=()=>storage.stop();
+    this.authority=new InlineLeaseAuthority(identity,storage.files);
     this.stopAuthorityTimer=desktopInterval(()=>void this.authority.tick().catch(()=>{}),100);
     this.writerIO={
       ...files,
@@ -102,7 +108,7 @@ export class DesktopInlineHost {
   deleted(path:string){this.authority.deleted(path);}
   dispose(){
     if(this.closing)return this.closing;
-    this.stopped=true;this.stopAuthorityTimer();this.coordinated?.stop();this.authority.stop();this.writer.stop();this.nativeWriter?.stop();
+    this.stopped=true;this.stopAuthorityTimer();this.coordinated?.stop();this.authority.stop();this.stopAuthorityReads();this.writer.stop();this.nativeWriter?.stop();
     this.closing=(async()=>{
       try{
         await Promise.allSettled([...this.work,this.authority.tick()]);

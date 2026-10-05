@@ -34,6 +34,11 @@ export interface HostedInlineState {
   hashes:string[];body?:string;detail?:string;updatedAt:string;
   locationConflict?:string[];
   bindingCheckpoint?:InlineBindingCheckpoint;
+  /** Keep the last applied cursor while exact async-answer evidence is missing.
+   * A snapshot replacement is not proof of a historical answer binding. */
+  bindingRecoverySequence?:number;
+  bindingRecoveryCheckpoint?:InlineBindingCheckpoint;
+  bindingRecoveryIssue?:'history-unavailable';
   finishedAt?:string;presentationTurns?:Record<string,InlineTurn>;
   finalDocumentHash?:string;
   /** Positional provenance outside the note; never a retained Markdown marker. */
@@ -304,19 +309,29 @@ export class HostedInlineWriter {
           this.bindingReplayAt.set(path,this.monotonic()+15_000);
           const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),15_000);
           try{
-            const starts=Object.values(state.bindingCheckpoint?.starts??{}).map(start=>start.sequence).filter(Number.isSafeInteger);
-            const afterSequence=starts.length?Math.max(0,Math.min(...starts)-1):0;
+            const previous=state.bindingRecoveryCheckpoint??state.bindingCheckpoint;
+            const starts=Object.values(previous?.starts??{}).map(start=>start.sequence).filter(Number.isSafeInteger);
+            // Older checkpoints did not retain the active session. Replay
+            // their original start instead of inventing the missing session.
+            const cursor=previous?.session||previous?.latestTurn?previous.sequence:undefined;
+            const afterSequence=state.bindingRecoverySequence??cursor??(starts.length?Math.max(0,Math.min(...starts)-1):0);
+            state.bindingRecoverySequence=afterSequence;
+            state.bindingRecoveryCheckpoint=previous;
             const items=await this.network(path,()=>this.io.replayBindings!(request,access,abort.signal,afterSequence));
             // Replay supplies exact start/lifecycle associations only. Keep the
             // canonical transcript and current session; never adopt an unrelated
             // newer turn just because its answer is present in the same thread.
-            let evidence:import('./inline-thread').InlineThreadState={messages:current.messages.filter(message=>message.role==='user'),activities:[]};
-            for(const item of items)evidence=applyThreadItem(evidence,item).state;
+            let evidence=restoreInlineBindings({messages:current.messages.filter(message=>message.role==='user'),activities:[]},{...previous,sequence:afterSequence});
+            // Oversized server replays become a snapshot. That snapshot has
+            // only latestTurn; it cannot replace missing historical lifecycle.
+            for(const item of items)if(item.kind==='event')evidence=applyThreadItem(evidence,item).state;
             const binding=inlineBindingCheckpoint(evidence);delete binding.sequence;
             current=restoreInlineBindings({...current,turns:{...current.turns,...evidence.turns}},binding);
             questions=followInlineQuestions(current,state.turnIds,state.questionFollows,state.prose);
+            if(questions.waiting&&items.some(item=>item.kind==='snapshot')&&!items.some(item=>item.kind==='event'))state.bindingRecoveryIssue='history-unavailable';
           }finally{clearTimeout(timer);abort.abort();}
         }
+        if(!questions.waiting){delete state.bindingRecoverySequence;delete state.bindingRecoveryCheckpoint;delete state.bindingRecoveryIssue;}
         state.questionFollows=questions.follows;state.turnIds=questions.turnIds;state.turnId=questions.turnId!;
         state.incoming=observeIncoming(current,state.turnIds,state.incoming,state.steering,[request.messageId,request.initialInput?.messageId??'',...Object.values(current.turns??{}).filter(turn=>state.turnIds!.includes(turn.turnId)).map(turn=>turn.messageId??''),...state.questionFollows.flatMap(follow=>follow.input?[follow.input.messageId]:[])]);
         state.prose=mergeProse(state.prose??[],current.messages,state.turnIds);
@@ -363,12 +378,13 @@ export class HostedInlineWriter {
         let next=renderInlineTurn(current,state.turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,request.threadTitle,{startedAt:request.createdAt,finishedAt:state.finishedAt},finalAnswerFormat(request.finalAnswerFormat));
         if(phase==='complete'&&conversation&&this.io.importReplyAsset)next=await this.network(path,()=>rewriteReplyReferences(next,importAsset));
         if(state.assetFailures?.length)next+='\n\n> Some linked files could not be imported. Their original links are preserved. Attach this response again to retry importing the files.';
+        if(state.bindingRecoveryIssue)next+='\n\n> Reply recovery is waiting for exact T3 answer history. T3 returned a current snapshot without the required historical turn bindings. The saved response is retained; no prompt was resent.';
         const terminal=phase==='complete'&&!questions.waiting||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the
         // vault edit cannot turn our own output into an apparent user edit.
         const nextHash=contentHash(next);
         if(!state.hashes.includes(nextHash))state.hashes.push(nextHash);
-        state.body=next;state.status='running';delete state.detail;
+        state.body=next;state.status=state.bindingRecoveryIssue?'waiting':'running';delete state.detail;
         if(terminal&&this.io.commitFinal){state.finalBody=next;state.finalPhase=phase as 'complete'|'interrupted';}
         await save();
         if(this.stopped)return;
@@ -418,7 +434,7 @@ export class HostedInlineWriter {
           });
         }
         if(conflict){if(!['paused','conflict'].includes(state.status))logFailure('note.write.conflict',new Error('Response markers were removed or malformed.'),{jobId:request.id,notePath:state.notePath,knownHashes:state.hashes.slice(-5)});state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='Response markers removed or malformed. Restore the response boundaries to resume streaming.';}
-        else if(applied)state.status=phase==='complete'&&questions.waiting?'waiting':phase;
+        else if(applied)state.status=state.bindingRecoveryIssue||phase==='complete'&&questions.waiting?'waiting':phase;
         else state.detail='Waiting for the note to become available and saved on the host.';
         if(applied)for(const input of selectionsApplied)input.selectionApplied=true;
         if(applied&&terminal&&request.independent){

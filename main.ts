@@ -553,7 +553,8 @@ export default class SendToT3 extends Plugin {
     if(isClientCommand(input)){
       await this.refreshNoteCommandHost();
       if(!this.clientMaintenance||this.stopped)throw Error('Desktop client maintenance is unavailable.');
-      return this.clientMaintenance.execute(input);
+      const result=await this.clientMaintenance.execute(input);
+      return input.kind==='client-status'?{...result,responseHostOpening:!!this.inlineHostRefresh,...(this.inlineHostService?{responseHost:this.inlineHostService.status()}: {})}:result;
     }
     if(isResponseCommand(input)){
       const command=validateResponseCommand(input);await this.refreshInlineHost();

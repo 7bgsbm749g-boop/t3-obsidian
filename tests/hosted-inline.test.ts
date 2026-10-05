@@ -492,15 +492,20 @@ test('recovery replays an exact historical late-answer binding omitted by canoni
   activities:[{id:'q',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'recovered',responseMode:'message'}},{id:'r',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',payload:{requestId:'recovered',answers:{choice:'Yes'}}}],
   checkpoints:[{turnId:'turn',status:'ready',checkpointRef:'refs/t3/checkpoints/one',assistantMessageId:'first',completedAt:'2026-10-03T14:38:20Z'},{turnId:'answer-turn',status:'ready',checkpointRef:'refs/t3/checkpoints/two',assistantMessageId:'follow-final',completedAt:'2026-10-03T14:40:59Z'}],
   latestTurn:{turnId:'unrelated',state:'completed'},session:{status:'ready',activeTurnId:null}};
- h.io.threadState=async()=>current;let replays=0;
- h.io.replayBindings=async(_request,_access,signal)=>{assert.equal(signal.aborted,false);replays++;return [
+ h.io.threadState=async()=>current;let replays=0,snapshotOnly=true;const cursors:number[]=[];
+ h.io.replayBindings=async(_request,_access,signal,cursor)=>{assert.equal(signal.aborted,false);replays++;cursors.push(cursor);if(snapshotOnly)return [{kind:'snapshot',snapshot:{snapshotSequence:5000,thread:current}}];return [
   {kind:'event',event:{sequence:1,type:'thread.activity-appended',payload:{activity:{id:'resolution',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',createdAt:at,payload:{requestId:'recovered',responseMode:'message',answers:{choice:'Yes'}}}}}},
   {kind:'event',event:{sequence:2,type:'thread.message-sent',payload:{messageId:'async-answer:recovered',role:'user',text:'Yes',createdAt:at}}},
   {kind:'event',event:{sequence:3,type:'thread.session-set',payload:{session:{status:'starting',activeTurnId:null,updatedAt:at}}}},
   {kind:'event',event:{sequence:4,type:'thread.session-set',payload:{session:{status:'running',activeTurnId:'answer-turn',updatedAt:at}}}},
   {kind:'event',event:{sequence:5,type:'thread.session-set',payload:{session:{status:'ready',activeTurnId:null,updatedAt:'2026-10-03T14:40:59Z'}}}}];};
  await h.create().tick();
- assert.equal(replays,1);assert.equal(h.state.turnId,'answer-turn');assert.equal(h.state.status,'complete');assert.equal(h.state.finalSaved,true);assert.equal(h.state.cleanupComplete,true);
+ assert.equal(h.state.status,'waiting');assert.equal(h.state.bindingRecoveryIssue,'history-unavailable');assert.notEqual(h.state.finalSaved,true);
+ assert.match(h.document,/waiting for exact T3 answer history/);assert.doesNotMatch(h.document,/Unrelated work/);
+ const cursor=h.state.bindingRecoverySequence;
+ snapshotOnly=false;await h.create().tick();
+ assert.equal(replays,2);assert.deepEqual(cursors,[cursor,cursor],'fallback snapshots never advance the missing evidence cursor');assert.equal(h.state.bindingRecoveryIssue,undefined);
+ assert.equal(h.state.turnId,'answer-turn');assert.equal(h.state.status,'complete');assert.equal(h.state.finalSaved,true);assert.equal(h.state.cleanupComplete,true);
  assert.match(h.document,/First final[\s\S]*Yes[\s\S]*Recovered follow-up/);assert.doesNotMatch(h.document,/Unrelated work|· Working|t3-inline:/);
  assert.ok(!h.calls.some(call=>call.type),'history recovery never dispatches a prompt or approval');
 });

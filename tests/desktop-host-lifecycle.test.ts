@@ -8,6 +8,7 @@ import {createRequire} from 'node:module';
 import {runInNewContext} from 'node:vm';
 import {setTimeout as pause} from 'node:timers/promises';
 import lockfile from 'proper-lockfile';
+import {promises as fs} from 'node:fs';
 import {InlineLeaseClient} from '../inline-lease';
 import {localInlineFiles} from '../hosted-inline-desktop';
 import {contentHash} from '../completion';
@@ -68,6 +69,42 @@ test('response host releases ownership even when closing a cached connection fai
     await old.dispose();assert.equal(old.active,false);
     await h.plugin.refreshInlineHost();assert.notEqual(h.plugin.inlineHostService,old);assert.equal(h.plugin.inlineHostService.active,true);
   }finally{await h.close();}
+});
+
+test('packaged authority abandons a lost read and acknowledges an immutable registration and replay',async()=>{
+  const h=await fixture(),read=fs.readFile;let late!:(value:string)=>void,lose=true;
+  try{
+    fs.readFile=((path:any,...args:any[])=>{
+      if(lose&&String(path)===join(h.root,h.directory,'lease-catalog.json')){lose=false;return new Promise(resolve=>{late=resolve;});}
+      return (read as any)(path,...args);
+    }) as typeof read;
+    await h.plugin.refreshInlineHost();
+    const actor=randomUUID(),id=randomUUID(),command={id:randomUUID(),actor};
+    const request:any={version:2,nativeProjection:true,id,initialOwner:actor,vaultId:h.vaultId,host:{workspaceRoot:h.root,directory:h.directory,environmentId:'fixture'},notePath:'Synthetic.md',threadId:randomUUID(),messageId:randomUUID(),projectId:'fixture',threadEnvironmentId:'fixture',initialHash:contentHash(''),createdAt:new Date().toISOString()};
+    const storage=localInlineFiles(h.root,h.directory),client=new InlineLeaseClient(actor,storage,h.directory);
+    const input={kind:'register' as const,jobId:id,request};
+    assert.equal((await client.command(input,command)).ok,true,'the packaged host must clear the stuck read before the existing registration deadline');
+    const record=await storage.read(`${h.directory}/leases/${id}.json`);
+    late('invalid abandoned bytes');await pause(10);
+    assert.equal((await client.command(input,command)).ok,true);
+    assert.equal(await storage.read(`${h.directory}/leases/${id}.json`),record,'late read and exact replay cannot mutate request identity or ownership');
+    client.dispose();
+  }finally{fs.readFile=read;late?.('');await h.close();}
+});
+
+test('shutdown cancels a lost authority read before reacquiring ownership',async()=>{
+  const h=await fixture(),read=fs.readFile;let entered!:()=>void,lose=true;
+  const started=new Promise<void>(resolve=>{entered=resolve;});
+  try{
+    fs.readFile=((path:any,...args:any[])=>{
+      if(lose&&String(path)===join(h.root,h.directory,'lease-catalog.json')){lose=false;entered();return new Promise(()=>{});}
+      return (read as any)(path,...args);
+    }) as typeof read;
+    await h.plugin.refreshInlineHost();const host=h.plugin.inlineHostService;
+    await Promise.race([started,pause(1000).then(()=>{throw Error('Authority did not enter the synthetic read');})]);
+    await Promise.race([host.dispose(),pause(500).then(()=>{throw Error('Stopped authority retained a lost read and its lock');})]);
+    await h.plugin.refreshInlineHost();assert.notEqual(h.plugin.inlineHostService,host);assert.equal(h.plugin.inlineHostService.active,true);
+  }finally{fs.readFile=read;await h.close();}
 });
 
 test('packaged desktop host delivers a renamed response while an older journal read is stalled',async()=>{
