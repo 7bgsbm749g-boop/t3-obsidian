@@ -96,8 +96,13 @@ function sameThreadData(a:any,b:any):boolean {
   if(a===b)return true;
   if(a===null||b===null||typeof a!=='object'||typeof b!=='object')return false;
   if(Array.isArray(a)||Array.isArray(b))return Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((value,index)=>sameThreadData(value,b[index]));
-  const keys=Object.keys(a);
-  return keys.length===Object.keys(b).length&&keys.every(key=>Object.hasOwn(b,key)&&sameThreadData(a[key],b[key]));
+  // Optional undefined fields disappear in the durable JSON representation.
+  const keys=Object.keys(a).filter(key=>a[key]!==undefined);
+  return keys.length===Object.keys(b).filter(key=>b[key]!==undefined).length&&keys.every(key=>Object.hasOwn(b,key)&&sameThreadData(a[key],b[key]));
+}
+function sameObservedThread(a:InlineThreadState,b:InlineThreadState){
+  const {sequence:_a,...left}=a,{sequence:_b,...right}=b;
+  return sameThreadData(left,right);
 }
 
 /** One desktop host, serialized capture, durable messages; no task definitions. */
@@ -121,7 +126,7 @@ export class EventSubscriptions {
     const {threads,...control}=this.state;
     return {...clone(control),...(threads?{threads:{...threads}}:{})};
   }
-  private async save(){await this.host.save(this.state);this.dirty=false;}
+  private async save(){this.dirty=true;await this.host.save(this.state);this.dirty=false;}
   private async saveIfDirty(){if(this.dirty)await this.save();}
   async initialize(){return this.serialize(async()=>{
     const saved=await this.host.load() as EventState|undefined;
@@ -305,8 +310,14 @@ export class EventSubscriptions {
     const key=this.threadKey(target);
     let read=this.reads?.get(key);if(!read){read=this.host.readThread(target);this.reads?.set(key,read);}
     const state=await read,prior=this.state.threads?.[key];
-    const merged={...state,turns:{...prior?.state.turns,...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})}};
-    if(prior&&sameThreadData(prior.state,merged))return prior.state;
+    if(state.sequence!==undefined&&prior?.state.sequence!==undefined&&state.sequence<prior.state.sequence)return prior.state;
+    const merged={...state,...(state.sequence===undefined&&prior?.state.sequence!==undefined?{sequence:prior.state.sequence}:{}),turns:{...prior?.state.turns,...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})}};
+    if(prior&&sameObservedThread(prior.state,merged)){
+      // A canonical clock-only advance fences late deltas in memory. Unchanged
+      // data remains durable at the prior cursor and can be replayed on restart.
+      if(merged.sequence!==prior.state.sequence)this.state.threads![key]={...prior,state:merged};
+      return this.state.threads![key].state;
+    }
     (this.state.threads??={})[key]={state:merged,sequence:prior?.sequence};this.dirty=true;return merged;
   }
   private displayIO():DisplayHost {
@@ -325,7 +336,10 @@ export class EventSubscriptions {
         if(item.kind==='event'&&item.event?.sequence<= (prior.sequence??-1))return;
         const applied=applyThreadItem(prior.state,item);
         const sequence=item.kind==='snapshot'&&prior.sequence!==undefined?prior.sequence:applied.sequence??prior.sequence;
-        if(sequence===prior.sequence&&sameThreadData(prior.state,applied.state))return;
+        if(sequence===prior.sequence&&sameObservedThread(prior.state,applied.state)){
+          if(applied.state.sequence!==prior.state.sequence)(this.state.threads??={})[key]={...prior,state:applied.state};
+          return;
+        }
         (this.state.threads??={})[key]={state:applied.state,sequence};this.dirty=true;await this.save();
       }).catch(()=>{});
     },()=>this.state.threads?.[key]?.sequence));

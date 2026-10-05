@@ -387,11 +387,14 @@ export default class SendToT3 extends Plugin {
     return {path,content:await this.inlineHostService?.eventContent(path,content)??content,properties};
   }
   private async eventThread(target:EventTarget){
+    return (await this.eventThreadSnapshot(target)).thread;
+  }
+  private async eventThreadSnapshot(target:EventTarget){
     const access=await this.inlineThreadAccess(target.environmentId);
     try{
-      const thread=(await readInlineSnapshot(access,target.threadId,target.projectId,undefined,true)).thread;
+      const snapshot=await readInlineSnapshot(access,target.threadId,target.projectId,undefined,true),thread=snapshot.thread;
       if(!thread||thread.id!==target.threadId||thread.projectId!==target.projectId||thread.deletedAt||thread.archivedAt)throw Error('The subscribing thread is unavailable in its original project.');
-      return thread;
+      return snapshot;
     }finally{await access.close?.();}
   }
   private async eventHostTarget(){
@@ -489,9 +492,15 @@ export default class SendToT3 extends Plugin {
       },
       prepareAction:notification=>{const event=notification.events.at(-1)!;return prepareEventAction(notification.action!,event.kind==='job'?undefined:event.path,this.eventActionIO(),event.kind==='property'?{property:event.property!,after:event.after,matches:value=>observedPropertyEquals(value,event.after)}:undefined);},
       deliverAction:async notification=>{if(!this.eventHostCurrent(server.identity))throw Error('Subscription host ownership changed.');await executeEventAction(notification.command as ActionPlan,this.eventActionIO());},
-      readThread:async target=>{const thread=await this.eventThread(target);return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread}}).state;},
+      readThread:async target=>{
+        const snapshot=await this.eventThreadSnapshot(target);
+        const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:snapshot.thread}}).state;
+        // Keep the canonical watermark without stamping unrelated global clock
+        // changes into every timestamp-derived message binding.
+        return {...state,...(Number.isSafeInteger(snapshot.snapshotSequence)&&snapshot.snapshotSequence>=0?{sequence:snapshot.snapshotSequence}:{})};
+      },
       watchThread:(target,item,sequence)=>{
-        return watchThread(target.threadId,()=>this.inlineThreadAccess(target.environmentId),{item:value=>{if(value.kind==='snapshot'&&value.snapshot?.thread?.projectId!==target.projectId)return;item(value);},reconnecting:error=>logFailure('subscriptions.thread.reconnecting',error,{...target})},undefined,undefined,{afterSequence:sequence});
+        return watchThread(target.threadId,()=>this.inlineThreadAccess(target.environmentId),{item:value=>{if(value.kind==='snapshot'&&value.snapshot?.thread?.projectId!==target.projectId)return;item(value);},reconnecting:error=>logFailure('subscriptions.thread.reconnecting',error,{...target})},undefined,undefined,{afterSequence:sequence,pollSnapshots:false});
       },
       displayHost:{
         validateDestination:async path=>{const text=await deviceNoteIO(this.app).readNote(path);if(text===undefined)throw Error(`Destination note unavailable: ${path}`);endInsertionOffset(text);},

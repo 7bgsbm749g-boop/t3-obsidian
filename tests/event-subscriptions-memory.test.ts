@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {EventSubscriptions,type EventState,type EventSubscriptionCommand,type NoteEventSnapshot} from '../event-subscriptions';
-import type {InlineThreadState} from '../inline-thread';
+import {applyThreadItem,type InlineThreadState} from '../inline-thread';
 
 const source={threadId:'worker',projectId:'project',environmentId:'machine'};
 const origin=randomUUID(),turn='original';
@@ -15,15 +15,15 @@ function historicalState():EventState {
   return {version:1,subscriptions:[],notifications:[],commands:{},feedback:[],threads:Object.fromEntries(Array.from({length:22},(_,i)=>['historical-'+i,{state:{historyComplete:true,messages:[{id:'old-'+i,role:'assistant',turnId:null,text:body,streaming:false}],activities:[]}}]))};
 }
 async function harness(initial=historicalState()){
-  let saved:EventState=JSON.parse(JSON.stringify(initial)),remote=thread(),reads=0,saves=0,failSave=false,failRead=false;
+  let saved:EventState=JSON.parse(JSON.stringify(initial)),remote=thread(),reads=0,saves=0,attachments=0,failSave=false,failRead=false,failBindings=false;
   const monitors=new Map<string,{item:(value:any)=>void;cursor:()=>number|undefined}>();
   const service=new EventSubscriptions({load:async()=>saved,save:async state=>{saves++;if(failSave)throw Error('disk unavailable');saved=JSON.parse(JSON.stringify(state));},
     notes:async()=>[note()],validateTarget:async()=>{},isBusy:async()=>true,prepare:async()=>({}),deliver:async()=> 'busy',recording:()=>{},now:()=>1000,id:randomUUID,
-    readThread:async()=>{reads++;if(failRead)throw Error('offline');return structuredClone(remote);},
+    readThread:async()=>{reads++;if(failRead)throw Error('offline');const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:structuredClone(remote)}}).state;return {...state,...(remote.sequence!==undefined?{sequence:remote.sequence}:{})};},
     watchThread:(target,item,cursor)=>{monitors.set(target.threadId,{item,cursor});return {stop(){monitors.delete(target.threadId);}};},
-    displayHost:{validateDestination:async()=>{},responseBindings:async()=>[],prepareDisplay:async()=>{throw Error('unexpected new reply');},attachDisplay:async()=>{throw Error('unexpected attachment');}},
+    displayHost:{validateDestination:async()=>{},responseBindings:async()=>{if(failBindings)throw Error('disk unavailable');return [];},prepareDisplay:async()=>{throw Error('unexpected new reply');},attachDisplay:async()=>{attachments++;}},
   });await service.initialize();
-  return {service,monitors,setRemote:(state:InlineThreadState)=>{remote=state;},failSave:(value:boolean)=>{failSave=value;},failRead:(value:boolean)=>{failRead=value;},get saves(){return saves;},get reads(){return reads;},get saved(){return saved;}};
+  return {service,monitors,setRemote:(state:InlineThreadState)=>{remote=state;},failSave:(value:boolean)=>{failSave=value;},failRead:(value:boolean)=>{failRead=value;},failBindings:(value:boolean)=>{failBindings=value;},get attachments(){return attachments;},get saves(){return saves;},get reads(){return reads;},get saved(){return saved;}};
 }
 
 test('unchanged polling shares reads and performs zero writes while retaining all historical threads',async()=>{
@@ -70,4 +70,36 @@ test('changed canonical history and old turn records persist without requiring a
   h.setRemote(remote);const saves=h.saves;await h.service.tick();assert.equal(h.saves,saves+1);
   const key=JSON.stringify([source.environmentId,source.projectId,source.threadId]);assert.equal(h.saved.threads![key].state.messages[1].text,'recovered final');assert.equal(h.saved.threads![key].state.turns![turn].state,'completed');
   remote.turns={};remote.latestTurn=undefined;h.setRemote(remote);await h.service.tick();assert.equal(h.saved.threads![key].state.turns![turn].state,'completed');h.service.stop();
+});
+
+test('canonical polls retain the event watermark and do not rewrite an unchanged streamed snapshot',async()=>{
+  const h=await harness();await h.service.command(stream());await h.service.command(inspect);
+  h.monitors.get(source.threadId)!.item({kind:'snapshot',snapshot:{snapshotSequence:41,thread:thread()}});await h.service.command(inspect);
+  const saves=h.saves;await h.service.tick();assert.equal(h.saves,saves);
+  const key=JSON.stringify([source.environmentId,source.projectId,source.threadId]);assert.equal(h.service.snapshot.threads![key].state.sequence,41);h.service.stop();
+});
+
+test('a repeated storage error cannot hide a failed post-attachment receipt; recovery flushes without attaching again',async()=>{
+  const initial=historicalState(),id=randomUUID(),destinationId=randomUUID(),binding=randomUUID();
+  initial.displays=[{...source,id,scope:'thread',enabled:true,createdAt:'2026-10-05T00:00:00Z',boundary:[],destinations:[{id:destinationId,path:'A.md'}],bindings:[{messageId:origin,turnId:turn,destinationId,status:'planned',request:{id:binding} as any}]}];
+  const h=await harness(initial);h.failBindings(true);await h.service.tick();assert.equal(h.saved.displays![0].error,'disk unavailable');
+  h.failBindings(false);h.failSave(true);await assert.rejects(h.service.tick(),/disk unavailable/);assert.equal(h.attachments,1);assert.equal(h.service.snapshot.displays![0].bindings[0].status,'attached');
+  h.failSave(false);await h.service.tick();assert.equal(h.attachments,1);assert.equal(h.saved.displays![0].bindings[0].status,'attached');h.service.stop();
+});
+
+test('a canonical watermark-only advance skips persistence, and restart replays from the last durable cursor',async()=>{
+  const h=await harness();await h.service.command(stream());await h.service.command(inspect);
+  h.monitors.get(source.threadId)!.item({kind:'snapshot',snapshot:{snapshotSequence:41,thread:thread()}});await h.service.command(inspect);
+  h.setRemote({...thread(),sequence:45});const saves=h.saves;await h.service.tick();assert.equal(h.saves,saves);
+  const key=JSON.stringify([source.environmentId,source.projectId,source.threadId]);assert.equal(h.service.snapshot.threads![key].state.sequence,45);assert.equal(h.saved.threads![key].state.sequence,41);
+  const restarted=await harness(h.saved);assert.equal(restarted.monitors.get(source.threadId)!.cursor(),41);h.service.stop();restarted.service.stop();
+});
+
+test('a changed full snapshot fences late text deltas through restart and ignores stale canonical reads',async()=>{
+  const h=await harness();await h.service.command(stream());await h.service.command(inspect);
+  h.monitors.get(source.threadId)!.item({kind:'snapshot',snapshot:{snapshotSequence:41,thread:thread()}});await h.service.command(inspect);
+  const remote={...thread(),sequence:45};remote.messages[1]={...remote.messages[1],text:'progress delta'};h.setRemote(remote);await h.service.tick();
+  const restarted=await harness(h.saved);h.service.stop();restarted.monitors.get(source.threadId)!.item({kind:'event',event:{sequence:42,type:'thread.message-sent',payload:{messageId:'assistant',role:'assistant',turnId:turn,text:' delta',streaming:true}}});await restarted.service.command(inspect);
+  const key=JSON.stringify([source.environmentId,source.projectId,source.threadId]);assert.equal(restarted.service.snapshot.threads![key].state.messages[1].text,'progress delta');
+  restarted.setRemote({...thread(),sequence:40});const saves=restarted.saves;await restarted.service.tick();assert.equal(restarted.saves,saves);assert.equal(restarted.service.snapshot.threads![key].state.messages[1].text,'progress delta');restarted.service.stop();
 });

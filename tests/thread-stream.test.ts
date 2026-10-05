@@ -58,6 +58,23 @@ test('a closed stream obtains fresh credentials and a new canonical snapshot',as
   }finally{watcher.stop();}
 });
 
+test('a host with its own canonical poll keeps live/replay streaming without a second snapshot poll',async()=>{
+  const paths:string[]=[],items:any[]=[],sent:any[]=[],sockets:Socket[]=[];
+  class Socket {
+    onopen?:()=>void;onclose?:()=>void;onmessage?:(event:{data:string})=>void;onerror?:()=>void;
+    constructor(){sockets.push(this);queueMicrotask(()=>this.onopen?.());}
+    send(raw:string){const frame=JSON.parse(raw);sent.push(frame);if(frame.tag==='orchestration.subscribeThread')queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[{kind:'event',event:{sequence:42,type:'thread.metadata-updated',payload:{title:'progress'}}}]})}));}
+    close(){this.onclose?.();}
+  }
+  const watcher=watchThread('worker',async()=>({origin:'https://t3.example',api:async path=>{paths.push(path);return {ticket:'test'};}}),{item:item=>items.push(item),reconnecting:()=>{}},()=>new Socket() as unknown as WebSocket,undefined,{afterSequence:()=>41,pollSnapshots:false});
+  try{
+    await new Promise(resolve=>setTimeout(resolve,1400));
+    assert.deepEqual(paths,['/api/auth/websocket-ticket']);assert.equal(items[0].event.sequence,42);assert.equal(sent[0].payload.afterSequence,41);assert.equal(sent[1]._tag,'Ack');
+    sockets[0].onclose?.();await new Promise(resolve=>setTimeout(resolve,1150));
+    assert.equal(sockets.length,2);assert.deepEqual(paths,['/api/auth/websocket-ticket','/api/auth/websocket-ticket']);assert.equal(items.length,2);
+  }finally{watcher.stop();}
+});
+
 test('one-shot binding replay stops at synchronization and cancels a stranded socket without renderer timers',async()=>{
   for(const cancel of [false,true]){
     const abort=new AbortController(),sent:any[]=[];let closed=0;

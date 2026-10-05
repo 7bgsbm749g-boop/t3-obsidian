@@ -26,24 +26,36 @@ The patch keeps the existing version-1 storage format and histories:
   Successful saves clear the flag; failed tick saves retain recovery state and
   flush it before continuing, preserving the existing post-effect recovery path.
 - Canonical snapshots are compared as plain JSON data without encoding another
-  full string. Equal observations retain their existing state references. Old
-  turn records remain merged for canonical catch-up.
+  full string. Undefined optional object fields compare like their durable JSON
+  representation. Equal observations retain their existing state references.
+  Old turn records and the stream watermark remain merged for canonical catch-up.
 - Job and display readers share one canonical read per exact environment,
   project and thread within a serialized operation. Busy checks and dispatch
   validations remain independently fresh.
 - Monitor events still save their state and cursor immediately. There is no
   event batching, history truncation, retention policy change or delayed delivery
   checkpoint in this release.
+- Canonical reads retain the authoritative snapshot watermark, fencing late
+  deltas even after restart. A clock-only advance stays in memory without a
+  write; restart resumes from the prior durable cursor and safely replays it.
+  Older canonical reads cannot overwrite newer observed state.
+- The subscription stream disables its second, recent-history poll. The service
+  already polls complete canonical history every second, even during stream
+  outages. Ordinary response streams keep their existing fallback polling.
+- A save marks state dirty before invoking storage, so a failed checkpoint cannot
+  be hidden by a previously recorded error with the same text. Recovery flushes
+  the successful attachment receipt without attaching again.
 
 ## Validation before release
 
-The build and complete suite passed: **791 TypeScript and 11 Python tests**.
+The final build and complete suite passed: **796 TypeScript and 11 Python tests**.
 Existing coverage verifies prepared-byte retries, lost acknowledgements, host
 restart, feedback suppression, direct actions, stable attachment IDs, pause and
 resume, old-turn catch-up and post-move receipt-save failures. New large-history
 tests verify unchanged polling and notes, shared reads, failed-save rollback,
 durable cursor replay, error recovery and changed canonical history without an
-event feed.
+event feed. Additional coverage verifies watermark-only advances, stale canonical
+reads, late deltas after restart, and failed post-attachment receipt recovery.
 
 A synthetic benchmark used identical 6,656,325-byte state containing 22 historical
 threads, four displays of one thread, 25 unchanged polling/response-only updates
@@ -54,11 +66,11 @@ and 25 ordered stream events. It has no vault, credentials, network or dispatch.
 | Writes during unchanged work | 125 | 0 |
 | Total writes, including 25 cursor checkpoints | 150 | 25 |
 | Canonical reads | 100 | 25 |
-| Estimated allocation bytes | 2,337,104,648 | 175,040,296 |
-| CPU milliseconds | 7,804.7 | 749.6 |
-| Elapsed milliseconds | 7,800.0 | 739.4 |
+| Estimated allocation bytes | 2,337,104,648 | 174,093,752 |
+| CPU milliseconds | 7,804.7 | 866.3 |
+| Elapsed milliseconds | 7,800.0 | 1,530.7 |
 
-Estimated allocations decreased **92.5%** and CPU **90.4%** in that workload. Both
+Estimated allocations decreased **92.6%** and CPU **88.9%** in that workload. Both
 runs retained identical history hashes and the saved cursor reached 25 after
 each event was checked. The remaining 25 writes are intentionally preserved
 durable event checkpoints. This benchmark does not predict total Obsidian RAM
@@ -75,3 +87,26 @@ after each sample. No heap objects or credentials are captured.
 
 Real-client post-release results and the immutable smoke receipt are recorded
 after deployment; source tests alone do not establish live delivery.
+
+## Live validation exposed a second polling workload
+
+The initial 2.31.34 installation removed the clone hotspot and passed the
+installed-class rollback/replay checks and a real synthetic file-action delivery.
+It did not finish the live validation: the steady-state sample still allocated
+991,080,856 bytes in five seconds, only 6.9% less than the baseline. Its immutable
+deployment receipt remains awaiting smoke; the final revision supersedes it.
+
+A bounded four-second trace identified eight full saves. `watchThread`'s default
+1.2-second recent-history poll was overwriting complete subscription histories,
+including one large thread whose partial snapshots had `historyComplete:false`.
+The subscription tick then fetched complete history again. Polling snapshots also
+carried changing global sequence watermarks unrelated to new messages. Both
+histories repeatedly changed their stored representation even while idle.
+
+Removing that second subscription poll preserves the service's existing canonical
+recovery path and the websocket live/replay connection. Retaining the stream
+watermark and comparing optional fields as durable JSON removes additional
+representation-only writes. Regression tests cover unchanged streamed/canonical
+snapshots, the stream's disabled-poll/reconnect mode, and repeated post-attachment
+storage failure. The final full suite and real-client measurement are recorded
+with the completed final release below.
