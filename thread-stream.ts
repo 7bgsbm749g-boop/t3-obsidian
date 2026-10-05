@@ -3,7 +3,7 @@ import {Buffer} from 'buffer';
 import {applyThreadItem,turnForMessage,type InlineThreadState} from './inline-thread';
 
 export type ThreadAccessCloseReason='cache-expired'|'auth-rejected'|'host-disposed'|'stop-complete'|'stop-timeout'|'stream-reconnect'|'stream-stopped'|'late-access'|'caller-closed';
-export interface ThreadAccess {origin:string;api:(path:string,payload?:any)=>Promise<any>;expiresAt?:number;close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
+export interface ThreadAccess {origin:string;api:(path:string,payload?:any)=>Promise<any>;readReplyFile?:(source:string,projectId:string)=>Promise<Uint8Array>;expiresAt?:number;close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
 export type ThreadAccessFactory=()=>Promise<ThreadAccess>;
 export type ThreadStreamItem={kind:'snapshot';snapshot:any}|{kind:'event';event:any}|{kind:'synchronized'};
 export interface ThreadStreamCallbacks {item:(item:ThreadStreamItem)=>void;reconnecting:(error:Error)=>void}

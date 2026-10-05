@@ -50,7 +50,12 @@ def main():
     parser.add_argument('--connection-id', help='Exact paired connection ID, or local for this desktop')
     parser.add_argument('--mode', choices=['project', 'self'], help='Link mode (default: project); self requires an existing project at the folder')
     parser.add_argument('--relink', action='store_true', help='Deliberately replace a different direct folder link')
+    parser.add_argument('--image-folder', help='Image subfolder inside the linked folder (link-folder only)')
+    parser.add_argument('--file-folder', help='Document subfolder inside the linked folder (link-folder only)')
     args = parser.parse_args()
+    if args.image_folder is not None or args.file_folder is not None:
+        if args.kind != 'link-folder' or not args.image_folder or not args.file_folder:
+            parser.error('--image-folder and --file-folder must be supplied together with link-folder.')
     config_path = Path(args.config_dir)
     if (not args.config_dir or config_path.is_absolute() or '..' in config_path.parts
             or '\\' in args.config_dir or ':' in args.config_dir
@@ -111,6 +116,8 @@ def main():
                 parser.error('link-folder requires --project-id, --connection-id, and --environment-id.')
             command.update(projectId=args.project_id, connectionId=args.connection_id,
                            environmentId=args.environment_id, mode=args.mode or 'project', relink=args.relink)
+            if args.image_folder is not None:
+                command['replyFolders'] = dict(images=args.image_folder, files=args.file_folder)
         elif any([args.project_id, args.connection_id, args.environment_id, args.mode, args.relink]):
             parser.error('Project selection and relinking options require link-folder.')
     elif args.kind in ['stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination']:

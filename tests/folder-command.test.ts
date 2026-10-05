@@ -19,6 +19,14 @@ function harness(initial:FolderLink[]=[]){
   };
   return {host,journals,links:()=>links,saves:()=>saves,resolutions:()=>resolutions,setLinks:(value:FolderLink[])=>{links=value;},failSave:(value:boolean)=>{failSave=value;},failAck:()=>{failAck=true;},unavailable:()=>{unavailable=true;}};
 }
+test('link commands save file destinations and subsequent project relinks preserve them',async()=>{
+  const h=harness(),folders={images:'Pictures/T3',files:'Documents/T3'};
+  await executeFolderCommand(command('Notes',{replyFolders:folders}),h.host);
+  assert.deepEqual(h.links()[0].replyFolders,folders);
+  await executeFolderCommand(command('Notes'),h.host);assert.deepEqual(h.links()[0].replyFolders,folders);
+  assert.throws(()=>validateFolderCommand(command('Notes',{replyFolders:{images:'../Escape',files:'Files'}})),/folder/i);
+  assert.throws(()=>validateFolderCommand(command('/',{mode:'self',replyFolders:folders})),/general settings/);
+});
 test('strict agent folder paths and explicit identities reject unsafe or ambiguous input',()=>{
   for(const path of ['','..','Notes/../Secret','/Notes','Notes/','Notes//A','.obsidian','Notes/.hidden','C:\\vault','Notes\\A','Notes\nA','Notes\x7fA',' Notes'])assert.throws(()=>validateAgentCommand(command(path)));
   for(const path of ['/','Notes','Projects/Side/handoff'])assert.equal(validateFolderCommand(command(path,{mode:path==='/'?'self':'project'})).folderPath,path);

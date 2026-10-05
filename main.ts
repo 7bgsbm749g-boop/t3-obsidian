@@ -50,6 +50,7 @@ import {existingThreadTurn,threadIsActive,responseOwnsActiveTurn} from './thread
 import {DeviceInlineManager} from './leased-inline';
 import {deviceNoteIO} from './inline-note-io';
 import {importReplyAsset} from './reply-import';
+import {loadReplyFolders,validateReplyFolders,resolveReplyFolders,type ReplyFolders} from './reply-locations';
 import {InlineChatManager,captureEditorSelection,type InlineJob} from './inline-chat';
 import {handoffInline,hostedPaths,type HostedInlineRequest,type InlineHostTarget,type InlineFiles} from './hosted-inline';
 import {leasePaths,type LeaseRecord} from './inline-lease';
@@ -69,7 +70,7 @@ const NEW_FOLDER_PROJECT='folder:new';
 const VAULT_PROJECT='vault:root';
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
 type PreparedNote={content:string;images:Awaited<ReturnType<typeof collectImages>>};
-interface Settings { threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];noteDeliveries:NoteDelivery[];vaultId:string;vaultLocations:VaultLocation[] }
+interface Settings { replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];noteDeliveries:NoteDelivery[];vaultId:string;vaultLocations:VaultLocation[] }
 export default class SendToT3 extends Plugin {
   declare settings: Settings;
   mode: 'desktop'|'direct' = 'desktop';
@@ -154,7 +155,7 @@ export default class SendToT3 extends Plugin {
     this.cloudAccount=local?.cloudAccount??null;
     this.nativeAccount=local?.nativeAccount??null;
     this.vaultRegistrations=local?.vaultRegistrations??{};
-    this.settings = {threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),noteDeliveries:loadNoteDeliveries(data?.noteDeliveries),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
+    this.settings = {replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),noteDeliveries:loadNoteDeliveries(data?.noteDeliveries),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
     this.folderLinkReplica=mergeFolderLinkChanges(this.settings.folderLinkChanges,loadFolderLinkChanges(await deviceState(`folder-links:${this.deviceId}:${this.settings.vaultId}`)));
     this.settings.folderLinkChanges=this.folderLinkReplica;
     this.settings.folderLinks=applyFolderLinkChanges(this.settings.folderLinks,this.folderLinkReplica);
@@ -512,7 +513,7 @@ export default class SendToT3 extends Plugin {
         responseBindings:target=>this.displayResponseBindings(target),
         prepareDisplay:async(display,destination,input)=>{
           const host=await this.inlineHostTarget(),id=commandId(display.id,`response:${input.id}:${destination.id}`);
-          return {nativeProjection:await this.coordinatedHostAvailable(host),destinationSection:destination.section,version:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat)==='raw-markdown'?3:2,finalAnswerFormat:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat),independent:true,id,initialInput:{messageId:input.id,text:input.text,label:incomingLabel(input)},initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id,{messageId:input.id,text:input.text,label:incomingLabel(input)},undefined,intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate),{startedAt:input.createdAt??display.createdAt}).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)!=='remove',intermediateMode:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)};
+          return {replyFolders:resolveReplyFolders(this.settings.replyFolders,this.settings.folderLinks,destination.path),nativeProjection:await this.coordinatedHostAvailable(host),destinationSection:destination.section,version:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat)==='raw-markdown'?3:2,finalAnswerFormat:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat),independent:true,id,initialInput:{messageId:input.id,text:input.text,label:incomingLabel(input)},initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id,{messageId:input.id,text:input.text,label:incomingLabel(input)},undefined,intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate),{startedAt:input.createdAt??display.createdAt}).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)!=='remove',intermediateMode:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)};
         },
         attachDisplay:async(request,path)=>{
           if(this.stopped||!this.eventHostCurrent(server.identity)||!this.deviceInline)throw Error('Streaming host ownership changed.');
@@ -685,7 +686,7 @@ export default class SendToT3 extends Plugin {
     this.lastDiskSnapshot=JSON.stringify(data);
     const baseline=JSON.parse(this.sharedBaseline),remote=this.sharedData(data);
     const adopted=mergeSharedSettings(baseline,remote,this.sharedSnapshot());
-    for(const key of ['inlineStreaming','orchestration','completion','threadTitleGeneration'] as const)this.settings[key]=adopted[key];
+    for(const key of ['inlineStreaming','orchestration','completion','threadTitleGeneration','replyFolders'] as const)this.settings[key]=adopted[key];
     const diskLinks=loadFolderLinks(data),diskChanges=loadFolderLinkChanges(data.folderLinkChanges);
     this.folderLinkReplica=mergeFolderLinkChanges(this.folderLinkReplica,diskChanges);
     this.settings.folderLinkChanges=this.folderLinkReplica;
@@ -1123,7 +1124,7 @@ export default class SendToT3 extends Plugin {
     const host=await this.inlineHostTarget();
     const threadEnvironmentId=request.connection.environmentId??await this.localInlineEnvironment();
     job.hostTarget=host;this.rememberInlineTarget(host);
-    request.inlineHost={nativeProjection:await this.coordinatedHostAvailable(host),version:finalAnswerFormat(job.finalAnswerFormat)==='raw-markdown'?3:2,finalAnswerFormat:finalAnswerFormat(job.finalAnswerFormat),independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
+    request.inlineHost={replyFolders:resolveReplyFolders(this.settings.replyFolders,this.settings.folderLinks,job.path,request.folderLinkIntent),nativeProjection:await this.coordinatedHostAvailable(host),version:finalAnswerFormat(job.finalAnswerFormat)==='raw-markdown'?3:2,finalAnswerFormat:finalAnswerFormat(job.finalAnswerFormat),independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
     request.prompt+=stagedNoteInstruction([request.inlineHost]);if(request.prompt.length>120_000)throw Error('The note and staged-edit context exceed T3’s prompt limit.');
   }
   private async coordinatedHostAvailable(target:InlineHostTarget){
@@ -1188,13 +1189,14 @@ export default class SendToT3 extends Plugin {
     if(existing)return {project:this.projectForLink(existing),link:existing};
     if(!create)return;
     if(!interactive)throw Error('Link this note’s folder to an existing T3 project with link-folder before sending. New projects require the workspace picker.');
-    const project=await this.pickFolderProject(folderPath,folderPath.split('/').at(-1)!);
+    let replyFolders=loadReplyFolders(undefined);
+    const project=await this.pickFolderProject(folderPath,folderPath.split('/').at(-1)!,async(_project,folders)=>{replyFolders=folders;});
     if(!project)throw new ProjectCreationCancelled();
     if(this.stopped)throw Error('The plugin was disabled before sending.');
     const connection=this.connection(project);
     if(project.connectionId)this.settings.directProjects=[...this.settings.directProjects.filter(item=>projectKey(item)!==projectKey(project)),project];
     else this.settings.projects=[...this.settings.projects.filter(item=>item.id!==project.id),project];
-    const link:FolderLink={id:randomId(),folderPath,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false,vaultId:this.settings.vaultId,...(connection.environmentId?{environmentId:connection.environmentId}:{})};
+    const link:FolderLink={replyFolders,id:randomId(),folderPath,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false,vaultId:this.settings.vaultId,...(connection.environmentId?{environmentId:connection.environmentId}:{})};
     return {project,link};
   }
   private folderLinkIntent(link:FolderLink):{folderLinkIntent?:FolderLink}{
@@ -1588,11 +1590,11 @@ export default class SendToT3 extends Plugin {
   async linkFolder(folder:TFolder,project:Project,self:boolean){
     new FolderLinkModal(this.app,this,folder,project,self).open();
   }
-  async saveFolderLink(folder:TFolder,project:Project,self:boolean,verified?:FolderLink){
+  async saveFolderLink(folder:TFolder,project:Project,self:boolean,verified?:FolderLink,replyFolders?:ReplyFolders){
     if((folder.path==='/'?this.app.vault.getRoot():this.app.vault.getAbstractFileByPath(folder.path))!==folder)throw Error('This folder no longer exists. Choose a folder again.');
     const previous=this.settings.folderLinks;
     const existing=previous.find(link=>link.folderPath===folder.path&&link.projectId===project.id&&link.connectionId===(project.connectionId??''));
-    this.settings.folderLinks=upsertFolderLink(previous,verified??{id:existing?.id??randomId(),folderPath:folder.path,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self});
+    this.settings.folderLinks=upsertFolderLink(previous,verified??{id:existing?.id??randomId(),folderPath:folder.path,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self,...((replyFolders??existing?.replyFolders)?{replyFolders:validateReplyFolders((replyFolders??existing?.replyFolders)!)}:{})});
     try{await this.save();this.refreshFolderIndicators();}catch(error){this.settings.folderLinks=previous;this.refreshFolderIndicators();throw error;}
     new Notice(`${folder.path} linked to ${projectLabel(project)}.`);
   }
@@ -1600,6 +1602,13 @@ export default class SendToT3 extends Plugin {
     const previous=this.settings.folderLinks;
     this.settings.folderLinks=previous.filter(link=>link.folderPath!==path);
     try{await this.save();this.refreshFolderIndicators();}catch(error){this.settings.folderLinks=previous;this.refreshFolderIndicators();throw error;}
+  }
+  async saveReplyFolders(path:string,folders:ReplyFolders,expected:FolderLink){
+    const current=this.settings.folderLinks.find(link=>link.folderPath===path);
+    if(JSON.stringify(current)!==JSON.stringify(expected))throw Error('This folder link changed. Reopen its file locations.');
+    const previous=this.settings.folderLinks;
+    this.settings.folderLinks=upsertFolderLink(previous,{...current!,replyFolders:validateReplyFolders(folders)});
+    try{await this.save();}catch(error){this.settings.folderLinks=previous;throw error;}
   }
   private async localFolderProject(folder:TFolder):Promise<Project>{
     if(Platform.isMobile)throw Error('Link to self is available when Obsidian and T3 Code run on the same desktop computer.');
@@ -1619,22 +1628,25 @@ export default class SendToT3 extends Plugin {
     if(!this.settings.selected.includes(project.id))this.settings.selected.push(project.id);
     return project;
   }
-  private pickFolderProject(folderPath:string,name:string,onChosen?:(project:Project)=>Promise<void>):Promise<Project|undefined>{
+  private pickFolderProject(folderPath:string,name:string,onChosen?:(project:Project,folders:ReplyFolders)=>Promise<void>):Promise<Project|undefined>{
     if(this.projectCreateModal)throw Error('Choose or cancel the open project workspace first.');
+    const folders=loadReplyFolders(this.settings.folderLinks.find(link=>link.folderPath===folderPath)?.replyFolders);
     return new Promise(resolve=>{
       this.projectCreateModal=new ProjectCreateModal(this.app,name,{
         machines:()=>this.vaultMachines(),connect:machine=>this.projectLocation(machine),
-        link:async project=>{if(this.stopped)throw Error('The plugin was disabled before creating the project.');await onChosen?.(project);resolve(project);},
+        configure:folderPath==='/'?undefined:el=>replyFolderControls(this.app,el,folders,folderPath),
+        validateConfiguration:()=>{validateReplyFolders(folders);},
+        link:async project=>{if(this.stopped)throw Error('The plugin was disabled before creating the project.');await onChosen?.(project,validateReplyFolders(folders));resolve(project);},
         closed:()=>{this.projectCreateModal=undefined;resolve(undefined);},
       });
       this.projectCreateModal.open();
     });
   }
   async createFolderProject(folder:TFolder){
-    await this.pickFolderProject(folder.path,folder.path==='/'?this.app.vault.getName():folder.name,async project=>{
+    await this.pickFolderProject(folder.path,folder.path==='/'?this.app.vault.getName():folder.name,async(project,folders)=>{
       if(project.connectionId)this.settings.directProjects=[...this.settings.directProjects.filter(p=>projectKey(p)!==projectKey(project)),project];
       else this.settings.projects=[...this.settings.projects.filter(p=>p.id!==project.id),project];
-      await this.saveFolderLink(folder,project,false);
+      await this.saveFolderLink(folder,project,false,undefined,folder.path==='/'?undefined:folders);
     });
   }
   private checkProjectWorkspace(machine:VaultMachine,path:string){
@@ -1698,7 +1710,7 @@ export default class SendToT3 extends Plugin {
   }
   private sharedSnapshot(){const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,...shared}=this.settings;return JSON.parse(JSON.stringify(shared));}
   private sharedData(data:any){
-    return {...this.sharedSnapshot(),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),noteDeliveries:loadNoteDeliveries(data?.noteDeliveries),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),autoSettleThreads:data?.autoSettleThreads!==false,
+    return {...this.sharedSnapshot(),replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),noteDeliveries:loadNoteDeliveries(data?.noteDeliveries),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),autoSettleThreads:data?.autoSettleThreads!==false,
       orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads===true},
       inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},
       completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder??'Archive/T3 Code'}};
@@ -1780,11 +1792,11 @@ export default class SendToT3 extends Plugin {
     } catch(e) {if(options?.throwOnError)throw new RequestDeliveryError(message(e),saved);new Notice(`Send to T3 Code: ${message(e)} ${saved ? "See settings for saved requests." : "No thread was created."}`,12000);}
     finally {this.busy = false;}
   }
-  private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string,destinationSection?:string){
+  private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string,destinationSection?:string,sourcePath?:string){
     const policy=request.jobOptions?.inline??resolveJobOptions(this.settings.inlineStreaming).inline;
     const io=deviceNoteIO(this.app),host=await this.inlineHostTarget();
     for(const path of destinations){const document=await io.readNote(path);if(document===undefined)throw Error(`Destination note unavailable: ${path}`);endInsertionOffset(document);}
-    const source:HostedInlineRequest={destinationSection,nativeProjection:await this.coordinatedHostAvailable(host),version:policy.finalAnswerFormat==='raw-markdown'?3:2,finalAnswerFormat:policy.finalAnswerFormat,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode};
+    const source:HostedInlineRequest={replyFolders:resolveReplyFolders(this.settings.replyFolders,this.settings.folderLinks,sourcePath??request.noteThread?.notePath??destinations[0],request.folderLinkIntent),destinationSection,nativeProjection:await this.coordinatedHostAvailable(host),version:policy.finalAnswerFormat==='raw-markdown'?3:2,finalAnswerFormat:policy.finalAnswerFormat,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode};
     request.inlineBindings=[];this.rememberInlineTarget(host);
     const opened=await this.inlineHostFiles(host);
     try{
@@ -1832,7 +1844,7 @@ export default class SendToT3 extends Plugin {
         const thread=await runBridge(this.connection(project),['read',command.threadId!]);
         if(thread.id!==command.threadId||thread.projectId!==project.id||!thread.messages?.some((item:any)=>item.role==='user'&&item.id===command.messageId))throw Error('The source response is not in this note’s linked T3 project.');
         request={id:command.id,project,connection:this.connection(project),title:thread.title??'T3 response',prompt:'',threadId:command.threadId};
-        await this.prepareStreamBindings(request,command.destinations.length?command.destinations:[command.notePath],thread.messages.find((item:any)=>item.role==='user'&&item.id===command.messageId)?.createdAt,command.destinationSection);
+        await this.prepareStreamBindings(request,command.destinations.length?command.destinations:[command.notePath],thread.messages.find((item:any)=>item.role==='user'&&item.id===command.messageId)?.createdAt,command.destinationSection,command.notePath);
         for(const binding of request.inlineBindings!)binding.messageId=command.messageId!;
         persist({request});
       }
@@ -2065,8 +2077,36 @@ class FolderLinkModal extends Modal{
   onOpen(){
     const el=this.contentEl;el.empty();this.titleEl.setText(`Link ${this.folder.name} to ${this.project.title}`);
     el.createEl('p',{text:`${this.folder.path} → ${projectLabel(this.project)}`});
+    const folders=loadReplyFolders(this.plugin.settings.folderLinks.find(link=>link.folderPath===this.folder.path)?.replyFolders);
+    if(this.folder.path!=='/')replyFolderControls(this.app,el,folders,this.folder.path);
     const actions=new Setting(el).addButton(b=>b.setButtonText('Cancel').onClick(()=>this.close())).addButton(b=>b.setButtonText('Link').setCta().onClick(async()=>{
-      actions.setDisabled(true);try{await this.plugin.saveFolderLink(this.folder,this.project,this.self);this.close();}catch(error){new Notice(message(error));actions.setDisabled(false);}
+      actions.setDisabled(true);try{await this.plugin.saveFolderLink(this.folder,this.project,this.self,undefined,this.folder.path==='/'?undefined:validateReplyFolders(folders));this.close();}catch(error){new Notice(message(error));actions.setDisabled(false);}
+    }));
+  }
+}
+
+class ReplyFolderPicker extends FuzzySuggestModal<TFolder>{
+  constructor(app:App,private folderScope:string|undefined,private chosen:(path:string)=>void){super(app);this.setPlaceholder('Choose an attachment folder');}
+  getItems(){return this.app.vault.getAllLoadedFiles().filter((file):file is TFolder=>file instanceof TFolder&&file.path!=='/'&&(!this.folderScope||file.path.startsWith(this.folderScope+'/'))&&!file.path.split('/').some(part=>part.startsWith('.')));}
+  getItemText(folder:TFolder){return this.folderScope?folder.path.slice(this.folderScope.length+1):folder.path;}
+  onChooseItem(folder:TFolder){this.chosen(this.getItemText(folder));}
+}
+function replyFolderControls(app:App,el:HTMLElement,folders:ReplyFolders,scope?:string){
+  el.createEl('p',{text:scope?`T3 files are saved inside ${scope}. Enter subfolders or browse existing folders. New folders are created when files arrive.`:'For notes without a linked project folder. Enter vault folders or browse existing folders. New folders are created when files arrive.'});
+  for(const [key,label] of [['images','Image folder'],['files','Document and other file folder']] as const){
+    let input:import('obsidian').TextComponent;
+    new Setting(el).setName(label).addText(t=>{input=t;t.setValue(folders[key]).onChange(value=>{folders[key]=value;});}).addButton(b=>b.setButtonText('Browse').onClick(()=>new ReplyFolderPicker(app,scope,path=>{folders[key]=path;input.setValue(path);}).open()));
+  }
+}
+class ReplyFoldersModal extends Modal{
+  constructor(app:App,private plugin:SendToT3,private path:string){super(app);}
+  onOpen(){
+    this.titleEl.setText('T3 file locations');
+    const link=this.plugin.settings.folderLinks.find(link=>link.folderPath===this.path);
+    if(!link||this.path==='/'){this.close();return;}
+    const folders=loadReplyFolders(link.replyFolders);replyFolderControls(this.app,this.contentEl,folders,this.path);
+    new Setting(this.contentEl).addButton(b=>b.setButtonText('Cancel').onClick(()=>this.close())).addButton(b=>b.setButtonText('Save').setCta().onClick(async()=>{
+      try{await this.plugin.saveReplyFolders(this.path,validateReplyFolders(folders),link);this.close();}catch(error){new Notice(message(error));}
     }));
   }
 }
@@ -2145,6 +2185,9 @@ class T3Settings extends PluginSettingTab {
       slider.onChange(async value=>{const mode=modes[value];slider.sliderEl.setAttribute('aria-valuetext',mode);this.plugin.settings.inlineStreaming.intermediateMode=mode;this.plugin.settings.inlineStreaming.keepIntermediate=mode!=='remove';describe(mode);await this.plugin.save();});
     });
     const modeLabels=progressSetting.controlEl.createDiv({cls:'send-to-t3-mode-labels'});for(const label of ['Remove','Keep','Collapse'])modeLabels.createSpan({text:label});
+    el.createEl('h3',{text:'T3 file locations'});
+    const folders={...this.plugin.settings.replyFolders};replyFolderControls(this.app,el,folders);
+    new Setting(el).addButton(b=>b.setButtonText('Save file locations').onClick(async()=>{try{const before=this.plugin.settings.replyFolders;this.plugin.settings.replyFolders=validateReplyFolders(folders);try{await this.plugin.save();}catch(error){this.plugin.settings.replyFolders=before;throw error;}new Notice('T3 file locations saved.');}catch(error){new Notice(message(error));}}));
     el.createEl('h3',{text:'Orchestration'});
     new Setting(el).setName('Wait for other threads').setDesc('Prepend an instruction to wait for all other active T3 Code threads in the destination project to finish before starting work.').addToggle(t=>t.setValue(this.plugin.settings.orchestration.waitForOtherThreads).onChange(async enabled=>{this.plugin.settings.orchestration.waitForOtherThreads=enabled;await this.plugin.save();}));
     new Setting(el).setName('Legacy cleanup defaults').setDesc('Applies only to previously queued cleanup jobs. Manual sends and questions always keep their notes. Changed or renamed notes are kept.').addDropdown(d=>d.addOptions({keep:'Keep note',archive:'Archive note',delete:'Delete note (vault trash)'}).setValue(this.plugin.settings.completion.action).onChange(async value=>{this.plugin.settings.completion.action=value as CompletionAction;await this.plugin.save();this.display();}));
@@ -2156,7 +2199,9 @@ class T3Settings extends PluginSettingTab {
     new Setting(el).setName('Vault project machine').setDesc(root?`${machine??(Platform.isMobile?'Linked computer':'This computer')} · ${root.workspaceRoot} · Hosts new note responses; keep Obsidian open there.`:'Choose the default T3 destination and response-writing host. Keep Obsidian and this plugin running there.').addButton(b=>b.setButtonText(root?'Change machine':'Connect vault').onClick(async()=>{try{await this.plugin.configureVaultRoot();this.display();}catch(e){if(!(e instanceof VaultSetupCancelled))new Notice(message(e),10000);}}));
     if(!this.plugin.settings.folderLinks.length)el.createEl('p',{text:'No folders are linked.'});
     for(const link of this.plugin.settings.folderLinks){
-      new Setting(el).setName(link.folderPath==='/'?'Vault root':link.folderPath).setDesc(`${link.self?'Self · ':''}${link.projectTitle} · ${link.workspaceRoot}`).addButton(b=>b.setButtonText('Unlink').onClick(async()=>{await this.plugin.unlinkFolder(link.folderPath);this.display();}));
+      const setting=new Setting(el).setName(link.folderPath==='/'?'Vault root':link.folderPath).setDesc(`${link.self?'Self · ':''}${link.projectTitle} · ${link.workspaceRoot}`);
+      if(link.folderPath!=='/')setting.addButton(b=>b.setButtonText('File locations').onClick(()=>new ReplyFoldersModal(this.app,this.plugin,link.folderPath).open()));
+      setting.addButton(b=>b.setButtonText('Unlink').onClick(async()=>{await this.plugin.unlinkFolder(link.folderPath);this.display();}));
     }
     if(this.plugin.settings.completionJobs.length){
       el.createEl('h3',{text:'Task completion monitoring'});

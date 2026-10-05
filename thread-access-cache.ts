@@ -42,6 +42,7 @@ export class ThreadAccessCache {
       const entry:Entry={access,expires,borrowed:{
         get origin(){return access.origin;},
         api:(path,payload)=>this.request(environmentId,path,payload),
+        ...(access.readReplyFile?{readReplyFile:(source:string,projectId:string)=>this.perform(environmentId,current=>current.readReplyFile!(source,projectId),true)}:{}),
         // Stop helpers own their borrow, never the host's underlying session.
         close:reason=>access.trace?.('borrow-released',reason??'caller-closed'),
       }};
@@ -56,16 +57,19 @@ export class ThreadAccessCache {
   }
 
   private async request(environmentId:string,path:string,payload?:any):Promise<any>{
+    // Reads and stream-ticket creation are safe to retry. Dispatch never is.
+    return this.perform(environmentId,access=>access.api(path,payload),payload===undefined&&!path.split('?')[0].endsWith('/dispatch')||path==='/api/auth/websocket-ticket');
+  }
+  private async perform(environmentId:string,operation:(access:ThreadAccess)=>Promise<any>,retry:boolean):Promise<any>{
     const entry=await this.acquire(environmentId);
-    try{return await entry.access.api(path,payload);}
+    try{return await operation(entry.access);}
     catch(error){
       if(!(error instanceof T3HttpError)||error.status!==401)throw error;
       this.invalidate(environmentId,entry);
-      // Reads and stream-ticket creation are safe to retry. Dispatch never is.
-      if(!(payload===undefined&&!path.split('?')[0].endsWith('/dispatch')||path==='/api/auth/websocket-ticket'))throw error;
+      if(!retry)throw error;
       const fresh=await this.acquire(environmentId,entry);
       try{
-        const result=await fresh.access.api(path,payload);fresh.access.trace?.('recovered');return result;
+        const result=await operation(fresh.access);fresh.access.trace?.('recovered');return result;
       }catch(retryError){
         if(retryError instanceof T3HttpError&&retryError.status===401&&this.entries.get(environmentId)===fresh){
           this.invalidate(environmentId,fresh);this.blocked.set(environmentId,{until:this.now()+5000,error:retryError});

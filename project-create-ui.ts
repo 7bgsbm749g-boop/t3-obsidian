@@ -23,6 +23,8 @@ export interface ProjectLocation {
   close():void;
 }
 export interface ProjectCreateHost {
+  configure?(el:HTMLElement):void;
+  validateConfiguration?():void;
   machines():VaultMachine[];
   connect(machine:VaultMachine):Promise<ProjectLocation>;
   link(project:Project):Promise<void>;
@@ -66,6 +68,7 @@ export class ProjectCreateModal extends Modal {
     new Setting(this.contentEl).setName('Search folders').addText(t=>t.setValue(this.query).setPlaceholder('Filter folders…').setDisabled(this.working).onChange(value=>{this.query=value;this.drawFolders(list);}));
     const list=this.contentEl.createEl('div',{cls:'send-to-t3-workspace-folders'});
     this.drawFolders(list);
+    this.host.configure?.(this.contentEl);
     new Setting(this.contentEl)
       .addButton(b=>b.setButtonText('Cancel').setDisabled(this.working).onClick(()=>this.close()))
       .addButton(b=>b.setButtonText('Create and link').setCta().setDisabled(this.working||!this.machineId).onClick(()=>this.create()));
@@ -109,6 +112,7 @@ export class ProjectCreateModal extends Modal {
     this.folder=list.parentPath;this.entries=list.entries;this.query='';this.newFolder=undefined;this.namingFolder=false;this.status='';
   });}
   async create(){await this.work(async()=>{
+    this.host.validateConfiguration?.();
     if(!this.name.trim())throw Error('Enter a project name.');
     if(!this.folder.trim()||this.folder==='~')throw Error('Choose a workspace folder first.');
     const location=await this.connect();if(!location||this.ended)return;

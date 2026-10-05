@@ -1,9 +1,10 @@
 import {folderLinkForPath,type FolderLink} from './folder-link';
 import type {Project} from './bridge';
+import {validateReplyFolders,type ReplyFolders} from './reply-locations';
 
 export type FolderCommand = {version:1;id:string;folderPath:string} & (
   {kind:'inspect-folder'|'unlink-folder'} |
-  {kind:'link-folder';projectId:string;connectionId:string;environmentId:string;mode:'project'|'self';relink:boolean}
+  {kind:'link-folder';projectId:string;connectionId:string;environmentId:string;mode:'project'|'self';relink:boolean;replyFolders?:ReplyFolders}
 );
 export interface FolderCommandResult {
   id:string;ok:boolean;vaultId:string;folderPath:string;directLink:FolderLink|null;effectiveLink:FolderLink|null;
@@ -18,9 +19,10 @@ export function safeFolderPath(value:unknown):value is string {
 export function validateFolderCommand(value:any):FolderCommand {
   if(value?.version!==1||!isFolderCommand(value??{})||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.id??''))throw Error('Invalid Obsidian folder command.');
   if(!safeFolderPath(value.folderPath))throw Error('Choose an existing vault-relative folder; / means the vault root.');
-  const fields=['version','id','kind','folderPath',...(value.kind==='link-folder'?['projectId','connectionId','environmentId','mode','relink']:[])];
+  const fields=['version','id','kind','folderPath',...(value.kind==='link-folder'?['projectId','connectionId','environmentId','mode','relink','replyFolders']:[])];
   if(Object.keys(value).some(key=>!fields.includes(key)))throw Error('Unexpected folder command arguments.');
   if(value.kind==='link-folder'){
+    if(value.replyFolders!==undefined){validateReplyFolders(value.replyFolders);if(value.folderPath==='/')throw Error('Use the general settings for vault-root file locations.');}
     for(const key of ['projectId','connectionId','environmentId'])if(typeof value[key]!=='string'||!value[key].trim()||value[key]!==value[key].trim()||value[key].length>200||/[\x00-\x1f\x7f]/.test(value[key]))throw Error(`Linking requires an explicit ${key}.`);
     if(!['project','self'].includes(value.mode)||typeof value.relink!=='boolean')throw Error('Choose project or self link mode and an explicit relink preference.');
     if(value.folderPath==='/'&&value.mode!=='self')throw Error('The vault root requires self mode and an existing project for this vault.');
@@ -70,6 +72,7 @@ export async function executeFolderCommand(input:FolderCommand,host:FolderComman
     const unchanged=before?.projectId===project!.id&&before.connectionId===(project!.connectionId??'')&&before.self===(command.mode==='self')&&(!before.environmentId||before.environmentId===command.environmentId)&&before.workspaceRoot===project!.workspaceRoot;
     if(before&&!unchanged&&!command.relink)throw Error('This folder already has a different direct link. Use --relink to deliberately replace it.');
     after={id:unchanged?before!.id:command.id,folderPath:command.folderPath,connectionId:project!.connectionId??'',projectId:project!.id,projectTitle:project!.title,workspaceRoot:project!.workspaceRoot,self:command.mode==='self',vaultId:host.vaultId,environmentId:command.environmentId};
+    if(command.replyFolders??before?.replyFolders)after.replyFolders=validateReplyFolders((command.replyFolders??before?.replyFolders)!);
   }
   if(journal.prepared&&!same(after,journal.prepared.after))throw Error('Verified project metadata changed since preparation. Inspect it and use a new request ID.');
   const links=host.links().filter(link=>link.folderPath!==command.folderPath);if(after)links.push(after);

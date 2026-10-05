@@ -1,4 +1,6 @@
+import {loadReplyFolders,type ReplyFolders} from './reply-locations';
 export interface FolderLink {
+  replyFolders?:ReplyFolders;
   id:string;
   folderPath:string;
   connectionId:string;
@@ -36,6 +38,7 @@ export function normalizeFolderLink(value:FolderLink):FolderLink{
   if(!link.id||!link.projectId||!link.projectTitle||!link.workspaceRoot)throw Error('The folder link is incomplete.');
   if(typeof value.vaultId==='string'&&value.vaultId)link.vaultId=value.vaultId;
   if(typeof value.environmentId==='string'&&value.environmentId)link.environmentId=value.environmentId;
+  if(value.replyFolders!==undefined)link.replyFolders=loadReplyFolders(value.replyFolders);
   return link;
 }
 

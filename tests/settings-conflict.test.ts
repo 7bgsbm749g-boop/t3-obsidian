@@ -47,6 +47,15 @@ test('external refresh adopts all shared preferences and unrelated saves preserv
   assert.equal(h.current().inlineStreaming.enabled,false);assert.equal(h.current().inlineStreaming.finalAnswerFormat,'raw-markdown');assert.equal(h.current().completion.action,'archive');
 });
 
+test('general attachment folders default without writes and merge distinct synced edits',async()=>{
+  const h=await harness({vaultId:'vault'});assert.equal(h.plugin.settings.replyFolders.images,'T3 Code Attachments');assert.equal(h.saves(),0);
+  h.setCurrent({...h.current(),replyFolders:{images:'Remote Images',files:'T3 Code Attachments'}});
+  h.plugin.settings.replyFolders.files='Local Documents';await h.plugin.save();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.current().replyFolders)),{images:'Remote Images',files:'Local Documents'});
+  h.setCurrent({...h.current(),replyFolders:{images:'Synced Images',files:'Synced Documents'}});await h.plugin.onExternalSettingsChange();
+  assert.equal(h.plugin.settings.replyFolders.images,'Synced Images');assert.equal(h.plugin.settings.replyFolders.files,'Synced Documents');
+});
+
 test('title generation defaults safely and follows synced settings without losing local edits',async()=>{
   const h=await harness({vaultId:'vault',threadTitleGeneration:'invalid'});
   assert.equal(h.plugin.settings.threadTitleGeneration,'untitled-only');

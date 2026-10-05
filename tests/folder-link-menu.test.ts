@@ -160,6 +160,24 @@ test('folder menu opens an inactive link dialog; cancel is inert and Link alone 
   }finally{h.plugin.onunload();}
 });
 
+test('link dialog saves chosen subfolders, rejects escapes and rolls back failed location edits',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const modal=await h.open();
+    await h.setting(modal,'Image folder').controls[0].change('Pictures/T3');
+    await h.setting(modal,'Document and other file folder').controls[0].change('../Escape');
+    await h.button(modal,'Link').click();assert.equal(modal.closed,false);assert.equal(h.plugin.settings.folderLinks.length,0);
+    await h.setting(modal,'Document and other file folder').controls[0].change('Documents/T3');
+    await h.button(modal,'Link').click();assert.equal(modal.closed,true);
+    const link=h.plugin.settings.folderLinks[0];assert.equal(link.replyFolders.images,'Pictures/T3');assert.equal(link.replyFolders.files,'Documents/T3');
+    h.setFailSave(true);await assert.rejects(h.plugin.saveReplyFolders('Notes',{images:'Other',files:'Files'},link),/storage failure/);
+    assert.equal(h.plugin.settings.folderLinks[0],link);
+    h.setFailSave(false);await h.plugin.saveReplyFolders('Notes',{images:'Other',files:'Files'},link);
+    assert.equal(h.plugin.settings.folderLinks[0].replyFolders.images,'Other');
+    await assert.rejects(h.plugin.saveReplyFolders('Notes',{images:'Again',files:'Files'},link),/changed/);
+  }finally{h.plugin.onunload();}
+});
+
 test('folder menu exposes project links without a workflow builder',async()=>{
   const h=await folderMenuHarness();
   try{assert.deepEqual(h.folderMenu().items.map((item:any)=>item.title),['Link to T3 Code']);}

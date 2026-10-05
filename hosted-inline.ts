@@ -9,6 +9,7 @@ import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberIn
 import {needsInlineHistory,readInlineSnapshot,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
+import {validateReplyFolders,type ReplyFolders} from './reply-locations';
 import {observeIncoming,mergeProse,selectionRange,type InlineSteering} from './inline-steering';
 import type {InitialInlineInput,InlineMessage,InlineTurn,InlineBindingCheckpoint} from './inline-thread';
 import {interruptStoppedResponse,stoppedResponseBody} from './response-stop';
@@ -17,6 +18,7 @@ class StopStreamRequested extends Error {}
 
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface HostedInlineRequest {
+  replyFolders?:ReplyFolders;
   keepIntermediate?:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat;
   initialInput?:InitialInlineInput;
   independent?:boolean;
@@ -63,6 +65,7 @@ export function safeNotePath(path:unknown):path is string {
   return typeof path==='string'&&path.endsWith('.md')&&!path.includes('\\')&&!/[\x00-\x1f:]/.test(path)&&path.split('/').every(p=>!!p&&p!=='.'&&p!=='..'&&!p.startsWith('.'));
 }
 export function validateHostedRequest(value:any):HostedInlineRequest {
+  if(value?.replyFolders!==undefined)validateReplyFolders(value.replyFolders);
   if(value?.nativeProjection!==undefined&&typeof value.nativeProjection!=='boolean')throw Error('Invalid native projection preference.');
   validateDestinationSection(value?.destinationSection);
   if(value?.initialInput!==undefined&&(!uuid.test(value.initialInput?.messageId??'')||value.initialInput.messageId!==value.messageId||typeof value.initialInput.text!=='string'||!value.initialInput.text.trim()||value.initialInput.text.length>120_000||value.initialInput.label!==undefined&&(typeof value.initialInput.label!=='string'||value.initialInput.label.length>200)))throw Error('Invalid initial response input.');
@@ -381,12 +384,13 @@ export class HostedInlineWriter {
           try{return await this.io.importReplyAsset!(reference,request,access);}
           catch(error){
             state.assetFailures??=[];
-            if(state.assetFailures.length<32&&!state.assetFailures.some(item=>item.source===reference.source))state.assetFailures.push({source:reference.source.slice(0,500),error:'Import unavailable; original link preserved.'});
+            if(state.assetFailures.length<32&&!state.assetFailures.some(item=>item.source===reference.source))state.assetFailures.push({source:reference.source.slice(0,500),error:(error instanceof Error?error.message:'Import unavailable; original link preserved.').slice(0,300)});
             return undefined;
           }
         };
         if(phase==='complete')state.assetFailures=[];
         if(phase==='complete'&&this.io.importReplyAsset&&!conversation){
+          current={...current,messages:current.messages.map(message=>({...message}))};
           for(const message of inlineTurnMessages(current,state.turnId,intermediateMode(request.intermediateMode,request.keepIntermediate)!=='remove')){
             message.text=await this.network(path,()=>rewriteReplyReferences(message.text,importAsset));
           }
