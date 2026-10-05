@@ -141,3 +141,80 @@ TypeScript and 11 Python tests**. New HTTP tests cover split multi-byte text,
 replacement characters, BOM rejection and declared/streamed byte limits. Journal
 tests confirm cached paths still reject symlink replacement and malformed names;
 the existing same-size tampering, changed hash and truncated-chain tests pass.
+
+## Final real-QLO2 validation: 2.31.36
+
+Source commits: `97f194f` (subscription copying/saves), `93704da` (duplicate polling
+and watermarks), and `fba21c1` (HTTP decoding and journal allocation).
+The final immutable package came from the clean `fba21c1` checkout. Deployment
+preserved `data.json`, completed a fresh official Sync scan and restarted the
+continuous service. A guarded `reload-client` replaced client
+`bcb6a353-d760-4f2a-9ac2-98bc9249a797` with
+`2cc6e44e-4254-4651-b4b9-0523d0424840`, reporting loaded 2.31.36.
+The final response-host status has recovered authority, zero pending storage
+operations and zero timeouts.
+
+Two five-second native allocation samples produced **652,595,132** and
+**649,151,816** bytes, versus **1,064,870,212** at loaded 2.31.33: reductions of
+**38.7%** and **39.0%**. These are whole-renderer estimated allocation samples,
+separate from the larger component benchmark savings. The second sample ended
+with 116,945,108 bytes of used heap. A one-minute observation ranged from
+509,235,200 to 692,273,152 bytes of renderer RSS. This is short-run evidence;
+it does not establish a long-duration OOM guarantee or laptop send latency.
+The host still performs file integrity checks and reads response records.
+
+The actual loaded subscription class retained 22 synthetic histories, produced
+zero writes for ten unchanged ticks, shared ten canonical reads across four
+displays, rolled back a failed save, resumed at cursor 41 and ignored duplicate
+replay. A separate real Vault modify event delivered exactly one durable
+`set-property` action into `T3 memory smoke 20261005-23136.md`. Its visible checkbox
+and preserved before/after body were inspected in the native client. The owned
+subscription was cancelled and the temporary note/pane removed afterward.
+A 4.5-second idle trace of the real service produced **zero writes** with all
+22 original histories, 17 subscriptions and 8 displays retained.
+
+All 19 original pane identities and the original active source pane were restored.
+The app, community-plugin and global Obsidian settings are byte-identical to the
+initial snapshots, including restoring the temporary native CLI flag to off.
+The original purchase note, failed command `681e6bc2-f8a3-4e6f-b5e0-c38a35d905cd`
+request/result and original response requests `e25b4b29-1ba8-5179-bcdd-ad63854b6fb5`
+and `6de3ba50-b5ec-5963-a6d4-1db7176bb004` passed hash preservation checks.
+No original failed command was retried and no purchase action occurred.
+
+The laptop transport was unavailable. Its 2.31.36 reload remains queued under
+status ID `7915b450-5ec1-43e2-818e-e5c3580c5768`; no Windows UI or end-to-end
+55-second timing result is claimed. The local VPS QLO2 client supplied the live
+memory smoke. Versions 2.31.34 and 2.31.35 remain immutable intermediate installs
+with awaiting-smoke receipts, superseded by the completed final revision.
+
+## Native inspection and retained handoff
+
+Supported native CLI route (temporarily enabled through Settings → General →
+Advanced → Command line interface):
+
+```sh
+DISPLAY=:99 XDG_RUNTIME_DIR=/run/user/1000 /opt/Obsidian/obsidian vault=QLO2 eval code=...
+```
+
+`final-23136/native-obsidian-cli.py` keeps stdin open while waiting for asynchronous
+CLI replies. `dev:screenshot path=ABSOLUTE_PATH` supplies native screenshots.
+The retained profile script uses the real renderer's
+`window.electron.remote.getCurrentWebContents().debugger`, attaches its own
+debugger only when necessary and detaches it afterward. No external CDP listener,
+credentials or heap-object dump is required.
+
+GUI control used the installed `mcp__vps_computer__*` Cua tools with session
+`memory-qlo2`, the local `~/.cache/cua-driver/cua-driver.sock` backend and X11
+display `:99`. At verification, QLO2's main process/window were PID 2440332 and
+window 6291459; rediscover them with `list_windows` before reusing the route.
+AT-SPI supplied only window metadata, so fresh window screenshots grounded
+window-local input. The separate Settings window was closed after CLI restoration;
+the owned Cua session was ended. Other Obsidian clients were preserved.
+
+Retained smoke scripts, profiles, screenshots, cleanup/preservation proofs and
+logs are in:
+`/home/ubuntu/backups/send-to-t3-code/memory-fix-20261005T193948Z/final-23136/`.
+Immutable final smoke receipt:
+`/home/ubuntu/backups/send-to-t3-code/releases/2.31.36/smoke-vps-qlo2.json`.
+Its evidence ZIP includes the reproducible scripts, before/after profiles and
+validation records; raw settings backup files are excluded.
