@@ -30,7 +30,7 @@ test('default-closed fold bounds nested headings, tables, fences and out-of-orde
   assert.match(text,/^> \[!t3-progress\]- \*\*Bounded history · Completed\*\*/);
   assert.doesNotMatch(text,/spinner/);
   const folds=ast.children.filter(node=>node.type==='blockquote'&&text.slice(node.position!.start.offset!,node.position!.end.offset!).startsWith('> [!t3-progress]-'));
-  assert.equal(folds.length,2);
+  assert.equal(folds.length,1);
   for(const fold of folds)assert.doesNotMatch(text.slice(fold.position!.start.offset!,fold.position!.end.offset!),/Final visible answer|Following user/);
   assert.match(text,/> > Checking\./);assert.match(text,/> ## Nested heading/);assert.match(text,/> ```md/);
   assert.equal(text.split('Final visible answer.').length-1,1);
@@ -54,14 +54,15 @@ test('a stale commentary checkpoint cannot hide newer final prose created before
   assert.equal(renderInlineTurn(afterCompletion,'turn','thread','complete','remove'),'> FINAL ANSWER\n');
 });
 
-test('steering quotes stay outside folds and final-message pieces retain exact boundaries',()=>{
+test('steering quotes share the history fold while the current final stays outside',()=>{
   const conversation={messages:state.messages,steering:[{messageId:'steer',text:'Keep my question visible.',confirmed:true,before:[{...state.messages[0],text:'Checking.'}]}]};
   const text=render(state,'complete',conversation),ast=unified().use(remarkParse).parse(text);
   for(const node of ast.children.filter(n=>n.type==='blockquote')){
     const block=text.slice(node.position!.start.offset!,node.position!.end.offset!);
-    if(block.startsWith('> [!t3-progress]-'))assert.doesNotMatch(block,/Keep my question visible|Final visible answer/);
+    if(block.startsWith('> [!t3-progress]-')){assert.match(block,/Keep my question visible/);assert.doesNotMatch(block,/Final visible answer/);}
   }
-  assert.match(text,/> \[!t3-steering\] You\n> Keep my question visible\./);
+  assert.equal(foldsOf(text).length,1);
+  assert.match(text,/> > \[!t3-steering\] You\n> > Keep my question visible\./);
   assert.equal(text.match(/Bounded history · Completed/g)?.length,1);
   assert.equal(text.match(/class="send-to-t3-run-timer"/g)?.length,1);
 });
@@ -99,8 +100,8 @@ for(const inputKind of ['question answer','steering','repeated mixed inputs'] as
   const waiting=renderLive();assertOneRun(waiting);
   live.messages.push(after);
   const first=renderLive();assertOneRun(first);
-  assert.match(first,/> \[!t3-progress\]- Progress /);
-  assert.deepEqual(foldKeys(first).slice(0,foldKeys(waiting).length),foldKeys(waiting),'streaming retains the keys used for explicit fold choices');
+  assert.equal(foldsOf(first).length,1);assert.doesNotMatch(first,/^> \[!t3-progress\]- Progress /m);
+  assert.deepEqual(foldKeys(first),foldKeys(waiting),'steering and subsequent streaming retain the single fold choice');
   if(inputKind==='repeated mixed inputs'){
     steering.push({messageId:'steer',text:'Use private handoff browser',before:[progress,after],confirmed:true});
     addQuestion('second','Second answer','2026-10-02T10:00:04Z');
@@ -108,7 +109,8 @@ for(const inputKind of ['question answer','steering','repeated mixed inputs'] as
   }
   const text=renderLive();assertOneRun(text);
   const visibleInputs=inputKind==='steering'?['Use private handoff browser']:inputKind==='question answer'?['jslepx']:['jslepx','Use private handoff browser','Second answer'];
-  for(const fold of foldsOf(text))for(const input of visibleInputs)assert.ok(!fold.includes(input),'input stays outside progress');
+  assert.equal(foldsOf(text).length,1);
+  for(const input of visibleInputs)assert.ok(foldsOf(text)[0].includes(input),'input shares the history fold');
   const ordered=['Before input.',visibleInputs[0],'After first input.',...visibleInputs.slice(1),...(inputKind==='repeated mixed inputs'?['After repeated inputs.']:[])];
   for(let index=1;index<ordered.length;index++)assert.ok(text.indexOf(ordered[index-1])<text.indexOf(ordered[index]),'transcript retains chronological order');
   const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',document=`<!-- t3-inline:start:${id} -->\n${text}<!-- t3-inline:end:${id} -->`;
@@ -128,11 +130,36 @@ test('independent response bindings and a new run in the same thread each own th
   assert.deepEqual(activeInlineIds(document),[a,b]);
 });
 
-test('empty late-answer follow-up places a working fold after its visible input',()=>{
+test('empty late-answer follow-up keeps earlier answers and input under the top working header',()=>{
   const running={...state,messages:state.messages.slice(0,2),latestTurn:{turnId:'next',state:'running'},turns:{turn:{turnId:'turn',state:'completed',assistantMessageId:'final'}},session:{status:'running',activeTurnId:'next'}};
   const text=render(running,'running',{messages:running.messages,steering:[{messageId:'reply',text:'Follow up now.',confirmed:true,before:running.messages}],preserveHistory:true});
-  assert.match(text,/Final visible answer\.[\s\S]*> Follow up now\.[\s\S]*> \[!t3-progress\]- \*\*Bounded history · Working/);
+  assert.equal(foldsOf(text).length,1);
+  assert.match(foldsOf(text)[0],/^> \[!t3-progress\]- \*\*Bounded history · Working[\s\S]*Final visible answer\.[\s\S]*> > Follow up now\./);
   assertOneRun(text);
+});
+
+test('a growing final-message prefix stays before steering; only its completed suffix leaves the fold',()=>{
+  const prefix={id:'final',role:'assistant',turnId:'turn',text:'Before steering.\n\n',streaming:true};
+  const final={...prefix,text:'Before steering.\n\nAfter steering final.',streaming:false};
+  const complete={...state,messages:[final]};
+  const text=render(complete,'complete',{messages:[final],steering:[{messageId:'input',text:'Change direction.',before:[prefix],confirmed:true}]});
+  assert.equal(foldsOf(text).length,1);
+  assert.match(foldsOf(text)[0],/Before steering\.[\s\S]*Change direction\./);
+  assert.doesNotMatch(foldsOf(text)[0],/After steering final/);
+  assert.match(text,/\n\n> After steering final\.\n$/);
+});
+
+test('sender labels, user Markdown and open input fences stay bounded within one native fold',()=>{
+  const before=state.messages.slice(0,1);
+  const inputs=[
+    {messageId:'agent',text:'Agent input.\n\n```md\nUnfinished example',label:'Agent · Source thread',before,confirmed:true},
+    {messageId:'unknown',text:'Native input.\n\n| A | B |\n| --- | --- |\n| 1 | 2 |',label:'User',before,confirmed:true},
+  ];
+  const text=render(state,'complete',{messages:state.messages,steering:inputs});
+  const fold=foldsOf(text)[0];assert.equal(foldsOf(text).length,1);
+  assert.match(fold,/> > \[!t3-steering\] Agent · Source thread/);
+  assert.match(fold,/Unfinished example\n> > ```[\s\S]*> > \[!t3-steering\] User/);
+  assert.doesNotMatch(fold,/Final visible answer/);
 });
 
 test('Collapse status remains discoverable for steering and exact error recovery; Stop freezes it',()=>{

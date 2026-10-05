@@ -5,6 +5,7 @@ import {pendingApprovals,renderApproval} from './approvals';
 import {intermediateMode,runTimer,type IntermediateMode,type RunTiming,type FinalAnswerFormat} from './response-presentation';
 import {steeringSegments,type InlineSteering} from './inline-steering';
 import {responseActivityLabel,responseActivityRow} from './response-activity';
+import {visibleInlineInput} from './input-presentation';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string;context?:unknown}
@@ -76,7 +77,7 @@ export interface InitialInlineInput {messageId:string;text:string;label?:string}
 /** The same neutral user quote is used for initial questions and steering. */
 export function renderInlineInput(text:string,label='You',position?:'live'|'recovered'):string {
   const heading=label.replace(/[\r\n\t]+/g,' ').replace(/[\\`*_{}\[\]()#+.!>|]/g,'\\$&').slice(0,200);
-  return `> [!t3-steering] ${heading}${position==='recovered'?' · Recovered (paragraph position approximate)':''}\n${text.split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
+  return `> [!t3-steering] ${heading}${position==='recovered'?' · Recovered (paragraph position approximate)':''}\n${closeOpenFence(visibleInlineInput(text)).split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
 }
 
 export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming):{text:string;bodyHash:string} {
@@ -471,28 +472,22 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   if(mode==='collapse'){
     const pieces=steeringSegments(all,conversation?.steering.filter(item=>item.confirmed)??[]);
     const title=phase==='complete'?`**${label} · Completed**`:heading;
-    const blocks:string[]=[];let progress:string[]=[];let fold=0;
-    // The response binding owns one run status, not each progress section.
-    // Late answers retain the historical transcript above the active status,
-    // just as in the expanded presentation. Keep fold identities unchanged.
-    const statusAfter=phase!=='complete'&&conversation?.preserveHistory?pieces.reduce((last,piece,index)=>piece.role==='user'?index:last,-1):-1;
-    let statusShown=false;
-    const flush=(after:number)=>{
-      const key=encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:${fold++}`);
-      const showStatus=!statusShown&&after>=statusAfter;
-      const caption=showStatus?`${title}${timer}${spinner}`:'Progress';
-      if(showStatus)statusShown=true;
-      blocks.push(`> [!t3-progress]- ${caption} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(progress.length?'\n>\n'+progress.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):''));progress=[];
-    };
+    // One native callout owns the entire chronological history, including
+    // steering and earlier completed turns. Only the current completed turn's
+    // last final-message piece stays outside. Frozen prefixes of that same
+    // message still belong before their steering input inside the history.
+    const finalId=phase==='complete'?inlineTurnMessages({...state,messages:all},turnId).at(-1)?.id:undefined;
+    const finalIndex=finalId?pieces.reduce((last,piece,index)=>piece.role==='assistant'&&piece.messageId===finalId?index:last,-1):-1;
+    const history:string[]=[];let final='';
     for(const [index,piece] of pieces.entries()){
-      if(piece.role==='user'||piece.messageId&&finalIds.has(piece.messageId)){
-        if(progress.length||!blocks.length)flush(index-1);
-        blocks.push(piece.role==='user'?renderInlineInput(piece.text,piece.label,piece.position):assistant(piece.text,piece.messageId));
-      }else if(piece.text.trim())progress.push(quoteResponse(closeOpenFence(piece.text.trim())));
+      if(index===finalIndex)final=assistant(piece.text,piece.messageId);
+      else if(piece.role==='user')history.push(renderInlineInput(piece.text,piece.label,piece.position));
+      else if(piece.text.trim())history.push(quoteResponse(closeOpenFence(piece.text.trim())));
     }
-    if(progress.length||!statusShown)flush(pieces.length);
+    const key=encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`);
+    const fold=`> [!t3-progress]- ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
     const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):approvals;
-    return input+blocks.join('\n\n')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+bottom+'\n';
+    return input+fold+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+bottom+'\n';
   }
   if(phase==='complete')return input+(prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
   const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):approvals?'\n\n'+approvals:'';

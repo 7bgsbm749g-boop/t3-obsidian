@@ -43,12 +43,13 @@ test('raw final selection uses completion bounds rather than recovered message a
   assert.match(render(late,'remove'),/^Final answer/);assert.doesNotMatch(render(late,'remove'),/Unverified/);
 });
 
-test('completed earlier final stays raw beside formatted continuation, steering and question controls',()=>{
+test('earlier final joins collapsed history while expanded raw history and question controls remain supported',()=>{
   const current:InlineThreadState={...state,messages:[...state.messages,{id:'next-progress',role:'assistant',turnId:'next',text:'Follow-up progress.\n\n```ts\npartial',streaming:true}],turns:{turn:state.latestTurn!},latestTurn:{turnId:'next',state:'running'},session:{status:'running',activeTurnId:'next'},activities:[{id:'q',kind:'user-input.requested',turnId:'next',summary:'Question',payload:{requestId:'question',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Proceed?',options:[{label:'Yes',description:'Continue'}]}]}}]};
   const conversation={messages:current.messages,steering:[{messageId:'input',text:'Please continue.',before:state.messages,confirmed:true}],preserveHistory:true};
   for(const mode of ['keep','collapse'] as const){
     const text=renderInlineTurn(current,'next','thread','running',mode,'environment',conversation,undefined,undefined,undefined,'raw-markdown');
-    assert.match(text,/\nFinal answer\.\n/);assert.match(text,/> \[!t3-steering\] You\n> Please continue\./);
+    assert.match(text,mode==='collapse'?/> > Final answer\.\n/:/\nFinal answer\.\n/);
+    assert.match(text,mode==='collapse'?/> > \[!t3-steering\] You\n> > Please continue\./:/> \[!t3-steering\] You\n> Please continue\./);
     assert.match(text,mode==='collapse'?/> > Follow-up progress/:/> Follow-up progress/);
     assert.match(text,/Proceed\?|t3-question:/);assert.match(text,/send-to-t3-response-activity/);
     assert.match(text,mode==='collapse'?/> ```\n/:/partial\n```/);
