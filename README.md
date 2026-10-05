@@ -361,8 +361,16 @@ Assistant response HTML outside code is displayed literally so tag-like placehol
 
 ### Plugin logging disabled
 
-Plugin diagnostic logging is disabled for a performance isolation test on all
-platforms. No diagnostic journal, operation instrumentation, logging listeners,
+Desktop reply credentials have a focused local audit at
+`<T3 base directory>/userdata/logs/obsidian-stream-auth.jsonl`. It records credential
+IDs, lifetime, component, closure reason and caller, rejection and recovery;
+it excludes tokens, prompts and response text. Two private files are capped at
+256 KiB each. Writes occur only on credential events, with no timer, vault write,
+Sync publication or remote upload, and audit failures do not block delivery.
+The general plugin diagnostic logger described below remains disabled.
+
+General plugin diagnostic logging is disabled for a performance isolation test on all
+platforms. No general diagnostic journal, operation instrumentation, logging listeners,
 persistence timer, Sync publication, or remote upload runs. On startup the
 plugin clears this vault's old device-local diagnostic buffers and removes the
 shared `t3-code-log.json` from its configuration folder. It also removes only
@@ -372,6 +380,13 @@ The **Export plugin diagnostics…** command reports that logging is disabled.
 Each device must reload this release after Sync to stop its previous logger.
 Request queues, credentials, subscriptions, and response recovery remain intact.
 Obsidian's own Sync logs are separate from plugin diagnostics.
+
+The response host owns its shared credential; stopping one response releases
+borrowed access without revoking the credential used by other responses. A
+rejected reply read refreshes access immediately and retries once; concurrent
+readers share that refresh. Delayed failures from an old credential cannot close
+its replacement. Repeated authentication rejection backs off, and dispatches
+are never replayed by read recovery.
 
 ## Multiple streaming destinations and agent commands
 

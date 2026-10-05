@@ -2,7 +2,8 @@ import {logEvent,logFailure} from './diagnostics';
 import {Buffer} from 'buffer';
 import {applyThreadItem,turnForMessage,type InlineThreadState} from './inline-thread';
 
-export interface ThreadAccess {origin:string;api:(path:string,payload?:any)=>Promise<any>;close?:()=>Promise<void>|void}
+export type ThreadAccessCloseReason='cache-expired'|'auth-rejected'|'host-disposed'|'stop-complete'|'stop-timeout'|'stream-reconnect'|'stream-stopped'|'late-access'|'caller-closed';
+export interface ThreadAccess {origin:string;api:(path:string,payload?:any)=>Promise<any>;expiresAt?:number;close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
 export type ThreadAccessFactory=()=>Promise<ThreadAccess>;
 export type ThreadStreamItem={kind:'snapshot';snapshot:any}|{kind:'event';event:any}|{kind:'synchronized'};
 export interface ThreadStreamCallbacks {item:(item:ThreadStreamItem)=>void;reconnecting:(error:Error)=>void}
@@ -64,12 +65,12 @@ export async function readInlineEvents(access:ThreadAccess,threadId:string,after
 export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets,replay?:{afterSequence:()=>number|undefined}) {
   let stopped=false,socket:WebSocket|undefined,timer:ReturnType<typeof setTimeout>|undefined,rotation:ReturnType<typeof setTimeout>|undefined,pollTimer:ReturnType<typeof setTimeout>|undefined,attempt=0;
   let access:ThreadAccess|undefined;
-  const closeAccess=()=>{if(pollTimer)clearTimeout(pollTimer);pollTimer=undefined;const old=access;access=undefined;if(old?.close)void Promise.resolve(old.close()).catch(()=>{});};
+  const closeAccess=(reason:ThreadAccessCloseReason)=>{if(pollTimer)clearTimeout(pollTimer);pollTimer=undefined;const old=access;access=undefined;if(old?.close)void Promise.resolve(old.close(reason)).catch(()=>{});};
   const retry=(error:Error)=>{
     if(stopped)return;
     if(rotation)clearTimeout(rotation);
     logFailure('stream.reconnecting',error,{threadId,attempt});logEvent('stream.disconnected',{threadId});
-    callbacks.reconnecting(error);closeAccess();
+    callbacks.reconnecting(error);closeAccess('stream-reconnect');
     const delay=Math.min(30_000,1000*2**Math.min(attempt++,5));
     timer=setTimeout(()=>{void connect();},delay);
   };
@@ -78,7 +79,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
     let ready:ThreadAccess;
     try{
       ready=await accessFactory();
-      if(stopped){await ready.close?.();return;}
+      if(stopped){await ready.close?.('late-access');return;}
       access=ready;
       const issued=await ready.api('/api/auth/websocket-ticket',{});
       if(typeof issued?.ticket!=='string'||!issued.ticket)throw Error('T3 did not issue a stream ticket.');
@@ -126,5 +127,5 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
     }catch(error){retry(error instanceof Error?error:Error('Cannot open T3 thread stream.'));}
   };
   void connect();
-  return {stop(){logEvent('stream.stopped',{threadId});stopped=true;if(timer)clearTimeout(timer);if(rotation)clearTimeout(rotation);if(socket){try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{/* Connection is already gone. */}socket.close();}closeAccess();}};
+  return {stop(){logEvent('stream.stopped',{threadId});stopped=true;if(timer)clearTimeout(timer);if(rotation)clearTimeout(rotation);if(socket){try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{/* Connection is already gone. */}socket.close();}closeAccess('stream-stopped');}};
 }

@@ -3,7 +3,8 @@ import {contentHash} from './completion';
 import {HostedInlineWriter,hostedPaths,validateHostedRequest,pendingCompletionCleanup,type HostedInlineRequest,type HostedInlineState,type InlineFiles,type InlineHostTarget} from './hosted-inline';
 import {InlineLeaseClient,HEARTBEAT_MS,leasePaths,terminalLease,type LeaseRecord,type LeaseReply} from './inline-lease';
 import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,turnForMessage,hasCompletionProof,hasResponseMarkers,regionBody,type InlineThreadState,type InlineStartRequest} from './inline-thread';
-import {readInlineEvents,readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
+import {readInlineEvents,readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem,type ThreadAccessCloseReason} from './thread-stream';
+import {ThreadAccessCache} from './thread-access-cache';
 import type {ReplyReference} from './reply-assets';
 import type {SteeringInput} from './inline-steering';
 import {logFailure} from './diagnostics';
@@ -20,7 +21,7 @@ export interface DeviceInlineIO {
   receiveCoordinated?(record:LeaseRecord,proofBytes?:string):void|Promise<void>;
   receiveThreadTitle?(id:string,title:string):void;
   readSaved?(path:string):Promise<string|undefined>;
-  access(environmentId:string):Promise<ThreadAccess>;
+  access(environmentId:string,reason?:ThreadAccessCloseReason):Promise<ThreadAccess>;
   readNote(path:string):Promise<string|undefined>;
   locateNote?(id:string,path:string):Promise<string|undefined>;
   noteChanged?(path:string):void;
@@ -46,7 +47,7 @@ export class DeviceInlineManager {
   private nextRenameRetry=0;
   private hosts=new Map<string,Host>();
   private jobs=new Map<string,Runtime>();
-  private accesses=new Map<string,{value:Promise<ThreadAccess>;expires:number}>();
+  private accessCache=new ThreadAccessCache((environmentId,reason)=>this.io.access(environmentId,reason),()=>this.now());
   private titles?:ThreadTitleFeed;
   constructor(readonly actor:string,private vaultId:string,private io:DeviceInlineIO,private open:(target:InlineHostTarget)=>Promise<{files:InlineFiles;close():void}>,private now=()=>Date.now(),private monotonic=()=>performance.now(),private pause?:(milliseconds:number)=>Promise<void>){const saved=io.loadRenames?.();this.renames=Array.isArray(saved)?saved:[];for(const rename of this.renames)this.host(rename.host);if(io.receiveThreadTitle)this.titles=new ThreadTitleFeed(environmentId=>io.access(environmentId),(id,title)=>io.receiveThreadTitle!(id,title));}
   private host(target:InlineHostTarget){
@@ -61,13 +62,7 @@ export class DeviceInlineManager {
     this.hosts.set(key,host);return host;
   }
   private access(environmentId:string){
-    let current=this.accesses.get(environmentId);
-    if(current&&current.expires<=this.now()){void current.value.then(access=>access.close?.()).catch(()=>{});this.accesses.delete(environmentId);current=undefined;}
-    if(!current){
-      const value=this.io.access(environmentId);current={value,expires:this.now()+180_000};this.accesses.set(environmentId,current);
-      void value.catch(()=>{if(this.accesses.get(environmentId)?.value===value)this.accesses.delete(environmentId);});
-    }
-    return current.value;
+    return this.accessCache.get(environmentId);
   }
   async register(request:HostedInlineRequest){
     if(this.stopped)throw Error('The plugin stopped before registering the response.');
@@ -370,7 +365,7 @@ export class DeviceInlineManager {
     this.titles?.dispose();
     for(const runtime of this.jobs.values()){runtime.refresh?.cancel(Error('Response writer stopped.'));runtime.monitor?.stop();runtime.writer.stop();}
     for(const host of this.hosts.values())host.close();
-    for(const access of this.accesses.values())void access.value.then(value=>value.close?.()).catch(()=>{});
-    this.jobs.clear();this.hosts.clear();this.accesses.clear();
+    void this.accessCache.dispose();
+    this.jobs.clear();this.hosts.clear();
   }
 }

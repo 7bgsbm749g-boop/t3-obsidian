@@ -17,6 +17,35 @@ import {desktopTimersPlugin} from '../esbuild.config.mjs';
 import {leasePaths} from '../inline-lease';
 import {INLINE_SNAPSHOT_INTERVAL_MS} from '../leased-inline';
 
+test('stopping one hosted response cannot revoke the session delivering another response',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3-stop-shared-')),directory='.obsidian/t3-code/inline/v1';
+  const identity={workspaceRoot:root,directory,environmentId:'env',vaultId:'vault'},files=localInlineFiles(root,directory);
+  const notes=new Map<string,string>(),noteFiles=new Map<string,{path:string}>(),requests:HostedInlineRequest[]=[];let creates=0,closes=0,complete=false;
+  const commands:any[]=[],released:string[]=[];
+  for(const name of ['Stopped.md','Continuing.md']){
+    const id=randomUUID(),region=initialRegion(id),request:HostedInlineRequest={version:1,id,vaultId:'vault',host:{workspaceRoot:root,directory,environmentId:'env'},notePath:name,threadId:randomUUID(),messageId:commandId(id,'message'),projectId:'p',threadEnvironmentId:'env',initialHash:region.bodyHash,createdAt:new Date().toISOString()};
+    requests.push(request);notes.set(name,'Outside text\n'+region.text);noteFiles.set(name,{path:name});await files.write(hostedPaths(directory,id).request,JSON.stringify(request));
+  }
+  const app:any={workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:(path:string)=>noteFiles.get(path),read:async(file:any)=>notes.get(file.path),process:async(file:any,change:any)=>{const value=change(notes.get(file.path));notes.set(file.path,value);return value;}}};
+  const host=await DesktopInlineHost.open(app,identity,async()=>{
+    creates++;return {origin:'https://test',close:()=>{closes++;},trace:(event,reason)=>{if(event==='borrow-released')released.push(reason!);},api:async(path:string,payload:any)=>{
+      assert.equal(closes,0,'stop cleanup must not revoke shared access');
+      if(payload){commands.push(payload);return {};}
+      const request=requests.find(request=>path.includes(request.threadId))!;
+      return {thread:{id:request.threadId,projectId:'p',messages:[{id:request.messageId,role:'user',text:'q',streaming:false,createdAt:request.createdAt},{id:'a',role:'assistant',turnId:'turn',text:complete?'Continuing final':'Initial progress',streaming:!complete}],latestTurn:{turnId:'turn',requestedAt:request.createdAt,state:complete?'completed':'running'},session:{status:complete?'ready':'running',activeTurnId:complete?null:'turn'}}};
+    }};
+  });
+  try{
+    await host.tick();assert.match(notes.get('Continuing.md')!,/Initial progress/);
+    await files.write(hostedPaths(directory,requests[0].id).stop,'{}');await host.tick();await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(commands.length,1);assert.equal(commands[0].type,'thread.turn.interrupt');assert.deepEqual(released,['stop-complete']);assert.equal(closes,0);
+    complete=true;await host.tick();
+    const final=JSON.parse((await files.read(hostedPaths(directory,requests[1].id).state))!);
+    assert.equal(final.status,'complete');assert.match(notes.get('Continuing.md')!,/Outside text[\s\S]*Continuing final/);assert.equal(creates,1);assert.equal(closes,0);
+  }finally{await host.dispose();await rm(root,{recursive:true,force:true});}
+  assert.equal(closes,1);
+});
+
 for(const recovery of ['saved','canonical','replay'])test(`bundled desktop recovers ${recovery} binding evidence with the feed stopped and renderer timers suspended`,async()=>{
   const missedStart=recovery!=='saved';let replayReads=0;
   const bundle=await build({stdin:{contents:"export {DesktopInlineHost,localInlineFiles} from './hosted-inline-desktop'; export {DeviceInlineManager} from './leased-inline'; export {desktopInterval,desktopPause} from './desktop-timers';",resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,platform:'browser',format:'cjs',target:'es2022',external:['node:*',...builtinModules.filter(name=>name!=='buffer')],plugins:[desktopTimersPlugin()]});

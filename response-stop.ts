@@ -61,10 +61,10 @@ export async function boundedStopOperation<T>(work:Promise<T>,timeoutMs=10_000):
 export async function interruptStoppedResponse(accessFor:()=>Promise<ThreadAccess>,requestId:string,threadId:string,turnId?:string,timeoutMs=10_000,messageId?:string,projectId?:string,createdAt=new Date().toISOString()){
   let expired=false,access:ThreadAccess|undefined,timer:ReturnType<typeof setTimeout>|undefined;
   let closed=false;
-  const close=()=>{if(!access||closed)return;closed=true;try{void Promise.resolve(access.close?.()).catch(()=>{});}catch{/* Cleanup must not change the stop result. */}};
+  const close=(reason:'stop-complete'|'stop-timeout')=>{if(!access||closed)return;closed=true;try{void Promise.resolve(access.close?.(reason)).catch(()=>{});}catch{/* Cleanup must not change the stop result. */}};
   const work=(async()=>{
     access=await accessFor();
-    if(expired){close();return;}
+    if(expired){close('stop-timeout');return;}
     try{
       if(!turnId){
         if(!messageId)throw Error('The stopped response has no bound T3 turn.');
@@ -74,8 +74,8 @@ export async function interruptStoppedResponse(accessFor:()=>Promise<ThreadAcces
       }
       if(expired)return;
       await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(requestId,'interrupt'),threadId,turnId,createdAt});
-    }finally{close();}
+    }finally{close('stop-complete');}
   })();
-  try{await Promise.race([work,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{expired=true;close();reject(Error('The response was finished in the note, but T3 did not acknowledge the interrupt.'));},timeoutMs);})]);}
+  try{await Promise.race([work,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{expired=true;close('stop-timeout');reject(Error('The response was finished in the note, but T3 did not acknowledge the interrupt.'));},timeoutMs);})]);}
   finally{if(timer)clearTimeout(timer);}
 }

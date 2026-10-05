@@ -6,6 +6,7 @@ import type {Connection,Request} from './bridge';
 import type {InlineStartRequest} from './inline-thread';
 import {existingThreadTurn} from './thread-target';
 import {readNewThreadDefaults} from './model-defaults';
+import {T3HttpError} from './thread-access-cache';
 export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean}
 export interface PairedSession {token:string;expiresAt:number;environmentId:string;url:string;dpopKeyId?:string;accountId?:string}
 export interface DirectPlan {hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:any;turn:any;observedActiveTurnId?:string;delivery?:InlineStartRequest}
@@ -30,7 +31,7 @@ export async function jsonHttp(url:string,options:RequestInit={},fetcher:Fetcher
  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),30000);
  try{
   const r=await fetcher(url,{...options,credentials:'omit',redirect:'error',cache:'no-store',signal:controller.signal});
-  if(!r.ok){if(r.status===401||r.status===403)throw Error('T3 access denied or expired. Create a fresh pairing link in T3 and pair this device again.');throw Error(`T3 returned HTTP ${r.status}. Retry the saved request if sending.`);}
+  if(!r.ok){if(r.status===401||r.status===403)throw new T3HttpError(r.status,'T3 access denied or expired. Create a fresh pairing link in T3 and pair this device again.');throw new T3HttpError(r.status,`T3 returned HTTP ${r.status}. Retry the saved request if sending.`);}
   if(Number(r.headers.get('content-length')||0)>4_000_000)throw Error('T3 response exceeds 4 MB.');
   let body='';
   if(r.body?.getReader){const reader=r.body.getReader();const parts:Uint8Array[]=[];let size=0;try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>4_000_000){await reader.cancel();throw Error('T3 response exceeds 4 MB.');}parts.push(value);}}finally{reader.releaseLock();}body=Buffer.concat(parts).toString('utf8');}

@@ -12,6 +12,8 @@ import type {ThreadAccess} from './thread-stream';
 import {existingThreadTurn} from './thread-target';
 import {readNewThreadDefaults,type NewThreadDefaults} from './model-defaults';
 import {workspaceChildPath} from './workspace-picker';
+import {T3HttpError} from './thread-access-cache';
+import {recordDesktopAuth} from './desktop-auth-audit';
 
 export function desktopDefaults():Connection {return {executable:'',host:'local',native:true,baseDir:join(homedir(),'.t3')};}
 export function cli(command:string[],args:string[]):Promise<string> {
@@ -81,7 +83,7 @@ export function requestJson(origin:string,token:string,path:string,payload?:any)
   const data=payload===undefined?undefined:JSON.stringify(payload);
   const r=http.request(new URL(apiPath,origin),{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',...(data?{'Content-Length':Buffer.byteLength(data)}:{})}},res=>{
    let out='';let bytes=0;res.setEncoding('utf8');res.on('data',(s:string)=>{bytes+=Buffer.byteLength(s);if(bytes>4_000_000)r.destroy(new Error('T3 response too large.'));else out+=s;});
-   res.on('error',reject);res.on('end',()=>{if(res.statusCode!==200){reject(new Error(`T3 API returned HTTP ${res.statusCode}. Retry the saved request if sending.`));return;}try{resolve(JSON.parse(out));}catch{reject(new Error('Invalid T3 API response.'));}});
+   res.on('error',reject);res.on('end',()=>{if(res.statusCode!==200){reject(new T3HttpError(res.statusCode??0,`T3 API returned HTTP ${res.statusCode}. Retry the saved request if sending.`));return;}try{resolve(JSON.parse(out));}catch{reject(new Error('Invalid T3 API response.'));}});
   });
   r.setTimeout(20_000,()=>r.destroy(new Error('T3 API timed out. Retry the saved request.')));r.on('error',reject);r.end(data);
  });
@@ -143,15 +145,28 @@ export async function runDesktop(connection:Connection,args:string[],input=''):P
 }
 
 /** A short-lived local session dedicated to one live thread subscription. */
-export async function desktopThreadAccess(connection:Connection):Promise<ThreadAccess>{
+export async function desktopThreadAccess(connection:Connection,component:'response-host'|'thread-reader'='thread-reader'):Promise<ThreadAccess>{
   if(connection.host!=='local')throw Error('Local T3 is available only on this computer.');
   const base=connection.baseDir||join(homedir(),'.t3');
   const runtime=JSON.parse(await fs.readFile(join(base,'userdata','server-runtime.json'),'utf8'));
   const command=findCli(connection);
   const issued=JSON.parse(await cli(command,['auth','session','issue','--base-dir',base,'--ttl','5m','--label','send-to-t3-code-inline','--json']));
-  if(typeof issued.token!=='string'||typeof issued.sessionId!=='string')throw Error('T3 did not issue a local stream session.');
-  let closed=false;
-  return {origin:runtime.origin,api:(path,payload)=>requestJson(runtime.origin,issued.token,path,payload),async close(){if(closed)return;closed=true;try{await cli(command,['auth','session','revoke','--base-dir',base,issued.sessionId]);}catch{/* Session expires after five minutes. */}}};
+  if(typeof issued.token!=='string'||!issued.token||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(issued.sessionId??''))throw Error('T3 did not issue a local stream session.');
+  const issuedAt=Date.now(),expiry=Date.parse(issued.expiresAt),expiresAt=Number.isFinite(expiry)?expiry:undefined;
+  const metadata={sessionId:issued.sessionId,component,issuedAt,expiresAt};
+  const audit=(event:import('./desktop-auth-audit').DesktopAuthRecord['event'],reason?:import('./thread-stream').ThreadAccessCloseReason,caller?:string[])=>recordDesktopAuth(base,{...metadata,event,reason,caller});
+  void audit('issued');let closed=false,rejectionRecorded=false,recoveryRecorded=false;
+  return {origin:runtime.origin,expiresAt,trace:(event,reason)=>{if(event==='recovered'){if(recoveryRecorded)return;recoveryRecorded=true;}void audit(event,reason);},async api(path,payload){
+    try{return await requestJson(runtime.origin,issued.token,path,payload);}catch(error){
+      if(error instanceof T3HttpError&&error.status===401&&!rejectionRecorded){rejectionRecorded=true;void audit('rejected');}throw error;
+    }
+  },async close(reason='caller-closed'){
+    if(closed)return;closed=true;
+    const caller=(new Error('Local stream credential closure').stack??'').split('\n').slice(2,7).map(line=>line.trim());
+    void audit('closing',reason,caller);
+    try{await cli(command,['auth','session','revoke','--base-dir',base,issued.sessionId]);void audit('revoke-completed',reason);}
+    catch{void audit('revoke-failed',reason);/* Session expires after five minutes. */}
+  }};
 }
 
 export async function desktopEnvironment(connection:Connection):Promise<string>{

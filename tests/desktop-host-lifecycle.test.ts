@@ -65,7 +65,8 @@ test('response host releases ownership even when closing a cached connection fai
   const h=await fixture();
   try{
     await h.plugin.refreshInlineHost();const old=h.plugin.inlineHostService;
-    old.accesses.set('broken',{access:{close:async()=>{throw Error('Connection already gone');}},expires:0});
+    old.accessCache.createAccess=async()=>({origin:'https://fixture',api:async()=>({}),close:async()=>{throw Error('Connection already gone');}});
+    await old.accessCache.get('broken');
     await old.dispose();assert.equal(old.active,false);
     await h.plugin.refreshInlineHost();assert.notEqual(h.plugin.inlineHostService,old);assert.equal(h.plugin.inlineHostService.active,true);
   }finally{await h.close();}
@@ -132,7 +133,7 @@ test('packaged desktop host delivers a renamed response while an older journal r
     const text=notes.get('Untitled.md')!;notes.delete('Untitled.md');files.delete('Untitled.md');
     file.path='Renamed.md';files.set(file.path,file);notes.set(file.path,text);host.renamed('Untitled.md',file.path);
     const access={origin:'https://fixture',api:async()=>({thread:{id:fresh.threadId,projectId:'fixture',title:'Canonical renamed thread',messages:[{id:fresh.messageId,role:'user',text:'Reply',streaming:false,createdAt:fresh.createdAt},{id:'answer',role:'assistant',text:'Healthy reply delivered.',turnId:'healthy-turn',streaming:false}],activities:[],latestTurn:{turnId:'healthy-turn',messageId:fresh.messageId,state:'completed',requestedAt:fresh.createdAt,assistantMessageId:'answer'},session:{status:'ready',activeTurnId:null}}}),close:async()=>{}};
-    host.accesses.set('fixture',{access,expires:Date.now()+60_000});
+    host.accessCache.createAccess=async()=>access;
     const deadline=Date.now()+1500,recordPath=`${h.directory}/leases/${fresh.id}.json`,storage=localInlineFiles(h.root,h.directory);
     while(Date.now()<deadline){
       if(JSON.parse((await storage.read(recordPath))!).state?.cleanupComplete)break;

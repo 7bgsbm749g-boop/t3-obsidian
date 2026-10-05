@@ -13,7 +13,8 @@ import {importReplyAsset} from './reply-import';
 import {deviceNoteIO} from './inline-note-io';
 export {importReplyAsset} from './reply-import';
 import {HostedInlineWriter,type HostedInlineRequest,type InlineFiles} from './hosted-inline';
-import {readInlineEvents,type ThreadAccess} from './thread-stream';
+import {readInlineEvents,type ThreadAccess,type ThreadAccessCloseReason} from './thread-stream';
+import {ThreadAccessCache} from './thread-access-cache';
 
 export function localInlineFiles(root:string,directory:string):LeaseFiles&{requests():Promise<string[]>}{
   const base=resolve(root,directory);
@@ -41,12 +42,12 @@ export class DesktopInlineHost {
   status(){return {active:this.active,authority:this.authority.status(),storage:this.authorityStorage.status()};}
   private stopAuthorityTimer:()=>void;
   private work=new Set<Promise<void>>();
-  private opening=new Map<string,Promise<ThreadAccess>>();
   private stopped=false;
   private closing?:Promise<void>;
   get active(){return !this.stopped;}
-  private accesses=new Map<string,{access:ThreadAccess;expires:number}>();
-  private constructor(private release:()=>Promise<void>,app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},files:ReturnType<typeof localInlineFiles>,access:(environmentId:string)=>Promise<ThreadAccess>){
+  private accessCache:ThreadAccessCache;
+  private constructor(private release:()=>Promise<void>,app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},files:ReturnType<typeof localInlineFiles>,access:(environmentId:string,reason?:ThreadAccessCloseReason)=>Promise<ThreadAccess>){
+    this.accessCache=new ThreadAccessCache(access);
     const storage=this.authorityStorage=interruptibleAuthorityFiles(files);
     this.stopAuthorityReads=()=>storage.stop();
     this.authority=new InlineLeaseAuthority(identity,storage.files);
@@ -55,17 +56,7 @@ export class DesktopInlineHost {
       ...files,
       locateNote:deviceNoteIO(app).locateNote,
       replayBindings:(request,access,signal,afterSequence)=>readInlineEvents(access,request.threadId,afterSequence,signal),
-      access:async environmentId=>{
-        const cached=this.accesses.get(environmentId);
-        if(cached&&cached.expires>Date.now())return cached.access;
-        const pending=this.opening.get(environmentId);if(pending)return pending;
-        const work=(async()=>{
-          this.accesses.delete(environmentId);await cached?.access.close?.();
-          const fresh=await access(environmentId);this.accesses.set(environmentId,{access:fresh,expires:Date.now()+180_000});return fresh;
-        })();
-        this.opening.set(environmentId,work);
-        try{return await work;}finally{this.opening.delete(environmentId);}
-      },
+      access:environmentId=>this.accessCache.get(environmentId),
       importReplyAsset:(reference,request,threadAccess)=>importReplyAsset(app,reference,request,threadAccess),
       updateNote:async(path,change)=>{
         const file=app.vault.getFileByPath(path);if(!file)return undefined;
@@ -85,7 +76,7 @@ export class DesktopInlineHost {
   }
   async responseCommand(kind:string,id:string,hash?:string,notePath?:string){return this.coordinated.command(kind,id,hash,notePath);}
   eventContent(path:string,content:string){return this.coordinated.eventContent(path,content);}
-  static async open(app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},access:(environmentId:string)=>Promise<ThreadAccess>){
+  static async open(app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},access:(environmentId:string,reason?:ThreadAccessCloseReason)=>Promise<ThreadAccess>){
     logEvent('ownership.coordinator.opening',identity);
     try{
     const base=join(identity.workspaceRoot,identity.directory);await fs.mkdir(base,{recursive:true});
@@ -112,8 +103,8 @@ export class DesktopInlineHost {
     this.closing=(async()=>{
       try{
         await Promise.allSettled([...this.work,this.authority.tick()]);
-        await Promise.allSettled([...this.accesses.values()].map(({access})=>Promise.resolve().then(()=>access.close?.())));
-      }finally{this.accesses.clear();await this.release();}
+        await this.accessCache.dispose();
+      }finally{await this.release();}
     })();
     void this.closing.catch(()=>{});return this.closing;
   }

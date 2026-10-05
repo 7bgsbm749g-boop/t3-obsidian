@@ -159,7 +159,7 @@ export default class SendToT3 extends Plugin {
     this.settings.folderLinkChanges=this.folderLinkReplica;
     this.settings.folderLinks=applyFolderLinkChanges(this.settings.folderLinks,this.folderLinkReplica);
     const restoreFolderLinks=JSON.stringify(loadFolderLinks(data))!==JSON.stringify(this.settings.folderLinks)||JSON.stringify(loadFolderLinkChanges(data?.folderLinkChanges))!==JSON.stringify(this.folderLinkReplica);
-    // Logging is disabled for the performance isolation trial. Do not create
+    // General logging is disabled for the performance isolation trial. Do not create
     // a journal, operation wrappers, diagnostic listeners or flush timers.
     configureDiagnostics();
     try{await clearDeviceDiagnostics(this.settings.vaultId);}catch(error){new Notice(message(error));}
@@ -186,7 +186,7 @@ export default class SendToT3 extends Plugin {
     const storedTargets=this.app.loadLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`);
     if(Array.isArray(storedTargets))this.inlineTargets=storedTargets.filter(target=>target&&typeof target.environmentId==='string'&&typeof target.workspaceRoot==='string'&&typeof target.directory==='string');
     if(typeof this.registerEditorExtension==='function'){const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)));}
-    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>nativeResponses(this.app).receive(record,proof),receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:environmentId=>this.inlineThreadAccess(environmentId),importReplyAsset:(reference,request,access)=>importReplyAsset(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
+    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>nativeResponses(this.app).receive(record,proof),receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),importReplyAsset:(reference,request,access)=>importReplyAsset(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
     if(!Platform.isMobile)this.app.workspace.onLayoutReady(()=>{
       const refresh=()=>{void this.refreshNoteCommandHost().catch(()=>{});void this.refreshEventHost().catch(()=>{});};
       refresh();this.registerInlineInterval(refresh,5000);
@@ -1006,14 +1006,15 @@ export default class SendToT3 extends Plugin {
     if(this.inlineTargets.some(value=>value.environmentId===target.environmentId&&sameWorkspacePath(value.workspaceRoot,target.workspaceRoot)&&value.directory===target.directory))return;
     this.inlineTargets.push(target);this.app.saveLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`,this.inlineTargets);
   }
-  private async inlineThreadAccess(environmentId:string){
+  private async inlineThreadAccess(environmentId:string,forceRefresh=false){
     const paired=this.settings.paired.find(connection=>connection.environmentId===environmentId);
     // A known connection is sufficient, even when this desktop's T3 server
     // is stopped. Local discovery is only needed for an unpaired local thread.
     if(!paired&&!Platform.isMobile&&environmentId===await this.localInlineEnvironment())return (await import('./desktop')).desktopThreadAccess({...this.settings.connection,host:'local'});
     if(!paired)throw Error('Connect this device to the thread machine to take over responses.');
     const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
-    return {origin:endpoint(paired.url),api:await environmentApi(connection,await this.sessionFor(paired.id))};
+    const session=await this.sessionFor(paired.id,forceRefresh);
+    return {origin:endpoint(paired.url),expiresAt:session?.expiresAt,api:await environmentApi(connection,session)};
   }
   private localInlineEnvironment():Promise<string>{
     if(Platform.isMobile)return Promise.reject(Error('A phone cannot host vault responses.'));
@@ -1058,12 +1059,13 @@ export default class SendToT3 extends Plugin {
       const environmentId=await this.localInlineEnvironment();
       if(this.stopped)return;
       const {DesktopInlineHost}=await import('./hosted-inline-desktop');
-      const host=await DesktopInlineHost.open(this.app,{vaultId:this.settings.vaultId,environmentId,workspaceRoot:localRoot,directory:`${this.app.vault.configDir||'.obsidian'}/t3-code/inline/v1`},async target=>{
-        if(target===environmentId)return (await import('./desktop')).desktopThreadAccess({...this.settings.connection,host:'local'});
+      const host=await DesktopInlineHost.open(this.app,{vaultId:this.settings.vaultId,environmentId,workspaceRoot:localRoot,directory:`${this.app.vault.configDir||'.obsidian'}/t3-code/inline/v1`},async(target,reason)=>{
+        if(target===environmentId)return (await import('./desktop')).desktopThreadAccess({...this.settings.connection,host:'local'},'response-host');
         const paired=this.settings.paired.find(c=>c.environmentId===target);
         if(!paired)throw Error('Connect the thread machine in the streaming host’s T3 settings.');
         const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId,connectionId:paired.id};
-        return {origin:endpoint(paired.url),api:await environmentApi(connection,await this.sessionFor(paired.id))};
+        const session=await this.sessionFor(paired.id,reason==='auth-rejected');
+        return {origin:endpoint(paired.url),expiresAt:session?.expiresAt,api:await environmentApi(connection,session)};
       });
       if(this.stopped){host.dispose();return;}this.inlineHostService=host;this.inlineHostKey=key;
     })();
@@ -1396,10 +1398,10 @@ export default class SendToT3 extends Plugin {
     const work=(async()=>{const token=await nativeRelayAccount(account,async()=>{if(!active())throw Error('Sign-in cancelled.');await this.save();},nativeAccountFetch);if(!active())throw Error('Sign-in cancelled.');this.nativeToken=token;return token;})();
     this.nativeRefreshing=work;try{return await work;}finally{if(this.nativeRefreshing===work)this.nativeRefreshing=undefined;}
   }
-  async sessionFor(id:string):Promise<PairedSession|undefined>{
+  async sessionFor(id:string,forceRefresh=false):Promise<PairedSession|undefined>{
     const session=this.pairedSessions[id];const c=this.settings.paired.find(c=>c.id===id);
     if(session?.accountId&&session.accountId!==this.nativeAccount?.userId)throw Error('Sign in to the T3 account that owns this connection.');
-    if(session&&session.expiresAt>Date.now()+60000)return session;
+    if(session&&session.expiresAt>Date.now()+60000&&!forceRefresh)return session;
     if(!c?.managed||!this.nativeAccount)return session;
     const existing=this.sessionRefreshing.get(id);if(existing)return existing;
     const account=this.nativeAccount;const generation=this.cloudGeneration;
