@@ -59,3 +59,10 @@ hashes. The laptop needs one initial native reload after Sync to activate this
 new mailbox handler; native laptop execution and bootstrap remain unverified.
 After activation, later immutable releases retry remotely until Sync, ordinary
 saved editor buffers, and a newly loaded target instance have been verified.
+
+A later read-only fleet check found the laptop reachable again, with neither
+Obsidian nor T3 running. Its disk still held 2.31.26. The retry hook therefore
+remains pending client startup and Sync; no laptop reload was claimed. The
+follow-up observation is retained in the same evidence directory as
+`laptop-observation.json`. The completed synthetic smoke note was removed after
+its saved content and lease proof were retained.
