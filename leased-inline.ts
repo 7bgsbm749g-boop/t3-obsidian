@@ -124,6 +124,7 @@ export class DeviceInlineManager {
     }
   }
   explorerResponses():ExplorerResponse[]{return [...this.hosts.values()].flatMap(host=>host.responses);}
+  stoppableResponses(path:string){return [...this.jobs.values()].filter(({record})=>(record.state?.notePath??record.request.notePath)===path&&!record.stopRequestedAt&&!record.state?.userStopped&&!terminalLease(record)).map(({record,host})=>({id:record.request.id,hostTarget:host.target}));}
   private receiveRecord(host:Host,record:LeaseRecord){
     if(this.stopped||record.request.vaultId!==this.vaultId||hostKey(record.request.host)!==hostKey(host.target))return;
     const projected=leaseExplorerResponse(record),previous=host.responses.find(r=>r.id===projected.id);

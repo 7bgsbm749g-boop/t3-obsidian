@@ -197,6 +197,20 @@ function devices(independent=false,stream=true){
   },dispose:()=>managers.forEach(manager=>manager.dispose())};
 }
 
+test('palette stop targets retain the response host, follow note renames, and exclude stopped responses',async()=>{
+  const h=devices(true),device=h.create(h.actor);
+  try{
+    await device.manager.register(h.request);await h.drain(device.manager);
+    assert.deepEqual(device.manager.stoppableResponses('Note.md'),[{id:h.request.id,hostTarget:h.request.host}]);
+    assert.deepEqual(device.manager.stoppableResponses('Other.md'),[]);
+    device.document.path='Moved.md';device.manager.renamed('Note.md','Moved.md');await h.drain(device.manager);
+    assert.deepEqual(device.manager.stoppableResponses('Note.md'),[]);
+    assert.equal(device.manager.stoppableResponses('Moved.md')[0]?.id,h.request.id);
+    await device.manager.stopResponse(h.request.host,h.request.id);await h.drain(device.manager);
+    assert.deepEqual(device.manager.stoppableResponses('Moved.md'),[]);
+  }finally{h.dispose();}
+});
+
 test('an owned stale running cache recovers final output without stream events, reconnects or takeover',async()=>{
   const h=devices(true,false),device=h.create(h.actor);
   try{

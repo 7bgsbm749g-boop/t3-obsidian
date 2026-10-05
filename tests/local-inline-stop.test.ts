@@ -51,3 +51,37 @@ test('orphan stop uses the clicked editor, and saved stop intent cleans a restor
     const reloaded=h.create();reloaded.resume();assert.doesNotMatch(h.value,/t3-inline:|Working/);assert.match(h.value,/edited in the note/);reloaded.dispose();
   }finally{h.manager.dispose();}
 });
+
+test('stop all clears running and failed replies, including an orphan from another device, without touching another note or completed prose',async()=>{
+  const h=await harness(true),failed=randomUUID(),orphan=randomUUID(),other=randomUUID(),completed=randomUUID();
+  const append=(id:string,label:string)=>{const region=initialRegion(id);h.value+=region.text.replace('Working',label)+`\nAfter ${id}\n`;};
+  append(failed,'Error');append(orphan,'Error');append(completed,'Complete');
+  h.manager.jobs.push({...h.job,id:failed,requestId:failed,phase:'error'}, {...h.job,id:other,path:'Other.md'}, {...h.job,id:completed,phase:'complete',finalized:true});
+  const calls:any[]=[];h.manager.hosted.stop=async(job:any)=>{calls.push(job);};
+  const hostTarget={environmentId:'other-device',workspaceRoot:'/other-vault',directory:'/private-streams'};
+  try{
+    assert.equal(await h.manager.stopAllAt(h.editor,h.info,[{id:orphan,hostTarget}]),3);
+    assert.match(h.value,/Partial answer edited in the note/);
+    for(const id of [h.id,failed,orphan])assert.ok(!h.value.includes(`t3-inline:start:${id}`));
+    assert.ok(h.value.includes(`t3-inline:start:${completed}`));
+    assert.equal(h.manager.jobs.find((job:any)=>job.id===other).phase,'running');
+    assert.deepEqual(calls.map(job=>job.id).sort(),[h.id,failed,orphan].sort());
+    assert.deepEqual(calls.find(job=>job.id===orphan).hostTarget,hostTarget);
+    assert.equal(await h.manager.stopAllAt(h.editor,h.info),0);
+    assert.equal(calls.length,3);
+  }finally{h.manager.dispose();}
+});
+
+test('stop all finishes each valid reply when another response has incomplete boundaries',async()=>{
+  const h=await harness(true),broken=randomUUID();
+  h.value+=`\n<!-- t3-inline:start:${broken} -->\n**T3 · Error**\nKeep this broken reply\n`;
+  h.manager.jobs.push({...h.job,id:broken,requestId:broken,phase:'error',hosted:false});
+  h.manager.hosted.stop=async()=>{};
+  try{
+    await assert.rejects(h.manager.stopAllAt(h.editor,h.info),/Could not finish 1 of 2 T3 responses/);
+    assert.ok(!h.value.includes(`t3-inline:start:${h.id}`));
+    assert.match(h.value,/Partial answer edited in the note/);
+    assert.match(h.value,/Keep this broken reply/);
+    assert.ok(h.saved.every(job=>job.phase==='cancelled'));
+  }finally{h.manager.dispose();}
+});

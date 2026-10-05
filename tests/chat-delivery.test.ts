@@ -244,7 +244,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';
   try {
-    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','send-or-ask','resolve-native-response-conflict','send-note-to-multiple-notes','answer-t3-question'],'Manual send and multi-destination commands are available');
+    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','send-or-ask','stop-all-responses','resolve-native-response-conflict','send-note-to-multiple-notes','answer-t3-question'],'Manual send, stop, and multi-destination commands are available');
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands.length,2);
     assert.equal(h.commands[0].type,'thread.create');

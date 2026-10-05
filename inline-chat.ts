@@ -10,7 +10,7 @@ import {Notice} from 'obsidian';
 import type {Connection,Request} from './bridge';
 import {commandId,endpoint,environmentApi,type PairedSession} from './direct';
 import {contentHash} from './completion';
-import {activeInlineIds,applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,endInsertionOffset,endMarker,finalizeRegion,hasResponseMarkers,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type InlineTurn,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,failedInlineIds,applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,endInsertionOffset,endMarker,finalizeRegion,hasResponseMarkers,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type InlineTurn,type SelectionAnchor} from './inline-thread';
 import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {InlineHostTarget} from './hosted-inline';
 import {replaceInlineEditorText} from './inline-editor';
@@ -253,12 +253,23 @@ export class InlineChatManager {
     if(terminal)runtime.monitor?.stop();
   }
   /** Menu cleanup also works for an orphaned block with no runtime or connection. */
-  stopAt(id:string,editor:Editor,info:MarkdownView|MarkdownFileInfo){
+  stopAt(id:string,editor:Editor,info:MarkdownView|MarkdownFileInfo,hostTarget?:InlineHostTarget){
     const path=info.file?.path;if(!path)return Promise.resolve();
     let job=this.jobs.find(item=>item.id===id);
-    if(!job){job={id,path,requestId:id,bodyHash:'',phase:'running',createdAt:new Date().toISOString(),hosted:true};this.jobs.push(job);}
+    if(!job){job={id,path,requestId:id,bodyHash:'',phase:'running',createdAt:new Date().toISOString(),hosted:true,...(hostTarget?{hostTarget}:{})};this.jobs.push(job);}
+    if(hostTarget)job.hostTarget=hostTarget;
     this.runtime(job).source={editor,info};
     return this.stop(job);
+  }
+  /** Palette cleanup needs neither a selection nor a device-local job record. */
+  async stopAllAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,hosted:Array<{id:string;hostTarget:InlineHostTarget}>=[]){
+    const path=info.file?.path;if(!path)return 0;
+    const document=editor.getValue(),targets=new Map(hosted.map(job=>[job.id,job.hostTarget]));
+    const ids=[...new Set([...this.activeFor(path).map(job=>job.id),...activeInlineIds(document),...failedInlineIds(document),...targets.keys()])];
+    const results=await Promise.allSettled(ids.map(id=>this.stopAt(id,editor,info,targets.get(id))));
+    const failures=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected');
+    if(failures.length)throw Error(`Could not finish ${failures.length} of ${ids.length} T3 responses: ${failures.map(result=>result.reason instanceof Error?result.reason.message:String(result.reason)).join('; ')}`);
+    return ids.length;
   }
   private finishStopped(job:InlineJob){
     if(this.stopped)return;
