@@ -279,7 +279,27 @@ export class HostedInlineWriter {
         }
         const previousBinding=state.bindingCheckpoint?.bindings?.[messageId];
         const checkpoint=inlineBindingCheckpoint(current);
-        if(JSON.stringify(checkpoint)!==JSON.stringify(state.bindingCheckpoint)){state.bindingCheckpoint=checkpoint;await save();}
+        // Preserve the gap BEFORE a canonical snapshot advances the durable
+        // checkpoint. Otherwise a crash, or this very replay, starts at head
+        // and permanently skips the exact answer lifecycle we need.
+        const pendingHistory=followInlineQuestions(current,targets.turnIds,state.questionFollows,state.prose).follows.some(item=>item.answered&&!item.dismissed&&!item.replyTurnId&&item.responseMode==='message'&&current!.messages.some(message=>message.id===`async-answer:${item.requestId}`));
+        let recoveryChanged=false;
+        if(pendingHistory&&this.io.replayBindings){
+          const previous=state.bindingRecoveryCheckpoint??state.bindingCheckpoint??{};
+          const starts=Object.values(previous.starts??{}).map(start=>start.sequence).filter(Number.isSafeInteger);
+          const relevant=!!(previous.session?.activeTurnId&&targets.turnIds.includes(previous.session.activeTurnId)||previous.latestTurn&&targets.turnIds.includes(previous.latestTurn.turnId));
+          const cursor=relevant?previous.sequence:undefined;
+          const original=starts.length?Math.max(0,Math.min(...starts)-1):0;
+          if(state.bindingRecoverySequence===undefined){
+            state.bindingRecoverySequence=cursor??original;state.bindingRecoveryCheckpoint=previous;recoveryChanged=true;
+          }else if(!relevant&&previous.sequence===state.bindingRecoverySequence&&original<state.bindingRecoverySequence){
+            // Repair a snapshot-head cursor saved by 2.31.28. An unrelated
+            // session cannot seed historical lifecycle. Rewind from the exact
+            // original start identity; never synthesize a binding or completion.
+            state.bindingRecoverySequence=original;state.bindingRecoveryCheckpoint={...previous,session:undefined,latestTurn:undefined};recoveryChanged=true;
+          }
+        }
+        if(recoveryChanged||JSON.stringify(checkpoint)!==JSON.stringify(state.bindingCheckpoint)){state.bindingCheckpoint=checkpoint;await save();}
         if(!current.messages.length){await this.waitingTitle(request,state,current.title,save);return;}
         if(request.finalAnswerFormat==='raw-markdown')current={...current,turns:{...state.presentationTurns,...current.turns}};
         if((!state.turnId||state.pendingMessageId)&&!current.messages.some(m=>m.id===messageId&&m.role==='user')){await this.waitingTitle(request,state,current.title,save);return;}
@@ -309,14 +329,8 @@ export class HostedInlineWriter {
           this.bindingReplayAt.set(path,this.monotonic()+15_000);
           const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),15_000);
           try{
-            const previous=state.bindingRecoveryCheckpoint??state.bindingCheckpoint;
-            const starts=Object.values(previous?.starts??{}).map(start=>start.sequence).filter(Number.isSafeInteger);
-            // Older checkpoints did not retain the active session. Replay
-            // their original start instead of inventing the missing session.
-            const cursor=previous?.session||previous?.latestTurn?previous.sequence:undefined;
-            const afterSequence=state.bindingRecoverySequence??cursor??(starts.length?Math.max(0,Math.min(...starts)-1):0);
-            state.bindingRecoverySequence=afterSequence;
-            state.bindingRecoveryCheckpoint=previous;
+            const previous=state.bindingRecoveryCheckpoint;
+            const afterSequence=state.bindingRecoverySequence!;
             const items=await this.network(path,()=>this.io.replayBindings!(request,access,abort.signal,afterSequence));
             // Replay supplies exact start/lifecycle associations only. Keep the
             // canonical transcript and current session; never adopt an unrelated
@@ -328,7 +342,10 @@ export class HostedInlineWriter {
             const binding=inlineBindingCheckpoint(evidence);delete binding.sequence;
             current=restoreInlineBindings({...current,turns:{...current.turns,...evidence.turns}},binding);
             questions=followInlineQuestions(current,state.turnIds,state.questionFollows,state.prose);
-            if(questions.waiting&&items.some(item=>item.kind==='snapshot')&&!items.some(item=>item.kind==='event'))state.bindingRecoveryIssue='history-unavailable';
+            // A fulfilled replay has reached the server's synchronization
+            // marker. Missing bindings remain unavailable even when it also
+            // returned unrelated recent events rather than a snapshot.
+            if(questions.waiting)state.bindingRecoveryIssue='history-unavailable';
           }finally{clearTimeout(timer);abort.abort();}
         }
         if(!questions.waiting){delete state.bindingRecoverySequence;delete state.bindingRecoveryCheckpoint;delete state.bindingRecoveryIssue;}
@@ -378,7 +395,7 @@ export class HostedInlineWriter {
         let next=renderInlineTurn(current,state.turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,request.threadTitle,{startedAt:request.createdAt,finishedAt:state.finishedAt},finalAnswerFormat(request.finalAnswerFormat));
         if(phase==='complete'&&conversation&&this.io.importReplyAsset)next=await this.network(path,()=>rewriteReplyReferences(next,importAsset));
         if(state.assetFailures?.length)next+='\n\n> Some linked files could not be imported. Their original links are preserved. Attach this response again to retry importing the files.';
-        if(state.bindingRecoveryIssue)next+='\n\n> Reply recovery is waiting for exact T3 answer history. T3 returned a current snapshot without the required historical turn bindings. The saved response is retained; no prompt was resent.';
+        if(state.bindingRecoveryIssue)next+='\n\n> Reply recovery is waiting for exact T3 answer history. The current T3 replay did not provide the required historical turn bindings. The saved response is retained; no prompt was resent.';
         const terminal=phase==='complete'&&!questions.waiting||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the
         // vault edit cannot turn our own output into an apparent user edit.

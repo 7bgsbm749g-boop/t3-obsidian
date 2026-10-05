@@ -480,10 +480,18 @@ for(const version of [1,2,3] as const)for(const dismiss of [false,true])test(`ho
   assert.doesNotMatch(finished,/· Working|send-to-t3-inline-spinner/);
 });
 
-test('recovery replays an exact historical late-answer binding omitted by canonical latestTurn without adopting unrelated work',async()=>{
+for(const repairHead of [false,true])for(const fallback of ['snapshot','events'])test(`exact late-answer recovery preserves its cursor across ${fallback} fallback${repairHead?' and repairs a saved snapshot-head cursor':''}`,async()=>{
  const h=independent(harness());h.dispatch();await h.create().tick();
+ const saved=h.state;
+ saved.bindingCheckpoint={...saved.bindingCheckpoint,sequence:50,session:{status:'ready',activeTurnId:null},latestTurn:{turnId:'turn',state:'completed',completedAt:'2026-10-03T14:38:20Z'}};
+ const expectedCursor=repairHead?44:50;
+ if(repairHead){
+   saved.bindingCheckpoint={...saved.bindingCheckpoint,sequence:5000,starts:{[h.request.messageId]:{messageId:h.request.messageId,requestedAt:h.request.createdAt,sequence:45,turnId:'turn'}},latestTurn:{turnId:'unrelated',state:'completed'}};
+   saved.bindingRecoverySequence=5000;saved.bindingRecoveryCheckpoint=saved.bindingCheckpoint;
+ }
+ h.files.set(h.paths.state,JSON.stringify(saved));
  const at='2026-10-03T14:40:50.423Z';
- const current:InlineThreadState={historyComplete:true,messages:[
+ const current:InlineThreadState={sequence:5000,historyComplete:true,messages:[
   {id:h.request.messageId,role:'user',text:'Begin',turnId:null,streaming:false,createdAt:h.request.createdAt},
   {id:'first',role:'assistant',text:'First final.',turnId:'turn',streaming:false},
   {id:'async-answer:recovered',role:'user',text:'Yes',turnId:null,streaming:false,createdAt:at},
@@ -493,16 +501,18 @@ test('recovery replays an exact historical late-answer binding omitted by canoni
   checkpoints:[{turnId:'turn',status:'ready',checkpointRef:'refs/t3/checkpoints/one',assistantMessageId:'first',completedAt:'2026-10-03T14:38:20Z'},{turnId:'answer-turn',status:'ready',checkpointRef:'refs/t3/checkpoints/two',assistantMessageId:'follow-final',completedAt:'2026-10-03T14:40:59Z'}],
   latestTurn:{turnId:'unrelated',state:'completed'},session:{status:'ready',activeTurnId:null}};
  h.io.threadState=async()=>current;let replays=0,snapshotOnly=true;const cursors:number[]=[];
- h.io.replayBindings=async(_request,_access,signal,cursor)=>{assert.equal(signal.aborted,false);replays++;cursors.push(cursor);if(snapshotOnly)return [{kind:'snapshot',snapshot:{snapshotSequence:5000,thread:current}}];return [
-  {kind:'event',event:{sequence:1,type:'thread.activity-appended',payload:{activity:{id:'resolution',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',createdAt:at,payload:{requestId:'recovered',responseMode:'message',answers:{choice:'Yes'}}}}}},
-  {kind:'event',event:{sequence:2,type:'thread.message-sent',payload:{messageId:'async-answer:recovered',role:'user',text:'Yes',createdAt:at}}},
-  {kind:'event',event:{sequence:3,type:'thread.session-set',payload:{session:{status:'starting',activeTurnId:null,updatedAt:at}}}},
-  {kind:'event',event:{sequence:4,type:'thread.session-set',payload:{session:{status:'running',activeTurnId:'answer-turn',updatedAt:at}}}},
-  {kind:'event',event:{sequence:5,type:'thread.session-set',payload:{session:{status:'ready',activeTurnId:null,updatedAt:'2026-10-03T14:40:59Z'}}}}];};
+ h.io.replayBindings=async(_request,_access,signal,cursor)=>{assert.equal(signal.aborted,false);assert.equal(h.state.bindingRecoverySequence,expectedCursor,'persist the gap before starting interruptible network work');replays++;cursors.push(cursor);if(snapshotOnly)return fallback==='snapshot'?[{kind:'snapshot',snapshot:{snapshotSequence:5000,thread:current}}]:[{kind:'event',event:{sequence:5001,type:'thread.metadata-updated',payload:{title:'Unrelated recent activity'}}}];return [
+  {kind:'event',event:{sequence:51,type:'thread.activity-appended',payload:{activity:{id:'resolution',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',createdAt:at,payload:{requestId:'recovered',responseMode:'message',answers:{choice:'Yes'}}}}}},
+  {kind:'event',event:{sequence:52,type:'thread.message-sent',payload:{messageId:'async-answer:recovered',role:'user',text:'Yes',createdAt:at}}},
+  {kind:'event',event:{sequence:53,type:'thread.session-set',payload:{session:{status:'starting',activeTurnId:null,updatedAt:at}}}},
+  {kind:'event',event:{sequence:54,type:'thread.session-set',payload:{session:{status:'running',activeTurnId:'answer-turn',updatedAt:at}}}},
+  {kind:'event',event:{sequence:55,type:'thread.session-set',payload:{session:{status:'ready',activeTurnId:null,updatedAt:'2026-10-03T14:40:59Z'}}}}];};
  await h.create().tick();
  assert.equal(h.state.status,'waiting');assert.equal(h.state.bindingRecoveryIssue,'history-unavailable');assert.notEqual(h.state.finalSaved,true);
  assert.match(h.document,/waiting for exact T3 answer history/);assert.doesNotMatch(h.document,/Unrelated work/);
  const cursor=h.state.bindingRecoverySequence;
+ assert.equal(cursor,expectedCursor,'the canonical head must not replace the last applied recovery checkpoint');
+ assert.equal(h.state.bindingRecoveryCheckpoint?.sequence,repairHead?5000:50);
  snapshotOnly=false;await h.create().tick();
  assert.equal(replays,2);assert.deepEqual(cursors,[cursor,cursor],'fallback snapshots never advance the missing evidence cursor');assert.equal(h.state.bindingRecoveryIssue,undefined);
  assert.equal(h.state.turnId,'answer-turn');assert.equal(h.state.status,'complete');assert.equal(h.state.finalSaved,true);assert.equal(h.state.cleanupComplete,true);

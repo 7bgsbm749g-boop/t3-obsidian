@@ -12,7 +12,7 @@ test('a durable active-session checkpoint catches up both exact answers after in
   const cursor=fixture.checkpoint.sequence;
   const before=fixture.events.filter((item:any)=>item.event.sequence<=cursor).reduce(apply,empty());
   const checkpoint=inlineBindingCheckpoint(before);
-  assert.equal(checkpoint.session?.activeTurnId,'source');assert.equal(checkpoint.latestTurn?.turnId,'source');
+  assert.deepEqual(checkpoint.session,{status:'running',activeTurnId:'source'});assert.equal(checkpoint.latestTurn?.turnId,'source');
   const restored=restoreInlineBindings(empty(),JSON.parse(JSON.stringify(checkpoint)));
   assert.equal(restored.session?.activeTurnId,'source');
   const evidence=fixture.events.filter((item:any)=>item.event.sequence>cursor).reduce(apply,restored);

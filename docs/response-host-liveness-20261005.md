@@ -29,10 +29,15 @@ and creates no diagnostic logs or background publication.
 Exact-history recovery now retains the last applied checkpoint's session and
 latest turn. New checkpoints can replay from that cursor. Older checkpoints
 without this evidence still replay their original start, rather than invent an
-active session. The initial recovery checkpoint and gap cursor survive later
-snapshot replacements. Only actual protocol events augment historical bindings.
+active session. The initial recovery checkpoint and gap cursor are durably saved
+before a canonical checkpoint advance or an interruptible replay. They survive
+later snapshot replacements. Only actual protocol events augment historical bindings.
 An oversized snapshot-only replay explicitly remains waiting, preserves the
 response and never dispatches a prompt or borrows an unrelated turn.
+An event replay that reaches synchronization without the required lifecycle also
+remains waiting. A snapshot-head cursor retained by the initial 2.31.28 delivery
+is safely rewound from the exact original start ID when its saved session belongs
+to an unrelated turn. This restores the replay range without inventing evidence.
 
 The original incident's available history (817 thread rows at 00:29:38) could
 recover the original turn plus its two exact async answers, one steering that
