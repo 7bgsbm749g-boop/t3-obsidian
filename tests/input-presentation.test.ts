@@ -12,6 +12,7 @@ test('generated footer and its reply instruction are hidden without changing use
     const raw=prompt+(instruction?'\n\n'+instruction:'')+footer;
     assert.equal(visibleInlineInput(raw),prompt);
     assert.equal(visibleInlineInput(raw+'\n'),prompt);
+    if(instruction)for(const ending of ['\n','\n\n','\n\n\n'])assert.equal(visibleInlineInput(prompt+'\n\n'+instruction+ending+footer),prompt);
   }
   const escaped='\n\nSent from Obsidian.\nObsidian vault: "Quoted \\"vault\\""\nDestination note path: "C:\\\\Vault\\\\Note.md"';
   assert.equal(visibleInlineInput(prompt+escaped),prompt);
