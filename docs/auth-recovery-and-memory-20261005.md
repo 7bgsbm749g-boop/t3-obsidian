@@ -54,8 +54,11 @@ mobile rendering was not tested.
 At the stalled-client observation, QLO2's renderer occupied 2,089,408 KiB RSS and
 its main process 1,430,120 KiB. The VPS had only about 679 MiB available and all
 4 GiB of swap occupied; memory pressure stalled work for roughly half the time.
-The original process exited before a retained-heap capture, so these observations
-do not establish an OOM kill or prove a permanent leak.
+The kernel confirms a global out-of-memory kill at **16:33:57 UTC**: it killed
+the same QLO2 renderer, PID 2193638, with 3,747,960 KiB anonymous RSS and only
+200 KiB free swap remaining. The QLO2 main process then trapped/crashed. The
+original process exited before a retained-heap capture, so a permanent leak and
+the exact objects retained at that peak cannot be established from its heap.
 
 A five-second allocation/CPU sample of the reopened real QLO2 client identifies
 a substantial continuing workload in the subscription/display service:
