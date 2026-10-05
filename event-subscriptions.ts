@@ -90,20 +90,39 @@ export function observedPropertyEquals(current:unknown,observed:unknown){return 
 function sameTarget(a:Partial<EventTarget>,b:Partial<EventTarget>){return a.threadId===b.threadId&&a.projectId===b.projectId&&a.environmentId===b.environmentId;}
 const clone=<T>(value:T):T=>JSON.parse(JSON.stringify(value));
 const empty=():EventState=>({version:1,subscriptions:[],notifications:[],commands:{},feedback:[]});
+/** Thread snapshots contain plain JSON data. Compare without allocating another
+ * encoded copy of every message body; equal snapshots retain their references. */
+function sameThreadData(a:any,b:any):boolean {
+  if(a===b)return true;
+  if(a===null||b===null||typeof a!=='object'||typeof b!=='object')return false;
+  if(Array.isArray(a)||Array.isArray(b))return Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((value,index)=>sameThreadData(value,b[index]));
+  const keys=Object.keys(a);
+  return keys.length===Object.keys(b).length&&keys.every(key=>Object.hasOwn(b,key)&&sameThreadData(a[key],b[key]));
+}
 
 /** One desktop host, serialized capture, durable messages; no task definitions. */
 export class EventSubscriptions {
-  private state=empty();private baselines=new Map<string,Map<string,NoteEventSnapshot>>();private work=Promise.resolve();private ticking?:Promise<void>;private tickNeedsSave=false;private stopped=false;private monitors=new Map<string,{stop():void}>();
+  private state=empty();private baselines=new Map<string,Map<string,NoteEventSnapshot>>();private work=Promise.resolve();private ticking?:Promise<void>;private tickNeedsSave=false;private dirty=false;private reads?:Map<string,Promise<InlineThreadState>>;private stopped=false;private monitors=new Map<string,{stop():void}>();
   constructor(private host:EventSubscriptionHost){}
   get active(){return this.state.subscriptions.some(subscription=>subscription.enabled)||(this.state.displays??[]).some(d=>d.enabled&&!d.cancelled);}
   get snapshot(){return clone(this.state);}
   private serialize<T>(action:()=>Promise<T>,rollback=true):Promise<T>{
     const run=this.work.catch(()=>{}).then(async()=>{
       if(this.stopped)throw Error('Event subscriptions are stopped.');
-      const before=clone(this.state),baselines=new Map([...this.baselines].map(([key,notes])=>[key,new Map(notes)]));
-      try{return await action();}catch(error){if(rollback){this.state=before;this.baselines=baselines;}throw error;}finally{this.host.recording(this.active&&!this.stopped);this.syncMonitors();}
+      // Reducers replace thread records. Roll back their table, not megabytes of
+      // unchanged history. Mutable delivery/control records still get a deep copy.
+      const before=rollback?this.checkpoint():undefined,dirty=this.dirty;
+      const baselines=rollback?new Map([...this.baselines].map(([key,notes])=>[key,new Map(notes)])):undefined;
+      this.reads=new Map();
+      try{return await action();}catch(error){if(before){this.state=before;this.baselines=baselines!;this.dirty=dirty;}throw error;}finally{this.reads=undefined;this.host.recording(this.active&&!this.stopped);this.syncMonitors();}
     });this.work=run.then(()=>{},()=>{});return run;
   }
+  private checkpoint():EventState {
+    const {threads,...control}=this.state;
+    return {...clone(control),...(threads?{threads:{...threads}}:{})};
+  }
+  private async save(){await this.host.save(this.state);this.dirty=false;}
+  private async saveIfDirty(){if(this.dirty)await this.save();}
   async initialize(){return this.serialize(async()=>{
     const saved=await this.host.load() as EventState|undefined;
     if(saved){
@@ -120,7 +139,7 @@ export class EventSubscriptions {
     if((STREAM_COMMANDS as readonly string[]).includes(command.kind)){
       const fields=await displayCommand(this.state.displays??= [],command as ThreadDisplayCommand,this.displayIO(),this.host.now());
       const result:EventCommandResult={id:command.id,ok:true,monitoring:this.active,...clone(fields)};
-      this.state.commands[command.id]={input:key,result};await this.host.save(this.state);return result;
+      this.state.commands[command.id]={input:key,result};await this.save();return result;
     }
     const noteCommand=command as NoteEventSubscriptionCommand;
     let subscription:EventSubscription|undefined;
@@ -141,18 +160,18 @@ export class EventSubscriptions {
       for(const notification of this.state.notifications)if(notification.subscriptionId===subscription.id&&['pending','prepared'].includes(notification.status)){notification.status='cancelled';if(notification.action)delete notification.command;}
     }
     const result:EventCommandResult={id:noteCommand.id,ok:true,monitoring:this.active,...(subscription?{subscriptionId:subscription.id}:{}),...(noteCommand.kind==='subscriptions'?{subscriptions:clone(this.state.subscriptions),notifications:this.state.notifications.filter(n=>n.action||n.status==='pending'||n.status==='prepared').map(({id,subscriptionId,status,count,attempts,error,action})=>({id,subscriptionId,status,count,attempts,...(action?{action}:{}),...(error?{error}:{})}))}:{})};
-    this.state.commands[noteCommand.id]={input:key,result};await this.host.save(this.state);return result;
+    this.state.commands[noteCommand.id]={input:key,result};await this.save();return result;
   });}
   interested(path:string,oldPath?:string){return !this.stopped&&Boolean(oldPath&&(this.state.displays??[]).length)||!this.stopped&&this.state.subscriptions.some(subscription=>subscription.enabled&&!subscription.job&&(inEventScope(subscription.scope,path)||Boolean(oldPath&&inEventScope(subscription.scope,oldPath))));}
   async observe(kind:Exclude<EventKind,'property'>,path:string,note?:NoteEventSnapshot,oldPath?:string){
-    if(kind==='rename'&&oldPath&&(this.state.displays??[]).length)await this.serialize(async()=>{renameDisplays(this.state.displays!,oldPath,path);await this.host.save(this.state);});
+    if(kind==='rename'&&oldPath&&(this.state.displays??[]).length)await this.serialize(async()=>{renameDisplays(this.state.displays!,oldPath,path);await this.save();});
     if(!this.interested(path,oldPath))return;
     return this.serialize(()=>this.capture(kind,path,note,oldPath));
   }
   private async capture(kind:Exclude<EventKind,'property'>,path:string,note?:NoteEventSnapshot,oldPath?:string){
       const now=this.host.now(),content=note?eventContent(note.content):undefined;
-      this.state.actionEffects=(this.state.actionEffects??[]).filter(e=>e.expiresAt>now);
-      const effect=this.state.actionEffects.find(e=>e.kind===kind&&e.path===path&&e.oldPath===oldPath&&content!==undefined&&e.afterHash===hash(content));
+      this.expireEffects(now);
+      const effect=this.state.actionEffects?.find(e=>e.kind===kind&&e.path===path&&e.oldPath===oldPath&&content!==undefined&&e.afterHash===hash(content));
       for(const subscription of this.state.subscriptions){
         if(subscription.job||!subscription.enabled||!inEventScope(subscription.scope,path)&&!(oldPath&&inEventScope(subscription.scope,oldPath)))continue;
         const baselines=this.baselines.get(subscription.id)??new Map<string,NoteEventSnapshot>(),before=baselines.get(oldPath??path);
@@ -171,26 +190,26 @@ export class EventSubscriptions {
           }
         }
         for(const event of events)this.enqueue(subscription,event,now);
-        if(kind==='rename'&&oldPath&&subscription.scope.kind==='note'&&subscription.scope.path===oldPath){subscription.scope.path=path;subscription.revision++;}
+        if(kind==='rename'&&oldPath&&subscription.scope.kind==='note'&&subscription.scope.path===oldPath){subscription.scope.path=path;subscription.revision++;this.dirty=true;}
         if(oldPath)baselines.delete(oldPath);if(note&&kind!=='delete'&&inEventScope(subscription.scope,path))baselines.set(path,{...note,content:content!});else baselines.delete(path);
         this.baselines.set(subscription.id,baselines);
       }
-      if(effect)this.state.actionEffects=this.state.actionEffects.filter(e=>e!==effect);
+      if(effect){this.state.actionEffects=this.state.actionEffects!.filter(e=>e!==effect);this.dirty=true;}
       // Follow an explicitly watched note or folder through a rename.
-      if(kind==='rename'&&oldPath){renameDisplays(this.state.displays??[],oldPath,path);}
-      if(kind==='rename'&&oldPath)for(const subscription of this.state.subscriptions)if(subscription.scope.path===oldPath||subscription.scope.path.startsWith(oldPath+'/')){subscription.scope.path=path+subscription.scope.path.slice(oldPath.length);subscription.revision++;}
-      await this.host.save(this.state);
+      if(kind==='rename'&&oldPath){renameDisplays(this.state.displays??[],oldPath,path);this.dirty=true;}
+      if(kind==='rename'&&oldPath)for(const subscription of this.state.subscriptions)if(subscription.scope.path===oldPath||subscription.scope.path.startsWith(oldPath+'/')){subscription.scope.path=path+subscription.scope.path.slice(oldPath.length);subscription.revision++;this.dirty=true;}
+      await this.saveIfDirty();
   }
   interestedFolder(path:string,oldPath?:string){return Boolean(oldPath&&(this.state.displays??[]).length)||this.active&&[path,oldPath].some(folder=>folder&&this.state.subscriptions.some(s=>s.enabled&&!s.job&&(s.scope.path===folder||s.scope.path.startsWith(folder+'/')||s.scope.kind==='folder'&&inEventScope(s.scope,folder+'/scope.md'))));}
   async renameFolder(oldPath:string,path:string,notes:NoteEventSnapshot[]){
-    if((this.state.displays??[]).length)await this.serialize(async()=>{renameDisplays(this.state.displays!,oldPath,path);await this.host.save(this.state);});
+    if((this.state.displays??[]).length)await this.serialize(async()=>{renameDisplays(this.state.displays!,oldPath,path);await this.save();});
     if(!this.interestedFolder(path,oldPath))return;
     return this.serialize(async()=>{
       renameDisplays(this.state.displays??[],oldPath,path);
       for(const note of notes)await this.capture('rename',note.path,note,oldPath+note.path.slice(path.length));
       for(const subscription of this.state.subscriptions)if(subscription.scope.path===oldPath||subscription.scope.path.startsWith(oldPath+'/')){subscription.scope.path=path+subscription.scope.path.slice(oldPath.length);subscription.revision++;}
       for(const subscription of this.state.subscriptions)if(subscription.enabled)await this.seed(subscription);
-      await this.host.save(this.state);
+      await this.save();
     });
   }
   async deleteFolder(path:string){
@@ -204,29 +223,44 @@ export class EventSubscriptions {
       if(this.state.notifications.filter(item=>item.status==='pending'||item.status==='prepared').length>=1000)throw Error('Event notification queue is full. Reconnect receiving threads.');
       notification={id:this.host.id(),subscriptionId:subscription.id,...(subscription.action?{action:clone(subscription.action)}:{target:{threadId:subscription.threadId!,projectId:subscription.projectId!,environmentId:subscription.environmentId!}}),events:[event],count:1,firstAt:now,dueAt:now+1500,status:'pending',attempts:0};this.state.notifications.push(notification);
     }
+    this.dirty=true;
+  }
+  private expireEffects(now:number,bounded=false){
+    const effects=this.state.actionEffects;if(!effects)return;
+    const current=effects.filter(e=>e.expiresAt>now),retained=bounded?current.slice(-1000):current;
+    if(retained.length!==effects.length){this.state.actionEffects=retained;this.dirty=true;}
   }
   tick(){if(this.ticking)return this.ticking;const run=this.serialize(async()=>{
-    if(this.tickNeedsSave){await this.host.save(this.state);this.tickNeedsSave=false;}
+    if(this.tickNeedsSave){await this.save();this.tickNeedsSave=false;}
     if(!this.active)return;
-    this.state.actionEffects=(this.state.actionEffects??[]).filter(e=>e.expiresAt>this.host.now()).slice(-1000);
+    this.expireEffects(this.host.now(),true);
     for(const subscription of this.state.subscriptions.filter(s=>s.enabled&&s.job)){
       try{
-        const observation=subscription.observation??={seen:[]};if(observation.terminal)continue;
+        if(!subscription.observation){subscription.observation={seen:[]};this.dirty=true;}
+        const observation=subscription.observation;if(observation.terminal)continue;
         const state=await this.readObservedThread(subscription.job!);
+        const previousTurn=observation.turnId;
         for(const event of jobEvents(subscription.job!,state,observation)){
+          this.dirty=true;
           if(!subscription.action||subscription.jobStates?.includes(event.state))this.enqueue(subscription,event,this.host.now());observation.seen.push(event.id);if(event.terminal)observation.terminal=event.state;
         }
-        delete observation.error;await this.host.save(this.state);
-      }catch(error){subscription.observation??={seen:[]};subscription.observation.error=error instanceof Error?error.message:String(error);await this.host.save(this.state);}
+        if(observation.turnId!==previousTurn||Object.hasOwn(observation,'error'))this.dirty=true;
+        delete observation.error;await this.saveIfDirty();
+      }catch(error){subscription.observation??={seen:[]};const message=error instanceof Error?error.message:String(error);if(subscription.observation.error!==message){subscription.observation.error=message;this.dirty=true;}await this.saveIfDirty();}
     }
-    for(const display of this.state.displays??[]){if(!display.enabled||display.cancelled)continue;try{await tickDisplay(display,this.displayIO());delete display.error;}catch(error){display.error=error instanceof Error?error.message:String(error);}await this.host.save(this.state);}
+    for(const display of this.state.displays??[]){
+      if(!display.enabled||display.cancelled)continue;
+      try{await tickDisplay(display,this.displayIO());if(Object.hasOwn(display,'error')){delete display.error;this.dirty=true;}}
+      catch(error){const message=error instanceof Error?error.message:String(error);if(display.error!==message){display.error=message;this.dirty=true;}}
+      await this.saveIfDirty();
+    }
     // Once a notified thread becomes idle, rebaseline its scopes before clearing
     // suppression. Its edits may arrive via Sync after completion; identical
     // snapshots and response stripping also exclude repeats.
     for(const target of [...this.state.feedback]){
       try{if(await this.host.isBusy(target))continue;}catch{continue;}
       for(const subscription of this.state.subscriptions)if(subscription.enabled&&sameTarget(subscription,target))await this.seed(subscription);
-      this.state.feedback=this.state.feedback.filter(item=>!sameTarget(item,target));await this.host.save(this.state);
+      this.state.feedback=this.state.feedback.filter(item=>!sameTarget(item,target));await this.save();
     }
     for(const notification of this.state.notifications){
       if(this.stopped)return;
@@ -235,7 +269,7 @@ export class EventSubscriptions {
       try{
         if(notification.status==='pending'){
           if(notification.target&&await this.host.isBusy(notification.target))continue;
-          notification.command=notification.action?await this.host.prepareAction!(notification):await this.host.prepare(notification);notification.status='prepared';await this.host.save(this.state);
+          notification.command=notification.action?await this.host.prepareAction!(notification):await this.host.prepare(notification);notification.status='prepared';await this.save();
         }
         notification.attempts++;
         if(notification.action){
@@ -245,35 +279,39 @@ export class EventSubscriptions {
             const effect={notificationId:notification.id,kind:plan.kind==='move-note'?'rename' as const:'modify' as const,path:plan.destination??plan.path,...(plan.destination?{oldPath:plan.path}:{}),afterHash:hash(eventContent(plan.after)),expiresAt:this.host.now()+60_000};
             const index=effects.findIndex(e=>e.notificationId===notification.id);if(index<0)effects.push(effect);else effects[index]=effect;
           }
-          await this.host.save(this.state);await this.host.deliverAction!(notification);
+          await this.save();await this.host.deliverAction!(notification);
           notification.status='delivered';notification.command={version:1,kind:plan.kind,path:plan.path,destination:plan.destination,beforeHash:hash(plan.before),afterHash:hash(plan.after)};delete notification.error;delete notification.retryAt;
-          await this.host.save(this.state);continue;
+          await this.save();continue;
         }
         const target=notification.target!;
         const alreadyFeedback=this.state.feedback.some(t=>sameTarget(t,target));
         if(!alreadyFeedback)this.state.feedback.push(target);
         // Save loop suppression and exact T3 command before the first network write.
-        await this.host.save(this.state);
+        await this.save();
         const result=await this.host.deliver(notification);
-        if(result==='busy'){if(!alreadyFeedback)this.state.feedback=this.state.feedback.filter(target=>!sameTarget(target,notification.target!));await this.host.save(this.state);continue;}
+        if(result==='busy'){if(!alreadyFeedback)this.state.feedback=this.state.feedback.filter(target=>!sameTarget(target,notification.target!));await this.save();continue;}
         notification.status='delivered';delete notification.error;delete notification.retryAt;
-      }catch(error){if(error instanceof EventActionSkipped){notification.status='cancelled';notification.error=error.message;await this.host.save(this.state);continue;}if(notification.status==='pending')notification.attempts++;notification.error=error instanceof Error?error.message:String(error);notification.retryAt=this.host.now()+Math.min(60_000,1000*2**Math.min(notification.attempts,6));}
-      await this.host.save(this.state);
+      }catch(error){if(error instanceof EventActionSkipped){notification.status='cancelled';notification.error=error.message;await this.save();continue;}if(notification.status==='pending')notification.attempts++;notification.error=error instanceof Error?error.message:String(error);notification.retryAt=this.host.now()+Math.min(60_000,1000*2**Math.min(notification.attempts,6));}
+      await this.save();
     }
     // Bounded receipts; never prune unresolved notifications.
     const terminal=this.state.notifications.filter(item=>item.status==='delivered'||item.status==='cancelled');
-    if(terminal.length>200){const retained=new Set(terminal.slice(-200).map(item=>item.id));this.state.notifications=this.state.notifications.filter(item=>item.status==='pending'||item.status==='prepared'||retained.has(item.id));await this.host.save(this.state);}
+    if(terminal.length>200){const retained=new Set(terminal.slice(-200).map(item=>item.id));this.state.notifications=this.state.notifications.filter(item=>item.status==='pending'||item.status==='prepared'||retained.has(item.id));await this.save();}
+    await this.saveIfDirty();
   },false).catch(error=>{this.tickNeedsSave=true;throw error;});this.ticking=run;void run.finally(()=>{this.ticking=undefined;}).catch(()=>{});return run;}
   private threadKey(target:EventTarget){return JSON.stringify([target.environmentId,target.projectId,target.threadId]);}
   private async readObservedThread(target:EventTarget){
     if(!this.host.readThread)throw Error('Thread lifecycle observation is unavailable.');
-    const state=await this.host.readThread(target),key=this.threadKey(target),prior=this.state.threads?.[key];
+    const key=this.threadKey(target);
+    let read=this.reads?.get(key);if(!read){read=this.host.readThread(target);this.reads?.set(key,read);}
+    const state=await read,prior=this.state.threads?.[key];
     const merged={...state,turns:{...prior?.state.turns,...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})}};
-    (this.state.threads??={})[key]={state:merged,sequence:prior?.sequence};return merged;
+    if(prior&&sameThreadData(prior.state,merged))return prior.state;
+    (this.state.threads??={})[key]={state:merged,sequence:prior?.sequence};this.dirty=true;return merged;
   }
   private displayIO():DisplayHost {
     if(!this.host.displayHost)throw Error('Thread streaming is unavailable.');
-    return {...this.host.displayHost,readThread:target=>this.readObservedThread(target),save:()=>this.host.save(this.state)};
+    return {...this.host.displayHost,readThread:target=>this.readObservedThread(target),save:()=>this.save()};
   }
   private syncMonitors(){
     if(this.stopped||!this.host.watchThread)return;
@@ -286,7 +324,9 @@ export class EventSubscriptions {
         const prior=this.state.threads?.[key]??{state:{messages:[],activities:[]}};
         if(item.kind==='event'&&item.event?.sequence<= (prior.sequence??-1))return;
         const applied=applyThreadItem(prior.state,item);
-        (this.state.threads??={})[key]={state:applied.state,sequence:item.kind==='snapshot'&&prior.sequence!==undefined?prior.sequence:applied.sequence??prior.sequence};await this.host.save(this.state);
+        const sequence=item.kind==='snapshot'&&prior.sequence!==undefined?prior.sequence:applied.sequence??prior.sequence;
+        if(sequence===prior.sequence&&sameThreadData(prior.state,applied.state))return;
+        (this.state.threads??={})[key]={state:applied.state,sequence};this.dirty=true;await this.save();
       }).catch(()=>{});
     },()=>this.state.threads?.[key]?.sequence));
   }

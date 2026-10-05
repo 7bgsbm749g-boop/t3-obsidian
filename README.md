@@ -26,6 +26,8 @@ Subscriptions and the delivery queue live in the vault project machine's private
 
 Changing the vault project machine stops the old watcher without automatically transferring its state. The designated host imports its own pre-2.28.1 local subscriptions once; legacy subscriptions registered on other desktops require explicit recreation after updating those clients.
 
+The host retains its canonical thread histories and recovery records. Polling shares one read per thread within a cycle and persists only changed observations. Unchanged polls and response-only note changes do not rewrite the history store. Rollback copies mutable subscription/delivery records and retains references to immutable thread records; polling that keeps its in-memory recovery state does not create an unused rollback copy. Stream positions remain checkpointed together with their reduced state, and notification and reply-attachment checkpoints still precede external effects.
+
 ### Register and manage subscriptions
 
 Use the real originating T3 thread, project, and environment IDs; the plugin validates that the thread exists on that machine in that project. Do not substitute another thread or create a new one to receive each event.
