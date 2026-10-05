@@ -38,3 +38,24 @@ Live release acceptance still requires a real QLO2 reload and a bounded renamed
 response with durable completion proof. Unit tests and matching Sync files alone
 do not establish visible editor delivery. Native mobile coverage is not supplied
 by this desktop regression.
+
+## Release 2.31.27 verification
+
+The real VPS QLO2 client loaded 2.31.27 through the native command. A second
+reload through the private mailbox produced a different client instance nonce
+with the same embedded version. The bounded live thread
+`4a8ffe54-20c1-5026-bbec-e833c916c098` completed after both its T3 title and its
+Obsidian note were renamed while the turn was running. Its binding
+`c231387c-ea63-5efb-8ae9-830208f5c766` reached `complete`, `finalSaved`,
+`cleanupComplete`, and `verifiedOnHost`; verification followed T3 completion by
+5.177 seconds. The saved note and visible completed editor were retained outside
+the vault, and the immutable acceptance receipt is
+`/home/ubuntu/backups/send-to-t3-code/releases/2.31.27/smoke-vps-qlo2.json`.
+The full release suite passed 748 TypeScript and 11 Python tests.
+
+`send-to-t3-native-laptop-reload.timer` is installed and active. The laptop was
+offline during verification, so its pending state retains the exact release
+hashes. The laptop needs one initial native reload after Sync to activate this
+new mailbox handler; native laptop execution and bootstrap remain unverified.
+After activation, later immutable releases retry remotely until Sync, ordinary
+saved editor buffers, and a newly loaded target instance have been verified.
