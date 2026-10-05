@@ -28,6 +28,8 @@ Changing the vault project machine stops the old watcher without automatically t
 
 The host retains its canonical thread histories and recovery records. One full-history polling loop supplies subscription recovery, sharing one read per thread within a cycle; subscription streams do not also fetch a partial recent history. Ordinary response streams retain their own polling. Unchanged observations and response-only note changes do not rewrite the history store. Rollback copies mutable subscription/delivery records and retains references to immutable thread records; polling that keeps its in-memory recovery state does not create an unused rollback copy. Canonical reads retain the observed stream watermark. Stream positions remain checkpointed together with their reduced state, and notification and reply-attachment checkpoints still precede external effects. Failed checkpoints remain dirty until a successful save.
 
+Bounded HTTP bodies use the platform UTF-8 decoder. Private journal validation reuses verified paths and file identity records while freshly checking every revision's identity, including nanosecond change times; it still rejects tampering, missing revisions and symlink replacement.
+
 ### Register and manage subscriptions
 
 Use the real originating T3 thread, project, and environment IDs; the plugin validates that the thread exists on that machine in that project. Do not substitute another thread or create a new one to receive each event.

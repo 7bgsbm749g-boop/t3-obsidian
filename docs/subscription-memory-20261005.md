@@ -1,4 +1,4 @@
-# Subscription state allocation reduction
+# Streaming host allocation reduction
 
 Linux killed QLO2's renderer for memory exhaustion on 2026-10-05. The preceding
 [investigation](auth-recovery-and-memory-20261005.md) identified repeated copying
@@ -48,7 +48,7 @@ The patch keeps the existing version-1 storage format and histories:
 
 ## Validation before release
 
-The final build and complete suite passed: **796 TypeScript and 11 Python tests**.
+The subscription revision passed its build and complete suite: **796 TypeScript and 11 Python tests**.
 Existing coverage verifies prepared-byte retries, lost acknowledgements, host
 restart, feedback suppression, direct actions, stable attachment IDs, pause and
 resume, old-turn catch-up and post-move receipt-save failures. New large-history
@@ -110,3 +110,34 @@ representation-only writes. Regression tests cover unchanged streamed/canonical
 snapshots, the stream's disabled-poll/reconnect mode, and repeated post-attachment
 storage failure. The final full suite and real-client measurement are recorded
 with the completed final release below.
+
+## Remaining native allocation paths
+
+Loaded 2.31.35 produced zero subscription writes during a 4.5-second idle trace,
+retaining all 22 histories, 17 subscriptions and 8 displays. The isolated installed
+class passed rollback, replay and zero-write tests; a real temporary QLO2 note
+received one durable property action. However, the overall five-second allocation
+estimate was still 1,033,046,636 bytes (only 3.0% below baseline). RSS was 568 MB,
+but a reload and a short sample do not establish an OOM fix. Its deployment stays
+awaiting smoke while the remaining identified paths are addressed.
+
+The next revision uses the platform UTF-8 decoder for bounded HTTP bodies,
+avoiding the browser Buffer polyfill's intermediate code-point arrays. It retains
+the existing 4 MB byte limit, replacement-character behavior and BOM handling.
+Journal validation reuses verified paths and compares nanosecond file identity
+fields directly instead of reconstructing path and signature strings for every
+revision on every read. Every revision still receives a fresh `lstat`; hash-chain,
+replacement, truncation and symlink checks remain intact.
+
+A separate synthetic decoder benchmark used 25 identical 680,011-byte JSON
+bodies through the actual browser-bundled HTTP function. Estimated allocations
+fell from 541,260,840 to 52,331,288 bytes (**90.3%**); CPU fell from 663.1 to 232.6
+milliseconds (**64.9%**). Decoded data was identical. `http-decoder-benchmark.mjs`
+and both browser bundles/results are retained in the evidence directory. This is
+component evidence, separate from the real-client allocation sample.
+
+The final allocation revision passed its build and complete suite: **801
+TypeScript and 11 Python tests**. New HTTP tests cover split multi-byte text,
+replacement characters, BOM rejection and declared/streamed byte limits. Journal
+tests confirm cached paths still reject symlink replacement and malformed names;
+the existing same-size tampering, changed hash and truncated-chain tests pass.

@@ -64,3 +64,11 @@ test('a verified prefix rejects a rewritten valid hash and tail truncation',asyn
     await fs.rm(join(journal.root,id,'0000000001.json'));await assert.rejects(journal.read(id),/missing/);
   }finally{await fs.rm(root,{recursive:true,force:true});}
 });
+
+test('a cached revision path still rejects symlink replacement and malformed revision names',async()=>{
+  const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-path-'));try{
+    const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);await journal.append(id,state(),'accepted');await journal.read(id);
+    const file=join(journal.root,id,'0000000000.json'),moved=join(root,'original.json');await fs.rename(file,moved);await fs.symlink(moved,file);await assert.rejects(journal.read(id),/Invalid journal revision file/);
+    await fs.rm(file);await fs.rename(moved,join(journal.root,id,'0000000002.json'));await assert.rejects(journal.read(id),/missing or malformed/);
+  }finally{await fs.rm(root,{recursive:true,force:true});}
+});

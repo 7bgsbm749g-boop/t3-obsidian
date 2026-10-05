@@ -34,7 +34,10 @@ export async function jsonHttp(url:string,options:RequestInit={},fetcher:Fetcher
   if(!r.ok){if(r.status===401||r.status===403)throw new T3HttpError(r.status,'T3 access denied or expired. Create a fresh pairing link in T3 and pair this device again.');throw new T3HttpError(r.status,`T3 returned HTTP ${r.status}.`);}
   if(Number(r.headers.get('content-length')||0)>4_000_000)throw Error('T3 response exceeds 4 MB.');
   let body='';
-  if(r.body?.getReader){const reader=r.body.getReader();const parts:Uint8Array[]=[];let size=0;try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>4_000_000){await reader.cancel();throw Error('T3 response exceeds 4 MB.');}parts.push(value);}}finally{reader.releaseLock();}body=Buffer.concat(parts).toString('utf8');}
+  if(r.body?.getReader){const reader=r.body.getReader();const parts:Uint8Array[]=[];let size=0;try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>4_000_000){await reader.cancel();throw Error('T3 response exceeds 4 MB.');}parts.push(value);}}finally{reader.releaseLock();}
+   // The platform decoder avoids the browser Buffer polyfill's large temporary
+   // code-point arrays. Preserve BOM handling and the existing byte limit.
+   body=new TextDecoder('utf-8',{ignoreBOM:true}).decode(Buffer.concat(parts));}
   else {body=await r.text();if(Buffer.byteLength(body)>4_000_000)throw Error('T3 response exceeds 4 MB.');}
   try{return JSON.parse(body);}catch{throw Error('T3 returned an invalid response; response contents withheld.');}
  }catch(e){if(e instanceof Error && (e.message.startsWith('T3 ')||e.message.startsWith('Use ')))throw e;throw Error('Cannot reach T3 directly. Check its public address, network access, and that T3 is running. Nothing is queued.');}

@@ -5,7 +5,10 @@ import {contentHash} from './completion';
 import type {GenerationJournal,NoteGeneration} from './generated-note-coordinator';
 
 interface Revision {version:1;index:number;previous:string|null;event:string;at:string;state:NoteGeneration;hash:string}
-type VerifiedPrefix={signatures:string[];hashes:string[];latest?:Revision};
+type FileIdentity={dev:bigint;ino:bigint;size:bigint;mtimeNs:bigint;ctimeNs:bigint;mode:bigint};
+type VerifiedFile={name:string;path:string;identity:FileIdentity};
+type VerifiedPrefix={files:VerifiedFile[];hashes:string[];latest?:Revision};
+const sameFile=(a:FileIdentity,b:FileIdentity)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs&&a.mode===b.mode;
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const inside=(root:string,path:string)=>{const part=relative(root,path);return !part||!isAbsolute(part)&&part!=='..'&&!part.startsWith('../');};
 async function canonical(path:string):Promise<string>{
@@ -29,16 +32,18 @@ export class DesktopGenerationJournal implements GenerationJournal {
   private directory(id:string){if(!uuid.test(id))throw Error('Invalid journal identity.');return resolve(this.root,id);}
   private async revisions(id:string):Promise<VerifiedPrefix>{
     const directory=this.directory(id);let names:string[];
-    try{names=await fs.readdir(directory);}catch(error:any){if(error.code==='ENOENT'){if(this.verified.get(id)?.hashes.length)throw Error('Journal revisions are missing.');return {signatures:[],hashes:[]};}throw error;}
+    try{names=await fs.readdir(directory);}catch(error:any){if(error.code==='ENOENT'){if(this.verified.get(id)?.hashes.length)throw Error('Journal revisions are missing.');return {files:[],hashes:[]};}throw error;}
     if(await fs.realpath(directory)!==directory)throw Error('Symlinked journal registration.');
-    const paths=names.filter(name=>name.endsWith('.json')).sort(),cached=this.verified.get(id),prefix:VerifiedPrefix={signatures:[],hashes:[],latest:cached?.latest};
+    const paths=names.filter(name=>name.endsWith('.json')).sort(),cached=this.verified.get(id),prefix:VerifiedPrefix={files:[],hashes:[],latest:cached?.latest};
     if(cached&&paths.length<cached.hashes.length)throw Error('Journal revisions are missing.');
     for(const [index,name] of paths.entries()){
-      if(name!==`${String(index).padStart(10,'0')}.json`)throw Error('Journal revisions are missing or malformed.');
-      const path=resolve(directory,name),stat=await fs.lstat(path,{bigint:true});if(!stat.isFile()||stat.isSymbolicLink())throw Error('Invalid journal revision file.');
-      const signature=[stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs,stat.mode].join(':');
-      prefix.signatures.push(signature);
-      if(cached?.signatures[index]===signature){prefix.hashes.push(cached.hashes[index]);continue;}
+      const prior=cached?.files[index];
+      if(name!==(prior?.name??`${String(index).padStart(10,'0')}.json`))throw Error('Journal revisions are missing or malformed.');
+      const path=prior?.path??resolve(directory,name),stat=await fs.lstat(path,{bigint:true});if(!stat.isFile()||stat.isSymbolicLink())throw Error('Invalid journal revision file.');
+      // Every file still gets a fresh nanosecond identity check. Reuse verified
+      // path/identity records instead of rebuilding strings for the whole chain.
+      if(prior&&sameFile(prior.identity,stat)){prefix.files.push(prior);prefix.hashes.push(cached!.hashes[index]);continue;}
+      prefix.files.push({name,path,identity:{dev:stat.dev,ino:stat.ino,size:stat.size,mtimeNs:stat.mtimeNs,ctimeNs:stat.ctimeNs,mode:stat.mode}});
       const revision:Revision=JSON.parse(await fs.readFile(path,'utf8'));
       const {hash,...body}=revision;
       if(revision.version!==1||revision.index!==index||revision.state.journalRevision!==index||revision.previous!==(prefix.hashes.at(-1)??null)||hash!==contentHash(JSON.stringify(body))||revision.state.request.id!==id||revision.state.originalHash!==contentHash(revision.state.original)||cached?.hashes[index]!==undefined&&cached.hashes[index]!==hash)throw Error('Response journal integrity check failed.');
