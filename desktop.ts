@@ -83,7 +83,7 @@ export function requestJson(origin:string,token:string,path:string,payload?:any)
   const data=payload===undefined?undefined:JSON.stringify(payload);
   const r=http.request(new URL(apiPath,origin),{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',...(data?{'Content-Length':Buffer.byteLength(data)}:{})}},res=>{
    let out='';let bytes=0;res.setEncoding('utf8');res.on('data',(s:string)=>{bytes+=Buffer.byteLength(s);if(bytes>4_000_000)r.destroy(new Error('T3 response too large.'));else out+=s;});
-   res.on('error',reject);res.on('end',()=>{if(res.statusCode!==200){reject(new T3HttpError(res.statusCode??0,`T3 API returned HTTP ${res.statusCode}. Retry the saved request if sending.`));return;}try{resolve(JSON.parse(out));}catch{reject(new Error('Invalid T3 API response.'));}});
+   res.on('error',reject);res.on('end',()=>{if(res.statusCode!==200){reject(new T3HttpError(res.statusCode??0,`T3 API returned HTTP ${res.statusCode}.`));return;}try{resolve(JSON.parse(out));}catch{reject(new Error('Invalid T3 API response.'));}});
   });
   r.setTimeout(20_000,()=>r.destroy(new Error('T3 API timed out. Retry the saved request.')));r.on('error',reject);r.end(data);
  });

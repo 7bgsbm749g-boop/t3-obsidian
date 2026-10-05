@@ -34,7 +34,7 @@ import { Connection, Project, Request, RequestDeliveryError, parseProjects, runB
 import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from './folder-link';
 import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from './folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from './palette-chat';
-import {openChatFlow,openNoteSendFlow,type ChatHost} from './chat-ui';
+import {openChatFlow,openNoteSendFlow,type ChatHost,type ChatDestination} from './chat-ui';
 import {selectionRange} from './inline-steering';
 import {projectThreads,type ThreadChoice} from './thread-target';
 import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,mutateNoteThreads,previousNoteThreads,type NoteThread} from './note-threads';
@@ -46,7 +46,7 @@ import {ProjectCreateModal,ProjectCreationCancelled,workspaceInsideVault,type Pr
 import {workspaceChildPath} from './workspace-picker';
 import {VaultSetupModal,VaultSetupCancelled,type VaultMachine} from './vault-setup-ui';
 import {EventSubscriptions,type EventTarget,type NoteEventSnapshot,notificationPrompt,inEventScope,observedPropertyEquals} from './event-subscriptions';
-import {existingThreadTurn,threadIsActive} from './thread-target';
+import {existingThreadTurn,threadIsActive,responseOwnsActiveTurn} from './thread-target';
 import {DeviceInlineManager} from './leased-inline';
 import {deviceNoteIO} from './inline-note-io';
 import {importReplyAsset} from './reply-import';
@@ -762,7 +762,7 @@ export default class SendToT3 extends Plugin {
   }
   openNoteSend(file:TFile){
     const host:ChatHost={...this.destinationContext(this.noteContext(file)),busy:this.busy,
-      sendChat:(_text,key,resolve)=>this.sendNote(file,undefined,undefined,false,key,resolve?.()),
+      sendChat:(_text,key,resolve,_back,destination)=>this.sendNote(file,destination?.threadId,destination?.projectKey,false,key,resolve?.()),
       sendToNew:(_text,key,resolve)=>this.sendNote(file,undefined,undefined,true,key,resolve?.()),
       sendToExisting:(_text,key,resolve,back)=>this.openNoteThreads(file,key,resolve,back),
     };
@@ -829,7 +829,10 @@ export default class SendToT3 extends Plugin {
   private needsFolderProject(notePath?:string):boolean {
     return Boolean(notePath?.includes('/')&&!folderLinkForPath(this.settings.folderLinks.filter(link=>link.folderPath!=='/'),notePath));
   }
-  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'onProjectChange'>{
+  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'getDefaultDestination'|'onProjectChange'>{
+    // Capture the destination once. A later editor update must not redirect a send.
+    const responseId=inline&&inlineSteeringTarget(inline.editor.getValue(),inline.editor.posToOffset(inline.editor.getCursor()),inline.responseId);
+    const remembered=this.noteThread(note?.path);
     const projectName=(key?:string)=>{
       const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
       if(key===VAULT_PROJECT)return this.settings.folderLinks.find(item=>item.folderPath==='/')?.projectTitle??this.app.vault.getName();
@@ -841,7 +844,7 @@ export default class SendToT3 extends Plugin {
     };
     return {
       getInlineDefaults:()=>({...this.settings.inlineStreaming}),
-      steering:!!inline&&!!inlineSteeringTarget(inline.editor.getValue(),inline.editor.posToOffset(inline.editor.getCursor()),inline.responseId),
+      steering:!!responseId,
       getNotePath:()=>note?.path??'No note open',
       getProjectName:projectName,
       getTargetDescription:key=>`${note?.path??'No note open'} → ${projectName(key)}`,
@@ -850,16 +853,34 @@ export default class SendToT3 extends Plugin {
         const root=this.settings.folderLinks.find(item=>item.folderPath==='/');
         return [...(this.needsFolderProject(note?.path)?[{key:NEW_FOLDER_PROJECT,label:`New project: ${note!.path.split('/').at(-2)}`}]:[]),{key:VAULT_PROJECT,label:`Vault project: ${root?.projectTitle??this.app.vault.getName()}`},...this.projects().filter(project=>!root||project.id!==root.projectId||(project.connectionId??'')!==root.connectionId||!sameWorkspacePath(project.workspaceRoot,root.workspaceRoot)).map(project=>({key:projectKey(project),label:this.projectChoiceLabel(project)}))];
       },
-      getDefaultThread:key=>{const remembered=this.noteThread(note?.path),job=note?this.inlineChat?.activeFor(note.path).find(job=>job.threadId&&['sending','running','reconnecting'].includes(job.phase)):undefined;return !key||remembered&&key===`${remembered.connectionId?remembered.connectionId+':':''}${remembered.projectId}`?job?.threadId??remembered?.threadId:undefined;},
+      getDefaultThread:key=>!key||remembered&&key===`${remembered.connectionId?remembered.connectionId+':':''}${remembered.projectId}`?remembered?.threadId:undefined,
+      getDefaultDestination:async key=>{
+        try{
+          const hosted=responseId?await this.steeringRecord(responseId):undefined;
+          const job=responseId?this.inlineChat?.find(responseId):undefined;
+          const source=hosted?.record.request??job;
+          if(responseId&&(!source||job?.hosted&&!hosted))throw Error('This response is unavailable. Reconnect its host or choose another thread.');
+          if(hosted&&(hosted.record.state?.notePath??hosted.record.request.notePath)!==note?.path||job&&!hosted&&job.path!==note?.path)throw Error('This response belongs to another note. Choose another thread.');
+          const threadId=source?.threadId??remembered?.threadId;
+          if(!threadId)throw Error('This response has not reached a T3 thread. Choose New thread or Existing thread…');
+          const project=source?await this.recoveryProject(source.projectId!,hosted?.record.request.threadEnvironmentId??job?.connection?.environmentId):this.projectForNoteThread(remembered!);
+          if(key&&key!==projectKey(project))throw Error('This conversation belongs to another project. Choose New thread or Existing thread…');
+          const thread=await this.readChatThread(this.connection(project),project,threadId);
+          const active=threadIsActive(thread);
+          if(thread.hasPendingApprovals||thread.hasPendingUserInput)throw Error('This conversation is waiting for approval or input. Resolve it in T3 before sending.');
+          if(active&&responseId&&!responseOwnsActiveTurn(thread,hosted?.record.state??job))throw Error('The selected response is not bound to the current active turn. Wait for its checkpoint or explicitly choose a thread.');
+          return {threadId,projectKey:projectKey(project),...(active&&responseId?{responseId}:{}),label:active?'Send to running thread':'Continue thread',detail:`${typeof thread.title==='string'?thread.title:'T3 thread'} · ${threadId.slice(0,8)}${active&&responseId?' · Keeps this response’s streaming choices.':''}`} satisfies ChatDestination;
+        }catch(error){return {label:'Thread unavailable',unavailable:true,detail:`${unsavedMessage(error)} No message was sent. Use New thread or Existing thread…`};}
+      },
     };
   }
   private openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false){
     // Generated text is captured context, never a source to move. Classify it
     // before the chooser/network waits: streaming may replace its surroundings.
     if(inline?.anchor){const snapshot=inline.editor.getValue();inline={...inline,snapshot:inline.snapshot??snapshot,referenceSelection:inline.referenceSelection??selectionOverlapsInlineResponse(snapshot,inline.anchor)};}
-    const send=(text:string,options:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions})=>this.sendResolvedChat(text,note,inline,answerOnly,options);
+    const send=(text:string,options:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions})=>this.sendResolvedChat(text,note,inline,answerOnly,options);
     const host:ChatHost={...this.destinationContext(note,inline),
-      sendChat:(text,key,resolve)=>send(text,{projectOverrideKey:key,jobOptions:resolve?.()}),
+      sendChat:(text,key,resolve,_back,destination)=>send(text,{threadId:destination?.threadId,responseId:destination?.responseId,expectedProjectKey:destination?.projectKey,projectOverrideKey:key,jobOptions:resolve?.()}),
       sendToNew:(text,key,resolve)=>send(text,{newThread:true,projectOverrideKey:key,jobOptions:resolve?.()}),
       sendToExisting:(text,key,resolve,back)=>this.openChatThreads(text,note,inline,answerOnly,key,resolve,back),
     };
@@ -875,10 +896,10 @@ export default class SendToT3 extends Plugin {
     if(this.stopped)return;
     new ExistingThreadModal(this.app,threads,thread=>this.sendResolvedChat(prompt,note,inline,answerOnly,{threadId:thread.id,expectedProjectKey:projectKey(project),projectOverrideKey:overrideKey,jobOptions:resolve?.()}),'Ask in an existing thread','No existing threads in this project. Use New thread.',back).open();
   }
-  private async sendResolvedChat(prompt:string,note:{path:string;absolutePath?:string}|undefined,context:EditorChatContext|undefined,answerOnly:boolean,options:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
+  private async sendResolvedChat(prompt:string,note:{path:string;absolutePath?:string}|undefined,context:EditorChatContext|undefined,answerOnly:boolean,options:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
     const jobOptions=options.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     // Steering extends the existing response, even when this draft says Off.
-    const activeId=context&&inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId);
+    const activeId=options.responseId??(!options.threadId&&context?inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId):undefined);
     if(context&&note&&activeId&&!options.newThread)return this.sendInlineSteering(activeId,prompt,note,context,options);
     if(jobOptions.inline.enabled&&note&&(context||typeof this.app.workspace.getLeaf==='function')){
       if(!context){const file=this.app.vault.getFileByPath(note.path);if(!file)throw Error('The original note is unavailable.');const view=await this.editorForNoteSend(file);if(!view)throw Error('A Markdown editor is required for inline streaming.');context={view,editor:view.editor};}
@@ -890,7 +911,7 @@ export default class SendToT3 extends Plugin {
     const manager=this.inlineChat;if(!manager)throw Error('Inline T3 response is unavailable. Reload the plugin.');
     if(context.view.file?.path!==note.path)throw Error('The original note is no longer open. Reopen it before asking T3.');
     const activeId=inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId);
-    if(activeId&&!options?.newThread)return this.sendInlineSteering(activeId,prompt,note,context,options);
+    if(activeId&&!options?.newThread&&!options?.threadId)return this.sendInlineSteering(activeId,prompt,note,context,options);
     const jobOptions=options?.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     const requestId=randomId(),initialInput=context.initialQuestion?{messageId:commandId(requestId,'message'),text:context.initialQuestion}:undefined;
     let job:InlineJob|undefined,delivered=false;
@@ -903,15 +924,18 @@ export default class SendToT3 extends Plugin {
     }catch(error){if(job)manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&error.requestSaved));throw error;}
   }
 
-  private async sendInlineSteering(id:string,prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;expectedProjectKey?:string;projectOverrideKey?:string}){
-    logEvent('steering.requested',{jobId:id,notePath:note.path,promptHash:contentHash(prompt),promptLength:prompt.length,selectionHash:context.anchor?contentHash(JSON.stringify(context.anchor)):undefined});
-    const job=this.inlineChat?.find(id);let hosted:{record:LeaseRecord;host:InlineHostTarget}|undefined;
+  private async steeringRecord(id:string):Promise<{record:LeaseRecord;host:InlineHostTarget}|undefined>{
+    const job=this.inlineChat?.find(id);
     const targets=[job?.hostTarget,...this.inlineTargets].filter((value):value is InlineHostTarget=>!!value);
     if(!job||job.hosted)try{const current=await this.inlineHostTarget();if(!targets.some(target=>JSON.stringify(target)===JSON.stringify(current)))targets.push(current);}catch{}
     for(const host of targets){
       let opened:{files:InlineFiles;close():void};try{opened=await this.inlineHostFiles(host);}catch{continue;}
-      try{const raw=await opened.files.read(leasePaths(host.directory,id).record);if(raw){const record:LeaseRecord=JSON.parse(raw);if(record.request.id===id&&record.request.vaultId===this.settings.vaultId){hosted={record,host};break;}}}finally{opened.close();}
+      try{const raw=await opened.files.read(leasePaths(host.directory,id).record);if(raw){const record:LeaseRecord=JSON.parse(raw);if(record.request.id===id&&record.request.vaultId===this.settings.vaultId)return {record,host};}}finally{opened.close();}
     }
+  }
+  private async sendInlineSteering(id:string,prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;expectedProjectKey?:string;projectOverrideKey?:string}){
+    logEvent('steering.requested',{jobId:id,notePath:note.path,promptHash:contentHash(prompt),promptLength:prompt.length,selectionHash:context.anchor?contentHash(JSON.stringify(context.anchor)):undefined});
+    const job=this.inlineChat?.find(id),hosted=await this.steeringRecord(id);
     if(job?.hosted&&!hosted||!hosted&&!job)throw Error('The active response is unavailable. Reconnect its vault project machine.');
     const threadId=hosted?.record.request.threadId??job?.threadId,projectId=hosted?.record.request.projectId??job?.projectId,environmentId=hosted?.record.request.threadEnvironmentId??job?.connection?.environmentId;
     if(!threadId||!projectId)throw Error('Wait for the first message to reach T3 before steering.');
@@ -922,6 +946,8 @@ export default class SendToT3 extends Plugin {
     if(selection){const document=context.editor.getValue(),range=selectionRange(document,selection);if(!range)throw Error('The selected text changed. Select it again.');if(selectionOverlapsInlineResponse(document,{start:range.from,end:range.to}))selection=undefined;}
     const project=await this.recoveryProject(projectId,environmentId),key=projectKey(project);
     if(options?.expectedProjectKey&&options.expectedProjectKey!==key||options?.projectOverrideKey&&options.projectOverrideKey!==key)throw Error('Steering must use the running thread’s project.');
+    const current=await this.readChatThread(this.connection(project),project,threadId);
+    if(!threadIsActive(current)||!responseOwnsActiveTurn(current,hosted?.record.state??job))throw Error('This response no longer owns the active turn. Reopen the chooser or explicitly choose a thread. No message was sent.');
     const policy=hosted?.record.request??job!;
     const jobOptions=resolveJobOptions({enabled:true,intermediateMode:policy.intermediateMode,keepIntermediate:policy.keepIntermediate,finalAnswerFormat:policy.finalAnswerFormat});
     await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{threadId,projectOverrideKey:key,jobOptions,sourceContext:context,onPrepared:request=>{
@@ -1289,10 +1315,16 @@ export default class SendToT3 extends Plugin {
       return {bytes:Buffer.from(await this.app.vault.readBinary(target)),name:target.name};
     },definitions);
   }
+  private async readChatThread(connection:Connection,project:Project,threadId:string){
+    let thread:any;
+    try{thread=await runBridge(connection,['read',threadId]);}
+    catch(error){if(/HTTP 404\b/.test(message(error)))throw Error('The selected T3 thread does not exist. Choose another thread.');throw error;}
+    if(thread?.id!==threadId||thread.projectId!==project.id||thread.archivedAt||thread.deletedAt)throw Error('The selected T3 thread is unavailable in this project.');
+    return thread;
+  }
   private async requestTitle(connection:Connection,project:Project,threadId:string|undefined,notePath:string|undefined){
     if(!threadId)return noteThreadTitle(notePath,this.settings.threadTitleGeneration);
-    const thread=await runBridge(connection,['read',threadId]);
-    if(thread?.id!==threadId||thread.projectId!==project.id)throw Error('The selected T3 thread is unavailable in this project.');
+    const thread=await this.readChatThread(connection,project,threadId);
     return typeof thread.title==='string'&&thread.title.trim()?thread.title.slice(0,160):'T3 thread';
   }
   async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;sourceContext?:EditorChatContext;onPrepared?:(request:Request)=>void|Promise<void>}):Promise<void> {
@@ -1348,7 +1380,7 @@ export default class SendToT3 extends Plugin {
       await this.dispatch(request);
       const draft=this.app.loadLocalStorage(this.chatDraftKey);
       if(typeof draft==='string'&&draft&&(draft===prompt||[THREAD_REPLY_INSTRUCTION,INLINE_REPLY_INSTRUCTION].some(instruction=>prompt===`${draft}\n\n${instruction}`||prompt.endsWith(`\n\nQuestion:\n${draft}\n\n${instruction}`))))this.app.saveLocalStorage(this.chatDraftKey,'');
-    }catch(e){if(e instanceof ProjectCreationCancelled)throw e;throw new RequestDeliveryError(`${message(e)} ${saved?'Check Unconfirmed requests in settings before sending again.':'No thread was created.'}`,saved);}
+    }catch(e){if(e instanceof ProjectCreationCancelled)throw e;throw new RequestDeliveryError(`${saved?message(e):unsavedMessage(e)} ${saved?'Check Unconfirmed requests in settings before sending again.':'No message was sent or queued.'}`,saved);}
     finally{this.busy=false;}
   }
   async exportDiagnostics(){
@@ -1982,6 +2014,7 @@ function randomId():string {
   const hex=Buffer.from(bytes).toString('hex');return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
 function message(e:unknown) {return e instanceof Error ? e.message : String(e);}
+function unsavedMessage(e:unknown){return message(e).replace(/\s*Retry the saved request(?: if sending| with its original ID)?\./g,'');}
 class MissingThreeModal extends Modal {
   private settled=false;
   constructor(app:App,private reason:string,private markdown:string,private resolve:(include:boolean|undefined)=>void){super(app);}

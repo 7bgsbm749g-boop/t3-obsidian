@@ -14,6 +14,13 @@ export function threadIsActive(thread:any):boolean {
     || thread?.hasPendingApprovals===true || thread?.hasPendingUserInput===true;
 }
 
+/** A live thread can be running a different response. Only exact retained
+ * provider-turn bindings permit extending the selected response block. */
+export function responseOwnsActiveTurn(thread:any,response:{turnId?:string;turnIds?:string[]}|undefined):boolean {
+  const active=thread?.session?.activeTurnId??(['running','starting'].includes(thread?.latestTurn?.state)?thread.latestTurn.turnId:undefined);
+  return typeof active==='string'&&!!response&&(response.turnId===active||response.turnIds?.includes(active)===true);
+}
+
 /** Existing conversations keep their model, permissions, and interaction mode. */
 export function existingThreadTurn(thread:any,target:{threadId:string;projectId:string},commandId:string,message:any){
   if(!thread||thread.id!==target.threadId||thread.projectId!==target.projectId||thread.archivedAt||thread.deletedAt)throw Error('The selected thread is no longer available in the linked project. Choose a thread again.');

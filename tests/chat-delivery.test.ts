@@ -25,7 +25,8 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   const rootLink={id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true};
   let activeNote:any,activeEditor:any,activeEditorView=true;
   const initial={folderLinks:[rootLink,{...rootLink,id:'notes',folderPath:'Notes',self:false}],chatProjectKey:'old:unrelated-project',paired:[{id:'chat-connection',name:'Laptop',url:'https://chat.example',environmentId:'chat-env'}],directScanId:'chat-connection',directProjects:[project],directSelected:['chat-connection:chat-project'],completion:{action:'delete'}};
-  const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[],settingsControls:any[]=[],workspaceEvents:Record<string,((...args:any[])=>void)[]>={};let threads:any[]=[],catalog:any[]=[project],focusedButton:any;
+  const shared:any[]=[], commands:any[]=[], registered:any[]=[],modals:any[]=[],settingsControls:any[]=[],notices:string[]=[],workspaceEvents:Record<string,((...args:any[])=>void)[]>={};let threads:any[]=[],catalog:any[]=[project],focusedButton:any;
+  let readOverride:((id:string)=>Response|undefined|Promise<Response|undefined>)|undefined;
   let vaultAccesses=0;
   const hostViews=new WeakMap<object,any>();
   const hostFiles=new Map<string,string>(),hostEditors=new Map<string,any>(),hostNotes=new Map<string,{path:string}>();
@@ -68,7 +69,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     setClass(_value:string){return this;}
     setName(text:string){this.name=text;return this;}setDesc(_text:string){return this;}setDisabled(_value:boolean){return this;}
     addToggle(callback:(toggle:any)=>void){const toggle={setValue:()=>toggle,onChange:()=>toggle};callback(toggle);return this;}
-    addButton(callback:(button:any)=>void){const button:any={text:'',click:()=>{},buttonEl:{isConnected:true,focus:()=>{focusedButton=button;}},setButtonText:(text:string)=>{button.text=text;return button;},setCta:()=>button,setDisabled:()=>button,onClick:(click:()=>void)=>{button.click=click;return button;}};callback(button);this.buttons.push(button);return this;}
+    addButton(callback:(button:any)=>void){const button:any={text:'',click:()=>{},buttonEl:{isConnected:true,focus:()=>{focusedButton=button;}},setButtonText:(text:string)=>{button.text=text;return button;},setCta:()=>button,setDisabled:(value:boolean)=>{button.buttonEl.disabled=value;return button;},onClick:(click:()=>void)=>{button.click=click;return button;}};callback(button);this.buttons.push(button);return this;}
     addDropdown(callback:(d:any)=>void){const d:any={options:{},value:'',disabled:false,change:()=>{},addOption:(key:string,label:string)=>{d.options[key]=label;return d;},setValue:(value:string)=>{d.value=value;return d;},setDisabled:(value:boolean)=>{d.disabled=value;return d;},onChange:(fn:any)=>{d.change=fn;return d;}};(this as any).dropdown=d;callback(d);return this;}
     addText(callback:(t:any)=>void){const t={setValue:()=>t,setPlaceholder:()=>t,setDisabled:()=>t,onChange:()=>t};callback(t);return this;}
   }
@@ -96,7 +97,8 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     register(){}
     addCommand(command:any){registered.push(command);}
   }
-  const api={Plugin,Platform:{isMobile:true},Modal,Menu,MenuItem,Setting,SuggestModal:Modal,FuzzySuggestModal:Modal,PluginSettingTab:Base,Notice:Base,TFile:File,MarkdownView:Base};
+  class Notice {constructor(text:string){notices.push(text);}}
+  const api={Plugin,Platform:{isMobile:true},Modal,Menu,MenuItem,Setting,SuggestModal:Modal,FuzzySuggestModal:Modal,PluginSettingTab:Base,Notice,TFile:File,MarkdownView:Base};
   const fetcher=async(url:string,options:any)=>{
     assert.equal(options.credentials,'omit');
     assert.equal(options.redirect,'error');
@@ -107,6 +109,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     if(url.endsWith('/shell'))return response({projects:catalog.map(p=>({...p,defaultModelSelection:{instanceId:'codex',model:'default'}})),threads});
     if(url.includes('/threads/')){
       const id=decodeURIComponent(url.split('/threads/')[1].split('?')[0]);
+      const overridden=await readOverride?.(id);if(overridden)return overridden;
       return response(commands.some(command=>command.threadId===id&&command.type==='thread.turn.start')?snapshot(id):{thread:threads.find(thread=>thread.id===id)??{id,projectId:project.id,runtimeMode:'approval-required',interactionMode:'default'}});
     }
     const command=JSON.parse(options.body);
@@ -153,7 +156,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();const timer=setInterval(()=>plugin.deviceInline?.tick(),20);const unload=plugin.onunload.bind(plugin);plugin.onunload=()=>{clearInterval(timer);unload();};return plugin;};
   const plugin=await start();
-  return {setStreaming:(value:boolean)=>{streaming=value;},plugin,start,commands,shared,hostFiles,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+  return {setReadOverride:(value:typeof readOverride)=>{readOverride=value;},notices,setStreaming:(value:boolean)=>{streaming=value;},plugin,start,commands,shared,hostFiles,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
     const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
     let value=selection+'\nTail';
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
@@ -560,10 +563,11 @@ test('an empty palette action on a note with history opens a destination modal',
     );
     await h.plugin.openPaletteAction('','');
     const modal=h.modals.at(-1);
+    await modal.ready;
     assert.equal(modal.constructor.name,'SendDestinationModal');
     assert.equal(modal.titleEl.text,'Send to T3 Code');
     assert.equal(modal.contentEl.children[0].children[0].text,project.title);
-    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Previous thread','New thread','Existing thread…']);
+    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Continue thread','New thread','Existing thread…']);
     assert.equal(h.commands.length,0);
     modal.close();
     assert.equal(h.commands.length,0,'Dismissing the destination modal must not send');
@@ -632,7 +636,7 @@ test('Enter on the destination dialog uses the purple new or last used thread bu
     h.setThreads([{id:'previous-thread',projectId:project.id,title:'Previous',updatedAt:'2026-09-28T00:00:00Z',runtimeMode:'approval-required',interactionMode:'default'}]);
     await h.plugin.openChat('Continue here');
     await new Promise(resolve=>setTimeout(resolve,0));
-    assert.equal(h.focusedButton()?.text,'Previous thread');
+    assert.equal(h.focusedButton()?.text,'Continue thread');
     h.pressEnter();
     for(let attempt=0;attempt<120&&(h.commands.length<3||h.plugin.busy);attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.equal(h.commands[2].type,'thread.turn.start');
@@ -1131,6 +1135,114 @@ test('new inline responses capture the retention setting in their immutable host
   }finally{h.plugin.onunload();}
 });
 
+function seedResponse(h:any,path:string,threadId:string,status='running'){
+  const id=webcrypto.randomUUID(),region=initialRegion(id);
+  const opened=h.attachEditor(path,'Synthetic selection\n'+region.text+'Tail');
+  const host={environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1',connectionId:'chat-connection'};
+  const request={version:2,initialOwner:webcrypto.randomUUID(),id,vaultId:h.plugin.settings.vaultId,host,notePath:path,threadId,messageId:webcrypto.randomUUID(),projectId:project.id,threadEnvironmentId:'chat-env',initialHash:region.bodyHash,createdAt:'original-time'};
+  const record={request,owner:request.initialOwner,epoch:1,revision:1,expiresAt:Date.now()+15_000,state:{accepted:true,notePath:path,status,turnId:status==='running'?'old-turn':null,hashes:[region.bodyHash],updatedAt:''}};
+  const recordPath=leasePaths(host.directory,id).record;
+  h.hostFiles.set(recordPath,JSON.stringify(record));
+  return {id,opened,recordPath,originalRecord:h.hostFiles.get(recordPath)};
+}
+
+test('an accepted but undispatched response cannot advertise running or override an explicit existing thread',async()=>{
+  const h=await chatHarness(),path='Notes/Orphan.md';
+  try{
+    const {opened,recordPath,originalRecord}=seedResponse(h,path,'never-created','waiting');
+    h.plugin.settings.inlineStreaming.enabled=false;
+    h.plugin.settings.noteThreads.push({notePath:path,threadId:'real-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-10-05T00:00:00Z'});
+    h.setThreads([{id:'real-thread',projectId:project.id,title:'Real conversation',updatedAt:'2026-10-05T00:00:00Z',session:{status:'ready'}}]);
+    h.setReadOverride(id=>id==='never-created'?new Response('{}',{status:404}):undefined);
+    await h.plugin.openPaletteAction('Follow up.','');
+    const modal=h.modals.at(-1),button=h.settingsControls.at(-1).buttons[0];
+    assert.equal(button.text,'Thread unavailable');assert.equal(button.buttonEl.disabled,true);
+    assert.match(modal.contentEl.children.map((e:any)=>e.text).join('\n'),/does not exist/);
+    await modal.choose('default');
+    assert.equal(h.commands.length,0);assert.equal(h.plugin.settings.pending.length,0);
+    assert.equal(h.hostFiles.get(recordPath),originalRecord);assert.ok(opened.value.includes('Synthetic selection'));
+    await modal.choose('existing');
+    const picker=h.modals.at(-1);await picker.onChooseItem(picker.getItems()[0]);
+    await waitForReply(()=>h.commands.some(c=>c.type==='thread.turn.start'),'explicit existing thread received the message');
+    assert.deepEqual(h.commands.map(c=>c.threadId),['real-thread']);
+    assert.equal(h.hostFiles.get(recordPath),originalRecord,'the orphan must not receive steering or cleanup');
+  }finally{h.plugin.onunload();}
+});
+
+for(const active of [false,true])test(`selection and whole-note chooser agree on authenticated ${active?'running':'idle'} thread state`,async()=>{
+  const h=await chatHarness(),path='Notes/StateLabels.md';
+  try{
+    const {opened}=seedResponse(h,path,'same-thread');
+    h.plugin.settings.noteThreads.push({notePath:path,threadId:'same-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-10-05T00:00:00Z'});
+    h.setThreads([{id:'same-thread',projectId:project.id,title:'Same conversation',session:{status:active?'running':'ready',activeTurnId:active?'old-turn':null}}]);
+    await h.plugin.openPaletteAction('Question.','');
+    const selection=h.modals.at(-1),resolved=await selection.ready,label=h.settingsControls.at(-1).buttons[0].text;
+    assert.equal(label,active?'Send to running thread':'Continue thread');
+    assert.equal(resolved.responseId!==undefined,active,'idle stale headers do not extend the old binding');
+    selection.close();h.plugin.openNoteSend(opened.file);await h.modals.at(-1).ready;
+    assert.equal(h.settingsControls.at(-1).buttons[0].text,label);
+    assert.equal(h.commands.length,0,'opening either chooser is read-only');
+  }finally{h.plugin.onunload();}
+});
+
+test('the chooser freezes its response identity across subsequent editor projection changes',async()=>{
+  const h=await chatHarness(),path='Notes/FrozenTarget.md';
+  try{
+    const {id,opened,recordPath}=seedResponse(h,path,'original-thread');
+    h.setThreads([{id:'original-thread',projectId:project.id,title:'Original',session:{status:'running',activeTurnId:'old-turn'}}]);
+    h.plugin.settings.inlineStreaming.enabled=false;
+    await h.plugin.openPaletteAction('Keep this target.','');const modal=h.modals.at(-1);
+    const before=opened.value,other=initialRegion(webcrypto.randomUUID()).text;
+    opened.editor.replaceRange(other,opened.editor.offsetToPos(0),opened.editor.offsetToPos(before.length));
+    // Keep the selected original anchor available but place a different response at the cursor.
+    opened.editor.replaceRange(before,opened.editor.offsetToPos(0));
+    await modal.choose('default');
+    assert.deepEqual(h.commands.map(c=>c.threadId),['original-thread']);
+    const record=JSON.parse(h.hostFiles.get(recordPath)!);assert.equal(record.request.id,id);
+    assert.equal(record.state.steering[0].text,'Keep this target.');
+  }finally{h.plugin.onunload();}
+});
+
+test('a stale response cannot steer a different active provider turn in the same thread',async()=>{
+  const h=await chatHarness(),path='Notes/DifferentTurn.md';
+  try{
+    const {recordPath,originalRecord}=seedResponse(h,path,'same-thread');
+    h.setThreads([{id:'same-thread',projectId:project.id,title:'Same thread',session:{status:'running',activeTurnId:'unrelated-turn'}}]);
+    await h.plugin.openPaletteAction('Stay scoped.','');const modal=h.modals.at(-1);
+    assert.equal(h.settingsControls.at(-1).buttons[0].text,'Thread unavailable');
+    await modal.choose('default');
+    assert.equal(h.commands.length,0);assert.equal(h.hostFiles.get(recordPath),originalRecord);
+  }finally{h.plugin.onunload();}
+});
+
+test('a thread disappearing after validation does not save, dispatch, move text or suggest retrying an unsaved request',async()=>{
+  const h=await chatHarness(),path='Notes/Disappear.md';
+  try{
+    const {opened,recordPath,originalRecord}=seedResponse(h,path,'gone-thread');
+    h.setThreads([{id:'gone-thread',projectId:project.id,title:'Temporary',session:{status:'running',activeTurnId:'old-turn'}}]);
+    await h.plugin.openPaletteAction('Preserve this.','');const modal=h.modals.at(-1),document=opened.value;
+    h.setReadOverride(()=>new Response('{}',{status:404}));await modal.choose('default');
+    assert.equal(h.commands.length,0);assert.equal(h.plugin.settings.pending.length,0);
+    assert.equal(opened.value,document);assert.equal(h.hostFiles.get(recordPath),originalRecord);
+    assert.doesNotMatch(h.notices.at(-1)!,/Retry the saved request/);
+    await assert.rejects(h.plugin.sendChat('Also preserve.',{path},{threadId:'gone-thread'}),(e:any)=>e.requestSaved===false&&/No message was sent or queued/.test(e.message)&&!/Retry the saved request/.test(e.message));
+  }finally{h.plugin.onunload();}
+});
+
+test('closing a chooser during thread validation cannot deliver a queued Enter action',async()=>{
+  const h=await chatHarness(),path='Notes/CancelledCheck.md';let release!:(r:Response)=>void;
+  try{
+    const {opened}=seedResponse(h,path,'slow-thread');
+    h.setReadOverride(()=>new Promise<Response>(resolve=>{release=resolve;}));
+    const opening=h.plugin.openPaletteAction('Cancelled question.','');
+    await waitForReply(()=>!!release,'read-only validation started');const modal=h.modals.at(-1),document=opened.value;
+    const sending=modal.choose('default');modal.close();
+    release(new Response(JSON.stringify({thread:{id:'slow-thread',projectId:project.id,session:{status:'running'}}})));
+    await opening;await sending;
+    assert.equal(h.commands.length,0);assert.equal(h.plugin.settings.pending.length,0);assert.equal(opened.value,document);
+  }finally{h.plugin.onunload();}
+});
+
 for(const streamingDefault of [false,true])for(const destination of ['default','new'])test(`a synced running response accepts palette ${destination} with streaming default ${streamingDefault} and no local thread history`,async()=>{
   const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/Steering.md',region=initialRegion(id);
   try{
@@ -1181,6 +1293,7 @@ for(const surface of ['editor','ordinary-ask','palette','explicit-target'])test(
     else if(surface==='ordinary-ask')await h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code')!.callback();
     else if(surface==='palette')await h.plugin.openPaletteAction('',selected);
     else h.plugin.openEditorChat(selected,opened.file,{editor:opened.editor,view:opened.view,anchor:{text:selected,start:0,end:selected.length,before:'',after:'\n'+region.text.slice(0,23)},responseId:id});
+    await h.modals.at(-1).ready;
     assert.equal(h.settingsControls.at(-1).buttons[0].text,'Send to running thread');
     await h.modals.at(-1).choose(false);
     assert.equal(h.commands.length,1);assert.ok(opened.value.startsWith(selected),'text remains until T3 confirms its message');
@@ -1205,8 +1318,9 @@ test('the full-note modal changes project for one send without reusing another p
     const links=JSON.stringify(h.plugin.settings.folderLinks);
     h.plugin.openNoteSend(file);
     const destination=h.modals.at(-1);
+    await destination.ready;
     assert.equal(destination.constructor.name,'SendDestinationModal');
-    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Previous thread','New thread','Existing thread…']);
+    assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Continue thread','New thread','Existing thread…']);
     const pathButton=destination.contentEl.children[0].children[0];
     assert.equal(pathButton.tag,'button');assert.equal(pathButton.text,project.title);
     pathButton.click();

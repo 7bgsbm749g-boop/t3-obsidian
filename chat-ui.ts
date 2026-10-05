@@ -4,6 +4,14 @@ import {App, FuzzySuggestModal, Modal, Notice, Setting} from 'obsidian';
 import {RequestDeliveryError} from './bridge';
 import {ProjectCreationCancelled} from './project-create-ui';
 
+export interface ChatDestination {
+  threadId?:string;
+  responseId?:string;
+  projectKey?:string;
+  label:string;
+  unavailable?:boolean;
+  detail?:string;
+}
 export interface ChatHost {
   steering?:boolean;
   getInlineDefaults?():InlineDefaults;
@@ -14,7 +22,8 @@ export interface ChatHost {
   onProjectChange?(listener:()=>void):()=>void;
   getProjectChoices():{key:string;label:string}[];
   getDefaultThread(projectKey?:string):string|undefined;
-  sendChat(prompt:string,projectKey?:string,resolve?:()=>ResolvedJobOptions,returnToDraft?:()=>void):Promise<void>;
+  getDefaultDestination?(projectKey?:string):Promise<ChatDestination>;
+  sendChat(prompt:string,projectKey?:string,resolve?:()=>ResolvedJobOptions,returnToDraft?:()=>void,destination?:ChatDestination):Promise<void>;
   sendToNew(prompt:string,projectKey?:string,resolve?:()=>ResolvedJobOptions,returnToDraft?:()=>void):Promise<void>;
   sendToExisting(prompt:string,projectKey?:string,resolve?:()=>ResolvedJobOptions,returnToDraft?:()=>void):Promise<void>;
 }
@@ -55,6 +64,12 @@ type Destination='default'|'new'|'existing';
 
 /** The same compact destination UI handles whole notes, selections, and typed asks. */
 class SendDestinationModal extends Modal {
+  ready:Promise<ChatDestination|undefined>=Promise.resolve(undefined);
+  private revision=0;
+  private opened=false;
+  private defaultButton?:HTMLButtonElement;
+  private defaultDisabled=false;
+  private checkingDefault=false;
   private choosing=false;
   private overrides:JobOverrides={};
   private actions!:Setting;
@@ -63,6 +78,7 @@ class SendDestinationModal extends Modal {
   private composing:boolean;
   constructor(app:App,private host:ChatHost,private prompt?:string){super(app);this.composing=prompt===undefined;}
   onOpen(){
+    this.opened=true;const revision=++this.revision;
     logEvent('ui.destination.opened',{notePath:this.host.getNotePath(),steering:this.host.steering,composing:this.composing,projectKey:this.projectKey});
     this.titleEl.setText('Send to T3 Code');this.contentEl.empty();
     const row=this.contentEl.createEl('p',{cls:'send-to-t3-destination-top'});
@@ -79,7 +95,7 @@ class SendDestinationModal extends Modal {
       if(this.field)this.prompt=this.field.value;
       new JobOverridesModal(this.app,this.overrides,this.host.getInlineDefaults?.()??{enabled:false},draft=>{this.overrides=draft;this.onOpen();}).open();
     });
-    if(this.host.steering)this.contentEl.createEl('p',{text:'Send to running thread keeps that response’s streaming and rendering choices. New thread uses these overrides.'});
+    const detail=this.contentEl.createEl('p',{text:''});
     if(this.composing){
       this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Message for T3',placeholder:'What would you like to do?',rows:'5'}});
       this.field.style.width='100%';this.field.value=this.prompt??'';
@@ -90,7 +106,20 @@ class SendDestinationModal extends Modal {
     const remembered=this.host.getDefaultThread(this.projectKey);
     let defaultButton:HTMLButtonElement|undefined;
     this.actions=new Setting(this.contentEl).setClass('send-to-t3-destination-actions');
-    if(remembered||this.host.steering)this.actions.addButton(button=>{defaultButton=button.buttonEl;button.setButtonText(this.host.steering?'Send to running thread':'Previous thread').setCta().onClick(()=>this.choose('default'));});
+    this.ready=Promise.resolve(undefined);this.defaultDisabled=false;this.defaultButton=undefined;this.checkingDefault=false;
+    if(remembered||this.host.steering)this.actions.addButton(button=>{
+      defaultButton=button.buttonEl;
+      this.defaultButton=defaultButton;
+      button.setButtonText(this.host.getDefaultDestination?'Checking thread…':this.host.steering?'Send to running thread':'Previous thread').setCta().onClick(()=>this.choose('default'));
+      if(this.host.getDefaultDestination){
+        this.checkingDefault=true;
+        this.defaultDisabled=true;button.setDisabled(true);detail.setText('Checking the selected T3 conversation…');
+        this.ready=this.host.getDefaultDestination(this.projectKey).catch(()=>({label:'Thread unavailable',unavailable:true,detail:'Cannot check this conversation. Reconnect T3 or choose another thread.'})).then(destination=>{
+          if(this.opened&&revision===this.revision){this.defaultDisabled=Boolean(destination.unavailable);button.setButtonText(destination.label).setDisabled(Boolean(this.host.busy||this.defaultDisabled));detail.setText(destination.detail??'');}
+          return destination;
+        });
+      }
+    });
     this.actions.addButton(button=>{
       button.setButtonText('New thread');
       if(!defaultButton){defaultButton=button.buttonEl;button.setCta();}
@@ -98,35 +127,42 @@ class SendDestinationModal extends Modal {
     });
     this.actions.addButton(button=>button.setButtonText('Existing thread…').onClick(()=>this.choose('existing')));
     this.actions.setDisabled(Boolean(this.host.busy));
+    const checkedButton=this.defaultButton as HTMLButtonElement|undefined;
+    if(checkedButton)checkedButton.disabled=Boolean(this.host.busy||this.defaultDisabled);
     if(this.field)this.field.focus();
     else setTimeout(()=>{if(defaultButton?.isConnected)defaultButton.focus();},0);
   }
-  onClose(){logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
+  onClose(){this.opened=false;logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
   private async choose(target:Destination|boolean='default'){
     if(this.choosing||this.host.busy)return;
+    target=target===false?'default':target===true?'existing':target;
     if(this.field){this.prompt=this.field.value;if(!this.prompt.trim())return;}
     logEvent('ui.destination.submitted',{notePath:this.host.getNotePath(),target,projectKey:this.projectKey,steering:this.host.steering});
-    this.choosing=true;this.actions.setDisabled(true);this.close();
+    const revision=this.revision;this.choosing=true;this.actions.setDisabled(true);
     const prompt=this.prompt??'';
     const resolve=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
     const returnToDraft=()=>this.open();
     try{
-      if(target===true||target==='existing')await this.host.sendToExisting(prompt,this.projectKey,resolve,returnToDraft);
+      const destination=target==='default'&&this.checkingDefault?await this.ready:undefined;
+      if(!this.opened||revision!==this.revision)return;
+      if(destination?.unavailable)throw new RequestDeliveryError(destination.detail??'This conversation is unavailable. Choose another thread.',false);
+      this.close();
+      if(target==='existing')await this.host.sendToExisting(prompt,this.projectKey,resolve,returnToDraft);
       else if(target==='new')await this.host.sendToNew(prompt,this.projectKey,resolve);
-      else await this.host.sendChat(prompt,this.projectKey,resolve);
+      else await this.host.sendChat(prompt,this.projectKey,resolve,undefined,destination);
     }catch(error){
       if(error instanceof ProjectCreationCancelled)return;
       logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});
       new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
-      if(!(error instanceof RequestDeliveryError&&error.requestSaved))this.open();
-    }finally{this.choosing=false;this.actions.setDisabled(Boolean(this.host.busy));}
+      if(!this.opened&&!(error instanceof RequestDeliveryError&&error.requestSaved))this.open();
+    }finally{this.choosing=false;this.actions.setDisabled(Boolean(this.host.busy));if(this.defaultButton)this.defaultButton.disabled=Boolean(this.host.busy||this.defaultDisabled);}
   }
 }
 
 /** Both entry points preserve the note captured when the send was opened. */
 export async function openChatFlow(app:App,host:ChatHost,prompt?:string):Promise<void>{
   if(prompt!==undefined&&!prompt.trim())return;
-  new SendDestinationModal(app,host,prompt).open();
+  const modal=new SendDestinationModal(app,host,prompt);modal.open();await modal.ready;
 }
 export function openNoteSendFlow(app:App,host:ChatHost):void{
   new SendDestinationModal(app,host,'').open();
