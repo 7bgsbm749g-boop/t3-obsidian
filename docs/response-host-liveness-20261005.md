@@ -78,3 +78,28 @@ its saved prompt. Preserve its immutable failure result and the purchase note.
 No purchase, KeePass unlock or other purchase-workflow action is authorized here.
 Native mobile and desktop core Sync coverage remain separate from the VPS's
 real desktop and official Headless Sync validation.
+
+Live verification on the final 2.31.29 release acknowledged synthetic command
+`d678f292-c368-43c4-8740-9609021ba3fa`, with thread
+`42a35d62-854d-5e35-8b89-120dcae7d0ca`, user message
+`332f6697-6822-5c7d-b6e1-b5dbe6a16914` and binding
+`cbcdceb6-2491-53e1-b60a-25092d71443c`. The actual editing pane displayed BEGIN
+and MIDDLE output. Its guarded mid-response `app:reload` changed the loaded
+client instance, and the same response caught up and completed. Canonical history
+contains one source/user message, three assistant messages and one final token.
+Replaying the immutable command returned its identical result. Lease completion,
+cleanup, materialization hash, saved note hash and the native Completed view agree.
+The final suite passed 759 TypeScript tests and 11 Python tests. Source commits
+are `9e134c9` (authority) and `8c34b1d` (durable cursor correction).
+
+The purchase recovered all six original assistant messages but remains explicitly
+waiting for two exact answer bindings. Its recovery cursor is 193710 and its note
+remains the original 205 bytes and SHA-256 `4a93d9706d5568f4c8314414acfa1d4656823ef3a492aeee6550980dc4dac3bb`.
+The original failed command/result bytes remain unchanged, and an authenticated
+lookup confirms its proposed thread was never dispatched.
+
+An initial synthetic preview-to-editing transition exposed a separate stale
+native pane conflict. The reload guard refused to proceed; closing only that
+synthetic pane followed by a guarded reload recovered its same response without
+resending. This authority patch does not change native mode switching. Subsequent
+stable editing-pane sends, streaming and guarded mid-response reloads passed.
