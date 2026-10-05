@@ -58,5 +58,27 @@ failed-save rollback, mirrored/concurrent imports, retry after failure, empty
 documents, exact binary reads, size limits, absolute vault links, sandbox/line
 references, and remote binary rejection. The reviewed build passed with all
 818 TypeScript tests and 11 Python tests. The immutable release, fresh official
-Sync scan, and real QLO2 smoke are required before delivery is considered
-complete. Native mobile rendering is not covered by the VPS smoke.
+Sync scan, and real QLO2 smoke were completed for **2.32.0**.
+
+The live VPS client received the release through the supported QLO2 deployment
+and fresh official Sync scan, then ran Obsidian's guarded app reload. The new
+client reported loaded version `2.32.0`. Native settings controls saved separate
+vault image/document locations and separate linked-folder subfolders. The
+project folder picker offered only descendants of that linked folder.
+
+Two bounded real sends verified project-scoped and unlinked vault-scoped
+destinations. PNG, ZIP, text, and zero-byte text imports all matched their
+original bytes; two project response destinations shared four files. The real
+editor rendered the image and ZIP/text/empty file links in both notes. A
+historical response was reattached to a temporary note and recovered the
+previously missed 2.30.3 smoke ZIP, matching all 1,778,376 original bytes. The
+original settled note was unchanged.
+
+Temporary notes, imported fixtures, and the temporary folder link were removed
+after retaining evidence outside the vault. General defaults, original folder
+links, original active note, and all original panes were restored and checked.
+Evidence is retained under
+`/home/ubuntu/backups/send-to-t3-code/live-smoke/t3-files-20261005-4cf71bd0`,
+with an immutable copy recorded in the release smoke receipt. Native mobile
+rendering and binary imports from a different computer are not covered by this
+VPS smoke; unsupported remote binary files still require a T3 download route.
