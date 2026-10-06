@@ -36,7 +36,9 @@ same-note binding followed by a valid checked commit.
 
 Private diagnostic and validation evidence is retained outside the vault at
 `/home/ubuntu/backups/send-to-t3-code/investigations/direct-stream-20261006`.
-The complete suite passed: 843 TypeScript tests and 11 Python tests. The
+The complete suite passed: 843 TypeScript tests and 11 Python tests for the
+streaming change, and 844 TypeScript tests and 11 Python tests after integration
+with the concurrent Codebase change. The
 isolated native fixture passed in two real Obsidian panes in Live Preview,
 Reading view and Source mode, with host migration still pending and no
 generated body saved to disk. It also passed delayed final adoption. Its
@@ -44,5 +46,29 @@ screenshots and result are retained at
 `/home/ubuntu/backups/send-to-t3-code/investigations/direct-stream-native-20261006-03`.
 This fixture uses synthetic stream and host data; it does not prove real Sync
 transport or native mobile behavior.
-Release and real-client verification must be recorded in the immutable release
-receipt. Native mobile behavior requires a separate device test.
+
+The source change is committed as `3d33279`. The supported release path included
+it in 2.33.1, then in 2.33.2 with the concurrent Codebase fixes. The 2.33.2
+deployment receipt verifies the immutable runtime artifacts, settings preservation
+during installation, and the fresh Obsidian Sync scan. A real QLO2 client used
+Obsidian's Reload app without saving command; a fresh client acknowledgement
+reported loaded version 2.33.2 and a new instance ID.
+
+Bounded real T3 deliveries completed on both releases. The 2.33.2 delivery
+produced the expected progress and final messages. Its final reply was visible
+in the native editor. The saved document matched both the host delivery hash
+and the immutable commit proof; it retained the prompt and removed the active
+response anchors. Both temporary notes were removed after their saved results
+and proofs were retained outside the vault. No existing user note was manually
+edited. The real initial progress screenshot was missed while another task
+used the same client; the native migration fixture supplies the pre-acceptance
+display evidence, separately from the real delivery evidence.
+
+The immutable completed receipt is
+`/home/ubuntu/backups/send-to-t3-code/releases/2.33.2/smoke-vps-qlo2-direct-stream.json`.
+Its evidence is
+`/home/ubuntu/backups/send-to-t3-code/releases/2.33.2/smoke-vps-qlo2-direct-stream-evidence.json`.
+The final native screenshot is
+`/home/ubuntu/backups/send-to-t3-code/investigations/direct-stream-20261006/qlo2-final-visible-2.33.2.png`.
+This does not prove first-message latency across real desktop Sync or native
+iPhone/Android behavior. Native mobile behavior requires a separate device test.
