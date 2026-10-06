@@ -52,6 +52,7 @@ import {deviceNoteIO} from './inline-note-io';
 import {projectReplyReference as resolveReplyReference} from './project-reference';
 import {type CodebaseState,CodebaseBridge} from './codebase-native';
 import {codebaseTransport} from './codebase-transport';
+import {changeCodebaseProjectLinks} from './codebase-core';
 import {loadReplyFolders,type ReplyFolders} from './reply-locations';
 import {InlineChatManager,captureEditorSelection,type InlineJob} from './inline-chat';
 import {handoffInline,hostedPaths,type HostedInlineRequest,type InlineHostTarget,type InlineFiles} from './hosted-inline';
@@ -194,7 +195,7 @@ export default class SendToT3 extends Plugin {
     this.codebase=new CodebaseBridge(this.app,this,codebaseTransport(async(environmentId,reason)=>{
       if(!Platform.isMobile){try{if(environmentId===await this.localInlineEnvironment())return (await import('./desktop')).desktopThreadAccess({...this.settings.connection,host:'local'});}catch{/* Remote paired access remains available when local discovery fails. */}}
       return this.inlineThreadAccess(environmentId,reason==='auth-rejected');
-    }),()=>this.settings.folderLinks.map(link=>({...link,environmentId:link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??this.eventLocalEnvironmentId})),this.settings.vaultId,{load:()=>this.settings.codebase,save:async state=>{this.settings.codebase=state;await this.save();}});
+    }),()=>this.settings.folderLinks.map(link=>({...link,environmentId:link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??this.eventLocalEnvironmentId})),this.settings.vaultId,{load:()=>this.settings.codebase,save:async state=>{this.settings.codebase=state;await this.save();},projectChanged:async(scope,change)=>{await this.updateCodebaseProjectLinks(scope,change);}});
     await this.codebase.install();
     }
     this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>nativeResponses(this.app).receive(record,proof),receiveDirect:update=>nativeResponses(this.app).stream(update),receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
@@ -1607,6 +1608,12 @@ export default class SendToT3 extends Plugin {
     this.settings.folderLinks=upsertFolderLink(previous,verified??{id:existing?.id??randomId(),folderPath:folder.path,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self,environmentId:this.connection(project).environmentId??await this.localInlineEnvironment(),vaultId:this.settings.vaultId,...(existing?.replyFolders?{replyFolders:existing.replyFolders}:{})});
     try{await this.save();this.refreshFolderIndicators();}catch(error){this.settings.folderLinks=previous;this.refreshFolderIndicators();throw error;}
     new Notice(`${folder.path} linked to ${projectLabel(project)}.`);
+  }
+  private async updateCodebaseProjectLinks(scope:import('./codebase-core').CodebaseScope,change:{title?:string;deleted?:boolean}){
+    if(!this.eventLocalEnvironmentId&&!Platform.isMobile)this.eventLocalEnvironmentId=await this.localInlineEnvironment();
+    const previous=this.settings.folderLinks;
+    this.settings.folderLinks=changeCodebaseProjectLinks(previous,scope,change,link=>link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??(!link.connectionId||link.connectionId==='local'?this.eventLocalEnvironmentId:undefined));
+    try{await this.save();this.refreshFolderIndicators();this.refreshProjectsInBackground(true);}catch(error){this.settings.folderLinks=previous;this.refreshFolderIndicators();throw Error('The project changed in T3, but its folder links could not be saved. The link update will be tried again after reload.');}
   }
   async unlinkFolder(path:string){
     const previous=this.settings.folderLinks;

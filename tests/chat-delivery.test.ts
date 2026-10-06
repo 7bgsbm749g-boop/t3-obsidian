@@ -1776,7 +1776,8 @@ for(const picker of ['project','existing'])test(`an override preserves the captu
     const chooser=h.modals.at(-1);h.setActiveNote('Notes/Other.md');opened.editor.getSelection=()=> 'Tail';opened.editor.getCursor=()=>opened.editor.offsetToPos(opened.value.length);
     if(picker==='project'){chooser.onChooseItem(chooser.getItems().find((item:any)=>item.key==='vault:root'));await destination.choose('new');}else await chooser.onChooseItem(chooser.getItems()[0]);
     const sent=h.commands.find(command=>command.type==='thread.turn.start');assert.ok(sent);assert.match(sent.message.text,/^Original selection/);assert.match(sent.message.text,/Notes\/Original.md/);assert.doesNotMatch(sent.message.text,/Other.md/);
-    assert.match(opened.value,/Original selection\n[\s\S]*t3-inline:start:[\s\S]*Tail/);
+    // A completed synthetic reply can settle before the picker returns.
+    assert.match(opened.value,/^Original selection\n[\s\S]*(?:t3-inline:start:|> Inline reply from T3\.)[\s\S]*Tail$/);
   }finally{h.plugin.onunload();}
 });
 

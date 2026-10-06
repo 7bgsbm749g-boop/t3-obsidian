@@ -32,12 +32,27 @@ export function codebaseTransport(createAccess:(environmentId:string,reason?:Thr
   }
   async function catalog(environmentId:string,fresh=false){
     const cached=catalogs.get(environmentId);if(!fresh&&cached&&now()-cached.at<15000)return cached.value;
-    const pending=catalogPending.get(environmentId);if(pending)return pending;
+    const pending=catalogPending.get(environmentId);if(pending){if(!fresh)return pending;try{await pending;}catch{}if(stopped)throw Error('The project connection is stopped.');}
     const work=measured('catalog',async()=>{const borrowed=await bounded(access.get(environmentId)),value=await bounded(borrowed.api('/api/orchestration/shell'));if(stopped)throw Error('The project connection is stopped.');catalogs.set(environmentId,{value,at:now()});return value;});
     catalogPending.set(environmentId,work);try{return await work;}finally{if(catalogPending.get(environmentId)===work)catalogPending.delete(environmentId);}
   }
-  async function verify(scope:CodebaseScope,fresh=false){const shell=await catalog(scope.environmentId,fresh),project=shell.projects?.find((p:any)=>p.id===scope.projectId),thread=scope.threadId?shell.threads?.find((t:any)=>t.id===scope.threadId&&t.projectId===scope.projectId):undefined;if(!project||scope.threadId&&!thread||(thread?.worktreePath??project.workspaceRoot)!==scope.root)throw Error('The project workspace changed or is unavailable. Refresh its folder link before opening files.');}
+  async function verify(scope:CodebaseScope,fresh=false,allowMissing=false){const shell=await catalog(scope.environmentId,fresh),project=shell.projects?.find((p:any)=>p.id===scope.projectId),thread=scope.threadId?shell.threads?.find((t:any)=>t.id===scope.threadId&&t.projectId===scope.projectId):undefined;if(!project&&allowMissing)return undefined;if(!project||scope.threadId&&!thread||(thread?.worktreePath??project.workspaceRoot)!==scope.root)throw Error('The project workspace changed or is unavailable. Refresh its folder link before opening files.');return project;}
   async function call(scope:CodebaseScope,tag:string,payload:unknown){return measured(tag,async()=>{const [socket]=await Promise.all([connection(scope.environmentId),verify(scope,tag==='projects.writeFile')]);return bounded(socket.rpc.call(tag,payload));});}
+  async function projectCommand(scope:CodebaseScope,change:{title:string}|{deleted:true}){
+    if(scope.threadId)throw Error('Choose the project root to change a project.');
+    const current=await verify(scope,true,'deleted' in change);
+    if('deleted' in change&&!current||'title' in change&&current?.title===change.title)return;
+    if(stopped)throw Error('The project connection is stopped.');
+    const borrowed=await bounded(access.get(scope.environmentId));
+    const command={commandId:crypto.randomUUID(),projectId:scope.projectId,...('title' in change?{type:'project.meta.update',title:change.title}:{type:'project.delete',force:true})};
+    // One attempt only. A lost reply is reconciled by the fresh project catalog.
+    let failure:unknown;
+    try{await bounded(borrowed.api('/api/orchestration/dispatch',command));}catch(error){failure=error;}
+    catalogs.delete(scope.environmentId);
+    const shell=await catalog(scope.environmentId,true),project=shell.projects?.find((p:any)=>p.id===scope.projectId);
+    const confirmed='title' in change?project?.workspaceRoot===scope.root&&project?.title===change.title:!project;
+    if(!confirmed)throw failure??Error('The project change could not be confirmed. Refresh before trying again.');
+  }
   return {
     timings,
     dispose(){stopped=true;for(const socket of sockets.values())socket.rpc.close();sockets.clear();catalogs.clear();void access.dispose();},
@@ -46,6 +61,8 @@ export function codebaseTransport(createAccess:(environmentId:string,reason?:Thr
     async search(scope,name){const result=await call(scope,'projects.searchEntries',{cwd:scope.root,query:name,limit:200,kind:'file'});if(result.truncated)throw Error('T3 returned incomplete file matches. Use Codebase view to choose the file.');return result.entries??[];},
     async read(scope,path){relativeCodebasePath(path);const result=await call(scope,'projects.readFile',{cwd:scope.root,relativePath:path});if(result.truncated||typeof result.contents!=='string'||new TextEncoder().encode(result.contents).length!==result.byteLength)throw Error('T3 cannot return the complete text file. Editing is disabled.');return result.contents;},
     async write(scope,path,contents){relativeCodebasePath(path);await call(scope,'projects.writeFile',{cwd:scope.root,relativePath:path,contents});},
-    async resource(scope,path){relativeCodebasePath(path);const result=await call(scope,'assets.createUrl',{resource:{_tag:'draft-workspace-file',cwd:scope.root,path}});if(!result.relativeUrl?.startsWith('/api/assets/'))throw Error('T3 did not return a file preview.');const socket=await connection(scope.environmentId);return {url:new URL(result.relativeUrl,socket.origin).href,expiresAt:Number(result.expiresAt)};}
+    async resource(scope,path){relativeCodebasePath(path);const result=await call(scope,'assets.createUrl',{resource:{_tag:'draft-workspace-file',cwd:scope.root,path}});if(!result.relativeUrl?.startsWith('/api/assets/'))throw Error('T3 did not return a file preview.');const socket=await connection(scope.environmentId);return {url:new URL(result.relativeUrl,socket.origin).href,expiresAt:Number(result.expiresAt)};},
+    async renameProject(scope,title){title=title.trim();if(!title||/[\x00-\x1f]/.test(title))throw Error('Enter a project name.');await projectCommand(scope,{title});},
+    async deleteProject(scope){await projectCommand(scope,{deleted:true});}
   };
 }

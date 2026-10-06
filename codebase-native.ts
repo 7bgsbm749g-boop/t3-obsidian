@@ -1,5 +1,5 @@
 import {App,EditorSuggest,type Editor,type EditorPosition,type EditorSuggestContext,ItemView,MarkdownView,Menu,Modal,Setting,Notice,TFile,TFolder,FuzzySuggestModal,WorkspaceLeaf,type Plugin} from 'obsidian';
-import {CODEBASE_PREFIX,CodebaseDocument,contextualCandidates,linkedCodebases,relativeCodebasePath,scopeKey,virtualPath,type CodebaseScope,type CodebaseIO,type CodebaseEntry} from './codebase-core';
+import {CODEBASE_PREFIX,CodebaseDocument,codebaseRootLabels,contextualCandidates,linkedCodebases,relativeCodebasePath,scopeKey,virtualPath,type CodebaseScope,type CodebaseIO,type CodebaseEntry} from './codebase-core';
 import {registerProjectReferences} from './project-reference';
 import type {FolderLink} from './folder-link';
 import {replyReferences,type ReplyReference} from './reply-assets';
@@ -10,15 +10,15 @@ import {CODEBASE_VIEW as VIEW,CodebaseView} from './codebase-view';
 import {timingSummaries} from './codebase-performance';
 export {CodebaseView} from './codebase-view';
 export interface CodebaseState {version:1;references:Record<string,SavedReference>;choices:Record<string,string>}
-export interface CodebaseStorage {load():CodebaseState|undefined;save(state:CodebaseState):Promise<void>}
+export interface CodebaseStorage {load():CodebaseState|undefined;save(state:CodebaseState):Promise<void>;projectChanged?(scope:CodebaseScope,change:{title?:string;deleted?:boolean}):Promise<void>}
 const MEDIA=/\.(?:png|jpe?g|gif|webp|svg|bmp|avif|pdf|mp[34]|wav|m4a|3gp|flac|ogg|oga|opus|webm|ogv|mov|mkv)$/i;
 export interface RegisteredFile {scope:CodebaseScope;path:string;file:TFile;document:CodebaseDocument;resource?:{url:string;expiresAt:number};preparing?:Promise<void>;text?:string}
 export interface SavedReference {scope:CodebaseScope;path:string;note:string;name:string}
 class FileChoice extends FuzzySuggestModal<RegisteredFile>{
   private settled=false;
-  constructor(app:App,private items:RegisteredFile[],private finish:(file:RegisteredFile|undefined)=>void){super(app);this.setPlaceholder('Choose the project file');}
+  constructor(app:App,private items:RegisteredFile[],private finish:(file:RegisteredFile|undefined)=>void,private title:(scope:CodebaseScope)=>string=scope=>scope.title){super(app);this.setPlaceholder('Choose the project file');}
   getItems(){return this.items;}
-  getItemText(item:RegisteredFile){return `${item.scope.title} / ${item.path}${item.scope.threadId?' (thread workspace)':''}`;}
+  getItemText(item:RegisteredFile){return `${this.title(item.scope)} / ${item.path}${item.scope.threadId?' (thread workspace)':''}`;}
   onChooseItem(item:RegisteredFile){if(!this.settled){this.settled=true;this.finish(item);}}
   onClose(){super.onClose?.();setTimeout(()=>{if(!this.settled){this.settled=true;this.finish(undefined);}},0);}
 }
@@ -42,10 +42,12 @@ export class CodebaseBridge {
   private refreshing?:Promise<void>;
   private searches=new Map<string,Promise<void>>();
   private searchAt=new Map<string,number>();
-  private viewBases=new WeakMap<MarkdownView,string>();
+  private viewBases=new WeakMap<MarkdownView,{path:string;text:string}>();
   private draftAliases:Record<string,string>;
   private chrome=new Map<any,MutationObserver>();
   private legacyPaths:Record<string,string>;
+  private recoveryNotices=new Set<string>();
+  private projectReconciliation?:Promise<void>;
   constructor(readonly app:App,private plugin:Plugin,readonly io:CodebaseIO,readonly links:()=>FolderLink[],vaultId:string,private storage?:CodebaseStorage){
     this.draftsKey=`t3-codebase-drafts:${vaultId}`;this.metadataPath=`${app.vault.configDir}/t3-code/codebase-v1.json`;
     this.drafts=app.loadLocalStorage(this.draftsKey)??{};
@@ -61,6 +63,7 @@ export class CodebaseBridge {
     this.undo.push(registerProjectReferences(this.app,(reference,request,access)=>this.reply(reference,request,access)));
     try{const saved=this.storage?.load()??JSON.parse(await this.app.vault.adapter.read(this.metadataPath));this.adopt(saved);}catch{/* First use or unavailable metadata. */}
     const vault=this.app.vault,cache=this.app.metadataCache,workspace=this.app.workspace;
+    await this.reconcileProjectChanges().catch(error=>new Notice(`T3 project changed; folder link update pending: ${error.message}`,10000));
     this.nativeSwitcher();
     this.nativeFileOpen();
     for(const method of ['getFileByPath','getAbstractFileByPath'])this.patch(vault,method,(original:any)=>(path:string)=>this.files.get(path)?.file??this.files.get(this.legacyPaths[path])?.file??this.folders.get(path)??original(path));
@@ -68,7 +71,7 @@ export class CodebaseBridge {
       const item=this.files.get(file.path);if(item){this.captureBases(item);await this.prepare(item);item.text=await item.document.read();await this.prepareEmbeds(item.text,file.path);return item.text;}
       const text=await original(file);void this.prepareEmbeds(text,file.path).then(changed=>{if(!changed)return;for(const leaf of workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===file.path)view.previewMode?.rerender(true);}});return text;
     });
-    this.patch(vault,'modify',(original:any)=>async(file:TFile,text:string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,text,options);await this.prepare(item);const before=item.document.base,peers=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===file.path);try{if(peers.some(view=>view.editor.getValue()===text&&this.viewBases.has(view)&&this.viewBases.get(view)!==before)){item.document.uncertain=true;item.document.draft=text;this.retain(file.path,text);}await item.document.save(text);}catch(error){new Notice(`${error instanceof Error?error.message:String(error)} Use Review unsaved project edit to compare versions.`,10000);throw error;}item.text=text;this.synchronizePeers(item,before,text);file.stat.mtime=Date.now();file.stat.size=new TextEncoder().encode(text).length;});
+    this.patch(vault,'modify',(original:any)=>async(file:TFile,text:string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,text,options);await this.prepare(item);const before=item.document.base,peers=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===file.path),matching=peers.filter(view=>view.editor.getValue()===text);if(text===before)return;try{if(matching.some(view=>{const basis=this.viewBase(view,item);return basis&&basis.text!==before;})){item.document.uncertain=true;item.document.draft=text;this.retain(file.path,text);}await item.document.save(text);}catch(error){new Notice(`${error instanceof Error?error.message:String(error)} Use Review unsaved project edit to compare versions.`,10000);throw error;}item.text=text;this.synchronizePeers(item,before,text);file.stat.mtime=Date.now();file.stat.size=new TextEncoder().encode(text).length;});
     this.patch(vault,'process',(original:any)=>async(file:TFile,change:(text:string)=>string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,change,options);const text=change(await vault.read(file));await vault.modify(file,text);return text;});
     this.patch(vault,'append',(original:any)=>async(file:TFile,text:string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,text,options);await vault.process(file,old=>old+text);});
     this.patch(vault,'readBinary',(original:any)=>async(file:TFile)=>{const item=this.files.get(file.path);if(!item)return original(file);await this.prepare(item);const response=await fetch(item.resource!.url,{credentials:'omit'});if(!response.ok)throw Error('The project file is unavailable.');return response.arrayBuffer();});
@@ -106,13 +109,13 @@ export class CodebaseBridge {
       if(candidates.length||link.startsWith(CODEBASE_PREFIX))return;
       return original(link,source,newLeaf,state);
     });
-    this.plugin.registerEvent(workspace.on('editor-change',(editor,view)=>{const file=view.file,item=file?this.files.get(file.path):undefined;if(!item||item.document.base===undefined)return;const text=editor.getValue();if(text!==item.document.base){const basis=this.viewBases.get(view as MarkdownView);if(basis!==undefined&&basis!==item.document.base)item.document.uncertain=true;item.document.draft=text;this.retain(item.file.path,text);}}));
-    this.plugin.registerEvent(workspace.on('file-open',file=>{this.app.workspace.iterateAllLeaves?.(leaf=>this.nativeChrome(leaf.view));const item=file?this.files.get(file.path):undefined;if(!item)return;for(const leaf of workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===file!.path&&!this.viewBases.has(view))this.viewBases.set(view,view.editor.getValue());}}));
+    this.plugin.registerEvent(workspace.on('editor-change',(editor,view)=>{const file=view.file,item=file?this.files.get(file.path):undefined;if(!item||item.document.base===undefined)return;const text=editor.getValue(),basis=this.viewBase(view as MarkdownView,item);if(!basis)return;if(text!==item.document.base){if(basis.text!==item.document.base)item.document.uncertain=true;item.document.draft=text;this.retain(item.file.path,text);}}));
+    this.plugin.registerEvent(workspace.on('file-open',file=>{this.app.workspace.iterateAllLeaves?.(leaf=>this.nativeChrome(leaf.view));const item=file?this.files.get(file.path):undefined;if(!item)return;this.captureBases(item);}));
     this.plugin.registerEditorSuggest(new CodebaseLinkSuggest(this.app,this));
     this.plugin.registerView(VIEW,leaf=>new CodebaseView(leaf,this));
     this.plugin.addCommand({id:'codebase-view',name:'Open Codebase view',callback:()=>void this.show()});
     this.plugin.addCommand({id:'review-codebase-edit',name:'Review unsaved project edit',checkCallback:checking=>{const file=workspace.getActiveViewOfType(MarkdownView)?.file,item=file?this.files.get(file.path):undefined;if(!item||this.drafts[item.file.path]===undefined)return false;if(!checking)void this.review(item).catch(error=>new Notice(error.message,10000));return true;}});
-    this.plugin.addCommand({id:'review-codebase-edits',name:'Review all unsaved project edits',checkCallback:checking=>{const items=[...this.files.values()].filter(item=>this.drafts[item.file.path]!==undefined||Object.entries(this.draftAliases).some(([old,path])=>path===item.file.path&&this.drafts[old]!==undefined));if(!items.length)return false;if(!checking)new FileChoice(this.app,items,item=>{if(item)void this.review(item).catch(error=>new Notice(error.message));}).open();return true;}});
+    this.plugin.addCommand({id:'review-codebase-edits',name:'Review all unsaved project edits',checkCallback:checking=>{const items=[...this.files.values()].filter(item=>this.drafts[item.file.path]!==undefined||Object.entries(this.draftAliases).some(([old,path])=>path===item.file.path&&this.drafts[old]!==undefined));if(!items.length)return false;if(!checking)new FileChoice(this.app,items,item=>{if(item)void this.review(item).catch(error=>new Notice(error.message));},scope=>this.scopeTitle(scope)).open();return true;}});
     this.plugin.addCommand({id:'refresh-codebase',name:'Refresh Codebase view',callback:()=>void this.refresh()});
     this.plugin.addCommand({id:'copy-codebase-performance',name:'Copy Codebase performance report',callback:()=>{void navigator.clipboard.writeText(JSON.stringify(this.performanceReport(),null,2)).then(()=>new Notice('Codebase performance report copied.')).catch(error=>new Notice(String(error)));}});
     this.plugin.registerInterval(window.setInterval(()=>{void this.refresh(false).catch(()=>{});},15000));
@@ -133,16 +136,29 @@ export class CodebaseBridge {
 
   private patch(target:any,key:string,wrap:(original:any)=>any){if(typeof target[key]!=='function')return;const original=target[key],replacement=wrap(original.bind(target));target[key]=replacement;this.undo.push(()=>{if(target===this.app.vault.adapter)return;/* Keep a fail-closed prefix guard while old native leaves unload. */if(target[key]===replacement)target[key]=original;});}
   private allowed(scope:CodebaseScope){return this.scopes().some(s=>s.environmentId===scope.environmentId&&s.projectId===scope.projectId&&(!!scope.threadId||s.root===scope.root));}
-  private captureBases(item:RegisteredFile){if(item.document.base===undefined)return;for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===item.file.path&&!this.viewBases.has(view)&&view.editor.getValue()===item.document.base)this.viewBases.set(view,item.document.base);}}
-  private synchronizePeers(item:RegisteredFile,before:string|undefined,text:string){for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path!==item.file.path)continue;const value=view.editor.getValue();if(value===before||value===text){this.viewBases.set(view,text);if(value!==text)view.setViewData(text,false);}}}
+  private viewBase(view:MarkdownView,item:RegisteredFile){const basis=this.viewBases.get(view);return basis?.path===item.file.path?basis:undefined;}
+  private setViewBase(view:MarkdownView,item:RegisteredFile,text:string){this.viewBases.set(view,{path:item.file.path,text});}
+  private captureBases(item:RegisteredFile){if(item.document.base===undefined)return;for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===item.file.path&&(!this.viewBase(view,item)||(view as MarkdownView&{lastSavedData?:string}).lastSavedData===item.document.base)&&view.editor.getValue()===item.document.base)this.setViewBase(view,item,item.document.base);}}
+  private savedViewText(view:MarkdownView,item:RegisteredFile,before:string|undefined,text:string){
+    if(view.file?.path!==item.file.path)return;
+    const value=view.editor.getValue();if(value!==before&&value!==text)return;
+    const native=view as MarkdownView&{lastSavedData?:string;saving?:unknown};
+    const canSync='data' in native&&'lastSavedData' in native&&!native.saving&&(native.data===before||native.data===text)&&(native.lastSavedData===before||native.lastSavedData===text);
+    view.setViewData(text,false);
+    // Mirror the saved buffer only for this confirmed, unchanged native file.
+    // Keep in-flight saves and unexpected/dirty native state under core control.
+    if(canSync&&view.file?.path===item.file.path&&view.editor.getValue()===text&&(typeof view.getViewData!=='function'||view.getViewData()===text)&&!native.saving&&(native.lastSavedData===before||native.lastSavedData===text)){native.data=text;native.lastSavedData=text;}
+  }
+  private synchronizePeers(item:RegisteredFile,before:string|undefined,text:string){for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path!==item.file.path)continue;const value=view.editor.getValue();if(value===before||value===text){this.setViewBase(view,item,text);if(value!==text)this.savedViewText(view,item,before,text);}}}
   private nativeChrome(view:any){
     const item=view.file?this.files.get(view.file.path):undefined,header=view.containerEl?.querySelector('.view-header-title-container');
     this.chrome.get(view)?.disconnect();this.chrome.delete(view);if(!header)return;
     if(!item){for(const el of header.querySelectorAll('[data-t3-codebase-hidden]'))el.removeAttribute('data-t3-codebase-hidden');return;}
-    const label=()=>{if(this.stopped||view.file?.path!==item.file.path)return;const crumbs=Array.from(header.querySelectorAll('.view-header-breadcrumb')) as HTMLElement[];if(crumbs.length<5)return;for(const el of Array.from(header.querySelector('.view-header-title-parent')?.children??[]) as HTMLElement[])if(crumbs.indexOf(el)>=0&&crumbs.indexOf(el)<4||el.classList.contains('view-header-breadcrumb-separator')&&Array.from(el.parentElement!.children).indexOf(el)<8)el.setAttribute('data-t3-codebase-hidden','true');const project=crumbs[4];if(project.textContent!==item.scope.title)project.setText(item.scope.title);project.setAttribute('aria-label',item.scope.title);project.draggable=false;};
+    const label=()=>{if(this.stopped||view.file?.path!==item.file.path)return;const crumbs=Array.from(header.querySelectorAll('.view-header-breadcrumb')) as HTMLElement[];if(crumbs.length<5)return;for(const el of Array.from(header.querySelector('.view-header-title-parent')?.children??[]) as HTMLElement[])if(crumbs.indexOf(el)>=0&&crumbs.indexOf(el)<4||el.classList.contains('view-header-breadcrumb-separator')&&Array.from(el.parentElement!.children).indexOf(el)<8)el.setAttribute('data-t3-codebase-hidden','true');const project=crumbs[4];const title=this.scopeTitle(item.scope);if(project.textContent!==title)project.setText(title);project.setAttribute('aria-label',title);project.draggable=false;};
     label();if(typeof MutationObserver!=='undefined'){const observer=new MutationObserver(label);observer.observe(header,{childList:true,subtree:true});this.chrome.set(view,observer);}
   }
   scopes(){return linkedCodebases(this.links());}
+  scopeTitle(scope:CodebaseScope){return scope.threadId?scope.title:codebaseRootLabels(this.scopes()).get(scopeKey(scope))??scope.title;}
   /** On demand, durations/counts only. No journal, content, identities or paths. */
   performanceReport(){
     return {version:1,release:this.plugin.manifest.version,scopeCount:this.scopes().length,views:[...this.views].map(view=>({rowCount:view.rowCount,synchronousCpu:timingSummaries(view.timings,['render','reveal'])})),transport:timingSummaries(this.io.timings??[],['connect','catalog','projects.listEntries','projects.searchEntries','projects.readFile','projects.writeFile','assets.createUrl'],200)};
@@ -154,7 +170,7 @@ export class CodebaseBridge {
     const own=Object.getOwnPropertyDescriptor(prototype,'renderSuggestion'),original=prototype.renderSuggestion,bridge=this;
     const replacement=function(this:any,suggestion:any,el:HTMLElement){
       const result=original.call(this,suggestion,el),item=!bridge.stopped&&suggestion?.type==='file'&&this.app===bridge.app?bridge.files.get(suggestion.file?.path):undefined;
-      if(item){const title=el.querySelector<HTMLElement>('.suggestion-title'),content=el.querySelector<HTMLElement>('.suggestion-content');title?.setText(item.file.extension==='md'?item.file.basename:item.file.name);if(content){const note=content.querySelector<HTMLElement>('.suggestion-note')??content.createDiv({cls:'suggestion-note'}),folder=item.path.split('/').slice(0,-1).join('/');note.setText(item.scope.title+(folder?' / '+folder:''));}}
+      if(item){const title=el.querySelector<HTMLElement>('.suggestion-title'),content=el.querySelector<HTMLElement>('.suggestion-content');title?.setText(item.file.extension==='md'?item.file.basename:item.file.name);if(content){const note=content.querySelector<HTMLElement>('.suggestion-note')??content.createDiv({cls:'suggestion-note'}),folder=item.path.split('/').slice(0,-1).join('/');note.setText(bridge.scopeTitle(item.scope)+(folder?' / '+folder:''));}}
       return result;
     };
     try{Object.defineProperty(prototype,'renderSuggestion',{configurable:true,writable:true,value:replacement});}catch{return;}
@@ -184,11 +200,11 @@ export class CodebaseBridge {
   }
   private pin(item:RegisteredFile,source=''){this.records.set(item.file.path,{scope:item.scope,path:item.path,note:source||this.records.get(item.file.path)?.note||'',name:item.file.name});clearTimeout(this.persistTimer);this.persistTimer=setTimeout(()=>{this.persistTimer=undefined;void this.persist().catch(()=>{});},250);}
   remember(file:TFile,source:string){const item=this.files.get(file.path);if(item){this.choices[JSON.stringify([source,file.name])]=file.path;this.pin(item,source);}}
-  label(file:TFile){const item=this.files.get(file.path);return item?`${item.scope.title} / ${item.path}`:file.path;}
+  label(file:TFile){const item=this.files.get(file.path);return item?`${this.scopeTitle(item.scope)} / ${item.path}`:file.path;}
   candidates(name:string,source:string){return contextualCandidates([...this.files.values()].filter(item=>this.allowed(item.scope)),name,source,this.links());}
   async suggestions(query:string,source:string){if(query.length>2)try{await this.search(query,source);}catch{}const linked=this.links().filter(l=>source.startsWith(l.folderPath+'/')).sort((a,b)=>b.folderPath.length-a.folderPath.length)[0];return [...this.files.values()].filter(f=>this.allowed(f.scope)&&(!linked||f.scope.projectId===linked.projectId&&f.scope.environmentId===linked.environmentId)&&f.file.name.toLowerCase().includes(query.toLowerCase())).slice(0,100);}
   private resolve(name:string,source:string){const sourceItem=this.files.get(source);if(sourceItem){const clean=name.split('#')[0];if(!clean)return sourceItem;if(clean.includes('/')){const parts=sourceItem.path.split('/').slice(0,-1);for(const part of clean.split('/')){if(part==='.')continue;if(part==='..'){if(!parts.length)return undefined;parts.pop();}else parts.push(part);}const relative=this.files.get(virtualPath(sourceItem.scope,parts.join('/')));if(relative)return relative;}}const own=this.files.get(name.split('#')[0]);if(own&&this.allowed(own.scope))return own;const remembered=this.choices[JSON.stringify([source,name.split('#')[0]])];if(remembered&&this.files.has(remembered)&&this.allowed(this.files.get(remembered)!.scope))return this.files.get(remembered);const sourceFile=this.files.get(source);const candidates=contextualCandidates([...this.files.values()].filter(item=>this.allowed(item.scope)),name,source,this.links());if(sourceFile){const same=candidates.filter(f=>scopeKey(f.scope)===scopeKey(sourceFile.scope));if(same.length===1)return same[0];}return candidates.length===1?candidates[0]:undefined;}
-  private choose(items:RegisteredFile[],name:string,source:string){return new Promise<RegisteredFile|undefined>(resolve=>{new FileChoice(this.app,items,item=>{if(item){this.choices[JSON.stringify([source,name.split('#')[0]])]=item.file.path;void this.persist();}resolve(item);}).open();});}
+  private choose(items:RegisteredFile[],name:string,source:string){return new Promise<RegisteredFile|undefined>(resolve=>{new FileChoice(this.app,items,item=>{if(item){this.choices[JSON.stringify([source,name.split('#')[0]])]=item.file.path;void this.persist();}resolve(item);},scope=>this.scopeTitle(scope)).open();});}
   private persist(){this.persistence=this.persistence.catch(()=>{}).then(async()=>{const state:CodebaseState={version:1,references:Object.fromEntries(this.records),choices:this.choices};if(this.storage){if(JSON.stringify(state)!==JSON.stringify(this.storage.load()))await this.storage.save(state);return;}const adapter=this.app.vault.adapter,dir=this.metadataPath.slice(0,this.metadataPath.lastIndexOf('/'));if(!await adapter.exists(dir))await adapter.mkdir(dir);await adapter.write(this.metadataPath,JSON.stringify(state));});return this.persistence;}
 
   async search(name:string,source:string){
@@ -228,9 +244,9 @@ export class CodebaseBridge {
     const text=await this.app.vault.read(item.file);item.text=text;
     await leaf.setViewState({type:'markdown',state:{...state?.state,file:item.file.path,mode:'source',source:item.file.extension!=='md'},active:state?.active??true,group:state?.group},state?.eState);
     if(!(leaf.view instanceof MarkdownView))throw Error('Obsidian could not open its native editor.');
-    this.viewBases.set(leaf.view,item.document.base!);
+    this.setViewBase(leaf.view,item,item.document.base!);
     this.nativeChrome(leaf.view);
-    const draft=this.drafts[item.file.path];if(draft!==undefined&&draft!==text){new Notice('A saved local edit is available. It has not been sent to T3.');leaf.view.editor.setValue(draft);}
+    const draft=this.drafts[item.file.path];if(draft!==undefined&&draft!==text&&!this.recoveryNotices.has(item.file.path)){this.recoveryNotices.add(item.file.path);new Notice('An unsaved project edit is kept on this device. Use Review unsaved project edit to compare and recover it.',10000);}
     if(subpath)await leaf.view.setState({...leaf.view.getState(),subpath},{history:true});
   }
   async reply(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess){
@@ -259,6 +275,49 @@ export class CodebaseBridge {
     modal.open();return modal;
   }
 
+  projectMenu(scope:CodebaseScope,event:MouseEvent){
+    if(scope.threadId)return;
+    const menu=new Menu();
+    menu.addItem(item=>item.setTitle('Rename project…').setIcon('pencil').setDisabled(!this.io.renameProject||!this.storage?.projectChanged).onClick(()=>this.projectModal(scope,false)));
+    menu.addItem(item=>item.setTitle('Delete project…').setIcon('trash').setDisabled(!this.io.deleteProject||!this.storage?.projectChanged).onClick(()=>this.projectModal(scope,true)));
+    menu.showAtMouseEvent(event);
+  }
+  private projectModal(scope:CodebaseScope,deleting:boolean){
+    const modal=new Modal(this.app);modal.titleEl.setText(deleting?'Delete T3 project':'Rename T3 project');
+    modal.contentEl.createEl('p',{text:this.scopeTitle(scope)});modal.contentEl.createEl('code',{text:scope.root});
+    let title=scope.title,applied=false;
+    if(deleting)modal.contentEl.createEl('p',{text:'This removes the project and its threads from T3. The workspace folder and vault notes are kept. Unsaved project edits remain on this device.'});
+    else new Setting(modal.contentEl).setName('Project name').addText(input=>input.setValue(title).onChange(value=>{title=value;confirm.setDisabled(!title.trim()||title.trim()===scope.title);}));
+    const error=modal.contentEl.createEl('p',{attr:{role:'status'}});let confirm:any;
+    new Setting(modal.contentEl).addButton(button=>button.setButtonText('Cancel').onClick(()=>modal.close())).addButton(button=>{
+      confirm=button;button.setButtonText(deleting?'Delete project':'Rename');if(deleting)button.setWarning();else button.setCta().setDisabled(true);
+      button.onClick(async()=>{button.setDisabled(true);error.setText('');try{
+        if(!applied&&!this.allowed(scope))throw Error('This project is no longer linked to the vault.');
+        if(!applied){
+          if(deleting)await this.io.deleteProject!(scope);else await this.io.renameProject!(scope,title.trim());
+          const change=deleting?{deleted:true}:{title:title.trim()};
+          const pending=this.local('project-changes')??[];pending.push({id:crypto.randomUUID(),scope,change});this.local('project-changes',pending);applied=true;
+        }
+        await this.reconcileProjectChanges();modal.close();this.renderViews();this.app.workspace.iterateAllLeaves?.(leaf=>this.nativeChrome(leaf.view));
+      }catch(failure){error.setText(failure instanceof Error?failure.message:String(failure));if(applied)button.setButtonText('Retry folder link update');button.setDisabled(false);}});
+    });modal.open();return modal;
+  }
+  private async reconcileProjectChanges(){
+    if(!this.storage?.projectChanged)return;
+    if(this.projectReconciliation)return this.projectReconciliation;
+    const work=(async()=>{
+      while(!this.stopped){
+        const pending=this.local('project-changes')??[],first=pending[0];if(!first)return;
+        if(!first.id){first.id=crypto.randomUUID();this.local('project-changes',pending);}
+        await this.storage!.projectChanged!(first.scope,first.change);
+        // Another confirmed action may have appended while persistence waited.
+        // Remove this exact record from the current queue, never an old snapshot.
+        this.local('project-changes',(this.local('project-changes')??[]).filter((entry:any)=>entry.id!==first.id));
+      }
+    })();this.projectReconciliation=work;
+    try{await work;}finally{if(this.projectReconciliation===work)this.projectReconciliation=undefined;}
+  }
+
   menu(item:RegisteredFile,event:MouseEvent){const menu=new Menu();menu.addItem(entry=>entry.setTitle('Open in new tab').setIcon('file').onClick(()=>{void this.open(item,this.app.workspace.getLeaf('tab')).catch(error=>new Notice(error.message));}));menu.addItem(entry=>entry.setTitle('Copy link').setIcon('link').onClick(()=>{void navigator.clipboard.writeText(`[[${item.file.name}]]`);}));menu.addItem(entry=>entry.setTitle('Insert link').setIcon('link').onClick(()=>{const view=this.app.workspace.getActiveViewOfType(MarkdownView);if(view?.file){this.choices[JSON.stringify([view.file.path,item.file.name])]=item.file.path;view.editor.replaceSelection(`[[${item.file.name}]]`);this.remember(item.file,view.file.path);}}));menu.showAtMouseEvent(event);}
   async show(active=true){let leaf=this.app.workspace.getLeavesOfType(VIEW)[0];if(!leaf){leaf=this.app.workspace.getLeftLeaf(false)!;await leaf.setViewState({type:VIEW,active});}if(active)await this.app.workspace.revealLeaf(leaf);}
   attach(view:CodebaseView){this.views.add(view);}detach(view:CodebaseView){this.views.delete(view);}
@@ -268,9 +327,9 @@ export class CodebaseBridge {
       await Promise.all([...this.views].filter(view=>force||view.visible()).map(view=>view.refresh(force)));
       const groups=new Map<RegisteredFile,MarkdownView[]>();
       for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView,item=view.file?this.files.get(view.file.path):undefined;if(item){const views=groups.get(item)??[];views.push(view);groups.set(item,views);}}
-      await Promise.all([...groups].map(async([item,views])=>{const base=item.document.base;if(base===undefined||this.drafts[item.file.path]!==undefined||views.some(view=>view.editor.getValue()!==base))return;
-        try{const text=await this.io.read(item.scope,item.path);if(this.stopped||this.drafts[item.file.path]!==undefined||item.document.base!==base||views.some(view=>view.editor.getValue()!==base))return;
-          if(text!==base){item.document.base=text;item.text=text;for(const view of views){this.viewBases.set(view,text);view.setViewData(text,false);}}
+      await Promise.all([...groups].map(async([item,views])=>{const base=item.document.base;if(base===undefined||this.drafts[item.file.path]!==undefined||views.some(view=>view.file?.path!==item.file.path||view.editor.getValue()!==base))return;
+        try{const text=await this.io.read(item.scope,item.path);if(this.stopped||this.drafts[item.file.path]!==undefined||item.document.base!==base||views.some(view=>view.file?.path!==item.file.path||view.editor.getValue()!==base))return;
+          if(text!==base){item.document.base=text;item.text=text;for(const view of views){this.setViewBase(view,item,text);this.savedViewText(view,item,base,text);}}
         }catch{/* Keep both the native editors and cached tree when offline. */}
       }));
     })();this.refreshing=work;void work.finally(()=>{if(this.refreshing===work)this.refreshing=undefined;}).catch(()=>{});return work;
