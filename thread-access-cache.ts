@@ -42,7 +42,6 @@ export class ThreadAccessCache {
       const entry:Entry={access,expires,borrowed:{
         get origin(){return access.origin;},
         api:(path,payload)=>this.request(environmentId,path,payload),
-        ...(access.readReplyFile?{readReplyFile:(source:string,projectId:string)=>this.perform(environmentId,current=>current.readReplyFile!(source,projectId),true)}:{}),
         // Stop helpers own their borrow, never the host's underlying session.
         close:reason=>access.trace?.('borrow-released',reason??'caller-closed'),
       }};

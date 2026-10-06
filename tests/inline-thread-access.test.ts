@@ -9,7 +9,7 @@ async function fixture(isMobile=false){
   let localChecks=0;
   class Base{}
   const module={exports:{} as any};
-  const api={Plugin:Base,Modal:Base,FuzzySuggestModal:Base,PluginSettingTab:Base,Notice:Base,Platform:{isMobile}};
+  const api={Plugin:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,Platform:{isMobile}};
   runInNewContext(await readFile('dist/main.js','utf8'),{
     module,exports:module.exports,require:(name:string)=>{
       assert.equal(name,'obsidian','Remote access must not load local desktop dependencies');return api;

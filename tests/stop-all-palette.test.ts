@@ -18,7 +18,7 @@ test('mobile palette stop all works without selection, while sending is busy, an
     async saveData(){}
     addCommand(command:any){commands.set(command.id,command);}addSettingTab(){}registerEvent(){}
   }
-  const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,PluginSettingTab:Base,Notice:class{constructor(text:string){notices.push(text);}}};
+  const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:class{constructor(text:string){notices.push(text);}}};
   const module={exports:{} as any};
   runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout,clearTimeout,console},{timeout:5000});
   const plugin=new module.exports.default();await plugin.onload();

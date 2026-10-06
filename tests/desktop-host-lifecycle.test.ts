@@ -17,7 +17,7 @@ import {responseAnchor} from '../native-response-projection';
 async function fixture(){
   const root=await mkdtemp(join(tmpdir(),'t3-host-lifecycle-')),module={exports:{} as any};
   class Base{}
-  const obsidian={Plugin:Base,Modal:Base,FuzzySuggestModal:Base,PluginSettingTab:Base,Notice:Base,Platform:{isMobile:false}},require=createRequire(import.meta.url);
+  const obsidian={Plugin:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,Platform:{isMobile:false}},require=createRequire(import.meta.url);
   runInNewContext(await readFile(process.env.T3_HOST_LIFECYCLE_BUNDLE??'dist/main.js','utf8'),{module,exports:module.exports,require:(id:string)=>id==='obsidian'?obsidian:require(id),global:{},process,console,Buffer,URL,TextEncoder,TextDecoder,AbortController,crypto:webcrypto,performance,structuredClone,setTimeout,clearTimeout,setInterval,clearInterval,setImmediate,document:{createElement:()=>({})}});
   const plugin=new module.exports.default(),directory='.obsidian/t3-code/inline/v1',vaultId=randomUUID();
   plugin.app={workspace:{getLeavesOfType:()=>[]},vault:{configDir:'.obsidian',adapter:{getFullPath:()=>root},getFileByPath:()=>undefined}};

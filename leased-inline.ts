@@ -30,7 +30,7 @@ export interface DeviceInlineIO {
   isOpen(path:string):boolean;
   isSaved?(path:string,hash:string,proof?:{id:string;body:string;cleaned?:boolean}):Promise<boolean>;
   updateNote(path:string,change:(current:string)=>string,allowed:()=>boolean):Promise<string|undefined>;
-  importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
+  resolveReplyReference?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
 type SnapshotRefresh={epoch:number;startedAt:number;work:Promise<InlineThreadState|undefined>;cancel(error:Error):void};
 type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;maintenanceFailures?:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void};proof?:{hash:string;bytes:string}};
@@ -111,7 +111,7 @@ export class DeviceInlineManager {
         const requests=JSON.parse(raw);if(!Array.isArray(requests))return;
         await Promise.allSettled(requests.map(async value=>{
           const request=validateHostedRequest(value);
-          if(![2,3].includes(request.version)||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(host.target)||this.jobs.has(request.id))return;
+          if(![2,3,4].includes(request.version)||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(host.target)||this.jobs.has(request.id))return;
           const bytes=await host.files.read(leasePaths(host.target.directory,request.id).record);if(!bytes||this.stopped)return;
           const record:LeaseRecord=JSON.parse(bytes);
           const path=await this.location(record);if(path===undefined)return;
@@ -139,7 +139,7 @@ export class DeviceInlineManager {
     let stopping=false;
     const allowed=()=>!this.stopped&&(!runtime.record.stopRequestedAt||stopping)&&runtime.writeEpoch===runtime.record.epoch&&runtime.record.owner===this.actor&&host.client.valid(record.request.id,runtime.record.epoch);
     runtime.writer=new HostedInlineWriter({vaultId:this.vaultId,...host.target},{
-      monotonic:this.monotonic,requests:async()=>[paths.request],accepts:request=>{if(runtime.record.stopRequestedAt)stopping=true;return [2,3].includes(request.version)&&allowed();},
+      monotonic:this.monotonic,requests:async()=>[paths.request],accepts:request=>{if(runtime.record.stopRequestedAt)stopping=true;return [2,3,4].includes(request.version)&&allowed();},
       canResume:path=>this.io.isOpen(path),
       locateNote:this.io.locateNote?async(id,path)=>{
         const located=await this.io.locateNote!(id,path);
@@ -176,7 +176,7 @@ export class DeviceInlineManager {
         if(this.io.locateNote&&await this.io.locateNote(record.request.id,path)!==path)throw Error('The response note moved during the update; retrying.');
         return this.io.updateNote(path,change,allowed);
       },
-      importReplyAsset:this.io.importReplyAsset?(reference,request,access)=>this.io.importReplyAsset!(reference,{...request,notePath:runtime.record.state?.notePath??request.notePath},access):undefined,
+      resolveReplyReference:this.io.resolveReplyReference?(reference,request,access)=>this.io.resolveReplyReference!(reference,{...request,notePath:runtime.record.state?.notePath??request.notePath},access):undefined,
     });
     this.jobs.set(record.request.id,runtime);
   }

@@ -54,7 +54,7 @@ if(args[0]==='auth'){
   class Folder {path='/';name='';}
   const root=new Folder();
   const folders=new Map<string,Folder>();
-  const api={Platform:{isMobile:false},TFolder:Folder,TFile:Base,MarkdownView:Base,Modal:Base,FuzzySuggestModal:Base,PluginSettingTab:Base,Notice:Base,
+  const api={Platform:{isMobile:false},TFolder:Folder,TFile:Base,MarkdownView:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,
     Plugin:class {
       app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},
         workspace:{onLayoutReady:()=>{},on:()=>{},getActiveViewOfType:()=>activeFile?{file:activeFile}:undefined},

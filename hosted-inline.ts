@@ -25,7 +25,7 @@ export interface HostedInlineRequest {
   nativeProjection?:boolean;
   destinationSection?:string;
   threadTitle?:string;
-  version:1|2|3;initialOwner?:string;id:string;vaultId:string;host:InlineHostTarget;notePath:string;
+  version:1|2|3|4;initialOwner?:string;id:string;vaultId:string;host:InlineHostTarget;notePath:string;
   threadId:string;messageId:string;projectId:string;threadEnvironmentId:string;initialHash:string;createdAt:string;
 }
 export interface HostedInlineState {
@@ -72,10 +72,10 @@ export function validateHostedRequest(value:any):HostedInlineRequest {
   if(value?.threadTitle!==undefined&&(typeof value.threadTitle!=='string'||value.threadTitle.length>200))throw Error('Invalid thread title.');
   if(value?.independent!==undefined&&typeof value.independent!=='boolean')throw Error('Invalid binding preference.');
   if(value?.finalAnswerFormat!==undefined&&!['formatted','raw-markdown'].includes(value.finalAnswerFormat))throw Error('Invalid final answer format.');
-  if(value?.finalAnswerFormat==='raw-markdown'&&value.version!==3)throw Error('Raw Markdown requires an updated response writer.');
+  if(value?.finalAnswerFormat==='raw-markdown'&&![3,4].includes(value.version))throw Error('Raw Markdown requires an updated response writer.');
   if(value?.intermediateMode!==undefined&&!['remove','keep','collapse'].includes(value.intermediateMode))throw Error('Invalid hosted response preference.');
   if(value?.keepIntermediate!==undefined&&typeof value.keepIntermediate!=='boolean')throw Error('Invalid hosted response preference.');
-  if(![1,2,3].includes(value?.version)||(value.version!==1&&!uuid.test(value.initialOwner??''))||!uuid.test(value.id??'')||!(typeof value.messageId==='string'&&(uuid.test(value.messageId)||/^async-answer:[^\s\x00-\x1f]{1,200}$/.test(value.messageId)))||!safeNotePath(value.notePath)||
+  if(![1,2,3,4].includes(value?.version)||(value.version!==1&&!uuid.test(value.initialOwner??''))||!uuid.test(value.id??'')||!(typeof value.messageId==='string'&&(uuid.test(value.messageId)||/^async-answer:[^\s\x00-\x1f]{1,200}$/.test(value.messageId)))||!safeNotePath(value.notePath)||
     ![value.threadId,value.vaultId,value.projectId,value.threadEnvironmentId,value.createdAt,value.host?.environmentId,value.host?.workspaceRoot,value.host?.directory].every(x=>typeof x==='string'&&x.length>0)||
     !/^[0-9a-f]{64}$/.test(value.initialHash))throw Error('Invalid hosted response job.');
   return value;
@@ -117,7 +117,7 @@ export interface HostedWriterIO extends InlineFiles {
   accepts?(request:HostedInlineRequest):boolean;
   /** Keep missing-boundary jobs recoverable while their editor is open. */
   canResume?(path:string):boolean;
-  importReplyAsset?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
+  resolveReplyReference?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
 
 /** Each request has its own serial worker. Requests and write-ahead hashes are durable;
@@ -380,25 +380,25 @@ export class HostedInlineWriter {
         state.bindingCheckpoint=inlineBindingCheckpoint(current);
         const inputs=questionConversationInputs(current,state.incoming??[],state.questionFollows,state.prose);
         const conversation=state.turnIds.length>1||inputs.length?{messages:state.prose,steering:inputs,preserveHistory:questions.continued}:undefined;
-        const importAsset=async(reference:ReplyReference)=>{
-          try{return await this.io.importReplyAsset!(reference,request,access);}
+        const resolveReference=async(reference:ReplyReference)=>{
+          try{return await this.io.resolveReplyReference!(reference,request,access);}
           catch(error){
             state.assetFailures??=[];
-            if(state.assetFailures.length<32&&!state.assetFailures.some(item=>item.source===reference.source))state.assetFailures.push({source:reference.source.slice(0,500),error:(error instanceof Error?error.message:'Import unavailable; original link preserved.').slice(0,300)});
+            if(state.assetFailures.length<32&&!state.assetFailures.some(item=>item.source===reference.source))state.assetFailures.push({source:reference.source.slice(0,500),error:(error instanceof Error?error.message:'Project file unavailable; original link preserved.').slice(0,300)});
             return undefined;
           }
         };
         if(phase==='complete')state.assetFailures=[];
-        if(phase==='complete'&&this.io.importReplyAsset&&!conversation){
+        if(phase==='complete'&&this.io.resolveReplyReference&&!conversation){
           current={...current,messages:current.messages.map(message=>({...message}))};
           for(const message of inlineTurnMessages(current,state.turnId,intermediateMode(request.intermediateMode,request.keepIntermediate)!=='remove')){
-            message.text=await this.network(path,()=>rewriteReplyReferences(message.text,importAsset));
+            message.text=await this.network(path,()=>rewriteReplyReferences(message.text,resolveReference));
           }
         }
         if(phase==='complete'||phase==='interrupted')state.finishedAt??=completionTime(current,state.turnId);else delete state.finishedAt;
         let next=renderInlineTurn(current,state.turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,request.threadTitle,{startedAt:request.createdAt,finishedAt:state.finishedAt},finalAnswerFormat(request.finalAnswerFormat));
-        if(phase==='complete'&&conversation&&this.io.importReplyAsset)next=await this.network(path,()=>rewriteReplyReferences(next,importAsset));
-        if(state.assetFailures?.length)next+='\n\n> Some linked files could not be imported. Their original links are preserved. Attach this response again to retry importing the files.';
+        if(phase==='complete'&&conversation&&this.io.resolveReplyReference)next=await this.network(path,()=>rewriteReplyReferences(next,resolveReference));
+        if(state.assetFailures?.length)next+='\n\n> Some project file links are unavailable. Their original links are preserved. Check the project connection and file path.';
         if(state.bindingRecoveryIssue)next+='\n\n> Reply recovery is waiting for exact T3 answer history. The current T3 replay did not provide the required historical turn bindings. The saved response is retained; no prompt was resent.';
         const terminal=phase==='complete'&&!questions.waiting||phase==='interrupted';
         // Persist the intended version before writing it, so a crash after the

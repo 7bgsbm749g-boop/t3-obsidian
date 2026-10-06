@@ -185,3 +185,9 @@
 .send-to-t3-new-folder .setting-item-info { margin: 0; }
 .send-to-t3-new-folder .setting-item-control { flex-wrap: wrap; justify-content: flex-start; }
 .send-to-t3-new-folder input { flex: 1; min-width: 120px; }
+
+.t3-codebase-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+.t3-codebase-children { margin-left:14px; }
+.t3-codebase-folder, .t3-codebase-file { display:block; width:100%; text-align:left; background:transparent; box-shadow:none; height:auto; min-height:28px; padding:4px 8px; white-space:normal; overflow-wrap:anywhere; }
+.t3-codebase-folder:hover, .t3-codebase-file:hover { background:var(--background-modifier-hover); }
+.t3-codebase-error { color:var(--text-error); font-size:var(--font-smallest); }

@@ -20,7 +20,7 @@ test('mobile upgrade removes old credentials and settings, retains uncertain wor
   async loadData(){return {remote:{url:'https://old.example'},remoteProjects:[{id:'p'}],remoteSelected:['laptop:p']};}
   async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}
  }
- const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,PluginSettingTab:Base,Notice:Base};
+ const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};
  const module={exports:{} as any};runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout,clearTimeout,console},{timeout:5000});
  const p=new module.exports.default();await p.onload();assert.equal(p.mode,'direct');assert.equal(p.settings.pending.length,1);assert.equal(p.settings.pending[0].id,'old-id');assert.equal(p.settings.completionJobs[0].status,'kept');assert.match(p.settings.completionJobs[0].detail,/companion mode was removed/);
  await p.retry(p.settings.pending[0]);assert.equal(p.settings.pending.length,1,'Retired send remains for manual review');
@@ -47,7 +47,7 @@ test('direct pairing works in mobile bundle, keeps sessions local, and resumes o
   async loadData(){return {paired:[{id:'c',name:'Laptop',url:'https://t3.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:p']};}
   async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}
  }
- const api={Plugin,Platform:{isMobile:true},TFile:File,Modal:Base,FuzzySuggestModal:Base,PluginSettingTab:Base,Notice:Base};
+ const api={Plugin,Platform:{isMobile:true},TFile:File,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};
  const fetcher=async(url:string,o:any)=>{
   assert.equal(o.redirect,'error');assert.equal(o.credentials,'omit');
   if(url.endsWith('/.well-known/t3/environment'))return new Response(JSON.stringify({environmentId:'env',label:'Laptop',orchestrationProtocolVersion:1}));
@@ -69,7 +69,7 @@ test('mobile OAuth sign-in discovers machines, persists credentials locally and 
   app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,v:any)=>{local=v;},workspace:{onLayoutReady:()=>{},on:()=>{}}};
   async loadData(){return {}; }async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}
  }
- const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,PluginSettingTab:Base,Notice:Base};
+ const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};
  const result=(v:any)=>new Response(JSON.stringify(v));
  const token=()=>result({access_token:'oauth-private',refresh_token:'refresh-private',expires_in:3600,token_type:'Bearer'});
  const fetcher=async(url:string,o:any)=>{

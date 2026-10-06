@@ -226,7 +226,7 @@ test('a crashed T3 server may resume the original turn without another user mess
 test('failed imports preserve final text and original links without blocking completion',async()=>{
   const h=harness();h.dispatch();h.answer('See ![plot](/tmp/plot.png) and [data](/tmp/data.pdf).',true);
   const sources:string[]=[];
-  h.io.importReplyAsset=async reference=>{sources.push(reference.source);if(reference.image)throw Error('asset unavailable');return '[[T3 Code Attachments/data.pdf]]';};
+  h.io.resolveReplyReference=async reference=>{sources.push(reference.source);if(reference.image)throw Error('asset unavailable');return '[[T3 Code Attachments/data.pdf]]';};
   await h.create().tick();assert.equal(h.state.status,'complete');
   assert.match(h.document,/!\[plot\]\(\/tmp\/plot.png\)/);assert.match(h.document,/\[\[T3 Code Attachments\/data.pdf\]\]/);
   assert.match(h.document,/original links are preserved/);assert.doesNotMatch(h.document,/t3-inline:start/);
@@ -340,7 +340,7 @@ for(const keepIntermediate of [undefined,false,true])test(`hosted response prefe
   ],activities:[],latestTurn:{turnId:'turn',state:complete?'completed':'running',requestedAt:h.request.createdAt,assistantMessageId:'final'},session:{status:complete?'ready':'running',activeTurnId:complete?null:'turn'}});
   h.io.threadState=async()=>thread();
   const sources:string[]=[];
-  h.io.importReplyAsset=async reference=>{sources.push(reference.source);return '[[T3 Code Attachments/data.txt]]';};
+  h.io.resolveReplyReference=async reference=>{sources.push(reference.source);return '[[T3 Code Attachments/data.txt]]';};
   await h.create().tick();assert.match(h.document,/I checked/);
   complete=true;await h.create().tick();
   assert.equal(h.state.status,'complete');assert.match(h.document,/Final answer/);assert.doesNotMatch(h.document,/t3-inline:|T3 · Working/);
@@ -632,7 +632,7 @@ for(const version of [1,2,3] as const)test(`Collapse survives hosted v${version}
     {id:'progress',role:'assistant',text:'Checked [asset](/tmp/progress.txt).\n\n## Nested',turnId:'turn',streaming:false},
     {id:'final',role:'assistant',text:'Exact final answer.',turnId:'turn',streaming:!complete},
   ],activities:[],latestTurn:{turnId:'turn',state:complete?'completed':'running',requestedAt:h.request.createdAt,completedAt:complete?new Date(Date.parse(h.request.createdAt)+197000).toISOString():null,assistantMessageId:'final'},session:{status:complete?'ready':'running',activeTurnId:complete?null:'turn'}});
-  const assets:string[]=[];h.io.importReplyAsset=async reference=>{assets.push(reference.source);return '[[T3 Code Attachments/progress.txt]]';};
+  const assets:string[]=[];h.io.resolveReplyReference=async reference=>{assets.push(reference.source);return '[[T3 Code Attachments/progress.txt]]';};
   await h.create().tick();assert.match(h.document,/> \[!t3-progress\]- \*\*T3 · Working/);
   complete=true;await h.create().tick();
   assert.equal(h.state.status,'complete');assert.match(h.document,/T3 · Completed[\s\S]*>03:17<\/span>/);
@@ -692,3 +692,5 @@ test('canonical external inputs complete independent mirrors without touching id
   const done=h.document;await h.create().tick();assert.equal(h.document,done);
  }
 });
+
+for(const format of ['formatted','raw-markdown'] as const)test(`v4 external-file writer retains ${format} formatting across completion`,async()=>{const h=harness();h.request.version=4;h.request.initialOwner=randomUUID();h.request.finalAnswerFormat=format;h.io.accepts=()=>true;h.files.set(h.paths.request,JSON.stringify(h.request));h.dispatch();h.answer('Final answer',true);await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/Final answer/);assert.equal(validateHostedRequest(h.request).version,4);assert.equal(h.state.requestHash,hostedRequestHash(h.request));});

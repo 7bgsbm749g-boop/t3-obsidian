@@ -156,12 +156,7 @@ export async function desktopThreadAccess(connection:Connection,component:'respo
   const metadata={sessionId:issued.sessionId,component,issuedAt,expiresAt};
   const audit=(event:import('./desktop-auth-audit').DesktopAuthRecord['event'],reason?:import('./thread-stream').ThreadAccessCloseReason,caller?:string[])=>recordDesktopAuth(base,{...metadata,event,reason,caller});
   void audit('issued');let closed=false,rejectionRecorded=false,recoveryRecorded=false;
-  return {origin:runtime.origin,expiresAt,async readReplyFile(source,projectId){
-    const shell=await requestJson(runtime.origin,issued.token,'/api/orchestration/shell');
-    const project=shell?.projects?.find((entry:any)=>entry.id===projectId);
-    if(typeof project?.workspaceRoot!=='string')throw Error('The linked file’s T3 project is unavailable.');
-    return (await import('./reply-import-desktop')).readDesktopReplyFile(source,project.workspaceRoot);
-  },trace:(event,reason)=>{if(event==='recovered'){if(recoveryRecorded)return;recoveryRecorded=true;}void audit(event,reason);},async api(path,payload){
+  return {origin:runtime.origin,expiresAt,trace:(event,reason)=>{if(event==='recovered'){if(recoveryRecorded)return;recoveryRecorded=true;}void audit(event,reason);},async api(path,payload){
     try{return await requestJson(runtime.origin,issued.token,path,payload);}catch(error){
       if(error instanceof T3HttpError&&error.status===401&&!rejectionRecorded){rejectionRecorded=true;void audit('rejected');}throw error;
     }

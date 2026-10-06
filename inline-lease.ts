@@ -159,7 +159,7 @@ export class InlineLeaseAuthority {
       const raw=await this.files.read(paths.record);if(raw)record=JSON.parse(raw);
       if(command.kind==='register'){
         const request=validateHostedRequest(command.request);
-        if(![2,3].includes(request.version)||request.id!==command.jobId||request.vaultId!==this.identity.vaultId||request.host.environmentId!==this.identity.environmentId||!sameWorkspacePath(request.host.workspaceRoot,this.identity.workspaceRoot)||request.host.directory!==directory)throw Error('The response belongs to another host or vault.');
+        if(![2,3,4].includes(request.version)||request.id!==command.jobId||request.vaultId!==this.identity.vaultId||request.host.environmentId!==this.identity.environmentId||!sameWorkspacePath(request.host.workspaceRoot,this.identity.workspaceRoot)||request.host.directory!==directory)throw Error('The response belongs to another host or vault.');
         if(record){if(hostedRequestHash(record.request)!==hostedRequestHash(request))throw Error('This response ID already belongs to another request.');await this.publishCatalog(record);return respond(true);}
         if(command.actor!==request.initialOwner)throw Error('Only the sending instance can register a response.');
         const writer=request.nativeProjection?undefined:this.noteWriter(request.notePath,request.id);

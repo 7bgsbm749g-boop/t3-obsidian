@@ -9,9 +9,9 @@ import {interruptibleAuthorityFiles} from './authority-storage-desktop';
 import type {App} from 'obsidian';
 import {logEvent,logFailure} from './diagnostics';
 import {InlineLeaseAuthority,type LeaseFiles} from './inline-lease';
-import {importReplyAsset} from './reply-import';
+import {projectReplyReference as resolveReplyReference} from './project-reference';
 import {deviceNoteIO} from './inline-note-io';
-export {importReplyAsset} from './reply-import';
+
 import {HostedInlineWriter,type HostedInlineRequest,type InlineFiles} from './hosted-inline';
 import {readInlineEvents,type ThreadAccess,type ThreadAccessCloseReason} from './thread-stream';
 import {ThreadAccessCache} from './thread-access-cache';
@@ -57,7 +57,7 @@ export class DesktopInlineHost {
       locateNote:deviceNoteIO(app).locateNote,
       replayBindings:(request,access,signal,afterSequence)=>readInlineEvents(access,request.threadId,afterSequence,signal),
       access:environmentId=>this.accessCache.get(environmentId),
-      importReplyAsset:(reference,request,threadAccess)=>importReplyAsset(app,reference,request,threadAccess),
+      resolveReplyReference:(reference,request,threadAccess)=>resolveReplyReference(app,reference,request,threadAccess),
       updateNote:async(path,change)=>{
         const file=app.vault.getFileByPath(path);if(!file)return undefined;
         const current=await app.vault.read(file);

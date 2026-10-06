@@ -98,7 +98,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     addCommand(command:any){registered.push(command);}
   }
   class Notice {constructor(text:string){notices.push(text);}}
-  const api={Plugin,Platform:{isMobile:true},Modal,Menu,MenuItem,Setting,SuggestModal:Modal,FuzzySuggestModal:Modal,PluginSettingTab:Base,Notice,TFile:File,MarkdownView:Base};
+  const api={Plugin,Platform:{isMobile:true},Modal,Menu,MenuItem,Setting,SuggestModal:Modal,FuzzySuggestModal:Modal,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice,TFile:File,MarkdownView:Base};
   const fetcher=async(url:string,options:any)=>{
     assert.equal(options.credentials,'omit');
     assert.equal(options.redirect,'error');

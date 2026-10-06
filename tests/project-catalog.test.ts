@@ -14,7 +14,7 @@ async function harness(){
   app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>Object.assign(local,value),workspace:{onLayoutReady:(cb:Function)=>layouts.push(cb),on:(name:string,cb:Function)=>events.set(name,cb)},vault:{getName:()=> 'Catalog test'}};
   async loadData(){return disk;}async saveData(value:any){disk=value;saves++;}addSettingTab(){}registerEvent(){}addCommand(){}registerInterval(){}
  }
- const api={Plugin,Platform:{isMobile:true},TFolder:Folder,Modal:Base,FuzzySuggestModal:Base,PluginSettingTab:Base,Notice:Base};const module={exports:{} as any};
+ const api={Plugin,Platform:{isMobile:true},TFolder:Folder,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};const module={exports:{} as any};
  const fetcher=async(url:string)=>{
   const response=(value:any,status=200)=>new Response(JSON.stringify(value),{status});const id=new URL(url).hostname[0];
   if(url.endsWith('/environment'))return response({environmentId:id,label:id,orchestrationProtocolVersion:1});

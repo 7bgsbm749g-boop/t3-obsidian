@@ -83,7 +83,7 @@ async function folderMenuHarness(){
     addSeparator(){return this;}
     showAtPosition(){shownMenu=this;return this;}
   }
-  const api={Plugin,Menu,Platform:{isMobile:true},TFolder:Folder,TFile:File,Modal,FuzzySuggestModal:Modal,PluginSettingTab:Base,Setting,Notice:class{constructor(text:string){notices.push(text);}}};
+  const api={Plugin,Menu,Platform:{isMobile:true},TFolder:Folder,TFile:File,Modal,FuzzySuggestModal:Modal,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Setting,Notice:class{constructor(text:string){notices.push(text);}}};
   const module={exports:{} as any};
   runInNewContext(await readFile('dist/main.js','utf8'),{
     module,exports:module.exports,window:{innerWidth:1000,innerHeight:700},require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,
@@ -160,22 +160,9 @@ test('folder menu opens an inactive link dialog; cancel is inert and Link alone 
   }finally{h.plugin.onunload();}
 });
 
-test('link dialog saves chosen subfolders, rejects escapes and rolls back failed location edits',async()=>{
+test('link dialog keeps project files external and has no import folder controls',async()=>{
   const h=await folderMenuHarness();
-  try{
-    const modal=await h.open();
-    await h.setting(modal,'Image folder').controls[0].change('Pictures/T3');
-    await h.setting(modal,'Document and other file folder').controls[0].change('../Escape');
-    await h.button(modal,'Link').click();assert.equal(modal.closed,false);assert.equal(h.plugin.settings.folderLinks.length,0);
-    await h.setting(modal,'Document and other file folder').controls[0].change('Documents/T3');
-    await h.button(modal,'Link').click();assert.equal(modal.closed,true);
-    const link=h.plugin.settings.folderLinks[0];assert.equal(link.replyFolders.images,'Pictures/T3');assert.equal(link.replyFolders.files,'Documents/T3');
-    h.setFailSave(true);await assert.rejects(h.plugin.saveReplyFolders('Notes',{images:'Other',files:'Files'},link),/storage failure/);
-    assert.equal(h.plugin.settings.folderLinks[0],link);
-    h.setFailSave(false);await h.plugin.saveReplyFolders('Notes',{images:'Other',files:'Files'},link);
-    assert.equal(h.plugin.settings.folderLinks[0].replyFolders.images,'Other');
-    await assert.rejects(h.plugin.saveReplyFolders('Notes',{images:'Again',files:'Files'},link),/changed/);
-  }finally{h.plugin.onunload();}
+  try{const modal=await h.open();assert.ok(!modal.contentEl.settings.some((s:any)=>s.name==='Image folder'||s.name==='Document and other file folder'));await h.button(modal,'Link').click();assert.equal(modal.closed,true);assert.equal(h.plugin.settings.folderLinks[0].environmentId,'env');assert.equal(h.plugin.settings.folderLinks[0].replyFolders,undefined);}finally{h.plugin.onunload();}
 });
 
 test('folder menu exposes project links without a workflow builder',async()=>{

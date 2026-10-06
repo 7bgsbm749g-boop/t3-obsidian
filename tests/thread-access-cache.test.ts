@@ -11,12 +11,6 @@ const rejected=()=>new T3HttpError(401,'T3 API returned HTTP 401.');
 const path='/api/orchestration/threads/test?turnLimit=20';
 const defer=<T>()=>{let resolve!:(value:T)=>void;const promise=new Promise<T>(r=>{resolve=r;});return {promise,resolve};};
 
-test('borrowed local file reads survive credential refresh and retain the same binary capability',async()=>{
-  let creates=0;const bytes=Uint8Array.from([80,75,0,255]);
-  const cache=new ThreadAccessCache(async()=>{const generation=++creates;return {origin:'https://test',api:async()=>({}),readReplyFile:async(source,project)=>{assert.equal(source,'report.zip');assert.equal(project,'project');if(generation===1)throw rejected();return bytes;}};});
-  try{assert.deepEqual(await (await cache.get('env')).readReplyFile!('report.zip','project'),bytes);assert.equal(creates,2);}finally{await cache.dispose();}
-});
-
 test('loopback HTTP errors retain their status without exposing the rejected response',async()=>{
   const server=createServer((_request,response)=>{response.writeHead(401);response.end('PRIVATE_RESPONSE');});
   server.listen(0,'127.0.0.1');await once(server,'listening');

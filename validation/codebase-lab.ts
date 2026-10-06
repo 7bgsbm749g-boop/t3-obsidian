@@ -1,0 +1,33 @@
+import {Plugin,MarkdownView} from 'obsidian';
+import {CodebaseBridge} from '../codebase-native';
+import type {CodebaseIO} from '../codebase-core';
+const fs=require('node:fs'),path=require('node:path');
+const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
+export default class CodebaseLab extends Plugin {
+  async onload(){this.app.workspace.onLayoutReady(()=>void this.run().catch(error=>this.evidence('error.json',{message:error.message,stack:error.stack})));}
+  private root(){return path.dirname((this.app.vault.adapter as any).getFullPath(''));}
+  private evidence(name:string,data:unknown){fs.writeFileSync(path.join(this.root(),name),JSON.stringify(data,null,2));}
+  async run(){
+    await pause(1000);const root=this.root();if(!fs.existsSync(path.join(root,'ISOLATED-NATIVE-LAB')))throw Error('An isolated lab is required.');
+    const external=path.join(root,'external');fs.mkdirSync(external);fs.writeFileSync(path.join(external,'report.md'),'# External report\n\nOriginal text.\n');fs.writeFileSync(path.join(external,'sample.ts'),'const value = 1;\n');
+    const scope={environmentId:'lab',projectId:'project',title:'External project',root:external};
+    const png=new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jYb0AAAAASUVORK5CYII=','base64'));const mediaUrl=URL.createObjectURL(new Blob([png],{type:'image/png'}));
+    const objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R] /Count 1 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>','<< /Length 0 >>\nstream\n\nendstream'];let pdf='%PDF-1.4\n';const offsets=[0];for(const [index,object] of objects.entries()){offsets.push(pdf.length);pdf+=`${index+1} 0 obj\n${object}\nendobj\n`;}const xref=pdf.length;pdf+=`xref\n0 5\n0000000000 65535 f \n${offsets.slice(1).map(offset=>String(offset).padStart(10,'0')+' 00000 n ').join('\n')}\ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;const pdfUrl=URL.createObjectURL(new Blob([pdf],{type:'application/pdf'}));
+    const io:CodebaseIO={list:async()=>({entries:[{path:'report.md',kind:'file'},{path:'sample.ts',kind:'file'}],truncated:false}),search:async()=>[{path:'report.md',kind:'file'}],read:async(_scope,file)=>fs.readFileSync(path.join(external,file),'utf8'),write:async(_scope,file,text)=>{fs.writeFileSync(path.join(external,file),text);},resource:async(_scope,file)=>({url:file.endsWith('.pdf')?pdfUrl:mediaUrl,expiresAt:Date.now()+300000})};
+    const bridge=new CodebaseBridge(this.app,this,io,()=>[{id:'link',folderPath:'/',connectionId:'local',environmentId:'lab',projectId:'project',workspaceRoot:external,projectTitle:'External project',self:false}],'lab');await bridge.install();this.register(()=>bridge.dispose());
+    const before=this.app.vault.getAllLoadedFiles().map(f=>f.path).sort();const item=bridge.register(scope,'report.md');await bridge.open(item);const view=this.app.workspace.getActiveViewOfType(MarkdownView);if(!view)throw Error('Native MarkdownView not active');
+    view.editor.setValue('# External report\n\nSaved through the native editor.\n');await pause(3500);
+    const saved=fs.readFileSync(path.join(external,'report.md'),'utf8');if(!saved.includes('Saved through'))throw Error('Native autosave did not reach the project');
+    await this.app.workspace.openLinkText('report.md','Reference.md',false);await pause(300);
+    const after=this.app.vault.getAllLoadedFiles().map(f=>f.path).sort();if(JSON.stringify(before)!==JSON.stringify(after))throw Error('Project files entered the physical vault inventory');
+    const image=bridge.register(scope,'chart.png');await bridge.open(image);await pause(500);const imageView=this.app.workspace.getLeaf(false).view;if(imageView.getViewType()!=='image')throw Error('Image did not open in native viewer');
+    const note=this.app.vault.getFileByPath('Reference.md')!;await this.app.vault.modify(note,'# Reference\n\n![[chart.png]]\n');await this.app.workspace.getLeaf(false).openFile(note);await this.app.workspace.getLeaf(false).setViewState({type:'markdown',state:{file:note.path,mode:'preview'}});await pause(1000);const embed=this.app.workspace.getActiveViewOfType(MarkdownView)?.contentEl.querySelector<HTMLImageElement>('.markdown-reading-view .image-embed img');if(!embed||!embed.naturalWidth){this.evidence('embed-error.json',{html:(this.app.workspace.getLeaf(false).view as MarkdownView).contentEl.innerHTML,state:this.app.workspace.getLeaf(false).view.getState(),img:embed?.outerHTML});throw Error('Native image embed did not load');}
+    const pdfFile=bridge.register(scope,'document.pdf');await bridge.open(pdfFile);await pause(3000);const pdfView=this.app.workspace.getLeaf(false).view;if(pdfView.getViewType()!=='pdf'||!(pdfView as any).contentEl.querySelector('.page canvas'))throw Error('PDF did not open in native viewer');this.evidence('native-pdf.json',{type:pdfView.getViewType(),html:(pdfView as any).contentEl.innerHTML});
+    const code=bridge.register(scope,'sample.ts');await bridge.open(code);await pause(300);const codeView=this.app.workspace.getActiveViewOfType(MarkdownView)!;codeView.editor.setValue('const value = 2;\n');await pause(3500);
+    if(fs.readFileSync(path.join(external,'sample.ts'),'utf8')!=='const value = 2;\n')throw Error('Native code save failed');
+    fs.writeFileSync(path.join(external,'sample.ts'),'// external edit\n');codeView.editor.setValue('// my edit\n');try{await codeView.save();}catch{}await pause(300);
+    if(fs.readFileSync(path.join(external,'sample.ts'),'utf8')!=='// external edit\n')throw Error('Conflict overwrote the project file');
+    this.evidence('native-codebase.json',{nativeMarkdownView:view instanceof MarkdownView,nativeCodeView:codeView instanceof MarkdownView,bareLinkOpened:true,nativeImageView:true,nativeImageEmbed:true,nativePdfView:true,markdownAutosave:saved,codeAutosave:true,conflictPreserved:true,physicalInventoryUnchanged:true,virtualFile:item.file.path,before,after});
+    try{const image=await require('@electron/remote').getCurrentWebContents().capturePage();fs.writeFileSync(path.join(root,'native-codebase.png'),image.toPNG());}catch{}
+  }
+}
