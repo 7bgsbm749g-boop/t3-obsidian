@@ -81,3 +81,38 @@ The completion-race regression fails against 2.34.5 and passes with the follow-u
 The follow-up build and all 933 JavaScript plus 11 Python tests passed.
 Final release and third-note recovery evidence will be recorded outside the
 vault with the existing investigation artifacts.
+
+## Approved startup display recovery
+
+The user separately approved the display proposal after reviewing it. Before
+this change, native records and direct display bodies were held only in memory.
+Reload cleared them, and drawing the surviving empty anchors required fresh
+remote catalog and lease reads. Permanent saved-state repair alone therefore
+did not establish uninterrupted active display after reload.
+
+The native display manager now retains only the binding identity, current prompt,
+validated body, placement and epoch/revision/sequence in the existing device-only
+IndexedDB store. Startup loads this bounded snapshot before host discovery. It
+projects the body only into the exact empty native anchor in the same vault and
+note, with Reconnecting until fresh data arrives. Restored entries never enter
+the device writer manager, host authority or final-commit proof maps. No prompt
+is resent, ownership changed, settings rewritten or generated body saved into
+the note. Existing native projection still preserves ordinary editor saves.
+
+A prior direct preview is retained through delayed host prose and earlier direct
+events. Fresh matching events replace it. Stop, saved completion, location
+conflict, changed prompt identity, note deletion and removed or changed markers
+invalidate display evidence. Native rename changes its local placement. Writes
+are coalesced at 500 ms and use the existing private database; storage failure
+does not stop normal streaming or final saves. The bounded cache holds at most
+32 replies and eight million body characters. A device with no validated prior
+preview, unavailable local storage, or changed anchor cannot use this shortcut.
+The guarantee starts when the native editor is ready; it does not remove the
+app's own startup screen or assert that cached data is live while offline.
+
+Nine integration regressions cover multi-stream/multi-pane reload without host
+reads, ordinary saves, delayed host and direct data, stop and late events,
+changed boundaries, malformed cache and vault/prompt mismatch, native completion,
+rename, deletion and storage failure. The original startup code fails the first
+seven new reload regressions. Build, full suite and active native reload evidence
+are retained outside the vault before the release is marked complete.

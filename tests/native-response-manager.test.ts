@@ -29,6 +29,68 @@ function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>
 async function start(h:ReturnType<typeof fixture>){await h.manager.receive(record());await h.manager.receive(record(other));for(const frames of h.frames)frames.length=0;}
 function neverBlank(h:ReturnType<typeof fixture>){for(const frames of h.frames)assert.ok(frames.every(frame=>frame.includes(body)),JSON.stringify(frames));}
 
+async function previewCheckpoint(){
+  const h=fixture(2);let saved:unknown;
+  h.manager.configurePreviewCache('vault',undefined,async value=>{saved=structuredClone(value);});
+  await start(h);h.manager.stream({request:record().request,messageId:id,sequence:12,body:'> Latest device paragraph'});
+  await h.manager.flushPreviewCache();h.manager.dispose();return saved;
+}
+test('reload restores several local previews before host discovery without saving generated text',async()=>{
+  const saved=await previewCheckpoint(),h=fixture(2);let latest:unknown;
+  h.manager.configurePreviewCache('vault',saved,async value=>{latest=value;});h.manager.refresh();
+  assert.ok(h.views.every((_,i)=>h.visible(i).includes('Latest device paragraph')&&h.visible(i).includes(otherBody)&&h.visible(i).includes('Reconnecting…')));
+  assert.equal(h.reads(),0);assert.ok(h.views.every(view=>view.getViewData()===before));
+  h.edit(h.visible().replace('Before','Ordinary edit'));await h.views[0].save();
+  assert.equal(h.views[0].getViewData(),before.replace('Before','Ordinary edit'));assert.ok(!h.views[0].getViewData().includes('Latest device paragraph'));
+  await h.manager.flushPreviewCache();assert.equal(latest,undefined);h.manager.dispose();
+});
+test('reloaded preview cannot regress to delayed host prose or earlier direct events',async()=>{
+  const h=fixture();h.manager.configurePreviewCache('vault',await previewCheckpoint(),async()=>{});h.manager.refresh();
+  await h.manager.receive({...record(id,2),state:{...record().state!,body:'> Delayed host',bindingCheckpoint:{sequence:200}}});
+  h.manager.stream({request:record().request,messageId:id,sequence:11,body:'> Earlier direct'});
+  assert.ok(h.visible().includes('Latest device paragraph'));assert.ok(h.visible().includes('Reconnecting…'));
+  h.manager.stream({request:record().request,messageId:id,sequence:13,body:'> Fresh direct'});
+  assert.ok(h.visible().includes('Fresh direct'));assert.ok(!h.visible().includes('Latest device paragraph'));assert.equal(h.views[0].getViewData(),before);h.manager.dispose();
+});
+test('stop removes the durable preview and late events cannot restore it on another reload',async()=>{
+  const h=fixture();let saved:unknown;h.manager.configurePreviewCache('vault',await previewCheckpoint(),async value=>{saved=structuredClone(value);});
+  await h.manager.receive({...record(id,2),stopRequestedAt:123});
+  h.manager.stream({request:record().request,messageId:id,sequence:40,body:'> Late stopped output'});
+  await h.manager.flushPreviewCache();h.manager.dispose();const reloaded=fixture();reloaded.manager.configurePreviewCache('vault',saved,async()=>{});reloaded.manager.refresh();
+  assert.ok(!reloaded.visible().includes('Latest device paragraph'));assert.ok(!reloaded.visible().includes('Late stopped output'));assert.ok(reloaded.visible().includes(otherBody));reloaded.manager.dispose();
+});
+test('removed or changed saved markers cannot be restored from a preview cache',async()=>{
+  for(const document of [before.replace(responseAnchor(id),''),before.replace(responseAnchor(id),responseAnchor(id).replace('\n\n','\nUser text\n'))]){
+    const h=fixture();h.edit(document);h.manager.configurePreviewCache('vault',await previewCheckpoint(),async()=>{});h.manager.refresh();
+    assert.ok(!h.visible().includes('Latest device paragraph'));assert.equal(h.views[0].getViewData(),document);h.manager.dispose();
+  }
+});
+test('cached preview rejects another vault, prompt, path and damaged persisted data',async()=>{
+  const saved:any=await previewCheckpoint();
+  const otherVault=fixture();otherVault.manager.configurePreviewCache('another-vault',saved,async()=>{});otherVault.manager.refresh();assert.equal(otherVault.visible(),before);otherVault.manager.dispose();
+  const differentPrompt=fixture();differentPrompt.manager.configurePreviewCache('vault',saved,async()=>{});await differentPrompt.manager.receive({...record(id,2),state:{...record().state!,messageId:'new-prompt',body:'> New prompt'}});assert.ok(!differentPrompt.visible().includes('Latest device paragraph'));differentPrompt.manager.dispose();
+  for(const mutate of [(entry:any)=>{entry.notePath='../Note.md';},(entry:any)=>{entry.id='invalid';},(entry:any)=>{entry.body='nested '+responseAnchor(other);}]){
+    const corrupt=structuredClone(saved);corrupt.entries=corrupt.entries.filter((entry:any)=>entry.id===id);mutate(corrupt.entries[0]);
+    const h=fixture();h.manager.configurePreviewCache('vault',corrupt,async()=>{});h.manager.refresh();assert.equal(h.visible(),before);h.manager.dispose();
+  }
+});
+test('saved completion removes cached output and keeps ordinary edits through native adoption',async()=>{
+  const h=fixture();let saved:unknown;h.manager.configurePreviewCache('vault',await previewCheckpoint(),async value=>{saved=structuredClone(value);});h.manager.refresh();
+  h.disk(final);await h.manager.receive(completed(2));assert.equal(h.views[0].getViewData(),final);await h.manager.flushPreviewCache();h.manager.dispose();
+  const reloaded=fixture();reloaded.edit(final);reloaded.manager.configurePreviewCache('vault',saved,async()=>{});reloaded.manager.refresh();assert.ok(!reloaded.visible().includes('Latest device paragraph'));assert.equal(reloaded.views[0].getViewData(),final);reloaded.manager.dispose();
+});
+test('native rename updates the cache path without copying a preview to a reused note path',async()=>{
+  const h=fixture();let saved:any;h.manager.configurePreviewCache('vault',await previewCheckpoint(),async value=>{saved=structuredClone(value);});h.manager.refresh();h.file.path='Renamed.md';h.manager.renamed('Note.md','Renamed.md');
+  assert.ok(h.visible().includes('Latest device paragraph'));await h.manager.flushPreviewCache();assert.ok(saved.entries.every((entry:any)=>entry.notePath==='Renamed.md'));h.manager.dispose();
+  const oldPath=fixture();oldPath.manager.configurePreviewCache('vault',saved,async()=>{});oldPath.manager.refresh();assert.equal(oldPath.visible(),before);oldPath.manager.dispose();
+});
+test('deleting a note removes its preview even when the host is unavailable',async()=>{
+  const h=fixture();let saved:any;h.manager.configurePreviewCache('vault',await previewCheckpoint(),async value=>{saved=value;});h.manager.deleted('Note.md');await h.manager.flushPreviewCache();assert.deepEqual(saved.entries,[]);h.manager.dispose();
+});
+test('failed cache storage does not prevent fresh display or final saves',async()=>{
+  const h=fixture();h.manager.configurePreviewCache('vault',undefined,async()=>{throw Error('Device disk full');});await start(h);await h.manager.flushPreviewCache();assert.ok(h.visible().includes(body));h.disk(final);await h.manager.receive(completed());assert.equal(h.views[0].getViewData(),final);h.manager.dispose();
+});
+
 test('live title metadata updates provisional and migrating headers without changing saved notes or waiting for host output',async()=>{
  const h=fixture(2),initial=regionBody(initialRegion(id,undefined,'New thread').text,id)!.body;
  h.manager.preview(h.views[0] as any,id,initial);h.manager.title(id,'Generated **title**');

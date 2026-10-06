@@ -194,6 +194,9 @@ export default class SendToT3 extends Plugin {
     const storedTargets=this.app.loadLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`);
     if(Array.isArray(storedTargets))this.inlineTargets=storedTargets.filter(target=>target&&typeof target.environmentId==='string'&&typeof target.workspaceRoot==='string'&&typeof target.directory==='string');
     if(typeof this.registerEditorExtension==='function'){const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)));}
+    const previewKey=`native-preview:${this.deviceId}:${this.settings.vaultId}`;
+    let savedPreviews:unknown;try{savedPreviews=await deviceState(previewKey);}catch(error){logFailure('note.preview.cache-load',error);}
+    nativeResponses(this.app).configurePreviewCache(this.settings.vaultId,savedPreviews,async snapshot=>{await deviceState(previewKey,snapshot);});
     if(typeof this.registerView==='function'){
     this.codebase=new CodebaseBridge(this.app,this,codebaseTransport(async(environmentId,reason)=>{
       if(!Platform.isMobile){try{if(environmentId===await this.localInlineEnvironment())return (await import('./desktop')).desktopThreadAccess({...this.settings.connection,host:'local'});}catch{/* Remote paired access remains available when local discovery fails. */}}
@@ -327,7 +330,7 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('layout-change',()=>this.inlineChat?.flushAvailable()));
     if(typeof this.app.vault?.on==='function'){
       for(const name of ['create','modify'] as const)this.registerEvent(this.app.vault.on(name as any,(file:TAbstractFile)=>{this.deviceInline?.changed(file.path);void nativeResponses(this.app).changed(file.path).catch(error=>logFailure('note.projection.file-update',error,{notePath:file.path}));}));
-      this.registerEvent(this.app.vault.on('delete',file=>{this.deviceInline?.deleted(file.path);this.inlineHostService?.deleted(file.path);this.folderIndicators?.refresh();}));
+      this.registerEvent(this.app.vault.on('delete',file=>{this.deviceInline?.deleted(file.path);nativeResponses(this.app).deleted(file.path);this.inlineHostService?.deleted(file.path);this.folderIndicators?.refresh();}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.inlineChat?.renamed(oldPath,file.path)));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{if(file instanceof TFolder)void this.renameLinkedFolder(oldPath,file.path).catch(error=>new Notice(`T3 folder links: ${message(error)}`,10000));}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{nativeResponses(this.app).renamed(oldPath,file.path);this.inlineHostService?.renamed(oldPath,file.path);this.deviceInline?.renamed(oldPath,file.path);}));

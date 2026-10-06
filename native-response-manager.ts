@@ -8,6 +8,7 @@ import {regionBody,initialRegion,startMarker,endMarker,renameInlineHeader} from 
 import {logFailure} from './diagnostics';
 import {nativeCommitMatches,readNativeCommitProof,type NativeCommitProof} from './native-response-commit';
 import type {DirectInlineUpdate} from './direct-inline-preview';
+import {loadNativePreviews,previewMatches,previewMessageId,MAX_NATIVE_PREVIEWS,MAX_NATIVE_PREVIEW_CHARACTERS,type NativePreviewEntry,type NativePreviewSnapshot} from './native-preview-cache';
 
 const managers=new WeakMap<App,NativeResponseManager>();
 export function nativeResponses(app:App){let manager=managers.get(app);if(!manager){manager=new NativeResponseManager(app);managers.set(app,manager);}return manager;}
@@ -26,7 +27,46 @@ export class NativeResponseManager {
   private lifetime=0;
   private relocations=new Map<string,Map<string,string>>();
   private warnings=new Map<MarkdownView,Map<string,HTMLElement>>();
+  private previewVault?:string;
+  private cached=new Map<string,NativePreviewEntry>();
+  private reconnecting=new Set<string>();
+  private savePreviews?:(snapshot:NativePreviewSnapshot)=>Promise<void>;
+  private previewDirty=false;
+  private previewTimer?:ReturnType<typeof setTimeout>;
+  private previewWork?:Promise<void>;
   constructor(private app:App){}
+  configurePreviewCache(vaultId:string,saved:unknown,save:(snapshot:NativePreviewSnapshot)=>Promise<void>){
+    this.previewVault=vaultId;this.savePreviews=save;this.cached.clear();this.reconnecting.clear();
+    for(const entry of loadNativePreviews(saved,vaultId)){this.cached.set(entry.id,entry);this.reconnecting.add(entry.id);}
+    if(typeof this.app.workspace?.getLeavesOfType==='function')this.refresh();
+  }
+  private dirtyPreview(){
+    this.previewDirty=true;
+    if(this.previewTimer===undefined)this.previewTimer=setTimeout(()=>{this.previewTimer=undefined;void this.flushPreviewCache();},500);
+  }
+  async flushPreviewCache():Promise<void>{
+    if(this.previewTimer!==undefined){clearTimeout(this.previewTimer);this.previewTimer=undefined;}
+    if(this.previewWork){await this.previewWork;if(this.previewDirty)await this.flushPreviewCache();return;}
+    if(!this.previewDirty||!this.savePreviews||!this.previewVault)return;
+    this.previewDirty=false;
+    const snapshot:NativePreviewSnapshot={version:1,vaultId:this.previewVault,entries:[...this.cached.values()].map(entry=>({...entry}))};
+    const work=this.savePreviews(snapshot).catch(error=>logFailure('note.preview.cache-save',error));this.previewWork=work;
+    try{await work;}finally{if(this.previewWork===work)this.previewWork=undefined;}
+  }
+  private forgetPreview(id:string){if(this.cached.delete(id))this.dirtyPreview();this.reconnecting.delete(id);}
+  private rememberPreview(record:LeaseRecord,body:string){
+    if(!this.previewVault||record.request.vaultId!==this.previewVault||this.reconnecting.has(record.request.id)||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict)return;
+    const request=record.request,stream=this.streams.get(request.id);
+    const entry:NativePreviewEntry={id:request.id,vaultId:request.vaultId,notePath:record.state?.notePath??request.notePath,threadId:request.threadId,projectId:request.projectId,threadEnvironmentId:request.threadEnvironmentId,messageId:previewMessageId(record),epoch:record.epoch,revision:record.revision,sequence:stream?.sequence??-1,body};
+    const old=this.cached.get(entry.id);if(old&&JSON.stringify(old)===JSON.stringify(entry))return;
+    if(!loadNativePreviews({version:1,vaultId:this.previewVault,entries:[entry]},this.previewVault).length)return;
+    this.cached.delete(entry.id);this.cached.set(entry.id,entry);
+    let characters=[...this.cached.values()].reduce((n,item)=>n+item.body.length,0);
+    while(this.cached.size>MAX_NATIVE_PREVIEWS||characters>MAX_NATIVE_PREVIEW_CHARACTERS){const oldest=this.cached.values().next().value!;characters-=oldest.body.length;this.cached.delete(oldest.id);this.reconnecting.delete(oldest.id);}
+    this.dirtyPreview();
+  }
+  private reconnectingBody(entry:NativePreviewEntry){return `> **T3 · Reconnecting…**\n>\n${this.titled(entry.id,entry.body)}`;}
+  deleted(path:string){for(const entry of [...this.cached.values()])if(entry.notePath===path||entry.notePath.startsWith(path+'/'))this.forgetPreview(entry.id);void this.flushPreviewCache();}
   /** A real vault rename keeps the TFile and response identity. Host leases
    * can lag behind that event (particularly across mobile Sync). */
   renamed(before:string,after:string){
@@ -39,6 +79,7 @@ export class NativeResponseManager {
       aliases.set(before,after);this.relocations.set(id,aliases);
     }
     for(const item of this.provisional.values())item.path=moved(item.path);
+    for(const entry of this.cached.values()){const path=moved(entry.notePath);if(path!==entry.notePath){entry.notePath=path;this.dirtyPreview();}}
     for(const item of this.streams.values())item.request={...item.request,notePath:moved(item.request.notePath)};
     for(const [id,record] of this.records){const current=record.state?.notePath??record.request.notePath,next=moved(current);if(next!==current)this.records.set(id,{...record,state:{...record.state??{requestHash:'',accepted:false,status:'waiting',hashes:[],updatedAt:''},notePath:next}});}
     this.refresh();
@@ -48,8 +89,14 @@ export class NativeResponseManager {
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
   stream(update:DirectInlineUpdate){
     const record=this.records.get(update.request.id),previous=this.streams.get(update.request.id);
-    if(record&&(record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.request.threadId!==update.request.threadId||record.request.projectId!==update.request.projectId||record.request.threadEnvironmentId!==update.request.threadEnvironmentId))return;
+    if(record&&(record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.request.vaultId!==update.request.vaultId||record.request.threadId!==update.request.threadId||record.request.projectId!==update.request.projectId||record.request.threadEnvironmentId!==update.request.threadEnvironmentId))return;
     if(previous&&previous.sequence>update.sequence)return;
+    const cached=this.cached.get(update.request.id);
+    if(record&&update.messageId!==previewMessageId(record))return;
+    if(cached&&this.reconnecting.has(update.request.id)){
+      if(!record||!previewMatches(cached,record)||update.sequence<cached.sequence)return;
+      this.reconnecting.delete(update.request.id);
+    }
     const path=record?.state?.notePath??update.request.notePath;
     this.streams.set(update.request.id,{...update,request:{...update.request,notePath:path}});this.refresh();
   }
@@ -57,15 +104,22 @@ export class NativeResponseManager {
   private titled(id:string,body:string){const title=this.titles.get(id);return title?renameInlineHeader(body,title):body;}
   async receive(record:LeaseRecord,proofBytes?:string){
     if(!record.coordinated)return;
+    const cached=this.cached.get(record.request.id);
+    if(cached&&previewMatches(cached,record)&&(cached.epoch>record.epoch||cached.epoch===record.epoch&&cached.revision>record.revision))return;
     const old=this.records.get(record.request.id);if(old&&(old.epoch>record.epoch||old.epoch===record.epoch&&old.revision>record.revision))return;
     if(proofBytes&&record.state?.delivery)this.proofs.set(record.request.id,readNativeCommitProof(proofBytes,record.request.id,record.state.delivery));
     const path=record.state?.notePath??record.request.notePath;
     const move=[...this.relocations.get(record.request.id)??[]].sort((a,b)=>b[0].length-a[0].length).find(([before])=>path===before||path.startsWith(before+'/'));
     if(move)record={...record,state:{...record.state??{requestHash:'',accepted:false,status:'waiting',hashes:[],updatedAt:''},notePath:move[1]+path.slice(move[0].length)}};
+    if(cached){
+      if(!previewMatches(cached,record)||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict)this.forgetPreview(record.request.id);
+      else if(cached.sequence===-1&&record.state?.body!==undefined)this.reconnecting.delete(record.request.id);
+    }
     this.provisional.delete(record.request.id);this.records.set(record.request.id,record);
     if(record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete)this.streams.delete(record.request.id);
     this.refresh();
     if(record.state?.delivery&&record.state.cleanupComplete)await this.changed(record.state.notePath);
+    if(cached&&!this.cached.has(record.request.id))await this.flushPreviewCache();
   }
   private completed(path:string,document:string,pending:ReadonlySet<string>){
     if(!pending.size)return [];
@@ -127,6 +181,12 @@ export class NativeResponseManager {
       try{
         let adapter=this.view(view),saved=adapter?adapter.saved():view.getViewData();
         const responses:LocalResponse[]=[...this.provisional.entries()].filter(([,item])=>item.path===view.file!.path).map(([id,item])=>({id,body:this.titled(id,item.body)}));
+        for(const entry of [...this.cached.values()]){
+          if(!this.reconnecting.has(entry.id)||entry.notePath!==view.file.path)continue;
+          const region=responseRegion(saved,entry.id);
+          if(!region||saved.slice(region.from,region.to)!==responseAnchor(entry.id)){this.forgetPreview(entry.id);continue;}
+          if(!this.records.has(entry.id)&&!responses.some(response=>response.id===entry.id))responses.push({id:entry.id,body:this.reconnectingBody(entry)});
+        }
         for(const record of this.records.values()){
           if((record.state?.notePath??record.request.notePath)!==view.file.path)continue;
           const id=record.request.id;
@@ -135,7 +195,10 @@ export class NativeResponseManager {
           if(!region||saved.slice(region.from,region.to)!==responseAnchor(id))continue;
           if(record.state?.cleanupComplete&&adapter?.hasMaterialized(id))continue;
           const body=(record.state?.cleanupComplete?record.state.finalBody:undefined)??this.streams.get(id)?.body??record.state?.body??regionBody(initialRegion(id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,id)!.body;
-          responses.push({id,body:record.state?.cleanupComplete?body:this.titled(id,body)});
+          const cached=this.cached.get(id),restoring=cached&&this.reconnecting.has(id)&&previewMatches(cached,record);
+          const displayed=record.state?.cleanupComplete?body:this.titled(id,body);
+          if(!restoring)this.rememberPreview(record,displayed);
+          responses.push({id,body:restoring?this.reconnectingBody(cached):displayed});
         }
         if(!adapter&&responses.length){
           const file=view.file;
@@ -164,5 +227,5 @@ export class NativeResponseManager {
   prepare(path:string,before:string,after:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.prepareMaterialization(before,after,ids);}
   cancel(path:string){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.cancelMaterialization();}
   committed(path:string,saved:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path&&!adapter.acceptCommitted(saved,ids))throw Error('A native pane did not adopt the saved result.');}
-  dispose(){this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.proofs.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();}
+  dispose(){void this.flushPreviewCache();this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.proofs.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
 }
