@@ -45,3 +45,30 @@ future following now retains removed/cancelled history to choose a new command
 identity. The bundled integration test covers both removal and cancellation.
 The immutable 2.34.0 bytes remain unchanged; delivery continues with a newer
 patch release and a fresh client check.
+
+Release **2.34.1** is complete. Build and the full suite passed (900 TypeScript
+tests and 11 Python tests). The release tool installed the immutable artifacts
+into both vaults, preserved each installation's device settings, and completed
+the fresh QLO2 Sync scan. A native QLO2 reload loaded 2.34.1 in client instance
+`dbc2d8cb-be0e-46a9-b083-a6d3c556b9ef`.
+
+The fresh client check renewed a removed future registration with a new ID,
+left the duplicate note bytes unchanged, attached a subsequent real response,
+and imported that response through the UI while it was running. Both notes
+received the final answer. Four bounded synthetic prompts were sent explicitly
+for the entire smoke pass; importing sent none. The earlier 2.34.0 evidence
+records visible live commentary/tool catch-up and preservation of a surrounding
+note edit. The 2.34.1 evidence records running selection, exact running lifecycle
+seed, and final delivery; it does not add native mobile coverage.
+
+The synthetic tabs, notes and following registrations were cleaned up. The
+original note and command-line-disabled setting were restored, and the
+originating investigation note's stream was preserved. The prerequisite started
+another read-only turn during smoke testing; no further source or release edits
+were made until its terminal result was read again. No communication was sent
+to that thread.
+
+Immutable release evidence:
+`/home/ubuntu/backups/send-to-t3-code/releases/2.34.1/smoke-vps-qlo2-run-import-evidence.json`.
+The artifact directory is
+`/home/ubuntu/backups/send-to-t3-code/run-import-20261006`.
