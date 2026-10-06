@@ -9,6 +9,9 @@ import {logFailure} from './diagnostics';
 
 export interface DirectInlineUpdate {request:HostedInlineRequest;messageId:string;sequence:number;body:string}
 type Watch=typeof watchThread;
+export interface PreviewClock {now():number;later(callback:()=>void,ms:number):unknown;cancel(handle:unknown):void}
+const displayClock:PreviewClock={now:()=>performance.now(),later:(callback,ms)=>setTimeout(callback,ms),cancel:handle=>clearTimeout(handle as ReturnType<typeof setTimeout>)};
+export const DIRECT_DISPLAY_INTERVAL_MS=80;
 
 /** A device consumes T3 events only for its native display. It never acquires
  * a writer lease, imports attachments, or saves generated Markdown. The host
@@ -24,7 +27,9 @@ export class DirectInlinePreview {
   private incoming:Parameters<typeof observeIncoming>[2];
   private stopped=false;
   private minimumSequence:number;
-  constructor(record:LeaseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
+  private pending?:unknown;
+  private lastRender=-Infinity;
+  constructor(record:LeaseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
   update(record:LeaseRecord){
     this.record=record;
     // A durable host cursor must not skip lifecycle events the device has not
@@ -39,7 +44,7 @@ export class DirectInlinePreview {
   delivery(delivery:InlineStartRequest){
     if(this.stopped)return;
     this.state=restoreInlineBindings(this.state,{starts:{[delivery.messageId]:delivery}});
-    this.render();
+    this.schedule(true);
   }
   tick(open:boolean){
     if(this.stopped)return;
@@ -60,16 +65,22 @@ export class DirectInlinePreview {
     if(!Number.isSafeInteger(sequence)||sequence<0)return;
     if(item.kind==='snapshot'&&(item.snapshot?.thread?.id!==request.threadId||item.snapshot?.thread?.projectId!==request.projectId))return;
     if(item.kind==='event'&&item.event?.aggregateId!==undefined&&item.event.aggregateId!==request.threadId)return;
-    this.state=applyThreadItem(this.state,item).state;
-    this.render();
+    const next=applyThreadItem(this.state,item).state;if(next===this.state)return;this.state=next;
+    this.schedule(item.kind==='event'&&((item.event?.type==='thread.session-set'&&item.event.payload?.session?.status!=='running')||(item.event?.type==='thread.message-sent'&&item.event.payload?.streaming===false)));
+  }
+  private schedule(urgent=false){
+    const elapsed=this.clock.now()-this.lastRender;
+    if(urgent||elapsed>=DIRECT_DISPLAY_INTERVAL_MS){if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;if(this.render())this.lastRender=this.clock.now();return;}
+    if(this.pending!==undefined)return;
+    this.pending=this.clock.later(()=>{this.pending=undefined;if(this.stopped)return;if(this.render())this.lastRender=this.clock.now();},DIRECT_DISPLAY_INTERVAL_MS-elapsed);
   }
   private render(){
-    if((this.state.sequence??-1)<this.minimumSequence)return;
+    if((this.state.sequence??-1)<this.minimumSequence)return false;
     const request=this.record.request,messageId=this.messageId();
     let turnId=turnForMessage(this.state,messageId);
     // A bare user message or the thread's latest turn is not evidence that
     // this response owns that output. Retain Working until the exact binding.
-    if(!turnId)return;
+    if(!turnId)return false;
     this.turnIds=[...new Set([...this.turnIds,turnId])];
     const steering=(this.record.state?.steering??[]).map(input=>({...input}));
     for(const input of steering){const turn=turnForMessage(this.state,input.messageId);if(!turn)continue;input.confirmed=true;turnId=turn;if(!this.turnIds.includes(turn))this.turnIds.push(turn);}
@@ -85,7 +96,8 @@ export class DirectInlinePreview {
     if(request.finalAnswerFormat==='raw-markdown')current.turns=rememberInlineTurns(current,this.turnIds,current.turns);
     const body=renderInlineTurn(current,turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,this.state.title??request.threadTitle,{startedAt:request.createdAt,finishedAt:phase==='complete'||phase==='interrupted'?completionTime(this.state,turnId):undefined},finalAnswerFormat(request.finalAnswerFormat));
     this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body});
+    return true;
   }
-  suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;}
+  suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
   dispose(){this.stopped=true;this.suspend();}
 }

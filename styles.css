@@ -192,3 +192,16 @@
 .t3-codebase-explorer .collapse-icon.is-collapsed svg { transform: rotate(0deg); }
 /* Keep the native path header, with project names in place of bridge identities. */
 [data-t3-codebase-hidden="true"] { display: none !important; }
+
+/* The unfinished paragraph keeps a stable text node until a block boundary. */
+.send-to-t3-stream-tail { white-space: pre-wrap; overflow-wrap: anywhere; }
+.send-to-t3-tool { margin: .5em 0; font-size: var(--font-smaller); }
+.send-to-t3-tool > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); }
+.send-to-t3-tool > summary::before { content: '›'; width: .6em; }
+.send-to-t3-tool[open] > summary::before { transform: rotate(90deg); }
+.send-to-t3-tool [data-t3-tool-icon] { display: inline-flex; width: 16px; height: 16px; flex: 0 0 16px; }
+.send-to-t3-tool [data-t3-tool-icon] svg { width: 16px; height: 16px; }
+.send-to-t3-tool[data-t3-tool-status="inProgress"] > summary::after { content: ''; width: .65em; height: .65em; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: send-to-t3-inline-spin .8s linear infinite; }
+.send-to-t3-tool[data-t3-tool-status="failed"] > summary { color: var(--text-error); }
+.send-to-t3-tool pre { max-height: 18em; overflow: auto; white-space: pre-wrap; }
+@media (prefers-reduced-motion: reduce) { .send-to-t3-tool > summary::after { animation: none; } }

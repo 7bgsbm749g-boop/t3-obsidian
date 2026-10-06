@@ -52,7 +52,7 @@ test('earlier final joins collapsed history while expanded raw history and quest
     assert.match(text,mode==='collapse'?/> > \[!t3-steering\] You\n> > Please continue\./:/> \[!t3-steering\] You\n> Please continue\./);
     assert.match(text,mode==='collapse'?/> > Follow-up progress/:/> Follow-up progress/);
     assert.match(text,/Proceed\?|t3-question:/);assert.match(text,/send-to-t3-response-activity/);
-    assert.match(text,mode==='collapse'?/> ```\n/:/partial\n```/);
+    assert.match(text,/stream-tail">```ts&#10;partial<\/span>/);
   }
 });
 

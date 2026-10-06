@@ -1,4 +1,5 @@
 import type {InlineThreadState} from './inline-thread';
+import {reconcileResponseDOM} from './response-dom';
 
 export type IntermediateMode='remove'|'keep'|'collapse';
 export type FinalAnswerFormat='formatted'|'raw-markdown';
@@ -33,16 +34,17 @@ export function completionTime(state:InlineThreadState,turnId:string):string {
 
 /** Native callouts give editor, reading view and mobile the same bounded fold.
  * Retain explicit user choices when streaming replaces a callout's DOM. */
-export function installResponsePresentation(root:Document):()=>void {
+export function installResponsePresentation(root:Document,icon?:(element:HTMLElement,name:string)=>void):()=>void {
   const choices=new WeakMap<Element,Map<string,boolean>>();
+  const retained=new WeakMap<Element,Map<string,HTMLElement>>();
   const owner=(element:Element)=>element.closest('.workspace-leaf-content')??root.documentElement;
   const key=(element:Element)=>element.querySelector<HTMLElement>('.send-to-t3-fold-key')?.dataset.t3Fold;
   const title=(element:Element)=>element.querySelector<HTMLElement>(':scope > .callout-title');
   const seen=new WeakMap<Element,{heading:HTMLElement;key:string|undefined}>();
   const watched=new Set<Element>(),aligned=new Set<HTMLElement>();
-  let restoring=false,queued:ReturnType<typeof setTimeout>|undefined,disposed=false;
+  let restoring=false,queued=false,disposed=false;
   const refresh=()=>{
-    queued=undefined;if(disposed)return;
+    queued=false;if(disposed)return;
     const layout=new Set<Element>(),actionsInUse=new Set<HTMLElement>();
     for(const timer of Array.from(root.querySelectorAll<HTMLElement>('.send-to-t3-run-timer[data-t3-start]'))){
       const start=Number(timer.dataset.t3Start),end=timer.dataset.t3End;
@@ -50,10 +52,36 @@ export function installResponsePresentation(root:Document):()=>void {
       const text=elapsedRun({startedAt:new Date(start).toISOString(),...(end&&Number.isFinite(Number(end))?{finishedAt:new Date(Number(end)).toISOString()}:{})});
       if(timer.textContent!==text)timer.textContent=text;
     }
-    for(const fold of Array.from(root.querySelectorAll<HTMLElement>('.callout[data-callout="t3-progress"]'))){
+    for(let fold of Array.from(root.querySelectorAll<HTMLElement>('.callout[data-callout="t3-progress"]'))){
+      const id=key(fold),container=owner(fold);
+      // Reconcile before the next paint. Only active responses retain ordinary
+      // Markdown nodes; native embeds keep their fresh render children.
+      if(id?.endsWith(':active')&&fold.isConnected&&typeof fold.replaceWith==='function'){
+        const surface=fold.closest('.cm-content, .markdown-preview-view')??container;
+        let cache=retained.get(surface);if(!cache){cache=new Map();retained.set(surface,cache);}
+        const previous=cache.get(id);
+        if(previous&&previous!==fold&&!previous.isConnected){
+          const oldTitle=title(previous),newTitle=title(fold),oldContent=previous.querySelector(':scope > .callout-content'),newContent=fold.querySelector(':scope > .callout-content');
+          if(oldTitle&&newTitle&&oldContent&&newContent){
+            reconcileResponseDOM(oldTitle,newTitle);reconcileResponseDOM(oldContent,newContent);
+            fold.replaceWith(previous);fold=previous;
+          }
+        }
+        cache.set(id,fold);if(cache.size>64)cache.delete(cache.keys().next().value!);
+      }
+      if(icon)for(const element of Array.from(fold.querySelectorAll<HTMLElement>('[data-t3-tool-icon]')))if(!element.firstChild)icon(element,element.dataset.t3ToolIcon??'wrench');
       const heading=title(fold);if(!heading)continue;
       heading.setAttribute('role','heading');heading.setAttribute('aria-level','6');
       heading.setAttribute('aria-expanded',String(!fold.classList.contains('is-collapsed')));
+      if(id?.endsWith(':active')){
+        const choice=choices.get(container)?.get(id);
+        if(choice!==undefined)fold.classList.toggle('is-collapsed',!choice);
+        const collapsed=fold.classList.contains('is-collapsed');
+        heading.setAttribute('aria-expanded',String(!collapsed));
+        fold.querySelector('.callout-fold')?.classList.toggle('is-collapsed',collapsed);
+        const content=fold.querySelector<HTMLElement>(':scope > .callout-content');
+        if(content){content.style.display=collapsed?'none':'';content.style.removeProperty('height');}
+      }
       // Native callout titles support pointer input. Also offer keyboard input
       // without changing note bytes or Obsidian's native fold implementation.
       heading.tabIndex=0;
@@ -71,7 +99,7 @@ export function installResponsePresentation(root:Document):()=>void {
           actions.classList.add('send-to-t3-progress-actions');aligned.add(actions);
         }
       }
-      const id=key(fold),previous=seen.get(fold),fresh=previous?.heading!==heading||previous?.key!==id;
+      const previous=seen.get(fold),fresh=previous?.heading!==heading||previous?.key!==id;
       seen.set(fold,{heading,key:id});
       const expanded=id?(choices.get(owner(fold))?.get(id)??(id.endsWith(':complete')?false:id.endsWith(':active')?true:undefined)):undefined;
       // Restore only newly rendered titles. Native transitions mutate their
@@ -86,7 +114,7 @@ export function installResponsePresentation(root:Document):()=>void {
     for(const element of layout)if(!watched.has(element)){resize?.observe(element);watched.add(element);}
     for(const actions of aligned)if(!actionsInUse.has(actions)){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');aligned.delete(actions);}
   };
-  const schedule=()=>{if(queued===undefined&&!disposed)queued=setTimeout(refresh,0);};
+  const schedule=()=>{if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
   const resize=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(schedule);
   const remember=(event:Event)=>{
     if(restoring)return;
@@ -94,7 +122,17 @@ export function installResponsePresentation(root:Document):()=>void {
     const fold=target?.closest('.callout[data-callout="t3-progress"]');if(!fold)return;
     const id=key(fold);if(!id)return;
     const container=owner(fold);let saved=choices.get(container);if(!saved){saved=new Map();choices.set(container,saved);}
-    saved.set(id,fold.classList.contains('is-collapsed'));schedule();
+    const expanded=fold.classList.contains('is-collapsed');saved.set(id,expanded);
+    if(id.endsWith(':active')&&typeof fold.classList.toggle==='function'){
+      // A retained title no longer belongs to the discarded native render
+      // child. Handle its toggle directly, without a transient close animation.
+      event.preventDefault();event.stopImmediatePropagation();
+      fold.classList.toggle('is-collapsed',!expanded);
+      const content=fold.querySelector<HTMLElement>(':scope > .callout-content');
+      if(content){content.getAnimations?.().forEach(animation=>animation.cancel());content.style.display=expanded?'':'none';}
+      target?.setAttribute('aria-expanded',String(expanded));
+    }
+    schedule();
   };
   const keyboard=(event:KeyboardEvent)=>{
     if(event.key!=='Enter'&&event.key!==' ')return;
@@ -105,5 +143,5 @@ export function installResponsePresentation(root:Document):()=>void {
   observer.observe(root.body,{childList:true,subtree:true});
   root.addEventListener('click',remember,true);root.addEventListener('keydown',keyboard);
   const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;observer.disconnect();resize?.disconnect();for(const actions of aligned){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');}if(queued!==undefined)clearTimeout(queued);clearInterval(timer);root.removeEventListener('click',remember,true);root.removeEventListener('keydown',keyboard);};
+  return ()=>{disposed=true;observer.disconnect();resize?.disconnect();for(const actions of aligned){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');}clearInterval(timer);root.removeEventListener('click',remember,true);root.removeEventListener('keydown',keyboard);};
 }

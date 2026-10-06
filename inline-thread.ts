@@ -6,6 +6,7 @@ import {intermediateMode,runTimer,type IntermediateMode,type RunTiming,type Fina
 import {steeringSegments,type InlineSteering} from './inline-steering';
 import {responseActivityLabel,responseActivityRow} from './response-activity';
 import {visibleInlineInput} from './input-presentation';
+import {responseTools,renderResponseTool} from './response-tools';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string;context?:unknown}
@@ -387,6 +388,22 @@ function quoteResponse(text:string):string {
   }).filter(Boolean).join('\n\n');
 }
 
+/** Completed blocks use normal Markdown. The growing tail stays literal until
+ * a blank-line boundary outside a fence, so incomplete syntax cannot repeatedly
+ * turn an existing paragraph into a table, heading, or code widget. */
+function quoteStreamingResponse(text:string):string {
+  let boundary=0,offset=0,fence:string|undefined;
+  for(const line of text.split('\n')){
+    const match=/^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if(match){if(!fence)fence=match[1];else if(match[1][0]===fence[0]&&match[1].length>=fence.length&&line.slice(match[0].length).trim()==='')fence=undefined;}
+    if(!fence&&!line.trim()&&offset<text.length)boundary=offset+line.length+1;
+    offset+=line.length+1;
+  }
+  const prefix=text.slice(0,boundary).trimEnd(),tail=text.slice(boundary);
+  const escaped=tail.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/\n/g,'&#10;');
+  return (prefix?quoteResponse(prefix)+(tail?'\n>\n':''):'')+(tail?`> <span class="send-to-t3-stream-tail">${escaped}</span>`:'');
+}
+
 /** Select the completed turn's prose consistently for rendering and assets. */
 export function inlineTurnMessages(state:InlineThreadState,turnId:string,keepIntermediate=false):InlineMessage[] {
   const messages=state.messages.filter(m=>m.turnId===turnId&&m.role==='assistant');
@@ -442,7 +459,8 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     }
   }
   const rawFinal=(id?:string)=>format==='raw-markdown'&&!!id&&finalIds.has(id);
-  const assistant=(text:string,id?:string)=>rawFinal(id)?escapeReplyHtml(closeOpenFence(text.replace(/\n+$/,''))):quoteResponse(closeOpenFence(text.trim()));
+  const growing=(id?:string)=>phase==='running'&&!!all.find(message=>message.id===id)?.streaming;
+  const assistant=(text:string,id?:string)=>rawFinal(id)?escapeReplyHtml(closeOpenFence(text.replace(/\n+$/,''))):growing(id)?quoteStreamingResponse(text):quoteResponse(closeOpenFence(text.trim()));
   const answerBlocks:string[]=[];let progressMessages:string[]=[];
   const flushProgress=()=>{if(progressMessages.length)answerBlocks.push(quoteResponse(closeOpenFence(progressMessages.join('\n\n'))));progressMessages=[];};
   if(format==='raw-markdown')for(const message of messages){
@@ -467,7 +485,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     previousRole=segment.role;
     const next=body?body+separator+rendered:rendered;
     return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}`:next;
-  },''):format==='raw-markdown'?answerBlocks.join('\n\n'):answer?quoteResponse(closeOpenFence(answer)):'';
+  },''):messages.some(message=>growing(message.id))?messages.map(message=>assistant(message.text,message.id)).filter(Boolean).join('\n\n'):format==='raw-markdown'?answerBlocks.join('\n\n'):answer?quoteResponse(closeOpenFence(answer)):'';
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null||conversation?.messages.some(m=>m.turnId===request.turnId)).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
@@ -483,21 +501,26 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const finalId=finalReady?inlineTurnMessages({...state,messages:all},turnId).at(-1)?.id:undefined;
     const finalIndex=finalId?pieces.reduce((last,piece,index)=>piece.role==='assistant'&&piece.messageId===finalId?index:last,-1):-1;
     const history:string[]=[];let final='';
+    const tools=responseTools(state,[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])]);let toolIndex=0;
+    const toolsBefore=(at=Infinity)=>{while(toolIndex<tools.length&&(Date.parse(tools[toolIndex].createdAt??'')||0)<=at)history.push(renderResponseTool(tools[toolIndex++]));};
     for(const [index,piece] of pieces.entries()){
+      const message=state.messages.find(message=>message.id===piece.messageId)??all.find(message=>message.id===piece.messageId);if(message?.createdAt)toolsBefore(Date.parse(message.createdAt));
       if(index===finalIndex)final=assistant(piece.text,piece.messageId);
       else if(piece.role==='user')history.push(renderInlineInput(piece.text,piece.label,piece.position));
-      else if(piece.text.trim())history.push(quoteResponse(closeOpenFence(piece.text.trim())));
+      else if(piece.text.trim())history.push(growing(piece.messageId)?quoteStreamingResponse(piece.text):quoteResponse(closeOpenFence(piece.text.trim())));
     }
+    toolsBefore();
     // Completion starts a new fold default, independent of live user choices.
     const key=encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active');
     const fold=`> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
     const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):approvals;
     return input+fold+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+bottom+'\n';
   }
-  if(phase==='complete')return input+(prose?`${prose}\n`:'')+(questions?`\n${questions}\n`:'');
+  const toolHistory=retain?responseTools(state,[turnId]).map(renderResponseTool).join('\n\n'):'';
+  if(phase==='complete')return input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
   const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):approvals?'\n\n'+approvals:'';
   const body=prose?`\n\n${prose}\n`:'';
-  return `${input}${followupIndex<0?heading+timer+spinner:''}${status}${body}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
+  return `${input}${followupIndex<0?heading+timer+spinner:''}${status}${body}${toolHistory?'\n\n'+toolHistory:''}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
 }
 
 export function turnPhase(state:InlineThreadState,turnId:string):'running'|'complete'|'interrupted'|'error' {

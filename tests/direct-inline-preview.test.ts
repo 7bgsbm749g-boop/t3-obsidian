@@ -1,21 +1,29 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {DirectInlinePreview,type DirectInlineUpdate} from '../direct-inline-preview';
+import {DirectInlinePreview,type DirectInlineUpdate,type PreviewClock} from '../direct-inline-preview';
 import type {LeaseRecord} from '../inline-lease';
 import type {ThreadStreamCallbacks,ThreadStreamItem,watchThread} from '../thread-stream';
 import {DeviceInlineManager} from '../leased-inline';
 import {InlineLeaseAuthority,leasePaths,type LeaseFiles} from '../inline-lease';
 
-function fixture(){
+class TestClock implements PreviewClock {
+  time=0;next=0;pending=new Map<number,{at:number;callback:()=>void}>();
+  now=()=>this.time;
+  later=(callback:()=>void,ms:number)=>{const id=++this.next;this.pending.set(id,{at:this.time+ms,callback});return id;};
+  cancel=(id:unknown)=>{this.pending.delete(id as number);};
+  advance(ms:number){const end=this.time+ms;for(;;){const entry=[...this.pending].sort((a,b)=>a[1].at-b[1].at)[0];if(!entry||entry[1].at>end)break;this.time=entry[1].at;this.pending.delete(entry[0]);entry[1].callback();}this.time=end;}
+}
+function fixture(paced=true){
   const request={version:4 as const,nativeProjection:true,id:randomUUID(),vaultId:randomUUID(),host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/inline'},initialOwner:randomUUID(),notePath:'Note.md',threadId:'thread',messageId:'prompt',projectId:'project',threadEnvironmentId:'host',initialHash:'hash',createdAt:'2026-10-06T03:00:00Z',intermediateMode:'keep' as const};
   const record:LeaseRecord={request,coordinated:true,migrating:true,owner:'host',epoch:1,revision:0,expiresAt:Number.MAX_SAFE_INTEGER};
   const streams:Array<{callbacks:ThreadStreamCallbacks;cursor:()=>number|undefined;stopped:boolean}>=[],updates:DirectInlineUpdate[]=[];
   const watch:typeof watchThread=(_id,_access,callbacks,_socket,_targets,replay)=>{const stream={callbacks,cursor:replay!.afterSequence,stopped:false};streams.push(stream);return {stop:()=>{stream.stopped=true;}};};
-  const preview=new DirectInlinePreview(record,async()=>{throw Error('No file or writer access in preview fixture');},update=>updates.push(update),watch);
+  const clock=new TestClock();
+  const preview=new DirectInlinePreview(record,async()=>{throw Error('No file or writer access in preview fixture');},update=>updates.push(update),watch,clock);
   const snapshot=(sequence=2,text='First paragraph',messageId='prompt',turnId='turn'):ThreadStreamItem=>({kind:'snapshot',snapshot:{snapshotSequence:sequence,thread:{id:'thread',projectId:'project',title:'Test',messages:[{id:messageId,role:'user',text:'Question',turnId,streaming:false},{id:'answer',role:'assistant',text,turnId,streaming:true}],activities:[],latestTurn:{turnId,state:'running',messageId},session:{status:'running',activeTurnId:turnId}}}});
-  const item=(item:ThreadStreamItem,index=streams.length-1)=>streams[index].callbacks.item(item);
-  return {preview,record,streams,updates,item,snapshot,event:(sequence:number,text:string,aggregateId='thread')=>item({kind:'event',event:{sequence,aggregateId,type:'thread.message-sent',payload:{messageId:'answer',role:'assistant',text,turnId:'turn',streaming:true}}})};
+  const item=(item:ThreadStreamItem,index=streams.length-1)=>{if(paced)clock.advance(80);streams[index].callbacks.item(item);};
+  return {preview,record,streams,updates,clock,item,snapshot,event:(sequence:number,text:string,aggregateId='thread')=>item({kind:'event',event:{sequence,aggregateId,type:'thread.message-sent',payload:{messageId:'answer',role:'assistant',text,turnId:'turn',streaming:true}}})};
 }
 test('direct text appears while the host is still waiting for Sync and old or duplicate data cannot regress it',()=>{
   const h=fixture();h.preview.tick(true);assert.equal(h.streams[0].cursor(),0);h.item(h.snapshot());
@@ -68,4 +76,20 @@ test('device registration starts the direct transport while host migration has n
   const record=JSON.parse(storage.get(leasePaths(identity.directory,request.id).record)!);assert.equal(record.migrating,true);assert.equal(record.state,undefined);
   const commands=[...storage].filter(([path])=>path.includes('/commands/')).map(([,bytes])=>JSON.parse(bytes));assert.ok(commands.every(command=>command.kind!=='checkpoint'));
  }finally{manager.dispose();authority.stop();globalThis.WebSocket=oldSocket;}
+});
+
+test('dense deltas advance the replay cursor immediately but display the full accumulated text at bounded intervals',()=>{
+  const h=fixture(false);h.preview.tick(true);h.item(h.snapshot());assert.equal(h.updates.length,1);
+  for(let sequence=3;sequence<=102;sequence++){h.event(sequence,'x');h.clock.advance(4);}
+  assert.equal(h.streams[0].cursor(),102);assert.equal(h.updates.length,6);
+  assert.match(h.updates.at(-1)!.body,new RegExp('First paragraph'+'x'.repeat(100)));
+  h.event(103,' pending');assert.equal(h.updates.length,6);
+  h.item({kind:'event',event:{sequence:104,type:'thread.session-set',payload:{session:{status:'ready',activeTurnId:null}}}});
+  assert.equal(h.updates.length,7);assert.match(h.updates.at(-1)!.body,/pending/);
+  h.clock.advance(1000);assert.equal(h.updates.length,7);h.preview.dispose();
+});
+test('suspension cancels trailing display work, and an exact delivery still displays immediately',()=>{
+  const h=fixture(false);h.preview.tick(true);h.item(h.snapshot());h.event(3,' queued');h.preview.tick(false);h.clock.advance(1000);assert.equal(h.updates.length,1);
+  h.preview.tick(true);h.preview.delivery({messageId:'prompt',turnId:'turn',requestedAt:h.record.request.createdAt,sequence:1});assert.match(h.updates.at(-1)!.body,/queued/);
+  h.event(4,' disposed');h.preview.dispose();const n=h.updates.length;h.clock.advance(1000);assert.equal(h.updates.length,n);
 });

@@ -12,9 +12,9 @@ const state=(activities:InlineActivity[]=[]):InlineThreadState=>({messages:[],ac
 test('canonical read, command, tool and reasoning state gives useful labels; unknown state falls back',()=>{
   assert.equal(responseActivityLabel(state([activity('read','tool.started',{data:{toolName:'Read'}})]),'turn'),'Reading file');
   for(const data of [{item:{command:'npm test'}},{item:{input:{command:'npm test'}}},{item:{result:{command:'npm test'}}},{command:'npm test'},{input:{command:'npm test'}},{state:{input:{command:'npm test'}}}]){
-    assert.equal(responseActivityLabel(state([activity('cmd','tool.started',{itemType:'command_execution',data})]),'turn'),'Running npm test');
+    assert.equal(responseActivityLabel(state([activity('cmd','tool.started',{itemType:'command_execution',data})]),'turn'),'Running npm');
   }
-  assert.equal(responseActivityLabel(state([activity('mcp','tool.started',{data:{tool:'preview_snapshot'}})]),'turn'),'Running preview_snapshot');
+  assert.equal(responseActivityLabel(state([activity('mcp','tool.started',{data:{tool:'preview_snapshot'}})]),'turn'),'Viewing preview snapshot');
   assert.equal(responseActivityLabel(state([activity('read','tool.started',{title:'Reading file'})]),'turn'),'Reading file');
   const thinking={...state(),messages:[{id:'reasoning',role:'reasoning',turnId:'turn',streaming:true,text:'private reasoning'}]};
   assert.equal(responseActivityLabel(thinking,'turn'),'Thinking');

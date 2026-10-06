@@ -548,7 +548,7 @@ for(const format of ['formatted','raw-markdown'] as const)test(`${format} prefer
   const first=h.create(h.actor),second=h.create(randomUUID());
   try{
     await first.manager.register(h.request);await h.drain(first.manager);
-    assert.match(first.document.value,/> First paragraph/);
+    assert.match(first.document.value,/stream-tail">First paragraph/);
     second.document.value=first.document.value;
     first.manager.dispose();h.advance(LEASE_MS+2001);
     second.manager.discover([h.request.host]);await h.drain(second.manager);

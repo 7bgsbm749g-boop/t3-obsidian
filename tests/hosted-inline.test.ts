@@ -433,7 +433,7 @@ for(const version of [1,2,3] as const)test(`initial question survives hosted v${
   h.files.set(h.paths.request,JSON.stringify(h.request));
   assert.match(h.document,/> Keep it brief\.[\s\S]*T3 · Working/);
   h.dispatch();let writer=h.create();await writer.tick();writer.stop();
-  assert.match(h.document,/> Keep it brief\.[\s\S]*> Progress A/);
+  assert.match(h.document,/> Keep it brief\.[\s\S]*stream-tail">Progress A/);
   writer=h.create();h.answer('Final answer.',true);await writer.tick();writer.stop();
   assert.match(h.document,version===3?/> \[!t3-steering\] You\n> Explain \*\*this\*\*\.\n>\n> Keep it brief\.\n\nFinal answer\./:/> \[!t3-steering\] You\n> Explain \*\*this\*\*\.\n>\n> Keep it brief\.\n\n> Final answer\./);
   assert.equal(h.document.split('[!t3-steering]').length-1,1);

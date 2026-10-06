@@ -101,7 +101,7 @@ test('stream deltas, final replacement, snapshots, status, and fence balancing r
   const event=(sequence:number,text:string,streaming:boolean)=>({kind:'event',event:{sequence,type:'thread.message-sent',payload:{messageId:'m1',role:'assistant',text,streaming,turnId:'turn'}}});
   state=applyThreadItem(state,event(1,'Here is\n',true)).state;
   state=applyThreadItem(state,event(2,'```ts\nconst x = 1;',true)).state;
-  assert.match(renderInlineTurn(state,'turn','thread'),/```ts\nconst x = 1;\n```\n\n\n<span class="send-to-t3-response-activity"/);
+  assert.match(renderInlineTurn(state,'turn','thread'),/stream-tail">Here is&#10;```ts&#10;const x = 1;<\/span>/);
   state=applyThreadItem(state,event(3,'Here is ```ts\nconst x = 2;\n```',false)).state;
   assert.equal(state.messages[0].text,'Here is ```ts\nconst x = 2;\n```');
   state=applyThreadItem(state,{kind:'event',event:{sequence:4,type:'thread.activity-appended',payload:{activity:{id:'a1',kind:'approval.requested',summary:'Review the command',turnId:'turn',payload:{requestId:'approval'}}}}}).state;
@@ -133,7 +133,7 @@ test('streamed numbered Markdown is marker-safe across trailing newlines',()=>{
   const id='numbered',region=initialRegion(id),source='Question\n'+region.text+'Following paragraph';
   const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:'1. First line.\n2. Second line.\n',streaming:true}],activities:[]};
   const rendered=renderInlineTurn(state,'turn','thread');
-  assert.equal(rendered,'**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n\n> 1. First line.\n> 2. Second line.\n\n\n'+responseActivityRow()+'\n');
+  assert.equal(rendered,'**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n\n> <span class="send-to-t3-stream-tail">1. First line.&#10;2. Second line.&#10;</span>\n\n\n'+responseActivityRow()+'\n');
   const change=replaceRegion(source,id,region.bodyHash,rendered);assert.ok(change);
   const updated=source.slice(0,change.from)+change.text+source.slice(change.to);
   assert.equal(regionBody(updated,id)?.body,rendered);
@@ -178,18 +178,18 @@ test('Markdown headings leave the quote while surrounding prose remains quoted',
   assert.equal(renderInlineTurn(state,'turn','thread','complete'),'> Intro\n\n## Section\n\n> Body\n\n### Detail\n\n> More body\n\n```md\n## Example only\n```\n');
 });
 
-test('a partial table stays quoted until its delimiter arrives, then reflows without losing text',()=>{
+test('a growing table stays literal until a block boundary, then renders without losing text',()=>{
   const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:'Intro\n\n| Name | Value |',streaming:true}],activities:[]} as any;
-  assert.match(renderInlineTurn(state,'turn','thread'),/> \| Name \| Value \|\n\n\n<span class="send-to-t3-response-activity"/);
-  state.messages[0].text+='\n| --- | --- |\n| A | 1 |';
+  assert.match(renderInlineTurn(state,'turn','thread'),/stream-tail">\| Name \| Value \|<\/span>/);
+  state.messages[0].text+='\n| --- | --- |\n| A | 1 |\n\n';
   assert.match(renderInlineTurn(state,'turn','thread'),/> Intro\n\n\| Name \| Value \|\n\| --- \| --- \|\n\| A \| 1 \|\n\n\n<span class="send-to-t3-response-activity"/);
 });
 
-test('an unfinished code fence renders outside the quote with a temporary close',()=>{
+test('an unfinished code fence stays literal and formats once the block is complete',()=>{
   const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:'Intro\n\n```ts\nconst value = 1;',streaming:true}],activities:[]} as any;
-  assert.match(renderInlineTurn(state,'turn','thread'),/> Intro\n\n```ts\nconst value = 1;\n```\n\n\n<span class="send-to-t3-response-activity"/);
+  assert.match(renderInlineTurn(state,'turn','thread'),/stream-tail">```ts&#10;const value = 1;<\/span>/);
   state.messages[0].text+='\n```\n\nDone.';
-  assert.match(renderInlineTurn(state,'turn','thread'),/> Intro\n\n```ts\nconst value = 1;\n```\n\n> Done\.\n\n\n<span class="send-to-t3-response-activity"/);
+  assert.match(renderInlineTurn(state,'turn','thread'),/```ts\nconst value = 1;\n```\n>\n> <span class="send-to-t3-stream-tail">Done\.<\/span>/);
 });
 
 test('pipes inside fences, escaped pipes, and prose do not create tables',()=>{
