@@ -93,3 +93,52 @@ Native desktop and QLO2 release smoke evidence must be retained outside the
 vault and recorded with the immutable release receipt. Unit tests and matching
 files alone do not establish visible editor adoption. This investigation does
 not establish native iPhone or Android behavior.
+
+## Immutable 2.34.4 production result
+
+Release 2.34.4 was packaged from clean reviewed source commit `4a90f84`;
+its version metadata is committed as `2364d04`. Its exact build and full suite
+passed 923 JavaScript tests and 11 Python tests. Development and QLO2 runtime
+installation, byte-identical settings preservation, and a fresh successful Sync
+scan were performed by the supported release entry point. Runtime main SHA-256:
+`e0c905d7a21c127ad3f75c8b0d695998cb742ae69398f8391b9a9d8addce6e6c`.
+
+A fresh bounded real delivery in thread
+`ac197a85-895d-5638-99dc-38c419c50981`, binding
+`7b818ec4-06ac-5a0b-8e22-be1fd983722c`, completed with exactly
+`EDITOR SAVE VERIFIED`. Native typing inserted `x` beside the start comment,
+accepted another character and its deletion, and inserted `z` beside the end
+comment. Saved Markdown contained both adjacent ordinary edits and excluded
+transient output during streaming. Checked final delivery saved both edits and
+the reply with SHA-256
+`baebcc0b279f6559fe71c0e6c270aac1f5c56094b0ca074537039e6a2b2e89c5`.
+The host recorded `finalSaved`, `cleanupComplete`, verified delivery, and two
+desktop actor acknowledgments. Native F2 rename after completion moved the
+retired binding's destination, and a checked full app reload preserved those
+exact saved bytes and displayed the renamed note with both characters.
+
+The earlier 2.34.3 combined-edge conflict was repaired using its reviewed hash
+and retained completed reply, without dispatching another turn. Its verified
+repaired document hash is
+`6a241a495e357ce402ca37621b915089aefcba689b1fc75aa44b0de4d39ed928`.
+The first bounded command waits returned pending; the original command ID later
+received a successful acknowledgment, which was independently checked against
+disk and journal. A timeout was never counted as a successful save.
+
+Production pointer clicks opened and closed the one-command tool batch and the
+existing four-command/seven-file batch. The latter owned test note retained its
+original hash. My three owned synthetic notes and temporary folder/link were
+removed only after exact hash checks and outside-vault evidence retention.
+Original folder links were preserved by this cleanup. Subsequent separately
+authorized folder-link and stream recovery belongs to thread
+`7e7934de-89f9-4207-91b2-1d2d466aba2e`, whose pending source is excluded from
+this immutable release, along with unfinished stream-close and language views.
+
+VPS fresh loaded client: `9c080bf5-5046-43b7-aaeb-9a74b7fb5b50`. Laptop
+fresh loaded client: `fdfe2bf7-9294-429a-b315-1280318b590e`. Both report
+2.34.4; native keystrokes were verified on the VPS, not repeated on Windows.
+The complete immutable smoke receipt is
+`/home/ubuntu/backups/send-to-t3-code/releases/2.34.4/smoke-vps-qlo2.json`;
+its copied JSON evidence references twenty hashed records and screenshots.
+Older 2.34.2/2.34.3 receipts remain incomplete and immutable. Phone coverage and
+unrecovered-writing limits above remain unchanged.
