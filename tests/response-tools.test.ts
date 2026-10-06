@@ -27,7 +27,7 @@ test('unfinished Markdown stays literal until a complete block boundary and is f
   message.streaming=false;assert.doesNotMatch(renderInlineTurn(state,'turn','thread','running','collapse'),/stream-tail/);
 });
 
-test('consecutive calls become one collapsed history group; the current batch appears once outside history',()=>{
+test('consecutive calls become one collapsed history group; the current batch appears once at the bottom',()=>{
   const message=(id:string,time:number,text:string,role='assistant')=>({id,role,text,turnId:'turn',streaming:false,createdAt:new Date(time*1000).toISOString()});
   const state:InlineThreadState={messages:[message('before',1,'Before.'),message('middle',5,'Between batches.')],activities:[
     a('one',2,'tool.completed',{toolCallId:'one',data:{command:'npm test',output:'first output'}}),
@@ -40,13 +40,14 @@ test('consecutive calls become one collapsed history group; the current batch ap
     const body=renderInlineTurn(state,'turn','thread','running',mode);
     assert.equal(body.match(/data-t3-tool-id="three"/g)?.length,1);
     assert.match(body,/<details class="send-to-t3-response-activity"[^\n]+<strong>Running npm<\/strong>/);
+    assert.match(body,mode==='collapse'?/^> <details class="send-to-t3-response-activity"/m:/^<details class="send-to-t3-response-activity"/m);
     assert.match(body,/data-t3-tool-id="three"[^>]+data-t3-tool-status="completed"[^\n]+Ran npm/);
     if(mode!=='remove'){assert.match(body,/<details class="send-to-t3-tool-group"[^>]*><summary>[^\n]*<span>Ran 2 commands<\/span><\/summary>/);assert.equal(body.match(/first output/g)?.length,1);}
     const stopped=stoppedResponseBody(body);assert.doesNotMatch(stopped,/data-t3-live-tool|response-activity|inline-spinner/);assert.match(stopped,/build passed/);
   }
   const collapsed=renderInlineTurn(state,'turn','thread','running','collapse');assert.ok(collapsed.indexOf('Before.')<collapsed.indexOf('Ran 2 commands')&&collapsed.indexOf('Ran 2 commands')<collapsed.indexOf('Between batches.'));
   state.messages.push(message('reason',7,'Private reasoning','reasoning'));
-  assert.equal(currentResponseToolGroup(state,'turn'),undefined);assert.equal(responseActivityLabel(state,'turn'),'Working');
+  assert.equal(currentResponseToolGroup(state,'turn'),undefined);assert.equal(responseActivityLabel(state,'turn'),'Thinking');
   const advanced=renderInlineTurn(state,'turn','thread','running','collapse');assert.match(advanced,/<span>Ran 1 command<\/span><\/summary>/);assert.doesNotMatch(advanced,/Private reasoning|<strong>Running npm/);
 });
 

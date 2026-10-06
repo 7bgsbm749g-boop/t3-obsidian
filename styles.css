@@ -153,11 +153,10 @@
 .send-to-t3-run-timer { font-variant-numeric: tabular-nums; color: var(--text-muted); font-weight: normal; }
 .send-to-t3-fold-key { display: none; }
 .send-to-t3-response-activity {
-  font-size: var(--h6-size);
-  font-family: var(--h6-font);
-  color: var(--h6-color, var(--text-muted));
+  color: var(--text-muted);
   overflow-wrap: anywhere;
 }
+.send-to-t3-response-activity[role="status"] { display: inline-flex; align-items: center; gap: .5em; }
 
 .send-to-t3-destination-top {
   display: flex;
@@ -198,7 +197,7 @@
 
 /* The unfinished paragraph keeps a stable text node until a block boundary. */
 .send-to-t3-stream-tail { white-space: pre-wrap; overflow-wrap: anywhere; }
-.send-to-t3-tool, .send-to-t3-tool-group { margin: .5em 0; font-size: var(--font-smaller); }
+.send-to-t3-tool, .send-to-t3-tool-group, .send-to-t3-response-activity { margin: .5em 0; font-size: var(--font-smaller); }
 .send-to-t3-tool > summary, details[data-t3-tool-group] > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); }
 .send-to-t3-tool > summary::before, details[data-t3-tool-group] > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
 .send-to-t3-tool[open] > summary::before, details[data-t3-tool-group][open] > summary::before { transform: rotate(90deg); }

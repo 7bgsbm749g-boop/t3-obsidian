@@ -111,7 +111,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
         heading.setAttribute('aria-expanded',String(!fold.classList.contains('is-collapsed')));
       }
     }
-    // The current tool group lives below history. Keep its dropdown and result
+    // Keep the current tool group's dropdown and result
     // nodes through native renders, and keep user choices when it becomes history.
     for(let group of Array.from(root.querySelectorAll<HTMLElement>('details[data-t3-tool-group]'))){
       const id=group.dataset.t3ToolGroup!;

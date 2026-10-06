@@ -71,7 +71,7 @@ function assertOneRun(text:string,phase='Working'){
   assert.equal(text.match(new RegExp(`Bounded history · ${phase}`,'g'))?.length,1);
   assert.equal(text.match(/class="send-to-t3-run-timer"/g)?.length,1);
   assert.equal(text.match(/^> \[!t3-progress\]\+ .*class="send-to-t3-inline-spinner"/gm)?.length,1);
-  assert.equal(text.match(/class="send-to-t3-response-activity"/g)?.length,1,'retain the separate bottom tool activity indicator');
+  assert.equal(text.match(/class="send-to-t3-response-activity"/g)?.length,1,'retain one bottom tool activity indicator');
 }
 function foldsOf(text:string){
   return unified().use(remarkParse).parse(text).children.filter(node=>node.type==='blockquote').map(node=>text.slice(node.position!.start.offset!,node.position!.end.offset!)).filter(block=>/^> \[!t3-progress\][+-]/.test(block));

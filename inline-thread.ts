@@ -83,7 +83,7 @@ export function renderInlineInput(text:string,label='You',position?:'live'|'reco
 
 export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming):{text:string;bodyHash:string} {
   const status=`${mode==='collapse'?'> [!t3-progress]+ ':''}**${inlineThreadLabel(threadTitle)} · Working**${timing?' '+runTimer(timing):''} <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
-  const body=(initialInput?`${renderInlineInput(initialInput.text,initialInput.label)}\n\n${status}`:status)+`\n\n${responseActivityRow()}`;
+  const body=(initialInput?`${renderInlineInput(initialInput.text,initialInput.label)}\n\n${status}`:status)+(mode==='collapse'?'\n>\n> ':'\n\n')+responseActivityRow();
   // The final blank line also closes the quote in Obsidian Live Preview when
   // this response is the last block in the note.
   return {text:`\n${startMarker(id)}\n${body}\n${endMarker(id)}\n\n`,bodyHash:contentHash(body)};
@@ -475,7 +475,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const toolGroups=responseToolGroups(state,[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])]);
   const currentTool=phase==='running'?currentResponseToolGroup(state,turnId,toolGroups):undefined;
   const historyGroups=toolGroups.filter(group=>group!==currentTool?.group);
-  const bottom=spinner?`\n\n${currentTool?renderResponseToolGroup(currentTool.group,currentTool):responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Working')}`:'';
+  const bottom=spinner?`\n\n${currentTool?renderResponseToolGroup(currentTool.group,currentTool):responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Thinking')}`:'';
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
@@ -513,11 +513,12 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
       else if(piece.text.trim())history.push(growing(piece.messageId)?quoteStreamingResponse(piece.text):quoteResponse(closeOpenFence(piece.text.trim())));
     }
     toolsBefore();
+    if(bottom)history.push(bottom.trim());
     // Completion starts a new fold default, independent of live user choices.
     const key=encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active');
     const fold=`> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
     const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):approvals;
-    return input+fold+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+bottom+'\n';
+    return input+fold+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }
   const toolHistory=retain?historyGroups.map(group=>renderResponseToolGroup(group)).join('\n\n'):'';
   if(phase==='complete')return input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
