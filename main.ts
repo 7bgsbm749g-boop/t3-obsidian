@@ -7,6 +7,7 @@ import {NativeConflictModal} from './native-conflict-modal';
 import {ResponseLocationModal} from './response-location-ui';
 import {stagedNoteInstruction} from './staged-note-instruction';
 import {isResponseCommand,validateResponseCommand} from './response-command';
+import {installStreamBlockControls} from './stream-block-controls';
 import {incomingLabel} from './inline-steering';
 import {detectMissingThree,suppliedNoteBlocks,leaseResponseEvidence,mergeNoteDeliveries,loadNoteDeliveries,withMissingThree,type NoteDelivery,type ResponseEvidence} from './missing-three';
 import {ProjectDiscovery,type ProjectSource,type ProjectSnapshot} from './project-discovery';
@@ -201,7 +202,7 @@ export default class SendToT3 extends Plugin {
     }),()=>this.settings.folderLinks.map(link=>({...link,environmentId:link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??this.eventLocalEnvironmentId})),this.settings.vaultId,{load:()=>this.settings.codebase,save:async state=>{this.settings.codebase=state;await this.save();},projectChanged:async(scope,change)=>{await this.updateCodebaseProjectLinks(scope,change);}});
     await this.codebase.install();
     }
-    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>nativeResponses(this.app).receive(record,proof),receiveDirect:update=>nativeResponses(this.app).stream(update),receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
+    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>{this.codebase?.observeSource(record.request,record.state?.notePath??record.request.notePath);return nativeResponses(this.app).receive(record,proof);},receiveDirect:update=>{this.codebase?.observeSource(update.request);return nativeResponses(this.app).stream(update);},receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
     this.addCommand({id:'stop-all-responses',name:'Stop all T3 responses in current note',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;if(this.stopped||!file||file.extension.toLowerCase()!=='md')return false;
       if(!checking)void this.inlineChat!.stopAllAt(editor,view,this.deviceInline?.stoppableResponses(file.path)).then(count=>new Notice(count?`Stopped ${count} T3 response${count===1?'':'s'} in this note.`:'No active or failed T3 responses in this note.')).catch(error=>new Notice(`T3: ${message(error)}`,10000));
@@ -225,6 +226,7 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.openImportStreams(file).catch(error=>new Notice(`T3 streams: ${message(error)}`,10000));return true;
     }});
     if(typeof document.querySelectorAll==='function')this.register(installResponsePresentation(document,setIcon));
+    if(typeof document.querySelectorAll==='function')this.register(installStreamBlockControls(this.app,document,command=>this.executeAgentCommand(command),setIcon,error=>new Notice(`T3: ${message(error)}`,10000)));
     const questionStorage=`${this.localKey}-questions-${this.settings.vaultId}`;
     this.questions=new QuestionController(environmentId=>this.inlineThreadAccess(environmentId),{load:()=>{const saved=this.app.loadLocalStorage(questionStorage);return Array.isArray(saved)?saved:[];},save:records=>this.app.saveLocalStorage(questionStorage,records)},randomId);
     const approvalStorage=`${this.localKey}-approvals-${this.settings.vaultId}`;
@@ -608,7 +610,7 @@ export default class SendToT3 extends Plugin {
           throw Error(`The response host has not acknowledged command ${command.id}. Check the saved result before retrying.`);
         }finally{opened.close();}
       }
-      return {id:command.id,ok:true,...await this.inlineHostService.responseCommand(command.kind,command.bindingId,command.hash,command.notePath)};
+      return {id:command.id,ok:true,...await this.inlineHostService.responseCommand(command.kind,command.kind==='close-stream-block'?command.foldKey:command.bindingId,command.hash,command.notePath)};
     }
     if(isFolderCommand(input)){
       if(this.stopped||this.busy)throw Error('Obsidian is unavailable or sending another request.');

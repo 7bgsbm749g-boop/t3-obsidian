@@ -20,7 +20,7 @@ Unchanged native buffers do not check or write remote files and do not replace r
 
 ## Links and discovery
 
-Notes keep ordinary bare wikilinks. Existing physical vault links win. The nearest linked project narrows basename matches; ambiguous matches require a chooser, and its choice is remembered per source note and link name. Worktree references retain the thread identity. Link opening searches uncached project names asynchronously before Obsidian's normal missing-link creation path. Known offline project files fail to open instead of creating vault notes.
+Notes keep original Markdown links and wikilinks, including absolute agent paths. Existing physical vault links win for ordinary vault references; exact project paths resolve first. The nearest linked project narrows basename matches; ambiguous matches require a chooser, and its choice is remembered per source note and link name. Worktree references retain the thread identity. Link opening searches uncached project names asynchronously before Obsidian's normal missing-link creation path. Known offline project files fail to open instead of creating vault notes.
 
 Codebase view is a separate left sidebar tab with the code-xml icon. It lists non-self linked projects once, expands directories lazily, and provides bare wikilinks through the file context action. Visible expanded folders and clean open text files refresh every 15 seconds. Device-local caches retain folder names, worktree names and expansion state across reloads. Cached rows appear before network work and remain during offline errors. The tree reconciles native explorer rows by identity, retains scroll/focus, and limits independent requests to four. Duplicate folder requests share one promise. Clean text is cached only in memory for 15 seconds; save verification always reads fresh bytes. Shared metadata records only files opened or linked, rather than every browsed entry. A changed workspace root has a separate native identity, so an old editor cannot save into a new workspace. No new T3 event protocol or server endpoint is required.
 
@@ -33,3 +33,43 @@ Right-click a project root for **Rename project…** or **Delete project…**. T
 The isolated `validation/codebase-lab.ts` runs against external synthetic files through the production bridge. It checks native MarkdownView/code opening, native autosave, bare link routing, conflict preservation, an unchanged physical file inventory, paired native editor refresh, and cached sidebar timing. Build with `node scripts/build-native-response-lab.mjs NEW_PRIVATE_EVIDENCE_DIR --codebase`; launch the returned independent profile. Full product delivery additionally requires the immutable QLO2 release, fresh Sync scan, native client reload and retained live smoke evidence.
 
 Native iPhone/Android coverage is not available on this VPS. The bridge uses internal Obsidian compatibility hooks; future Obsidian updates need the native regression checks. Third-party vault-wide enumeration continues to see only physical vault files; project links are resolved by this plugin.
+
+## Original project paths
+
+Agent responses keep their original Markdown and wikilink targets. The bridge
+resolves absolute workspace paths, local `file:` URLs, `sandbox:` paths, and
+Obsidian's slashless form before physical vault lookup. An accidental physical
+copy therefore cannot capture an exact project path. Bare vault links retain
+their existing precedence. Paths must fall within a known linked workspace at
+a directory boundary; traversal and invalid owned paths cannot create notes.
+
+The source note's recorded choice, linked project and machine select the
+workspace before choosing its longest matching root. Main workspaces and thread
+worktrees have separate identities. Cached explorer worktrees participate in
+synchronous resolution; cold absolute clicks discover worktrees once per root
+within a 15-second interval. Removed or moved recorded roots retain ownership
+for the unavailable state, but cannot hide a current matching workspace.
+
+Heading fragments, PDF fragments and zero-based line/column navigation pass
+through native view state. Local file-URL clicks and rendered image resources
+use small native Markdown adapters; no saved link text, editor language,
+physical vault inventory or project file content is changed by resolution.
+Signed image URLs remain only in the rendered DOM and in memory.
+
+
+The 2026-10-06 isolated desktop run retained evidence at
+`/home/ubuntu/backups/send-to-t3-code/path-routing-native-20261006-g`.
+Native clicks opened unchanged absolute references, file URLs and embedded
+images. The native cursor reached zero-based line 6 / column 3, a heading link
+reached line 4, and the native PDF toolbar selected page 2. Missing project
+files created no vault notes; project autosave and conflict recovery passed.
+Ten consecutive native opens had a 2 ms median (including one cold open); the
+cold maximum was 117.6 ms. Forty cached sidebar reveals had a 0.6 ms p95.
+These are desktop lab measurements, not network or native mobile guarantees.
+
+Independent review retained normal-Markdown and exact-path lookup measurements
+in the completion-alert implementation evidence directory. With ten projects
+and 3,000 registered files, median CPU time per 100 lookups was 0.025 ms for
+bare physical links, 0.035 ms for web URLs, 0.667 ms for physical folder links,
+and approximately 11 ms for exact project paths. No IO occurred. These figures
+were measured while other tests were running; network opens remain separate.
