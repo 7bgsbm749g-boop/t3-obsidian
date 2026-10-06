@@ -7,6 +7,7 @@ import {NativeConflictModal} from './native-conflict-modal';
 import {ResponseLocationModal} from './response-location-ui';
 import {stagedNoteInstruction} from './staged-note-instruction';
 import {isResponseCommand,validateResponseCommand} from './response-command';
+import {installStreamBlockControls} from './stream-block-controls';
 import {incomingLabel} from './inline-steering';
 import {detectMissingThree,suppliedNoteBlocks,leaseResponseEvidence,mergeNoteDeliveries,loadNoteDeliveries,withMissingThree,type NoteDelivery,type ResponseEvidence} from './missing-three';
 import {ProjectDiscovery,type ProjectSource,type ProjectSnapshot} from './project-discovery';
@@ -228,6 +229,7 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.openImportStreams(file).catch(error=>new Notice(`T3 streams: ${message(error)}`,10000));return true;
     }});
     if(typeof document.querySelectorAll==='function')this.register(installResponsePresentation(document,setIcon));
+    if(typeof document.querySelectorAll==='function')this.register(installStreamBlockControls(this.app,document,command=>this.executeAgentCommand(command),setIcon,error=>new Notice(`T3: ${message(error)}`,10000)));
     const questionStorage=`${this.localKey}-questions-${this.settings.vaultId}`;
     this.questions=new QuestionController(environmentId=>this.inlineThreadAccess(environmentId),{load:()=>{const saved=this.app.loadLocalStorage(questionStorage);return Array.isArray(saved)?saved:[];},save:records=>this.app.saveLocalStorage(questionStorage,records)},randomId);
     const approvalStorage=`${this.localKey}-approvals-${this.settings.vaultId}`;
@@ -623,7 +625,7 @@ export default class SendToT3 extends Plugin {
           throw Error(`The response host has not acknowledged command ${command.id}. Check the saved result before retrying.`);
         }finally{opened.close();}
       }
-      return {id:command.id,ok:true,...await this.inlineHostService.responseCommand(command.kind,command.bindingId,command.hash,command.notePath)};
+      return {id:command.id,ok:true,...await this.inlineHostService.responseCommand(command.kind,command.kind==='close-stream-block'?command.foldKey:command.bindingId,command.hash,command.notePath)};
     }
     if(isFolderCommand(input)){
       if(this.stopped||this.busy)throw Error('Obsidian is unavailable or sending another request.');

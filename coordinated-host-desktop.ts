@@ -14,6 +14,7 @@ import {restoreResponseAnchor} from './response-anchor-recovery';
 import {projectResponses,responseAnchor,responseRegion,savedProjection} from './native-response-projection';
 import {regionBody,initialRegion,startMarker,endMarker} from './inline-thread';
 import {logFailure} from './diagnostics';
+import {streamBlock,removeStreamBlock} from './stream-block';
 import {hostedPaths,type HostedInlineRequest,type HostedInlineState,type HostedWriterIO} from './hosted-inline';
 import {leasePaths,terminalLease,type InlineLeaseAuthority,type LeaseRecord,type LeaseIdentity,type LeaseFiles} from './inline-lease';
 
@@ -34,6 +35,16 @@ export class CoordinatedHost {
     if(previous!==undefined&&previous!==bytes)throw Error('An immutable native commit proof changed.');
     if(previous===undefined)await this.files.write(path,bytes);
     return {bytes,hash:contentHash(bytes)};
+  }
+  private async publishHistoryRemoval(record:LeaseRecord,result:NoteGeneration){
+    if(result.historyRemoval?.status!=='verified'||!record.state?.delivery)return record;
+    const proof=result.historyRemoval.proof;
+    if(record.state.delivery.commitId===proof.commitId)return record;
+    const published=await this.materialization(result);
+    const finalBody=removeStreamBlock(result.finalBody!,result.historyRemoval.key,result.historyRemoval.blockHash).text;
+    const state={...record.state,body:finalBody,finalBody,finalDocumentHash:proof.hash,delivery:{commitId:proof.commitId,hash:proof.hash,proofHash:published.hash,verifiedOnHost:true,observedBy:[]}};
+    const updated=await this.authority.checkpoint(record.request.id,state,{epoch:record.epoch,revision:record.revision});
+    this.records.set(record.request.id,updated);await nativeResponses(this.app).receive(updated,published.bytes);return updated;
   }
   private constructor(private app:App,private identity:LeaseIdentity,private files:LeaseFiles,private authority:InlineLeaseAuthority,readonly journal:DesktopGenerationJournal,readonly coordinator:GeneratedNoteCoordinator){}
   static async open(app:App,identity:LeaseIdentity,files:LeaseFiles,authority:InlineLeaseAuthority,options?:{journalRoot?:string}){
@@ -145,7 +156,14 @@ export class CoordinatedHost {
       }
       if(terminalLease(record)||record.state?.finalSaved){
         if(record.coordinated){
-          const journal=await this.journal.read(id);
+          let journal=await this.journal.read(id);
+          // A proven completed rename can still carry the original empty
+          // anchor. Settle its checked recovery before auditing shortened
+          // history; otherwise that known preimage becomes a false conflict.
+          if(journal?.historyRemoval&&journal.notePath===notePath&&!journal.pendingRename){
+            journal=await this.coordinator.observe(id);
+            record=await this.publishHistoryRemoval(record,journal);
+          }
           if(journal?.status==='verified'&&record.state?.delivery&&!record.state.delivery.proofHash){
             const proof=await this.materialization(journal);
             record=await this.authority.checkpoint(id,{...record.state,delivery:{...record.state.delivery,proofHash:proof.hash}},{epoch:record.epoch,revision:record.revision});this.records.set(id,record);
@@ -164,12 +182,14 @@ export class CoordinatedHost {
               if(saved===current.original){
                 const evidence=join(this.journal.root,id,'completed-rename-preimages');await fs.mkdir(evidence,{recursive:true,mode:0o700});
                 await fs.writeFile(join(evidence,contentHash(notePath)+'.md'),saved,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
-                await this.recoverySave(notePath,saved,current.verified.document,id,true);
+                const committed=current.historyRemoval?.status==='verified'?current.historyRemoval.proof.document:current.verified.document;
+                await this.recoverySave(notePath,saved,committed,id,true);
               }
               await this.coordinator.settleRename(id);
             }
-            await this.coordinator.observe(id);
-            for(const actor of record.state?.delivery?.observedBy??[])await this.coordinator.acknowledge(id,actor,record.state!.delivery!.commitId,journal.verified!.document).catch(()=>{});
+            const observed=await this.coordinator.observe(id);
+            record=await this.publishHistoryRemoval(record,observed);
+            for(const actor of record.state?.delivery?.observedBy??[])await this.coordinator.acknowledge(id,actor,record.state!.delivery!.commitId,observed.historyRemoval?.status==='verified'?observed.historyRemoval.proof.document:observed.verified!.document).catch(()=>{});
           }
         }
         return;
@@ -269,6 +289,19 @@ export class CoordinatedHost {
     }finally{if(detach)manager.cancel(path);}
   }
   async command(kind:string,id:string,hash?:string,notePath?:string){
+    if(kind==='close-stream-block'){
+      if(!notePath||!hash)throw Error('Choose the exact streaming block and note.');
+      const matches=[...this.records.values()].filter(record=>record.coordinated&&(record.state?.notePath??record.request.notePath)===notePath&&record.state?.status==='complete'&&record.state.cleanupComplete&&record.state.finalSaved&&record.state.finalBody&&streamBlock(record.state.finalBody,id));
+      // A repeated command can arrive after the lease has already adopted the
+      // shortened body. The journal retains the immutable original fold.
+      if(!matches.length)for(const record of this.records.values()){
+        if(!record.coordinated||(record.state?.notePath??record.request.notePath)!==notePath||record.state?.status!=='complete'||!record.state.cleanupComplete)continue;
+        if((await this.journal.read(record.request.id))?.historyRemoval?.key===id)matches.push(record);
+      }
+      if(matches.length!==1)throw Error('The completed streaming response is unavailable or ambiguous. Wait for delivery and try again.');
+      const record=matches[0],result=await this.coordinator.closeHistory(record.request.id,id,hash);
+      await this.publishHistoryRemoval(record,result);return {closed:true,bindingId:record.request.id};
+    }
     if(kind==='resolve-response-location'){
       const review=await this.locations(id),chosen=review.locations.find(location=>location.path===notePath);
       if(review.locationHash!==hash||!chosen)throw Error('The candidate notes changed. Review the response destination again.');

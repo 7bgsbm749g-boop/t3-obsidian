@@ -8,6 +8,9 @@ import {contentHash} from '../completion';
 import {coordinatedDeliveryLimitations} from '../coordinated-delivery-gates';
 import {generatedEventContent} from '../generated-event-content';
 import {eventContent} from '../event-subscriptions';
+import {historyFixture} from './fixtures/stream-history';
+import {streamBlock} from '../stream-block';
+import {nativeCommitMatches,readNativeCommitProof} from '../native-response-commit';
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 function request(response=id,path='Arms.md'):HostedInlineRequest{return {version:2,id:response,initialOwner:id,vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/test/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:path,threadId:'thread',messageId:id,projectId:'project',threadEnvironmentId:'host',initialHash:initialRegion(response).bodyHash,createdAt:'2026-10-02T20:00:00Z',independent:true};}
 function fixture(){
@@ -114,4 +117,54 @@ test('renames retain immutable request identity and exact response registration'
 });
 test('delivery limitations describe the actual out-of-band boundary and waived platform coverage',()=>{
   assert.ok(coordinatedDeliveryLimitations.some(value=>value.includes('out-of-band')));assert.ok(coordinatedDeliveryLimitations.some(value=>value.includes('iPhone')));
+});
+
+test('history close preserves the immutable final result, unrelated edits and observable subscription baseline',async()=>{
+  const f=fixture(),{body,key}=historyFixture();await f.coordinator.accept(request(),f.original);await f.coordinator.result(id,f.original,body);await f.coordinator.commit(id);
+  const original=(await f.journal.read(id))!,oldProof=f.coordinator.materialization(original),oldBaseline=eventContent(generatedEventContent(f.get(),[original]));
+  f.set(f.get().replace('Workout','Edited workout').replace('Tail','Edited tail'));
+  const result=await f.coordinator.closeHistory(id,key,contentHash(streamBlock(body,key)!.text));
+  assert.equal(result.finalBody,body);assert.deepEqual(result.verified,original.verified);assert.deepEqual(result.attempt,original.attempt);
+  assert.equal(result.historyRemoval!.status,'verified');assert.ok(!f.get().includes('Checking.'));assert.ok(f.get().includes('Final answer stays.'));assert.ok(f.get().includes('Edited workout'));assert.ok(f.get().includes('Edited tail'));
+  const proof=f.coordinator.materialization(result),bytes=JSON.stringify(proof);
+  assert.notEqual(proof.commitId,oldProof.commitId);assert.ok(nativeCommitMatches(proof,f.get()));assert.equal(nativeCommitMatches(proof,f.get().replace('Final answer stays.','Changed final')),false);
+  assert.deepEqual(readNativeCommitProof(bytes,id,{commitId:proof.commitId,hash:proof.hash,proofHash:contentHash(bytes),verifiedOnHost:true,observedBy:[]}),proof);
+  assert.equal(eventContent(generatedEventContent(f.get(),[result])),oldBaseline.replace('Workout','Edited workout').replace('Tail','Edited tail'));
+  assert.equal((await f.coordinator.observe(id)).status,'verified');
+  const writes=f.writes();await f.coordinator.closeHistory(id,key,contentHash(streamBlock(body,key)!.text));assert.equal(f.writes(),writes);
+  await f.coordinator.acknowledge(id,'late-device',proof.commitId,proof.document);assert.equal((await f.journal.read(id))!.acknowledgements.at(-1)!.commitId,proof.commitId);
+});
+test('history close refuses a changed final answer, active block or stale checksum without writing',async()=>{
+  for(const reason of ['final','checksum','active']){
+    const f=fixture(),{body,key}=historyFixture(reason==='active');await f.coordinator.accept(request(),f.original);await f.coordinator.result(id,f.original,body);await f.coordinator.commit(id);
+    if(reason==='final')f.set(f.get().replace('Final answer stays.','User final edit'));
+    const before=f.get(),writes=f.writes(),hash=reason==='checksum'?'0'.repeat(64):contentHash(streamBlock(body,key)!.text);
+    await assert.rejects(f.coordinator.closeHistory(id,key,hash));assert.equal(f.get(),before);assert.equal(f.writes(),writes);
+  }
+});
+test('a crash after history save recovers its durable intent and shortened delivery proof',async()=>{
+  const f=fixture(),{body,key}=historyFixture();await f.coordinator.accept(request(),f.original);await f.coordinator.result(id,f.original,body);await f.coordinator.commit(id);
+  await f.coordinator.closeHistory(id,key,contentHash(streamBlock(body,key)!.text));
+  f.records.set(id,structuredClone(f.events.find(event=>event.event==='history-removal-pending').state));
+  const restart=new GeneratedNoteCoordinator(f.journal,f.notes),writes=f.writes();
+  const recovered=await restart.observe(id);assert.equal(recovered.status,'verified');assert.equal(recovered.historyRemoval!.status,'verified');assert.equal(f.writes(),writes);assert.ok(nativeCommitMatches(restart.materialization(recovered),f.get()));
+});
+test('closing one response preserves an independent active response in the same note',async()=>{
+  const f=fixture(),{body,key}=historyFixture(),original=f.original.replace('Tail',`${responseAnchor(other)}\n\nTail`);f.set(original);
+  await f.coordinator.accept(request(),original);
+  await f.coordinator.accept({...request(other),messageId:other,threadId:'another-thread'},original);
+  await f.coordinator.result(id,original,body);await f.coordinator.commit(id);
+  await f.coordinator.closeHistory(id,key,contentHash(streamBlock(body,key)!.text));
+  assert.ok(f.get().includes(responseAnchor(other)));assert.ok(f.get().includes('Final answer stays.'));assert.ok(!f.get().includes('Checking.'));
+  await f.coordinator.result(other,original,'> Independent final answer.');
+  assert.equal((await f.coordinator.commit(other)).status,'verified');
+  assert.ok(f.get().includes('Independent final answer.'));assert.ok(!f.get().includes('Checking.'));
+  assert.equal((await f.coordinator.observe(id)).status,'verified');
+});
+test('failed history compare-and-set cancels its intent and permits a later checked retry',async()=>{
+  const f=fixture(),{body,key}=historyFixture();await f.coordinator.accept(request(),f.original);await f.coordinator.result(id,f.original,body);await f.coordinator.commit(id);
+  let fail=true;const coordinator=new GeneratedNoteCoordinator(f.journal,{read:f.notes.read,compareAndSet:async(...args)=>fail?false:f.notes.compareAndSet(...args)});
+  const hash=contentHash(streamBlock(body,key)!.text),before=f.get();await assert.rejects(coordinator.closeHistory(id,key,hash),/changed/);
+  assert.equal(f.get(),before);assert.equal((await f.journal.read(id))!.historyRemoval,undefined);
+  fail=false;assert.equal((await coordinator.closeHistory(id,key,hash)).historyRemoval!.status,'verified');
 });

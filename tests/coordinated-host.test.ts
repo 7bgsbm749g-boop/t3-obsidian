@@ -12,11 +12,12 @@ import {HostedInlineWriter,hostedRequestHash,hostedPaths,type HostedInlineReques
 import {initialRegion} from '../inline-thread';
 import {responseAnchor} from '../native-response-projection';
 import {contentHash} from '../completion';
+import {streamBlock,streamBlocks} from '../stream-block';
 
-async function setup(native=true,liveLease=false){
+async function setup(native=true,liveLease=false,collapse=false){
   const root=await mkdtemp(join(tmpdir(),'coordinated-production-')),vault=join(root,'vault');await import('node:fs/promises').then(fs=>fs.mkdir(vault));
   const identity={vaultId:randomUUID(),environmentId:'host',workspaceRoot:vault,directory:'.obsidian/t3-code/inline/v1'},id=randomUUID(),actor=randomUUID(),initial=initialRegion(id);
-  const request:HostedInlineRequest={version:2,nativeProjection:native,independent:true,id,initialOwner:actor,vaultId:identity.vaultId,host:identity,notePath:'Note.md',threadId:'thread',messageId:randomUUID(),projectId:'project',threadEnvironmentId:'host',initialHash:initial.bodyHash,createdAt:'2026-10-03T00:00:00Z'};
+  const request:HostedInlineRequest={version:2,nativeProjection:native,independent:true,id,initialOwner:actor,vaultId:identity.vaultId,host:identity,notePath:'Note.md',threadId:'thread',messageId:randomUUID(),projectId:'project',threadEnvironmentId:'host',initialHash:initial.bodyHash,createdAt:'2026-10-03T00:00:00Z',...(collapse?{intermediateMode:'collapse'}:{})};
   const file={path:'Note.md'},notes=new Map([['Note.md',`# Exercise\n\n| Exercise | 20kg |\n| --- | ---: |\n| Barb | 20 |\n\n${native?responseAnchor(id):initial.text}\n\nTail\n`]]),storage=new Map<string,string>();let writes=0;
   const files:LeaseFiles={read:async path=>storage.get(path),write:async(path,value)=>{storage.set(path,value);},remove:async path=>{storage.delete(path);},list:async directory=>[...storage.keys()].filter(path=>path.startsWith(directory+'/'))};
   const authority=new InlineLeaseAuthority(identity,files),remote={...files,read:async(path:string)=>{if(path.includes('/replies/'))await authority.tick();return files.read(path);}};
@@ -33,6 +34,21 @@ async function setup(native=true,liveLease=false){
   const writer=new HostedInlineWriter(identity,host.io(base));
   return {root,app,identity,base,host,authority,client,files,storage,request,id,notes,file,writer,complete:()=>{completed=true;},writes:()=>writes,close:async()=>{writer.stop();host.stop();authority.stop();client.dispose();await rm(root,{recursive:true,force:true});}};
 }
+
+test('history close uses a completed lease and publishes a shortened immutable delivery proof',async()=>{
+ const h=await setup(true,false,true);try{
+  await h.writer.tick();h.complete();await h.writer.tick();await h.host.scan();
+  const before=h.notes.get('Note.md')!,block=streamBlocks(before)[0],old=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
+  assert.ok(block?.complete);h.notes.set('Note.md',before+'Unrelated late text\n');
+  const response:any=await h.host.command('close-stream-block',block.key,contentHash(block.text),'Note.md');assert.equal(response.closed,true);
+  const after=h.notes.get('Note.md')!,record=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
+  assert.ok(after.includes('Added **25kg**.'));assert.ok(after.endsWith('Unrelated late text\n'));assert.ok(!after.includes('[!t3-progress]'));assert.equal(record.state.status,'complete');assert.notEqual(record.state.delivery.commitId,old.state.delivery.commitId);
+  const bytes=(await h.files.read(nativeCommitPath(h.identity.directory,h.id,record.state.delivery.commitId)))!,proof=readNativeCommitProof(bytes,h.id,record.state.delivery);
+  assert.ok(nativeCommitMatches(proof,after));assert.equal(nativeCommitMatches(proof,after.replace('Added **25kg**.','Changed final')),false);
+  const writes=h.writes();await h.host.command('close-stream-block',block.key,contentHash(block.text),'Note.md');assert.equal(h.writes(),writes);
+  await h.host.scan();assert.equal((await h.host.journal.read(h.id))!.status,'verified');
+ }finally{await h.close();}
+});
 
 test('production host streams only to journal, stages a table and commits the result in one save with real acknowledgements',async()=>{
  const h=await setup();try{
@@ -307,6 +323,19 @@ test('a completed native rename repairs only the exact stale anchor once, includ
   h.notes.set('Renamed.md',original);await restarted.scan();
   assert.equal(h.notes.get('Renamed.md'),original,'a later undo is not silently repaired');
   assert.equal((await restarted.journal.read(h.id))!.status,'conflict');
+ }finally{restarted?.stop();await h.close();}
+});
+test('completed rename recovery retains an explicitly closed history after restart',async()=>{
+ const h=await setup(true,false,true);let restarted:CoordinatedHost|undefined;try{
+  await h.writer.tick();const original=h.notes.get('Note.md')!;h.complete();await h.writer.tick();
+  const block=streamBlocks(h.notes.get('Note.md')!)[0];
+  await h.host.command('close-stream-block',block.key,contentHash(block.text),'Note.md');
+  const shortened=h.notes.get('Note.md')!;
+  await h.client.command({kind:'relocate',jobId:h.id,previousNotePath:'Note.md',notePath:'Renamed.md'});await h.host.scan();
+  h.host.stop();h.writer.stop();restarted=await CoordinatedHost.open(h.app,h.identity,h.files,h.authority,{journalRoot:join(h.root,'journal')});
+  h.notes.set('Renamed.md',original);await restarted.scan();
+  assert.equal(h.notes.get('Renamed.md'),shortened);assert.ok(!shortened.includes('[!t3-progress]'));assert.ok(shortened.includes('Added **25kg**.'));
+  assert.equal((await restarted.journal.read(h.id))!.status,'verified');
  }finally{restarted?.stop();await h.close();}
 });
 test('completed rename recovery preserves changed ordinary text as a conflict',async()=>{

@@ -5,6 +5,8 @@ import {hostedRequestHash,validateHostedRequest} from './hosted-inline';
 import {changedEdits,changedInterval,mergeSavedEdits,type SavedEdit} from './coordinated-merge';
 import {responseAnchor,responseRegion} from './native-response-projection';
 import type {NativeCommitProof} from './native-response-commit';
+import {nativeCommitMatches} from './native-response-commit';
+import {streamBlock,removeStreamBlock} from './stream-block';
 
 export interface NoteGeneration {
   journalRevision?:number;
@@ -16,6 +18,7 @@ export interface NoteGeneration {
   conflicts:Array<{original:string;latest:string;proposed?:string;reason:string}>;
   acknowledgements:Array<{deviceId:string;commitId:string;hash:string;observedAt:string}>;
   pendingRename?:{before:string;after:string};
+  historyRemoval?:{key:string;blockHash:string;before:string;proof:NativeCommitProof;status:'pending'|'verified'};
 }
 export interface GenerationJournal {
   read(id:string):Promise<NoteGeneration|undefined>;
@@ -96,6 +99,7 @@ export class GeneratedNoteCoordinator {
     return [...changedEdits(record.original,record.staged),{...final,preserveBoundaryInsertions:true}];
   }
   materialization(record:NoteGeneration):NativeCommitProof {
+    if(record.historyRemoval?.status==='verified')return record.historyRemoval.proof;
     if(record.status!=='verified'||!record.verified||!record.attempt)throw Error('Native materialization requires a verified journal commit.');
     const merged=mergeSavedEdits(record.original,record.attempt.before,this.edits(record));
     if(!merged.ok||merged.text!==record.verified.document)throw Error('Native materialization does not match the verified result.');
@@ -145,7 +149,8 @@ export class GeneratedNoteCoordinator {
     const initial=await this.require(id);
     return this.serial(initial.notePath,async()=>{
       const record=await this.require(id),hash=contentHash(document);
-      if(record.status!=='verified'||!record.verified||record.verified.commitId!==commitId||record.verified.hash!==hash)throw Error('Device observed a different or unverified result.');
+      const evidence=record.historyRemoval?.status==='verified'&&record.historyRemoval.proof.commitId===commitId?record.historyRemoval.proof:record.verified;
+      if(record.status!=='verified'||!evidence||evidence.commitId!==commitId||evidence.hash!==hash)throw Error('Device observed a different or unverified result.');
       if(!deviceId.trim())throw Error('Missing authenticated device identity.');
       if(!record.acknowledgements.some(ack=>ack.deviceId===deviceId&&ack.commitId===commitId)){record.acknowledgements.push({deviceId,commitId,hash,observedAt:new Date().toISOString()});await this.journal.append(id,record,'device-observed');}
       return record;
@@ -154,6 +159,52 @@ export class GeneratedNoteCoordinator {
   async remove(id:string){
     const initial=await this.require(id);
     return this.serial(initial.notePath,async()=>{const record=await this.require(id);if(record.status!=='removed'){record.status='removed';await this.journal.append(id,record,'intentional-removal');}return record;});
+  }
+  /** A history-only deletion is an explicit checked user edit. Preserve the
+   * original response and commit evidence; publish a derived proof for clients
+   * that receive the shortened note before adopting the original delivery. */
+  async closeHistory(id:string,key:string,blockHash:string){
+    const initial=await this.require(id);
+    return this.serial(initial.notePath,async()=>{
+      const record=await this.require(id);
+      if(!record.verified||!['verified','conflict'].includes(record.status))throw Error('The response has not finished saving.');
+      const originalBlock=record.finalBody?streamBlock(record.finalBody,key):undefined;
+      if(!originalBlock?.complete||contentHash(originalBlock.text)!==blockHash)throw Error('The streaming history differs from its saved response.');
+      const latest=await this.notes.read(record.notePath);if(latest===undefined)throw Error('The response note is unavailable.');
+      let intent=record.historyRemoval;
+      if(intent){
+        if(intent.key!==key||intent.blockHash!==blockHash)throw Error('A different history removal is already recorded.');
+        if(intent.status==='verified'){
+          if(nativeCommitMatches(intent.proof,latest))return record;
+          // Native undo may restore the exact original history. A new close
+          // is a new intentional edit, preserving the earlier immutable proof.
+          if(!streamBlock(latest,key))throw Error('The shortened response changed.');
+          intent=undefined;record.historyRemoval=undefined;
+        }
+        if(intent&&latest!==intent.before&&latest!==intent.proof.document)throw Error('The note changed during history removal.');
+      }
+      if(!intent){
+        // Exact protected ranges, rather than the old whole-note checksum,
+        // permit unrelated edits and other responses in the same note.
+        const base=this.materialization({...record,status:'verified',historyRemoval:undefined});
+        if(!nativeCommitMatches(base,latest))throw Error('The saved response changed. Save or reload the note before removing its history.');
+        const removal=removeStreamBlock(latest,key,blockHash),outside=changedEdits(base.document,latest);
+        const ranges=base.ranges.map(range=>{
+          const shift=outside.filter(edit=>edit.to<range.from).reduce((sum,edit)=>sum+edit.text.length-(edit.to-edit.from),0);
+          const from=range.from+shift,to=range.to+shift;
+          const map=(offset:number)=>offset<=removal.from?offset:offset>=removal.to?offset-(removal.to-removal.from):removal.from;
+          return {from:map(from),to:map(to)};
+        });
+        const proof:NativeCommitProof={version:1,bindingId:id,commitId:this.id(),hash:contentHash(removal.text),document:removal.text,ranges};
+        record.status='verified';intent=record.historyRemoval={key,blockHash,before:latest,proof,status:'pending'};
+        await this.journal.append(id,record,'history-removal-pending');
+      }
+      if(latest!==intent.proof.document&&!await this.notes.compareAndSet(record.notePath,intent.before,intent.proof.document)){
+        if(await this.notes.read(record.notePath)!==intent.proof.document){record.historyRemoval=undefined;await this.journal.append(id,record,'history-removal-not-applied');throw Error('The note changed before history removal. Save the note and try again.');}
+      }
+      if(await this.notes.read(record.notePath)!==intent.proof.document)throw Error('History removal has not reached the saved note.');
+      intent.status='verified';await this.journal.append(id,record,'history-removal-verified');return record;
+    });
   }
   /** Explicit conflict resolution, never an inference from missing text. A
    * frontend must bind this to a user's restore choice for the displayed
@@ -183,6 +234,16 @@ export class GeneratedNoteCoordinator {
     return this.serial(initial.notePath,async()=>{
       const record=await this.require(id);if(record.status!=='verified'||!record.verified)return record;
       const latest=await this.notes.read(record.notePath);
+      if(record.historyRemoval){
+        const intent=record.historyRemoval;
+        if(intent.status==='pending'){
+          if(latest===intent.before)return record;
+          if(latest===intent.proof.document){intent.status='verified';await this.journal.append(id,record,'history-removal-verified');return record;}
+          const base=this.materialization({...record,historyRemoval:undefined});
+          if(latest!==undefined&&nativeCommitMatches(base,latest)){record.historyRemoval=undefined;await this.journal.append(id,record,'history-removal-not-applied');return record;}
+        }else if(latest!==undefined&&nativeCommitMatches(intent.proof,latest))return record;
+        return this.conflict(record,latest??'','A later note version changed the explicitly shortened response.');
+      }
       if(latest===record.verified.document)return record;
       if(latest!==undefined){
         const user=changedInterval(record.verified.document,latest);

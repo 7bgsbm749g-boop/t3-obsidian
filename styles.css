@@ -132,6 +132,9 @@
   top: var(--send-to-t3-header-center);
   transform: translateY(-50%);
 }
+.send-to-t3-stream-actions .edit-block-button:not(.send-to-t3-stream-close),
+.send-to-t3-stream-close[hidden] { display: none !important; }
+.send-to-t3-stream-close[aria-disabled="true"] { pointer-events: none; opacity: 0.5; }
 .callout[data-callout="t3-progress"] > .callout-content {
   position: relative;
   padding-inline-start: 1em;
