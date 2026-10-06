@@ -68,6 +68,22 @@ The supported release receipt and QLO2 live-delivery evidence are recorded under
 `/home/ubuntu/backups/send-to-t3-code/releases/` and
 `/home/ubuntu/backups/send-to-t3-code/stream-fix-20261006/` respectively.
 
+QLO2 release **2.33.7** received a fresh successful Headless Sync scan and a
+supported client reload. The new client instance reported loaded version 2.33.7.
+Two bounded real deliveries completed and saved their final replies. The second
+used a full-width Live Preview editor: across **2,413 sampled animation frames**,
+missing, closed and replaced active callout counts were zero. The expanded tool
+retained node identity and open state through `inProgress` → `completed`, displayed
+**Running python3** → **Ran python3**, and retained its exact command and output.
+The completed fold closed normally, with the final reply visible below it.
+`qlo2-live-metrics.json`, screenshots, saved synthetic note copies, lease records,
+reload acknowledgement and client status are retained in the dated evidence root.
+The first delivery's diagnostic pane obscured its live content; no live frame
+claim relies on that run. Both temporary notes were removed through the real
+client after completion, the previous note was restored, and native CLI access
+was returned to its original disabled setting. The final host status was idle,
+with zero pending operations and zero timeouts.
+
 ## Limits
 
 This verifies native Linux desktop editor behavior, with the production release
