@@ -54,3 +54,30 @@ link worked. Clicking close removed history from both disk and the visible
 editor, preserved final prose and surrounding text, and verified the private
 removal journal. Evidence is retained at
 `/home/ubuntu/backups/send-to-t3-code/stream-close-native-2348-20261006/verified.json`.
+
+## QLO2 release 2.34.9
+
+Immutable source `9cead67` passed the complete 955 JavaScript and 11 Python
+suite. The supported release tool installed and freshly synced exact 2.34.9
+bytes while preserving each installation's settings during deployment.
+A checked native reload loaded fresh instance
+`bb284bb2-73bc-46d3-83a4-86e4115f3f04` in QLO2 Obsidian 1.14.4.
+
+A bounded real delivery verified active and completed text clicks, native drag
+selection and clipboard text, tool summary expansion and output copy, the
+completed close button, and exact history-only deletion. The shortened note
+matched the checked host delivery hash and kept its final answer and all
+outside bytes. An ordinary callout retained its native edit action. The
+synthetic note and tab were removed, and all 19 original leaf IDs and the
+original active leaf were preserved. Native deletion displayed a view-close
+warning; independent saved-file and workspace checks verified cleanup.
+Normal delivery/deletion updated only retained `noteThreads` metadata; no
+settings file was manually edited or restored.
+
+Complete receipt:
+`/home/ubuntu/backups/send-to-t3-code/releases/2.34.9/smoke-vps-qlo2.json`.
+Native evidence:
+`/home/ubuntu/backups/send-to-t3-code/stream-close-qlo2-2349-20261006/evidence.json`.
+The laptop was offline, so this does not establish a native Windows 2.34.9
+reload. There is no native mobile coverage. The separate path thread's
+pointer/performance smoke remains incomplete.
