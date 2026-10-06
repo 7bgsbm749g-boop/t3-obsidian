@@ -175,7 +175,18 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
     event.preventDefault();event.stopPropagation();
     void navigator.clipboard.writeText(code.textContent??'').then(()=>{button.textContent='Copied';},()=>{button.textContent='Copy failed';});
   };
-  const click=(event:Event)=>{remember(event);copyTool(event);};
+  const click=(event:Event)=>{
+    const summary=(event.target as Element)?.closest?.('summary'),detail=summary?.parentElement;
+    if(detail?.matches('details[data-t3-tool-group], details[data-t3-tool-key]')){
+      // A native editor can replace the HTML widget before the asynchronous
+      // toggle event arrives. Record the user's next choice before that render.
+      const id=detail.getAttribute('data-t3-tool-group')??detail.getAttribute('data-t3-tool-key')!;
+      const container=owner(detail);let saved=toolChoices.get(container);if(!saved){saved=new Map();toolChoices.set(container,saved);}
+      const expanded=!detail.hasAttribute('open');saved.set(id,expanded);detail.toggleAttribute('open',expanded);
+      event.preventDefault();event.stopImmediatePropagation();return;
+    }
+    remember(event);copyTool(event);
+  };
   const observer=new MutationObserver(records=>{if(records.some(record=>[...Array.from(record.addedNodes),...Array.from(record.removedNodes)].some(node=>node.nodeType===1)))schedule();});
   observer.observe(root.body,{childList:true,subtree:true});
   root.addEventListener('click',click,true);root.addEventListener('keydown',keyboard);root.addEventListener('toggle',rememberTool,true);

@@ -45,9 +45,10 @@ export default class DenseStreamLab extends Plugin {
     const live=(leaf:any)=>leaf.view.containerEl.querySelector('.cm-content details[data-t3-live-tool="true"]') as HTMLDetailsElement|null;
     const liveGroups=leaves.map(live);
     check('one collapsed current group outside history',liveGroups.every(node=>node&&!node.open&&!node.closest('.callout'))&&originals.every(node=>!node.querySelector('[data-t3-tool-id]')));
-    liveGroups.forEach(node=>{if(node)node.open=true;});
+    liveGroups.forEach(node=>node?.querySelector<HTMLElement>(':scope > summary')?.click());
+    check('summary click opens the current group',liveGroups.every(node=>node?.open));
     const details=liveGroups.map(node=>node?.querySelector<HTMLDetailsElement>('[data-t3-tool-id="npm"]'));
-    details.forEach(node=>{if(node)node.open=true;});
+    details.forEach(node=>node?.querySelector<HTMLElement>(':scope > summary')?.click());
     const editor=(first.view as MarkdownView).editor;editor.setSelection({line:2,ch:0},{line:2,ch:8});
     const text='The next paragraph grows without changing the opening paragraph. '.repeat(2)+'\n\n| Name | Value |\n| --- | --- |\n| Stable | 1 |\n\n```ts\n\nconst value = 1;\n```\n\nLast growing paragraph.';
     let frames=0,missingFrames=0,closedFrames=0,replacedFrames=0,groupMissing=0,groupClosed=0,groupReplaced=0,sampling=true;
@@ -100,8 +101,12 @@ export default class DenseStreamLab extends Plugin {
     event('thread.message-sent',{messageId:'after-batch',role:'assistant',text:'After batch.',turnId:'turn',createdAt:at(sequence+1),streaming:false});await pause(180);
     const mixed=leaves.map(leaf=>Array.from(fold(leaf)?.querySelectorAll<HTMLDetailsElement>('details[data-t3-tool-group]')??[]).find(node=>node.querySelector(':scope > summary')?.textContent==='Ran 4 commands and changed 7 files'));
     check('exact T3 command/file summary defaults closed',mixed.every(node=>node&&!node.open&&node.querySelectorAll('[data-t3-tool-id]').length===5));
-    mixed.forEach(node=>{if(node)node.open=true;});await pause(80);
+    mixed.forEach(node=>node?.querySelector<HTMLElement>(':scope > summary')?.click());await pause(80);
     check('summary click reveals all calls',mixed.every(node=>node?.open&&getComputedStyle(node.querySelector('.send-to-t3-tool-group-content')!).display!=='none'));
+    mixed.forEach(node=>node?.querySelector<HTMLElement>(':scope > summary')?.click());
+    event('thread.message-sent',{messageId:'after-batch',role:'assistant',text:' More text.',turnId:'turn',streaming:true});await pause(160);
+    check('summary click closes the batch through a native redraw',mixed.every(node=>node?.isConnected&&!node.open));
+    event('thread.message-sent',{messageId:'after-batch',role:'assistant',text:'After batch. More text.',turnId:'turn',streaming:false});
     await this.capture('tool-groups.png');
     // Finish the tool and message before terminal turn evidence.
     tool('tool.completed','read',{content:[{type:'text',text:'Synthetic file contents.'}]},'completed');

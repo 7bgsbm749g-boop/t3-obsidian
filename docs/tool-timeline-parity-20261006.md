@@ -61,3 +61,21 @@ delivery must pass before the release is marked complete. The live release
 receipt records runtime hashes, Sync, client reload and final smoke evidence.
 These checks cover the VPS desktop client. Native iPhone and Android behavior
 was not tested.
+
+The first QLO2 delivery in 2.34.2 saved the exact requested summary and checked
+final reply. Subsequent pointer clicks did not reliably close the batch. A
+separate repair thread is investigating an editor/save lockup; those clicks
+do not establish a dropdown-specific cause. Code review also identified a
+choice-restoration window before the asynchronous native details toggle.
+The source follow-up captures the user's next choice synchronously on the
+summary click. Native validation now uses actual summary clicks to open and
+close groups, including a redraw after closing. This follow-up is not part of
+the immutable 2.34.2 bundle and needs a later release and production check.
+
+Retained follow-up run `native-5` passed 26 of 27 checks, including both new
+summary-click checks and clean final adoption. Its update-count check failed:
+77 deltas produced 66 updates while only 20 animation frames were sampled.
+The lab was mostly in the background; timer throttling is a possible cause,
+not a verified diagnosis. The prior `native-3` run passed that check. Do not
+use `native-5` as proof that the dense-stream timing check passed. The follow-up
+build and all 906 JavaScript plus 11 Python tests passed.
