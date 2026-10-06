@@ -53,6 +53,17 @@ function stranded(h:ReturnType<typeof harness>){
 
 function independent(h:ReturnType<typeof harness>){h.request.independent=true;h.files.set(h.paths.request,JSON.stringify(h.request));return h;}
 
+test('an imported older run retains its exact lifecycle through newer unrelated snapshots',async()=>{
+  const h=independent(harness('Original T3 prompt'));
+  Object.assign(h.request,{version:4,initialOwner:randomUUID(),importTurn:{messageId:h.request.messageId,turnId:'imported-old',state:'completed',requestedAt:h.request.createdAt}});
+  h.files.set(h.paths.request,JSON.stringify(h.request));
+  h.io.accepts=()=>true;
+  h.io.threadState=async()=>({historyComplete:true,messages:[{id:h.request.messageId,role:'user',text:'Original T3 prompt',createdAt:h.request.createdAt,turnId:null,streaming:false},{id:'import-final',role:'assistant',text:'EXACT OLD FINAL',turnId:'imported-old',streaming:false},{id:'other',role:'user',text:'Unrelated prompt',turnId:null,streaming:false},{id:'other-answer',role:'assistant',text:'UNRELATED LIVE',turnId:'other-run',streaming:true}],activities:[],latestTurn:{turnId:'other-run',state:'running'},session:{status:'running',activeTurnId:'other-run'}});
+  await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/EXACT OLD FINAL/);assert.doesNotMatch(h.document,/UNRELATED LIVE/);assert.match(h.document,/User introduction/);assert.match(h.document,/User tail/);
+  assert.throws(()=>validateHostedRequest({...h.request,importTurn:{...h.request.importTurn,messageId:randomUUID()}}),/imported run evidence/);
+  assert.throws(()=>validateHostedRequest({...h.request,version:3}),/imported run evidence/);
+});
+
 test('canonical title-only state updates the waiting header before any message or turn is bound',async()=>{
   const h=harness('Original question');h.dispatch();
   let title='Generated plan';

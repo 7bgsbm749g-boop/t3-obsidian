@@ -41,7 +41,9 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     await authority.tick();
   };
   let streaming=false;
+  let snapshotOverride:((threadId:string)=>any)|undefined;
   const snapshot=(threadId:string)=>{
+    const overridden=snapshotOverride?.(threadId);if(overridden)return overridden;
     const turn=[...commands].reverse().find(command=>command.type==='thread.turn.start'&&command.threadId===threadId);
     if(!turn)return {thread:{id:threadId,projectId:project.id,messages:[],activities:[]}};
     const turnId='provider-turn-'+turn.commandId;
@@ -110,7 +112,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     if(url.includes('/threads/')){
       const id=decodeURIComponent(url.split('/threads/')[1].split('?')[0]);
       const overridden=await readOverride?.(id);if(overridden)return overridden;
-      return response(commands.some(command=>command.threadId===id&&command.type==='thread.turn.start')?snapshot(id):{thread:threads.find(thread=>thread.id===id)??{id,projectId:project.id,runtimeMode:'approval-required',interactionMode:'default'}});
+      return response(snapshotOverride?.(id)??(commands.some(command=>command.threadId===id&&command.type==='thread.turn.start')?snapshot(id):{thread:threads.find(thread=>thread.id===id)??{id,projectId:project.id,runtimeMode:'approval-required',interactionMode:'default'}}));
     }
     const command=JSON.parse(options.body);
     commands.push(command);
@@ -156,7 +158,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();const timer=setInterval(()=>plugin.deviceInline?.tick(),20);const unload=plugin.onunload.bind(plugin);plugin.onunload=()=>{clearInterval(timer);unload();};return plugin;};
   const plugin=await start();
-  return {setReadOverride:(value:typeof readOverride)=>{readOverride=value;},notices,setStreaming:(value:boolean)=>{streaming=value;},plugin,start,commands,shared,hostFiles,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+  return {setSnapshotOverride:(value:typeof snapshotOverride)=>{snapshotOverride=value;},setReadOverride:(value:typeof readOverride)=>{readOverride=value;},notices,setStreaming:(value:boolean)=>{streaming=value;},plugin,start,commands,shared,hostFiles,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
     const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
     let value=selection+'\nTail';
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
@@ -244,7 +246,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';
   try {
-    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','send-or-ask','stop-all-responses','resolve-native-response-conflict','send-note-to-multiple-notes','answer-t3-question'],'Manual send, stop, and multi-destination commands are available');
+    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','send-or-ask','stop-all-responses','resolve-native-response-conflict','send-note-to-multiple-notes','import-t3-run','manage-note-t3-streams','answer-t3-question'],'Manual send, stop, and multi-destination commands are available');
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands.length,2);
     assert.equal(h.commands[0].type,'thread.create');
@@ -674,7 +676,7 @@ test('existing-thread picker uses the nested folder project even when the note r
 test('editor selection menu streams a T3 reply into its original note for new and existing threads',async()=>{
   const h=await chatHarness();
   try{
-    assert.equal(h.editorMenu('   ').menu.items.length,0,'Whitespace-only selections do not add an action');
+    assert.deepEqual(h.editorMenu('   ').menu.items.map(item=>item.title),['Import T3 run into this note…','Manage T3 streams in this note…'],'Import and stream controls do not require a selection');
     assert.ok(h.editorMenu('Cross-window selection','Notes/Popout.md',true).menu.items.some(item=>item.title==='Ask T3 Code'),'Editor menu accepts Obsidian file objects from another window realm');
     const selection='Explain why **this claim** follows.\nKeep [[source links]].';
     const first=h.editorMenu(selection,'Notes/Original.md');let entry=first.menu.items.find(item=>item.title==='Ask T3 Code');assert.ok(entry);
@@ -1494,6 +1496,91 @@ test('mobile project creation uses the chosen external location and reuses its p
   }finally{h.plugin.onunload();}
 });
 
+
+test('import picker previews an existing run, cancellation preserves the note, and confirmation performs no dispatch',async()=>{
+  const h=await chatHarness(),threadId=webcrypto.randomUUID(),messageId=webcrypto.randomUUID(),createdAt='2026-10-06T12:00:00Z';
+  const thread={id:threadId,projectId:project.id,title:'UI import source',updatedAt:createdAt};
+  h.setThreads([thread]);h.setSnapshotOverride(id=>id===threadId?{thread:{...thread,messages:[{id:messageId,role:'user',text:'UI original prompt',createdAt,turnId:null,streaming:false},{id:'ui-answer',role:'assistant',text:'UI IMPORTED ANSWER',createdAt,turnId:'ui-turn',streaming:false}],activities:[],latestTurn:{turnId:'ui-turn',state:'completed',requestedAt:createdAt,assistantMessageId:'ui-answer'},session:{status:'ready',activeTurnId:null}}}:undefined);
+  const note=h.attachEditor('Notes/Import-UI.md','UI surrounding text');
+  const choose=async()=>{
+    const count=h.modals.length;h.plugin.openRunImport(note.file);
+    h.modals.at(-1).onChooseItem(project);
+    await waitForReply(()=>h.modals.length===count+2,'thread picker opened');
+    h.modals.at(-1).onChooseItem(thread);
+    await waitForReply(()=>h.modals.length===count+3,'run picker opened');
+    const picker=h.modals.at(-1);assert.equal(picker.getItems()[0].status,'Completed');picker.onChooseItem(picker.getItems()[0]);
+    await waitForReply(()=>h.modals.length===count+4,'run preview opened');
+    assert.equal(h.modals.at(-1).notePath,note.file.path);assert.equal(note.value,'UI surrounding text');
+  };
+  try{
+    assert.ok(h.menuFor(note.view).items.some((item:any)=>item.title==='Import T3 run into this note…'));
+    assert.ok(h.registered.some(command=>command.id==='import-t3-run'&&command.checkCallback(true)));
+    await choose();h.settingsControls.flatMap(control=>control.buttons).reverse().find(button=>button.text==='Cancel').click();assert.equal(note.value,'UI surrounding text');assert.equal(h.commands.length,0);
+    await choose();h.settingsControls.flatMap(control=>control.buttons).reverse().find(button=>button.text==='Import response').click();
+    await waitForReply(()=>note.value.includes('UI IMPORTED ANSWER')&&!note.value.includes('t3-inline:start:'),'confirmed UI import finalized');
+    assert.match(note.value,/UI surrounding text/);assert.equal(h.commands.length,0);
+  }finally{h.plugin.onunload();}
+});
+
+test('run import catches up a T3-created response and streams completion without a new prompt or duplicate after reload',async()=>{
+  const h=await chatHarness();let restarted:any;
+  const threadId=webcrypto.randomUUID(),messageId=webcrypto.randomUUID(),createdAt='2026-10-06T12:00:00.000Z';let finished=false;
+  const source=()=>({snapshotSequence:finished?12:10,thread:{id:threadId,projectId:project.id,title:'Imported T3 response',messages:[
+    {id:messageId,role:'user',text:'Original T3 prompt',turnId:null,createdAt,streaming:false},
+    {id:'import-answer',role:'assistant',text:finished?'IMPORTED FINAL':'IMPORTED LIVE',turnId:'import-run',createdAt,streaming:!finished}],activities:[],latestTurn:{turnId:'import-run',state:finished?'completed':'running',requestedAt:createdAt,assistantMessageId:'import-answer'},session:{status:finished?'ready':'running',activeTurnId:finished?null:'import-run'}}});
+  h.setSnapshotOverride(id=>id===threadId?source():undefined);
+  const note=h.attachEditor('Elsewhere/Import.md','Existing note text\n');
+  try{
+    const first=await h.plugin.importRun(note.file.path,project,threadId,messageId);
+    assert.equal(first.duplicate,false);assert.equal(first.following,false);
+    await waitForReply(()=>note.value.includes('IMPORTED LIVE'),'existing T3 output caught up into an unrelated folder note');
+    assert.equal(h.commands.length,0,'Import must never send a prompt or create a project');
+    const repeated=await h.plugin.importRun(note.file.path,project,threadId,messageId);assert.equal(repeated.duplicate,true);
+    assert.equal((note.value.match(/t3-inline:start:/g)??[]).length,1);
+    finished=true;
+    await waitForReply(()=>note.value.includes('IMPORTED FINAL')&&!note.value.includes('t3-inline:start:'),'imported running response finalized');
+    note.editor.replaceRange('\nLater user edit',note.editor.offsetToPos(note.value.length));
+    h.plugin.onunload();restarted=await h.start();
+    const again=await restarted.importRun(note.file.path,project,threadId,messageId);assert.equal(again.duplicate,true);
+    assert.equal((note.value.match(/IMPORTED FINAL/g)??[]).length,1);assert.match(note.value,/Existing note text/);assert.match(note.value,/Later user edit/);assert.equal(h.commands.length,0);
+  }finally{restarted?.onunload();h.plugin.onunload();}
+});
+
+test('run import rejects unavailable associations and wrong source projects before touching the note',async()=>{
+  const h=await chatHarness(),threadId=webcrypto.randomUUID(),messageId=webcrypto.randomUUID(),note=h.attachEditor('Notes/Import-unavailable.md','Preserve me');
+  const source={id:threadId,projectId:project.id,title:'Old history',messages:[{id:messageId,role:'user',text:'Old prompt',turnId:null,createdAt:'2026-10-06T10:00:00Z',streaming:false}],activities:[],session:{status:'ready',activeTurnId:null}};
+  h.setSnapshotOverride(()=>({thread:source}));
+  try{
+    await assert.rejects(h.plugin.importRun(note.file.path,project,threadId,messageId),/prompt-to-run/);assert.equal(note.value,'Preserve me');
+    source.projectId='wrong-project';await assert.rejects(h.plugin.importRun(note.file.path,project,threadId,messageId),/requested T3 thread/);assert.equal(note.value,'Preserve me');assert.equal(h.commands.length,0);
+  }finally{h.plugin.onunload();}
+});
+
+test('run import recovers terminal response evidence outside the active catalog and reuses an existing note response',async()=>{
+  const h=await chatHarness(),threadId=webcrypto.randomUUID(),messageId=webcrypto.randomUUID(),createdAt='2026-10-06T10:00:00Z',id=webcrypto.randomUUID();
+  const note=h.attachEditor('Notes/Already-imported.md','Existing saved answer');
+  const host={environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1',connectionId:'chat-connection'};
+  const request={version:4,id,vaultId:h.plugin.settings.vaultId,host,notePath:note.file.path,threadId,messageId,projectId:project.id,threadEnvironmentId:'chat-env',initialHash:contentHash('Existing saved answer'),createdAt,independent:true};
+  const state={status:'complete',finalSaved:true,notePath:note.file.path,turnId:'old-run',bindingCheckpoint:{bindings:{[messageId]:{turnId:'old-run',kind:'explicit'}},turns:{'old-run':{turnId:'old-run',messageId,requestedAt:createdAt,state:'completed'}}}};
+  h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,state}));
+  h.hostFiles.set(`${host.directory}/explorer-responses.json`,JSON.stringify([{id,notePath:note.file.path,epoch:1,revision:1,active:false,input:false,complete:true}]));
+  h.hostFiles.set(leasePaths(host.directory,'').catalog,'[]');
+  h.setSnapshotOverride(()=>({thread:{id:threadId,projectId:project.id,messages:[{id:messageId,role:'user',text:'Original',createdAt,turnId:null,streaming:false},{id:'old-answer',role:'assistant',text:'Existing saved answer',turnId:'old-run',createdAt,streaming:false},{id:'new',role:'user',text:'Later',createdAt:'2026-10-06T11:00:00Z',turnId:null,streaming:false}],activities:[],latestTurn:{turnId:'new-run',state:'running',requestedAt:'2026-10-06T11:00:00Z'},session:{status:'running',activeTurnId:'new-run'}}}));
+  try{const result=await h.plugin.importRun(note.file.path,project,threadId,messageId);assert.equal(result.duplicate,true);assert.equal(note.value,'Existing saved answer');assert.equal(h.commands.length,0);}finally{h.plugin.onunload();}
+});
+
+test('run import future following is explicit, reused on repeat and resumed after pause',async()=>{
+  const h=await chatHarness(),threadId=webcrypto.randomUUID(),messageId=webcrypto.randomUUID(),createdAt='2026-10-06T12:00:00Z',note=h.attachEditor('Notes/Import-follow.md','Keep text');
+  h.setSnapshotOverride(()=>({thread:{id:threadId,projectId:project.id,title:'Finished run',messages:[{id:messageId,role:'user',text:'Prompt',turnId:null,createdAt,streaming:false},{id:'final',role:'assistant',text:'PAST IMPORT',turnId:'past',createdAt,streaming:false}],activities:[],latestTurn:{turnId:'past',state:'completed',requestedAt:createdAt,assistantMessageId:'final'},session:{status:'ready',activeTurnId:null}}}));
+  const displays:any[]=[],events:any[]=[];
+  h.plugin.executeAgentCommand=async(command:any)=>{events.push(command);if(command.kind==='thread-streams')return {ok:true,displays};if(command.kind==='stream-thread'){const display={...command.source,id:command.id,enabled:true,destinations:command.destinations.map((path:string)=>({path}))};displays.push(display);return {ok:true,display};}if(command.kind==='resume-thread-stream'){displays[0].enabled=true;return {ok:true,display:displays[0]};}throw Error('Unexpected event command');};
+  try{
+    await h.plugin.importRun(note.file.path,project,threadId,messageId,false);assert.equal(events.length,0);
+    await h.plugin.importRun(note.file.path,project,threadId,messageId,true);assert.equal(displays.length,1);assert.equal(events.find(event=>event.kind==='stream-thread').start,'future');
+    await h.plugin.importRun(note.file.path,project,threadId,messageId,true);assert.equal(displays.length,1);
+    displays[0].enabled=false;await h.plugin.importRun(note.file.path,project,threadId,messageId,true);assert.equal(events.at(-1).kind,'resume-thread-stream');assert.equal(h.commands.length,0);
+  }finally{h.plugin.onunload();}
+});
 
 test('disabled diagnostics create no journal or diagnostic threads',async()=>{
   const h=await chatHarness();try{

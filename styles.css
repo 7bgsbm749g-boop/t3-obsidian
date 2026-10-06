@@ -205,3 +205,4 @@
 .send-to-t3-tool[data-t3-tool-status="failed"] > summary { color: var(--text-error); }
 .send-to-t3-tool pre { max-height: 18em; overflow: auto; white-space: pre-wrap; }
 @media (prefers-reduced-motion: reduce) { .send-to-t3-tool > summary::after { animation: none; } }
+.send-to-t3-import-prompt { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

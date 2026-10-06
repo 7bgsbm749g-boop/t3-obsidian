@@ -18,6 +18,8 @@ class StopStreamRequested extends Error {}
 
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface HostedInlineRequest {
+  /** Exact source lifecycle retained when importing an already existing run. */
+  importTurn?:InlineTurn;
   replyFolders?:ReplyFolders;
   keepIntermediate?:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat;
   initialInput?:InitialInlineInput;
@@ -65,6 +67,7 @@ export function safeNotePath(path:unknown):path is string {
   return typeof path==='string'&&path.endsWith('.md')&&!path.includes('\\')&&!/[\x00-\x1f:]/.test(path)&&path.split('/').every(p=>!!p&&p!=='.'&&p!=='..'&&!p.startsWith('.'));
 }
 export function validateHostedRequest(value:any):HostedInlineRequest {
+  if(value?.importTurn!==undefined){const turn=value.importTurn;if(value.version!==4||turn.messageId!==value.messageId||typeof turn.turnId!=='string'||!turn.turnId||turn.turnId.length>200||!['running','completed','interrupted','error','cancelled'].includes(turn.state)||!Number.isFinite(Date.parse(turn.requestedAt)))throw Error('Invalid imported run evidence.');}
   if(value?.replyFolders!==undefined)validateReplyFolders(value.replyFolders);
   if(value?.nativeProjection!==undefined&&typeof value.nativeProjection!=='boolean')throw Error('Invalid native projection preference.');
   validateDestinationSection(value?.destinationSection);
@@ -204,6 +207,7 @@ export class HostedInlineWriter {
       let state:HostedInlineState;
       try{state=JSON.parse((await this.io.read(paths.state))??'null')??{requestHash:hash,accepted:false,notePath:request.notePath,status:'waiting',hashes:[request.initialHash],updatedAt:new Date().toISOString()};}catch{return;}
       if(state.requestHash!==hash||!Array.isArray(state.hashes)||!safeNotePath(state.notePath))return;
+      if(request.importTurn&&!state.bindingCheckpoint?.bindings?.[request.messageId]){const turn=request.importTurn,checkpoint=state.bindingCheckpoint;state.bindingCheckpoint={...checkpoint,bindings:{...checkpoint?.bindings,[request.messageId]:{turnId:turn.turnId,kind:'explicit'}},turns:{[turn.turnId]:turn,...checkpoint?.turns}};}
       const legacyProof=pendingCompletionCleanup(request,state)&&['complete','interrupted'].includes(state.status);
       if(['complete','interrupted','conflict'].includes(state.status)&&!legacyQuestionReply(state)&&!legacyProof)return;
       const save=async()=>{state.updatedAt=new Date().toISOString();await this.io.write(paths.state,JSON.stringify(state));this.renameOffsets.set(path,renameEnd);};

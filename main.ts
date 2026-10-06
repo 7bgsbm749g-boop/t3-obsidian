@@ -14,6 +14,9 @@ import {resolveJobOptions,type ResolvedJobOptions} from './job-options';
 import {intermediateMode,installResponsePresentation,finalAnswerFormat,type FinalAnswerFormat,type IntermediateMode} from './response-presentation';
 import {applyThreadItem} from './inline-thread';
 import {readInlineSnapshot,watchThread} from './thread-stream';
+import {importRuns,importBindingId,importFollowId,type ImportRun} from './run-import';
+import {openRunImport,ImportStreamsModal} from './run-import-ui';
+import {restoreInlineBindings,type InlineThreadState} from './inline-thread';
 import {nativeResponses} from './native-response-manager';
 import {editorStream} from './editor-stream';
 import {validateNoteCommand,isEventCommand,type NoteCommand,type NoteCommandResult} from './note-command';
@@ -213,6 +216,14 @@ export default class SendToT3 extends Plugin {
       const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;if(!file||this.busy)return false;
       if(!checking)new StreamDestinationsModal(this.app,file.path,command=>this.executeNoteCommand(command)).open();return true;
     }});
+    this.addCommand({id:'import-t3-run',name:'Import T3 run into this note…',checkCallback:checking=>{
+      const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;if(this.stopped||this.busy||!file||file.extension.toLowerCase()!=='md')return false;
+      if(!checking)this.openRunImport(file);return true;
+    }});
+    this.addCommand({id:'manage-note-t3-streams',name:'Manage T3 streams in this note…',checkCallback:checking=>{
+      const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;if(this.stopped||this.busy||!file||file.extension.toLowerCase()!=='md')return false;
+      if(!checking)void this.openImportStreams(file).catch(error=>new Notice(`T3 streams: ${message(error)}`,10000));return true;
+    }});
     if(typeof document.querySelectorAll==='function')this.register(installResponsePresentation(document,setIcon));
     const questionStorage=`${this.localKey}-questions-${this.settings.vaultId}`;
     this.questions=new QuestionController(environmentId=>this.inlineThreadAccess(environmentId),{load:()=>{const saved=this.app.loadLocalStorage(questionStorage);return Array.isArray(saved)?saved:[];},save:records=>this.app.saveLocalStorage(questionStorage,records)},randomId);
@@ -342,6 +353,8 @@ export default class SendToT3 extends Plugin {
       const selection=editor.getSelection();
       const file=view.file;
       if(!file||file.extension.toLowerCase()!=='md')return;
+      menu.addItem(item=>item.setTitle('Import T3 run into this note…').setIcon('download').setDisabled(this.busy).onClick(()=>this.openRunImport(file)));
+      menu.addItem(item=>item.setTitle('Manage T3 streams in this note…').setIcon('list').setDisabled(this.busy).onClick(()=>void this.openImportStreams(file).catch(error=>new Notice(`T3 streams: ${message(error)}`,10000))));
       const targets=questionTargets(editor.getValue()).filter(target=>!this.questions?.isDismissed(target));
       if(targets.length)menu.addItem(item=>item.setTitle('Answer T3 question…').setIcon('message-circle-question').onClick(()=>this.openQuestion(targets[0])));
       const active=this.inlineChat?.activeFor(file.path)??[];
@@ -807,6 +820,96 @@ export default class SendToT3 extends Plugin {
       if(this.stopped)return;
       new ExistingThreadModal(this.app,threads,thread=>this.sendNote(file,thread.id,projectKey(project),false,overrideKey,resolve?.()),undefined,undefined,back).open();
     }catch(error){if(back)throw error;new Notice(`Send to T3 Code: ${message(error)}`,10000);}
+  }
+  openRunImport(file:TFile){
+    if(this.stopped||this.busy)return;
+    openRunImport(this.app,file.path,{
+      projects:()=>this.projects(),projectLabel:project=>this.projectChoiceLabel(project),
+      threads:async project=>projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id),
+      runs:async(project,thread)=>importRuns((await this.readImportHistory(project,thread.id)).state),
+      attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow),
+    });
+  }
+  async openImportStreams(file:TFile){
+    const result=await this.executeAgentCommand({version:1,id:randomId(),kind:'thread-streams'}) as import('./event-subscriptions').EventCommandResult;
+    const displays=(result.displays??[]).filter(display=>!display.cancelled&&display.destinations.some(destination=>destination.path===file.path&&!destination.removed));
+    const labelled=await Promise.all(displays.map(async display=>({...display,title:await this.eventThread(display).then(thread=>String(thread.title)).catch(()=>`Unavailable thread · ${display.threadId.slice(0,8)}`)})));
+    if(this.stopped)return;
+    new ImportStreamsModal(this.app,file.path,labelled,async(display,kind)=>{
+      const changed=await this.executeAgentCommand({version:1,id:randomId(),kind,subscriptionId:display.id,...(kind==='remove-stream-destination'?{destination:file.path}:{})}) as import('./event-subscriptions').EventCommandResult;
+      return changed.display!;
+    }).open();
+  }
+  private async followImportedThread(source:{threadId:string;projectId:string;environmentId:string},notePath:string){
+    const result=await this.executeAgentCommand({version:1,id:randomId(),kind:'thread-streams'}) as import('./event-subscriptions').EventCommandResult;
+    const matches=(result.displays??[]).filter(display=>display.threadId===source.threadId&&display.projectId===source.projectId&&display.environmentId===source.environmentId&&display.destinations.some(destination=>destination.path===notePath&&!destination.removed));
+    if(matches.some(display=>display.enabled&&!display.cancelled))return;
+    const paused=matches.find(display=>!display.cancelled);
+    if(paused)await this.executeAgentCommand({version:1,id:randomId(),kind:'resume-thread-stream',subscriptionId:paused.id});
+    else await this.executeAgentCommand({version:1,id:matches.length?randomId():importFollowId(source,notePath),kind:'stream-thread',scope:'thread',source,destinations:[notePath],start:'future'});
+  }
+  private async readImportRecords(source:{threadId:string;projectId:string;environmentId:string}){
+    const host=await this.inlineHostTarget(),opened=await this.inlineHostFiles(host);
+    try{
+      const catalog=JSON.parse((await opened.files.read(leasePaths(host.directory,'').catalog))??'[]') as HostedInlineRequest[];
+      if(!Array.isArray(catalog))throw Error('Response history is unavailable. Try again after the host reconnects.');
+      // The active lease catalog excludes completed responses. The explorer
+      // index retains their IDs so old checkpoints and duplicate proofs survive.
+      const explorer=loadExplorerResponses(JSON.parse((await opened.files.read(explorerResponsePath(host.directory)))??'[]'));
+      const ids=new Set([...catalog.map(request=>request.id),...explorer.map(response=>response.id)]);
+      const records:LeaseRecord[]=[];
+      for(const id of ids){
+        const raw=await opened.files.read(leasePaths(host.directory,id).record);
+        if(!raw)continue;
+        const record:LeaseRecord=JSON.parse(raw),request=record.request;
+        if(request.vaultId===this.settings.vaultId&&request.threadId===source.threadId&&request.projectId===source.projectId&&request.threadEnvironmentId===source.environmentId)records.push(record);
+      }
+      return records;
+    }finally{opened.close();}
+  }
+  private async readImportHistory(project:Project,threadId:string){
+    if(this.stopped)throw Error('The plugin is disabled.');
+    const connection=this.connection(project),environmentId=connection.environmentId??await this.localInlineEnvironment();
+    const source={threadId,projectId:project.id,environmentId},access=await this.inlineThreadAccess(environmentId);
+    let snapshot:any;
+    try{snapshot=await readInlineSnapshot(access,threadId,project.id,undefined,true);}finally{await access.close?.();}
+    if(snapshot.thread.deletedAt||snapshot.thread.archivedAt)throw Error('This source thread is no longer available.');
+    let state:InlineThreadState=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+    const records=await this.readImportRecords(source);
+    for(const record of records)state=restoreInlineBindings(state,record.state?.bindingCheckpoint);
+    return {source,state,records,title:String(snapshot.thread.title??'T3 response').slice(0,200)};
+  }
+  /** Import is independent of note routing. The selected source never receives input. */
+  async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false):Promise<{duplicate:boolean;following:boolean}>{
+    if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
+    this.busy=true;
+    try{
+      const history=await this.readImportHistory(project,threadId),run=importRuns(history.state).find(run=>run.messageId===messageId);
+      if(!run||run.unavailable||!run.turnId||!run.turn)throw Error(run?.unavailable??'This response is no longer in the T3 history.');
+      const document=await deviceNoteIO(this.app).readNote(notePath);if(document===undefined)throw Error('Destination note not found.');
+      const existing=history.records.find(record=>(record.state?.notePath??record.request.notePath)===notePath&&(
+        [record.request.messageId,record.state?.messageId,...record.state?.steering?.map(input=>input.messageId)??[],...record.state?.questionFollows?.flatMap(input=>[`async-answer:${input.requestId}`,...(input.input?[input.input.messageId]:[])])??[]].includes(messageId)
+        ||[record.state?.turnId,...record.state?.turnIds??[]].includes(run.turnId)));
+      const id=importBindingId(history.source,messageId,notePath),host=await this.inlineHostTarget(),opened=await this.inlineHostFiles(host);
+      let duplicate=!!existing;
+      try{
+        const raw=existing?JSON.stringify(existing):await opened.files.read(leasePaths(host.directory,id).record);
+        const record:LeaseRecord|undefined=raw?JSON.parse(raw):undefined;
+        if(record){
+          duplicate=true;
+          if(!record.state?.finalSaved&&!['complete','interrupted'].includes(record.state?.status??''))await this.deviceInline.register(record.request);
+        }else{
+          const prepared=await opened.files.read(`${host.directory}/requests/${id}.json`);
+          const policy=resolveJobOptions(this.settings.inlineStreaming).inline;
+          const request:HostedInlineRequest=prepared?JSON.parse(prepared):{version:4,id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath,threadId,messageId,projectId:project.id,threadEnvironmentId:history.source.environmentId,createdAt:run.createdAt,threadTitle:history.title,independent:true,importTurn:run.turn,nativeProjection:await this.coordinatedHostAvailable(host),initialInput:/^[0-9a-f-]{36}$/i.test(messageId)?{messageId,text:history.state.messages.find(message=>message.id===messageId)!.text,label:incomingLabel(history.state.messages.find(message=>message.id===messageId)!)}:undefined,initialHash:initialRegion(id).bodyHash,keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode,finalAnswerFormat:policy.finalAnswerFormat};
+          this.rememberInlineTarget(host);
+          const binding=await editorStream(request,notePath,deviceNoteIO(this.app),()=>!this.stopped,id);
+          await this.deviceInline.register(binding);
+        }
+      }finally{opened.close();}
+      if(follow)await this.followImportedThread(history.source,notePath);
+      return {duplicate,following:follow};
+    }finally{this.busy=false;}
   }
   async sendNote(file:TFile,threadId?:string,expectedProjectKey?:string,newThread=false,overrideKey?:string,jobOptions?:ResolvedJobOptions){
     if(this.busy)return;

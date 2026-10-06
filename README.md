@@ -402,6 +402,33 @@ are never replayed by read recovery.
 
 ## Multiple streaming destinations and agent commands
 
+### Import an existing T3 run
+
+With a Markdown note open, choose **Import T3 run into this note…** from the
+command palette or editor menu. Select the source project and machine, thread,
+then response. The preview shows its prompt, date, status and destination.
+Confirming imports that response without sending a prompt or changing the
+note's project routing. A running response catches up with output already in T3
+and streams until completion. Repeating the import reuses its existing binding,
+including after completion, reload and later note edits.
+
+**Follow future runs in this thread** is off by default. Enable it to attach
+later responses started in T3 to this note. It does not import other earlier
+runs. **Manage T3 streams in this note…** lists these registrations and supports
+pause, resume and removal from this note. Already attached responses finish
+normally. Resume skips runs started while paused. For a registration shared by
+several notes, pause/resume affects all its destinations; removal affects only
+the current note.
+
+Import requires exact prompt-to-run evidence and a verified lifecycle. Saved
+response checkpoints can supply older associations missing from the current T3
+snapshot. Missing associations or completion records appear as **Unavailable**
+with an explanation; the plugin does not guess from message order or import an
+unrelated latest run. Arbitrary old T3 history without these records still needs
+additional historical data from T3. Source machines and the vault response host
+must be reachable. The destination must already exist; imported content follows
+the normal response presentation, file import, ownership and checked-save rules.
+
 Several T3 threads can stream into separate response blocks in the same note. One response can also stream into several notes. Each binding has its own ID and destination; mirroring does not send another prompt. Choose **Send note with streaming destinations…** in the command palette and enter existing vault-relative Markdown paths, one per line. This creates one new thread from the current note and mirrors its response into those destinations.
 
 Active replies follow note and folder moves within the vault. If a client misses the rename during Sync or a restart, it finds the existing response by its tracking ID and continues in its new location. A healthy writer retains ownership while waiting for a moved note to arrive through Sync. Moving the note does not start another thread or recreate the old path. Verified native renames retain local output immediately and send a saved relocation handoff to the host before waiting for Sync. Exact stale saved copies at former paths have their active markers retired after an external backup; changed copies remain protected. An ambiguous duplicate shows a blocked warning with the candidate paths. Use **Review response destination…** to choose the intended note: recovery backs up each candidate, preserves its text, detaches competing active markers, and catches up with the existing T3 reply without resending the prompt.
