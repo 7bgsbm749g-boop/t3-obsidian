@@ -14,11 +14,12 @@ const MEDIA=/\.(?:png|jpe?g|gif|webp|svg|bmp|avif|pdf|mp[34]|wav|ogg|webm)$/i;
 export interface RegisteredFile {scope:CodebaseScope;path:string;file:TFile;document:CodebaseDocument;resource?:{url:string;expiresAt:number};preparing?:Promise<void>;text?:string}
 export interface SavedReference {scope:CodebaseScope;path:string;note:string;name:string}
 class FileChoice extends FuzzySuggestModal<RegisteredFile>{
+  private settled=false;
   constructor(app:App,private items:RegisteredFile[],private finish:(file:RegisteredFile|undefined)=>void){super(app);this.setPlaceholder('Choose the project file');}
   getItems(){return this.items;}
   getItemText(item:RegisteredFile){return `${item.scope.title} / ${item.path}${item.scope.threadId?' (thread workspace)':''}`;}
-  onChooseItem(item:RegisteredFile){this.finish(item);}
-  onClose(){this.finish(undefined);}
+  onChooseItem(item:RegisteredFile){if(!this.settled){this.settled=true;this.finish(item);}}
+  onClose(){super.onClose?.();setTimeout(()=>{if(!this.settled){this.settled=true;this.finish(undefined);}},0);}
 }
 export class CodebaseBridge {
   private files=new Map<string,RegisteredFile>();
