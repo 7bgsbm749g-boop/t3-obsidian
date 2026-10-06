@@ -42,6 +42,5 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
     pending.set(id,{resolve,reject,timer});
     try{socket.send(JSON.stringify({_tag:'Request',id,tag,payload,headers:[]}));}catch{pending.delete(id);clearTimeout(timer);reject(Error('Cannot send the request to this machine.'));}
   });
-  return {call:rpc,close(){closed=true;finish(Error('T3 connection closed.'));socket.close();}};
+  return {call:rpc,get closed(){return closed;},close(){closed=true;finish(Error('T3 connection closed.'));socket.close();}};
 }
-

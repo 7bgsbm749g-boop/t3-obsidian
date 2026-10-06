@@ -4,6 +4,7 @@ export const CODEBASE_PREFIX='__t3_codebase__/';
 export interface CodebaseScope {environmentId:string;projectId:string;title:string;root:string;threadId?:string}
 export interface CodebaseEntry {path:string;kind:'file'|'directory'}
 export interface CodebaseIO {
+  dispose?():void|Promise<void>;
   workspaces?(scope:CodebaseScope):Promise<CodebaseScope[]>;
   list(scope:CodebaseScope,directory:string):Promise<{entries:CodebaseEntry[];truncated:boolean}>;
   search(scope:CodebaseScope,name:string):Promise<CodebaseEntry[]>;
@@ -16,7 +17,9 @@ export function relativeCodebasePath(path:string):string {
   return path;
 }
 export function scopeKey(scope:CodebaseScope){return [scope.environmentId,scope.projectId,scope.threadId??'main'].map(encodeURIComponent).join('/');}
-export function virtualPath(scope:CodebaseScope,path:string){return CODEBASE_PREFIX+scopeKey(scope)+'/'+relativeCodebasePath(path);}
+// A changed workspace is a new native file identity. Late autosaves from its
+// old native editor must never resolve to a file in the new workspace.
+export function virtualPath(scope:CodebaseScope,path:string){return CODEBASE_PREFIX+scopeKey(scope)+'/'+encodeURIComponent(scope.root)+'/'+relativeCodebasePath(path);}
 export function linkedCodebases(links:FolderLink[]):CodebaseScope[]{
   const result=new Map<string,CodebaseScope>();
   for(const link of links)if(!link.self&&link.environmentId){const scope={environmentId:link.environmentId,projectId:link.projectId,title:link.projectTitle,root:link.workspaceRoot};result.set(scopeKey(scope),scope);}
@@ -29,11 +32,18 @@ export function contextualCandidates<T extends {scope:CodebaseScope;path:string}
 }
 export class CodebaseDocument {
   private queue:Promise<void>=Promise.resolve();
+  private reading?:Promise<string>;
+  private readAt=0;
   base?:string;
   draft?:string;
   uncertain=false;
   constructor(readonly scope:CodebaseScope,readonly path:string,private io:CodebaseIO,private retain:(draft:string|undefined)=>void){}
-  async read(){const text=await this.io.read(this.scope,this.path);if(this.draft!==undefined&&text!==this.base)throw Error('The project file changed. Your edit is kept on this device.');this.base=text;return this.draft??text;}
+  read(force=false):Promise<string>{
+    if(!force&&this.base!==undefined&&Date.now()-this.readAt<15000)return Promise.resolve(this.base);
+    if(this.reading)return this.reading;
+    const reading=this.io.read(this.scope,this.path).then(text=>{if(this.draft!==undefined&&text!==this.base)throw Error('The project file changed. Your edit is kept on this device.');this.base=text;this.readAt=Date.now();return text;});
+    this.reading=reading;void reading.finally(()=>{if(this.reading===reading)this.reading=undefined;}).catch(()=>{});return reading;
+  }
   save(text:string):Promise<void>{
     this.draft=text;this.retain(text);
     const task=this.queue.then(async()=>{
@@ -48,6 +58,7 @@ export class CodebaseDocument {
         this.uncertain=false;
       }
       this.base=text;
+      this.readAt=Date.now();
       if(this.draft===text){this.draft=undefined;this.retain(undefined);}
     });
     this.queue=task.catch(()=>{});return task;

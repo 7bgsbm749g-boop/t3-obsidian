@@ -186,8 +186,12 @@
 .send-to-t3-new-folder .setting-item-control { flex-wrap: wrap; justify-content: flex-start; }
 .send-to-t3-new-folder input { flex: 1; min-width: 120px; }
 
-.t3-codebase-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
-.t3-codebase-children { margin-left:14px; }
-.t3-codebase-folder, .t3-codebase-file { display:block; width:100%; text-align:left; background:transparent; box-shadow:none; height:auto; min-height:28px; padding:4px 8px; white-space:normal; overflow-wrap:anywhere; }
-.t3-codebase-folder:hover, .t3-codebase-file:hover { background:var(--background-modifier-hover); }
-.t3-codebase-error { color:var(--text-error); font-size:var(--font-smallest); }
+/* Native explorer classes supply spacing, selection, icons, and theme styling. */
+.t3-codebase-explorer { padding: 0; overflow: auto; }
+.t3-codebase-explorer [hidden] { display: none !important; }
+.t3-codebase-explorer .tree-item-inner { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t3-codebase-message { color: var(--text-muted); font-size: var(--font-ui-smaller); padding: 4px 12px; }
+.t3-codebase-explorer .collapse-icon svg { transform: rotate(90deg); }
+.t3-codebase-explorer .collapse-icon.is-collapsed svg { transform: rotate(0deg); }
+/* Keep the native path header, with project names in place of bridge identities. */
+[data-t3-codebase-hidden="true"] { display: none !important; }
