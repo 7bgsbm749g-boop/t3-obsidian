@@ -9,6 +9,7 @@ import type {ThreadAccess} from './thread-stream';
 import {CodebaseBrowseCache,type BrowseState} from './codebase-cache';
 import {CODEBASE_VIEW as VIEW,CodebaseView} from './codebase-view';
 import {timingSummaries} from './codebase-performance';
+import {NativeLanguageViews} from './language-views';
 export {CodebaseView} from './codebase-view';
 export interface CodebaseState {version:1;references:Record<string,SavedReference>;choices:Record<string,string>;automaticChoices?:Record<string,string[]>}
 export interface CodebaseStorage {load():CodebaseState|undefined;save(state:CodebaseState):Promise<void>;projectChanged?(scope:CodebaseScope,change:{title?:string;deleted?:boolean}):Promise<void>}
@@ -37,6 +38,7 @@ export class CodebaseBridge {
   private metadataPath:string;
   private drafts:Record<string,string>;
   readonly browse:CodebaseBrowseCache;
+  readonly languageViews:NativeLanguageViews;
   private localKey:string;
   private browseTimer?:ReturnType<typeof setTimeout>;
   private persistTimer?:ReturnType<typeof setTimeout>;
@@ -54,6 +56,7 @@ export class CodebaseBridge {
   private knownScopes=new Map<string,CodebaseScope>();
   private workspaceScopes=new Map<string,{at:number;value:CodebaseScope[];error?:boolean;pending?:Promise<void>}>();
   constructor(readonly app:App,private plugin:Plugin,readonly io:CodebaseIO,readonly links:()=>FolderLink[],vaultId:string,private storage?:CodebaseStorage){
+    this.languageViews=new NativeLanguageViews(app,plugin);
     this.draftsKey=`t3-codebase-drafts:${vaultId}`;this.metadataPath=`${app.vault.configDir}/t3-code/codebase-v1.json`;
     this.drafts=app.loadLocalStorage(this.draftsKey)??{};
     this.localKey=`t3-codebase-browser:${vaultId}:`;
@@ -65,6 +68,7 @@ export class CodebaseBridge {
   local(name:string,value?:unknown):any{if(value===undefined)return this.app.loadLocalStorage(this.localKey+name);this.app.saveLocalStorage(this.localKey+name,value);}
   private renderViews(key?:string){if(this.stopped)return;for(const view of this.views)view.invalidate(key);if(this.rendering)return;this.rendering=true;setTimeout(()=>{this.rendering=false;if(!this.stopped)for(const view of this.views)view.render();},16);}
   async install(){
+    this.languageViews.install();
     this.undo.push(registerProjectReferences(this.app,(reference,request,access)=>this.reply(reference,request,access)));
     try{const saved=this.storage?.load()??JSON.parse(await this.app.vault.adapter.read(this.metadataPath));this.adopt(saved);}catch{/* First use or unavailable metadata. */}
     const vault=this.app.vault,cache=this.app.metadataCache,workspace=this.app.workspace;
@@ -77,7 +81,7 @@ export class CodebaseBridge {
       const item=this.files.get(file.path);if(item){this.captureBases(item);await this.prepare(item);const before=item.document.base;item.text=await item.document.read();this.synchronizePeers(item,before,item.text);await this.prepareEmbeds(item.text,file.path);return item.text;}
       const text=await original(file);void this.prepareEmbeds(text,file.path).then(changed=>{if(!changed)return;for(const leaf of workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===file.path)view.previewMode?.rerender(true);}});return text;
     });
-    this.patch(vault,'modify',(original:any)=>async(file:TFile,text:string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,text,options);if(text===item.document.base)return;await this.prepare(item);const before=item.document.base,peers=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===file.path),matching=peers.filter(view=>this.viewText(view)===text),origins=peers.map(view=>({view,basis:this.viewBase(view,item)})).filter(({view,basis})=>{const native=view as MarkdownView&{lastSavedData?:string;saving?:unknown};return basis?.text===before&&!!native.saving&&native.data===text&&native.lastSavedData===text;});if(text===before)return;try{if(matching.some(view=>{const basis=this.viewBase(view,item);return basis&&basis.text!==before;})){item.document.uncertain=true;item.document.draft=text;this.retain(file.path,text);}await item.document.save(text);for(const {view,basis} of origins)if(view.file?.path===file.path&&this.viewBase(view,item)===basis)this.setViewBase(view,item,text);}catch(error){new Notice(`${error instanceof Error?error.message:String(error)} Use Review unsaved project edit to compare versions.`,10000);throw error;}item.text=text;this.synchronizePeers(item,before,text);file.stat.mtime=Date.now();file.stat.size=new TextEncoder().encode(text).length;});
+    this.patch(vault,'modify',(original:any)=>async(file:TFile,text:string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,text,options);if(text===item.document.base)return;await this.prepare(item);const before=item.document.base,peers=this.editorLeaves().map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===file.path),matching=peers.filter(view=>this.viewText(view)===text),origins=peers.map(view=>({view,basis:this.viewBase(view,item)})).filter(({view,basis})=>{const native=view as MarkdownView&{lastSavedData?:string;saving?:unknown};return basis?.text===before&&!!native.saving&&native.data===text&&native.lastSavedData===text;});if(text===before)return;try{if(matching.some(view=>{const basis=this.viewBase(view,item);return basis&&basis.text!==before;})){item.document.uncertain=true;item.document.draft=text;this.retain(file.path,text);}await item.document.save(text);for(const {view,basis} of origins)if(view.file?.path===file.path&&this.viewBase(view,item)===basis)this.setViewBase(view,item,text);}catch(error){new Notice(`${error instanceof Error?error.message:String(error)} Use Review unsaved project edit to compare versions.`,10000);throw error;}item.text=text;this.synchronizePeers(item,before,text);file.stat.mtime=Date.now();file.stat.size=new TextEncoder().encode(text).length;});
     this.patch(vault,'process',(original:any)=>async(file:TFile,change:(text:string)=>string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,change,options);const text=change(await vault.read(file));await vault.modify(file,text);return text;});
     this.patch(vault,'append',(original:any)=>async(file:TFile,text:string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,text,options);await vault.process(file,old=>old+text);});
     this.patch(vault,'readBinary',(original:any)=>async(file:TFile)=>{const item=this.files.get(file.path);if(!item)return original(file);await this.prepare(item);const response=await fetch(item.resource!.url,{credentials:'omit'});if(!response.ok)throw Error('The project file is unavailable.');return response.arrayBuffer();});
@@ -147,11 +151,12 @@ export class CodebaseBridge {
 
   private patch(target:any,key:string,wrap:(original:any)=>any){if(typeof target[key]!=='function')return;const original=target[key],replacement=wrap(original.bind(target));target[key]=replacement;this.undo.push(()=>{if(target===this.app.vault.adapter)return;/* Keep a fail-closed prefix guard while old native leaves unload. */if(target[key]===replacement)target[key]=original;});}
   private allowed(scope:CodebaseScope){return this.scopes().some(s=>s.environmentId===scope.environmentId&&s.projectId===scope.projectId&&(!!scope.threadId||s.root===scope.root));}
-  private canRead(path:string){return !this.app.workspace.getLeavesOfType('markdown').some(leaf=>{const view=leaf.view as MarkdownView&{saving?:unknown};return view.file?.path===path&&!!view.saving;});}
+  private editorLeaves(){return [...new Set(['markdown',...this.languageViews.types()].flatMap(type=>this.app.workspace.getLeavesOfType(type)))];}
+  private canRead(path:string){return !this.editorLeaves().some(leaf=>{const view=leaf.view as MarkdownView&{saving?:unknown};return view.file?.path===path&&!!view.saving;});}
   private viewText(view:MarkdownView){return view.getMode?.()==='preview'?view.getViewData():view.editor?.getValue();}
   private viewBase(view:MarkdownView,item:RegisteredFile){const basis=this.viewBases.get(view);return basis?.path===item.file.path?basis:undefined;}
   private setViewBase(view:MarkdownView,item:RegisteredFile,text:string){this.viewBases.set(view,{path:item.file.path,text});}
-  private captureBases(item:RegisteredFile){if(item.document.base===undefined)return;for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path!==item.file.path)continue;const basis=this.viewBase(view,item),text=this.viewText(view),saved=(view as MarkdownView&{lastSavedData?:string}).lastSavedData;
+  private captureBases(item:RegisteredFile){if(item.document.base===undefined)return;for(const leaf of this.editorLeaves()){const view=leaf.view as MarkdownView;if(view.file?.path!==item.file.path)continue;const basis=this.viewBase(view,item),text=this.viewText(view),saved=(view as MarkdownView&{lastSavedData?:string}).lastSavedData;
     if(text===item.document.base&&(!basis||saved===item.document.base))this.setViewBase(view,item,item.document.base);
     else if(!basis&&item.text!==undefined&&text===item.text&&saved===item.text)this.setViewBase(view,item,item.text);
   }}
@@ -170,7 +175,7 @@ export class CodebaseBridge {
     if(canSync&&view.file?.path===item.file.path&&this.viewText(view)===text&&(typeof view.getViewData!=='function'||view.getViewData()===text)&&!native.saving&&(native.lastSavedData===before||native.lastSavedData===text)){native.data=text;native.lastSavedData=text;}
     return view.file?.path===item.file.path&&this.viewText(view)===text&&view.getViewData()===text;
   }
-  private synchronizePeers(item:RegisteredFile,_before:string|undefined,text:string){if(this.stopped)return;for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView,basis=this.viewBase(view,item);if(view.file?.path!==item.file.path||!basis)continue;const value=this.viewText(view);if(value===basis.text||value===text){try{if(this.savedViewText(view,item,basis.text,text))this.setViewBase(view,item,text);}catch{/* A native editor that did not adopt the text keeps its old basis for retry. */}}}}
+  private synchronizePeers(item:RegisteredFile,_before:string|undefined,text:string){if(this.stopped)return;for(const leaf of this.editorLeaves()){const view=leaf.view as MarkdownView,basis=this.viewBase(view,item);if(view.file?.path!==item.file.path||!basis)continue;const value=this.viewText(view);if(value===basis.text||value===text){try{if(this.savedViewText(view,item,basis.text,text))this.setViewBase(view,item,text);}catch{/* A native editor that did not adopt the text keeps its old basis for retry. */}}}}
   private nativeChrome(view:any){
     const item=view.file?this.files.get(view.file.path):undefined,header=view.containerEl?.querySelector('.view-header-title-container');
     this.chrome.get(view)?.disconnect();this.chrome.delete(view);if(!header)return;
@@ -264,7 +269,7 @@ export class CodebaseBridge {
     if(subpath)state={...state,eState:{...state?.eState,subpath}};
     if(MEDIA.test(item.path)||item.file.extension!=='md'&&(this.app as any).viewRegistry?.getTypeByExtension?.(item.file.extension)){await leaf.openFile(item.file,state);this.nativeChrome(leaf.view);return;}
     const text=await this.app.vault.read(item.file);if(this.stopped||!this.allowed(item.scope))throw Error('The project file is no longer available.');item.text=text;
-    await leaf.setViewState({type:'markdown',state:{...state?.state,file:item.file.path,mode:'source',source:item.file.extension!=='md'},active:state?.active??true,group:state?.group},state?.eState);
+    await leaf.setViewState({type:this.languageViews.type(item.file.extension)??'markdown',state:{...state?.state,file:item.file.path,mode:state?.state?.mode==='preview'?'preview':'source',source:item.file.extension.toLowerCase()!=='md'},active:state?.active??true,group:state?.group},state?.eState);
     if(!(leaf.view instanceof MarkdownView))throw Error('Obsidian could not open its native editor.');
     this.setViewBase(leaf.view,item,item.document.base!);
     this.nativeChrome(leaf.view);
@@ -395,7 +400,7 @@ export class CodebaseBridge {
     const work=(async()=>{
       await Promise.all([...this.views].filter(view=>force||view.visible()).map(view=>view.refresh(force)));
       const groups=new Map<RegisteredFile,MarkdownView[]>();
-      for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView,item=view.file?this.files.get(view.file.path):undefined;if(item){const views=groups.get(item)??[];views.push(view);groups.set(item,views);}}
+      for(const leaf of this.editorLeaves()){const view=leaf.view as MarkdownView,item=view.file?this.files.get(view.file.path):undefined;if(item){const views=groups.get(item)??[];views.push(view);groups.set(item,views);}}
       await Promise.all([...groups].map(async([item,views])=>{
         this.captureBases(item);const base=item.document.base,bases=views.map(view=>this.viewBase(view,item));
         const clean=()=>views.every((view,index)=>view.file?.path===item.file.path&&!(view as MarkdownView&{saving?:unknown}).saving&&bases[index]&&this.viewBase(view,item)===bases[index]&&this.viewText(view)===bases[index]!.text);
@@ -406,7 +411,7 @@ export class CodebaseBridge {
       }));
     })();this.refreshing=work;void work.finally(()=>{if(this.refreshing===work)this.refreshing=undefined;}).catch(()=>{});return work;
   }
-  dispose(){this.stopped=true;for(const observer of this.chrome.values())observer.disconnect();this.chrome.clear();clearTimeout(this.browseTimer);if(this.persistTimer){clearTimeout(this.persistTimer);void this.persist().catch(()=>{});}this.browse.flush();this.browse.dispose();void this.io.dispose?.();this.app.workspace.iterateAllLeaves?.(leaf=>{const view=leaf.view as MarkdownView,item=view.file?this.files.get(view.file.path):undefined;if(item){const text=this.viewText(view);if(text!==undefined&&text!==item.document.base&&text!==this.viewBase(view,item)?.text)this.retain(item.file.path,text);leaf.detach();}});for(const undo of this.undo.reverse())undo();}
+  dispose(){this.stopped=true;this.languageViews.dispose();for(const observer of this.chrome.values())observer.disconnect();this.chrome.clear();clearTimeout(this.browseTimer);if(this.persistTimer){clearTimeout(this.persistTimer);void this.persist().catch(()=>{});}this.browse.flush();this.browse.dispose();void this.io.dispose?.();this.app.workspace.iterateAllLeaves?.(leaf=>{const view=leaf.view as MarkdownView,item=view.file?this.files.get(view.file.path):undefined;if(item){const text=this.viewText(view);if(text!==undefined&&text!==item.document.base&&text!==this.viewBase(view,item)?.text)this.retain(item.file.path,text);leaf.detach();}});for(const undo of this.undo.reverse())undo();}
 }
 
 class CodebaseLinkSuggest extends EditorSuggest<TFile> {

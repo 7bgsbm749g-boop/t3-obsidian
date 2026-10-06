@@ -5,6 +5,7 @@ import {builtinModules} from 'node:module';
 import {mkdir,readFile,writeFile,access,realpath,readdir} from 'node:fs/promises';
 import {resolve,relative,isAbsolute,join,dirname,basename} from 'node:path';
 import {createHash,randomBytes} from 'node:crypto';
+import {editorExternals} from '../esbuild.config.mjs';
 if(!process.argv[2])throw Error('Specify a new private evidence directory.');
 async function canonical(path){try{return await realpath(path);}catch(error){if(error.code!=='ENOENT')throw error;return resolve(await canonical(dirname(path)),basename(path));}}
 const root=await canonical(resolve(process.argv[2]));
@@ -26,5 +27,5 @@ await writeFile(join(vault,'.obsidian/core-plugins.json'),JSON.stringify(['file-
 await writeFile(join(plugin,'manifest.json'),JSON.stringify({id:'coordinated-response-lab',name:'Isolated native response validation',version:'0.0.1',minAppVersion:'1.8.7',description:'Source-only validation; no Sync or T3 dispatch',author:'Local validation',isDesktopOnly:!process.argv.includes('--interaction')}));
 await writeFile(join(plugin,'styles.css'),await readFile('styles.css'));
 await writeFile(join(profile,'obsidian.json'),JSON.stringify({vaults:{[randomBytes(8).toString('hex')]:{path:vault,ts:Date.now(),open:true}}}));
-await build({entryPoints:[process.argv.includes('--stream-close')?'validation/stream-close-lab.ts':process.argv.includes('--dense')?'validation/dense-stream-lab.ts':process.argv.includes('--direct')?'validation/direct-inline-lab.ts':process.argv.includes('--codebase')?'validation/codebase-lab.ts':process.argv.includes('--interaction')?'validation/stream-interaction-lab.ts':'validation/native-response-lab.ts'],bundle:true,external:['electron','@electron/remote','obsidian','@codemirror/view','@codemirror/state','node:*',...builtinModules.filter(name=>name!=='buffer')],platform:'browser',format:'cjs',target:'es2022',outfile:join(plugin,'main.js')});
+await build({entryPoints:[process.argv.includes('--languages')?'validation/language-views-lab.ts':process.argv.includes('--stream-close')?'validation/stream-close-lab.ts':process.argv.includes('--dense')?'validation/dense-stream-lab.ts':process.argv.includes('--direct')?'validation/direct-inline-lab.ts':process.argv.includes('--codebase')?'validation/codebase-lab.ts':process.argv.includes('--interaction')?'validation/stream-interaction-lab.ts':'validation/native-response-lab.ts'],bundle:true,external:['electron','@electron/remote','obsidian',...editorExternals,'node:*',...builtinModules.filter(name=>name!=='buffer')],platform:'browser',format:'cjs',target:'es2022',outfile:join(plugin,'main.js')});
 process.stdout.write(JSON.stringify({root,vault,profile,launchArguments:[`--user-data-dir=${profile}`,'--no-sandbox']})+'\n');

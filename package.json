@@ -18,6 +18,11 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "@codemirror/commands": "6.10.0",
+    "@codemirror/lang-css": "6.3.1",
+    "@codemirror/lang-javascript": "6.2.5",
+    "@codemirror/lang-json": "6.0.2",
+    "@codemirror/lang-python": "6.2.1",
     "@noble/hashes": "^1.8.0",
     "buffer": "^6.0.3",
     "proper-lockfile": "^4.1.2",

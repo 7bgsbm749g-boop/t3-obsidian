@@ -2,24 +2,25 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
-const bundled=build({entryPoints:['codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian']});
+const bundled=build({entryPoints:['codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight']});
 const scope={environmentId:'env',projectId:'project',root:'/outside',title:'Project'};
 async function fixture(){
  class Base{}class File{constructor(public vault:any,public path:string){}}
  class View{
-  file:any;value='';previewValue='';mode='source';data='';lastSavedData='';saving=false;dirty=false;
+  type='markdown';file:any;value='';previewValue='';mode='source';data='';lastSavedData='';saving=false;dirty=false;
   editor={getValue:()=>this.value};getMode(){return this.mode;}getViewData(){return this.mode==='preview'?this.previewValue:this.value;}setViewData(text:string){if(this.mode==='preview')this.previewValue=text;else this.value=text;}
   async unload(){if(this.getViewData()!==this.lastSavedData){await app.vault.modify(this.file,this.getViewData());this.lastSavedData=this.getViewData();}}
  }
  const callbacks=new Map<string,Function>(),local=new Map<string,any>(),leaves:Array<{view:View}>=[],notices:string[]=[];
  const remote=new Map([['a.md','Alpha'],['b.json','Beta'],['code.ts','Code']]);let reads=0,writes=0;
  const io:any={read:async(_s:any,path:string)=>{reads++;return remote.get(path);},write:async(_s:any,path:string,text:string)=>{writes++;remote.set(path,text);},list:async()=>({entries:[],truncated:false}),search:async()=>[],resource:async()=>({url:'',expiresAt:0})};
- const app:any={loadLocalStorage:(k:string)=>local.get(k),saveLocalStorage:(k:string,v:any)=>local.set(k,v),vault:{configDir:'.obsidian',adapter:{read:async()=>{throw Error('missing');}},read:async()=>'',modify:async()=>{},process:async()=>{},getFileByPath:()=>null,getAbstractFileByPath:()=>null},metadataCache:{getFirstLinkpathDest:()=>null,fileToLinktext:()=>'',getFileCache:()=>null,getCache:()=>null},workspace:{on:(name:string,cb:Function)=>{callbacks.set(name,cb);return {};},onLayoutReady:()=>{},getLeavesOfType:()=>leaves,openLinkText:async()=>{}}};
- const plugin={registerEvent(){},registerView(){},registerInterval(){},registerEditorSuggest(){},addCommand(){}};
+ const app:any={loadLocalStorage:(k:string)=>local.get(k),saveLocalStorage:(k:string,v:any)=>local.set(k,v),vault:{configDir:'.obsidian',adapter:{read:async()=>{throw Error('missing');}},read:async()=>'',modify:async()=>{},process:async()=>{},getFileByPath:()=>null,getAbstractFileByPath:()=>null},metadataCache:{getFirstLinkpathDest:()=>null,fileToLinktext:()=>'',getFileCache:()=>null,getCache:()=>null},workspace:{on:(name:string,cb:Function)=>{callbacks.set(name,cb);return {};},onLayoutReady:()=>{},getLeavesOfType:(type:string)=>leaves.filter(leaf=>leaf.view.type===type),openLinkText:async()=>{}}};
+ const creators=new Map<string,any>();app.viewRegistry={getViewCreatorByType:(type:string)=>creators.get(type)};
+ const plugin={registerEvent(){},registerView(type:string,factory:any){creators.set(type,factory);},registerInterval(){},registerEditorSuggest(){},addCommand(){}};
  const module={exports:{} as any};runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:()=>({EditorSuggest:Base,ItemView:Base,MarkdownView:View,Notice:class{constructor(text:string){notices.push(text);}},TFile:File,TFolder:File,FuzzySuggestModal:Base}),window:{setInterval:()=>0},document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},TextEncoder,URL,console,setTimeout,clearTimeout,performance});
  const bridge=new module.exports.CodebaseBridge(app,plugin,io,()=>[{folderPath:'Linked',projectId:'project',environmentId:'env',workspaceRoot:'/outside',projectTitle:'Project'}],'navigation',{load:()=>undefined,save:async()=>{}});await bridge.install();
  const view=new View();leaves.push({view});
- async function load(path:string){await view.unload();const item=bridge.register(scope,path);view.file=item.file;view.value=view.data=view.lastSavedData=await app.vault.read(item.file);callbacks.get('file-open')!(item.file);return item;}
+ async function load(path:string){await view.unload();const item=bridge.register(scope,path);view.type=path==='b.json'?'json':path==='code.ts'?'typescript':'markdown';view.file=item.file;view.value=view.data=view.lastSavedData=await app.vault.read(item.file);callbacks.get('file-open')!(item.file);return item;}
  return {bridge,app,io,view,callbacks,remote,notices,local,load,get reads(){return reads;},get writes(){return writes;}};
 }
 test('one native tab can browse different text files without ghost edits, then save a real edit',async()=>{
@@ -50,7 +51,7 @@ test('native saved-state compatibility guard leaves an in-flight save and unknow
 });
 test('opening a retained uncertain edit shows the project buffer and keeps recovery text out of autosave',async()=>{
  const f=await fixture();const item=f.bridge.register(scope,'b.json');f.bridge.retain(item.file.path,'Retained recovery edit');item.document.uncertain=true;
- const leaf={view:f.view,setViewState:async(state:any)=>{f.view.file=f.app.vault.getFileByPath(state.state.file);f.view.value=f.view.data=f.view.lastSavedData=await f.app.vault.read(f.view.file);}};
+ const leaf={view:f.view,setViewState:async(state:any)=>{assert.equal(state.type,'json');f.view.type=state.type;f.view.file=f.app.vault.getFileByPath(state.state.file);f.view.value=f.view.data=f.view.lastSavedData=await f.app.vault.read(f.view.file);}};
  await f.bridge.open(item,leaf);assert.equal(f.view.value,'Beta');assert.equal(f.local.get('t3-codebase-drafts:navigation')[item.file.path],'Retained recovery edit');await f.view.unload();assert.equal(f.writes,0);assert.equal(item.document.uncertain,true);assert.equal(f.notices.length,1);await f.bridge.open(item,leaf);assert.equal(f.notices.length,1);f.bridge.dispose();
 });
 test('refresh adopts the exact fresh text after a background read advanced the document cache',async()=>{
