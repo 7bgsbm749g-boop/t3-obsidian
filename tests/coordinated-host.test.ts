@@ -51,6 +51,16 @@ test('production host streams only to journal, stages a table and commits the re
   assert.equal((await h.client.command({kind:'claim',jobId:h.id})).ok,false);
  }finally{await h.close();}
 });
+for(const side of ['before','after'] as const)test(`ordinary text touching the ${side} marker survives final host delivery`,async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const anchor=responseAnchor(h.id),ordinary='User writing';
+  h.notes.set('Note.md',h.notes.get('Note.md')!.replace(anchor,side==='before'?ordinary+anchor:anchor+ordinary));
+  h.complete();await h.writer.tick();
+  const lease=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
+  assert.equal(lease.state.cleanupComplete,true,JSON.stringify({lease,journal:await h.host.journal.read(h.id)}));
+  assert.ok(h.notes.get('Note.md')!.includes(ordinary));assert.ok(h.notes.get('Note.md')!.includes('Added **25kg**.'));
+ }finally{await h.close();}
+});
 test('legacy migration fences the old epoch before stripping and preserves exact run and incoming metadata',async()=>{
  const h=await setup(false);try{
   const record=JSON.parse((await h.files.read(leasePaths(h.request.host.directory,h.id).record))!);
@@ -191,6 +201,31 @@ test('mobile rename handoff waits for delayed Sync and retires the exact old-pat
   assert.equal(record.state.status,'complete');assert.equal(record.state.finalSaved,true);assert.equal(record.state.cleanupComplete,true);
   assert.ok(h.notes.get('Mobile title.md')!.includes('Added **25kg**.'));assert.ok(!h.notes.get('Note.md')!.includes(h.id));
   assert.equal(await readFile(join(h.root,'journal',h.id,'stale-rename-preimages',contentHash('Note.md')+'.md'),'utf8'),original);
+ }finally{await h.close();}
+});
+test('a completed native rename repairs only the exact stale anchor once, including delayed Sync after restart',async()=>{
+ const h=await setup();let restarted:CoordinatedHost|undefined;try{
+  await h.writer.tick();const original=h.notes.get('Note.md')!;h.complete();await h.writer.tick();
+  const final=h.notes.get('Note.md')!;
+  await h.client.command({kind:'relocate',jobId:h.id,previousNotePath:'Note.md',notePath:'Renamed.md'});
+  await h.host.scan();assert.equal((await h.host.journal.read(h.id))!.pendingRename!.after,'Renamed.md');
+  h.host.stop();h.writer.stop();restarted=await CoordinatedHost.open(h.app,h.identity,h.files,h.authority,{journalRoot:join(h.root,'journal')});
+  h.notes.set('Renamed.md',original);await restarted.scan();
+  assert.equal(h.notes.get('Renamed.md'),final);assert.equal(h.notes.get('Note.md'),final);
+  assert.equal((await restarted.journal.read(h.id))!.pendingRename,undefined);
+  assert.equal(await readFile(join(h.root,'journal',h.id,'completed-rename-preimages',contentHash('Renamed.md')+'.md'),'utf8'),original);
+  h.notes.set('Renamed.md',original);await restarted.scan();
+  assert.equal(h.notes.get('Renamed.md'),original,'a later undo is not silently repaired');
+  assert.equal((await restarted.journal.read(h.id))!.status,'conflict');
+ }finally{restarted?.stop();await h.close();}
+});
+test('completed rename recovery preserves changed ordinary text as a conflict',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const original=h.notes.get('Note.md')!;h.complete();await h.writer.tick();
+  const edited=original+'New user writing\n';h.notes.set('Renamed.md',edited);
+  await h.client.command({kind:'relocate',jobId:h.id,previousNotePath:'Note.md',notePath:'Renamed.md'});await h.host.scan();
+  assert.equal(h.notes.get('Renamed.md'),edited);assert.equal((await h.host.journal.read(h.id))!.status,'conflict');
+  assert.equal((await h.host.journal.read(h.id))!.pendingRename,undefined);
  }finally{await h.close();}
 });
 test('copied destinations show paths, require a current review and recover the same completed T3 response after restart',async()=>{

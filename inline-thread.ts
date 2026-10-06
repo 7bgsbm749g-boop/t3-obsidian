@@ -99,7 +99,7 @@ export function regionBody(document:string,id:string):{from:number;to:number;bod
 }
 
 function markerLines(document:string,prefix:'t3-inline'|'t3-response') {
-  const matches=[...document.matchAll(new RegExp(`^<!-- ${prefix}:(start|end):([a-z0-9-]+) -->$`,'gm'))];
+  const matches=[...document.matchAll(new RegExp(`<!-- ${prefix}:(start|end):([a-z0-9-]+) -->`,'g'))];
   if(!matches.length)return [];
   const code=markdownCodeRanges(document);
   return matches

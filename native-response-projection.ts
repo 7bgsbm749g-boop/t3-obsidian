@@ -14,7 +14,9 @@ const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export function responseRegion(text:string,id:string):{from:number;to:number;body:string}|undefined {
   if(!uuid.test(id))throw new ProjectionConflict('Invalid response identity.');
   const start=startMarker(id),end=endMarker(id),code=markdownCodeRanges(text);
-  const markers=[...text.matchAll(/^<!-- t3-(?:inline|response):(start|end):([0-9a-fA-F-]{36}) -->$/gm)].filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to));
+  // Ordinary text may touch either OUTER edge of a hidden comment. Matching
+  // the whole line made that legal edit invalidate every later edit and save.
+  const markers=[...text.matchAll(/<!-- t3-(?:inline|response):(start|end):([0-9a-fA-F-]{36}) -->/g)].filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to));
   const own=markers.filter(match=>match[0]===start||match[0]===end);
   if(!own.length)return;
   if(own.length!==2||own[0][0]!==start||own[1][0]!==end)throw new ProjectionConflict('Missing, duplicate or reversed response boundaries.');

@@ -7,10 +7,11 @@ const id='25158e9b-7a9b-40bb-9866-e777549652b4';
 const start=`<!-- t3-inline:start:${id} -->`;
 const end=`<!-- t3-inline:end:${id} -->`;
 
-test('only complete T3 tracking lines are hidden, including markers inserted after the editor opens',()=>{
+test('only complete T3 tracking comments are hidden, including markers beside ordinary text',()=>{
   const regex=inlineMarkerRegex();
   assert.equal(regex.test(start),true);
-  regex.lastIndex=0;assert.equal(regex.test(`A ${start}`),false);
+  regex.lastIndex=0;assert.equal(regex.test(`A ${start}`),true);
+  regex.lastIndex=0;assert.equal(regex.test(`${end}User text`),true);
   regex.lastIndex=0;assert.equal(regex.test('<!-- an ordinary note comment -->'),false);
 
   const initial=`Question\n${start}\n**T3 · Working**\n${end}\n<!-- an ordinary note comment -->`;

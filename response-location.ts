@@ -22,7 +22,7 @@ export class ResponseNoteLocator {
     this.dirty.delete(path);
     if(document===undefined){this.notes.delete(path);this.hashes.delete(path);return;}
     this.hashes.set(path,contentHash(document));
-    const matches=[...document.matchAll(/^<!-- (?:t3-inline|t3-response):start:([0-9a-f-]{36}) -->$/gm)];
+    const matches=[...document.matchAll(/<!-- (?:t3-inline|t3-response):start:([0-9a-f-]{36}) -->/g)];
     const code=matches.length?markdownCodeRanges(document):[];
     const ids=new Set(matches.filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to)).map(match=>match[1]));
     if(ids.size)this.notes.set(path,ids);else this.notes.delete(path);

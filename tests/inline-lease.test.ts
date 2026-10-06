@@ -648,6 +648,9 @@ test('native devices cache authenticated commit evidence once and acknowledge on
     h.advance(1000);await drain();assert.equal(proofReads,1);assert.ok(received.length>=2);
     saved=document;h.advance(1000);await drain();assert.deepEqual(h.record().state!.delivery!.observedBy,[h.actor]);assert.equal(proofReads,1);
     assert.equal((manager as any).jobs.size,0);
+    manager.renamed('Note.md','Renamed.md');await drain();
+    assert.equal(h.record().state!.notePath,'Renamed.md','a completed response still follows a native rename after polling retires');
+    assert.deepEqual(h.record().relocations,[{before:'Note.md',after:'Renamed.md'}]);
   }finally{manager.dispose();}
 });
 

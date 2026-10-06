@@ -1,6 +1,6 @@
 /** Conservative three-way text merge. Offsets always refer to the original
  * saved document, never to a native view containing transient output. */
-export interface SavedEdit {from:number;to:number;text:string}
+export interface SavedEdit {from:number;to:number;text:string;preserveBoundaryInsertions?:boolean}
 export type MergeResult={ok:true;text:string;edits:SavedEdit[]}|{ok:false;reason:string};
 
 /** A single changed interval deliberately treats separated edits as one area.
@@ -49,6 +49,10 @@ export function mergeSavedEdits(original:string,latest:string,proposed:readonly 
   if(!users.length)return {ok:true,text:applySavedEdits(original,proposed),edits:[...proposed]};
   const mapped:SavedEdit[]=[];
   for(const edit of proposed){
+    // A checked response replacement owns the comment pair, but ordinary
+    // insertions exactly outside that pair belong before/after the result.
+    // Other staged edits retain the conservative touching-edit rule.
+    const outside=(user:SavedEdit)=>edit.preserveBoundaryInsertions===true&&user.from===user.to&&(user.from===edit.from||user.from===edit.to);
     // A native pane can echo an independently registered anchor (or an
     // ordinary edit) already included in the incoming saved revision. Exact
     // identical edits are one change, not competing changes. Other touching
@@ -56,8 +60,8 @@ export function mergeSavedEdits(original:string,latest:string,proposed:readonly 
     if(users.some(user=>user.from===edit.from&&user.to===edit.to&&user.text===edit.text))continue;
     // Touching insertions and replacements are ambiguous. Avoid ordering them
     // based on arrival time, including edits exactly at a response boundary.
-    if(users.some(user=>!(edit.to<user.from||edit.from>user.to)))return {ok:false,reason:'Generated and ordinary edits overlap or touch. Both versions are preserved.'};
-    const shift=users.filter(user=>edit.from>user.to).reduce((delta,user)=>delta+user.text.length-(user.to-user.from),0);
+    if(users.some(user=>!(edit.to<user.from||edit.from>user.to)&&!outside(user)))return {ok:false,reason:'Generated and ordinary edits overlap or touch. Both versions are preserved.'};
+    const shift=users.filter(user=>edit.from>user.to||outside(user)&&user.to===edit.from).reduce((delta,user)=>delta+user.text.length-(user.to-user.from),0);
     mapped.push({from:edit.from+shift,to:edit.to+shift,text:edit.text});
   }
   return {ok:true,text:applySavedEdits(latest,mapped),edits:mapped};

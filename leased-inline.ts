@@ -49,6 +49,7 @@ export class DeviceInlineManager {
   private nextRenameRetry=0;
   private hosts=new Map<string,Host>();
   private jobs=new Map<string,Runtime>();
+  private bindings=new Map<string,{host:Host;notePath:string;coordinated:boolean;stopped:boolean}>();
   private previews=new Map<string,DirectInlinePreview>();
   private accessCache=new ThreadAccessCache((environmentId,reason)=>this.io.access(environmentId,reason),()=>this.now());
   private titles?:ThreadTitleFeed;
@@ -134,6 +135,7 @@ export class DeviceInlineManager {
     if(this.stopped||record.request.vaultId!==this.vaultId||hostKey(record.request.host)!==hostKey(host.target))return;
     const current=this.jobs.get(record.request.id)?.record;
     if(current&&(current.epoch>record.epoch||current.epoch===record.epoch&&current.revision>record.revision))return;
+    this.bindings.set(record.request.id,{host,notePath:record.state?.notePath??record.request.notePath,coordinated:record.coordinated===true,stopped:!!record.stopRequestedAt});
     if(record.coordinated&&this.io.receiveDirect){
       let preview=this.previews.get(record.request.id);
       if(!preview){preview=new DirectInlinePreview(record,()=>this.access(record.request.threadEnvironmentId),update=>this.io.receiveDirect!(update));this.previews.set(record.request.id,preview);}
@@ -364,9 +366,13 @@ export class DeviceInlineManager {
     for(const host of this.hosts.values())host.responses=relocateExplorerResponses(host.responses,before,after);
     for(const runtime of this.jobs.values()){
       runtime.writer.renamed(before,after);runtime.nextTick=0;
-      const current=this.renames.filter(item=>item.bindingId===runtime.record.request.id).at(-1)?.after??runtime.record.state?.notePath??runtime.record.request.notePath;
-      if(runtime.record.coordinated&&!runtime.record.stopRequestedAt&&!terminalLease(runtime.record)&&(current===before||current.startsWith(before+'/'))){
-        this.renames.push({id:crypto.randomUUID(),actor:this.actor,bindingId:runtime.record.request.id,host:runtime.host.target,before:current,after:after+current.slice(before.length)});
+    }
+    // Completed deliveries leave the polling jobs after disk acknowledgement,
+    // but their destination must still follow a later native rename.
+    for(const [bindingId,binding] of this.bindings){
+      const current=this.renames.filter(item=>item.bindingId===bindingId).at(-1)?.after??binding.notePath;
+      if(binding.coordinated&&!binding.stopped&&(current===before||current.startsWith(before+'/'))){
+        this.renames.push({id:crypto.randomUUID(),actor:this.actor,bindingId,host:binding.host.target,before:current,after:after+current.slice(before.length)});
         // Preserve the exact authenticated mailbox command across offline
         // retries and reload. Successive moves are acknowledged in order.
         this.io.saveRenames?.(this.renames);this.nextRenameRetry=0;
@@ -381,6 +387,6 @@ export class DeviceInlineManager {
     for(const runtime of this.jobs.values()){runtime.refresh?.cancel(Error('Response writer stopped.'));runtime.monitor?.stop();runtime.writer.stop();}
     for(const host of this.hosts.values())host.close();
     void this.accessCache.dispose();
-    this.jobs.clear();this.hosts.clear();
+    this.jobs.clear();this.bindings.clear();this.hosts.clear();
   }
 }

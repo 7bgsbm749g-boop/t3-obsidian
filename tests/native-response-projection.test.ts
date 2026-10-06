@@ -111,6 +111,39 @@ test('native transaction filter prevents partial response edits while preserving
   const ordinary=state.update({changes:{from:0,to:6,insert:'User edit'}}).state.doc.toString();
   assert.ok(ordinary.startsWith('User edit'));assert.ok(ordinary.includes('> Stream'));
 });
+test('typing beside either tracking comment remains editable and survives save, stream updates and reopen',async()=>{
+  for(const side of ['before','after'] as const){
+    const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);
+    let state=EditorState.create({doc:fixture.read(),extensions:[fixture.adapter.extension()]});
+    fixture.view.editor={cm:{state}};
+    const edit=(from:number,to:number,insert:string)=>{
+      state=state.update({changes:{from,to,insert}}).state;
+      fixture.view.editor.cm.state=state;fixture.edit(state.doc.toString());
+    };
+    const region=responseRegion(fixture.read(),id)!;
+    const at=side==='before'?region.from:region.to;
+    edit(at,at,'User text');edit(at+9,at+9,' remains');edit(at+9,at+17,'');
+    assert.ok(fixture.read().includes('User text'));
+    const durable=side==='before'?saved.replace(responseAnchor(id),'User text'+responseAnchor(id)):saved.replace(responseAnchor(id),responseAnchor(id)+'User text');
+    assert.equal(fixture.view.getViewData(),durable);await fixture.view.save();
+    fixture.adapter.setResponses([{id,body:'> New stream'}]);
+    assert.equal(fixture.view.getViewData(),durable);assert.ok(fixture.read().includes('> New stream'));
+    fixture.adapter.dispose();assert.equal(fixture.read(),durable);
+    const reopened=fakeView(durable);reopened.adapter.setResponses([{id,body:'> Restored stream'}]);
+    assert.equal(reopened.view.getViewData(),durable);assert.ok(reopened.read().includes('User text'));
+  }
+});
+test('ordinary edits cannot make an active response unparseable or stop the next valid edit',()=>{
+  const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);
+  let state=EditorState.create({doc:fixture.read(),extensions:[fixture.adapter.extension()]});
+  fixture.view.editor={cm:{state}};
+  const duplicate=state.update({changes:{from:0,insert:responseAnchor(id)+'\n'}});
+  assert.equal(duplicate.state.doc.toString(),fixture.read());
+  const fenced=state.update({changes:{from:0,insert:'```\n'}});
+  assert.equal(fenced.state.doc.toString(),fixture.read());
+  state=state.update({changes:{from:0,insert:'Ordinary text\n'}}).state;
+  assert.ok(state.doc.toString().startsWith('Ordinary text\n'));
+});
 test('final materialization requires an explicit verified commit and excludes completed response from local projections',()=>{
   const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'},{id:other,body:'> Other'}]);
   const final=saved.replace(responseAnchor(id),'\n> Finished');fixture.adapter.acceptCommitted(final,[id]);

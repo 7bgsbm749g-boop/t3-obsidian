@@ -1,9 +1,9 @@
 import type {Extension} from '@codemirror/state';
 import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
 
-/** Match only the plugin's complete tracking lines, never other HTML comments. */
+/** Match only complete plugin tracking comments, including beside user text. */
 export function inlineMarkerRegex():RegExp {
-  return /^<!-- (?:(?:t3-inline|t3-response):(?:start|end):[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|t3-(?:question|approval):(?:start|end):%7B[A-Za-z0-9%_.~-]+%7D) -->$/g;
+  return /<!-- (?:(?:t3-inline|t3-response):(?:start|end):[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|t3-(?:question|approval):(?:start|end):%7B[A-Za-z0-9%_.~-]+%7D) -->/g;
 }
 
 export function hiddenInlineMarkerExtension():Extension {

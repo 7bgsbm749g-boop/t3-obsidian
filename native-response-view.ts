@@ -206,6 +206,11 @@ export class NativeResponseView {
     const projection=projectResponses(savedProjection(current,this.projection),this.responses);
     let allowed=true;
     transaction.changes.iterChangedRanges((from,to)=>{if(!editableDisplayRange(projection,from,to))allowed=false;});
+    if(allowed&&projection.ranges.length){
+      // A paste outside the response can duplicate a marker or enclose it in
+      // code. Reject that transaction before it can break the save boundary.
+      try{savedProjection(transaction.newDoc.toString(),projection);}catch{allowed=false;}
+    }
     return allowed?transaction:[];
   }
   /** Remove local output before unwrapping the save boundary. A conflict must

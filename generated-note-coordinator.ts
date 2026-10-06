@@ -15,6 +15,7 @@ export interface NoteGeneration {
   status:'accepted'|'streaming'|'result-ready'|'commit-pending'|'verified'|'conflict'|'removed';
   conflicts:Array<{original:string;latest:string;proposed?:string;reason:string}>;
   acknowledgements:Array<{deviceId:string;commitId:string;hash:string;observedAt:string}>;
+  pendingRename?:{before:string;after:string};
 }
 export interface GenerationJournal {
   read(id:string):Promise<NoteGeneration|undefined>;
@@ -92,7 +93,7 @@ export class GeneratedNoteCoordinator {
     const region=regionBody(record.original,record.request.id);
     const final=region&&finalizeRegion(record.original,record.request.id,contentHash(region.body),record.finalBody);
     if(!final)throw Error('Response placement is ambiguous.');
-    return [...changedEdits(record.original,record.staged),final];
+    return [...changedEdits(record.original,record.staged),{...final,preserveBoundaryInsertions:true}];
   }
   materialization(record:NoteGeneration):NativeCommitProof {
     if(record.status!=='verified'||!record.verified||!record.attempt)throw Error('Native materialization requires a verified journal commit.');
@@ -203,7 +204,15 @@ export class GeneratedNoteCoordinator {
     return this.serial(initial.notePath,async()=>{
       const record=await this.require(id);if(record.notePath!==before)throw Error('Rename does not match this registration.');
       validateHostedRequest({...record.request,notePath:after});record.notePath=after;
+      if(record.status==='verified')record.pendingRename={before,after};
       await this.journal.append(id,record,'renamed');return record;
+    });
+  }
+  async settleRename(id:string){
+    const initial=await this.require(id);
+    return this.serial(initial.notePath,async()=>{
+      const record=await this.require(id);if(!record.pendingRename)return record;
+      delete record.pendingRename;await this.journal.append(id,record,'rename-observed');return record;
     });
   }
 }

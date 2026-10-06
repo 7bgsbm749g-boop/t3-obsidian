@@ -143,7 +143,24 @@ export class CoordinatedHost {
             record=await this.authority.checkpoint(id,{...record.state,delivery:{...record.state.delivery,proofHash:proof.hash}},{epoch:record.epoch,revision:record.revision});this.records.set(id,record);
           }
           await nativeResponses(this.app).receive(record);
-          if(journal){if(journal.notePath!==notePath)await this.coordinator.renamed(id,journal.notePath,notePath);await this.coordinator.observe(id);
+          if(journal){
+            let current=journal;
+            if(current.notePath!==notePath)current=await this.coordinator.renamed(id,current.notePath,notePath);
+            if(current.pendingRename&&current.verified&&record.relocations?.some(move=>move.after===notePath)){
+              const file=this.app.vault.getFileByPath(notePath),saved=file?await this.app.vault.read(file):undefined;
+              // Sync can rename the pre-commit empty anchor after this device
+              // already observed the final reply under its original name.
+              // The durable native rename plus the exact recorded preimage
+              // proves this single repair. Changed text remains a conflict.
+              if(saved===undefined)return;
+              if(saved===current.original){
+                const evidence=join(this.journal.root,id,'completed-rename-preimages');await fs.mkdir(evidence,{recursive:true,mode:0o700});
+                await fs.writeFile(join(evidence,contentHash(notePath)+'.md'),saved,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
+                await this.recoverySave(notePath,saved,current.verified.document,id,true);
+              }
+              await this.coordinator.settleRename(id);
+            }
+            await this.coordinator.observe(id);
             for(const actor of record.state?.delivery?.observedBy??[])await this.coordinator.acknowledge(id,actor,record.state!.delivery!.commitId,journal.verified!.document).catch(()=>{});
           }
         }

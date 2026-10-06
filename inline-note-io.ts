@@ -20,7 +20,7 @@ export function deviceNoteIO(app:App){
   const editors=(path:string)=>openViews(path).map(view=>view.editor);
   const saved=(view:MarkdownView)=>nativeResponses(app).view(view)?.saved()??view.getViewData?.()??view.editor.getValue();
   const stable=(open:MarkdownView[],path:string,value:string)=>{const current=openViews(path);return current.length===open.length&&open.every(view=>current.includes(view)&&saved(view)===value);};
-  const boundaries=(text:string)=>[...text.matchAll(/^<!-- t3-(?:inline|response):(?:start|end):[0-9a-f-]{36} -->$/gm)].map(match=>match[0]).join('\n');
+  const boundaries=(text:string)=>[...text.matchAll(/<!-- t3-(?:inline|response):(?:start|end):[0-9a-f-]{36} -->/g)].map(match=>match[0]).join('\n');
   const agreesWithDisk=async(path:string,value:string)=>{
     if(!app.vault?.getFileByPath)return true;const file=app.vault.getFileByPath(path);if(!file)return false;
     const disk=await app.vault.read(file);return boundaries(disk)===boundaries(value);
@@ -57,7 +57,7 @@ export function deviceNoteIO(app:App){
           // Registration must reach disk before a local native projection can
           // interpret a missing anchor as an incoming deletion. Obsidian's
           // pending autosave otherwise races the host's registration reply.
-          const newNativeAnchor=[...next.matchAll(/^<!-- t3-(?:inline|response):start:([0-9a-f-]{36}) -->$/gm)].some(match=>{
+          const newNativeAnchor=[...next.matchAll(/<!-- t3-(?:inline|response):start:([0-9a-f-]{36}) -->/g)].some(match=>{
             const id=match[1],region=responseRegion(next,id);return !responseRegion(current,id)&&!!region&&next.slice(region.from,region.to)===responseAnchor(id);
           });
           if(newNativeAnchor){
