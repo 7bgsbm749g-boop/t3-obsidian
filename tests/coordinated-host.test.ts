@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {nativeCommitPath,readNativeCommitProof,nativeCommitMatches} from '../native-response-commit';
+import {nativeResponses} from '../native-response-manager';
 import {randomUUID} from 'node:crypto';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -90,6 +91,79 @@ test('native note rename preserves immutable registration and moves coordinated 
  const h=await setup();try{
   await h.writer.tick();const before=h.notes.get('Note.md')!;h.notes.delete('Note.md');h.file.path='Renamed.md';h.notes.set('Renamed.md',before);await h.host.renamed('Note.md','Renamed.md');h.complete();await h.writer.tick();
   const journal=await h.host.journal.read(h.id),record=JSON.parse((await h.files.read(leasePaths(h.request.host.directory,h.id).record))!);assert.equal(journal!.notePath,'Renamed.md');assert.equal(journal!.request.notePath,'Note.md');assert.equal(journal!.status,'verified');assert.equal(record.state.notePath,'Renamed.md');assert.ok(h.notes.get('Renamed.md')!.includes('Added **25kg**.'));
+ }finally{await h.close();}
+});
+
+test('a pending rename cannot remove the only saved response anchor',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const original=h.notes.get('Note.md')!;
+  await h.host.renamed('Note.md','Delayed.md');await h.host.scan();
+  assert.equal(h.notes.get('Note.md'),original,'Sync has not supplied the destination yet');
+  h.notes.set('Delayed.md',original);await h.host.scan();
+  assert.equal(h.notes.get('Note.md'),original.replace(responseAnchor(h.id),''));
+  assert.ok(h.notes.get('Delayed.md')!.includes(responseAnchor(h.id)));
+ }finally{await h.close();}
+});
+
+test('a folder round trip with delayed files keeps the stream recoverable after restart',async()=>{
+ const h=await setup();let restarted:CoordinatedHost|undefined;try{
+  await h.writer.tick();const original=h.notes.get('Note.md')!;
+  await h.host.renamed('Note.md','Moved/Note.md');
+  await h.host.renamed('Moved','Returned');
+  await h.host.renamed('Returned/Note.md','Note.md');
+  assert.equal(h.notes.get('Note.md'),original);
+  h.writer.stop();h.host.stop();
+  restarted=await CoordinatedHost.open(h.app,h.identity,h.files,h.authority,{journalRoot:join(h.root,'journal')});await restarted.scan();
+  const writer=new HostedInlineWriter(h.identity,restarted.io(h.base));h.complete();await writer.tick();writer.stop();
+  assert.equal((await restarted.journal.read(h.id))!.status,'verified');
+  assert.ok(h.notes.get('Note.md')!.includes('Added **25kg**.'));
+ }finally{restarted?.stop();await h.close();}
+});
+
+test('active response repair restores a proven missing anchor and corrects its stale relocation trail',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const original=h.notes.get('Note.md')!;
+  await h.authority.renameNative('Note.md','Missing.md');
+  const key=leasePaths(h.identity.directory,h.id).record,lease=JSON.parse(h.storage.get(key)!);
+  lease.state.notePath='Note.md';lease.state.status='paused';h.storage.set(key,JSON.stringify(lease));
+  h.notes.set('Note.md',original.replace(responseAnchor(h.id),''));
+  const hash=contentHash(h.notes.get('Note.md')!);
+  await assert.rejects(h.host.command('repair-response',h.id,'0'.repeat(64)),/reviewed note changed/);
+  assert.equal(h.writes(),0);
+  const result:any=await h.host.command('repair-response',h.id,hash);
+  assert.equal(result.restored,true);assert.equal(h.notes.get('Note.md'),original);
+  assert.equal(await readFile(join(result.evidence,'before.md'),'utf8'),original.replace(responseAnchor(h.id),''));
+  assert.deepEqual(JSON.parse(h.storage.get(key)!).relocations.at(-1),{before:'Missing.md',after:'Note.md'});
+  h.complete();await h.writer.tick();assert.equal((await h.host.journal.read(h.id))!.status,'verified');
+ }finally{await h.close();}
+});
+
+test('active repair preserves text typed inside the saved anchor as ordinary note text',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const anchor=responseAnchor(h.id);
+  h.notes.set('Note.md',h.notes.get('Note.md')!.replace(anchor,anchor.replace('\n\n','its \n\n')));
+  const before=h.notes.get('Note.md')!,result:any=await h.host.command('repair-response',h.id,contentHash(before));
+  assert.equal(result.restored,true);assert.ok(h.notes.get('Note.md')!.includes('its \n\n'+anchor));
+  assert.equal(await readFile(join(result.evidence,'before.md'),'utf8'),before);
+  h.complete();await h.writer.tick();assert.equal((await h.host.journal.read(h.id))!.status,'verified');
+  assert.ok(h.notes.get('Note.md')!.includes('its '));assert.ok(h.notes.get('Note.md')!.includes('Added **25kg**.'));
+ }finally{await h.close();}
+});
+
+test('active repair refuses changed placement, canceled responses, and competing native buffers',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const original=h.notes.get('Note.md')!;
+  h.notes.set('Note.md',original.replace(responseAnchor(h.id),'')+'Later writing');
+  await assert.rejects(h.host.command('repair-response',h.id,contentHash(h.notes.get('Note.md')!)),/changed beyond/);
+  assert.equal(h.writes(),0);
+  h.notes.set('Note.md',original.replace(responseAnchor(h.id),''));
+  const manager=nativeResponses(h.app),savedViews=manager.savedViews;
+  manager.savedViews=()=>[{saved:()=>original+'Unsaved edit'}] as any;
+  await assert.rejects(h.host.command('repair-response',h.id,contentHash(h.notes.get('Note.md')!)),/Save the note/);
+  manager.savedViews=savedViews;assert.equal(h.writes(),0);
+  await h.client.command({kind:'stop',jobId:h.id});
+  await assert.rejects(h.host.command('repair-response',h.id,contentHash(h.notes.get('Note.md')!)),/saved or canceled/);
+  assert.equal(h.writes(),0);
  }finally{await h.close();}
 });
 
@@ -196,7 +270,7 @@ test('mobile rename handoff waits for delayed Sync and retires the exact old-pat
   await h.writer.tick();const original=h.notes.get('Note.md')!;
   const relocated=await h.client.command({kind:'relocate',jobId:h.id,previousNotePath:'Note.md',notePath:'Mobile title.md'});assert.equal(relocated.ok,true);
   await h.host.scan();h.complete();await h.writer.tick();assert.equal((await h.host.journal.read(h.id))!.notePath,'Mobile title.md');
-  assert.ok(!h.notes.get('Note.md')!.includes(h.id));assert.ok(!h.notes.has('Mobile title.md'));
+  assert.equal(h.notes.get('Note.md'),original,'the sole saved anchor survives until the destination arrives');assert.ok(!h.notes.has('Mobile title.md'));
   h.notes.set('Mobile title.md',original);h.notes.set('Note.md',original);await h.host.scan();await h.writer.tick();
   const record=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
   assert.equal(record.state.status,'complete');assert.equal(record.state.finalSaved,true);assert.equal(record.state.cleanupComplete,true);

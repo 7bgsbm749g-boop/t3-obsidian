@@ -30,6 +30,9 @@ export class ResponseNoteLocator {
   changed(path:string){if(safeNotePath(path))this.dirty.add(path);}
   deleted(path:string){for(const key of [...this.notes.keys(),...this.dirty])if(key===path||key.startsWith(path+'/')){this.notes.delete(key);this.dirty.delete(key);}}
   renamed(before:string,after:string){
+    for(const move of this.relocations.values())if(move.current===before||move.current.startsWith(before+'/')){
+      move.current=after+move.current.slice(before.length);move.previous.delete(move.current);
+    }
     for(const [path,ids] of [...this.notes])if(path===before||path.startsWith(before+'/')){
       const next=after+path.slice(before.length);this.notes.delete(path);this.notes.set(next,ids);this.dirty.add(next);
     }

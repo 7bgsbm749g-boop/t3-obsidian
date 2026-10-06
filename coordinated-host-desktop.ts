@@ -10,6 +10,7 @@ import {DesktopGenerationJournal} from './generation-journal-desktop';
 import {nativeResponses} from './native-response-manager';
 import {deviceNoteIO} from './inline-note-io';
 import {planNativeMigration} from './coordinated-migration';
+import {restoreResponseAnchor} from './response-anchor-recovery';
 import {projectResponses,responseAnchor,responseRegion,savedProjection} from './native-response-projection';
 import {regionBody,initialRegion,startMarker,endMarker} from './inline-thread';
 import {logFailure} from './diagnostics';
@@ -101,6 +102,13 @@ export class CoordinatedHost {
         for(const move of record.relocations){
           deviceNoteIO(this.app).noteRelocated(id,move.before,move.after,original?.originalHash);
           if(!original||move.before===notePath)continue;
+          // A rename intent alone does not prove Sync has delivered the new
+          // anchor. Keep the sole surviving registration until it has arrived.
+          const destination=this.app.vault.getFileByPath(notePath);
+          if(!destination)continue;
+          const destinationSaved=await this.app.vault.read(destination);
+          const destinationRegion=responseRegion(destinationSaved,id);
+          if(!destinationRegion||destinationSaved.slice(destinationRegion.from,destinationRegion.to)!==responseAnchor(id))continue;
           const file=this.app.vault.getFileByPath(move.before);if(!file)continue;
           const saved=await this.app.vault.read(file);
           // A known rename plus the exact former saved snapshot proves this
@@ -302,6 +310,26 @@ export class CoordinatedHost {
       await this.coordinator.stage(id,await fs.readFile(path,'utf8'),hash!);return {staged:true};
     }
     if(kind==='repair-response'){
+      if(['accepted','streaming'].includes(record.status)){
+        const {path,evidence}=await this.authority.exclusive(async()=>{
+          const raw=await this.files.read(leasePaths(this.identity.directory,id).record);if(!raw)throw Error('Unknown response binding.');
+          const lease:LeaseRecord=JSON.parse(raw),path=lease.state?.notePath??lease.request.notePath;
+          if(!lease.coordinated||lease.stopRequestedAt||lease.state?.userStopped||lease.state?.finalSaved)throw Error('This response is saved or canceled.');
+          const latest=await this.journal.read(id);
+          if(!latest||!['accepted','streaming'].includes(latest.status))throw Error('The response finished during review. Review its result before recovery.');
+          const file=this.app.vault.getFileByPath(path),saved=file?await this.app.vault.read(file):undefined;
+          if(saved===undefined||contentHash(saved)!==hash)throw Error('The reviewed note changed. Review it again before recovery.');
+          const after=restoreResponseAnchor(id,latest.original,saved);
+          const evidence=join(this.journal.root,id,`anchor-recovery-${hash}`);await fs.mkdir(evidence,{recursive:true,mode:0o700});
+          for(const [name,bytes] of [['before.md',saved],['after.md',after]])await fs.writeFile(join(evidence,name),bytes,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
+          if(after!==saved)await this.recoverySave(path,saved,after,id,false);
+          deviceNoteIO(this.app).noteChanged(path);
+          return {path,evidence};
+        });
+        let restored=await this.authority.relocate(id,path,path);
+        if(['paused','conflict'].includes(restored.state?.status??''))restored=await this.authority.resume(id);
+        this.records.set(id,restored);await this.scan();return {restored:true,notePath:path,evidence};
+      }
       // Pending readback recovery is not an explicit conflict restoration.
       // The caller's reviewed hash and the immutable expected bytes must agree.
       if(record.status==='commit-pending'&&record.attempt){

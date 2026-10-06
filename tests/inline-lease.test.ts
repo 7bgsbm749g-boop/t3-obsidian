@@ -26,6 +26,27 @@ function harness(){
   return {actor,request,region,files,remote,data,client,record,state,authority:()=>authority,now:()=>time,advance:(ms:number)=>{time+=ms;},restart:()=>{authority.stop();authority=new InlineLeaseAuthority(identity,files,()=>time);return authority.tick();}};
 }
 
+test('coordinated checkpoints cannot move a response back to a stale writer path',async()=>{
+ const h=harness(),request={...h.request,nativeProjection:true},state={...h.state,requestHash:hostedRequestHash({...h.request,nativeProjection:true})},client=h.client();
+ await client.command({kind:'register',jobId:request.id,request});await h.authority().migrated(request.id);
+ await h.authority().checkpoint(request.id,state);
+ await h.authority().renameNative('Note.md','Moved.md');
+ const current=h.record();await h.authority().checkpoint(request.id,{...state,body:'New progress'},{epoch:current.epoch,revision:current.revision});
+ assert.equal(h.record().state!.notePath,'Moved.md');assert.equal(h.record().state!.body,'New progress');
+ client.dispose();h.authority().stop();
+});
+
+test('reviewed relocation repairs a stale destination even when state already names the chosen path',async()=>{
+ const h=harness(),request={...h.request,nativeProjection:true},state={...h.state,requestHash:hostedRequestHash({...h.request,nativeProjection:true})},client=h.client();
+ await client.command({kind:'register',jobId:request.id,request});await h.authority().migrated(request.id);
+ await h.authority().checkpoint(request.id,state);await h.authority().renameNative('Note.md','Moved.md');
+ const stale=h.record();stale.state!.notePath='Note.md';h.data.set(leasePaths(request.host.directory,request.id).record,JSON.stringify(stale));
+ await h.authority().relocate(request.id,'Note.md','Note.md');
+ assert.deepEqual(h.record().relocations!.at(-1),{before:'Moved.md',after:'Note.md'});
+ const revision=h.record().revision;await h.authority().relocate(request.id,'Note.md','Note.md');assert.equal(h.record().revision,revision);
+ client.dispose();h.authority().stop();
+});
+
 test('registration timeout and successful retry expose the exact mailbox stage and correlated host reply',async()=>{
   const h=harness(),journal=new EventJournal({id:randomUUID,context:{deviceId:'test'},now:h.now,load:async()=>undefined,save:async()=>{}});
   configureDiagnostics(journal);

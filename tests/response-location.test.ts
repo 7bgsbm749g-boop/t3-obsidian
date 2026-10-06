@@ -104,3 +104,14 @@ test('proven relocation waits for Sync, follows its new path and excludes only t
   h.notes.delete('Copy.md');h.locator.deleted('Copy.md');h.notes.set('Old.md',original+'Changed copied note');h.locator.changed('Old.md');
   await assert.rejects(h.locator.locate(h.id,'Old.md'),error=>error instanceof DuplicateResponseLocation&&error.paths.includes('Old.md'));
 });
+
+test('an observed reverse folder move updates the proven relocation before the next host record',async()=>{
+ const h=harness(),original=h.notes.get('Old.md')!;
+ h.locator.relocated(h.id,'Old.md','Moved/Note.md',contentHash(original));
+ h.notes.set('Moved/Note.md',original);h.notes.delete('Old.md');
+ assert.equal(await h.locator.locate(h.id,'Old.md'),'Moved/Note.md');
+ h.move('Moved/Note.md','Returned/Note.md');h.locator.renamed('Moved','Returned');
+ assert.equal(await h.locator.locate(h.id,'Old.md'),'Returned/Note.md');
+ h.move('Returned/Note.md','Old.md');h.locator.renamed('Returned/Note.md','Old.md');
+ assert.equal(await h.locator.locate(h.id,'Old.md'),'Old.md');
+});

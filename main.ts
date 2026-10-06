@@ -329,7 +329,7 @@ export default class SendToT3 extends Plugin {
       for(const name of ['create','modify'] as const)this.registerEvent(this.app.vault.on(name as any,(file:TAbstractFile)=>{this.deviceInline?.changed(file.path);void nativeResponses(this.app).changed(file.path).catch(error=>logFailure('note.projection.file-update',error,{notePath:file.path}));}));
       this.registerEvent(this.app.vault.on('delete',file=>{this.deviceInline?.deleted(file.path);this.inlineHostService?.deleted(file.path);this.folderIndicators?.refresh();}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.inlineChat?.renamed(oldPath,file.path)));
-      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{if(!(file instanceof TFolder))return;let changed=false;for(const link of this.settings.folderLinks)if(link.folderPath===oldPath||link.folderPath.startsWith(oldPath+'/')){link.folderPath=file.path+link.folderPath.slice(oldPath.length);changed=true;}if(changed)void this.save().catch(error=>new Notice(`T3 folder links: ${message(error)}`,10000));}));
+      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{if(file instanceof TFolder)void this.renameLinkedFolder(oldPath,file.path).catch(error=>new Notice(`T3 folder links: ${message(error)}`,10000));}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{nativeResponses(this.app).renamed(oldPath,file.path);this.inlineHostService?.renamed(oldPath,file.path);this.deviceInline?.renamed(oldPath,file.path);}));
       this.registerEvent(this.app.vault.on('delete',file=>{this.inlineChat?.deleted(file.path);this.questionPaths.delete(file.path);}));
       this.registerEvent(this.app.vault.on('modify',file=>{if(file instanceof TFile&&file.extension==='md')void this.app.vault.read(file).then(text=>{if(questionTargets(text).length||approvalTargets(text).length)this.questionPaths.add(file.path);}).catch(()=>{});}));
@@ -375,6 +375,18 @@ export default class SendToT3 extends Plugin {
       if(!captured)return;
       menu.addItem(item=>item.setTitle('Ask T3 Code').setIcon('message-circle').setDisabled(this.busy).onClick(()=>this.openEditorChat(selection,file,{editor,view,...captured})));
     }));
+  }
+  private async renameLinkedFolder(before:string,after:string){
+    const previous=this.settings.folderLinks;
+    const links=previous.map(link=>link.folderPath===before||link.folderPath.startsWith(before+'/')?{...link,folderPath:after+link.folderPath.slice(before.length)}:link);
+    const changes=changedFolderLinks(previous,links,this.folderLinkReplica,randomId,Math.max(Date.now(),this.folderLinkClock+1));
+    if(!changes.length)return;
+    // Journal each observed move before awaiting an earlier queued save. A
+    // rapid reverse move must supersede its tombstone even before disk catches up.
+    this.folderLinkClock=Date.parse(changes[0].at);
+    this.folderLinkReplica=mergeFolderLinkChanges(this.folderLinkReplica,changes);
+    this.settings.folderLinkChanges=this.folderLinkReplica;this.settings.folderLinks=links;
+    await this.save();
   }
   private openQuestion(target:QuestionTarget){
     if(!this.questions||this.questions.isDismissed(target))return;

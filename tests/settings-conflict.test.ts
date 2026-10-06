@@ -38,6 +38,22 @@ test('shared saves preserve a disk folder link not edited in the local snapshot'
   assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.folderLinks)),[link]);
 });
 
+test('rapid folder move and reverse move survive queued saves, a stale Sync file and restart',async()=>{
+  const link={id:'link',folderPath:'Projects/Side/App',projectId:'project',projectTitle:'Repository',connectionId:'c',workspaceRoot:'/repo',self:false};
+  const h=await harness({vaultId:'vault',folderLinks:[link]});
+  const out=h.plugin.renameLinkedFolder('Projects/Side','Projects/Moved/Side');
+  const back=h.plugin.renameLinkedFolder('Projects/Moved/Side','Projects/Side');
+  await Promise.all([out,back]);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.current().folderLinks)),[link]);
+  const changes=JSON.parse(JSON.stringify(h.current().folderLinkChanges));
+  assert.equal(changes.find((c:any)=>c.folderPath==='Projects/Side/App').link.projectId,'project');
+  assert.equal(changes.find((c:any)=>c.folderPath==='Projects/Moved/Side/App').link,null);
+  h.setCurrent({...h.current(),folderLinks:[{...link,folderPath:'Projects/Moved/Side/App'}],folderLinkChanges:[]});
+  await h.plugin.onExternalSettingsChange();await h.plugin.save();
+  const restarted=await harness(h.current(),h.deviceId);
+  assert.deepEqual(JSON.parse(JSON.stringify(restarted.plugin.settings.folderLinks)),[link]);
+});
+
 test('external refresh adopts all shared preferences and unrelated saves preserve them',async()=>{
   const h=await harness({vaultId:'vault'});
   h.setCurrent({...h.current(),inlineStreaming:{enabled:false,keepIntermediate:true,intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'},orchestration:{waitForOtherThreads:true},completion:{action:'archive',archiveFolder:'Remote'}});

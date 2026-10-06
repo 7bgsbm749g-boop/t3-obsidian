@@ -177,9 +177,17 @@ export class InlineLeaseAuthority {
           const before=command.previousNotePath,after=command.notePath,current=record.state?.notePath??record.request.notePath;
           if(record.stopRequestedAt)throw Error('This response was canceled.');
           if(!record.coordinated||!safeNotePath(before)||!safeNotePath(after))throw Error('A coordinated response and exact rename paths are required.');
-          if(current===after)return respond(true);
-          if(current!==before)throw Error('The response moved again. Refresh its destination before retrying.');
-          record={...record,relocations:[...record.relocations??[],{before,after}],revision:record.revision+1,state:{...record.state??{requestHash:hostedRequestHash(record.request),accepted:false,status:'waiting',hashes:[record.request.initialHash],updatedAt:new Date().toISOString()},notePath:after}};
+          if(current===after){
+            const destination=record.relocations?.at(-1)?.after;
+            if(!destination||destination===after)return respond(true);
+            // Older checkpoints could overwrite state.notePath after a rename.
+            // A reviewed same-path recovery must also correct its durable trail.
+            if(before!==current)throw Error('The response moved again. Refresh its destination before retrying.');
+            record={...record,relocations:[...record.relocations!,{before:destination,after}],revision:record.revision+1};
+          }else{
+            if(current!==before)throw Error('The response moved again. Refresh its destination before retrying.');
+            record={...record,relocations:[...record.relocations??[],{before,after}],revision:record.revision+1,state:{...record.state??{requestHash:hostedRequestHash(record.request),accepted:false,status:'waiting',hashes:[record.request.initialHash],updatedAt:new Date().toISOString()},notePath:after}};
+          }
         }else if(command.kind==='stop'){
           if(!record.stopRequestedAt)record={...record,stopRequestedAt:this.now(),revision:record.revision+1};
         }else if(command.kind==='steer'){
@@ -232,6 +240,9 @@ export class InlineLeaseAuthority {
             if(record.state?.userStopped&&!state?.userStopped)throw Error('The response was stopped.');
             if(record.stopRequestedAt&&!state?.userStopped)throw Error('The response was stopped.');
             if(!state||state.requestHash!==hostedRequestHash(record.request)||!safeNotePath(state.notePath)||!Array.isArray(state.hashes)||state.hashes.some(hash=>!/^([0-9a-f]{64})$/.test(hash))||!['waiting','running','complete','interrupted','error','conflict','paused'].includes(state.status)||state.messageId!==undefined&&!uuid.test(state.messageId)&&!/^async-answer:[^\s\x00-\x1f]{1,200}$/.test(state.messageId)||state.pendingMessageId!==undefined&&!uuid.test(state.pendingMessageId))throw Error('Invalid response checkpoint.');
+            // Destination ownership belongs to native rename/relocation records.
+            // A writer's cached body checkpoint must not undo that decision.
+            if(record.coordinated)state.notePath=record.state?.notePath??record.request.notePath;
             if(record.state?.pendingMessageId&&state.pendingMessageId!==record.state.pendingMessageId&&state.messageId!==record.state.pendingMessageId)throw Error('The pending continuation changed.');
             if(state.steering!==undefined&&(!Array.isArray(state.steering)||state.steering.length!==(record.state?.steering?.length??0)||state.steering.some(input=>!validSteeringInput(input)||!Array.isArray(input.before))))throw Error('Invalid steering checkpoint.');
             if(state.status==='complete'&&state.steering?.some(input=>!input.confirmed))throw Error('Waiting for steering delivery before finalizing.');
