@@ -1,6 +1,15 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {codeLanguage,nativeLanguageVersion,plainTransfer,codeReadingFence,CodeGrammarCache} from '../code-language';
+import {codeLanguage,nativeLanguageVersion,plainTransfer,codeReadingFence,CodeGrammarCache,rawCodeChange,codeTabSize} from '../code-language';
+test('raw changes preserve mixed line endings, whitespace and Unicode',()=>{
+  for(const [before,after] of [['','\tnew\r\n'],['same','same'],['\told\r\n  next\n','\tnew\r\n  next\n'],['alpha\r\nbeta','alpha\r\n  beta'],['😀 x','😁 x'],['removed','']]){
+    const change=rawCodeChange(before,after);assert.equal(change?before.slice(0,change.from)+change.insert+before.slice(change.to):before,after);
+  }
+  assert.equal(rawCodeChange('same','same'),undefined);
+  assert.deepEqual(rawCodeChange('a\r\nb','a\r\nc'),{from:3,to:4,insert:'c'});
+  for(const size of [1,2,4,8,16])assert.equal(codeTabSize(size),size);
+  for(const size of [0,17,-1,2.5,'8',undefined])assert.equal(codeTabSize(size),4);
+});
 test('code routing selects JSX variants and leaves Markdown native',()=>{
   assert.equal(codeLanguage('md'),undefined);assert.equal(codeLanguage('MD'),undefined);
   for(const extension of ['ts','mts','cts','TS'])assert.deepEqual(codeLanguage(extension),{type:'typescript',grammar:'typescript',extensions:['ts','mts','cts']});

@@ -211,3 +211,12 @@
 .send-to-t3-tool pre:has(> .send-to-t3-tool-copy) { position: relative; }
 @media (prefers-reduced-motion: reduce) { .send-to-t3-tool > summary::after { animation: none; } }
 .send-to-t3-import-prompt { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Existing spaces and tabs have the same display policy in both code modes. */
+.t3-code-language-view .cm-scroller,
+.t3-code-language-view .cm-content,
+.t3-code-language-view pre,
+.t3-code-language-view code {
+  font-family: var(--font-monospace) !important;
+  tab-size: var(--t3-code-language-tab-size, 4) !important;
+}

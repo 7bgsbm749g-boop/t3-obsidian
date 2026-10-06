@@ -30,7 +30,7 @@ export default class LanguageViewsLab extends Plugin {
       'sample.py':'def greet(name: str):\n    return "Hello " + name\n',
       'sample.log':'---\n* raw text\n',
       'large.ts':'const large = "'+'x'.repeat(MAX_CODE_PARSE_LENGTH)+'";\n',
-      'crlf.ts':'const a: number = 1;\r\nconst b = 2;',
+      'crlf.ts':'function example() {\r\n    const spaces: number = 1;\r\n\tconst tabs = 2;\n}',
     };
     for(const [name,text] of Object.entries(fixtures))if(!this.app.vault.getFileByPath(name))await this.app.vault.create(name,text);
     const ordinary=this.app.workspace.getLeaf(false);await ordinary.openFile(this.app.vault.getFileByPath('Baseline.md')!);await pause(150);
@@ -55,6 +55,18 @@ export default class LanguageViewsLab extends Plugin {
     const languages:any[]=[];for(const [name,type,tree] of [['sample.tsx','typescript','JSXElement'],['sample.js','javascript','VariableDeclaration'],['sample.jsx','javascript','JSXElement'],['sample.json','json','JsonText'],['sample.css','css','StyleSheet'],['sample.py','python','Script'],['sample.log','plaintext','PlainText']]){const result=await open(name,type);const syntax=syntaxTree(result.cm.state).toString();if(!syntax.includes(tree))throw Error(`Wrong parser for ${name}: ${syntax}`);languages.push({name,type,language:result.cm.state.facet(language).name,tree:syntax});}
     const large=await open('large.ts','typescript');if(large.cm.state.facet(language).name!=='plaintext'||syntaxTree(large.cm.state).children.length)throw Error('Large file syntax grammar remained enabled');
     const crlf=await open('crlf.ts','typescript');if(crlf.view.editor.getValue()!==fixtures['crlf.ts'])throw Error('Native code loading removed carriage returns');await crlf.view.save();if(fs.readFileSync(path.join(this.root(),'vault/crlf.ts'),'utf8')!==fixtures['crlf.ts'])throw Error('Native code save changed CRLF bytes');
+    const sourceFont=getComputedStyle(crlf.cm.contentDOM).fontFamily,sourceTab=crlf.cm.state.tabSize;
+    await crlf.native.onSwitchView(new MouseEvent('click'));await pause(350);
+    const readingCode=crlf.view.contentEl.querySelector('pre code');if(!readingCode)throw Error('Native Reading code missing');
+    const readingStyle=getComputedStyle(readingCode),readingFont=readingStyle.fontFamily,readingTab=Number(readingStyle.tabSize);
+    if(sourceFont!==readingFont||sourceTab!==readingTab||sourceTab!==4)throw Error('Source/Reading indentation display differs');
+    await crlf.native.onSwitchView(new MouseEvent('click'));await pause(100);
+    if(crlf.view.editor.getValue()!==fixtures['crlf.ts'])throw Error('Reading/Source return changed CRLF or raw indentation');
+    crlf.native.editMode.set(fixtures['crlf.ts'].replace('= 1','= 12'));
+    if(crlf.view.editor.getValue()!==fixtures['crlf.ts'].replace('= 1','= 12'))throw Error('Incremental native set normalized whitespace');
+    crlf.native.editMode.set(fixtures['crlf.ts']);await crlf.view.save();
+    if(fs.readFileSync(path.join(this.root(),'vault/crlf.ts'),'utf8')!==fixtures['crlf.ts'])throw Error('Post-cycle native save changed exact whitespace');
+    this.evidence('language-whitespace.json',{raw:fixtures['crlf.ts'],sourceFont,readingFont,sourceTab,readingTab,exactIncrementalSet:true,readingSourceRoundTrip:true,mixedLineEndings:true,existingSpacesAndTabs:true});
     const state=codeLeaf.getViewState();await crlf.view.save();codeLeaf.detach();codeLeaf=this.app.workspace.getLeaf('tab');await codeLeaf.setViewState(state);await pause(150);if(codeLeaf.view.getViewType()!=='typescript'||(codeLeaf.view as MarkdownView).editor.getValue()!==fixtures['crlf.ts'])throw Error('Saved named workspace state did not restore');
     const hiddenLarge=this.app.workspace.getLeaf('tab');await hiddenLarge.setViewState({type:'typescript',state:{file:'large.ts',mode:'source'},active:true});await pause(100);
     let codeUpdates=0;for(const type of CODE_VIEW_TYPES)for(const leaf of this.app.workspace.getLeavesOfType(type)){const view:any=leaf.view,check=view.codeTransaction.bind(view);view.codeTransaction=(transaction:any)=>{codeUpdates++;return check(transaction);};}

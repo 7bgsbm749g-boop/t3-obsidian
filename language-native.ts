@@ -4,7 +4,7 @@ import {EditorView,keymap,lineNumbers} from '@codemirror/view';
 import {language,syntaxHighlighting,HighlightStyle,indentOnInput,foldGutter,type LanguageSupport} from '@codemirror/language';
 import {insertNewlineAndIndent,indentMore,indentLess} from '@codemirror/commands';
 import {tags} from '@lezer/highlight';
-import {codeLanguage,codeReadingFence,plainTransfer,MAX_CODE_PARSE_LENGTH,type CodeViewType} from './code-language';
+import {codeLanguage,codeReadingFence,plainTransfer,rawCodeChange,codeTabSize,MAX_CODE_PARSE_LENGTH,type CodeViewType} from './code-language';
 import type {NativeLanguageViews} from './language-views';
 import {codePlaintext} from './language-plaintext';
 
@@ -20,9 +20,10 @@ class NativeCodeView extends MarkdownView {
   constructor(leaf:WorkspaceLeaf,readonly type:CodeViewType,private registry:NativeLanguageViews){
     super(leaf);
     const edit:any=(this as any).editMode,preview:any=this.previewMode;
+    this.contentEl.classList.add('t3-code-language-view');
     const roots=(name:string)=>{const methods:Function[]=[];for(let prototype=Object.getPrototypeOf(edit);prototype;prototype=Object.getPrototypeOf(prototype))if(Object.prototype.hasOwnProperty.call(prototype,name)&&typeof prototype[name]==='function')methods.push(prototype[name]);return methods;};
     const local=roots('buildLocalExtensions'),dynamic=roots('getDynamicExtensions');
-    if(local.length<2||dynamic.length<2||typeof edit.getLocalExtensions!=='function'||typeof edit.updateOptions!=='function'||typeof preview.set!=='function'||typeof preview.clear!=='function'||typeof preview.get!=='function'||['getScroll','applyScroll','setEphemeralState','onResize'].some(method=>typeof preview[method]!=='function')||!(EditorView as any).clipboardCopyHook||!(EditorView as any).clipboardPasteHook)throw Error('Required per-instance native editor methods are absent');
+    if(local.length<2||dynamic.length<2||typeof edit.set!=='function'||typeof edit.getLocalExtensions!=='function'||typeof edit.updateOptions!=='function'||typeof preview.set!=='function'||typeof preview.clear!=='function'||typeof preview.get!=='function'||['getScroll','applyScroll','setEphemeralState','onResize'].some(method=>typeof preview[method]!=='function')||!(EditorView as any).clipboardCopyHook||!(EditorView as any).clipboardPasteHook)throw Error('Required per-instance native editor methods are absent');
     const genericLocal=local[local.length-1],genericDynamic=dynamic[dynamic.length-1];
     const colors=HighlightStyle.define([
       {tag:tags.keyword,color:'var(--color-purple)'},
@@ -41,15 +42,21 @@ class NativeCodeView extends MarkdownView {
     edit.getLocalExtensions=()=>[generic,this.codeExtensions,this.compartment.of(this.syntaxExtensions()),syntaxHighlighting(colors)];
     edit.localExtensions=null;
     const normalApp=edit.app;
+    const tabSize=()=>{const size=codeTabSize(normalApp.vault.getConfig('tabSize'));this.contentEl.style.setProperty('--t3-code-language-tab-size',String(size));return size;};
+    tabSize();
     const vaultProxy=new Proxy(normalApp.vault,{get:(target,key)=>key==='getConfig'?(name:string)=>['autoPairMarkdown','smartIndentList','livePreview','spellcheck'].includes(name)?false:target.getConfig(name):typeof target[key]==='function'?target[key].bind(target):target[key]});
     const codeApp=Object.assign(Object.create(normalApp),{vault:vaultProxy});
-    edit.getDynamicExtensions=()=>{edit.sourceMode=true;edit.app=codeApp;try{const extensions=genericDynamic.call(edit);if(normalApp.vault.getConfig('showLineNumber'))extensions.push(lineNumbers());return extensions;}finally{edit.app=normalApp;}};
+    edit.getDynamicExtensions=()=>{edit.sourceMode=true;edit.app=codeApp;try{const extensions=genericDynamic.call(edit);extensions.push(Prec.highest(EditorState.tabSize.of(tabSize())));if(normalApp.vault.getConfig('showLineNumber'))extensions.push(lineNumbers());return extensions;}finally{edit.app=normalApp;}};
+    // Core's incremental setter splits on /\r?\n/ and drops CR bytes. Keep its
+    // initialization lifecycle, but apply exact raw changes on this code instance.
+    const nativeEditSet=edit.set.bind(edit);
+    edit.set=(text:string,clear=false)=>{if(clear||!edit.cmInit)return nativeEditSet(text,clear);const change=rawCodeChange(edit.cm.state.doc.toString(),text);if(change)edit.cm.dispatch({changes:change,userEvent:'set'});};
     edit.sourceMode=true;
     // Presentation text never enters getViewData, native data, or lastSavedData.
     const nativeSet=preview.set.bind(preview),nativeClear=preview.clear.bind(preview);
     preview.get=()=>this.rawPreview;
     preview.clear=()=>{this.rawPreview='';nativeClear();};
-    preview.set=(text:string,clear=false)=>{if(clear)preview.clear();this.rawPreview=text;const grammar=text.length<=MAX_CODE_PARSE_LENGTH?codeLanguage(this.file?.extension??'')?.grammar:undefined;nativeSet(codeReadingFence(text,grammar),false);};
+    preview.set=(text:string,clear=false)=>{tabSize();if(clear)preview.clear();this.rawPreview=text;const grammar=text.length<=MAX_CODE_PARSE_LENGTH?codeLanguage(this.file?.extension??'')?.grammar:undefined;nativeSet(codeReadingFence(text,grammar),false);};
     preview.getFoldInfo=()=>({folds:[],lines:this.rawPreview.split('\n').length});preview.applyFoldInfo=()=>{};
     // Native Reading sees one presentation-only line before the raw code.
     const nativeScroll=preview.getScroll.bind(preview),nativeApplyScroll=preview.applyScroll.bind(preview),nativeState=preview.setEphemeralState.bind(preview),nativeResize=preview.onResize.bind(preview);

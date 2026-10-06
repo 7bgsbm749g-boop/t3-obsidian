@@ -11,10 +11,10 @@ const runtime=createRequire(process.cwd()+'/package.json');
 const external=['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight'];
 const bundled=build({entryPoints:['language-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external});
 const registryBundle=build({entryPoints:['language-views.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external});
-class GenericEdit {buildLocalExtensions(){return [];}getDynamicExtensions(){return [];}getLocalExtensions(){return this.buildLocalExtensions();}updateOptions(){}}
+class GenericEdit {buildLocalExtensions(){return [];}getDynamicExtensions(){return [];}getLocalExtensions(){return this.buildLocalExtensions();}updateOptions(){}set(text:string,clear=false){const edit=this as any;if(clear||!edit.cmInit)edit.cm.state=EditorState.create({doc:text,extensions:[edit.getLocalExtensions(),edit.getDynamicExtensions()]});else edit.cm.dispatch({changes:{from:0,to:edit.cm.state.doc.length,insert:text.split(/\r?\n/).join('\n')}});}}
 class MarkdownEdit extends GenericEdit {buildLocalExtensions():never{throw Error('Markdown local layer must not run');}getDynamicExtensions():never{throw Error('Markdown dynamic layer must not run');}}
 class BaseView {
-  leaf:any;app:any;earlyType:string;cleanups:Array<()=>void>=[];contentEl={createEl:()=>{}};restored:any;file:any;
+  leaf:any;app:any;earlyType:string;cleanups:Array<()=>void>=[];contentEl={createEl:()=>{},classList:{add:()=>{}},style:{setProperty:()=>{}}};restored:any;file:any;
   constructor(leaf:any){this.leaf=leaf;this.app=leaf.app;this.earlyType=this.getViewType();}
   register(callback:()=>void){this.cleanups.push(callback);}getViewType(){return 'markdown';}
   getState(){return {file:this.file?.path,mode:(this as any).getMode(),source:false};}async setState(state:any){this.restored=state;}
@@ -23,7 +23,7 @@ class NativeMarkdown extends BaseView {
   mode='source';editMode:any;previewMode:any;editor:any;
   constructor(leaf:any){super(leaf);const edit=this.editMode=new MarkdownEdit() as any;edit.app=this.app;edit.cmInit=true;edit.cm={state:EditorState.create(),dispatch(spec:any){this.state=this.state.update(spec).state;}};this.previewMode={rendered:'',set(text:string){this.rendered=text;},get(){return this.rendered;},clear(){this.rendered='';},readingScroll:1,readingState:{} as any,getScroll(){return this.readingScroll;},applyScroll(scroll:number){this.readingScroll=scroll;},setEphemeralState(state:any){this.readingState=state;},onResize(){}};this.editor={getValue:()=>edit.cm.state.doc.toString(),setValue:(text:string)=>edit.cm.dispatch({changes:{from:0,to:edit.cm.state.doc.length,insert:text}})};}
   async onLoadFile(file:any){this.file=file;this.setViewData(file.text,true);}
-  setViewData(text:string,_clear:boolean){this.editMode.cm.state=EditorState.create({doc:text,extensions:this.editMode.getLocalExtensions()});}
+  setViewData(text:string,clear:boolean){this.editMode.set(text,clear);}
   async onUnloadFile(){}getMode(){return this.mode;}showSearch(){}
 }
 const obsidian:any={MarkdownView:NativeMarkdown,TextFileView:BaseView,ItemView:BaseView,Keymap:{isModEvent:()=>false},Notice:class{},apiVersion:'1.14.4'};
@@ -53,7 +53,13 @@ test('large code keeps the syntax grammar off and restores it after shrinking',a
 });
 test('native code loading and Reading preserve carriage-return bytes',async()=>{
   const native=await evaluate(bundled),app={vault:{getConfig:()=>false}},leaf:any={app},registry={active:()=>true,grammars:{get:async()=>javascript({typescript:true})}},view=native.createNativeLanguageView(leaf,'typescript',registry);leaf.view=view;
-  for(const text of ['const a: number = 1;\r\nconst b = 2;', 'const a = 1;\rconst b = 2;']){await view.onLoadFile({path:'raw.ts',extension:'ts',text});assert.equal(view.editor.getValue(),text);view.previewMode.set(text,true);assert.equal(view.previewMode.get(),text);}
+  for(const text of ['const a: number = 1;\r\n    const b = 2;\n\tconst c = 3;', 'const a = 1;\rconst b = 2;']){await view.onLoadFile({path:'raw.ts',extension:'ts',text});assert.equal(view.editor.getValue(),text);view.previewMode.set(text,true);assert.equal(view.previewMode.get(),text);view.editMode.set('temporary');view.editMode.set(view.previewMode.get());assert.equal(view.editor.getValue(),text);view.editMode.set(text.replace(' = 1',' = 10'));assert.equal(view.editor.getValue(),text.replace(' = 1',' = 10'));}
+});
+test('code Source and Reading use the configured tab width without changing raw indentation',async()=>{
+  let size=2;const native=await evaluate(bundled),app={vault:{getConfig:(name:string)=>name==='tabSize'?size:false}},leaf:any={app},registry={active:()=>true,grammars:{get:async()=>javascript({typescript:true})}},view=native.createNativeLanguageView(leaf,'typescript',registry);leaf.view=view;
+  const properties=new Map();view.contentEl.style.setProperty=(key:string,value:string)=>properties.set(key,value);
+  const raw='function example() {\r\n  const spaces = 1;\n\tconst tabs = 2;\n}';await view.onLoadFile({path:'indent.ts',extension:'ts',text:raw});assert.equal(view.editMode.cm.state.tabSize,2);assert.equal(properties.get('--t3-code-language-tab-size'),'2');
+  size=8;view.previewMode.set(raw);assert.equal(properties.get('--t3-code-language-tab-size'),'8');view.editMode.cm.dispatch({effects:require('@codemirror/state').StateEffect.reconfigure.of([view.editMode.getLocalExtensions(),view.editMode.getDynamicExtensions()])});assert.equal(view.editMode.cm.state.tabSize,8);assert.equal(view.editor.getValue(),raw);assert.equal(view.previewMode.get(),raw);
 });
 test('factory registration stays lazy and preserves foreign ownership and unsupported workspace state',async()=>{
   const imports:string[]=[],module=await evaluate(registryBundle,imports),owned=new Map<string,any>([['json',()=>{}]]),app={viewRegistry:{getViewCreatorByType:(type:string)=>owned.get(type)}};

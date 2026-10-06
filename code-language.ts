@@ -14,6 +14,17 @@ export const CODE_LANGUAGES:readonly CodeLanguage[]=[
 ];
 export const CODE_VIEW_TYPES:readonly CodeViewType[]=['typescript','javascript','json','css','python','plaintext'];
 export const MAX_CODE_PARSE_LENGTH=300_000;
+/** Diff raw UTF-16 text without normalizing line endings or indentation. */
+export function rawCodeChange(before:string,after:string):{from:number;to:number;insert:string}|undefined {
+  if(before===after)return undefined;
+  let from=0,to=before.length,end=after.length;
+  while(from<to&&from<end&&before.charCodeAt(from)===after.charCodeAt(from))from++;
+  while(to>from&&end>from&&before.charCodeAt(to-1)===after.charCodeAt(end-1)){to--;end--;}
+  return {from,to,insert:after.slice(from,end)};
+}
+export function codeTabSize(value:unknown):number {
+  return typeof value==='number'&&Number.isInteger(value)&&value>=1&&value<=16?value:4;
+}
 export function codeLanguage(extension:string):CodeLanguage|undefined {
   const ext=extension.toLowerCase();if(ext==='md')return undefined;
   return CODE_LANGUAGES.find(profile=>profile.extensions.includes(ext))??CODE_LANGUAGES[CODE_LANGUAGES.length-1];
