@@ -35,7 +35,7 @@ test('private mailbox saves the reload acknowledgement before native dispatch an
 });
 test('reload waits for exact Sync bytes and ordinary saved edits, and rechecks both after acknowledgement',async()=>{
   const h=await fixture();try{
-    h.view.getViewData=()=> 'unsaved user edit';await assert.rejects(h.maintenance.execute(h.command),/ordinary note edits/);assert.equal(h.reloads(),0);
+    h.view.getViewData=()=> 'unsaved user edit';await assert.rejects(h.maintenance.execute(h.command),/unsaved edits/);assert.equal(h.reloads(),0);
     h.view.getViewData=()=> 'saved note';const result=await h.maintenance.execute(h.command);
     await writeFile(join(h.directory,'styles.css'),'another release');await assert.rejects(h.maintenance.acknowledged(h.command,result),/exact release files/);assert.equal(h.reloads(),0);
   }finally{await h.close();}
@@ -43,4 +43,17 @@ test('reload waits for exact Sync bytes and ordinary saved edits, and rechecks b
 test('native client commands require a complete immutable release and cannot request arbitrary app actions',()=>{
   const id=randomUUID();
   for(const value of [{version:1,id,kind:'reload-client'},{version:1,id,kind:'client-status',releaseVersion:'3.4.5'},{version:1,id,kind:'app:save'}])assert.throws(()=>validateClientCommand(value));
+});
+test('checked reload includes owned code views and rechecks a code edit after acknowledgement',async()=>{
+  const h=await fixture();try{
+    const code={file:{path:'Code.ts'},getMode:()=> 'source',getViewData:()=> 'const saved = 1;'};
+    h.app.workspace.getLeavesOfType=(type:string)=>type==='typescript'?[{view:code}]:[];
+    h.app.vault.read=async()=> 'const saved = 1;';
+    const maintenance=new DesktopClientMaintenance(h.app,h.root,'.obsidian','3.4.4',()=>['typescript']);
+    const result=await maintenance.execute(h.command);
+    code.getViewData=()=> 'const unsaved = 2;';
+    await assert.rejects(maintenance.acknowledged(h.command,result),/unsaved edits/);assert.equal(h.reloads(),0);
+    await assert.rejects(maintenance.execute(h.command),/unsaved edits/);assert.equal(h.reloads(),0);
+    code.getViewData=()=> 'const saved = 1;';assert.equal(await maintenance.acknowledged(h.command,result),true);assert.equal(h.reloads(),1);
+  }finally{await h.close();}
 });

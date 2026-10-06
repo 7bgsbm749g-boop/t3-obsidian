@@ -2,7 +2,7 @@
 
 Project `.ts`, `.mts`, and `.cts` files open in a view named `typescript`. `.tsx` uses that same view with its JSX grammar. JavaScript (`.js`, `.mjs`, `.cjs`, `.jsx`), JSON, CSS, and Python (`.py`, `.pyw`) use `javascript`, `json`, `css`, and `python`. Other text files use `plaintext`. Markdown and native media retain their usual views. No vault-wide extension mapping is changed. An existing extension handler remains under its current owner's control.
 
-The language views inherit Obsidian's native editor and save lifecycle. They retain native search, undo, autosave, tabs, Reading controls, and saved workspace state. CodebaseBridge includes these named views in its checked save, clean refresh, peer update, and local draft recovery paths. Project bytes remain outside the physical vault.
+The language views inherit Obsidian's native editor and save lifecycle. They retain native search, undo, autosave, tabs, Reading controls, and saved workspace state. CodebaseBridge includes these named views in its checked save, clean refresh, peer update, and local draft recovery paths. Project bytes remain outside the physical vault. The checked reload guard also checks every owned code view and rechecks saved bytes after its durable acknowledgement, before dispatching Reload app without saving.
 
 ## Markdown isolation
 
@@ -34,7 +34,7 @@ Full delivery also requires a clean-source immutable QLO2 release, fresh Sync sc
 
 ### Source validation, 2026-10-06
 
-The canonical build and all 966 JavaScript plus 11 Python tests passed. Suites ran with CPU affinity to one core, giving Node one test worker; private desktop clients ran one at a time after the suite. This avoided overlapping high-memory work after the earlier unrelated QLO2 renderer OOM.
+The canonical build and all 967 JavaScript plus 11 Python tests passed. Suites ran with CPU affinity to one core, giving Node one test worker; private desktop clients ran one at a time after the suite. This avoided overlapping high-memory work after the earlier unrelated QLO2 renderer OOM.
 
 Real isolated Obsidian 1.13.7 and 1.14.4 clients passed every language profile, TSX/JSX, native same-type reuse, undo/redo, option updates, raw Reading with embedded backticks and no final newline, plain URL copy/paste, image-paste selection preservation, code Enter/frontmatter behavior, large-file fallback, CRLF saves, and named workspace-state restoration. Each client performed 720 Markdown insert/delete pairs with zero code transaction callbacks or grammar loads, identical Markdown language/local extensions, and an unchanged global extension count. Warm median times were 0.9–1.3 ms per edit pair; timings are local observations rather than a universal speed guarantee.
 

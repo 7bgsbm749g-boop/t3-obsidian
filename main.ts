@@ -1209,7 +1209,7 @@ export default class SendToT3 extends Plugin {
       if(!root)return;
       const {NoteCommandServer}=await import('./note-command-desktop');
       const configDir=this.app.vault.configDir||'.obsidian';
-      this.clientMaintenance??=new (await import('./client-maintenance-desktop')).DesktopClientMaintenance(this.app,root,configDir,pluginManifest.version);
+      this.clientMaintenance??=new (await import('./client-maintenance-desktop')).DesktopClientMaintenance(this.app,root,configDir,pluginManifest.version,()=>this.codebase?.languageViews.types()??[]);
       const server=await NoteCommandServer.open(root,configDir,command=>this.executeAgentCommand(command),()=>!this.stopped&&!this.busy,undefined,async(command,result)=>isClientCommand(command)?this.clientMaintenance!.acknowledged(command,result):false);
       if(this.stopped){await server.dispose();return;}this.noteCommandServer=server;
     })();
