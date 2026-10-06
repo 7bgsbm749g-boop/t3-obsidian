@@ -64,14 +64,19 @@ export class CodebaseDocument {
   private queue:Promise<void>=Promise.resolve();
   private reading?:Promise<string>;
   private readAt=0;
-  base?:string;
+  // Every confirmed base assignment retires reads started against older state.
+  private baseVersion=0;
+  private loaded?:string;
+  get base(){return this.loaded;}
+  set base(text:string|undefined){this.loaded=text;this.baseVersion++;}
   draft?:string;
   uncertain=false;
-  constructor(readonly scope:CodebaseScope,readonly path:string,private io:CodebaseIO,private retain:(draft:string|undefined)=>void){}
+  constructor(readonly scope:CodebaseScope,readonly path:string,private io:CodebaseIO,private retain:(draft:string|undefined)=>void,private canAdoptRead:()=>boolean=()=>true){}
   read(force=false):Promise<string>{
     if(!force&&this.base!==undefined&&Date.now()-this.readAt<15000)return Promise.resolve(this.base);
     if(this.reading)return this.reading;
-    const reading=this.io.read(this.scope,this.path).then(text=>{if(this.draft!==undefined&&text!==this.base)throw Error('The project file changed. Your edit is kept on this device.');this.base=text;this.readAt=Date.now();return text;});
+    const version=this.baseVersion;
+    const reading=this.io.read(this.scope,this.path).then(text=>{if(this.base!==undefined&&(this.baseVersion!==version||!this.canAdoptRead()))return this.base;if(this.draft!==undefined&&text!==this.base)throw Error('The project file changed. Your edit is kept on this device.');this.base=text;this.readAt=Date.now();return text;});
     this.reading=reading;void reading.finally(()=>{if(this.reading===reading)this.reading=undefined;}).catch(()=>{});return reading;
   }
   save(text:string):Promise<void>{

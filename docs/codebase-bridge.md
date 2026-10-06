@@ -16,7 +16,7 @@ Markdown opens in native MarkdownView with normal source, Live Preview and readi
 
 The save queue checks the loaded base against a fresh remote read, writes once, then reads back. An uncertain write is never blindly retried. Failed/conflicting edits remain local and can be compared through Review unsaved project edit. Restored drafts cannot auto-overwrite the remote version. T3 has no atomic compare-and-swap API: external writers can still race between checks. UTF-8 byte-inexact or truncated reads are rejected, including files above T3's text limit.
 
-Unchanged native buffers do not check or write remote files and do not replace retained recovery edits. Editor save bases include the full virtual file identity, so a reused native tab cannot carry the previous file's base into a new file. A clean remote refresh also updates guarded native saved-buffer fields; delayed refreshes recheck the current file identity before touching a reused tab. Retained recovery text stays out of autosave on reopen. Use the review command to compare, copy, or explicitly save it.
+Unchanged native buffers do not check or write remote files and do not replace retained recovery edits. Editor save bases include the full virtual file identity, so a reused native tab cannot carry the previous file's base into a new file. A clean remote refresh and a fresh vault read also update guarded native saved-buffer fields. Each editor keeps its own loaded text independently of the shared read cache. A failed native update retains that editor basis for retry; delayed refreshes recheck the current file identity before touching a reused tab. Retained recovery text stays out of autosave on reopen. Use the review command to compare, copy, or explicitly save it.
 
 ## Links and discovery
 
