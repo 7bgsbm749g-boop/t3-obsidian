@@ -15,7 +15,7 @@ export function codebaseTransport(createAccess:(environmentId:string,reason?:Thr
   const sockets=new Map<string,{rpc:Rpc;origin:string;until:number}>(),opening=new Map<string,Promise<{rpc:Rpc;origin:string;until:number}>>();
   const catalogs=new Map<string,{value:any;at:number}>(),catalogPending=new Map<string,Promise<any>>();
   let stopped=false;
-  async function measured<T>(operation:string,work:()=>Promise<T>):Promise<T>{const start=now();try{return await work();}finally{timings.push({operation,milliseconds:now()-start});if(timings.length>200)timings.shift();}}
+  async function measured<T>(operation:string,work:()=>Promise<T>):Promise<T>{const start=now();try{return await work();}finally{timings.push({operation,milliseconds:now()-start});if(timings.filter(value=>value.operation===operation).length>200)timings.splice(timings.findIndex(value=>value.operation===operation),1);}}
   function bounded<T>(work:Promise<T>,late?:(value:T)=>void):Promise<T>{return new Promise((resolve,reject)=>{let expired=false;const timer=setTimeout(()=>{expired=true;reject(Error('The project machine did not respond. Cached folders remain available.'));},timeout);work.then(value=>{clearTimeout(timer);if(expired)late?.(value);else resolve(value);},error=>{clearTimeout(timer);reject(error);});});}
   async function connection(environmentId:string){
     if(stopped)throw Error('The project connection is stopped.');

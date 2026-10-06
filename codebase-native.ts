@@ -7,10 +7,11 @@ import type {HostedInlineRequest} from './hosted-inline';
 import type {ThreadAccess} from './thread-stream';
 import {CodebaseBrowseCache,type BrowseState} from './codebase-cache';
 import {CODEBASE_VIEW as VIEW,CodebaseView} from './codebase-view';
+import {timingSummaries} from './codebase-performance';
 export {CodebaseView} from './codebase-view';
 export interface CodebaseState {version:1;references:Record<string,SavedReference>;choices:Record<string,string>}
 export interface CodebaseStorage {load():CodebaseState|undefined;save(state:CodebaseState):Promise<void>}
-const MEDIA=/\.(?:png|jpe?g|gif|webp|svg|bmp|avif|pdf|mp[34]|wav|ogg|webm)$/i;
+const MEDIA=/\.(?:png|jpe?g|gif|webp|svg|bmp|avif|pdf|mp[34]|wav|m4a|3gp|flac|ogg|oga|opus|webm|ogv|mov|mkv)$/i;
 export interface RegisteredFile {scope:CodebaseScope;path:string;file:TFile;document:CodebaseDocument;resource?:{url:string;expiresAt:number};preparing?:Promise<void>;text?:string}
 export interface SavedReference {scope:CodebaseScope;path:string;note:string;name:string}
 class FileChoice extends FuzzySuggestModal<RegisteredFile>{
@@ -60,6 +61,8 @@ export class CodebaseBridge {
     this.undo.push(registerProjectReferences(this.app,(reference,request,access)=>this.reply(reference,request,access)));
     try{const saved=this.storage?.load()??JSON.parse(await this.app.vault.adapter.read(this.metadataPath));this.adopt(saved);}catch{/* First use or unavailable metadata. */}
     const vault=this.app.vault,cache=this.app.metadataCache,workspace=this.app.workspace;
+    this.nativeSwitcher();
+    this.nativeFileOpen();
     for(const method of ['getFileByPath','getAbstractFileByPath'])this.patch(vault,method,(original:any)=>(path:string)=>this.files.get(path)?.file??this.files.get(this.legacyPaths[path])?.file??this.folders.get(path)??original(path));
     for(const method of ['read','cachedRead'])this.patch(vault,method,(original:any)=>async(file:TFile)=>{
       const item=this.files.get(file.path);if(item){this.captureBases(item);await this.prepare(item);item.text=await item.document.read();await this.prepareEmbeds(item.text,file.path);return item.text;}
@@ -111,6 +114,7 @@ export class CodebaseBridge {
     this.plugin.addCommand({id:'review-codebase-edit',name:'Review unsaved project edit',checkCallback:checking=>{const file=workspace.getActiveViewOfType(MarkdownView)?.file,item=file?this.files.get(file.path):undefined;if(!item||this.drafts[item.file.path]===undefined)return false;if(!checking)void this.review(item).catch(error=>new Notice(error.message,10000));return true;}});
     this.plugin.addCommand({id:'review-codebase-edits',name:'Review all unsaved project edits',checkCallback:checking=>{const items=[...this.files.values()].filter(item=>this.drafts[item.file.path]!==undefined||Object.entries(this.draftAliases).some(([old,path])=>path===item.file.path&&this.drafts[old]!==undefined));if(!items.length)return false;if(!checking)new FileChoice(this.app,items,item=>{if(item)void this.review(item).catch(error=>new Notice(error.message));}).open();return true;}});
     this.plugin.addCommand({id:'refresh-codebase',name:'Refresh Codebase view',callback:()=>void this.refresh()});
+    this.plugin.addCommand({id:'copy-codebase-performance',name:'Copy Codebase performance report',callback:()=>{void navigator.clipboard.writeText(JSON.stringify(this.performanceReport(),null,2)).then(()=>new Notice('Codebase performance report copied.')).catch(error=>new Notice(String(error)));}});
     this.plugin.registerInterval(window.setInterval(()=>{void this.refresh(false).catch(()=>{});},15000));
     workspace.onLayoutReady(()=>void this.show(false));
   }
@@ -139,6 +143,37 @@ export class CodebaseBridge {
     label();if(typeof MutationObserver!=='undefined'){const observer=new MutationObserver(label);observer.observe(header,{childList:true,subtree:true});this.chrome.set(view,observer);}
   }
   scopes(){return linkedCodebases(this.links());}
+  /** On demand, durations/counts only. No journal, content, identities or paths. */
+  performanceReport(){
+    return {version:1,release:this.plugin.manifest.version,scopeCount:this.scopes().length,views:[...this.views].map(view=>({rowCount:view.rowCount,synchronousCpu:timingSummaries(view.timings,['render','reveal'])})),transport:timingSummaries(this.io.timings??[],['connect','catalog','projects.listEntries','projects.searchEntries','projects.readFile','projects.writeFile','assets.createUrl'],200)};
+  }
+  /** Decorate native recent-file rows at render time, preserving their targets. */
+  private nativeSwitcher(){
+    const prototype=(this.app as any).internalPlugins?.getPluginById?.('switcher')?.instance?.QuickSwitcherModal?.prototype;
+    if(!prototype||typeof prototype.renderSuggestion!=='function')return;
+    const own=Object.getOwnPropertyDescriptor(prototype,'renderSuggestion'),original=prototype.renderSuggestion,bridge=this;
+    const replacement=function(this:any,suggestion:any,el:HTMLElement){
+      const result=original.call(this,suggestion,el),item=!bridge.stopped&&suggestion?.type==='file'&&this.app===bridge.app?bridge.files.get(suggestion.file?.path):undefined;
+      if(item){const title=el.querySelector<HTMLElement>('.suggestion-title'),content=el.querySelector<HTMLElement>('.suggestion-content');title?.setText(item.file.extension==='md'?item.file.basename:item.file.name);if(content){const note=content.querySelector<HTMLElement>('.suggestion-note')??content.createDiv({cls:'suggestion-note'}),folder=item.path.split('/').slice(0,-1).join('/');note.setText(item.scope.title+(folder?' / '+folder:''));}}
+      return result;
+    };
+    try{Object.defineProperty(prototype,'renderSuggestion',{configurable:true,writable:true,value:replacement});}catch{return;}
+    this.undo.push(()=>{if(prototype.renderSuggestion!==replacement)return;if(own)Object.defineProperty(prototype,'renderSuggestion',own);else delete prototype.renderSuggestion;});
+  }
+  /** Keep native callers on native views for external text and prepared media. */
+  private nativeFileOpen(){
+    const prototype=WorkspaceLeaf?.prototype;
+    if(!prototype||typeof prototype.openFile!=='function')return;
+    const own=Object.getOwnPropertyDescriptor(prototype,'openFile'),original:any=prototype.openFile,bridge=this;
+    const replacement=function(this:WorkspaceLeaf&{app:App},file:TFile,...args:any[]){
+      const item=!bridge.stopped&&this.app===bridge.app&&file?.path?bridge.files.get(file.path):undefined;
+      if(!item)return original.call(this,file,...args);
+      if(file.extension==='md'||MEDIA.test(item.path)||(bridge.app as any).viewRegistry?.getTypeByExtension?.(file.extension))return bridge.prepare(item).then(()=>original.call(this,file,...args));
+      const options=args[0]??{};return bridge.open(item,this,{...options,active:options.active??(this===bridge.app.workspace.activeLeaf)});
+    };
+    try{Object.defineProperty(prototype,'openFile',{configurable:true,writable:true,value:replacement});}catch{return;}
+    this.undo.push(()=>{if(prototype.openFile!==replacement)return;if(own)Object.defineProperty(prototype,'openFile',own);else delete (prototype as any).openFile;});
+  }
   reconcileLinks(){this.renderViews();}
   private retain(path:string,draft:string|undefined){if(draft===undefined)delete this.drafts[path];else this.drafts[path]=draft;this.app.saveLocalStorage(this.draftsKey,this.drafts);}
   register(scope:CodebaseScope,path:string):RegisteredFile {
@@ -189,9 +224,9 @@ export class CodebaseBridge {
   private fileCache(path:string){const text=this.files.get(path)?.text??'',headings:any[]=[];let offset=0;for(const [line,content] of text.split('\n').entries()){const match=/^(#{1,6})\s+(.+?)(?:\s+#+)?$/.exec(content);if(match)headings.push({heading:match[2],level:match[1].length,position:{start:{line,col:0,offset},end:{line,col:content.length,offset:offset+content.length}}});offset+=content.length+1;}return {headings};}
   async open(item:RegisteredFile,leaf=this.app.workspace.getLeaf(false),state?:any,subpath?:string){
     this.pin(item);await this.prepare(item);
-    if(MEDIA.test(item.path)){await leaf.openFile(item.file,state);this.nativeChrome(leaf.view);return;}
+    if(MEDIA.test(item.path)||item.file.extension!=='md'&&(this.app as any).viewRegistry?.getTypeByExtension?.(item.file.extension)){await leaf.openFile(item.file,state);this.nativeChrome(leaf.view);return;}
     const text=await this.app.vault.read(item.file);item.text=text;
-    await leaf.setViewState({type:'markdown',state:{file:item.file.path,mode:'source',source:item.file.extension!=='md'},active:true});
+    await leaf.setViewState({type:'markdown',state:{...state?.state,file:item.file.path,mode:'source',source:item.file.extension!=='md'},active:state?.active??true,group:state?.group},state?.eState);
     if(!(leaf.view instanceof MarkdownView))throw Error('Obsidian could not open its native editor.');
     this.viewBases.set(leaf.view,item.document.base!);
     this.nativeChrome(leaf.view);

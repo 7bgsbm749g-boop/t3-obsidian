@@ -4,6 +4,7 @@ export const CODEBASE_PREFIX='__t3_codebase__/';
 export interface CodebaseScope {environmentId:string;projectId:string;title:string;root:string;threadId?:string}
 export interface CodebaseEntry {path:string;kind:'file'|'directory'}
 export interface CodebaseIO {
+  timings?:Array<{operation:string;milliseconds:number}>;
   dispose?():void|Promise<void>;
   workspaces?(scope:CodebaseScope):Promise<CodebaseScope[]>;
   list(scope:CodebaseScope,directory:string):Promise<{entries:CodebaseEntry[];truncated:boolean}>;
