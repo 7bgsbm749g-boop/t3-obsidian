@@ -1579,6 +1579,8 @@ test('run import future following is explicit, reused on repeat and resumed afte
     await h.plugin.importRun(note.file.path,project,threadId,messageId,true);assert.equal(displays.length,1);assert.equal(events.find(event=>event.kind==='stream-thread').start,'future');
     await h.plugin.importRun(note.file.path,project,threadId,messageId,true);assert.equal(displays.length,1);
     displays[0].enabled=false;await h.plugin.importRun(note.file.path,project,threadId,messageId,true);assert.equal(events.at(-1).kind,'resume-thread-stream');assert.equal(h.commands.length,0);
+    displays[0].destinations[0].removed=true;await h.plugin.importRun(note.file.path,project,threadId,messageId,true);assert.equal(displays.length,2);assert.notEqual(displays[1].id,displays[0].id,'Removed registrations need a new command identity');
+    displays[1].cancelled=true;await h.plugin.importRun(note.file.path,project,threadId,messageId,true);assert.equal(displays.length,3);assert.notEqual(displays[2].id,displays[1].id,'Cancelled registrations must not replay their old receipt');
   }finally{h.plugin.onunload();}
 });
 

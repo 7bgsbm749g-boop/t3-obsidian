@@ -35,3 +35,13 @@ registration reuse/resume, unavailable history and wrong-project rejection.
 Real-client evidence is recorded separately through the immutable release tool.
 Native mobile behavior requires an affected device and is not established by
 these desktop tests.
+
+The first live pass (2.34.0) verified completed import through the editor UI,
+future attachment of two subsequent T3 runs, a separate live catch-up import,
+completion, preservation of an ordinary note edit, and byte-identical repeated
+import after a native client reload. Review found that a removed destination
+could replay its previous deterministic follow-command receipt. Re-enabling
+future following now retains removed/cancelled history to choose a new command
+identity. The bundled integration test covers both removal and cancellation.
+The immutable 2.34.0 bytes remain unchanged; delivery continues with a newer
+patch release and a fresh client check.

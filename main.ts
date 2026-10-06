@@ -842,11 +842,12 @@ export default class SendToT3 extends Plugin {
   }
   private async followImportedThread(source:{threadId:string;projectId:string;environmentId:string},notePath:string){
     const result=await this.executeAgentCommand({version:1,id:randomId(),kind:'thread-streams'}) as import('./event-subscriptions').EventCommandResult;
-    const matches=(result.displays??[]).filter(display=>display.threadId===source.threadId&&display.projectId===source.projectId&&display.environmentId===source.environmentId&&display.destinations.some(destination=>destination.path===notePath&&!destination.removed));
+    const history=(result.displays??[]).filter(display=>display.threadId===source.threadId&&display.projectId===source.projectId&&display.environmentId===source.environmentId&&display.destinations.some(destination=>destination.path===notePath));
+    const matches=history.filter(display=>display.destinations.some(destination=>destination.path===notePath&&!destination.removed));
     if(matches.some(display=>display.enabled&&!display.cancelled))return;
     const paused=matches.find(display=>!display.cancelled);
     if(paused)await this.executeAgentCommand({version:1,id:randomId(),kind:'resume-thread-stream',subscriptionId:paused.id});
-    else await this.executeAgentCommand({version:1,id:matches.length?randomId():importFollowId(source,notePath),kind:'stream-thread',scope:'thread',source,destinations:[notePath],start:'future'});
+    else await this.executeAgentCommand({version:1,id:history.length?randomId():importFollowId(source,notePath),kind:'stream-thread',scope:'thread',source,destinations:[notePath],start:'future'});
   }
   private async readImportRecords(source:{threadId:string;projectId:string;environmentId:string}){
     const host=await this.inlineHostTarget(),opened=await this.inlineHostFiles(host);
