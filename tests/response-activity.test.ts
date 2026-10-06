@@ -23,19 +23,19 @@ test('canonical read, command, tool and reasoning state gives useful labels; unk
   assert.equal(responseActivityLabel(state([activity('x')]),''),'Working');
 });
 
-test('tool completion, terminal updates, partial snapshots and out-of-order lifecycle clear stale labels',()=>{
+test('successful completion keeps T3 live presentation while terminal failures and results remain final',()=>{
   const start=activity('a','tool.started',{title:'Reading file'});
   for(const terminal of [activity('done','tool.completed',{toolCallId:'a'}),activity('done','tool.updated',{toolCallId:'a',status:'completed'}),activity('done','tool.updated',{toolCallId:'a',status:'failed'})]){
-    assert.equal(responseActivityLabel(state([start,terminal]),'turn'),'Working');
-    assert.equal(responseActivityLabel(state([terminal,start]),'turn'),'Working');
+    assert.equal(responseActivityLabel(state([start,terminal]),'turn'),terminal.payload?.status==='failed'?'Working':'Reading file');
+    assert.equal(responseActivityLabel(state([terminal,start]),'turn'),terminal.payload?.status==='failed'?'Working':'Reading file');
   }
   assert.equal(responseActivityLabel(state([activity('upd','tool.updated',{title:'Reading file',status:'inProgress'})]),'turn'),'Reading file');
-  assert.equal(responseActivityLabel(state([activity('only','tool.completed',{title:'Reading file'})]),'turn'),'Working');
+  assert.equal(responseActivityLabel(state([activity('only','tool.completed',{title:'Reading file'})]),'turn'),'Reading file');
   const older=activity('old','tool.started',{title:'Reading file'},'turn',3),newer=activity('new','tool.started',{title:'Running rg'},'turn',5);
   assert.equal(responseActivityLabel(state([newer,older]),'turn'),'Running rg');
   assert.equal(responseActivityLabel(state([older,newer,activity('end','tool.completed',{toolCallId:'new'},'turn',6)]),'turn'),'Reading file');
   const idless=[{...start,payload:{title:'Reading file'}},{...activity('end','tool.completed'),payload:{title:'Reading file'}}];
-  assert.equal(responseActivityLabel(state(idless),'turn'),'Working');
+  assert.equal(responseActivityLabel(state(idless),'turn'),'Reading file');
 });
 
 test('events and snapshot recovery retain exact-turn isolation across responses and destinations',()=>{
@@ -45,7 +45,7 @@ test('events and snapshot recovery retain exact-turn isolation across responses 
   }
   assert.equal(responseActivityLabel(current,'turn'),'Reading file');assert.equal(responseActivityLabel(current,'other'),'Running pwd');
   const recovered=applyThreadItem(state(),{kind:'snapshot',snapshot:{thread:{...current,activities:[...current.activities,activity('done','tool.completed',{toolCallId:'a'})]}}}).state;
-  assert.equal(responseActivityLabel(recovered,'turn'),'Working');assert.equal(responseActivityLabel(recovered,'other'),'Running pwd');
+  assert.equal(responseActivityLabel(recovered,'turn'),'Reading file');assert.equal(responseActivityLabel(recovered,'other'),'Running pwd');
   assert.equal(responseActivityLabel(state([{...activity('unbound','tool.started',{title:'Reading file'}),turnId:null}]),'turn'),'Working');
 });
 

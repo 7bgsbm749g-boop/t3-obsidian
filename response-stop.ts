@@ -22,7 +22,12 @@ export function stoppedResponseBody(body:string):string {
   body=body.split('\n').map(line=>{
     const position=stopOffset;stopOffset+=line.length+1;
     if(beforeStop.some(([from,to])=>position>=from&&position<to))return line;
-    if(line.includes('class="send-to-t3-tool"')&&line.includes('data-t3-tool-status="inProgress"'))line=line.replace('data-t3-tool-status="inProgress"','data-t3-tool-status="stopped"').replace(/(<span>)(?:Running|Reading|Viewing|Searching|Editing) /,'$1Stopped ');
+    if(line.includes('class="send-to-t3-tool"')&&line.includes('data-t3-tool-status="inProgress"'))line=line.replaceAll('data-t3-tool-status="inProgress"','data-t3-tool-status="stopped"').replace(/(<span>)(?:Running|Reading|Viewing|Searching|Editing) /g,'$1Stopped ');
+    if(line.includes('data-t3-live-tool="true"')){
+      const count=(line.match(/class="send-to-t3-tool"/g)??[]).length;
+      const summary=/data-t3-tool-summary="([^"]+)"/.exec(line)?.[1]??`Used ${count} ${count===1?'tool':'tools'}`;
+      line=line.replace('class="send-to-t3-response-activity"','class="send-to-t3-tool-group"').replace(' data-t3-live-tool="true"','').replace(/<summary>[\s\S]*?<\/summary>/,`<summary><span data-t3-tool-icon="hammer" aria-hidden="true"></span><span>${summary} · stopped</span></summary>`);
+    }
     if(!/^> \[!t3-progress\][+-] \*\*[^\n]+ · (?:Working|Reconnecting|Error)\*\*/.test(line))return line;
     return line.replace(/ · (?:Working|Reconnecting|Error)\*\*/, ' · Interrupted**').replace(/ <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>/,'').replace(/<span class="send-to-t3-run-timer" data-t3-start="(\d+)"(?: data-t3-end="\d+")? aria-label="Elapsed run time">[^<]*<\/span>/,(_match,start)=>{
       const end=Date.now(),timing={startedAt:new Date(Number(start)).toISOString(),finishedAt:new Date(end).toISOString()};

@@ -39,15 +39,19 @@ export default class DenseStreamLab extends Plugin {
     const check=(name:string,value:boolean)=>{rows.push({name,pass:value});if(!value)failures.push(name);};
     check('initial boxes expanded in both panes',originals.every(node=>node&&!node.classList.contains('is-collapsed')));
     const event=(type:string,payload:any)=>callbacks.item({kind:'event',event:{sequence:++sequence,aggregateId:'fixture-thread',type,payload}});
-    const tool=(kind:string,toolCallId:string,data:any,status='inProgress')=>event('thread.activity-appended',{activity:{id:crypto.randomUUID(),turnId:'turn',kind,summary:'Tool',createdAt:at(sequence),payload:{toolCallId,status,data}}});
+    const tool=(kind:string,toolCallId:string,data:any,status='inProgress',itemType?:string)=>event('thread.activity-appended',{activity:{id:crypto.randomUUID(),turnId:'turn',kind,summary:'Tool',createdAt:at(sequence),payload:{toolCallId,status,data,itemType}}});
     tool('tool.started','npm',{item:{command:"/bin/bash -lc 'npm test > /tmp/dense.log 2>&1'"}});
     tool('tool.started','read',{toolName:'Read',input:{path:'/tmp/synthetic.md'}});await pause(120);
-    const details=originals.map(node=>node?.querySelector<HTMLDetailsElement>('[data-t3-tool-id="npm"]'));
+    const live=(leaf:any)=>leaf.view.containerEl.querySelector('.cm-content details[data-t3-live-tool="true"]') as HTMLDetailsElement|null;
+    const liveGroups=leaves.map(live);
+    check('one collapsed current group outside history',liveGroups.every(node=>node&&!node.open&&!node.closest('.callout'))&&originals.every(node=>!node.querySelector('[data-t3-tool-id]')));
+    liveGroups.forEach(node=>{if(node)node.open=true;});
+    const details=liveGroups.map(node=>node?.querySelector<HTMLDetailsElement>('[data-t3-tool-id="npm"]'));
     details.forEach(node=>{if(node)node.open=true;});
     const editor=(first.view as MarkdownView).editor;editor.setSelection({line:2,ch:0},{line:2,ch:8});
     const text='The next paragraph grows without changing the opening paragraph. '.repeat(2)+'\n\n| Name | Value |\n| --- | --- |\n| Stable | 1 |\n\n```ts\n\nconst value = 1;\n```\n\nLast growing paragraph.';
-    let frames=0,missingFrames=0,closedFrames=0,replacedFrames=0,sampling=true;
-    const frame=()=>{if(!sampling)return;frames++;leaves.forEach((leaf,index)=>{const current=fold(leaf);if(!current)missingFrames++;else {if(current!==originals[index])replacedFrames++;if(current.classList.contains('is-collapsed'))closedFrames++;}});requestAnimationFrame(frame);};requestAnimationFrame(frame);
+    let frames=0,missingFrames=0,closedFrames=0,replacedFrames=0,groupMissing=0,groupClosed=0,groupReplaced=0,sampling=true;
+    const frame=()=>{if(!sampling)return;frames++;leaves.forEach((leaf,index)=>{const current=fold(leaf),group=live(leaf);if(!current)missingFrames++;else {if(current!==originals[index])replacedFrames++;if(current.classList.contains('is-collapsed'))closedFrames++;}if(!group)groupMissing++;else {if(group!==liveGroups[index])groupReplaced++;if(!group.open)groupClosed++;}});requestAnimationFrame(frame);};requestAnimationFrame(frame);
     let accumulated='A stable opening paragraph.\n\n';
     for(let index=0;index<text.length;index+=3){const delta=text.slice(index,index+3);accumulated+=delta;event('thread.message-sent',{messageId:'answer',role:'assistant',text:delta,turnId:'turn',streaming:true});await pause(5);}
     tool('tool.completed','npm',{item:{aggregatedOutput:'Synthetic tests passed.\n<script>literal output</script>',exitCode:0,durationMs:1300}},'completed');await pause(150);
@@ -55,9 +59,12 @@ export default class DenseStreamLab extends Plugin {
     check('ordinary editor selection survives dense updates',editor.getSelection()==='Ordinary');
     check('every paint retains expanded history nodes',frames>10&&missingFrames===0&&closedFrames===0&&replacedFrames===0);
     check('completed paragraph nodes retained',leaves.every((leaf,index)=>fold(leaf)?.querySelector('blockquote p')===paragraphs[index]));
-    check('expanded tool details retained',details.every((node,index)=>node?.isConnected&&node.open&&node===fold(leaves[index])?.querySelector('[data-t3-tool-id="npm"]')));
+    check('expanded current dropdown survives every paint',groupMissing===0&&groupClosed===0&&groupReplaced===0);
+    check('expanded tool details retained',details.every((node,index)=>node?.isConnected&&node.open&&node===live(leaves[index])?.querySelector('[data-t3-tool-id="npm"]')));
     check('results visible and escaped',details.every(node=>node?.textContent?.includes('Exit code: 0')&&node.textContent.includes('<script>literal output</script>')&&!node.querySelector('script')));
-    check('short shell label and concurrent read',details.every(node=>node?.querySelector('summary')?.textContent==='Ran npm')&&originals.every(node=>node?.textContent?.includes('Reading synthetic.md')));
+    check('short shell label and concurrent read',details.every(node=>node?.querySelector('summary')?.textContent?.trim()==='Ran npm')&&leaves.every(leaf=>live(leaf)?.querySelector(':scope > summary')?.textContent?.trim()==='Reading synthetic.md'));
+    tool('tool.completed','read',{content:[{type:'text',text:'Synthetic file contents.'}]},'completed');await pause(150);
+    check('completed result remains live like T3',leaves.every(leaf=>live(leaf)?.querySelector(':scope > summary')?.textContent?.trim()==='Reading synthetic.md'&&live(leaf)?.querySelector('[data-t3-tool-id="read"]')?.getAttribute('data-t3-tool-status')==='completed'));
     check('dense stream displays all received text',leaves.every(leaf=>manager.view(leaf.view as MarkdownView)?.currentProjection().display.includes('Last growing paragraph.')));
     check('display grouped',updates<text.length/3/2);
     details[0]?.scrollIntoView({block:'center'});await pause(100);
@@ -73,7 +80,7 @@ export default class DenseStreamLab extends Plugin {
     this.write('READING-DOM.json',{before:reading?.outerHTML,after:fold(second)?.outerHTML,mode:second.view.getState()});
     check('reading view retains its active box',!!reading&&reading===fold(second)&&!reading.classList.contains('is-collapsed'));
     check('saved projection and disk contain no generated stream',leaves.every(leaf=>(leaf.view as MarkdownView).getViewData()===saved)&&await app.vault.read(file)===saved);
-    const copy=fold(first)?.querySelector<HTMLButtonElement>('[data-t3-tool-id="npm"] .copy-code-button');
+    const copy=first.view.containerEl.querySelector<HTMLButtonElement>('[data-t3-tool-id="npm"] .copy-code-button');
     const clipboard=require('electron').clipboard,oldImage=clipboard.readImage();
     const previousClipboard={text:clipboard.readText(),html:clipboard.readHTML(),rtf:clipboard.readRTF(),...(!oldImage.isEmpty()?{image:oldImage}:{})};
     try {copy?.click();await pause(100);check('native command copy action remains usable',!!copy&&clipboard.readText()==="/bin/bash -lc 'npm test > /tmp/dense.log 2>&1'");}
@@ -84,6 +91,18 @@ export default class DenseStreamLab extends Plugin {
     await second.setViewState({type:'markdown',state:{file:file.path,mode:'source',source:true}});await pause(150);
     check('source mode shows generated text with clean saved projection',!!manager.view(second.view as MarkdownView)?.currentProjection().display.includes('Reading.')&&(second.view as MarkdownView).getViewData()===saved);
     await second.setViewState({type:'markdown',state:{file:file.path,mode:'preview'}});await pause(150);
+    // New prose moves the previous batch into a settled summary; a second
+    // synthetic batch verifies the exact command/file sentence from T3.
+    event('thread.message-sent',{messageId:'boundary',role:'assistant',text:'Next batch.',turnId:'turn',createdAt:at(sequence+1),streaming:false});await pause(150);
+    check('earlier calls collapse behind a typed summary',leaves.every(leaf=>!leaf.view.containerEl.querySelector('[data-t3-live-tool]')&&fold(leaf)?.textContent?.includes('Ran 1 command and read 1 file')));
+    for(let index=0;index<4;index++)tool('tool.completed',`extra-${index}`,{item:{command:'pwd'}},'completed','command_execution');
+    tool('tool.completed','patch',{item:{changes:Array.from({length:7},(_,index)=>({path:`synthetic-${index}.ts`}))}},'completed','file_change');
+    event('thread.message-sent',{messageId:'after-batch',role:'assistant',text:'After batch.',turnId:'turn',createdAt:at(sequence+1),streaming:false});await pause(180);
+    const mixed=leaves.map(leaf=>Array.from(fold(leaf)?.querySelectorAll<HTMLDetailsElement>('details[data-t3-tool-group]')??[]).find(node=>node.querySelector(':scope > summary')?.textContent==='Ran 4 commands and changed 7 files'));
+    check('exact T3 command/file summary defaults closed',mixed.every(node=>node&&!node.open&&node.querySelectorAll('[data-t3-tool-id]').length===5));
+    mixed.forEach(node=>{if(node)node.open=true;});await pause(80);
+    check('summary click reveals all calls',mixed.every(node=>node?.open&&getComputedStyle(node.querySelector('.send-to-t3-tool-group-content')!).display!=='none'));
+    await this.capture('tool-groups.png');
     // Finish the tool and message before terminal turn evidence.
     tool('tool.completed','read',{content:[{type:'text',text:'Synthetic file contents.'}]},'completed');
     event('thread.message-sent',{messageId:'answer',role:'assistant',text:accumulated,turnId:'turn',streaming:false});
@@ -94,7 +113,7 @@ export default class DenseStreamLab extends Plugin {
     const complete:LeaseRecord={...record,revision:2,migrating:false,state:{requestHash:'fixture',accepted:true,notePath:file.path,status:'complete',hashes:[],updatedAt:'',body:lastBody,finalBody:lastBody.trimEnd(),cleanupComplete:true,finalSaved:true,delivery:{commitId:crypto.randomUUID(),hash:contentHash(final),verifiedOnHost:true,observedBy:[]}}};
     this.preview.update(complete);this.preview.tick(true);await manager.receive(complete);await pause(100);check('delayed checked final leaves disk clean',await app.vault.read(file)===saved);
     await app.vault.modify(file,final);await manager.changed(file.path);await pause(350);check('checked final adopted in both panes',leaves.every(leaf=>(leaf.view as MarkdownView).getViewData()===final&&!manager.view(leaf.view as MarkdownView)?.conflictRecord()));
-    this.write('RESULT.json',{pass:failures.length===0,rows,frames,missingFrames,closedFrames,replacedFrames,receivedDeltas:Math.ceil(text.length/3),displayUpdates:updates});await this.capture('dense-final.png');
+    this.write('RESULT.json',{pass:failures.length===0,rows,frames,missingFrames,closedFrames,replacedFrames,groupMissing,groupClosed,groupReplaced,receivedDeltas:Math.ceil(text.length/3),displayUpdates:updates});await this.capture('dense-final.png');
   }
   onunload(){this.preview?.dispose();nativeResponses(this.app).dispose();}
 }

@@ -6,7 +6,7 @@ import {intermediateMode,runTimer,type IntermediateMode,type RunTiming,type Fina
 import {steeringSegments,type InlineSteering} from './inline-steering';
 import {responseActivityLabel,responseActivityRow} from './response-activity';
 import {visibleInlineInput} from './input-presentation';
-import {responseTools,renderResponseTool} from './response-tools';
+import {responseToolGroups,currentResponseToolGroup,renderResponseToolGroup} from './response-tools';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string;context?:unknown}
@@ -472,7 +472,10 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const heading=`**${label} · ${phase==='running'||phase==='sending'?'Working':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const timer=timing?' '+runTimer(timing):'';
   const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
-  const bottom=spinner?`\n\n${responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Working')}`:'';
+  const toolGroups=responseToolGroups(state,[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])]);
+  const currentTool=phase==='running'?currentResponseToolGroup(state,turnId,toolGroups):undefined;
+  const historyGroups=toolGroups.filter(group=>group!==currentTool?.group);
+  const bottom=spinner?`\n\n${currentTool?renderResponseToolGroup(currentTool.group,currentTool):responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Working')}`:'';
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
@@ -501,8 +504,8 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const finalId=finalReady?inlineTurnMessages({...state,messages:all},turnId).at(-1)?.id:undefined;
     const finalIndex=finalId?pieces.reduce((last,piece,index)=>piece.role==='assistant'&&piece.messageId===finalId?index:last,-1):-1;
     const history:string[]=[];let final='';
-    const tools=responseTools(state,[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])]);let toolIndex=0;
-    const toolsBefore=(at=Infinity)=>{while(toolIndex<tools.length&&(Date.parse(tools[toolIndex].createdAt??'')||0)<=at)history.push(renderResponseTool(tools[toolIndex++]));};
+    let toolIndex=0;
+    const toolsBefore=(at=Infinity)=>{while(toolIndex<historyGroups.length&&(Date.parse(historyGroups[toolIndex].createdAt??'')||0)<=at)history.push(renderResponseToolGroup(historyGroups[toolIndex++]));};
     for(const [index,piece] of pieces.entries()){
       const message=state.messages.find(message=>message.id===piece.messageId)??all.find(message=>message.id===piece.messageId);if(message?.createdAt)toolsBefore(Date.parse(message.createdAt));
       if(index===finalIndex)final=assistant(piece.text,piece.messageId);
@@ -516,7 +519,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):approvals;
     return input+fold+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+bottom+'\n';
   }
-  const toolHistory=retain?responseTools(state,[turnId]).map(renderResponseTool).join('\n\n'):'';
+  const toolHistory=retain?historyGroups.map(group=>renderResponseToolGroup(group)).join('\n\n'):'';
   if(phase==='complete')return input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
   const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):approvals?'\n\n'+approvals:'';
   const body=prose?`\n\n${prose}\n`:'';
