@@ -22,7 +22,7 @@ export function stoppedResponseBody(body:string):string {
   body=body.split('\n').map(line=>{
     const position=stopOffset;stopOffset+=line.length+1;
     if(beforeStop.some(([from,to])=>position>=from&&position<to))return line;
-    if(!/^> \[!t3-progress\]- \*\*[^\n]+ · (?:Working|Reconnecting|Error)\*\*/.test(line))return line;
+    if(!/^> \[!t3-progress\][+-] \*\*[^\n]+ · (?:Working|Reconnecting|Error)\*\*/.test(line))return line;
     return line.replace(/ · (?:Working|Reconnecting|Error)\*\*/, ' · Interrupted**').replace(/ <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>/,'').replace(/<span class="send-to-t3-run-timer" data-t3-start="(\d+)"(?: data-t3-end="\d+")? aria-label="Elapsed run time">[^<]*<\/span>/,(_match,start)=>{
       const end=Date.now(),timing={startedAt:new Date(Number(start)).toISOString(),finishedAt:new Date(end).toISOString()};
       return `<span class="send-to-t3-run-timer" data-t3-start="${start}" data-t3-end="${end}" aria-label="Elapsed run time">${elapsedRun(timing)}</span>`;

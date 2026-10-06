@@ -73,7 +73,7 @@ export function installResponsePresentation(root:Document):()=>void {
       }
       const id=key(fold),previous=seen.get(fold),fresh=previous?.heading!==heading||previous?.key!==id;
       seen.set(fold,{heading,key:id});
-      const expanded=id?choices.get(owner(fold))?.get(id):undefined;
+      const expanded=id?(choices.get(owner(fold))?.get(id)??(id.endsWith(':complete')?false:id.endsWith(':active')?true:undefined)):undefined;
       // Restore only newly rendered titles. Native transitions mutate their
       // own DOM; repeatedly clicking a retained/hidden clone can starve both
       // the transition and the editor. Mark it before dispatching the click.

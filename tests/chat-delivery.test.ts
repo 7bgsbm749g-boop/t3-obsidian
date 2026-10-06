@@ -67,7 +67,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     name='';buttons:any[]=[];
     constructor(_element:any){settingsControls.push(this);}
     setClass(_value:string){return this;}
-    setName(text:string){this.name=text;return this;}setDesc(_text:string){return this;}setDisabled(_value:boolean){return this;}
+    setName(text:string){this.name=text;return this;}setDesc(text:string){(this as any).desc=text;return this;}setDisabled(_value:boolean){return this;}
     addToggle(callback:(toggle:any)=>void){const toggle={setValue:()=>toggle,onChange:()=>toggle};callback(toggle);return this;}
     addButton(callback:(button:any)=>void){const button:any={text:'',click:()=>{},buttonEl:{isConnected:true,focus:()=>{focusedButton=button;}},setButtonText:(text:string)=>{button.text=text;return button;},setCta:()=>button,setDisabled:(value:boolean)=>{button.buttonEl.disabled=value;return button;},onClick:(click:()=>void)=>{button.click=click;return button;}};callback(button);this.buttons.push(button);return this;}
     addDropdown(callback:(d:any)=>void){const d:any={options:{},value:'',disabled:false,change:()=>{},addOption:(key:string,label:string)=>{d.options[key]=label;return d;},setValue:(value:string)=>{d.value=value;return d;},setDisabled:(value:boolean)=>{d.disabled=value;return d;},onChange:(fn:any)=>{d.change=fn;return d;}};(this as any).dropdown=d;callback(d);return this;}
@@ -588,7 +588,7 @@ test('a palette question about selected text includes both parts and inserts bel
     assert.doesNotMatch(text,/Other note text stays private/);
     assert.equal(h.plugin.app.loadLocalStorage('send-to-t3-code-chat-draft-v1'),'');
     for(let attempt=0;attempt<200&&(editor.value.includes('t3-inline:start:')||!editor.value.includes('Inline reply from T3.'));attempt++)await new Promise(resolve=>setTimeout(resolve,25));
-    assert.match(editor.value.replace(/<!-- t3-response:(?:start|end):[0-9a-f-]+ -->\n/g,''),/Claim\n\n\n> \[!t3-steering\] You\n> Why\?\n\n> Inline reply from T3\./);
+    assert.match(editor.value.replace(/<!-- t3-response:(?:start|end):[0-9a-f-]+ -->\n/g,''),/Claim\n\n\n> \[!t3-steering\] You\n> Why\?\n\n> \[!t3-progress\]- \*\*Selected · Completed\*\*[^\n]*\n\n> Inline reply from T3\./);
     assert.equal(editor.value.split('> Why?').length-1,1);
     assert.doesNotMatch(editor.value,/> Selected text:|> Question:|> Sent from Obsidian/);
   }finally{h.plugin.onunload();}
@@ -1256,7 +1256,7 @@ for(const streamingDefault of [false,true])for(const destination of ['default','
     await h.plugin.openPaletteAction('Change the approach.','');
     assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Send to running thread','New thread','Existing thread…']);
     const destinationModal=h.modals.at(-1);
-    editOverrides(h,destinationModal,{'Stream replies into the editor':'on','Intermediate agent responses':'remove','Final answer format':'formatted'});
+    editOverrides(h,destinationModal,{'Stream replies into the editor':'on','Final answer format':'formatted'});
     if(destination==='default')editOverrides(h,destinationModal,{'Stream replies into the editor':'off'});
     if(destination==='new')h.setStreaming(true);
     await destinationModal.choose(destination);
@@ -1680,8 +1680,8 @@ for(const surface of ['editor','palette','hotkey','full-note'])for(const enabled
     else if(surface==='palette')await h.plugin.openPaletteAction('Explain.','Selected question');
     else h.registered.find(command=>command.id==='send-or-ask').editorCheckCallback(false,opened.editor,opened.view);
     const destination=h.modals.at(-1);
-    editOverrides(h,destination,{'Stream replies into the editor':enabled?'on':'off',...(enabled?{'Intermediate agent responses':'collapse','Final answer format':'raw-markdown'}:{})});
-    assert.equal(destination.contentEl.children[0].children[1].text,`Overrides · ${enabled?3:1}`);
+    editOverrides(h,destination,{'Stream replies into the editor':enabled?'on':'off',...(enabled?{'Final answer format':'raw-markdown'}:{})});
+    assert.equal(destination.contentEl.children[0].children[1].text,`Overrides · ${enabled?2:1}`);
     await destination.choose('new');
     const sent=h.commands.find(command=>command.type==='thread.turn.start');assert.ok(sent);
     assert.equal(JSON.stringify(h.plugin.settings.inlineStreaming),original);
@@ -1701,14 +1701,14 @@ test('child Cancel and reset are isolated; Off disables dependent controls witho
   const h=await chatHarness();
   try{
     h.attachEditor('Notes/Overrides.md','Question');await h.plugin.openPaletteAction('Explain.','');const destination=h.modals.at(-1);
-    editOverrides(h,destination,{'Intermediate agent responses':'keep','Final answer format':'raw-markdown','Stream replies into the editor':'off'});
+    editOverrides(h,destination,{'Final answer format':'raw-markdown','Stream replies into the editor':'off'});
     destination.contentEl.children[0].children[1].click();
     const child=h.modals.at(-1),controls=h.settingsControls.slice(-4);
-    assert.equal((controls[1] as any).dropdown.disabled,true);assert.equal((controls[2] as any).dropdown.disabled,true);
-    assert.equal((controls[1] as any).dropdown.value,'keep');assert.equal((controls[2] as any).dropdown.value,'raw-markdown');
+    assert.equal((controls[1] as any).dropdown,undefined,'progress style is fixed');assert.equal((controls[2] as any).dropdown.disabled,true);
+    assert.match((controls[1] as any).desc,/open box/);assert.equal((controls[2] as any).dropdown.value,'raw-markdown');
     controls[3].buttons.find((b:any)=>b.text==='Reset overrides').click();
     h.settingsControls.at(-1).buttons.find((b:any)=>b.text==='Cancel').click();assert.equal(child.closed,true);
-    assert.equal(destination.contentEl.children[0].children[1].text,'Overrides · 3');
+    assert.equal(destination.contentEl.children[0].children[1].text,'Overrides · 2');
     destination.contentEl.children[0].children[1].click();h.settingsControls.at(-1).buttons.find((b:any)=>b.text==='Reset overrides').click();h.settingsControls.at(-1).buttons.find((b:any)=>b.text==='Apply').click();
     assert.equal(destination.contentEl.children[0].children[1].text,'Overrides');destination.close();assert.equal(h.commands.length,0);assert.equal(h.plugin.settings.pending.length,0);
   }finally{h.plugin.onunload();}
@@ -1720,7 +1720,7 @@ test('project changes, existing-picker cancellation and safe errors preserve the
     h.attachEditor('Notes/Overrides.md','Question');h.plugin.settings.inlineStreaming.enabled=true;
     h.setThreads([{id:'existing',projectId:project.id,title:'Existing',latestTurn:{state:'completed'},session:{status:'ready',activeTurnId:null}}]);
     await h.plugin.openPaletteAction('Explain.','');const destination=h.modals.at(-1);
-    editOverrides(h,destination,{'Intermediate agent responses':'collapse'});h.plugin.settings.inlineStreaming.enabled=false;
+    editOverrides(h,destination,{'Final answer format':'raw-markdown'});h.plugin.settings.inlineStreaming.enabled=false;
     destination.contentEl.children[0].children[0].click();h.modals.at(-1).onChooseItem(h.modals.at(-1).getItems().find((item:any)=>item.key==='vault:root'));
     assert.equal(destination.contentEl.children[0].children[1].text,'Overrides · 1');
     await destination.choose('existing');h.modals.at(-1).close();await new Promise(resolve=>setTimeout(resolve,5));assert.equal(destination.closed,false);assert.equal(h.commands.length,0);
@@ -1740,7 +1740,7 @@ test('an overridden uncertain job replays its saved options, prompt and bindings
   try{
     h.attachEditor('Notes/Overrides.md','Question');h.plugin.settings.inlineStreaming.enabled=false;
     await h.plugin.openPaletteAction('Explain.','');const destination=h.modals.at(-1);
-    editOverrides(h,destination,{'Stream replies into the editor':'on','Intermediate agent responses':'collapse','Final answer format':'raw-markdown'});await destination.choose('new');
+    editOverrides(h,destination,{'Stream replies into the editor':'on','Final answer format':'raw-markdown'});await destination.choose('new');
     assert.equal(destination.closed,true);const pending=h.plugin.settings.pending[0];assert.ok(pending);
     assert.deepEqual(JSON.parse(JSON.stringify(pending.jobOptions)),{version:1,inline:{enabled:true,intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'}});
     const bytes=JSON.stringify(pending),binding=JSON.stringify(pending.inlineHost);h.plugin.onunload();restarted=await h.start();

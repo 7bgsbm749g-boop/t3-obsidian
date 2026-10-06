@@ -47,7 +47,7 @@ test('a stale commentary checkpoint cannot hide newer final prose created before
   assert.match(text,/\n\n> FINAL ANSWER\n/);
   for(const node of ast.children.filter(n=>n.type==='blockquote')){
     const block=text.slice(node.position!.start.offset!,node.position!.end.offset!);
-    if(block.startsWith('> [!t3-progress]-'))assert.doesNotMatch(block,/FINAL ANSWER/);
+    if(/^> \[!t3-progress\][+-]/.test(block))assert.doesNotMatch(block,/FINAL ANSWER/);
   }
   assert.equal(renderInlineTurn(snapshot,'turn','thread','complete','remove'),'> FINAL ANSWER\n');
   const afterCompletion={...snapshot,messages:[...messages,{...messages[1],id:'late',text:'LATE UNVERIFIED PROGRESS',createdAt:'2026-10-02T10:04:00Z'}]};
@@ -59,7 +59,7 @@ test('steering quotes share the history fold while the current final stays outsi
   const text=render(state,'complete',conversation),ast=unified().use(remarkParse).parse(text);
   for(const node of ast.children.filter(n=>n.type==='blockquote')){
     const block=text.slice(node.position!.start.offset!,node.position!.end.offset!);
-    if(block.startsWith('> [!t3-progress]-')){assert.match(block,/Keep my question visible/);assert.doesNotMatch(block,/Final visible answer/);}
+    if(/^> \[!t3-progress\][+-]/.test(block)){assert.match(block,/Keep my question visible/);assert.doesNotMatch(block,/Final visible answer/);}
   }
   assert.equal(foldsOf(text).length,1);
   assert.match(text,/> > \[!t3-steering\] You\n> > Keep my question visible\./);
@@ -70,11 +70,11 @@ test('steering quotes share the history fold while the current final stays outsi
 function assertOneRun(text:string,phase='Working'){
   assert.equal(text.match(new RegExp(`Bounded history · ${phase}`,'g'))?.length,1);
   assert.equal(text.match(/class="send-to-t3-run-timer"/g)?.length,1);
-  assert.equal(text.match(/^> \[!t3-progress\]- .*class="send-to-t3-inline-spinner"/gm)?.length,1);
+  assert.equal(text.match(/^> \[!t3-progress\]\+ .*class="send-to-t3-inline-spinner"/gm)?.length,1);
   assert.equal(text.match(/class="send-to-t3-response-activity"/g)?.length,1,'retain the separate bottom tool activity indicator');
 }
 function foldsOf(text:string){
-  return unified().use(remarkParse).parse(text).children.filter(node=>node.type==='blockquote').map(node=>text.slice(node.position!.start.offset!,node.position!.end.offset!)).filter(block=>block.startsWith('> [!t3-progress]-'));
+  return unified().use(remarkParse).parse(text).children.filter(node=>node.type==='blockquote').map(node=>text.slice(node.position!.start.offset!,node.position!.end.offset!)).filter(block=>/^> \[!t3-progress\][+-]/.test(block));
 }
 function foldKeys(text:string){return [...text.matchAll(/data-t3-fold="([^"]+)"/g)].map(match=>match[1]);}
 
@@ -134,7 +134,7 @@ test('empty late-answer follow-up keeps earlier answers and input under the top 
   const running={...state,messages:state.messages.slice(0,2),latestTurn:{turnId:'next',state:'running'},turns:{turn:{turnId:'turn',state:'completed',assistantMessageId:'final'}},session:{status:'running',activeTurnId:'next'}};
   const text=render(running,'running',{messages:running.messages,steering:[{messageId:'reply',text:'Follow up now.',confirmed:true,before:running.messages}],preserveHistory:true});
   assert.equal(foldsOf(text).length,1);
-  assert.match(foldsOf(text)[0],/^> \[!t3-progress\]- \*\*Bounded history · Working[\s\S]*Final visible answer\.[\s\S]*> > Follow up now\./);
+  assert.match(foldsOf(text)[0],/^> \[!t3-progress\]\+ \*\*Bounded history · Working[\s\S]*Final visible answer\.[\s\S]*> > Follow up now\./);
   assertOneRun(text);
 });
 
@@ -190,7 +190,7 @@ test('questions and pending actions remain outside progress folds',()=>{
   assert.match(text,/Action needed in T3: Approve the next action/);assert.match(text,/Which option\?|t3-question:/);
   for(const node of ast.children.filter(n=>n.type==='blockquote')){
     const block=text.slice(node.position!.start.offset!,node.position!.end.offset!);
-    if(block.startsWith('> [!t3-progress]-'))assert.doesNotMatch(block,/Action needed|Which option|t3-question:/);
+    if(/^> \[!t3-progress\][+-]/.test(block))assert.doesNotMatch(block,/Action needed|Which option|t3-question:/);
   }
 });
 
@@ -232,6 +232,13 @@ test('native fold transitions finish, hidden clones do not cause repeated clicks
     const fresh=new NativeFold();root.folds=[fresh];observed([{addedNodes:[fresh.content],removedNodes:[]}]);
     await new Promise(resolve=>setTimeout(resolve,20));
     assert.equal(fresh.collapsed,false,'replacement retains the explicit expansion');assert.equal(clicks,2,'restoration runs once despite transition mutations');
+    fresh.key='stable-response:0:complete';observed([{addedNodes:[fresh.content],removedNodes:[]}]);
+    await new Promise(resolve=>setTimeout(resolve,20));
+    assert.equal(fresh.collapsed,true,'completion closes a retained native callout');
+    fresh.heading.click();await new Promise(resolve=>setTimeout(resolve,20));
+    const completed=new NativeFold();completed.key=fresh.key;root.folds=[completed];observed([{addedNodes:[completed.content],removedNodes:[]}]);
+    await new Promise(resolve=>setTimeout(resolve,20));
+    assert.equal(completed.collapsed,false,'manual reopening after completion survives rerenders');
   }finally{dispose();(globalThis as any).Element=savedElement;(globalThis as any).MutationObserver=savedObserver;}
 });
 
@@ -263,4 +270,20 @@ test('native edit actions follow the header through expansion, wrapping and remo
     assert.equal(observed.size,0);assert.equal(classes.size,0);assert.equal(values.size,0);
   }finally{dispose();globalThis.MutationObserver=savedObserver;globalThis.ResizeObserver=savedResize;}
   assert.equal(disconnected,true);
+});
+
+test('progress opens at submission and stays open until the final message finishes, including failures',()=>{
+  const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  assert.match(initialRegion(id,undefined,'Name','collapse').text,/> \[!t3-progress\]\+ \*\*Name · Working/);
+  const streaming={...state,messages:state.messages.map(message=>message.id==='final'?{...message,streaming:true}:message)};
+  const before=render(streaming,'complete');
+  assert.match(before,/^> \[!t3-progress\]\+ .*Working/);
+  assert.ok(foldsOf(before)[0].includes('Final visible answer.'));
+  const after=render();
+  assert.match(after,/^> \[!t3-progress\]- .*Completed/);
+  assert.notDeepEqual(foldKeys(before),foldKeys(after),'completion resets live fold choices');
+  for(const phase of ['error','interrupted','cancelled','reconnecting'] as const){
+    const text=renderInlineTurn(state,'turn','thread',phase,'collapse');
+    assert.match(text,/^> \[!t3-progress\]\+/);
+  }
 });

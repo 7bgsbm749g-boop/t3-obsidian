@@ -187,7 +187,7 @@ export default class SendToT3 extends Plugin {
       this.settings.noteThreads.push({notePath:job.notePath,threadId:job.threadId,projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId??'',...(job.connection.environmentId?{environmentId:job.connection.environmentId}:{}),selectedAt:new Date().toISOString()});
       migratedNoteThreads=true;
     }
-    this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>this.stopHostedInline(job.id,job.hostTarget)},()=>intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate),()=>finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat));
+    this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>this.stopHostedInline(job.id,job.hostTarget)},()=>'collapse',()=>finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat));
     const storedTargets=this.app.loadLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`);
     if(Array.isArray(storedTargets))this.inlineTargets=storedTargets.filter(target=>target&&typeof target.environmentId==='string'&&typeof target.workspaceRoot==='string'&&typeof target.directory==='string');
     if(typeof this.registerEditorExtension==='function'){const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)));}
@@ -351,7 +351,7 @@ export default class SendToT3 extends Plugin {
       if(selection.trim())try{const anchor=captureEditorSelection(editor);captured={anchor,snapshot:editor.getValue(),referenceSelection:selectionOverlapsInlineResponse(editor.getValue(),anchor)};}catch{}
       for(const id of cursorId?[cursorId]:ids){
         const failed=active.find(job=>job.id===id)?.phase==='error'||failedInlineIds(editor.getValue()).includes(id);
-        const label=/^(?:> \[!t3-progress\]- )?\*\*(.+) · (?:Working|Reconnecting|Error)\*\*/m.exec(regionBody(editor.getValue(),id)?.body??'')?.[1];
+        const label=/^(?:> \[!t3-progress\][+-] )?\*\*(.+) · (?:Working|Reconnecting|Error)\*\*/m.exec(regionBody(editor.getValue(),id)?.body??'')?.[1];
         const suffix=ids.length>1?` (${label&&label!=='T3'?label+' · ':''}${id.slice(0,8)})`:'';
         if(failed){
           menu.addItem(item=>item.setTitle('Continue T3 response'+suffix).setIcon('rotate-cw').setDisabled(this.busy).onClick(()=>this.continueInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000))));
@@ -524,7 +524,7 @@ export default class SendToT3 extends Plugin {
         responseBindings:target=>this.displayResponseBindings(target),
         prepareDisplay:async(display,destination,input)=>{
           const host=await this.inlineHostTarget(),id=commandId(display.id,`response:${input.id}:${destination.id}`);
-          return {nativeProjection:await this.coordinatedHostAvailable(host),destinationSection:destination.section,version:4,finalAnswerFormat:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat),independent:true,id,initialInput:{messageId:input.id,text:input.text,label:incomingLabel(input)},initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id,{messageId:input.id,text:input.text,label:incomingLabel(input)},undefined,intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate),{startedAt:input.createdAt??display.createdAt}).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)!=='remove',intermediateMode:intermediateMode(this.settings.inlineStreaming.intermediateMode,this.settings.inlineStreaming.keepIntermediate)};
+          return {nativeProjection:await this.coordinatedHostAvailable(host),destinationSection:destination.section,version:4,finalAnswerFormat:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat),independent:true,id,initialInput:{messageId:input.id,text:input.text,label:incomingLabel(input)},initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id,{messageId:input.id,text:input.text,label:incomingLabel(input)},undefined,'collapse',{startedAt:input.createdAt??display.createdAt}).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:true,intermediateMode:'collapse'};
         },
         attachDisplay:async(request,path)=>{
           if(this.stopped||!this.eventHostCurrent(server.identity)||!this.deviceInline)throw Error('Streaming host ownership changed.');
@@ -2156,18 +2156,8 @@ class T3Settings extends PluginSettingTab {
     el.createEl('p',{text:'Sending includes the current note and its embedded images. Asking sends the question and note location. A selected passage and its embedded images are included with the question.'});
     el.createEl('h3',{text:'Inline responses'});
     new Setting(el).setName('Stream replies into the editor').setDesc('For every manual Send or Ask, insert the reply into the note. Selection questions appear below the selection; other replies appear at the end.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));
-    new Setting(el).setName('Final answer format').setDesc('Choose how the completed final answer appears. Intermediate responses keep their formatting and Remove / Keep / Collapse behavior. Images and files are handled in both formats. Applies to new responses.').addDropdown(dropdown=>dropdown.addOptions({formatted:'Current formatting','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));
-    const modes:IntermediateMode[]=['remove','keep','collapse'];
-    const progressSetting=new Setting(el).setName('Intermediate agent responses');
-    const describe=(mode:IntermediateMode)=>progressSetting.setDesc(`${mode==='remove'?'Remove progress; keep the final answer.':mode==='keep'?'Keep progress alongside the final answer.':'Collapse progress under an H6-style thread/status header; keep the final answer visible.'} Applies to new responses. Remove / Keep / Collapse.`);
-    const current=intermediateMode(this.plugin.settings.inlineStreaming.intermediateMode,this.plugin.settings.inlineStreaming.keepIntermediate);describe(current);
-    progressSetting.controlEl.addClass('send-to-t3-mode-control');
-    progressSetting.addSlider(slider=>{
-      slider.setLimits(0,2,1).setValue(modes.indexOf(current));
-      slider.sliderEl.setAttribute('aria-label','Intermediate agent responses');slider.sliderEl.setAttribute('aria-valuetext',current);
-      slider.onChange(async value=>{const mode=modes[value];slider.sliderEl.setAttribute('aria-valuetext',mode);this.plugin.settings.inlineStreaming.intermediateMode=mode;this.plugin.settings.inlineStreaming.keepIntermediate=mode!=='remove';describe(mode);await this.plugin.save();});
-    });
-    const modeLabels=progressSetting.controlEl.createDiv({cls:'send-to-t3-mode-labels'});for(const label of ['Remove','Keep','Collapse'])modeLabels.createSpan({text:label});
+    new Setting(el).setName('Final answer format').setDesc('Choose how the completed final answer appears. Intermediate responses keep their formatting in the progress box. Images and files are handled in both formats. Applies to new responses.').addDropdown(dropdown=>dropdown.addOptions({formatted:'Current formatting','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));
+    new Setting(el).setName('Intermediate agent responses').setDesc('Progress stays in an open box while the agent works. The box closes when the final answer is complete. Click the header to open or close it.');
     el.createEl('h3',{text:'Project files'});
     el.createEl('p',{text:'Project files stay in their T3 workspaces. Codebase view opens them in Obsidian. Reply attachments are not copied into the vault.'});
     new Setting(el).setName('Codebase view').addButton(b=>b.setButtonText('Open').onClick(()=>{void (this.app as any).commands.executeCommandById('send-to-t3-code:codebase-view');}));

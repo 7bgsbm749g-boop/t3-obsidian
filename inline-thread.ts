@@ -67,10 +67,10 @@ function safeInsertionOffset(document:string,initialOffset:number):number {
 export function startMarker(id:string){return `<!-- t3-inline:start:${id} -->`;}
 export function endMarker(id:string){return `<!-- t3-inline:end:${id} -->`;}
 export function activeInlineIds(document:string):string[]{
-  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^(?:> \[!t3-progress\]- )?\*\*[^\n]+ · (?:Sending…|Working|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
+  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Sending…|Working|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
 }
 export function failedInlineIds(document:string):string[]{
-  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^(?:> \[!t3-progress\]- )?\*\*[^\n]+ · Error\*\*/m.test(regionBody(document,id)?.body??''));
+  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · Error\*\*/m.test(regionBody(document,id)?.body??''));
 }
 export interface InitialInlineInput {messageId:string;text:string;label?:string}
 
@@ -81,7 +81,7 @@ export function renderInlineInput(text:string,label='You',position?:'live'|'reco
 }
 
 export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming):{text:string;bodyHash:string} {
-  const status=`${mode==='collapse'?'> [!t3-progress]- ':''}**${inlineThreadLabel(threadTitle)} · Working**${timing?' '+runTimer(timing):''} <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
+  const status=`${mode==='collapse'?'> [!t3-progress]+ ':''}**${inlineThreadLabel(threadTitle)} · Working**${timing?' '+runTimer(timing):''} <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
   const body=(initialInput?`${renderInlineInput(initialInput.text,initialInput.label)}\n\n${status}`:status)+`\n\n${responseActivityRow()}`;
   // The final blank line also closes the quote in Obsidian Live Preview when
   // this response is the last block in the note.
@@ -90,7 +90,7 @@ export function initialRegion(id:string,initialInput?:InitialInlineInput,threadT
 
 /** Update a waiting header without rebuilding an unbound response's contents. */
 export function renameInlineHeader(body:string,title:string):string {
-  return body.replace(/^((?:> \[!t3-progress\]- )?\*\*)[^\n]*( · (?:Working|Reconnecting)\*\*)/m,(_match,prefix,suffix)=>`${prefix}${inlineThreadLabel(title)}${suffix}`);
+  return body.replace(/^((?:> \[!t3-progress\][+-] )?\*\*)[^\n]*( · (?:Working|Reconnecting)\*\*)/m,(_match,prefix,suffix)=>`${prefix}${inlineThreadLabel(title)}${suffix}`);
 }
 
 export function regionBody(document:string,id:string):{from:number;to:number;body:string}|null {
@@ -422,6 +422,10 @@ export function rememberInlineTurns(state:InlineThreadState,turnIds:string[],sav
 
 export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate:boolean|IntermediateMode=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[];preserveHistory?:boolean},initialInput?:InitialInlineInput,threadTitle?:string,timing?:RunTiming,format:FinalAnswerFormat='formatted'):string {
   const mode=intermediateMode(keepIntermediate),retain=mode!=='remove';
+  // Completion and final-message delivery can arrive separately. Keep terminal
+  // controls terminal, but close history only after the final text is present.
+  const completedFinal=phase==='complete'?inlineTurnMessages(state,turnId).at(-1):undefined;
+  const finalReady=!!completedFinal&&!completedFinal.streaming;
   const messages=inlineTurnMessages(state,turnId,phase!=='complete'||retain);
   const answer=messages.map(m=>m.text.replace(/\n+$/,'')).filter(Boolean).join('\n\n');
   // A continuation uses the same transcript as steering, even before the first
@@ -471,12 +475,12 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const input=initialInput?`${renderInlineInput(initialInput.text,initialInput.label)}\n\n`:'';
   if(mode==='collapse'){
     const pieces=steeringSegments(all,conversation?.steering.filter(item=>item.confirmed)??[]);
-    const title=phase==='complete'?`**${label} · Completed**`:heading;
+    const title=phase==='complete'?`**${label} · ${finalReady?'Completed':'Working'}**`:heading;
     // One native callout owns the entire chronological history, including
     // steering and earlier completed turns. Only the current completed turn's
     // last final-message piece stays outside. Frozen prefixes of that same
     // message still belong before their steering input inside the history.
-    const finalId=phase==='complete'?inlineTurnMessages({...state,messages:all},turnId).at(-1)?.id:undefined;
+    const finalId=finalReady?inlineTurnMessages({...state,messages:all},turnId).at(-1)?.id:undefined;
     const finalIndex=finalId?pieces.reduce((last,piece,index)=>piece.role==='assistant'&&piece.messageId===finalId?index:last,-1):-1;
     const history:string[]=[];let final='';
     for(const [index,piece] of pieces.entries()){
@@ -484,8 +488,9 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
       else if(piece.role==='user')history.push(renderInlineInput(piece.text,piece.label,piece.position));
       else if(piece.text.trim())history.push(quoteResponse(closeOpenFence(piece.text.trim())));
     }
-    const key=encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`);
-    const fold=`> [!t3-progress]- ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
+    // Completion starts a new fold default, independent of live user choices.
+    const key=encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active');
+    const fold=`> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
     const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):approvals;
     return input+fold+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+bottom+'\n';
   }

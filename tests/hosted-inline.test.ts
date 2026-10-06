@@ -633,7 +633,7 @@ for(const version of [1,2,3] as const)test(`Collapse survives hosted v${version}
     {id:'final',role:'assistant',text:'Exact final answer.',turnId:'turn',streaming:!complete},
   ],activities:[],latestTurn:{turnId:'turn',state:complete?'completed':'running',requestedAt:h.request.createdAt,completedAt:complete?new Date(Date.parse(h.request.createdAt)+197000).toISOString():null,assistantMessageId:'final'},session:{status:complete?'ready':'running',activeTurnId:complete?null:'turn'}});
   const assets:string[]=[];h.io.resolveReplyReference=async reference=>{assets.push(reference.source);return '[[T3 Code Attachments/progress.txt]]';};
-  await h.create().tick();assert.match(h.document,/> \[!t3-progress\]- \*\*T3 · Working/);
+  await h.create().tick();assert.match(h.document,/> \[!t3-progress\]\+ \*\*T3 · Working/);
   complete=true;await h.create().tick();
   assert.equal(h.state.status,'complete');assert.match(h.document,/T3 · Completed[\s\S]*>03:17<\/span>/);
   assert.match(h.document,/\[\[T3 Code Attachments\/progress.txt\]\]/);assert.deepEqual(assets,['/tmp/progress.txt']);

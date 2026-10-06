@@ -50,9 +50,7 @@ export class JobOverridesModal extends Modal {
     new Setting(this.contentEl).setName('Stream replies into the editor').addDropdown(d=>{
       d.addOption('default',`Use default — ${base.enabled?'On':'Off'}`).addOption('on','On').addOption('off','Off').setValue(inline.enabled===undefined?'default':inline.enabled?'on':'off').onChange(value=>{inline.enabled=value==='default'?undefined:value==='on';this.onOpen();});
     });
-    new Setting(this.contentEl).setName('Intermediate agent responses').setDesc('Applies when streaming is On.').addDropdown(d=>{
-      d.addOption('default',`Use default — ${base.intermediateMode}`).addOption('remove','Remove').addOption('keep','Keep').addOption('collapse','Collapse').setValue(inline.intermediateMode??'default').setDisabled(!enabled).onChange(value=>{inline.intermediateMode=value==='default'?undefined:value as NonNullable<typeof inline.intermediateMode>;});
-    });
+    new Setting(this.contentEl).setName('Intermediate agent responses').setDesc('Progress stays in an open box until the final answer is complete. Click the header to open or close it.');
     new Setting(this.contentEl).setName('Final answer format').addDropdown(d=>{
       d.addOption('default',`Use default — ${base.finalAnswerFormat==='formatted'?'Current formatting':'Raw Markdown'}`).addOption('formatted','Current formatting').addOption('raw-markdown','Raw Markdown').setValue(inline.finalAnswerFormat??'default').setDisabled(!enabled).onChange(value=>{inline.finalAnswerFormat=value==='default'?undefined:value as NonNullable<typeof inline.finalAnswerFormat>;});
     });
