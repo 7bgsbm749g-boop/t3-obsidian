@@ -150,6 +150,21 @@ test('active repair preserves text typed inside the saved anchor as ordinary not
  }finally{await h.close();}
 });
 
+test('repair preserves anchor text when the retained reply finishes before the recovery command',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const anchor=responseAnchor(h.id);
+  h.notes.set('Note.md',h.notes.get('Note.md')!.replace(anchor,anchor.replace('\n\n','its \n\n')));
+  h.complete();await h.writer.tick();
+  assert.equal((await h.host.journal.read(h.id))!.status,'conflict');
+  const before=h.notes.get('Note.md')!,result:any=await h.host.command('repair-response',h.id,contentHash(before));
+  assert.equal(result.restored,true);assert.equal(result.generation.status,'verified');
+  assert.equal(await readFile(join(result.evidence,'before.md'),'utf8'),before);
+  assert.ok(h.notes.get('Note.md')!.includes('its '));assert.ok(h.notes.get('Note.md')!.includes('Added **25kg**.'));
+  await h.writer.tick();const lease=JSON.parse(h.storage.get(leasePaths(h.identity.directory,h.id).record)!);
+  assert.equal(lease.state.finalSaved,true);assert.equal(lease.state.cleanupComplete,true);
+ }finally{await h.close();}
+});
+
 test('active repair refuses changed placement, canceled responses, and competing native buffers',async()=>{
  const h=await setup();try{
   await h.writer.tick();const original=h.notes.get('Note.md')!;

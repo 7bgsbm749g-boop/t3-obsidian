@@ -39,6 +39,14 @@ Reload app without saving itself initiated the folder move.
   Recovery corrects a stale relocation trail and resumes the existing binding;
   it does not resend the prompt or create a replacement thread.
 
+The live third binding finished before its queued repair. Its generation was
+an unsaved conflict, with no commit attempt or verified materialization. Release
+2.34.5 preserved that note and returned the existing conflict. The follow-up
+allows the same checked anchor normalization for that narrow finished state,
+then passes the normalized saved hash to the ordinary result conflict repair.
+Committed results and pending commit intents do not enter this path. Its real
+preimage, including `its ` inside the markers, remained unchanged during review.
+
 ## Validation
 
 Five fault regressions failed before the fixes; the corrected authority fixtures
@@ -57,3 +65,19 @@ real QLO2 client. Native Windows visual verification depends on the laptop's
 available computer-use tools; file propagation and loaded-client status are
 reported separately from visible editor evidence. No native mobile behavior is
 established by this work.
+
+## Retained release checks
+
+Release 2.34.5 passed 932 JavaScript and 11 Python tests, installed exact
+immutable bytes with settings preserved, and has a complete VPS QLO2 smoke
+receipt. A native active folder move and return kept identical saved anchor
+bytes and the direct link. The bounded delivery completed and saved; a checked
+app reload executed after completion and visibly retained the same note.
+Both lost-anchor user responses completed exact host-verified saves, with
+ordinary prefix/suffix bytes unchanged and both desktop actor acknowledgements.
+Laptop inspection verified the restored project link and loaded 2.34.5.
+
+The completion-race regression fails against 2.34.5 and passes with the follow-up.
+The follow-up build and all 933 JavaScript plus 11 Python tests passed.
+Final release and third-note recovery evidence will be recorded outside the
+vault with the existing investigation artifacts.

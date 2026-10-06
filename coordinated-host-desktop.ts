@@ -310,13 +310,14 @@ export class CoordinatedHost {
       await this.coordinator.stage(id,await fs.readFile(path,'utf8'),hash!);return {staged:true};
     }
     if(kind==='repair-response'){
-      if(['accepted','streaming'].includes(record.status)){
-        const {path,evidence}=await this.authority.exclusive(async()=>{
+      const repairableAnchor=(value:NoteGeneration)=>['accepted','streaming'].includes(value.status)||value.status==='conflict'&&!value.attempt&&!value.verified&&value.finalBody!==undefined;
+      if(repairableAnchor(record)){
+        const {path,evidence,after,finished}=await this.authority.exclusive(async()=>{
           const raw=await this.files.read(leasePaths(this.identity.directory,id).record);if(!raw)throw Error('Unknown response binding.');
           const lease:LeaseRecord=JSON.parse(raw),path=lease.state?.notePath??lease.request.notePath;
           if(!lease.coordinated||lease.stopRequestedAt||lease.state?.userStopped||lease.state?.finalSaved)throw Error('This response is saved or canceled.');
           const latest=await this.journal.read(id);
-          if(!latest||!['accepted','streaming'].includes(latest.status))throw Error('The response finished during review. Review its result before recovery.');
+          if(!latest||!repairableAnchor(latest))throw Error('The response finished during review. Review its result before recovery.');
           const file=this.app.vault.getFileByPath(path),saved=file?await this.app.vault.read(file):undefined;
           if(saved===undefined||contentHash(saved)!==hash)throw Error('The reviewed note changed. Review it again before recovery.');
           const after=restoreResponseAnchor(id,latest.original,saved);
@@ -324,8 +325,9 @@ export class CoordinatedHost {
           for(const [name,bytes] of [['before.md',saved],['after.md',after]])await fs.writeFile(join(evidence,name),bytes,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
           if(after!==saved)await this.recoverySave(path,saved,after,id,false);
           deviceNoteIO(this.app).noteChanged(path);
-          return {path,evidence};
+          return {path,evidence,after,finished:latest.status==='conflict'};
         });
+        if(finished){const generation=await this.coordinator.restore(id,contentHash(after));await this.scan();return {restored:generation.status==='verified',notePath:path,evidence,generation};}
         let restored=await this.authority.relocate(id,path,path);
         if(['paused','conflict'].includes(restored.state?.status??''))restored=await this.authority.resume(id);
         this.records.set(id,restored);await this.scan();return {restored:true,notePath:path,evidence};
