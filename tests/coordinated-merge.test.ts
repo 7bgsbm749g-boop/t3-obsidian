@@ -26,3 +26,14 @@ test('identical already-landed edits are deduplicated but competing touching edi
  const same=mergeSavedEdits(original,latest,[edit]);assert.equal(same.ok,true);if(same.ok)assert.equal(same.text,latest);
  assert.equal(mergeSavedEdits(original,latest,[{...edit,text:'Different registration\n'}]).ok,false);
 });
+
+test('an exact unique response preimage proves independent edits touching both boundaries',()=>{
+ const original='Before\n<!-- start -->\n\n<!-- end -->\nAfter\n',from=original.indexOf('<!-- start -->'),to=original.indexOf('<!-- end -->')+'<!-- end -->'.length;
+ const edit={from,to,text:'FINAL',preserveBoundaryInsertions:true},anchor=original.slice(from,to);
+ const latest=original.replace(anchor,'prefix'+anchor+'suffix');
+ const result=mergeSavedEdits(original,latest,[edit]);assert.equal(result.ok,true);
+ if(result.ok)assert.equal(result.text,'Before\nprefixFINALsuffix\nAfter\n');
+ assert.equal(mergeSavedEdits(original,latest,[{...edit,preserveBoundaryInsertions:false}]).ok,false);
+ assert.equal(mergeSavedEdits(original,latest.replace('<!-- end -->','<!-- changed -->'),[edit]).ok,false);
+ assert.equal(mergeSavedEdits(original,latest.replace(anchor,anchor+anchor),[edit]).ok,false);
+});

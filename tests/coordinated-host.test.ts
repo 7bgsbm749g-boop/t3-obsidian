@@ -51,14 +51,15 @@ test('production host streams only to journal, stages a table and commits the re
   assert.equal((await h.client.command({kind:'claim',jobId:h.id})).ok,false);
  }finally{await h.close();}
 });
-for(const side of ['before','after'] as const)test(`ordinary text touching the ${side} marker survives final host delivery`,async()=>{
+for(const side of ['before','after','both'] as const)test(`ordinary text touching the ${side} marker survives final host delivery`,async()=>{
  const h=await setup();try{
   await h.writer.tick();const anchor=responseAnchor(h.id),ordinary='User writing';
-  h.notes.set('Note.md',h.notes.get('Note.md')!.replace(anchor,side==='before'?ordinary+anchor:anchor+ordinary));
+  h.notes.set('Note.md',h.notes.get('Note.md')!.replace(anchor,side==='before'?ordinary+anchor:side==='after'?anchor+ordinary:ordinary+anchor+ordinary));
   h.complete();await h.writer.tick();
   const lease=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
   assert.equal(lease.state.cleanupComplete,true,JSON.stringify({lease,journal:await h.host.journal.read(h.id)}));
   assert.ok(h.notes.get('Note.md')!.includes(ordinary));assert.ok(h.notes.get('Note.md')!.includes('Added **25kg**.'));
+  if(side==='both')assert.equal(h.notes.get('Note.md')!.split(ordinary).length,3);
  }finally{await h.close();}
 });
 test('legacy migration fences the old epoch before stripping and preserves exact run and incoming metadata',async()=>{

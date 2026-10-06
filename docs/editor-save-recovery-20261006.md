@@ -39,6 +39,13 @@ could duplicate a marker or wrap an active response in a code fence.
 Final delivery previously treated ordinary insertions touching either outer
 edge as a merge conflict. Only the checked final response replacement now
 preserves these exact outside insertions; other touching edits remain conflicts.
+The first production smoke also exposed a combined case: inserts at both edges
+change both marker lines, so the line-based diff could group them with the whole
+unchanged response. The merge now uses the exact unique recorded response
+preimage as an unchanged diff anchor. Repeated or changed preimages remain
+conservative conflicts. The original live conflict, both saved ordinary edits,
+and completed reply are retained in the evidence root. Release 2.34.3 remains
+`awaiting-live-smoke`; its bytes are immutable.
 
 Completed deliveries retired their polling job and therefore stopped forwarding
 native renames. A lightweight binding index now retains rename routing after
@@ -57,7 +64,10 @@ delivery with text touching each outer edge, retired completed bindings, delayed
 rename propagation across restart, preservation of changed user text, and a
 later undo. The pre-fix boundary regressions failed before the parser changes.
 
-The final build and full suite passed: 910 JavaScript tests and 11 Python tests.
+The first release build and full suite passed: 910 JavaScript tests and 11 Python
+tests. After the combined-edge live regression, the next full build and suite
+passed 921 JavaScript tests and 11 Python tests, including the concurrent reviewed
+project-link changes. The exact logs are retained in the evidence root.
 An isolated real Obsidian 1.13.7 desktop editor accepted native keystrokes at
 both outer comment edges, continued to accept typing/deletion, saved ordinary
 text without transient stream output, and showed that text after reopening the
@@ -65,6 +75,12 @@ note. Evidence is at
 `/home/ubuntu/backups/send-to-t3-code/investigations/editing-native-20261006T180400Z`
 (`BUILD-SOURCE.json`, `interaction.json`, and application screenshots). This
 fixture covers the boundary parser changes, not production deployment.
+
+The official real-Sync transport smoke also passed create, edit, rename, delayed
+reconnect, and delete propagation between the two independent lab vaults:
+`/home/ubuntu/backups/send-to-t3-code/sync-test-lab/20261006T182919Z-1c538031/smoke.json`.
+This establishes file transport only; it does not establish the plugin repair,
+desktop core Sync behavior, or native phone behavior.
 
 Native desktop and QLO2 release smoke evidence must be retained outside the
 vault and recorded with the immutable release receipt. Unit tests and matching

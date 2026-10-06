@@ -45,7 +45,21 @@ export function applySavedEdits(original:string,edits:readonly SavedEdit[]):stri
 export function mergeSavedEdits(original:string,latest:string,proposed:readonly SavedEdit[]):MergeResult {
   // Validate before considering an intervening edit.
   applySavedEdits(original,proposed);
-  const users=changedEdits(original,latest);
+  // Text on BOTH outer edges changes both marker lines. The normal line diff
+  // then treats the whole unchanged response as one replacement. An exact,
+  // unique checked response preimage supplies a stronger unchanged anchor.
+  const anchors=proposed.filter(edit=>edit.preserveBoundaryInsertions&&edit.to>edit.from).flatMap(edit=>{
+    const text=original.slice(edit.from,edit.to),at=latest.indexOf(text);
+    return original.indexOf(text)===edit.from&&original.lastIndexOf(text)===edit.from&&at>=0&&latest.lastIndexOf(text)===at?[{from:edit.from,to:edit.to,at,end:at+text.length}]:[];
+  }).sort((a,b)=>a.from-b.from);
+  let users:SavedEdit[];
+  if(anchors.length&&!anchors.some((anchor,index)=>index&&(anchor.from<anchors[index-1].to||anchor.at<anchors[index-1].end))){
+    users=[];let l=0,r=0;
+    for(const anchor of [...anchors,{from:original.length,to:original.length,at:latest.length,end:latest.length}]){
+      users.push(...changedEdits(original.slice(l,anchor.from),latest.slice(r,anchor.at)).map(edit=>({...edit,from:edit.from+l,to:edit.to+l})));
+      l=anchor.to;r=anchor.end;
+    }
+  }else users=changedEdits(original,latest);
   if(!users.length)return {ok:true,text:applySavedEdits(original,proposed),edits:[...proposed]};
   const mapped:SavedEdit[]=[];
   for(const edit of proposed){
