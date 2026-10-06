@@ -65,7 +65,7 @@ export class NativeResponseManager {
     while(this.cached.size>MAX_NATIVE_PREVIEWS||characters>MAX_NATIVE_PREVIEW_CHARACTERS){const oldest=this.cached.values().next().value!;characters-=oldest.body.length;this.cached.delete(oldest.id);this.reconnecting.delete(oldest.id);}
     this.dirtyPreview();
   }
-  private reconnectingBody(entry:NativePreviewEntry){return `> **T3 · Reconnecting…**\n>\n${this.titled(entry.id,entry.body)}`;}
+  private reconnectingBody(entry:NativePreviewEntry){return `> **T3 · Reconnecting…**\n\n${this.titled(entry.id,entry.body)}`;}
   deleted(path:string){for(const entry of [...this.cached.values()])if(entry.notePath===path||entry.notePath.startsWith(path+'/'))this.forgetPreview(entry.id);void this.flushPreviewCache();}
   /** A real vault rename keeps the TFile and response identity. Host leases
    * can lag behind that event (particularly across mobile Sync). */

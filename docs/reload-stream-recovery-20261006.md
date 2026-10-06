@@ -110,9 +110,18 @@ preview, unavailable local storage, or changed anchor cannot use this shortcut.
 The guarantee starts when the native editor is ready; it does not remove the
 app's own startup screen or assert that cached data is live while offline.
 
-Nine integration regressions cover multi-stream/multi-pane reload without host
+Ten integration regressions cover multi-stream/multi-pane reload without host
 reads, ordinary saves, delayed host and direct data, stop and late events,
 changed boundaries, malformed cache and vault/prompt mismatch, native completion,
 rename, deletion and storage failure. The original startup code fails the first
 seven new reload regressions. Build, full suite and active native reload evidence
 are retained outside the vault before the release is marked complete.
+
+The first live cache smoke on 2.34.7 captured the retained reply and Reconnecting
+in the ready native editor during an active checked reload, while saved Markdown
+kept the same empty-anchor preimage through the final verified commit. The same
+T3 delivery completed CACHE RELOAD VERIFIED. It also exposed a Markdown grouping
+issue: the reconnect label absorbed the cached callout into its quote. A real
+Markdown parser regression reproduces it; the follow-up separates the banner
+from the original cached Markdown block. Release 2.34.7 evidence is retained
+unchanged. The layout correction uses a strictly newer immutable release.

@@ -6,6 +6,8 @@ import {initialRegion,regionBody} from '../inline-thread';
 import {contentHash} from '../completion';
 import {readNativeCommitProof,type NativeCommitProof} from '../native-response-commit';
 import type {LeaseRecord} from '../inline-lease';
+import {unified} from 'unified';
+import remarkParse from 'remark-parse';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',commitId='cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee';
 const body='> Final answer',otherBody='> Independent response';
@@ -89,6 +91,11 @@ test('deleting a note removes its preview even when the host is unavailable',asy
 });
 test('failed cache storage does not prevent fresh display or final saves',async()=>{
   const h=fixture();h.manager.configurePreviewCache('vault',undefined,async()=>{throw Error('Device disk full');});await start(h);await h.manager.flushPreviewCache();assert.ok(h.visible().includes(body));h.disk(final);await h.manager.receive(completed());assert.equal(h.views[0].getViewData(),final);h.manager.dispose();
+});
+test('the reconnect label does not absorb the cached reply into its Markdown block',async()=>{
+  const h=fixture();h.manager.configurePreviewCache('vault',await previewCheckpoint(),async()=>{});h.manager.refresh();
+  const blocks=unified().use(remarkParse).parse(h.visible()).children.filter(node=>node.type==='blockquote');
+  assert.equal(blocks.length,4,'Two independent replies each retain a separate reconnect banner and reply block');h.manager.dispose();
 });
 
 test('live title metadata updates provisional and migrating headers without changing saved notes or waiting for host output',async()=>{
