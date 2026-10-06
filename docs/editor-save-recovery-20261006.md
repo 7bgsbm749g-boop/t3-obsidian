@@ -22,8 +22,15 @@ restored document with the same hash.
 The other note contained the same 176 bytes on both devices. Its recovery
 snapshot and preserved local conflict did not contain the reported extra
 writing. That writing has not been recovered. These observations do not prove
-what was present in the editor before restart. Live Sync server version history
-was not inspected because the available Windows GUI route was unavailable.
+what was present in the editor before restart. Read-only official Sync server
+history was subsequently inspected for both the original `Untitled 7.md` path
+and the renamed path. The creation/edit versions before the incident contain
+only the complaint, image link, and empty response anchor, not the reported
+extra writing. The new text and conversation added after the incident were
+preserved without replacement. Server history and pulled plaintext versions
+are retained as `sync-server-history.json`, `sync-history-versions.json`,
+`sync-history-old-path.json`, and their referenced files in the evidence root.
+No restore or push was issued during that inspection.
 
 ## Causes and changes
 
