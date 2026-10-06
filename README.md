@@ -163,6 +163,8 @@ Questions retain the optional wait instruction, 120,000-character limit (includi
 
 Under **Settings → Send to T3 Code → Inline responses**, **Stream replies into the editor** is on by default for all manual Send and Ask actions. With an updated host, the sending device displays new replies locally while the **Vault project machine** saves their final result. Older hosts retain exclusive device writer ownership, even when a folder link sends the T3 thread to a different machine. Turning streaming off keeps answers in T3 threads.
 
+The open note receives reply text directly from T3 as soon as its response is registered. It does not wait for the new note anchor to reach the vault project machine through Sync. Older host updates cannot replace newer local text. The host still checks and saves the final reply, including its imported files; Sync then carries that saved note to other devices. The visible status stays **Working** while the response runs or reconnects.
+
 Manually sending a note with **Open in T3 Code** or palette **Send to T3 Code** appends a streamed reply at the end of that note. A typed palette question also appends its reply at the end. The plugin opens the note in a Markdown tab if needed. A full-note send captures its content before inserting the response and sends that content and its images to T3. A streamed note stays in place even if archive or delete is selected under **When task completes**. Changing the switch affects new sends; an already active response continues to completion or until stopped.
 
 ## Ask T3 inline

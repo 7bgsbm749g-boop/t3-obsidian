@@ -97,6 +97,17 @@ test('one malformed lease file is isolated while independent response scanning a
  }finally{await h.close();}
 });
 
+test('a removed native binding without its anchor cannot block another reply in the same note',async()=>{
+ const h=await setup();try{
+  const old=randomUUID(),request={...h.request,id:old};
+  h.notes.set('Note.md',h.notes.get('Note.md')+'\n'+responseAnchor(old));
+  await h.client.command({kind:'register',jobId:old,request});await h.host.scan();
+  await h.host.command('remove-response',old);h.notes.set('Note.md',h.notes.get('Note.md')!.replace(responseAnchor(old),''));
+  await h.host.scan();assert.equal((await h.host.journal.read(old))!.status,'removed');
+  h.complete();await h.writer.tick();assert.equal((await h.host.journal.read(h.id))!.status,'verified');assert.ok(h.notes.get('Note.md')!.includes('Added **25kg**.'));
+ }finally{await h.close();}
+});
+
 
 test('restart verifies an already-landed native intent before locating removed anchors and propagates fenced completion',async()=>{
  const h=await setup();let restarted:CoordinatedHost|undefined;try{

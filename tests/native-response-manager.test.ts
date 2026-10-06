@@ -41,6 +41,27 @@ test('live title metadata updates provisional and migrating headers without chan
  h.manager.dispose();
 });
 
+test('direct device text wins over delayed host output until the checked final commit and Sync adoption',async()=>{
+ const h=fixture(2),active=record();active.migrating=true;active.state!.body=undefined;active.state!.accepted=false;
+ await h.manager.receive(active);
+ h.manager.stream({request:active.request,messageId:active.request.messageId,sequence:12,body:'> Direct first paragraph'});
+ h.edit(h.visible().replace('Before','Local before'));
+ await h.manager.receive({...active,revision:2,state:{...active.state!,body:'> Delayed old paragraph',bindingCheckpoint:{sequence:20}}});
+ h.manager.stream({request:active.request,messageId:active.request.messageId,sequence:11,body:'> Old direct paragraph'});
+ assert.ok(h.visible().includes('Direct first paragraph'));assert.ok(h.visible().includes('Local before'));
+ assert.ok(h.views.every(view=>!view.getViewData().includes('Direct first paragraph')));
+ await h.manager.receive(completed(3));assert.ok(h.visible().includes(body));assert.ok(!h.visible().includes('Direct first paragraph'));
+ h.manager.stream({request:active.request,messageId:active.request.messageId,sequence:30,body:'> Late direct paragraph'});assert.ok(!h.visible().includes('Late direct paragraph'));
+ h.disk(final);await h.manager.changed('Note.md');assert.ok(h.visible().includes('Local before'));assert.ok(h.manager.view(h.views[0] as any)!.hasMaterialized(id));h.manager.dispose();
+});
+test('a direct stream cannot project another thread and keeps its placement after a native rename',async()=>{
+ const h=fixture();const active=record();await h.manager.receive(active);
+ h.manager.stream({request:{...active.request,threadId:'wrong'},messageId:id,sequence:30,body:'> Wrong thread'});assert.ok(!h.visible().includes('Wrong thread'));
+ h.manager.stream({request:active.request,messageId:id,sequence:10,body:'> Direct stream'});
+ h.file.path='Renamed.md';h.manager.renamed('Note.md',h.file.path);await h.manager.receive({...active,revision:2});
+ assert.ok(h.visible().includes('Direct stream'));assert.equal(h.views[0].getViewData(),before);h.manager.dispose();
+});
+
 test('host completion retains final text throughout delayed Sync and adopts incoming saved bytes atomically',async()=>{
   const h=fixture(2);await start(h);await h.manager.receive(completed());
   for(let tick=0;tick<100;tick++)h.manager.refresh();

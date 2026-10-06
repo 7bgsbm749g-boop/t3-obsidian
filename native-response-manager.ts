@@ -7,6 +7,7 @@ import type {LeaseRecord} from './inline-lease';
 import {regionBody,initialRegion,startMarker,endMarker,renameInlineHeader} from './inline-thread';
 import {logFailure} from './diagnostics';
 import {nativeCommitMatches,readNativeCommitProof,type NativeCommitProof} from './native-response-commit';
+import type {DirectInlineUpdate} from './direct-inline-preview';
 
 const managers=new WeakMap<App,NativeResponseManager>();
 export function nativeResponses(app:App){let manager=managers.get(app);if(!manager){manager=new NativeResponseManager(app);managers.set(app,manager);}return manager;}
@@ -16,6 +17,7 @@ export function nativeResponses(app:App){let manager=managers.get(app);if(!manag
 export class NativeResponseManager {
   private views=new Map<MarkdownView,NativeResponseView>();
   private provisional=new Map<string,{path:string;body:string}>();
+  private streams=new Map<string,DirectInlineUpdate>();
   private records=new Map<string,LeaseRecord>();
   private titles=new Map<string,string>();
   private proofs=new Map<string,NativeCommitProof>();
@@ -37,12 +39,20 @@ export class NativeResponseManager {
       aliases.set(before,after);this.relocations.set(id,aliases);
     }
     for(const item of this.provisional.values())item.path=moved(item.path);
+    for(const item of this.streams.values())item.request={...item.request,notePath:moved(item.request.notePath)};
     for(const [id,record] of this.records){const current=record.state?.notePath??record.request.notePath,next=moved(current);if(next!==current)this.records.set(id,{...record,state:{...record.state??{requestHash:'',accepted:false,status:'waiting',hashes:[],updatedAt:''},notePath:next}});}
     this.refresh();
   }
   view(view:MarkdownView){const adapter=this.views.get(view);return adapter&&!adapter.isDisposed()?adapter:undefined;}
   conflictedView(path:string){return [...this.views].find(([view,adapter])=>view.file?.path===path&&!adapter.isDisposed()&&adapter.conflictRecord())?.[0];}
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
+  stream(update:DirectInlineUpdate){
+    const record=this.records.get(update.request.id),previous=this.streams.get(update.request.id);
+    if(record&&(record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.request.threadId!==update.request.threadId||record.request.projectId!==update.request.projectId||record.request.threadEnvironmentId!==update.request.threadEnvironmentId))return;
+    if(previous&&previous.sequence>update.sequence)return;
+    const path=record?.state?.notePath??update.request.notePath;
+    this.streams.set(update.request.id,{...update,request:{...update.request,notePath:path}});this.refresh();
+  }
   title(id:string,title:string){if(!title.trim()||this.titles.get(id)===title)return;this.titles.set(id,title);this.refresh();}
   private titled(id:string,body:string){const title=this.titles.get(id);return title?renameInlineHeader(body,title):body;}
   async receive(record:LeaseRecord,proofBytes?:string){
@@ -53,6 +63,7 @@ export class NativeResponseManager {
     const move=[...this.relocations.get(record.request.id)??[]].sort((a,b)=>b[0].length-a[0].length).find(([before])=>path===before||path.startsWith(before+'/'));
     if(move)record={...record,state:{...record.state??{requestHash:'',accepted:false,status:'waiting',hashes:[],updatedAt:''},notePath:move[1]+path.slice(move[0].length)}};
     this.provisional.delete(record.request.id);this.records.set(record.request.id,record);
+    if(record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete)this.streams.delete(record.request.id);
     this.refresh();
     if(record.state?.delivery&&record.state.cleanupComplete)await this.changed(record.state.notePath);
   }
@@ -123,7 +134,7 @@ export class NativeResponseManager {
           const region=responseRegion(saved,id);
           if(!region||saved.slice(region.from,region.to)!==responseAnchor(id))continue;
           if(record.state?.cleanupComplete&&adapter?.hasMaterialized(id))continue;
-          const body=(record.state?.cleanupComplete?record.state.finalBody:undefined)??record.state?.body??regionBody(initialRegion(id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,id)!.body;
+          const body=(record.state?.cleanupComplete?record.state.finalBody:undefined)??this.streams.get(id)?.body??record.state?.body??regionBody(initialRegion(id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,id)!.body;
           responses.push({id,body:record.state?.cleanupComplete?body:this.titled(id,body)});
         }
         if(!adapter&&responses.length){
@@ -153,5 +164,5 @@ export class NativeResponseManager {
   prepare(path:string,before:string,after:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.prepareMaterialization(before,after,ids);}
   cancel(path:string){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.cancelMaterialization();}
   committed(path:string,saved:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path&&!adapter.acceptCommitted(saved,ids))throw Error('A native pane did not adopt the saved result.');}
-  dispose(){this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.proofs.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();}
+  dispose(){this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.proofs.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();}
 }

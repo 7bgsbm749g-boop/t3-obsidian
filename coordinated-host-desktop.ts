@@ -11,7 +11,7 @@ import {nativeResponses} from './native-response-manager';
 import {deviceNoteIO} from './inline-note-io';
 import {planNativeMigration} from './coordinated-migration';
 import {projectResponses,responseAnchor,responseRegion,savedProjection} from './native-response-projection';
-import {regionBody,initialRegion} from './inline-thread';
+import {regionBody,initialRegion,startMarker,endMarker} from './inline-thread';
 import {logFailure} from './diagnostics';
 import {hostedPaths,type HostedInlineRequest,type HostedInlineState,type HostedWriterIO} from './hosted-inline';
 import {leasePaths,terminalLease,type InlineLeaseAuthority,type LeaseRecord,type LeaseIdentity,type LeaseFiles} from './inline-lease';
@@ -196,7 +196,10 @@ export class CoordinatedHost {
       },
       updateNote:async(path,change)=>{
         const saved=await deviceNoteIO(this.app).readNote(path);if(saved===undefined)return;
-        const responses=[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&!record.state?.cleanupComplete&&(record.state?.notePath??record.request.notePath)===path).map(record=>({id:record.request.id,body:record.state?.body??regionBody(initialRegion(record.request.id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,record.request.id)!.body}));
+        // Historical removed/conflicted bindings can outlive their anchors.
+        // Only anchors present in this note participate in its projection;
+        // malformed present boundaries still fail the normal validation.
+        const responses=[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&!record.state?.cleanupComplete&&(record.state?.notePath??record.request.notePath)===path&&(saved.includes(startMarker(record.request.id))||saved.includes(endMarker(record.request.id)))).map(record=>({id:record.request.id,body:record.state?.body??regionBody(initialRegion(record.request.id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,record.request.id)!.body}));
         const projection=projectResponses(saved,responses),next=change(projection.display);
         // Ordinary selection consumption follows the normal checked save path;
         // generated response body changes are only local/journaled.

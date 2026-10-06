@@ -10,6 +10,7 @@ import type {SteeringInput} from './inline-steering';
 import {logFailure} from './diagnostics';
 import {nativeCommitPath,readNativeCommitProof} from './native-response-commit';
 import {ThreadTitleFeed} from './thread-title-feed';
+import {DirectInlinePreview,type DirectInlineUpdate} from './direct-inline-preview';
 
 export const INLINE_SNAPSHOT_INTERVAL_MS=10_000;
 export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
@@ -19,6 +20,7 @@ export interface DeviceInlineIO {
   loadRenames?():PendingResponseRename[];
   saveRenames?(renames:PendingResponseRename[]):void;
   receiveCoordinated?(record:LeaseRecord,proofBytes?:string):void|Promise<void>;
+  receiveDirect?(update:DirectInlineUpdate):void;
   receiveThreadTitle?(id:string,title:string):void;
   readSaved?(path:string):Promise<string|undefined>;
   access(environmentId:string,reason?:ThreadAccessCloseReason):Promise<ThreadAccess>;
@@ -47,6 +49,7 @@ export class DeviceInlineManager {
   private nextRenameRetry=0;
   private hosts=new Map<string,Host>();
   private jobs=new Map<string,Runtime>();
+  private previews=new Map<string,DirectInlinePreview>();
   private accessCache=new ThreadAccessCache((environmentId,reason)=>this.io.access(environmentId,reason),()=>this.now());
   private titles?:ThreadTitleFeed;
   constructor(readonly actor:string,private vaultId:string,private io:DeviceInlineIO,private open:(target:InlineHostTarget)=>Promise<{files:InlineFiles;close():void}>,private now=()=>Date.now(),private monotonic=()=>performance.now(),private pause?:(milliseconds:number)=>Promise<void>){const saved=io.loadRenames?.();this.renames=Array.isArray(saved)?saved:[];for(const rename of this.renames)this.host(rename.host);if(io.receiveThreadTitle)this.titles=new ThreadTitleFeed(environmentId=>io.access(environmentId),(id,title)=>io.receiveThreadTitle!(id,title));}
@@ -71,11 +74,13 @@ export class DeviceInlineManager {
     this.receiveRecord(host,reply.record);const runtime=this.jobs.get(request.id);if(runtime)runtime.lastHeartbeat=this.now();this.tick();
   }
   async delivered(target:InlineHostTarget,id:string,delivery:InlineStartRequest){
+    this.previews.get(id)?.delivery(delivery);
     const host=this.host(target),reply=await host.client.command({kind:'delivery',jobId:id,delivery});
     if(!reply.ok||!reply.record)throw Error(reply.error??'Could not retain the prompt delivery evidence.');
     this.receiveRecord(host,reply.record);this.tick();
   }
   async stopResponse(target:InlineHostTarget,id:string){
+    this.previews.get(id)?.dispose();
     this.renames=this.renames.filter(item=>item.bindingId!==id);this.io.saveRenames?.(this.renames);
     const host=this.host(target),reply=await host.client.command({kind:'stop',jobId:id});
     if(!reply.ok||!reply.record)throw Error(reply.error??'Could not record the response stop.');
@@ -127,6 +132,13 @@ export class DeviceInlineManager {
   stoppableResponses(path:string){return [...this.jobs.values()].filter(({record})=>(record.state?.notePath??record.request.notePath)===path&&!record.stopRequestedAt&&!record.state?.userStopped&&!terminalLease(record)).map(({record,host})=>({id:record.request.id,hostTarget:host.target}));}
   private receiveRecord(host:Host,record:LeaseRecord){
     if(this.stopped||record.request.vaultId!==this.vaultId||hostKey(record.request.host)!==hostKey(host.target))return;
+    const current=this.jobs.get(record.request.id)?.record;
+    if(current&&(current.epoch>record.epoch||current.epoch===record.epoch&&current.revision>record.revision))return;
+    if(record.coordinated&&this.io.receiveDirect){
+      let preview=this.previews.get(record.request.id);
+      if(!preview){preview=new DirectInlinePreview(record,()=>this.access(record.request.threadEnvironmentId),update=>this.io.receiveDirect!(update));this.previews.set(record.request.id,preview);}
+      else preview.update(record);
+    }
     const projected=leaseExplorerResponse(record),previous=host.responses.find(r=>r.id===projected.id);
     if(!previous||projected.epoch>previous.epoch||projected.epoch===previous.epoch&&projected.revision>previous.revision)host.responses=host.responses.filter(r=>r.id!==projected.id).concat(projected);
     if(record.coordinated)void Promise.resolve(this.io.receiveCoordinated?.(record)).catch(error=>logFailure('note.projection.receive',error,{bindingId:record.request.id}));
@@ -254,7 +266,8 @@ export class DeviceInlineManager {
       const {record,host}=runtime,id=record.request.id;
       if(record.coordinated){
         runtime.refresh?.cancel(Error('Generated changes are coordinated by the host.'));runtime.monitor?.stop();runtime.monitor=undefined;runtime.writer.stop();
-        if(record.state?.cleanupComplete&&record.state.delivery?.observedBy.includes(this.actor)){this.jobs.delete(id);continue;}
+        this.previews.get(id)?.tick(this.io.isOpen(record.state?.notePath??record.request.notePath));
+        if(record.state?.cleanupComplete&&record.state.delivery?.observedBy.includes(this.actor)){this.previews.get(id)?.dispose();this.previews.delete(id);this.jobs.delete(id);continue;}
         if(!runtime.heartbeat&&this.now()-runtime.lastHeartbeat>=1000){runtime.lastHeartbeat=this.now();const work=this.observeCoordinated(runtime);runtime.heartbeat=work;void work.finally(()=>runtime.heartbeat=undefined).catch(()=>{});}
         continue;
       }
@@ -345,7 +358,7 @@ export class DeviceInlineManager {
     if(item.kind==='snapshot'){runtime.nextSnapshot=this.monotonic()+INLINE_SNAPSHOT_INTERVAL_MS;runtime.snapshotFailures=0;}
   }
   changed(path:string){this.io.noteChanged?.(path);}
-  deleted(path:string){this.io.noteDeleted?.(path);for(const host of this.hosts.values())host.responses=relocateExplorerResponses(host.responses,path);}
+  deleted(path:string){this.io.noteDeleted?.(path);for(const [id,runtime] of this.jobs){const current=runtime.record.state?.notePath??runtime.record.request.notePath;if(current===path||current.startsWith(path+'/')){this.previews.get(id)?.dispose();this.previews.delete(id);}}for(const host of this.hosts.values())host.responses=relocateExplorerResponses(host.responses,path);}
   renamed(before:string,after:string){
     this.io.noteRenamed?.(before,after);
     for(const host of this.hosts.values())host.responses=relocateExplorerResponses(host.responses,before,after);
@@ -364,6 +377,7 @@ export class DeviceInlineManager {
   dispose(){
     this.stopped=true;
     this.titles?.dispose();
+    for(const preview of this.previews.values())preview.dispose();this.previews.clear();
     for(const runtime of this.jobs.values()){runtime.refresh?.cancel(Error('Response writer stopped.'));runtime.monitor?.stop();runtime.writer.stop();}
     for(const host of this.hosts.values())host.close();
     void this.accessCache.dispose();
