@@ -75,6 +75,9 @@ export interface InlineFiles {
 export const hostedPaths=(directory:string,id:string)=>({request:`${directory}/requests/${id}.json`,state:`${directory}/states/${id}.json`,stop:`${directory}/stops/${id}.json`});
 export const legacyQuestionReply=(state:HostedInlineState|undefined)=>state?.status==='complete'&&state.questionFollows===undefined&&!!state.body?.includes('> **T3 · Question pending**')&&questionTargets(state.body).length>0;
 export const pendingCompletionCleanup=(request:HostedInlineRequest,state:HostedInlineState|undefined)=>!!request.independent&&state?.finalBody!==undefined&&!state.cleanupComplete&&!legacyQuestionReply(state)&&(state.finalSaved===true||['complete','interrupted'].includes(state.status));
+/** Keep pending cleanup and legacy questions discoverable; completed history
+ * is maintained by its coordinator instead of entering the reply writer. */
+export const needsHostedProcessing=(request:HostedInlineRequest,state:HostedInlineState|undefined)=>!state||!['complete','interrupted','conflict'].includes(state.status)||legacyQuestionReply(state)||pendingCompletionCleanup(request,state)&&['complete','interrupted'].includes(state.status);
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export function safeNotePath(path:unknown):path is string {
   return typeof path==='string'&&path.endsWith('.md')&&!path.includes('\\')&&!/[\x00-\x1f:]/.test(path)&&path.split('/').every(p=>!!p&&p!=='.'&&p!=='..'&&!p.startsWith('.'));
@@ -141,6 +144,7 @@ export interface HostedWriterIO extends InlineFiles {
 export class HostedInlineWriter {
   private stopped=false;
   private stopIntents=new Set<string>();
+  private stopPriority=new Set<string>();
   private networkCancels=new Map<string,(error?:Error)=>void>();
   private networkStarted=new Map<string,number>();
   private networkRetryAt=new Map<string,number>();
@@ -153,7 +157,7 @@ export class HostedInlineWriter {
   private bindingReplayAt=new Map<string,number>();
   constructor(private identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},private io:HostedWriterIO){}
   stop(){this.stopped=true;for(const cancel of this.networkCancels.values())cancel();}
-  requestStop(id:string){this.stopIntents.add(id);this.networkCancels.get(hostedPaths(this.identity.directory,id).request)?.();}
+  requestStop(id:string){this.stopIntents.add(id);this.stopPriority.add(id);this.networkCancels.get(hostedPaths(this.identity.directory,id).request)?.();}
   private async waitingTitle(request:HostedInlineRequest,state:HostedInlineState,title:string|undefined,save:()=>Promise<void>){
     if(!title)return;
     let changed=false;
@@ -198,10 +202,10 @@ export class HostedInlineWriter {
       if(this.stopped)return;
       if(this.work.has(path)){
         const id=path.slice(path.lastIndexOf('/')+1,-5);
-        if(await this.io.read(hostedPaths(this.identity.directory,id).stop)!==undefined)this.requestStop(id);
+        if(!this.stopIntents.has(id)&&await this.io.read(hostedPaths(this.identity.directory,id).stop)!==undefined)this.requestStop(id);
         return;
       }
-      if(!this.stopIntents.has(path.slice(path.lastIndexOf('/')+1,-5))&&this.monotonic()<(this.networkRetryAt.get(path)??0))return;
+      if(!this.stopPriority.has(path.slice(path.lastIndexOf('/')+1,-5))&&this.monotonic()<(this.networkRetryAt.get(path)??0))return;
       const work=this.process(path);this.work.set(path,work);
       return work.finally(()=>{if(this.work.get(path)===work)this.work.delete(path);});
     }));
@@ -211,6 +215,7 @@ export class HostedInlineWriter {
   private async process(path:string){
       const renameEnd=this.renames.length,renames=this.renames.slice(this.renameOffsets.get(path)??0,renameEnd);
       if(this.stopped)return;
+      this.stopPriority.delete(path.slice(path.lastIndexOf('/')+1,-5));
       let request:HostedInlineRequest;
       try{request=validateHostedRequest(JSON.parse((await this.io.read(path))??''));}catch{return;}
       if(this.io.accepts?!this.io.accepts(request):request.version!==1)return;
@@ -221,7 +226,7 @@ export class HostedInlineWriter {
       try{stored=JSON.parse((await this.io.read(paths.state))??'null');state=stored??{requestHash:hash,accepted:false,notePath:request.notePath,status:'waiting',hashes:[request.initialHash],updatedAt:new Date().toISOString()};}catch{return;}
       if(state.requestHash!==hash||!Array.isArray(state.hashes)||!safeNotePath(state.notePath))return;
       const legacyProof=pendingCompletionCleanup(request,state)&&['complete','interrupted'].includes(state.status);
-      if(['complete','interrupted','conflict'].includes(state.status)&&!legacyQuestionReply(state)&&!legacyProof)return;
+      if(!needsHostedProcessing(request,state))return;
       let savedIdentity=stored?durableResponseIdentity(state):undefined;
       if(request.importTurn&&!state.bindingCheckpoint?.bindings?.[request.messageId]){const turn=request.importTurn,checkpoint=state.bindingCheckpoint;state.bindingCheckpoint={...checkpoint,bindings:{...checkpoint?.bindings,[request.messageId]:{turnId:turn.turnId,kind:'explicit'}},turns:{[turn.turnId]:turn,...checkpoint?.turns}};}
       const save=async()=>{
@@ -502,6 +507,7 @@ export class HostedInlineWriter {
       }
   }
   private async finishStopped(request:HostedInlineRequest,state:HostedInlineState,save:()=>Promise<void>){
+    this.stopPriority.delete(request.id);
     state.userStopped=true;state.status='running';await save();
     // Remote interruption never participates in the note transaction.
     if(!this.interrupts.has(request.id)){
@@ -512,6 +518,7 @@ export class HostedInlineWriter {
     if(this.io.commitFinal){
       const body=stoppedResponseBody(state.body??'');
       if(await this.io.commitFinal(request,state,body)){state.body=body;state.finalBody=body;state.finalPhase='interrupted';state.finalSaved=true;state.cleanupComplete=true;state.status='interrupted';delete state.detail;}
+      else this.networkRetryAt.set(hostedPaths(this.identity.directory,request.id).request,this.monotonic()+5000);
       await save();return;
     }
     let before:string|undefined,after:string|undefined;

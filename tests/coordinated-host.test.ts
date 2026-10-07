@@ -57,9 +57,30 @@ test('a failed checked final save waits between retries and then saves current o
  }finally{writer?.stop();await h.close();}
 });
 
+test('failed stopped saves wait after servicing each explicit Stop and retain current outside text',async()=>{
+ const h=await setup();let writer:HostedInlineWriter|undefined;
+ try{
+  await h.writer.tick();let clock=0,attempts=0,allow=false;
+  const io=h.host.io(h.base),commit=io.commitFinal!;io.monotonic=()=>clock;
+  io.commitFinal=async(...args)=>{attempts++;return allow?commit(...args):false;};
+  writer=new HostedInlineWriter(h.identity,io);writer.requestStop(h.id);await writer.tick();
+  assert.equal(attempts,1);const before=h.notes.get('Note.md')!;
+  for(let i=0;i<20;i++)await writer.tick();assert.equal(attempts,1,'a retained Stop must not permanently bypass retry waits');
+  clock=4999;await writer.tick();assert.equal(attempts,1);
+  writer.requestStop(h.id);await writer.tick();assert.equal(attempts,2,'a new explicit Stop takes priority');
+  for(let i=0;i<20;i++)await writer.tick();assert.equal(attempts,2);
+  h.notes.set('Note.md',before+'New ordinary stop suffix\n');allow=true;clock=9999;await writer.tick();
+  assert.equal(attempts,3);assert.ok(h.notes.get('Note.md')!.endsWith('New ordinary stop suffix\n'));
+  const state=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!).state;
+  assert.equal(state.status,'interrupted');assert.equal(state.finalSaved,true);assert.equal(state.cleanupComplete,true);
+ }finally{writer?.stop();await h.close();}
+});
+
 test('history close uses a completed lease and publishes a shortened immutable delivery proof',async()=>{
  const h=await setup(true,false,true);try{
   await h.writer.tick();h.complete();await h.writer.tick();await h.host.scan();
+  let historicalReads=0;const idleIO=h.host.io({...h.base,read:async path=>{historicalReads++;return h.base.read(path);}}),idleWriter=new HostedInlineWriter(h.identity,idleIO);
+  try{for(let i=0;i<10;i++)await idleWriter.tick();assert.equal(historicalReads,0,'completed history must not repeatedly enter the reply writer');}finally{idleWriter.stop();}
   const before=h.notes.get('Note.md')!,block=streamBlocks(before)[0],old=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
   assert.ok(block?.complete);h.notes.set('Note.md',before+'Unrelated late text\n');
   const response:any=await h.host.command('close-stream-block',block.key,contentHash(block.text),'Note.md');assert.equal(response.closed,true);

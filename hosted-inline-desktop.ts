@@ -15,6 +15,9 @@ import {deviceNoteIO} from './inline-note-io';
 import {HostedInlineWriter,type HostedInlineRequest,type InlineFiles} from './hosted-inline';
 import {readInlineEvents,type ThreadAccess,type ThreadAccessCloseReason} from './thread-stream';
 import {ThreadAccessCache} from './thread-access-cache';
+import {DesktopInlineReadCache} from './inline-file-cache-desktop';
+
+const inlineReadCache=new DesktopInlineReadCache();
 
 export function localInlineFiles(root:string,directory:string):LeaseFiles&{requests():Promise<string[]>}{
   const base=resolve(root,directory);
@@ -23,9 +26,9 @@ export function localInlineFiles(root:string,directory:string):LeaseFiles&{reque
     const result=resolve(root,path);if(!result.startsWith(base+require('node:path').sep))throw Error('Invalid hosted response storage path.');return result;
   };
   return {
-    async read(path){try{return await fs.readFile(full(path),'utf8');}catch(error:any){if(error.code==='ENOENT')return undefined;throw error;}},
-    async write(path,contents){const target=full(path);await fs.mkdir(dirname(target),{recursive:true});const temporary=target+'.'+require('node:crypto').randomUUID()+'.tmp';try{await fs.writeFile(temporary,contents,{mode:0o600});await fs.rename(temporary,target);}finally{await fs.rm(temporary,{force:true});}},
-    async remove(path){await fs.rm(full(path),{force:true});},
+    async read(path){return inlineReadCache.read(full(path));},
+    async write(path,contents){const target=full(path);inlineReadCache.invalidate(target);await fs.mkdir(dirname(target),{recursive:true});const temporary=target+'.'+require('node:crypto').randomUUID()+'.tmp';try{await fs.writeFile(temporary,contents,{mode:0o600});await fs.rename(temporary,target);}finally{inlineReadCache.invalidate(target);await fs.rm(temporary,{force:true});}},
+    async remove(path){const target=full(path);inlineReadCache.invalidate(target);try{await fs.rm(target,{force:true});}finally{inlineReadCache.invalidate(target);}},
     async list(directoryPath){try{return (await fs.readdir(full(directoryPath))).filter(p=>p.endsWith('.json')).map(p=>`${directoryPath}/${p}`);}catch(error:any){if(error.code==='ENOENT')return [];throw error;}},
     async requests(){try{return (await fs.readdir(join(base,'requests'))).filter(p=>p.endsWith('.json')).map(p=>`${directory}/requests/${p}`);}catch(error:any){if(error.code==='ENOENT')return [];throw error;}},
   };
@@ -39,7 +42,7 @@ export class DesktopInlineHost {
   private authority:InlineLeaseAuthority;
   private stopAuthorityReads:()=>void;
   private authorityStorage:ReturnType<typeof interruptibleAuthorityFiles>;
-  status(){return {active:this.active,authority:this.authority.status(),storage:this.authorityStorage.status()};}
+  status(){return {active:this.active,authority:this.authority.status(),storage:this.authorityStorage.status(),readCache:inlineReadCache.status()};}
   private stopAuthorityTimer:()=>void;
   private work=new Set<Promise<void>>();
   private stopped=false;

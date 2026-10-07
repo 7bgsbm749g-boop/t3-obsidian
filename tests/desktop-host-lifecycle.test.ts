@@ -75,6 +75,9 @@ test('response host releases ownership even when closing a cached connection fai
 test('packaged authority abandons a lost read and acknowledges an immutable registration and replay',async()=>{
   const h=await fixture(),read=fs.readFile;let late!:(value:string)=>void,lose=true;
   try{
+    // Missing files now return after a fresh metadata check. Supply a real
+    // catalog so this fault stalls a byte read rather than nonexistent IO.
+    await mkdir(join(h.root,h.directory),{recursive:true});await writeFile(join(h.root,h.directory,'lease-catalog.json'),'[]');
     fs.readFile=((path:any,...args:any[])=>{
       if(lose&&String(path)===join(h.root,h.directory,'lease-catalog.json')){lose=false;return new Promise(resolve=>{late=resolve;});}
       return (read as any)(path,...args);
@@ -97,6 +100,7 @@ test('shutdown cancels a lost authority read before reacquiring ownership',async
   const h=await fixture(),read=fs.readFile;let entered!:()=>void,lose=true;
   const started=new Promise<void>(resolve=>{entered=resolve;});
   try{
+    await mkdir(join(h.root,h.directory),{recursive:true});await writeFile(join(h.root,h.directory,'lease-catalog.json'),'[]');
     fs.readFile=((path:any,...args:any[])=>{
       if(lose&&String(path)===join(h.root,h.directory,'lease-catalog.json')){lose=false;entered();return new Promise(()=>{});}
       return (read as any)(path,...args);

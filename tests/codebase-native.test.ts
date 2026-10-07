@@ -5,6 +5,18 @@ import {runInNewContext} from 'node:vm';
 import {virtualPath,type CodebaseIO} from '../codebase-core';
 const editorExternals=['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight'];
 const scope={environmentId:'env',projectId:'project',root:'/outside',title:'Project'};
+test('large candidate catalogs use one current link snapshot and immediately honor unlink and post-search revocation',async()=>{
+ const built=await build({entryPoints:['codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:editorExternals});class Base{}class File{constructor(public vault:any,public path:string){}}
+ const module={exports:{} as any};runInNewContext(built.outputFiles[0].text,{module,exports:module.exports,require:()=>({EditorSuggest:Base,ItemView:Base,FuzzySuggestModal:Base,TFile:File,TFolder:File}),document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},TextEncoder,URL,setTimeout,clearTimeout,performance});
+ const app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},vault:{configDir:'.obsidian'},workspace:{}},link={folderPath:'Linked',environmentId:'env',projectId:'project',workspaceRoot:'/outside',projectTitle:'Project'};let links=[link],reads=0;
+ const bridge=new module.exports.CodebaseBridge(app,{}, {},()=>{reads++;return links;},'snapshot');
+ try{
+  for(let i=0;i<600;i++)bridge.register(scope,`docs/file-${i}.md`);bridge.register(scope,'docs/report.md');reads=0;
+  assert.equal(bridge.candidates('report.md','Linked/Note.md').length,1);assert.equal(reads,1,'scope discovery must not repeat for every registered file');
+  links=[];reads=0;assert.equal(bridge.candidates('report.md','Linked/Note.md').length,0);assert.equal(reads,1);
+  links=[link];bridge.search=async()=>{links=[];};assert.equal((await bridge.suggestions('report','Linked/Note.md')).length,0,'permissions must be refreshed after the awaited search');
+ }finally{bridge.dispose();}
+});
 test('native bridge leaves vault enumeration and events physical, preserves vault links, and blocks unsafe writes',async()=>{
   const built=await build({entryPoints:['codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:editorExternals});
   class Base{}class File{constructor(public vault:any,public path:string){}}class Folder extends File{}

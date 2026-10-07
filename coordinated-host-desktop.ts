@@ -15,7 +15,7 @@ import {projectResponses,responseAnchor,responseRegion,savedProjection} from './
 import {regionBody,initialRegion,startMarker,endMarker} from './inline-thread';
 import {logFailure} from './diagnostics';
 import {streamBlock,removeStreamBlock} from './stream-block';
-import {hostedPaths,type HostedInlineRequest,type HostedInlineState,type HostedWriterIO} from './hosted-inline';
+import {hostedPaths,needsHostedProcessing,type HostedInlineRequest,type HostedInlineState,type HostedWriterIO} from './hosted-inline';
 import {leasePaths,terminalLease,type InlineLeaseAuthority,type LeaseRecord,type LeaseIdentity,type LeaseFiles} from './inline-lease';
 
 /** Host lock is owned by DesktopInlineHost. Mailbox mutations, migration fences
@@ -244,7 +244,7 @@ export class CoordinatedHost {
   io(base:HostedWriterIO):HostedWriterIO {
     const reads=new Map<string,{epoch:number;revision:number}>();
     return {...base,
-      requests:async()=>[...this.records.values()].filter(record=>record.coordinated&&!record.migrating).map(record=>hostedPaths(this.identity.directory,record.request.id).request),
+      requests:async()=>[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&needsHostedProcessing(record.request,record.state)).map(record=>hostedPaths(this.identity.directory,record.request.id).request),
       accepts:request=>!!this.records.get(request.id)?.coordinated&&!this.records.get(request.id)?.migrating&&!this.failures.has(request.id)&&!this.stopped,
       canResume:()=>true,
       locateNote:(id,path)=>deviceNoteIO(this.app).locateNote(id,path),

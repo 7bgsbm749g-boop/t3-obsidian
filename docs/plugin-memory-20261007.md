@@ -189,3 +189,63 @@ preserved the saved enabled setting before the next source validation.
 The narrower retry correction passed all 156 targeted tests, the build, the
 full 987 JavaScript/TypeScript tests and 11 Python tests. The two failures from
 the discarded broader retry change remain in the outside evidence log.
+
+## Repeated private byte reads and stopped saves
+
+The native 2.34.19 bounded reply saved exact host hash
+`4525a073d1fa77f4f6122ebced58df6f4bd75e32a20789b0aee025ec2883bc8b`,
+and own note/tab cleanup preserved the original layout and physical note hashes.
+Its late five-minute sample still measured 1.289 renderer CPU cores, 743–1143
+MiB RSS and 7146 MiB of read characters. All four large journals stayed exactly
+unchanged. The restored native final-save instrumentation proved that several
+old stopped replies were still retrying more often than five seconds. Functional
+smoke remains distinct from a sustained memory resolution.
+
+A later read of the supported laptop-reload service revealed that Windows had
+received and loaded 2.34.18 at 03:05 UTC, then 2.34.19 at 03:26 UTC. Those
+background loaded-client receipts were not known when the earlier functional
+receipt recorded its last verified Windows version. Fresh read-only Windows
+checks confirm installed immutable 2.34.19 hashes and loaded instance
+`5e3454af-93aa-473c-8dfb-ff3adf77448f`. The 120-second sample measured 0.586
+renderer cores and 410–700 MiB RSS, improving on the later 2.34.15 result but
+not proving long-term stability. The desktop remains locked; no visible GUI
+test, input or capture occurred. The real fleet thread returned HOLD.
+
+The next correction distinguishes a new explicit Stop's immediate priority
+from its persistent stopped state. Repeated unsuccessful stopped saves now
+wait five seconds after servicing that priority. Completed history is omitted
+from reply-writer discovery using the writer's same terminal-state guard;
+pending cleanup and legacy questions remain discoverable. History maintenance,
+commands and saved records remain intact. Coordinator tests exercise both a
+real stopped save with newer outside text and history-only close after writer
+discovery stops reading the completed reply.
+
+Desktop inline byte reads now share a bounded process-local cache: at most
+4096 entries and 16 million source characters. Every hit requires a fresh
+regular-file check of device, inode, size, mode and nanosecond modification and
+change times. A source read is cached only if its before/after identities match.
+Writes and deletes invalidate their path; symlinks are never cached. The cache
+does not persist bytes, weaken path validation, cache authentication or replace
+journal integrity checks. Real filesystem tests cover unchanged reads,
+same-size/same-mtime changes, atomic replacement, deletion, a concurrent write,
+symlink target changes and both storage bounds. Diagnostic counters contain no
+paths or content.
+
+Candidate filtering takes one fresh linked-project snapshot per synchronous
+operation, after any awaited search, instead of rebuilding it for every file.
+Permission checks after I/O stay fresh. A 601-file native bridge regression
+checks immediate unlink and revocation during a search. New full-suite and
+native measurements remain required before declaring this correction complete.
+
+The first full 993-test run found two synthetic lost-read fixtures that stalled
+`readFile` on a nonexistent catalog. The new metadata check correctly returns
+missing before that byte-read hook can run. Those fixtures now supply an actual
+catalog before injecting the stalled read, retaining their original timeout,
+late-result, replay and shutdown-lock checks. All 135 targeted tests passed
+against the rebuilt package with those corrected fixtures. The first full run
+and corrected targeted result remain retained outside the vault.
+
+The corrected source build and full suite passed 993 JavaScript/TypeScript
+tests and 11 Python tests. The next supported clean release repeats both checks
+before immutable packaging and installation. Source validation does not establish
+the native memory result.
