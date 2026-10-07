@@ -398,3 +398,66 @@ of this correction.
 The projection/cache correction passed its build and all 1002
 JavaScript/TypeScript tests plus 11 Python tests, pinned to CPU 0. Native
 sustained measurements remain necessary before any memory-resolution claim.
+
+## Unchanged host projections and offset retention
+
+The complete 2.34.23 native receipt retains 76 hashed artifacts. A real native
+view with 67,698 displayed characters returned its exact 26,374-character saved
+document 100 times, with zero code-range cache accesses or fresh parses. The
+bounded native reply completed and saved exact host hash
+`5711badf15dde7b90c54f4da19d081ef674c07d9f3f65e8a2d434dafb486e3aa`;
+its ordinary prefix, original leaves and original-note preimages were preserved.
+All four large journal counts stayed unchanged. The last five-minute VPS result
+was still 0.714 renderer cores and 722–1074 MiB RSS. The locked Windows client
+measured 0.218 cores and 470–821 MiB RSS. Memory remains open.
+
+The restored discovery trace showed zero idle display-binding queries, but the
+idle profile still attributed 13.21% of samples to host `updateNote`, including
+repeated Markdown projection and region parsing. The next correction retains
+one validated projection per note only when freshly read saved bytes and all
+ordered response identities and bodies match exactly. Changed ordinary bytes,
+changed bodies and damaged boundaries use the existing full validation. The
+change callback still runs; a different returned document goes through the
+normal saved-projection validation. Exact unchanged display output can reuse
+the already validated saved projection. This cannot bypass final journal
+verification, write intents, current-file checks or native acknowledgement.
+
+The private projection cache retains at most 16 entries and four million
+characters across saved/display/body strings, counting body references again
+conservatively. Returned ranges are independent copies, and shutdown clears
+the cache. Status exposes only numeric counters. The code-range cache now
+allows 128 entries within its existing eight-million-character source budget,
+and separately caps retained offset pairs at 65,536. Documents beyond either
+budget still parse correctly without entering the cache. Syntax trees are
+never retained. This addresses the observed 32-entry saturation without an
+unbounded offset cache.
+
+All 104 targeted tests pass, including exact unchanged host reuse without any
+code-range lookups, independent returned ranges, fresh ordinary edits, damaged
+markers, nested generated boundaries, source/entry/range eviction and shutdown.
+The initial cache-entry fixture mistakenly gave a 500-character budget that
+could hold only one two-marker projection. The corrected fixture separately
+tests the two-entry and 500-character bounds; its initial failure log is retained.
+The VPS plugin is temporarily paused, with its saved enabled setting preserved;
+native CLI OFF, Settings CLOSED and the exact original global config restored.
+Build/full validation runs serially on CPU 0. No language additions are included.
+
+The initial projection/cache build and full suite passed 1006
+JavaScript/TypeScript tests and 11 Python tests. Before release, review also
+found that the main 150 ms device tick refreshes every unchanged native view.
+The final correction keeps that device/legacy writer cadence, while spacing
+the idle native-view fallback at one second. Stream/lease receives still
+refresh immediately; layout changes and file opening schedule one coalesced
+microtask refresh. Initial layout readiness still refreshes synchronously.
+The callback checks plugin shutdown before touching the native manager.
+Within each synchronous device tick, replies sharing a note now reuse one
+fresh open-view query. No result is reused across ticks or asynchronous work.
+The expanded final source must repeat its build and full validation before
+the clean immutable release; no result from the earlier source is substituted.
+
+An initial expanded build rejected a union of two overloaded workspace event
+names. The correction registers each typed event separately, without an `any`
+cast. The final expanded build, all 162 targeted tests and the complete 1006
+JavaScript/TypeScript plus 11 Python suite passed on CPU 0. The supported clean
+release must repeat these checks; native behavior and sustained measurements
+remain required.

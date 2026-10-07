@@ -262,13 +262,17 @@ export class DeviceInlineManager {
   }
   tick(){
     if(this.stopped)return;
-    this.titles?.sync([...this.jobs.values()].filter(({record})=>record.coordinated&&!record.stopRequestedAt&&!terminalLease(record)&&this.io.isOpen(record.state?.notePath??record.request.notePath)).map(({record})=>record.request));
+    // A synchronous tick sees one current workspace. Several independent
+    // replies in the same note need only one fresh open-view query; never
+    // retain this result across ticks or asynchronous work.
+    const opened=new Map<string,boolean>(),isOpen=(path:string)=>{if(!opened.has(path))opened.set(path,this.io.isOpen(path));return opened.get(path)!;};
+    this.titles?.sync([...this.jobs.values()].filter(({record})=>record.coordinated&&!record.stopRequestedAt&&!terminalLease(record)&&isOpen(record.state?.notePath??record.request.notePath)).map(({record})=>record.request));
     this.flushRenames();
     for(const runtime of this.jobs.values()){
       const {record,host}=runtime,id=record.request.id;
       if(record.coordinated){
         runtime.refresh?.cancel(Error('Generated changes are coordinated by the host.'));runtime.monitor?.stop();runtime.monitor=undefined;runtime.writer.stop();
-        this.previews.get(id)?.tick(this.io.isOpen(record.state?.notePath??record.request.notePath));
+        this.previews.get(id)?.tick(isOpen(record.state?.notePath??record.request.notePath));
         if(record.state?.cleanupComplete&&record.state.delivery?.observedBy.includes(this.actor)){this.previews.get(id)?.dispose();this.previews.delete(id);this.jobs.delete(id);continue;}
         if(!runtime.heartbeat&&this.now()-runtime.lastHeartbeat>=1000){runtime.lastHeartbeat=this.now();const work=this.observeCoordinated(runtime);runtime.heartbeat=work;void work.finally(()=>runtime.heartbeat=undefined).catch(()=>{});}
         continue;

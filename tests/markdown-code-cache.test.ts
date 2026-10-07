@@ -23,9 +23,15 @@ test('exact repeated source avoids parsing, while changed fenced source is parse
 
 test('code-range source and entry bounds evict old documents without retaining syntax trees',()=>{
  const prefix=randomUUID();
- for(let i=0;i<40;i++)markdownCodeRanges(`${prefix}-${i}\n\n\`code\``);
- assert.ok(markdownCodeCacheStatus().entries<=32);
+ for(let i=0;i<160;i++)markdownCodeRanges(`${prefix}-${i}\n\n\`code\``);
+ assert.ok(markdownCodeCacheStatus().entries<=markdownCodeCacheStatus().maxEntries);
  const sources=Array.from({length:5},(_,i)=>'```text\n'+prefix+'-'+i+'\n'+'x'.repeat(2_000_000)+'\n```\n');
  for(const source of sources){const ranges=markdownCodeRanges(source);assert.equal(ranges.length,1);const status=markdownCodeCacheStatus();assert.ok(status.characters<=status.maxCharacters);assert.ok(status.entries<=status.maxEntries);}
  const before=markdownCodeCacheStatus().sourceParses;markdownCodeRanges(sources[0]);assert.equal(markdownCodeCacheStatus().sourceParses,before+1,'an evicted document must get a fresh parse');
+});
+
+test('an excessive code-range count is parsed correctly without retaining its offsets',()=>{
+ const source=randomUUID()+'\n\n'+'`x` '.repeat(markdownCodeCacheStatus().maxRanges+1),before=markdownCodeCacheStatus();
+ assert.equal(markdownCodeRanges(source).length,before.maxRanges+1);assert.equal(markdownCodeRanges(source).length,before.maxRanges+1);
+ const after=markdownCodeCacheStatus();assert.equal(after.sourceParses-before.sourceParses,2);assert.equal(after.characters,before.characters);assert.equal(after.ranges,before.ranges);assert.ok(after.ranges<=after.maxRanges);
 });

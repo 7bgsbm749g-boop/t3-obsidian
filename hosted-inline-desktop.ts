@@ -43,7 +43,7 @@ export class DesktopInlineHost {
   private authority:InlineLeaseAuthority;
   private stopAuthorityReads:()=>void;
   private authorityStorage:ReturnType<typeof interruptibleAuthorityFiles>;
-  status(){return {active:this.active,authority:this.authority.status(),storage:this.authorityStorage.status(),readCache:inlineReadCache.status(),codeRangeCache:markdownCodeCacheStatus()};}
+  status(){return {active:this.active,authority:this.authority.status(),storage:this.authorityStorage.status(),readCache:inlineReadCache.status(),codeRangeCache:markdownCodeCacheStatus(),projectionCache:this.coordinated?.projectionStatus()};}
   private stopAuthorityTimer:()=>void;
   private work=new Set<Promise<void>>();
   private stopped=false;

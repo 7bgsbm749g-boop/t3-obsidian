@@ -11,17 +11,20 @@ import {nativeResponses} from './native-response-manager';
 import {deviceNoteIO} from './inline-note-io';
 import {planNativeMigration} from './coordinated-migration';
 import {restoreResponseAnchor} from './response-anchor-recovery';
-import {projectResponses,responseAnchor,responseRegion,savedProjection} from './native-response-projection';
+import {responseAnchor,responseRegion,savedProjection} from './native-response-projection';
 import {regionBody,initialRegion,startMarker,endMarker} from './inline-thread';
 import {logFailure} from './diagnostics';
 import {streamBlock,removeStreamBlock} from './stream-block';
 import {hostedPaths,needsHostedProcessing,type HostedInlineRequest,type HostedInlineState,type HostedWriterIO} from './hosted-inline';
 import {leasePaths,terminalLease,type InlineLeaseAuthority,type LeaseRecord,type LeaseIdentity,type LeaseFiles} from './inline-lease';
+import {ResponseProjectionCache} from './response-projection-cache';
 
 /** Host lock is owned by DesktopInlineHost. Mailbox mutations, migration fences
  * and checkpoints share that authority's serialization. Journal bytes live
  * outside the vault and are never transported through Markdown or Sync. */
 export class CoordinatedHost {
+  private projections=new ResponseProjectionCache();
+  projectionStatus(){return this.projections.status();}
   private records=new Map<string,LeaseRecord>();
   private stopped=false;
   private failures=new Map<string,string>();
@@ -276,10 +279,10 @@ export class CoordinatedHost {
         // Only anchors present in this note participate in its projection;
         // malformed present boundaries still fail the normal validation.
         const responses=[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&!record.state?.cleanupComplete&&(record.state?.notePath??record.request.notePath)===path&&(saved.includes(startMarker(record.request.id))||saved.includes(endMarker(record.request.id)))).map(record=>({id:record.request.id,body:record.state?.body??regionBody(initialRegion(record.request.id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,record.request.id)!.body}));
-        const projection=projectResponses(saved,responses),next=change(projection.display);
+        const projection=this.projections.project(path,saved,responses),next=change(projection.display);
         // Ordinary selection consumption follows the normal checked save path;
         // generated response body changes are only local/journaled.
-        const ordinary=savedProjection(next,projection);
+        const ordinary=next===projection.display?saved:savedProjection(next,projection);
         if(ordinary!==saved){await deviceNoteIO(this.app).updateNote(path,()=>ordinary,()=>!this.stopped);}
         return next;
       },
@@ -411,5 +414,5 @@ export class CoordinatedHost {
     throw Error('Unsupported response command.');
   }
   async renamed(before:string,after:string){await this.authority.renameNative(before,after);await this.scan();}
-  stop(){this.stopped=true;this.backgroundChecks.clear();this.terminalRevisions.clear();}
+  stop(){this.stopped=true;this.backgroundChecks.clear();this.terminalRevisions.clear();this.projections.clear();}
 }

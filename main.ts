@@ -319,7 +319,15 @@ export default class SendToT3 extends Plugin {
       this.inlineChat?.resume();
     });
     this.app.workspace.onLayoutReady(()=>{
-      const tick=()=>{nativeResponses(this.app).refresh();this.deviceInline?.tick();this.deviceInline?.discover(this.inlineTargets);};
+      let nextNativeRefresh=0,queued=false;
+      const refreshNative=()=>{if(this.stopped)return;nativeResponses(this.app).refresh();nextNativeRefresh=performance.now()+1000;};
+      // Stream/lease changes already refresh their native projection directly.
+      // Keep the 150 ms device/legacy writer cadence, but avoid rebuilding every
+      // unchanged native view at that rate. Workspace changes remain immediate.
+      const queueNative=()=>{if(queued)return;queued=true;queueMicrotask(()=>{queued=false;refreshNative();});};
+      this.registerEvent(this.app.workspace.on('layout-change',queueNative));
+      this.registerEvent(this.app.workspace.on('file-open',queueNative));
+      const tick=()=>{if(performance.now()>=nextNativeRefresh)refreshNative();this.deviceInline?.tick();this.deviceInline?.discover(this.inlineTargets);};
       tick();this.registerInlineInterval(tick,150);
       const remember=()=>{if(this.settings.folderLinks.some(link=>link.folderPath==='/'))void this.inlineHostTarget().then(target=>this.rememberInlineTarget(target)).catch(()=>{});};
       remember();this.registerInterval(window.setInterval(remember,5000));

@@ -6,10 +6,11 @@ const parser=unified().use(remarkParse);
 // Bound retained source text as well as entry count. Callers receive copies
 // because reply escaping adds its own protected ranges.
 const codeCache=new Map<string,Array<[number,number]>>();
-let cachedCharacters=0;
+let cachedCharacters=0,cachedRanges=0;
 let codeCacheHits=0,codeSourceParses=0;
 const maxCachedCharacters=8_000_000;
-export function markdownCodeCacheStatus(){return {entries:codeCache.size,characters:cachedCharacters,maxCharacters:maxCachedCharacters,maxEntries:32,hits:codeCacheHits,sourceParses:codeSourceParses};}
+const maxCachedEntries=128,maxCachedRanges=65_536;
+export function markdownCodeCacheStatus(){return {entries:codeCache.size,characters:cachedCharacters,ranges:cachedRanges,maxCharacters:maxCachedCharacters,maxEntries:maxCachedEntries,maxRanges:maxCachedRanges,hits:codeCacheHits,sourceParses:codeSourceParses};}
 
 /** Source ranges remain stable even when HTML would swallow Markdown code. */
 export function markdownCodeRanges(markdown:string):Array<[number,number]> {
@@ -24,10 +25,10 @@ export function markdownCodeRanges(markdown:string):Array<[number,number]> {
     }else if('children' in node)for(const child of node.children)walk(child as RootContent);
   }
   walk(parser.parse(markdown.replace(/</g,' ')) as Root);
-  if(markdown.length<=maxCachedCharacters){
-    codeCache.set(markdown,ranges);cachedCharacters+=markdown.length;
-    while(codeCache.size>32||cachedCharacters>maxCachedCharacters){
-      const oldest=codeCache.keys().next().value!;cachedCharacters-=oldest.length;codeCache.delete(oldest);
+  if(markdown.length<=maxCachedCharacters&&ranges.length<=maxCachedRanges){
+    codeCache.set(markdown,ranges);cachedCharacters+=markdown.length;cachedRanges+=ranges.length;
+    while(codeCache.size>maxCachedEntries||cachedCharacters>maxCachedCharacters||cachedRanges>maxCachedRanges){
+      const oldest=codeCache.keys().next().value!;cachedCharacters-=oldest.length;cachedRanges-=codeCache.get(oldest)!.length;codeCache.delete(oldest);
     }
   }
   return ranges.map(([from,to])=>[from,to]);
