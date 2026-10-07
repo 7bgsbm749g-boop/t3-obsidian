@@ -748,3 +748,21 @@ slow requests, errors and stop races using a deterministic clock.
 This changes direct stream polling only. Coordinated-host canonical polling and
 fresh integrity audits remain unchanged. Native CPU/memory resolution is not
 claimed before measurement.
+
+2.34.32 native functional smoke completed at 09:28 UTC (69 hashed artifacts).
+A 45-second instance request trace had eight direct quiet-history reads with
+5.15–5.33-second returned spacing including HTTP latency, versus about 35–37
+at the prior 1200-ms cadence. The host still made 118 reads, totaling 37.3M
+serialized characters. Wrappers were restored in finally. A real final reply
+saved exact host hash c3af2481c85954d547d4f0fe3fffaadac62191ed0402c17e5cff2eac1d18c2e1.
+Original notes/leaves and settings survived cleanup and guarded pause; CLI OFF,
+Settings closed, exact global config. Both full checks passed 1033 JS/TS + 11
+Python before source commit and again in clean release tooling.
+
+Memory remains OPEN: late VPS 0.439 cores / 543–1141 MiB RSS; Windows loaded
+fresh a37dd668, returned HOLD, and measured 0.259 cores / 504–796 MiB RSS.
+These intervals do not show improvement. A separate 60-second paused VPS sample
+was 0.003 cores / 324 MiB RSS (CPU-0 release checks ran concurrently). Complete
+receipt: `/home/ubuntu/backups/send-to-t3-code/releases/2.34.32/smoke-vps-qlo2.json`.
+The retained profile/trace establish repeated coordinated-host processing as
+another target; no host polling change was included in 2.34.32.
