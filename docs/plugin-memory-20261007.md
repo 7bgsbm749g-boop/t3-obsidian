@@ -710,3 +710,18 @@ Client-status now returns numeric codeRangeCache counters on every desktop,
 including non-authority Windows clients, with no note paths or content. This
 makes the next native memory comparison observable without GUI input. Memory
 remains open until post-release native samples establish improvement.
+
+2.34.31 native functional smoke completed at 09:03 UTC with 73 hashed artifacts.
+The literal-code fixture preserved fake anchors, spaces/tabs and its ordinary
+prefix, and the real final reply saved exact host hash
+3353a7e60f0fdc8a5e92d36e8b00ae9eb46c4947b2dfc73d184dfea365e82c1c.
+Original notes/leaves and settings were restored; CLI is OFF and the VPS plugin
+is safely paused without changing its saved enabled setting. Windows loaded
+fresh instance 4eca6802 and returned HOLD. Both complete suites passed 1029
+JS/TS + 11 Python before commit and in clean release tooling.
+
+Memory remains OPEN: late VPS CPU 0.424 cores with 635–985 MiB RSS; Windows
+0.213 cores with 431–672 MiB RSS. Windows code-range counters increased by
+102 source parses and 9771 hits over ten minutes. Synthetic parser savings
+are not sufficient to establish a native memory fix. Complete receipt:
+`/home/ubuntu/backups/send-to-t3-code/releases/2.34.31/smoke-vps-qlo2.json`.
