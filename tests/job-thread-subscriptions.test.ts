@@ -16,22 +16,35 @@ function run(messageId=job.messageId,turnId='original',status='completed'):Inlin
   return {historyComplete:true,messages:[{id:messageId,role:'user',text:'work',turnId:null,streaming:false,createdAt:at},{id:randomUUID(),role:'assistant',text:'answer',turnId,streaming:false,createdAt:at}],activities:[],latestTurn:{turnId,state:status,requestedAt:at,completedAt:at},session:{status:status==='running'?'running':'ready',activeTurnId:status==='running'?turnId:null}};
 }
 async function harness(initial?:EventState){
-  let saved=initial,thread=run(),now=1000,busy=false,fail=false,attachFail=false;
+  let saved=initial,thread=run(),now=1000,busy=false,fail=false,attachFail=false,bindingReads=0;
   const delivered:EventNotification[]=[],requests:HostedInlineRequest[]=[],existing:Array<{id:string;path:string;messageIds:string[];turnIds:string[];threadId?:string}>=[],monitors=new Map<string,{item:(value:any)=>void;cursor:()=>number|undefined;stopped:boolean}>();
   const service=new EventSubscriptions({
     load:async()=>saved,save:async state=>{saved=structuredClone(state);},notes:async()=>[],validateTarget:async()=>{},isBusy:async()=>busy,recording:()=>{},now:()=>now,id:randomUUID,
     prepare:async n=>({id:commandId(n.id,'message'),events:n.events}),deliver:async n=>{delivered.push(structuredClone(n));if(fail)throw Error('lost acknowledgement');return 'delivered';},
     readThread:async()=>structuredClone(thread),watchThread:(t,item,cursor)=>{const monitor={item,cursor,stopped:false};monitors.set(t.threadId,monitor);return {stop(){monitor.stopped=true;}};},
-    displayHost:{validateDestination:async()=>{},responseBindings:async target=>existing.filter(b=>!b.threadId||b.threadId===target.threadId),
+    displayHost:{validateDestination:async()=>{},responseBindings:async target=>{bindingReads++;return existing.filter(b=>!b.threadId||b.threadId===target.threadId);},
       prepareDisplay:async(display,destination,message)=>{const id=commandId(display.id,message.id+destination.id);return {version:2,initialOwner:randomUUID(),independent:true,id,vaultId:'vault',host:{environmentId:'machine',workspaceRoot:'/vault',directory:'.obsidian/inline'},notePath:destination.path,threadId:display.threadId,messageId:message.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id).bodyHash,createdAt:'2026-10-02T12:00:00Z'};},
       attachDisplay:async(request,path)=>{requests.push({...request,notePath:path});if(attachFail)throw Error('note unavailable');existing.push({threadId:request.threadId,id:request.id,path,messageIds:[request.messageId],turnIds:[]});},
     },
   });await service.initialize();
-  return {service,delivered,requests,existing,monitors,setThread:(value:InlineThreadState)=>{thread=value;},advance:()=>{now+=3000;},busy:(value:boolean)=>{busy=value;},fail:(value:boolean)=>{fail=value;},attachFail:(value:boolean)=>{attachFail=value;},get saved(){return saved!;}};
+  return {service,delivered,requests,existing,monitors,setThread:(value:InlineThreadState)=>{thread=value;},advance:()=>{now+=3000;},busy:(value:boolean)=>{busy=value;},fail:(value:boolean)=>{fail=value;},attachFail:(value:boolean)=>{attachFail=value;},get saved(){return saved!;},get bindingReads(){return bindingReads;}};
 }
 const subscribeJob=():EventSubscriptionCommand=>({version:1,id:randomUUID(),kind:'subscribe-job',target,job});
 const stream=(source=worker,destinations=['A.md','B.md']):EventSubscriptionCommand=>({version:1,id:randomUUID(),kind:'stream-thread',scope:'thread',source,destinations});
 const manage=(kind:EventSubscriptionCommand['kind'],subscriptionId:string,extra={})=>({version:1,id:randomUUID(),kind,subscriptionId,...extra}) as EventSubscriptionCommand;
+
+test('idle streaming skips binding discovery; new runs and failed attachments read fresh bindings once per pass',async()=>{
+ const h=await harness();try{
+  await h.service.command(stream());
+  for(let i=0;i<20;i++)await h.service.tick();assert.equal(h.bindingReads,0);
+  const first=run(randomUUID(),'first');h.setThread(first);await h.service.tick();
+  assert.equal(h.bindingReads,1);assert.equal(h.requests.length,2);
+  for(let i=0;i<20;i++)await h.service.tick();assert.equal(h.bindingReads,1);
+  h.setThread(run(randomUUID(),'retry'));h.attachFail(true);await h.service.tick();assert.equal(h.bindingReads,2);
+  h.attachFail(false);await h.service.tick();assert.equal(h.bindingReads,3);assert.equal(h.saved.displays![0].bindings.filter(b=>b.status==='attached').length,4);
+  for(let i=0;i<20;i++)await h.service.tick();assert.equal(h.bindingReads,3);
+ }finally{h.service.stop();}
+});
 
 test('job outcomes use the original turn after newer turns, not latest session error',()=>{
   const original=run(),state={...run(randomUUID(),'newer','error'),turns:{original:original.latestTurn!},messages:[...original.messages,...run(randomUUID(),'newer').messages]};

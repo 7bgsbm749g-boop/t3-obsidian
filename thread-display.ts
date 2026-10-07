@@ -58,7 +58,10 @@ export async function tickDisplay(display:ThreadDisplay,host:DisplayHost){
   if(!display.enabled||display.cancelled)return;
   const state=await host.readThread(display);
   if(!state.historyComplete)throw Error('Waiting for canonical thread history.');
-  const existing=await host.responseBindings(display);
+  // Completed attachments and future-start boundaries need no private lease
+  // discovery. Read fresh bindings only when an eligible destination needs
+  // attachment or retry, and share that read within this pass.
+  let existing:Awaited<ReturnType<DisplayHost['responseBindings']>>|undefined;
   const roots=new Map<string,string>();
   // First prompt owns a provider turn; subsequent same-turn prompts are steering.
   for(const message of state.messages.filter(m=>m.role==='user')){
@@ -70,6 +73,7 @@ export async function tickDisplay(display:ThreadDisplay,host:DisplayHost){
     for(const destination of display.destinations.filter(d=>!d.removed)){
       let binding=display.bindings.find(b=>b.messageId===message.id&&b.destinationId===destination.id);
       if(binding&&binding.status!=='planned')continue;
+      existing??=await host.responseBindings(display);
       const attached=existing.find(b=>b.path===destination.path&&(b.messageIds.includes(message.id)||b.turnIds.includes(turnId)));
       const sibling=display.bindings.find(b=>b.destinationId===destination.id&&b.turnId===turnId&&b.messageId!==message.id);
       if(attached||roots.get(turnId)!==message.id||sibling){

@@ -35,7 +35,7 @@ export interface DeviceInlineIO {
   resolveReplyReference?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
 type SnapshotRefresh={epoch:number;startedAt:number;work:Promise<InlineThreadState|undefined>;cancel(error:Error):void};
-type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;maintenanceFailures?:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void};proof?:{hash:string;bytes:string}};
+type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;maintenanceFailures?:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void};proof?:{hash:string;bytes:string};observedBytes?:string;observedRecord?:LeaseRecord};
 type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;close():void;discovery?:Promise<void>;lastDiscovery:number;responses:ExplorerResponse[]};
 const hostKey=(target:InlineHostTarget)=>JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);
 const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...state,updatedAt:''}):'';
@@ -305,7 +305,13 @@ export class DeviceInlineManager {
   }
   private async observeCoordinated(runtime:Runtime){
     const {host}=runtime,raw=await host.files.read(leasePaths(host.target.directory,runtime.record.request.id).record);if(!raw||this.stopped)return;
-    const record:LeaseRecord=JSON.parse(raw);this.receiveRecord(host,record);
+    let record:LeaseRecord;
+    if(raw===runtime.observedBytes&&runtime.observedRecord===runtime.record)record=runtime.record;
+    else{
+      record=JSON.parse(raw);this.receiveRecord(host,record);
+      if(runtime.record===record){runtime.observedBytes=raw;runtime.observedRecord=record;}
+      else{runtime.observedBytes=undefined;runtime.observedRecord=undefined;}
+    }
     const delivery=record.state?.delivery;
     if(delivery?.proofHash&&this.io.receiveCoordinated){
       if(runtime.proof?.hash!==delivery.proofHash){

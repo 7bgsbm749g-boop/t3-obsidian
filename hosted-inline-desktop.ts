@@ -57,6 +57,10 @@ export class DesktopInlineHost {
     this.stopAuthorityTimer=desktopInterval(()=>void this.authority.tick().catch(()=>{}),100);
     this.writerIO={
       ...files,
+      requests:async()=>{
+        const paths=await files.requests();
+        return this.coordinated?this.coordinated.legacyRequests(paths):paths;
+      },
       locateNote:deviceNoteIO(app).locateNote,
       replayBindings:(request,access,signal,afterSequence)=>readInlineEvents(access,request.threadId,afterSequence,signal),
       access:environmentId=>this.accessCache.get(environmentId),

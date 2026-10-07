@@ -35,6 +35,17 @@ async function setup(native=true,liveLease=false,collapse=false){
   return {root,app,identity,base,host,authority,client,files,storage,request,id,notes,file,writer,complete:()=>{completed=true;},writes:()=>writes,close:async()=>{writer.stop();host.stop();authority.stop();client.dispose();await rm(root,{recursive:true,force:true});}};
 }
 
+test('legacy discovery excludes known native requests and retains unknown paths',async()=>{
+ const h=await setup();try{
+  const native=hostedPaths(h.identity.directory,h.id).request,unknown=hostedPaths(h.identity.directory,randomUUID()).request;
+  assert.deepEqual(h.host.legacyRequests([native,unknown]),[unknown]);
+  const id=randomUUID(),request={...h.request,id,version:1 as const};
+  h.storage.set(leasePaths(h.identity.directory,id).record,JSON.stringify({request,owner:COORDINATED_OWNER,coordinated:true,epoch:1,revision:0,expiresAt:Number.MAX_SAFE_INTEGER}));
+  await h.host.scan();const legacy=hostedPaths(h.identity.directory,id).request;
+  assert.deepEqual(h.host.legacyRequests([native,legacy,unknown]),[legacy,unknown]);
+ }finally{await h.close();}
+});
+
 test('a failed checked final save waits between retries and then saves current outside text',async()=>{
  const h=await setup();let writer:HostedInlineWriter|undefined;
  try{
@@ -369,8 +380,9 @@ test('supported repair verifies a reviewed pending commit without treating it as
  }finally{await h.close();}
 });
 
-test('active delivery proceeds while completed journal observation rotates through bounded history batches',async()=>{
+test('active delivery proceeds while completed journal observation rotates through bounded history batches',async t=>{
  const h=await setup();try{
+  let clock=Date.now();t.mock.method(Date,'now',()=>clock);
   await h.writer.tick();const historical=new Set<string>();
   for(let n=0;n<9;n++){
    const id=randomUUID(),request={...h.request,id,notePath:`Historical-${n}.md`};historical.add(id);
@@ -383,7 +395,8 @@ test('active delivery proceeds while completed journal observation rotates throu
   const before=activeReads;
   await h.host.scan(true);assert.equal(observed.size,1,'unchanged completed history waits for its maintenance interval');
   assert.equal(activeReads,before,'unchanged active leases do not repeat private journal audits every timer tick');
-  (h.host as any).nextTerminalScan=0;
+  clock+=29_999;await h.host.scan(true);assert.equal(observed.size,1,'unchanged history does not consume another full journal audit before thirty seconds');
+  clock++;
   await h.host.scan(true);assert.equal(observed.size,2,'maintenance rotates after its interval');
   await h.host.scan();assert.equal(observed.size,6,'explicit recovery scans retain the four-record batch');
   h.complete();await h.writer.tick();assert.equal((await read(h.id))!.status,'verified');assert.match(h.notes.get('Note.md')!,/Added \*\*25kg\*\*/);

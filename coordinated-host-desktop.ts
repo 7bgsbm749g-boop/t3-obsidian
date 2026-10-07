@@ -119,7 +119,10 @@ export class CoordinatedHost {
     if(this.terminalCursor>=terminal.length)this.terminalCursor=0;
     const now=Date.now();
     const historical=!background||now>=this.nextTerminalScan?terminal.slice(this.terminalCursor,this.terminalCursor+(background?1:4)):[];
-    if(historical.length){this.terminalCursor+=historical.length;this.nextTerminalScan=now+5000;}
+    // Unchanged completed history is maintenance, not live reply work. Keep
+    // full journal verification but pace it like unchanged active audits.
+    // Changed leases above and explicit recovery scans still run immediately.
+    if(historical.length){this.terminalCursor+=historical.length;this.nextTerminalScan=now+30_000;}
     const urgent=new Set(changedTerminal.map(record=>record.request.id));
     return active.concat(changedTerminal,historical.filter(record=>!urgent.has(record.request.id)));
   }
@@ -240,6 +243,14 @@ export class CoordinatedHost {
       if(journal&&journal.notePath!==notePath)await this.coordinator.renamed(id,journal.notePath,notePath);
       await nativeResponses(this.app).receive(record);
       }catch(error){const detail=error instanceof Error?error.message:String(error);this.failures.set(identity,detail);logFailure('response.coordinator.scan-conflict',error,{bindingId:identity});}
+  }
+  legacyRequests(paths:string[]):string[]{
+    // Unknown paths retain the original discovery behavior. A freshly read
+    // lease proves which known requests the version-one writer cannot accept.
+    return paths.filter(path=>{
+      const id=/\/([^/]+)\.json$/.exec(path)?.[1],record=id?this.records.get(id):undefined;
+      return !record||path!==hostedPaths(this.identity.directory,record.request.id).request||record.request.version===1;
+    });
   }
   io(base:HostedWriterIO):HostedWriterIO {
     const reads=new Map<string,{epoch:number;revision:number}>();

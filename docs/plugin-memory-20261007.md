@@ -249,3 +249,58 @@ The corrected source build and full suite passed 993 JavaScript/TypeScript
 tests and 11 Python tests. The next supported clean release repeats both checks
 before immutable packaging and installation. Source validation does not establish
 the native memory result.
+
+## Idle discovery follow-up
+
+Immutable 2.34.20 loaded on VPS instance
+`19ea5a61-2b29-4e66-8683-3f95e48b43a2` and Windows instance
+`7035466d-8dc6-4381-83db-768ecdc33a06`. The real bounded VPS reply saved
+exact host hash `2d5243b492e5cb9a8ee286046940a4862187cdceb5b53e29aa48eb6c70fd6201`,
+preserved its ordinary prefix, and rendered in the native client. Its owned
+note/tab was removed and all original leaves and physical preimages remained
+unchanged. Initial active CPU remains excessive; sustained measurement is
+still required and this is not a memory-resolution claim.
+
+A restored 30-second native trace measured 55 display-binding catalog scans
+and 20 coordinated discovery passes. Byte-cache hits avoid source reads but
+do not avoid repeated stat calls or JSON decoding. The next correction lazily
+reads display bindings only for an eligible attachment or failed-attachment
+retry, once per display pass. Future boundaries, attached and skipped bindings
+need no discovery. Canonical thread observation continues each tick.
+
+The legacy version-one writer omits known requests of newer versions after
+fresh coordinator discovery. Unknown paths and known version-one requests
+retain the original behavior. Unchanged completed-history maintenance rotates
+one full journal audit every thirty seconds rather than every five. Active
+writer ticks, changed leases, native rename acknowledgements and explicit
+recovery commands keep their immediate paths; full integrity verification and
+the explicit four-record recovery batch remain intact. Passive observation of
+unchanged completed history can take longer. No journals or private receipts
+are deleted to obtain this change.
+
+Device observations continue to read each authoritative lease every second.
+If its exact bytes and the accepted record object both remain unchanged, they
+skip JSON decoding, preview updates and ordinary display projection. Any changed
+byte re-enters the original receive path, including changes without a revision
+increment. An intervening command that replaces the record invalidates reuse.
+Authenticated commit delivery, saved-file matching and acknowledgement retry
+continue even after an unchanged read. The retained raw byte reference lives
+only as long as that active runtime, and is discarded when its job retires.
+
+The complete 2.34.20 functional receipt retains 73 hashed artifacts. Its late
+five-minute VPS sample measured 1.093 renderer cores and 806–1250 MiB RSS;
+the Windows ten-minute read-only sample measured 0.569 cores and 460–847 MiB
+RSS in its late five-minute interval. The four largest journal counts stayed
+unchanged. Memory remains open. A checked temporary VPS pause preserved the
+saved enabled setting; native CLI OFF, Settings CLOSED and the exact original
+global config hash were restored before validation. The idle-discovery and
+unchanged-device-observation follow-up passed all 110 targeted tests, including
+fresh changed-byte projection without a revision increment, continued saved
+commit acknowledgement retries, attachment recovery, immediate changed-history
+audits and thirty-second unchanged-history pacing. Build/full validation follows
+serially on CPU 0; no language additions are part of this correction.
+
+The corrected build and complete suite passed 996 JavaScript/TypeScript tests
+and 11 Python tests on CPU 0. The supported release command must repeat these
+checks from the reviewed clean source before packaging the next immutable
+version. Native sustained CPU/RSS measurements are still required.

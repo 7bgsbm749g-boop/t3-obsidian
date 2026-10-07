@@ -652,6 +652,24 @@ test('a device that reads a newly migrated native record does not send a legacy 
   }finally{h.dispose();}
 });
 
+test('unchanged native lease reads do not repeat large display projection, while any changed bytes remain visible',async()=>{
+ const h=harness(),request={...h.request,nativeProjection:true},client=h.client();
+ await client.command({kind:'register',jobId:request.id,request});
+ const key=leasePaths(request.host.directory,request.id).record;
+ h.data.set(key,JSON.stringify({...h.record(),migrating:false,state:{...h.state,status:'paused',body:'Retained large reply '.repeat(5000)}}));
+ let received=0,reads=0;
+ const remote={...h.remote,read:async(path:string)=>{if(path===key)reads++;return h.remote.read(path);}};
+ const manager=new DeviceInlineManager(h.actor,request.vaultId,{receiveCoordinated:()=>{received++;},access:async()=>{throw Error('Closed previews must not open a stream');},isOpen:()=>false,readNote:async()=>responseAnchor(request.id),updateNote:async()=>{throw Error('Native devices must not save projection');}},async()=>({files:remote,close:()=>{}}),h.now,h.now,async()=>{await new Promise(resolve=>setImmediate(resolve));});
+ const drain=async()=>{manager.tick();for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));};
+ try{
+  await manager.register(request);h.advance(1000);await drain();const baseline=received,initialReads=reads;
+  for(let i=0;i<20;i++){h.advance(1000);await drain();}
+  assert.equal(received,baseline);assert.equal(reads-initialReads,20,'each observation must still read the authoritative lease');
+  const changed=h.record();changed.state!.body='Changed reply without a revision increment';h.data.set(key,JSON.stringify(changed));
+  h.advance(1000);await drain();assert.equal(received,baseline+1,'byte identity, not a revision assumption, gates projection');
+ }finally{manager.dispose();client.dispose();h.authority().stop();}
+});
+
 test('native devices cache authenticated commit evidence once and acknowledge only matching saved bytes',async()=>{
   const h=harness(),request={...h.request,nativeProjection:true},commitId=randomUUID(),document='Saved final response';
   await h.client().command({kind:'register',jobId:request.id,request});
