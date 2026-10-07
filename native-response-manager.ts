@@ -55,7 +55,7 @@ export class NativeResponseManager {
   }
   private forgetPreview(id:string){if(this.cached.delete(id))this.dirtyPreview();this.reconnecting.delete(id);}
   private rememberPreview(record:LeaseRecord,body:string){
-    if(!this.previewVault||record.request.vaultId!==this.previewVault||this.reconnecting.has(record.request.id)||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict)return;
+    if(!this.previewVault||record.request.vaultId!==this.previewVault||this.reconnecting.has(record.request.id)||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict)return;
     const request=record.request,stream=this.streams.get(request.id);
     const entry:NativePreviewEntry={id:request.id,vaultId:request.vaultId,notePath:record.state?.notePath??request.notePath,threadId:request.threadId,projectId:request.projectId,threadEnvironmentId:request.threadEnvironmentId,messageId:previewMessageId(record),epoch:record.epoch,revision:record.revision,sequence:stream?.sequence??-1,body};
     const old=this.cached.get(entry.id);if(old&&JSON.stringify(old)===JSON.stringify(entry))return;
@@ -89,7 +89,7 @@ export class NativeResponseManager {
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
   stream(update:DirectInlineUpdate){
     const record=this.records.get(update.request.id),previous=this.streams.get(update.request.id);
-    if(record&&(record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.request.vaultId!==update.request.vaultId||record.request.threadId!==update.request.threadId||record.request.projectId!==update.request.projectId||record.request.threadEnvironmentId!==update.request.threadEnvironmentId))return;
+    if(record&&(record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.request.vaultId!==update.request.vaultId||record.request.threadId!==update.request.threadId||record.request.projectId!==update.request.projectId||record.request.threadEnvironmentId!==update.request.threadEnvironmentId))return;
     if(previous&&previous.sequence>update.sequence)return;
     const cached=this.cached.get(update.request.id);
     if(record&&update.messageId!==previewMessageId(record))return;
@@ -112,11 +112,11 @@ export class NativeResponseManager {
     const move=[...this.relocations.get(record.request.id)??[]].sort((a,b)=>b[0].length-a[0].length).find(([before])=>path===before||path.startsWith(before+'/'));
     if(move)record={...record,state:{...record.state??{requestHash:'',accepted:false,status:'waiting',hashes:[],updatedAt:''},notePath:move[1]+path.slice(move[0].length)}};
     if(cached){
-      if(!previewMatches(cached,record)||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict)this.forgetPreview(record.request.id);
+      if(!previewMatches(cached,record)||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict)this.forgetPreview(record.request.id);
       else if(cached.sequence===-1&&record.state?.body!==undefined)this.reconnecting.delete(record.request.id);
     }
     this.provisional.delete(record.request.id);this.records.set(record.request.id,record);
-    if(record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete)this.streams.delete(record.request.id);
+    if(record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete)this.streams.delete(record.request.id);
     this.refresh();
     if(record.state?.delivery&&record.state.cleanupComplete)await this.changed(record.state.notePath);
     if(cached&&!this.cached.has(record.request.id))await this.flushPreviewCache();
@@ -188,7 +188,7 @@ export class NativeResponseManager {
           if(!this.records.has(entry.id)&&!responses.some(response=>response.id===entry.id))responses.push({id:entry.id,body:this.reconnectingBody(entry)});
         }
         for(const record of this.records.values()){
-          if((record.state?.notePath??record.request.notePath)!==view.file.path)continue;
+          if(record.responseRemovedAt!==undefined||(record.state?.notePath??record.request.notePath)!==view.file.path)continue;
           const id=record.request.id;
           if(!saved.includes(startMarker(id))&&!saved.includes(endMarker(id)))continue;
           const region=responseRegion(saved,id);

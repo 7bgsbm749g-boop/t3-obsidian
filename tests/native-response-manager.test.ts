@@ -215,3 +215,13 @@ test('reusing a renamed path for an independent response keeps its own registrat
   h.open(view);await h.manager.receive(record(other));
   assert.ok(visible.includes(otherBody));assert.equal(view.getViewData(),responseAnchor(other));assert.ok(h.visible().includes(body));assert.ok(!h.visible().includes(otherBody));
 });
+
+
+test('removed response drops direct and cached display without restoring a stale stream or changing saved note bytes',async()=>{
+ const h=fixture();await start(h);const saved=h.manager.view(h.views[0] as any)!.saved();
+ const current=record();await h.manager.receive({...current,revision:3,responseRemovedAt:100});
+ assert.equal(h.manager.view(h.views[0] as any)!.saved(),saved);assert.doesNotMatch(h.visible(),/Final answer/);assert.match(h.visible(),/Independent response/);
+ h.manager.stream({request:current.request,messageId:current.request.messageId,sequence:100,body:'Late removed reply'});
+ await h.manager.receive({...current,revision:2});assert.doesNotMatch(h.visible(),/Late removed reply|Final answer/);
+ assert.equal(h.manager.view(h.views[0] as any)!.saved(),saved);h.manager.dispose();
+});

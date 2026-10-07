@@ -548,3 +548,33 @@ test('reviewed duplicate recovery normalizes a known legacy Working checkpoint a
   assert.match(h.notes.get('Renamed.md')!,/Added \*\*25kg\*\*/);assert.ok(!h.notes.get('Note.md')!.includes(h.id));
  }finally{await h.close();}
 });
+
+
+test('intentional removal stops hosted polling and stale writes while preserving the running T3 thread and all evidence',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const before=h.notes.get('Note.md'),record=JSON.parse(h.storage.get(leasePaths(h.identity.directory,h.id).record)!);
+  const state=structuredClone(record.state),journal=await h.host.journal.read(h.id);
+  const io=h.host.io(h.base);await io.read(hostedPaths(h.identity.directory,h.id).state);
+  assert.deepEqual(await h.host.command('remove-response',h.id),{removed:true});
+  const removed=JSON.parse(h.storage.get(leasePaths(h.identity.directory,h.id).record)!);
+  assert.equal(typeof removed.responseRemovedAt,'number');assert.deepEqual(removed.state,state);assert.equal(removed.stopRequestedAt,undefined);assert.equal(removed.state.userStopped,undefined);
+  assert.equal((await h.host.journal.read(h.id))!.status,'removed');assert.equal(h.notes.get('Note.md'),before);
+  assert.deepEqual(await io.requests(),[]);assert.equal(io.accepts!(h.request),false);
+  await assert.rejects(()=>io.write(hostedPaths(h.identity.directory,h.id).state,JSON.stringify(state)),/removed|revision changed/);
+  await h.host.command('remove-response',h.id);assert.equal(JSON.parse(h.storage.get(leasePaths(h.identity.directory,h.id).record)!).revision,removed.revision);
+  let audits=0;const read=h.host.journal.read.bind(h.host.journal);h.host.journal.read=async id=>{audits++;return read(id);};
+  for(let i=0;i<6;i++){await h.host.scan();await h.writer.tick();}
+  assert.equal(audits,0,'durable removed delivery must not repeatedly audit its history');assert.equal(h.notes.get('Note.md'),before);
+  assert.equal((await read(h.id))!.journalRevision,journal!.journalRevision!+1);
+ }finally{await h.close();}
+});
+
+test('startup repairs removal recorded before its lease tombstone without changing note or response state',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const before=h.notes.get('Note.md'),state=JSON.parse(h.storage.get(leasePaths(h.identity.directory,h.id).record)!).state;
+  await h.host.coordinator.remove(h.id);await h.host.scan();
+  const record=JSON.parse(h.storage.get(leasePaths(h.identity.directory,h.id).record)!);
+  assert.equal(typeof record.responseRemovedAt,'number');assert.deepEqual(record.state,state);assert.equal(record.stopRequestedAt,undefined);assert.equal(h.notes.get('Note.md'),before);
+  await assert.rejects(()=>h.authority.resume(h.id),/not awaiting/);
+ }finally{await h.close();}
+});

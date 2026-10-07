@@ -734,3 +734,19 @@ test('a canceled response rejects a persisted rename without relocating or retry
     manager.renamed('Note.md','Later.md');assert.equal(pending.length,0);
   }finally{manager.dispose();}
 });
+
+
+test('durable removed delivery is idempotent across restart and cannot be stopped, followed or overwritten',async()=>{
+ const h=harness(),request={...h.request,nativeProjection:true},client=h.client();
+ await client.command({kind:'register',jobId:request.id,request});await h.authority().migrated(request.id);
+ const state={...h.state,requestHash:hostedRequestHash(request),body:'Retain this response',prose:[]};await h.authority().checkpoint(request.id,state);
+ const removed=await h.authority().removeResponse(request.id);const bytes=h.data.get(leasePaths(request.host.directory,request.id).record);
+ assert.deepEqual(removed.state,state);assert.equal(removed.stopRequestedAt,undefined);
+ assert.equal((await h.authority().removeResponse(request.id)).revision,removed.revision);assert.equal(h.data.get(leasePaths(request.host.directory,request.id).record),bytes);
+ await h.restart();assert.equal((await h.authority().removeResponse(request.id)).responseRemovedAt,removed.responseRemovedAt);
+ assert.equal((await client.command({kind:'stop',jobId:request.id})).ok,true);assert.equal(h.record().stopRequestedAt,undefined);
+ assert.equal((await client.command({kind:'steer',jobId:request.id,steering:{messageId:randomUUID(),text:'Late'}})).ok,false);
+ await assert.rejects(()=>h.authority().checkpoint(request.id,state),/removed/);assert.equal(h.data.get(leasePaths(request.host.directory,request.id).record),bytes);
+ assert.equal(JSON.parse(h.data.get(leasePaths(request.host.directory,'').catalog)!).some((r:HostedInlineRequest)=>r.id===request.id),false);
+ client.dispose();h.authority().stop();
+});

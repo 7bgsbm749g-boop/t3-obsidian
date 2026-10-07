@@ -32,6 +32,7 @@ export class DirectInlinePreview {
   constructor(record:LeaseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
   update(record:LeaseRecord){
     this.record=record;
+    if(record.responseRemovedAt!==undefined){this.dispose();return;}
     if(record.state?.status==='conflict')this.suspend();
     // A durable host cursor must not skip lifecycle events the device has not
     // read, or discard newer local prose while importing binding evidence.
@@ -50,7 +51,7 @@ export class DirectInlinePreview {
   tick(open:boolean){
     if(this.stopped)return;
     const record=this.record;
-    if(!open||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.state?.status==='conflict'){this.suspend();return;}
+    if(!open||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.state?.status==='conflict'){this.suspend();return;}
     if(this.monitor)return;
     const generation=++this.generation;
     this.monitor=this.watch(record.request.threadId,this.access,{

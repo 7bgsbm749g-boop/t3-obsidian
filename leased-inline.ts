@@ -49,7 +49,7 @@ export class DeviceInlineManager {
   private nextRenameRetry=0;
   private hosts=new Map<string,Host>();
   private jobs=new Map<string,Runtime>();
-  private bindings=new Map<string,{host:Host;notePath:string;coordinated:boolean;stopped:boolean}>();
+  private bindings=new Map<string,{host:Host;notePath:string;coordinated:boolean;stopped:boolean;removed?:boolean}>();
   private previews=new Map<string,DirectInlinePreview>();
   private accessCache=new ThreadAccessCache((environmentId,reason)=>this.io.access(environmentId,reason),()=>this.now());
   private titles?:ThreadTitleFeed;
@@ -133,9 +133,16 @@ export class DeviceInlineManager {
   stoppableResponses(path:string){return [...this.jobs.values()].filter(({record})=>(record.state?.notePath??record.request.notePath)===path&&!record.stopRequestedAt&&!record.state?.userStopped&&!terminalLease(record)).map(({record,host})=>({id:record.request.id,hostTarget:host.target}));}
   private receiveRecord(host:Host,record:LeaseRecord){
     if(this.stopped||record.request.vaultId!==this.vaultId||hostKey(record.request.host)!==hostKey(host.target))return;
+    if(this.bindings.get(record.request.id)?.removed&&record.responseRemovedAt===undefined)return;
     const current=this.jobs.get(record.request.id)?.record;
     if(current&&(current.epoch>record.epoch||current.epoch===record.epoch&&current.revision>record.revision))return;
-    this.bindings.set(record.request.id,{host,notePath:record.state?.notePath??record.request.notePath,coordinated:record.coordinated===true,stopped:!!record.stopRequestedAt});
+    this.bindings.set(record.request.id,{host,notePath:record.state?.notePath??record.request.notePath,coordinated:record.coordinated===true,removed:record.responseRemovedAt!==undefined,stopped:record.responseRemovedAt!==undefined||!!record.stopRequestedAt});
+    if(record.responseRemovedAt!==undefined){
+      const old=this.jobs.get(record.request.id);old?.refresh?.cancel(Error('Response removed.'));old?.monitor?.stop();old?.writer.stop();
+      this.previews.get(record.request.id)?.dispose();this.previews.delete(record.request.id);this.jobs.delete(record.request.id);
+      if(record.coordinated)void Promise.resolve(this.io.receiveCoordinated?.(record)).catch(error=>logFailure('note.projection.receive',error,{bindingId:record.request.id}));
+      return;
+    }
     if(record.coordinated&&this.io.receiveDirect){
       let preview=this.previews.get(record.request.id);
       if(!preview){preview=new DirectInlinePreview(record,()=>this.access(record.request.threadEnvironmentId),update=>this.io.receiveDirect!(update));this.previews.set(record.request.id,preview);}
@@ -316,6 +323,7 @@ export class DeviceInlineManager {
       if(runtime.record===record){runtime.observedBytes=raw;runtime.observedRecord=record;}
       else{runtime.observedBytes=undefined;runtime.observedRecord=undefined;}
     }
+    if(record.responseRemovedAt!==undefined)return;
     const delivery=record.state?.delivery;
     if(delivery?.proofHash&&this.io.receiveCoordinated){
       if(runtime.proof?.hash!==delivery.proofHash){

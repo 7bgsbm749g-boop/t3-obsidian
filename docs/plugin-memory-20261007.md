@@ -633,3 +633,30 @@ tampering and truncation, retain stale-append and terminal-state fences, retry
 an injected publication failure, and wait for the verified note queue after
 a requested-path mismatch. Native installation, checkpoint audit count and
 both desktop resource measurements remain required before completion.
+
+
+### Intentional removal delivery fault (2.34.30)
+
+The 2.34.29 native read-only survey found two journals intentionally removed
+but leases still running: 19fab05e-a527-51fd-850b-b4853304f2d5 (2338 revisions)
+and b47b0afb-ec93-54f2-9b34-eb268a46575a (2287). Each was fully audited seven
+times in a 15-second trace. A removed journal ignored checkpoints, but the
+host continued polling and the device continued direct preview work.
+
+The authority now records a separate durable responseRemovedAt tombstone
+only after coordinated journal removal. This ends note delivery without
+setting userStopped, requesting a remote interruption, modifying saved
+response state, or deleting any journal/lease/recovery evidence. The catalog
+no longer advertises the binding; host queues reject it and stale checkpoints
+cannot revive it. Cold-start scanning repairs the journal-to-lease crash gap
+using its existing fresh audit. Devices dispose direct transports, pending
+frames and delivery monitoring, reject late discovery, and remove the old
+projection from display. Native cached previews for this intentionally removed
+response are retired; unrelated cached previews and settings remain intact.
+
+Regression checks cover idempotence and restart, late writes and events,
+retained note/state bytes, no repeated audits, retained remote thread work,
+and device discovery races. A product memory resolution still requires native
+CPU/RSS measurements after this release. 2.34.29 functional smoke passed but
+late VPS CPU remained 0.518 cores with 547–1056 MiB RSS; Windows remained
+0.228 cores with 481–779 MiB RSS. These measurements do not establish a fix.

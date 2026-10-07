@@ -10,13 +10,13 @@ export const HEARTBEAT_MS=3000;
 export const LEASE_MARGIN_MS=2000;
 export type LeaseIdentity={vaultId:string;environmentId:string;workspaceRoot:string;directory:string};
 export const COORDINATED_OWNER="00000000-0000-5000-8000-000000000001";
-export interface LeaseRecord {relocations?:Array<{before:string;after:string}>;coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;stopRequestedAt?:number;state?:HostedInlineState}
+export interface LeaseRecord {relocations?:Array<{before:string;after:string}>;coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;responseRemovedAt?:number;stopRequestedAt?:number;state?:HostedInlineState}
 export interface LeaseCommand {id:string;jobId:string;actor:string;kind:'relocate'|'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';previousNotePath?:string;observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
 export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;ttlMs:number;answeredAt?:number;retryAfterMs?:number}
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export const leasePaths=(directory:string,id:string)=>({record:`${directory}/leases/${id}.json`,command:`${directory}/mailbox/${id}.json`,reply:`${directory}/replies/${id}.json`,catalog:`${directory}/lease-catalog.json`});
-export const terminalLease=(record:LeaseRecord)=>!!record.state&&['complete','interrupted','conflict'].includes(record.state.status)&&!legacyQuestionReply(record.state)&&!pendingCompletionCleanup(record.request,record.state);
+export const terminalLease=(record:LeaseRecord)=>record.responseRemovedAt!==undefined||!!record.state&&['complete','interrupted','conflict'].includes(record.state.status)&&!legacyQuestionReply(record.state)&&!pendingCompletionCleanup(record.request,record.state);
 
 /** The existing desktop host lock admits exactly one authority. Clients only
  * submit commands; only this serialized coordinator mutates lease records. */
@@ -122,6 +122,16 @@ export class InlineLeaseAuthority {
     const reply=await this.apply({id:crypto.randomUUID(),jobId:id,actor:COORDINATED_OWNER,kind:'checkpoint',epoch:record.epoch,revision:record.revision,state});
     if(!reply.ok)throw Error(reply.error);return reply.record!;
   });}
+  /** Intentional note removal ends delivery only. Retain the complete lease
+   * and journal evidence, and never invoke the remote thread stop control. */
+  async removeResponse(id:string){return this.exclusive(async()=>{
+    const path=leasePaths(this.identity.directory,id).record,raw=await this.files.read(path);if(!raw)throw Error('Unknown response binding.');
+    const record:LeaseRecord=JSON.parse(raw);
+    if(!record.coordinated||record.migrating)throw Error('The response is not coordinated.');
+    if(record.responseRemovedAt!==undefined)return record;
+    record.responseRemovedAt=this.now();record.revision++;
+    await this.files.write(path,JSON.stringify(record));await this.publishCatalog(record);return record;
+  });}
   async fence(id:string){return this.exclusive(async()=>{
     const path=leasePaths(this.identity.directory,id).record,raw=await this.files.read(path);if(!raw)return;
     let record:LeaseRecord=JSON.parse(raw);
@@ -139,7 +149,7 @@ export class InlineLeaseAuthority {
   });}
   async resume(id:string){return this.exclusive(async()=>{
     const path=leasePaths(this.identity.directory,id).record,raw=await this.files.read(path);if(!raw)throw Error('Unknown response binding.');
-    const record:LeaseRecord=JSON.parse(raw);if(!record.state||!['paused','conflict'].includes(record.state.status)||record.state.finalSaved)throw Error('This response is not awaiting intact-boundary recovery.');
+    const record:LeaseRecord=JSON.parse(raw);if(record.responseRemovedAt!==undefined||!record.state||!['paused','conflict'].includes(record.state.status)||record.state.finalSaved)throw Error('This response is not awaiting intact-boundary recovery.');
     record.state={...record.state,status:'waiting'};delete record.state.detail;delete record.state.locationConflict;record.revision++;await this.files.write(path,JSON.stringify(record));await this.publishCatalog(record);return record;
   });}
   async relocate(id:string,before:string,after:string){return this.exclusive(async()=>{
@@ -189,8 +199,10 @@ export class InlineLeaseAuthority {
             record={...record,relocations:[...record.relocations??[],{before,after}],revision:record.revision+1,state:{...record.state??{requestHash:hostedRequestHash(record.request),accepted:false,status:'waiting',hashes:[record.request.initialHash],updatedAt:new Date().toISOString()},notePath:after}};
           }
         }else if(command.kind==='stop'){
+          if(record.responseRemovedAt!==undefined)return respond(true);
           if(!record.stopRequestedAt)record={...record,stopRequestedAt:this.now(),revision:record.revision+1};
         }else if(command.kind==='steer'){
+          if(record.responseRemovedAt!==undefined)throw Error('The response was removed from its note.');
           if(record.stopRequestedAt)throw Error('The response was stopped.');
           const input=command.steering,state=record.state;
           if(!validSteeringInput(input))throw Error('Invalid steering message.');
@@ -209,6 +221,7 @@ export class InlineLeaseAuthority {
           const checkpoint=state?.bindingCheckpoint;
           record={...record,revision:record.revision+1,state:{...state??{requestHash:hostedRequestHash(record.request),accepted:false,status:'waiting' as const,hashes:[record.request.initialHash],notePath:record.request.notePath,updatedAt:new Date(this.now()).toISOString()},bindingCheckpoint:{...checkpoint,starts:{...checkpoint?.starts,[messageId!]:delivery}}}};
         }else if(command.kind==='follow'){
+          if(record.responseRemovedAt!==undefined)throw Error('The response was removed from its note.');
           if(record.stopRequestedAt)throw Error('The response was stopped.');
           const state=record.state,previous=state?.messageId??record.request.messageId;
           if(state?.status!=='error'||!uuid.test(command.messageId??'')||command.messageId===previous||command.previousMessageId!==previous)throw Error('This response is no longer waiting for that continuation.');
@@ -234,6 +247,7 @@ export class InlineLeaseAuthority {
           if(record.owner!==command.actor||record.epoch!==command.epoch||record.expiresAt<=this.now())return respond(false,'Writer ownership expired.');
           if(command.kind==='heartbeat')record={...record,expiresAt:this.now()+LEASE_MS};
           else if(command.kind==='checkpoint'){
+            if(record.responseRemovedAt!==undefined)throw Error('The response was removed from its note.');
             if(command.revision!==record.revision)return respond(false,'Response checkpoint changed.');
             const state=command.state;
             if(state?.userStopped!==undefined&&typeof state.userStopped!=='boolean')throw Error('Invalid response stop checkpoint.');

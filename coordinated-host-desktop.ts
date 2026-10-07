@@ -139,6 +139,7 @@ export class CoordinatedHost {
       const identity=record.request.id;this.failures.delete(identity);
       try{
       const id=record.request.id,notePath=record.state?.notePath??record.request.notePath;
+      if(record.responseRemovedAt!==undefined){this.records.set(id,record);await nativeResponses(this.app).receive(record);return;}
       if(record.relocations?.length){
         const original=await this.journal.read(id);
         for(const move of record.relocations){
@@ -169,6 +170,12 @@ export class CoordinatedHost {
       // projection, or network work; those anchors have legitimately gone.
       if(record.coordinated&&!record.migrating&&!record.state?.cleanupComplete){
         const pending=await this.journal.read(id);
+        // Recover a crash after intentional journal removal without resuming
+        // delivery. Reuse this existing fresh audit; no additional history scan.
+        if(pending?.status==='removed'){
+          const removed=await this.authority.removeResponse(id);this.records.set(id,removed);
+          await nativeResponses(this.app).receive(removed);return;
+        }
         if(pending?.attempt&&['commit-pending','verified'].includes(pending.status)){
           const file=this.app.vault.getFileByPath(notePath);
           if(file&&!this.stopped&&await this.app.vault.read(file)===pending.attempt.expected){
@@ -188,6 +195,10 @@ export class CoordinatedHost {
       if(terminalLease(record)||record.state?.finalSaved){
         if(record.coordinated){
           let journal=await this.journal.read(id);
+          if(journal?.status==='removed'){
+            const removed=await this.authority.removeResponse(id);this.records.set(id,removed);
+            await nativeResponses(this.app).receive(removed);return;
+          }
           // A proven completed rename can still carry the original empty
           // anchor. Settle its checked recovery before auditing shortened
           // history; otherwise that known preimage becomes a false conflict.
@@ -263,8 +274,8 @@ export class CoordinatedHost {
   io(base:HostedWriterIO):HostedWriterIO {
     const reads=new Map<string,{epoch:number;revision:number}>();
     return {...base,
-      requests:async()=>[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&needsHostedProcessing(record.request,record.state)).map(record=>hostedPaths(this.identity.directory,record.request.id).request),
-      accepts:request=>!!this.records.get(request.id)?.coordinated&&!this.records.get(request.id)?.migrating&&!this.failures.has(request.id)&&!this.stopped,
+      requests:async()=>[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&record.responseRemovedAt===undefined&&needsHostedProcessing(record.request,record.state)).map(record=>hostedPaths(this.identity.directory,record.request.id).request),
+      accepts:request=>!!this.records.get(request.id)?.coordinated&&!this.records.get(request.id)?.migrating&&this.records.get(request.id)?.responseRemovedAt===undefined&&!this.failures.has(request.id)&&!this.stopped,
       canResume:()=>true,
       locateNote:(id,path)=>deviceNoteIO(this.app).locateNote(id,path),
       read:async path=>{
@@ -415,7 +426,7 @@ export class CoordinatedHost {
       }
       const repaired=await this.coordinator.restore(id,hash!);await this.scan();return {generation:repaired};
     }
-    if(kind==='remove-response'){await this.coordinator.remove(id);return {removed:true};}
+    if(kind==='remove-response'){await this.coordinator.remove(id);const removed=await this.authority.removeResponse(id);this.records.set(id,removed);await nativeResponses(this.app).receive(removed);return {removed:true};}
     throw Error('Unsupported response command.');
   }
   async renamed(before:string,after:string){await this.authority.renameNative(before,after);await this.scan();}

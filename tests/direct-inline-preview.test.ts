@@ -84,6 +84,14 @@ test('device registration starts the direct transport while host migration has n
   assert.ok(updates.some(update=>update.request.id===request.id&&update.body.includes('First paragraph')));
   const record=JSON.parse(storage.get(leasePaths(identity.directory,request.id).record)!);assert.equal(record.migrating,true);assert.equal(record.state,undefined);
   const commands=[...storage].filter(([path])=>path.includes('/commands/')).map(([,bytes])=>JSON.parse(bytes));assert.ok(commands.every(command=>command.kind!=='checkpoint'));
+  await authority.migrated(request.id);const removed=await authority.removeResponse(request.id),runtime=(manager as any).jobs.get(request.id);
+  await (manager as any).observeCoordinated(runtime);manager.tick();
+  assert.equal((manager as any).jobs.has(request.id),false);assert.equal((manager as any).previews.has(request.id),false);
+  assert.equal(manager.stoppableResponses(request.notePath).some(item=>item.id===request.id),false);
+  (manager as any).receiveRecord(runtime.host,record);manager.tick();
+  assert.equal((manager as any).jobs.has(request.id),false,'late discovery must not recreate a removed delivery');
+  assert.equal((manager as any).previews.has(request.id),false);assert.equal(removed.stopRequestedAt,undefined);
+
  }finally{manager.dispose();authority.stop();globalThis.WebSocket=oldSocket;}
 });
 
@@ -101,4 +109,12 @@ test('suspension cancels trailing display work, and an exact delivery still disp
   const h=fixture(false);h.preview.tick(true);h.item(h.snapshot());h.event(3,' queued');h.preview.tick(false);h.clock.advance(1000);assert.equal(h.updates.length,1);
   h.preview.tick(true);h.preview.delivery({messageId:'prompt',turnId:'turn',requestedAt:h.record.request.createdAt,sequence:1});assert.match(h.updates.at(-1)!.body,/queued/);
   h.event(4,' disposed');h.preview.dispose();const n=h.updates.length;h.clock.advance(1000);assert.equal(h.updates.length,n);
+});
+
+
+test('removed delivery disposes a direct preview immediately and rejects queued or late events',()=>{
+ const h=fixture(false);h.preview.tick(true);h.item(h.snapshot());const n=h.updates.length;
+ h.preview.update({...h.record,responseRemovedAt:100,revision:1});
+ assert.equal(h.streams[0].stopped,true);h.event(3,' late');h.clock.advance(1000);h.preview.tick(true);
+ assert.equal(h.streams.length,1);assert.equal(h.updates.length,n);assert.equal(h.clock.pending.size,0);
 });

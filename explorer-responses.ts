@@ -11,8 +11,9 @@ export function leaseExplorerResponse(record:LeaseRecord):ExplorerResponse {
   const state=record.state;
   const input=!state?.userStopped&&(legacyQuestionReply(state)||!!state?.questionFollows?.some(q=>!q.answered&&!q.dismissed));
   return {id:record.request.id,notePath:state?.notePath??record.request.notePath,epoch:record.epoch,revision:record.revision,
-    active:!record.stopRequestedAt&&!state?.userStopped&&(!state?.finishedAt||!!state.pendingMessageId)&&(!state||state.status==='running'||state.status==='waiting'&&!input||!!state.pendingMessageId),
-    input,complete:state?.status==='complete'&&!input&&!state.pendingMessageId&&!state.userStopped};
+    ...(record.responseRemovedAt!==undefined?{deleted:true}:{}),
+    active:record.responseRemovedAt===undefined&&!record.stopRequestedAt&&!state?.userStopped&&(!state?.finishedAt||!!state.pendingMessageId)&&(!state||state.status==='running'||state.status==='waiting'&&!input||!!state.pendingMessageId),
+    input:record.responseRemovedAt===undefined&&input,complete:record.responseRemovedAt===undefined&&state?.status==='complete'&&!input&&!state.pendingMessageId&&!state.userStopped};
 }
 export function loadExplorerResponses(value:unknown):ExplorerResponse[] {
   if(!Array.isArray(value))return [];
