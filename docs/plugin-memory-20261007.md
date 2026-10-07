@@ -767,7 +767,7 @@ receipt: `/home/ubuntu/backups/send-to-t3-code/releases/2.34.32/smoke-vps-qlo2.j
 The retained profile/trace establish repeated coordinated-host processing as
 another target; no host polling change was included in 2.34.32.
 
-### Bounded unchanged coordinated-host processing (2.34.33 candidate)
+### Bounded unchanged coordinated-host processing (2.34.33)
 
 The native 2.34.32 trace measured 118 host snapshots / 37.3M serialized
 characters in 45 seconds, versus eight quiet direct snapshots / 3.4M. The host
@@ -792,3 +792,27 @@ and checked commit behavior are unchanged. Regression checks cover missed feed
 completion with ordinary text edits, immediate stop, external durable recovery,
 rename, request failure and live-state adapter exemption. Native measurements
 are required before any memory-resolution claim.
+
+2.34.33 functional smoke completed at 10:03 UTC with 70 hashed artifacts.
+The 45-second trace had 41 host canonical reads, compared with 118 in 2.34.32;
+instance wrappers were restored. A real bounded literal-code reply saved exact
+host hash 0ba1a0a4c52119a5bc0bac3cd5130762b93fe3bde3001f23f34bf97b39c8f857.
+Owned note/tab cleanup preserved original physical notes and ordered leaves.
+Guarded VPS pause preserved the saved enable setting; native CLI OFF, Settings
+closed, exact global-config hash retained. Source and clean release checks each
+passed 1038 JS/TS + 11 Python.
+
+Memory remains OPEN: late VPS 0.470 cores / 557–1156 MiB RSS, whole 0.484 cores.
+Windows fresh client c45b9cfe-16d5-4e1e-b591-dab45d982d39 measured late renderer
+0.224 cores / 479–709 MiB RSS, whole 0.240 cores / 441–904 MiB; GPU CPU rose.
+Root T3 activity and desktop unlock limit quiet-state comparison. Available
+Windows physical memory increased from 6.52 to 7.15 GiB; these endpoints do
+not establish the cause of delay or memory resolution.
+
+After the user unlocked Windows, native Cua typing/save/reopen passed with
+exact 66 UTF-8 bytes. Reopen action-to-screenshot was 1.04 seconds including
+driver/capture overhead, not isolated application latency. Owned note/tab was
+removed; all 13 original leaves and original active leaf were restored, with
+no reload or settings changes. Obsidian remained open and the actor returned
+explicit HOLD. No mobile proof. Complete immutable functional receipt:
+`/home/ubuntu/backups/send-to-t3-code/releases/2.34.33/smoke-vps-qlo2.json`.
