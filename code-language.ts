@@ -9,7 +9,7 @@ export const CODE_LANGUAGES:readonly CodeLanguage[]=[
   {type:'javascript',grammar:'jsx',extensions:['jsx']},
   {type:'json',grammar:'json',extensions:['json']},
   {type:'css',grammar:'css',extensions:['css']},
-  {type:'python',grammar:'python',extensions:['py','pyw']},
+  {type:'python',grammar:'python',extensions:['py','pyw','pyi']},
   {type:'plaintext',extensions:[]},
 ];
 export const CODE_VIEW_TYPES:readonly CodeViewType[]=['typescript','javascript','json','css','python','plaintext'];

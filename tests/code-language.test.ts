@@ -45,3 +45,10 @@ test('failed grammar loads permit a later retry without duplicating successful l
   let loads=0;const cache=new CodeGrammarCache(async()=>{if(++loads===1)throw Error('unavailable');return 'ready';});
   await assert.rejects(cache.get('python'),/unavailable/);assert.equal(await cache.get('python'),'ready');assert.equal(await cache.get('python'),'ready');assert.equal(loads,2);
 });
+
+test('Python source, windowed source and typed stubs share the isolated Python view',()=>{
+  for(const extension of ['py','pyw','pyi','PYI']){
+    assert.equal(codeLanguage(extension)?.type,'python');assert.equal(codeLanguage(extension)?.grammar,'python');
+  }
+  assert.equal(codeLanguage('ipynb')?.type,'plaintext');assert.equal(codeLanguage('md'),undefined);
+});
