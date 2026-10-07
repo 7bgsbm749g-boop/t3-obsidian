@@ -21,7 +21,12 @@ class StopStreamRequested extends Error {}
 // cursor is conservative, whereas discarding exact start/recovery evidence is
 // not. Every meaningful change still persists the full current checkpoint.
 function durableResponseIdentity(state:HostedInlineState):string {
-  return JSON.stringify({...state,updatedAt:undefined,bindingCheckpoint:state.bindingCheckpoint?{...state.bindingCheckpoint,sequence:undefined}:undefined});
+  return JSON.stringify({...state,updatedAt:undefined,bindingCheckpoint:state.bindingCheckpoint?{...state.bindingCheckpoint,sequence:undefined}:undefined},(_key,value)=>{
+    // Persisted JSON and reconstructed binding evidence can order equivalent
+    // fields differently. Compare their contents; preserve array order and all
+    // meaningful values, including exact start and recovery sequence numbers.
+    return value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.keys(value).sort().map(key=>[key,value[key]])):value;
+  });
 }
 
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}

@@ -115,3 +115,34 @@ test fixture are retained in the outside evidence directory. During the old
 2.34.16 runtime's later failure, the kernel killed renderer 2913103 with
 3,011,204 KiB anonymous RSS at 02:29:57 UTC. The safe-pause request had not
 completed. No newer runtime or sustained memory resolution is claimed from it.
+
+## Equivalent JSON field order
+
+Release 2.34.17 completed a checked native reload, a real bounded reply save,
+authenticated native history reopen and original-note/tab/settings restoration.
+Its complete functional receipt explicitly leaves the memory task open. Native
+writer instrumentation was restored in `finally`; it observed writes whose only
+value changes were update timestamps and the global snapshot watermark, while
+their normalized JSON strings still differed. Equivalent object field order was
+therefore still causing false durable changes.
+
+The actual production-coordinator regression reproduces this by returning the
+same persisted state with reversed object keys, preserving array order. Before
+the correction, twenty unchanged polls increased the journal revision from 3
+to 43. The durable comparison now sorts object keys recursively. All meaningful
+values and array order remain significant; changed prose still persists its full
+checkpoint. The saved recovery cursor continues to advance only with meaningful
+state changes. New release and sustained native measurements remain necessary.
+
+The corrected source passed the build and the complete suite: 984
+JavaScript/TypeScript tests and 11 Python tests. Both ordered and reordered
+persisted-state cases retain unchanged journals and cursors, then save meaningful
+new prose. The before/after regression output is retained outside the vault.
+
+After native smoke, 2.34.17 was temporarily paused on the VPS after exact saved
+buffer and original-note checks. Its saved enabled setting stayed unchanged,
+CLI was restored OFF and Settings closed. The original global config hash was
+restored through native Settings without overwriting newer device data. The
+laptop's newly installed standard-user Cua diagnostic driver reports a locked
+desktop; Windows remains last verified on 2.34.15 until it can receive Sync and
+undergo native checks. No Windows input, policy change or forced restart occurred.

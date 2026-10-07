@@ -69,12 +69,17 @@ test('production host streams only to journal, stages a table and commits the re
  }finally{await h.close();}
 });
 
-test('unchanged live snapshots do not grow the private journal or advance the durable recovery cursor',async()=>{
+for(const reordered of [false,true])test(`unchanged live snapshots retain the durable cursor and journal${reordered?' across reordered JSON fields':''}`,async()=>{
  const h=await setup();try{
   let sequence=100,text='Stable live response';
   h.base.threadState=async()=>({sequence,messages:[{id:h.request.messageId,role:'user',text:'Add 25kg',createdAt:h.request.createdAt,turnId:null,streaming:false},{id:'answer',role:'assistant',text,turnId:'turn',streaming:true}],activities:[],latestTurn:{turnId:'turn',messageId:h.request.messageId,state:'running',requestedAt:h.request.createdAt,assistantMessageId:'answer'},session:{status:'running',activeTurnId:'turn'}});
   // Install the changed IO before constructing a writer, as production does.
-  const writer=new HostedInlineWriter(h.identity,h.host.io(h.base));
+  const io=h.host.io(h.base),read=io.read.bind(io);
+  if(reordered){
+   const reverseKeys=(value:any):any=>Array.isArray(value)?value.map(reverseKeys):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).reverse().map(([key,item])=>[key,reverseKeys(item)])):value;
+   io.read=async path=>{const text=await read(path);return text&&path.includes('/states/')?JSON.stringify(reverseKeys(JSON.parse(text))):text;};
+  }
+  const writer=new HostedInlineWriter(h.identity,io);
   try{
    await writer.tick();
    const first=(await h.host.journal.read(h.id))!,lease=await h.files.read(leasePaths(h.identity.directory,h.id).record);
