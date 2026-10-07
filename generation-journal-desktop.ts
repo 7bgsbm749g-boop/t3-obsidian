@@ -20,6 +20,9 @@ async function canonical(path:string):Promise<string>{
 export class DesktopGenerationJournal implements GenerationJournal {
   private queues=new Map<string,Promise<unknown>>();
   private verified=new Map<string,VerifiedPrefix>();
+  private audits=new Map<string,Promise<VerifiedPrefix>>();
+  private auditing=0;
+  private auditWaiters:Array<()=>void>=[];
   private constructor(readonly root:string){}
   static async open(root:string,syncedVaultRoots:readonly string[]){
     if(!isAbsolute(root)||!syncedVaultRoots.length||syncedVaultRoots.some(path=>!isAbsolute(path)))throw Error('Explicit absolute private storage and vault roots are required.');
@@ -30,7 +33,18 @@ export class DesktopGenerationJournal implements GenerationJournal {
     return new DesktopGenerationJournal(actual);
   }
   private directory(id:string){if(!uuid.test(id))throw Error('Invalid journal identity.');return resolve(this.root,id);}
-  private async revisions(id:string):Promise<VerifiedPrefix>{
+  private revisions(id:string):Promise<VerifiedPrefix>{
+    const pending=this.audits.get(id);if(pending)return pending;
+    const work=this.audit(id);this.audits.set(id,work);
+    void work.finally(()=>{if(this.audits.get(id)===work)this.audits.delete(id);}).catch(()=>{});
+    return work;
+  }
+  private async audit(id:string):Promise<VerifiedPrefix>{
+    if(this.auditing>=4)await new Promise<void>(resolve=>this.auditWaiters.push(resolve));
+    else this.auditing++;
+    try{return await this.verifyRevisions(id);}finally{const next=this.auditWaiters.shift();if(next)next();else this.auditing--;}
+  }
+  private async verifyRevisions(id:string):Promise<VerifiedPrefix>{
     const directory=this.directory(id);let names:string[];
     try{names=await fs.readdir(directory);}catch(error:any){if(error.code==='ENOENT'){if(this.verified.get(id)?.hashes.length)throw Error('Journal revisions are missing.');return {files:[],hashes:[]};}throw error;}
     if(await fs.realpath(directory)!==directory)throw Error('Symlinked journal registration.');

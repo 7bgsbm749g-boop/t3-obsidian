@@ -72,3 +72,17 @@ test('a cached revision path still rejects symlink replacement and malformed rev
     await fs.rm(file);await fs.rename(moved,join(journal.root,id,'0000000002.json'));await assert.rejects(journal.read(id),/missing or malformed/);
   }finally{await fs.rm(root,{recursive:true,force:true});}
 });
+
+test('overlapping journal reads share a full audit, with independent results and no more than four concurrent file audits',async t=>{
+ const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-overlap-'));
+ try{
+  const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);
+  const ids=Array.from({length:8},(_,index)=>`${String(index).padStart(8,'0')}-bbbb-cccc-dddd-eeeeeeeeeeee`);
+  for(const key of ids)await journal.append(key,{...state(),request:{id:key} as any},'accepted');
+  let active=0,maximum=0,reads=0;const original=fs.lstat;
+  t.mock.method(fs,'lstat',async(...args:any[])=>{active++;maximum=Math.max(maximum,active);reads++;try{await new Promise(resolve=>setTimeout(resolve,10));return await (original as any)(...args);}finally{active--;}});
+  const results=await Promise.all(ids.flatMap(key=>Array.from({length:10},()=>journal.read(key))));
+  assert.equal(reads,8,'one complete filesystem audit per identity for overlapping callers');assert.equal(maximum,4);
+  results[0]!.conflicts.push({original:'local',latest:'local',reason:'local'});assert.equal(results[1]!.conflicts.length,0);
+ }finally{t.mock.restoreAll();await fs.rm(root,{recursive:true,force:true});}
+});

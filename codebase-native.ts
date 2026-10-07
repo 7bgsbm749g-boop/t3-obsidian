@@ -10,6 +10,7 @@ import {CodebaseBrowseCache,type BrowseState} from './codebase-cache';
 import {CODEBASE_VIEW as VIEW,CodebaseView} from './codebase-view';
 import {timingSummaries} from './codebase-performance';
 import {NativeLanguageViews} from './language-views';
+import {EmbedReferenceCache} from './embed-reference-cache';
 export {CodebaseView} from './codebase-view';
 export interface CodebaseState {version:1;references:Record<string,SavedReference>;choices:Record<string,string>;automaticChoices?:Record<string,string[]>}
 export interface CodebaseStorage {load():CodebaseState|undefined;save(state:CodebaseState):Promise<void>;projectChanged?(scope:CodebaseScope,change:{title?:string;deleted?:boolean}):Promise<void>}
@@ -25,6 +26,7 @@ class FileChoice extends FuzzySuggestModal<RegisteredFile>{
   onClose(){super.onClose?.();setTimeout(()=>{if(!this.settled){this.settled=true;this.finish(undefined);}},0);}
 }
 export class CodebaseBridge {
+  private embedReferences=new EmbedReferenceCache();
   private files=new Map<string,RegisteredFile>();
   private folders=new Map<string,TFolder>();
   private undo:Array<()=>void>=[];
@@ -253,7 +255,7 @@ export class CodebaseBridge {
   private resource(item:RegisteredFile){if(this.stopped||!this.allowed(item.scope))return '';if(!item.resource||item.resource.expiresAt<Date.now()+5000){void this.prepare(item).catch(()=>{});return '';}return item.resource.url;}
   async prepare(item:RegisteredFile){if(this.stopped)throw Error('The project file bridge is stopped.');if(!this.allowed(item.scope))throw Error('This project is no longer linked to the vault.');if(MEDIA.test(item.path)&&(!item.resource||item.resource.expiresAt<Date.now()+60000)){if(!item.preparing){item.preparing=this.io.resource(item.scope,item.path).then(resource=>{if(this.stopped||!this.allowed(item.scope))throw Error('The project file is no longer available.');item.resource=resource;});void item.preparing.finally(()=>{item.preparing=undefined;}).catch(()=>{});}await item.preparing;}}
   private async prepareEmbeds(text:string,source:string){
-    let changed=false;const refs=replyReferences(text).filter(r=>r.image&&MEDIA.test(r.source.split('#')[0]));
+    let changed=false;const refs=this.embedReferences.get(source,text).filter(r=>MEDIA.test(r.source.split('#')[0]));
     for(const ref of refs){
       try{let item=this.resolve(ref.source,source);if(!item&&!this.app.metadataCache.getFirstLinkpathDest(ref.source,source)){
         const sourceItem=this.files.get(source);
@@ -411,7 +413,7 @@ export class CodebaseBridge {
       }));
     })();this.refreshing=work;void work.finally(()=>{if(this.refreshing===work)this.refreshing=undefined;}).catch(()=>{});return work;
   }
-  dispose(){this.stopped=true;this.languageViews.dispose();for(const observer of this.chrome.values())observer.disconnect();this.chrome.clear();clearTimeout(this.browseTimer);if(this.persistTimer){clearTimeout(this.persistTimer);void this.persist().catch(()=>{});}this.browse.flush();this.browse.dispose();void this.io.dispose?.();this.app.workspace.iterateAllLeaves?.(leaf=>{const view=leaf.view as MarkdownView,item=view.file?this.files.get(view.file.path):undefined;if(item){const text=this.viewText(view);if(text!==undefined&&text!==item.document.base&&text!==this.viewBase(view,item)?.text)this.retain(item.file.path,text);leaf.detach();}});for(const undo of this.undo.reverse())undo();}
+  dispose(){this.stopped=true;this.embedReferences.clear();this.languageViews.dispose();for(const observer of this.chrome.values())observer.disconnect();this.chrome.clear();clearTimeout(this.browseTimer);if(this.persistTimer){clearTimeout(this.persistTimer);void this.persist().catch(()=>{});}this.browse.flush();this.browse.dispose();void this.io.dispose?.();this.app.workspace.iterateAllLeaves?.(leaf=>{const view=leaf.view as MarkdownView,item=view.file?this.files.get(view.file.path):undefined;if(item){const text=this.viewText(view);if(text!==undefined&&text!==item.document.base&&text!==this.viewBase(view,item)?.text)this.retain(item.file.path,text);leaf.detach();}});for(const undo of this.undo.reverse())undo();}
 }
 
 class CodebaseLinkSuggest extends EditorSuggest<TFile> {

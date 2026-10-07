@@ -271,10 +271,21 @@ test('active delivery proceeds while completed journal observation rotates throu
    const id=randomUUID(),request={...h.request,id,notePath:`Historical-${n}.md`};historical.add(id);
    h.storage.set(leasePaths(h.identity.directory,id).record,JSON.stringify({request,coordinated:true,owner:COORDINATED_OWNER,epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,state:{requestHash:hostedRequestHash(request),accepted:true,status:'complete',finalSaved:true,cleanupComplete:true,finalPhase:'complete',finalBody:'Saved old answer',notePath:request.notePath,hashes:[],updatedAt:''}}));
   }
-  const read=h.host.journal.read.bind(h.host.journal),observed=new Set<string>();h.host.journal.read=async id=>{if(historical.has(id)){observed.add(id);return undefined;}return read(id);};
-  await h.host.scan();assert.equal(observed.size,4,'historical verification does not monopolize the active pass');
+  let activeReads=0;
+  const read=h.host.journal.read.bind(h.host.journal),observed=new Set<string>();h.host.journal.read=async id=>{if(historical.has(id)){observed.add(id);return undefined;}activeReads++;return read(id);};
+  (h.host as any).terminalDiscoveryComplete=false;
+  await h.host.scan(true);assert.equal(observed.size,1,'background history audit takes one slot');
+  const before=activeReads;
+  await h.host.scan(true);assert.equal(observed.size,1,'unchanged completed history waits for its maintenance interval');
+  assert.equal(activeReads,before,'unchanged active leases do not repeat private journal audits every timer tick');
+  (h.host as any).nextTerminalScan=0;
+  await h.host.scan(true);assert.equal(observed.size,2,'maintenance rotates after its interval');
+  await h.host.scan();assert.equal(observed.size,6,'explicit recovery scans retain the four-record batch');
   h.complete();await h.writer.tick();assert.equal((await read(h.id))!.status,'verified');assert.match(h.notes.get('Note.md')!,/Added \*\*25kg\*\*/);
-  await h.host.scan();assert.ok(observed.size>4,'later scans still audit historical results');
+  await h.host.scan();assert.ok(observed.size>6,'later scans still audit historical results');
+  const changed=[...historical][0],path=leasePaths(h.identity.directory,changed).record,record=JSON.parse(h.storage.get(path)!);
+  record.revision++;h.storage.set(path,JSON.stringify(record));observed.clear();
+  await h.host.scan(true);assert.ok(observed.has(changed),'a changed completed lease bypasses the cold-history budget, including native rename and delivery acknowledgements');
  }finally{await h.close();}
 });
 

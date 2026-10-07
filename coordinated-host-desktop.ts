@@ -28,6 +28,10 @@ export class CoordinatedHost {
   private scanning?:Promise<LeaseRecord[]>;
   private work=new Map<string,Promise<void>>();
   private terminalCursor=0;
+  private nextTerminalScan=0;
+  private backgroundChecks=new Map<string,{epoch:number;revision:number;until:number}>();
+  private terminalRevisions=new Map<string,{epoch:number;revision:number}>();
+  private terminalDiscoveryComplete=false;
   private async materialization(result:NoteGeneration){
     const proof=this.coordinator.materialization(result),bytes=JSON.stringify(proof);
     const path=nativeCommitPath(this.identity.directory,proof.bindingId,proof.commitId);
@@ -80,28 +84,44 @@ export class CoordinatedHost {
     const records=await Promise.all(leases.map(record=>this.journal.read(record.request.id)));
     return generatedEventContent(content,records.filter((record):record is NonNullable<typeof record>=>!!record),leases.filter(record=>!record.coordinated&&record.state).map(record=>record.state!));
   }
-  async scan(){
+  async scan(background=false){
     // Coalesce discovery, not the lifetime of every response. A native save
     // or journal operation stuck on one note must not gate later arrivals.
-    const loading=this.scanning??=this.scanRecords();
+    const loading=this.scanning??=this.scanRecords(background);
     void loading.finally(()=>{if(this.scanning===loading)this.scanning=undefined;}).catch(()=>{});
     const records=await loading;
     await Promise.all(records.map(record=>{
       if(this.stopped||this.work.has(record.request.id))return;
+      const prior=this.backgroundChecks.get(record.request.id),now=Date.now();
+      // The writer still polls active replies every tick. A repeated lease
+      // revision does not require another full private-journal audit; changed
+      // revisions and explicit recovery commands bypass this maintenance pace.
+      if(background&&prior?.epoch===record.epoch&&prior.revision===record.revision&&now<prior.until)return;
+      if(background)this.backgroundChecks.set(record.request.id,{epoch:record.epoch,revision:record.revision,until:now+5000});
       const work=this.scanRecord(record);this.work.set(record.request.id,work);
       return work.finally(()=>{if(this.work.get(record.request.id)===work)this.work.delete(record.request.id);});
     }));
   }
-  private async scanRecords(){
-    const active:LeaseRecord[]=[],terminal:LeaseRecord[]=[];
+  private async scanRecords(background=false){
+    const active:LeaseRecord[]=[],terminal:LeaseRecord[]=[],changedTerminal:LeaseRecord[]=[];
     for(const path of await this.files.list(`${this.identity.directory}/leases`)){
-      try{const raw=await this.files.read(path);if(!raw)continue;const record:LeaseRecord=JSON.parse(raw);if(!this.work.has(record.request.id))this.records.set(record.request.id,record);(terminalLease(record)||record.state?.finalSaved?terminal:active).push(record);}catch{/* A malformed historical record cannot gate a healthy response. */}
+      try{const raw=await this.files.read(path);if(!raw)continue;const record:LeaseRecord=JSON.parse(raw);if(!this.work.has(record.request.id))this.records.set(record.request.id,record);
+        if(terminalLease(record)||record.state?.finalSaved){
+          const previous=this.terminalRevisions.get(record.request.id);
+          if(background&&this.terminalDiscoveryComplete&&(!previous||previous.epoch!==record.epoch||previous.revision!==record.revision))changedTerminal.push(record);
+          if(background||!this.terminalDiscoveryComplete)this.terminalRevisions.set(record.request.id,{epoch:record.epoch,revision:record.revision});terminal.push(record);
+        }else active.push(record);
+      }catch{/* A malformed historical record cannot gate a healthy response. */}
     }
+    this.terminalDiscoveryComplete=true;
     // Serve active responses every pass. Completed-history observation is
     // rotating maintenance, so a cold journal audit cannot delay a new run.
     if(this.terminalCursor>=terminal.length)this.terminalCursor=0;
-    const historical=terminal.slice(this.terminalCursor,this.terminalCursor+4);this.terminalCursor+=historical.length;
-    return active.concat(historical);
+    const now=Date.now();
+    const historical=!background||now>=this.nextTerminalScan?terminal.slice(this.terminalCursor,this.terminalCursor+(background?1:4)):[];
+    if(historical.length){this.terminalCursor+=historical.length;this.nextTerminalScan=now+5000;}
+    const urgent=new Set(changedTerminal.map(record=>record.request.id));
+    return active.concat(changedTerminal,historical.filter(record=>!urgent.has(record.request.id)));
   }
   private async scanRecord(record:LeaseRecord){
       if(this.stopped)return;
@@ -378,5 +398,5 @@ export class CoordinatedHost {
     throw Error('Unsupported response command.');
   }
   async renamed(before:string,after:string){await this.authority.renameNative(before,after);await this.scan();}
-  stop(){this.stopped=true;}
+  stop(){this.stopped=true;this.backgroundChecks.clear();this.terminalRevisions.clear();}
 }

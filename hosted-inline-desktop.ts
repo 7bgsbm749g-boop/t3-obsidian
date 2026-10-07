@@ -92,7 +92,7 @@ export class DesktopInlineHost {
     // Discovery and each response already coalesce their own work. Holding
     // the entire scan here would prevent later ticks from serving healthy
     // responses or expiring network requests while one note is stalled.
-    const work=this.coordinated.scan().then(()=>Promise.all([this.writer.tick(),this.nativeWriter.tick()])).then(()=>{});
+    const work=this.coordinated.scan(true).then(()=>Promise.all([this.writer.tick(),this.nativeWriter.tick()])).then(()=>{});
     this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});return work;
   }
   renamed(before:string,after:string){this.writer.renamed(before,after);this.nativeWriter?.renamed(before,after);this.authority.renamed(before,after);if(this.coordinated){const work=this.coordinated.renamed(before,after);this.work.add(work);void work.finally(()=>this.work.delete(work)).catch(()=>{});}}
