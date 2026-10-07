@@ -304,3 +304,54 @@ The corrected build and complete suite passed 996 JavaScript/TypeScript tests
 and 11 Python tests on CPU 0. The supported release command must repeat these
 checks from the reviewed clean source before packaging the next immutable
 version. Native sustained CPU/RSS measurements are still required.
+
+## Durable conflict retries
+
+Immutable 2.34.21 loaded on VPS instance
+`833959f1-9770-4aa3-b34e-537b20f91e5f`. The bounded native reply saved exact
+host hash `8e1938ed270864b181821e72d6b29189146c4cf4a61498c9e5488e5b5c2c99b4`,
+rendered in Obsidian and preserved its ordinary prefix. Own note/tab cleanup
+restored all original leaves and physical preimages. A restored thirty-second
+trace recorded zero idle display-binding scans, compared with 55 on 2.34.20.
+The complete ten-minute VPS measurement still averaged 0.979 renderer cores
+and 801–1102 MiB RSS in the late five-minute interval. All four large journal
+counts remained unchanged; the memory problem is not resolved.
+
+An initial outside preflight survey mistakenly looked for `t3-response`
+markers. A separate corrected survey uses the actual `t3-inline` markers and
+shows that the large retained replies still have their anchors. The initial
+result was rejected, its evidence retained, and no missing-anchor source guard
+was implemented from that result.
+
+The remaining repeated-save path treats a proven durable journal conflict as
+running, replacing its useful reason with a generic waiting message. It then
+fetches thread history, renders retained prose and audits the journal again.
+The next correction makes that result an explicit writer conflict, preserves
+its reason and excludes it from automatic writer polling. A structurally
+rejected final body also records a conflict before its existing rejection is
+re-thrown. Native direct previews suspend immediately on that durable conflict,
+preserving text and replay state for explicit resume. No notes, journals,
+recovery records or preview caches are removed by this correction.
+
+All 148 targeted tests passed. They cover zero subsequent provider work after
+structural rejection, an explicit resume saving a valid final with newer
+ordinary text, retention of the original journal-conflict reason, and suspension
+of late/queued direct preview work with replay-cursor preservation. Existing
+delivery, checked save, native adoption, rename and recovery tests also pass.
+The VPS is temporarily paused with its saved enabled setting preserved, native
+CLI OFF and Settings CLOSED. Build/full validation runs serially on CPU 0.
+
+The complete 2.34.21 functional receipt retains 68 hashed artifacts and explicitly
+leaves the memory problem open. The Windows client was
+`8e4eb77e-2e86-4f77-b564-31e511c56243`, with unchanged immutable hashes before
+and after its ten-minute read-only sample. Its late five-minute renderer result
+was 0.379 cores and 464–868 MiB RSS, improving CPU over 2.34.20 without proving
+resolution. The desktop remained locked; no visible Windows or mobile smoke
+is claimed. The new conflict-state correction passed its build; full validation
+continues serially with the VPS plugin paused.
+
+The source build and complete suite passed 999 JavaScript/TypeScript tests and
+11 Python tests on CPU 0. These include the existing transient final-save retry,
+stopped-save retry and lost-native-acknowledgement recovery checks. The clean
+supported release must repeat validation, followed by actual native behavior
+and sustained measurements; this source result is not a memory-resolution claim.

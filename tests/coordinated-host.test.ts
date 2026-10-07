@@ -178,10 +178,39 @@ test('an unchanged rejected final keeps its error and journal stable, then compl
 
 test('a structurally rejected final cannot consume a private history audit or alter the note',async()=>{
  const h=await setup();try{
+  await h.writer.tick();
   const before=h.notes.get('Note.md'),state=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!).state;
   let reads=0;const read=h.host.journal.read.bind(h.host.journal);h.host.journal.read=async id=>{reads++;return read(id);};
   await assert.rejects(h.host.io(h.base).commitFinal!(h.request,state,'Unsafe <!-- t3-inline:start:other -->'),/tracking boundaries/);
+  assert.equal(state.status,'conflict');
   assert.equal(reads,0);assert.equal(h.notes.get('Note.md'),before);assert.equal(h.writes(),0);
+ }finally{await h.close();}
+});
+test('a structurally rejected finished reply stops automatic retries and resumes only after an explicit command',async()=>{
+ const h=await setup();let writer:HostedInlineWriter|undefined;
+ try{
+  let unsafe=true,accesses=0;
+  const base={...h.base,access:async()=>{accesses++;return {origin:'https://fixture',api:async()=>({thread:{id:h.request.threadId,projectId:h.request.projectId,messages:[{id:h.request.messageId,role:'user',turnId:'turn',streaming:false,text:'Add 25kg'},{id:'answer',role:'assistant',turnId:'turn',streaming:false,text:unsafe?'Unsafe <!-- t3-inline:start:other -->':'Safe final answer'}],activities:[],latestTurn:{turnId:'turn',messageId:h.request.messageId,state:'completed',assistantMessageId:'answer'},session:{status:'ready',activeTurnId:null}}})};}};
+  writer=new HostedInlineWriter(h.identity,h.host.io(base));const original=h.notes.get('Note.md');
+  await writer.tick();const conflict=JSON.parse(h.storage.get(leasePaths(h.identity.directory,h.id).record)!);
+  assert.equal(conflict.state.status,'conflict');assert.match(conflict.state.detail,/tracking boundaries/);assert.equal(h.notes.get('Note.md'),original);
+  const calls=accesses,journal=await h.host.journal.read(h.id);for(let i=0;i<20;i++)await writer.tick();
+  assert.equal(accesses,calls);assert.equal((await h.host.journal.read(h.id))!.journalRevision,journal!.journalRevision);
+  unsafe=false;h.notes.set('Note.md',original+'New ordinary text\n');await h.host.command('resume-response',h.id);await writer.tick();
+  const complete=JSON.parse(h.storage.get(leasePaths(h.identity.directory,h.id).record)!);
+  assert.equal(complete.state.finalSaved,true);assert.equal(complete.state.cleanupComplete,true);assert.match(h.notes.get('Note.md')!,/Safe final answer/);assert.ok(h.notes.get('Note.md')!.endsWith('New ordinary text\n'));
+ }finally{writer?.stop();await h.close();}
+});
+
+test('a durable journal conflict becomes a terminal writer conflict with its original reason preserved',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();
+  const journal=await h.host.journal.read(h.id);await h.host.coordinator.result(h.id,journal!.original,'Retained final reply');
+  h.notes.set('Note.md',h.notes.get('Note.md')!.replace(responseAnchor(h.id),'User replacement'));
+  const conflict=await h.host.coordinator.commit(h.id);assert.equal(conflict.status,'conflict');
+  const io=h.host.io(h.base),state=JSON.parse(h.storage.get(leasePaths(h.identity.directory,h.id).record)!).state,before=h.notes.get('Note.md');
+  assert.equal(await io.commitFinal!(h.request,state,'Retained final reply'),false);assert.equal(state.status,'conflict');assert.equal(state.detail,conflict.conflicts.at(-1)!.reason);
+  await io.write(hostedPaths(h.identity.directory,h.id).state,JSON.stringify(state));assert.deepEqual(await io.requests(),[]);assert.equal(h.notes.get('Note.md'),before);assert.equal(h.writes(),0);
  }finally{await h.close();}
 });
 for(const side of ['before','after','both'] as const)test(`ordinary text touching the ${side} marker survives final host delivery`,async()=>{

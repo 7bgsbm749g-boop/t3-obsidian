@@ -57,6 +57,15 @@ test('stop and completed host records close the direct stream without producing 
   for(const end of ['stop','complete'] as const){const h=fixture();h.preview.tick(true);h.item(h.snapshot());h.preview.update({...h.record,...(end==='stop'?{stopRequestedAt:1}:{state:{requestHash:'h',accepted:true,notePath:'Note.md',status:'complete',hashes:[],updatedAt:'',cleanupComplete:true}})});h.preview.tick(true);assert.equal(h.streams[0].stopped,true);const n=h.updates.length;h.item(h.snapshot(30,'Late'));assert.equal(h.updates.length,n);h.preview.dispose();}
 });
 
+test('a durable conflict suspends direct display work immediately and explicit resume keeps the replay cursor',()=>{
+ const h=fixture(false);h.preview.tick(true);h.item(h.snapshot());h.event(3,' queued');
+ const state={requestHash:'h',accepted:true,notePath:'Note.md',status:'conflict' as const,hashes:[],updatedAt:''};
+ h.preview.update({...h.record,state});assert.equal(h.streams[0].stopped,true);const count=h.updates.length;
+ h.clock.advance(1000);h.item(h.snapshot(99,'Late conflict data'));assert.equal(h.updates.length,count);h.preview.tick(true);assert.equal(h.streams.length,1);
+ h.preview.update({...h.record,state:{...state,status:'waiting'}});h.preview.tick(true);assert.equal(h.streams.length,2);assert.equal(h.streams[1].cursor(),3);
+ h.event(4,' after explicit resume');h.clock.advance(1000);assert.match(h.updates.at(-1)!.body,/First paragraph queued after explicit resume/);h.preview.dispose();
+});
+
 test('device registration starts the direct transport while host migration has no note, with no checkpoint or note writes',async()=>{
  const h=fixture(),storage=new Map<string,string>(),updates:DirectInlineUpdate[]=[],identity={...h.record.request.host,vaultId:h.record.request.vaultId};
  const files:LeaseFiles={read:async path=>storage.get(path),write:async(path,value)=>{storage.set(path,value);},remove:async path=>{storage.delete(path);},list:async dir=>[...storage.keys()].filter(path=>path.startsWith(dir+'/'))};

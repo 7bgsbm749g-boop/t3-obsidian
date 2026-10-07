@@ -442,7 +442,7 @@ export class HostedInlineWriter {
         if(terminal&&this.io.commitFinal){
           if(await this.io.commitFinal(request,state,next)){
             state.finalBody=next;state.finalPhase=phase as 'complete'|'interrupted';state.finalSaved=true;state.cleanupComplete=true;state.status=phase;delete state.detail;
-          }else {state.detail='Waiting for a checked coordinated save or conflict resolution.';this.networkRetryAt.set(path,this.monotonic()+5000);}
+          }else {if(!['conflict'].includes(state.status))state.detail='Waiting for a checked coordinated save or conflict resolution.';this.networkRetryAt.set(path,this.monotonic()+5000);}
           await save();return;
         }
         let conflict=false,applied=false;

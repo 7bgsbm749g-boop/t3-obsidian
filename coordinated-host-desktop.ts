@@ -284,11 +284,12 @@ export class CoordinatedHost {
         return next;
       },
       commitFinal:async(request,state,body)=>{
-        validateFinalResponseBody(body);
+        try{validateFinalResponseBody(body);}catch(error){state.status='conflict';throw error;}
         const journal=await this.journal.read(request.id);if(!journal)throw Error('Missing durable generation original.');
+        if(journal.status==='conflict'){state.status='conflict';state.detail=journal.conflicts.at(-1)?.reason;return false;}
         if(journal.staged===undefined)await this.coordinator.result(request.id,journal.stagedDraft??journal.original,body);
         const result=await this.coordinator.commit(request.id);
-        if(result.status==='conflict'){state.detail=result.conflicts.at(-1)?.reason;return false;}
+        if(result.status==='conflict'){state.status='conflict';state.detail=result.conflicts.at(-1)?.reason;return false;}
         if(result.status!=='verified'||!result.verified)return false;
         const proof=await this.materialization(result);
         state.finalDocumentHash=result.verified.hash;
