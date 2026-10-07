@@ -498,3 +498,41 @@ deleted failed results, full fallback audits and pending native reload
 acknowledgements retain their behavior. The build and complete suite pass:
 1008 JavaScript/TypeScript tests and 11 Python tests, serialized on CPU 0.
 A clean immutable release and native sustained measurements are still required.
+
+Immutable 2.34.25 passed both clean validation runs (1008 JavaScript/TypeScript
+and 11 Python tests), a checked native reload, and one bounded native command
+delivery. Its saved bytes match the host final-document hash; the ordinary
+prefix and all original leaf/physical-note preimages are preserved. The owned
+note/tab was removed and original active Diagnose leaf restored. Native CLI
+is off, Settings closed, and the exact global configuration hash retained.
+Its complete external receipt is `releases/2.34.25/smoke-vps-qlo2.json`.
+The restored native trace measured 57 skipped mailbox scans and one full audit
+over 15 seconds. The last five-minute VPS result improved to 0.599 cores and
+698–985 MiB RSS. Windows measured 0.248 cores and 510–814 MiB RSS, with a
+968 MiB whole-run peak. The memory problem remains open; the locked laptop
+has loaded-version and OS evidence, without visible UI or typing proof.
+
+The snapshot-size trace also confirmed duplicate canonical reads: the active
+Diagnose thread's device preview and host each fetched the same 424,366-character
+snapshot about ten times in 15 seconds. This is a diagnosis, not a change to
+stream recovery. The existing polling behavior remains unchanged in the next
+correction. The trace records numeric sizes only and restores every owned
+method wrapper. The early profile still includes Markdown parsing inside
+project image preparation. After the quiet sample, the native image-cache
+survey found 16 retained entries: ten ordinary notes consumed 320,437
+characters and ten slots, despite needing no Markdown image parsing. Six
+candidate entries remain, including a 105,930-character negative result for
+image-like syntax that did not produce a real image.
+
+The next correction keeps ordinary reads outside the image cache. A changed
+ordinary note first removes its previous candidate entry, so later image
+syntax cannot reuse stale data. Candidate text still uses exact-text memoizing
+and existing source/count bounds, including negative parse results for syntax
+inside code. Signed-resource resolution and renewal continue on each use;
+only Markdown syntax is cached. Numeric counters distinguish plain reads,
+real parser calls and warm hits. All 16 targeted cache and project-reference
+tests pass, including 100 large ordinary reads that do not evict a warm image
+entry, ordinary replacement invalidation, bounded negative results, and
+changed code/image syntax. Build and the complete 1010 JavaScript/TypeScript
+plus 11 Python tests pass on CPU 0. The supported clean release must repeat
+validation; actual native behavior and resource measurements remain required.
