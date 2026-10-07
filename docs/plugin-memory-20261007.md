@@ -816,3 +816,28 @@ removed; all 13 original leaves and original active leaf were restored, with
 no reload or settings changes. Obsidian remained open and the actor returned
 explicit HOLD. No mobile proof. Complete immutable functional receipt:
 `/home/ubuntu/backups/send-to-t3-code/releases/2.34.33/smoke-vps-qlo2.json`.
+
+### Native desktop SHA-256 (2.34.34 candidate)
+
+The retained 2.34.33 CPU profile contains repeated portable SHA-256 loops and
+full-size TextEncoder buffers for large response bodies. Desktop startup now
+installs Node/OpenSSL SHA-256 for contentHash after the mobile platform check.
+It consumes UTF-8 strings directly. Mobile keeps the existing portable path;
+the native module is not initialized there. Unload removes only its own hash
+implementation, so an old disposer cannot clear a newer plugin instance.
+
+This changes no hash format, saved state, journal proofs, delivery checks or
+poll intervals. Compatibility tests compare the existing portable hash with
+native results for CRLF/tabs, NUL, Unicode, lone surrogates, large bodies and
+100 deterministic random UTF-16 strings. Existing mobile bundle tests reject
+every non-Obsidian require and therefore check the platform loading boundary.
+Native resource results are required before claiming memory resolution.
+
+A separate CPU-0 synthetic comparison hashed the same 1,050,000-character
+Unicode/whitespace body 100 times: portable 1558.6 ms, native
+417.0 ms, equal SHA-256 1562fec1234ccd43cc140050464c489990185f4ab6715f899729a3ca0a585b81.
+Process maximum RSS was 148288 versus 101952 KiB. These are
+synthetic hashing results, not whole-application memory measurements. Build
+and full source checks passed 1040 JS/TS + 11 Python. The first small targeted
+check overlapped the end of the CPU-0 build; the subsequent full suite ran
+after build completion, serially. Release validation remains serial.

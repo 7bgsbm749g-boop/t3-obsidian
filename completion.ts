@@ -11,7 +11,14 @@ export interface CompletionJob extends NoteCompletion {
   requestId: string; threadId: string; projectId: string; connection: Connection;
   status: 'watching' | 'kept'; detail?: string; destination?: string;
 }
-export function contentHash(text: string) {return Buffer.from(sha256(new TextEncoder().encode(text))).toString('hex');}
+let desktopContentHash:((text:string)=>string)|undefined;
+/** Desktop installs its native implementation after the platform check. Keep
+ * the portable path available without loading any Node module on mobile. */
+export function installContentHasher(hash:(text:string)=>string){
+  desktopContentHash=hash;
+  return ()=>{if(desktopContentHash===hash)desktopContentHash=undefined;};
+}
+export function contentHash(text: string) {return desktopContentHash?desktopContentHash(text):Buffer.from(sha256(new TextEncoder().encode(text))).toString('hex');}
 export function archiveFolder(value: string): string {
   const path=value.trim().replace(/\\/g,'/');
   if (!path || path.startsWith('/') || /[:\x00-\x1f]/.test(path) || path.split('/').some(p=>!p || p==='.' || p==='..' || p.startsWith('.') || /[<>"|?*]/.test(p) || /[. ]$/.test(p))) {
