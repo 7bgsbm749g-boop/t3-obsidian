@@ -72,7 +72,7 @@ test('production host streams only to journal, stages a table and commits the re
 test('unchanged live snapshots do not grow the private journal or advance the durable recovery cursor',async()=>{
  const h=await setup();try{
   let sequence=100,text='Stable live response';
-  h.base.threadState=async()=>({sequence,messages:[{id:h.request.messageId,role:'user',text:'Add 25kg',createdAt:h.request.createdAt,turnId:'turn',streaming:false},{id:'answer',role:'assistant',text,turnId:'turn',streaming:true}],activities:[],latestTurn:{turnId:'turn',messageId:h.request.messageId,state:'running',requestedAt:h.request.createdAt,assistantMessageId:'answer'},session:{status:'running',activeTurnId:'turn'}});
+  h.base.threadState=async()=>({sequence,messages:[{id:h.request.messageId,role:'user',text:'Add 25kg',createdAt:h.request.createdAt,turnId:null,streaming:false},{id:'answer',role:'assistant',text,turnId:'turn',streaming:true}],activities:[],latestTurn:{turnId:'turn',messageId:h.request.messageId,state:'running',requestedAt:h.request.createdAt,assistantMessageId:'answer'},session:{status:'running',activeTurnId:'turn'}});
   // Install the changed IO before constructing a writer, as production does.
   const writer=new HostedInlineWriter(h.identity,h.host.io(h.base));
   try{
@@ -83,6 +83,7 @@ test('unchanged live snapshots do not grow the private journal or advance the du
    assert.equal(unchanged.journalRevision,first.journalRevision);
    assert.equal(await h.files.read(leasePaths(h.identity.directory,h.id).record),lease);
    assert.equal(unchanged.checkpoint?.bindingCheckpoint?.sequence,100,'restart must replay from the earlier durable cursor');
+   assert.equal(unchanged.checkpoint?.bindingCheckpoint?.bindings?.[h.request.messageId]?.sequence,100,'the inferred association must not be stamped again with each global snapshot');
    text='Meaningful new progress';await writer.tick();
    const changed=(await h.host.journal.read(h.id))!;
    assert.ok(changed.journalRevision!>first.journalRevision!);
@@ -113,6 +114,15 @@ test('an unchanged rejected final keeps its error and journal stable, then compl
    assert.equal(complete.state.status,'complete');assert.equal(complete.state.cleanupComplete,true);
    assert.equal(complete.state.detail,undefined);assert.ok(h.notes.get('Note.md')!.includes('Added **25kg**.'));
   }finally{writer.stop();}
+ }finally{await h.close();}
+});
+
+test('a structurally rejected final cannot consume a private history audit or alter the note',async()=>{
+ const h=await setup();try{
+  const before=h.notes.get('Note.md'),state=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!).state;
+  let reads=0;const read=h.host.journal.read.bind(h.host.journal);h.host.journal.read=async id=>{reads++;return read(id);};
+  await assert.rejects(h.host.io(h.base).commitFinal!(h.request,state,'Unsafe <!-- t3-inline:start:other -->'),/tracking boundaries/);
+  assert.equal(reads,0);assert.equal(h.notes.get('Note.md'),before);assert.equal(h.writes(),0);
  }finally{await h.close();}
 });
 for(const side of ['before','after','both'] as const)test(`ordinary text touching the ${side} marker survives final host delivery`,async()=>{

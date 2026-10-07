@@ -159,7 +159,14 @@ function establishBindings(state:InlineThreadState):InlineThreadState {
     if(message.turnId){bindings[message.id]={turnId:message.turnId,kind:'explicit'};const turn=turns[message.turnId];if(turn&&!turn.messageId&&(!message.createdAt||turn.requestedAt===message.createdAt))turns[message.turnId]={...turn,messageId:message.id};continue;}
     const matches=Object.values(turns).filter(t=>t.messageId===message.id||!t.messageId&&message.createdAt&&t.requestedAt===message.createdAt&&state.messages.filter(m=>m.role==='user'&&m.createdAt===message.createdAt).length===1);
     // A provider turn shared by steering must not steal the primary timestamp.
-    if(matches.length===1){turns[matches[0].turnId]={...matches[0],messageId:message.id};bindings[message.id]={turnId:matches[0].turnId,kind:matches[0].messageId===message.id?'start':'timestamp',sequence:state.sequence};continue;}
+    if(matches.length===1){
+      const turnId=matches[0].turnId,kind=matches[0].messageId===message.id?'start':'timestamp',previous=bindings[message.id];
+      turns[turnId]={...matches[0],messageId:message.id};
+      // This sequence marks when the association was first observed, not the
+      // global watermark of every later snapshot. Exact start event sequences
+      // remain in starts and are never replaced by this inferred evidence.
+      bindings[message.id]={turnId,kind,sequence:previous?.turnId===turnId&&previous.kind===kind?previous.sequence:state.sequence};continue;
+    }
     if(request?.turnId&&!bindings[message.id])bindings[message.id]={turnId:request.turnId,kind:request.activeTurnId===request.turnId?'steer':'start',sequence:state.sequence};
   }
   for(const [id,binding] of Object.entries(bindings)){

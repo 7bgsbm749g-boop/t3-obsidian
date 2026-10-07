@@ -8,6 +8,8 @@ import type {NativeCommitProof} from './native-response-commit';
 import {nativeCommitMatches} from './native-response-commit';
 import {streamBlock,removeStreamBlock} from './stream-block';
 
+export function validateFinalResponseBody(body:string){if(/<!-- t3-(?:inline|response):/.test(body))throw Error('A finished response cannot introduce tracking boundaries.');}
+
 export interface NoteGeneration {
   journalRevision?:number;
   request:HostedInlineRequest;notePath:string;original:string;originalHash:string;
@@ -86,7 +88,7 @@ export class GeneratedNoteCoordinator {
       if(edits.some(edit=>/<!-- t3-(?:inline|response):/.test(record.original.slice(edit.from,edit.to))))throw Error('Staged edits overlap response registrations.');
       if(edits.some(edit=>/<!-- t3-(?:inline|response):/.test(edit.text)))throw Error('Staged edits cannot introduce response registrations.');
       if(edits.some(edit=>!(edit.to<originalRegion.from||edit.from>originalRegion.to)))throw Error('Staged edits touch the response anchor.');
-      if(/<!-- t3-(?:inline|response):/.test(finalBody))throw Error('A finished response cannot introduce tracking boundaries.');
+      validateFinalResponseBody(finalBody);
       record.staged=staged;record.finalBody=finalBody;record.status='result-ready';
       await this.journal.append(id,record,'result-ready');return record;
     });

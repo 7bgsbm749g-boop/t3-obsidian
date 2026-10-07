@@ -4,7 +4,7 @@ import {homedir} from 'node:os';
 import type {App} from 'obsidian';
 import {contentHash} from './completion';
 import {generatedEventContent} from './generated-event-content';
-import {GeneratedNoteCoordinator,type NoteGeneration} from './generated-note-coordinator';
+import {GeneratedNoteCoordinator,validateFinalResponseBody,type NoteGeneration} from './generated-note-coordinator';
 import {nativeCommitPath} from './native-response-commit';
 import {DesktopGenerationJournal} from './generation-journal-desktop';
 import {nativeResponses} from './native-response-manager';
@@ -97,7 +97,7 @@ export class CoordinatedHost {
       // revision does not require another full private-journal audit; changed
       // revisions and explicit recovery commands bypass this maintenance pace.
       if(background&&prior?.epoch===record.epoch&&prior.revision===record.revision&&now<prior.until)return;
-      if(background)this.backgroundChecks.set(record.request.id,{epoch:record.epoch,revision:record.revision,until:now+5000});
+      if(background)this.backgroundChecks.set(record.request.id,{epoch:record.epoch,revision:record.revision,until:now+30_000});
       const work=this.scanRecord(record);this.work.set(record.request.id,work);
       return work.finally(()=>{if(this.work.get(record.request.id)===work)this.work.delete(record.request.id);});
     }));
@@ -273,6 +273,7 @@ export class CoordinatedHost {
         return next;
       },
       commitFinal:async(request,state,body)=>{
+        validateFinalResponseBody(body);
         const journal=await this.journal.read(request.id);if(!journal)throw Error('Missing durable generation original.');
         if(journal.staged===undefined)await this.coordinator.result(request.id,journal.stagedDraft??journal.original,body);
         const result=await this.coordinator.commit(request.id);

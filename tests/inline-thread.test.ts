@@ -129,6 +129,19 @@ test('a provider-assigned turn is matched to its dispatched user message by requ
   assert.equal(renderInlineTurn(state,'provider-turn','thread','complete'),'> Answer\n');
 });
 
+test('repeated snapshots retain inferred binding evidence instead of restamping global watermarks',()=>{
+ const requestedAt='2026-10-07T02:00:00Z';
+ const snapshot=(sequence:number)=>({kind:'snapshot',snapshot:{snapshotSequence:sequence,thread:{messages:[{id:'question',role:'user',text:'Question',turnId:null,streaming:false,createdAt:requestedAt}],activities:[],latestTurn:{turnId:'provider-turn',messageId:'question',state:'running',requestedAt},session:{status:'running',activeTurnId:'provider-turn'}}}});
+ let state=applyThreadItem({messages:[],activities:[],starts:{question:{messageId:'question',requestedAt,sequence:7,turnId:'provider-turn'}}},snapshot(100)).state;
+ const evidence=structuredClone(state.bindings?.question);
+ for(let sequence=101;sequence<=120;sequence++)state=applyThreadItem(state,snapshot(sequence)).state;
+ assert.deepEqual(state.bindings?.question,evidence);
+ assert.equal(state.bindings?.question.sequence,100);
+ assert.equal(state.starts?.question.sequence,7,'the exact start event must remain intact');
+ assert.equal(state.sequence,120,'the current snapshot watermark still advances');
+ assert.equal(turnForMessage(state,'question'),'provider-turn');
+});
+
 test('streamed numbered Markdown is marker-safe across trailing newlines',()=>{
   const id='numbered',region=initialRegion(id),source='Question\n'+region.text+'Following paragraph';
   const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:'1. First line.\n2. Second line.\n',streaming:true}],activities:[]};

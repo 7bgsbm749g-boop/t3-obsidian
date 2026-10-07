@@ -80,9 +80,54 @@ test('overlapping journal reads share a full audit, with independent results and
   const ids=Array.from({length:8},(_,index)=>`${String(index).padStart(8,'0')}-bbbb-cccc-dddd-eeeeeeeeeeee`);
   for(const key of ids)await journal.append(key,{...state(),request:{id:key} as any},'accepted');
   let active=0,maximum=0,reads=0;const original=fs.lstat;
-  t.mock.method(fs,'lstat',async(...args:any[])=>{active++;maximum=Math.max(maximum,active);reads++;try{await new Promise(resolve=>setTimeout(resolve,10));return await (original as any)(...args);}finally{active--;}});
+  t.mock.method(fs,'lstat',async(...args:any[])=>{active++;maximum=Math.max(maximum,active);if(String(args[0]).endsWith('.json'))reads++;try{await new Promise(resolve=>setTimeout(resolve,10));return await (original as any)(...args);}finally{active--;}});
   const results=await Promise.all(ids.flatMap(key=>Array.from({length:10},()=>journal.read(key))));
   assert.equal(reads,8,'one complete filesystem audit per identity for overlapping callers');assert.equal(maximum,4);
   results[0]!.conflicts.push({original:'local',latest:'local',reason:'local'});assert.equal(results[1]!.conflicts.length,0);
+ }finally{t.mock.restoreAll();await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('authenticated fingerprints survive reopen with fresh identities and only one journal body read',async t=>{
+ const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-reopen-cache-'));
+ try{
+  const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);let current=state();
+  for(let n=0;n<20;n++){current={...current,sequence:n};await journal.append(id,current,'checkpoint');}
+  await journal.read(id);
+  const reopened=await DesktopGenerationJournal.open(journal.root,[vault]);let reads=0,identities=0;const read=fs.readFile,stat=fs.lstat;
+  t.mock.method(fs,'readFile',async(...args:any[])=>{if(String(args[0]).endsWith('.json'))reads++;return (read as any)(...args);});
+  t.mock.method(fs,'lstat',async(...args:any[])=>{if(String(args[0]).endsWith('.json'))identities++;return (stat as any)(...args);});
+  assert.equal((await reopened.read(id))!.sequence,19);assert.equal(reads,1);assert.equal(identities,20,'every revision still receives a fresh identity check');
+  t.mock.restoreAll();
+  const first=join(journal.root,id,'0000000000.json'),before=await fs.stat(first),raw=await fs.readFile(first,'utf8');await fs.writeFile(first,raw.replace('Workout data','Workout daXa'));await fs.utimes(first,before.atime,before.mtime);
+  const again=await DesktopGenerationJournal.open(journal.root,[vault]);await assert.rejects(again.read(id),/integrity/);
+ }finally{t.mock.restoreAll();await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('invalid prefix authentication falls back to full checks and persisted history still rejects truncation and symlinks',async t=>{
+ const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-cache-auth-'));
+ try{
+  const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]),current=state();
+  await journal.append(id,current,'accepted');await journal.append(id,{...current,sequence:1},'checkpoint');await journal.read(id);
+  const cache=join(journal.root,id,'.verified-prefix.cache'),valid=await fs.readFile(cache,'utf8'),bad=JSON.parse(valid);bad.mac='0'.repeat(64);await fs.writeFile(cache,JSON.stringify(bad));
+  const reopened=await DesktopGenerationJournal.open(journal.root,[vault]);let reads=0;const read=fs.readFile;t.mock.method(fs,'readFile',async(...args:any[])=>{if(String(args[0]).endsWith('.json'))reads++;return (read as any)(...args);});
+  assert.equal((await reopened.read(id))!.sequence,1);assert.equal(reads,2,'unauthenticated fingerprints cannot skip journal bodies');t.mock.restoreAll();
+  const tail=join(journal.root,id,'0000000001.json'),tailBytes=await fs.readFile(tail);
+  await fs.writeFile(cache,valid);await fs.rm(tail);
+  await assert.rejects((await DesktopGenerationJournal.open(journal.root,[vault])).read(id),/missing/);
+  await fs.writeFile(tail,tailBytes);
+  const first=join(journal.root,id,'0000000000.json'),moved=join(root,'saved.json');await fs.rename(first,moved);await fs.symlink(moved,first);
+  await assert.rejects((await DesktopGenerationJournal.open(journal.root,[vault])).read(id),/Invalid journal revision/);
+ }finally{t.mock.restoreAll();await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('derived cache publication failure cannot prevent verified reads or alter immutable revisions',async t=>{
+ const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-cache-optional-'));
+ try{
+  const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);await journal.append(id,state(),'accepted');
+  const file=join(journal.root,id,'0000000000.json'),before=await fs.readFile(file),rename=fs.rename;
+  t.mock.method(fs,'rename',async(...args:any[])=>{if(String(args[1]).endsWith('.verified-prefix.cache'))throw Error('Cache disk unavailable');return (rename as any)(...args);});
+  assert.equal((await journal.read(id))!.original,'Workout data');assert.deepEqual(await fs.readFile(file),before);
+  assert.equal((await fs.readdir(join(journal.root,id))).some(name=>name.endsWith('.tmp')),false);
+  assert.equal((await (await DesktopGenerationJournal.open(journal.root,[vault])).read(id))!.original,'Workout data');
  }finally{t.mock.restoreAll();await fs.rm(root,{recursive:true,force:true});}
 });

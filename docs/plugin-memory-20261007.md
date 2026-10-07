@@ -74,3 +74,44 @@ journal/lease growth over twenty unchanged snapshots, retention of the old curso
 persistence of meaningful new progress, stable repeated errors, bounded retries
 and eventual checked final completion. Existing crash and answer-history recovery
 tests remain required. Performance claims require new post-release measurements.
+
+## Reopened history and inferred binding churn
+
+Release 2.34.16 passed a checked native reload and a bounded real final save,
+with owned-note cleanup and original notes, leaves and settings preserved. Its
+functional receipt explicitly leaves the memory investigation open. A five-minute
+VPS sample still measured approximately 1.23 renderer CPU cores. The later laptop
+sample remained on 2.34.15 and measured 1.19 cores and up to 1508 MiB working
+memory. The initial Windows reduction was temporary, not a sustained resolution.
+
+The native profile showed repeated hashing of immutable historical revisions
+after reload. An optional device-local, HMAC-authenticated fingerprint index now
+retains verified file identities and hashes across journal reopen. It contains
+no note text and is stored outside every vault. Every audit still checks every
+revision's fresh nanosecond identity; changed bodies are fully checked against
+the original authenticated chain. The last body is read and checked after reopen.
+Missing, malformed or unauthenticated caches fall back to full verification;
+cache write failure cannot prevent journal operation. Reopen, same-size tampering,
+bad authentication, truncation, symlink and cache-publication-failure tests cover
+the actual filesystem implementation. Immutable revisions and backups remain intact.
+
+Later native checkpoint comparisons exposed another cause of growth: an inferred
+message-to-turn binding was stamped with each global snapshot watermark. Its
+sequence now records the association observation and remains stable while that
+association is unchanged. Exact start-event sequences and advancing feed watermarks
+remain independent. The coordinator regression now uses the actual null-turn-ID
+message case that the earlier explicit-turn-ID regression missed.
+
+Unchanged active background maintenance is spaced by thirty seconds. Changed
+leases, explicit recovery and active reply polling retain immediate handling.
+The existing invalid-final boundary check also runs before private history audits,
+rejecting the same unsafe body without repeated large reads. These changes require
+new immutable release and native measurements; source tests alone do not establish
+that the user's memory problem is resolved.
+
+The reviewed source build and full suite passed 983 JavaScript/TypeScript tests
+and 11 Python tests. The earlier interrupted run and the corrected malformed
+test fixture are retained in the outside evidence directory. During the old
+2.34.16 runtime's later failure, the kernel killed renderer 2913103 with
+3,011,204 KiB anonymous RSS at 02:29:57 UTC. The safe-pause request had not
+completed. No newer runtime or sustained memory resolution is claimed from it.
