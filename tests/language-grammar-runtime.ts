@@ -1,6 +1,5 @@
 import {build} from 'esbuild';
 import {createRequire} from 'node:module';
-import {runInNewContext} from 'node:vm';
 import type {CodeGrammar} from '../code-language';
 import type {LanguageSupport} from '@codemirror/language';
 
@@ -12,7 +11,9 @@ let pending:Promise<{loadCodeGrammar:(grammar:CodeGrammar)=>Promise<LanguageSupp
 export function grammarRuntime(){
   return pending??=build({entryPoints:['language-grammars.ts'],bundle:true,write:false,platform:'node',format:'cjs',external}).then(result=>{
     const module={exports:{} as any};
-    runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:runtime,console,setTimeout,clearTimeout,queueMicrotask});
+    // StreamLanguage checks instanceof RegExp. Keep grammar and editor in the
+    // same realm, as they are in the installed plugin, as well as one module runtime.
+    new Function('module','exports','require',result.outputFiles[0].text)(module,module.exports,runtime);
     return module.exports;
   });
 }

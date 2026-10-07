@@ -1,5 +1,5 @@
 /** No Obsidian, CodeMirror, or grammar initialization in the routing layer. */
-export type CodeViewType='typescript'|'javascript'|'json'|'css'|'python'|'plaintext';
+export type CodeViewType='typescript'|'javascript'|'json'|'css'|'python'|'c'|'plaintext';
 export type CodeGrammar=Exclude<CodeViewType,'plaintext'>|'tsx'|'jsx';
 export interface CodeLanguage {type:CodeViewType;grammar?:CodeGrammar;extensions:readonly string[]}
 export const CODE_LANGUAGES:readonly CodeLanguage[]=[
@@ -10,9 +10,10 @@ export const CODE_LANGUAGES:readonly CodeLanguage[]=[
   {type:'json',grammar:'json',extensions:['json']},
   {type:'css',grammar:'css',extensions:['css']},
   {type:'python',grammar:'python',extensions:['py','pyw','pyi']},
+  {type:'c',grammar:'c',extensions:['c','h']},
   {type:'plaintext',extensions:[]},
 ];
-export const CODE_VIEW_TYPES:readonly CodeViewType[]=['typescript','javascript','json','css','python','plaintext'];
+export const CODE_VIEW_TYPES:readonly CodeViewType[]=['typescript','javascript','json','css','python','c','plaintext'];
 export const MAX_CODE_PARSE_LENGTH=300_000;
 /** Diff raw UTF-16 text without normalizing line endings or indentation. */
 export function rawCodeChange(before:string,after:string):{from:number;to:number;insert:string}|undefined {

@@ -1,4 +1,4 @@
-import type {LanguageSupport} from '@codemirror/language';
+import {LanguageSupport,StreamLanguage} from '@codemirror/language';
 import type {CodeGrammar} from './code-language';
 /** esbuild initializes each bundled grammar only when this branch is reached. */
 export async function loadCodeGrammar(grammar:CodeGrammar):Promise<LanguageSupport> {
@@ -10,5 +10,6 @@ export async function loadCodeGrammar(grammar:CodeGrammar):Promise<LanguageSuppo
     case 'json':return (await import('@codemirror/lang-json')).json();
     case 'css':return (await import('@codemirror/lang-css')).css();
     case 'python':return (await import('@codemirror/lang-python')).python();
+    case 'c':return new LanguageSupport(StreamLanguage.define((await import('@codemirror/legacy-modes/mode/clike')).c));
   }
 }
