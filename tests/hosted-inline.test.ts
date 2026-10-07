@@ -729,3 +729,52 @@ test('canonical external inputs complete independent mirrors without touching id
 });
 
 for(const format of ['formatted','raw-markdown'] as const)test(`v4 external-file writer retains ${format} formatting across completion`,async()=>{const h=harness();h.request.version=4;h.request.initialOwner=randomUUID();h.request.finalAnswerFormat=format;h.io.accepts=()=>true;h.files.set(h.paths.request,JSON.stringify(h.request));h.dispatch();h.answer('Final answer',true);await h.create().tick();assert.equal(h.state.status,'complete');assert.match(h.document,/Final answer/);assert.equal(validateHostedRequest(h.request).version,4);assert.equal(h.state.requestHash,hostedRequestHash(h.request));});
+
+test('coordinated quiet polling avoids repeated render/download and finds a missed final on authority ticks',async()=>{
+ const h=harness();h.dispatch();let clock=0,updates=0;h.io.monotonic=()=>clock;h.io.quietCanonicalPolling=true;
+ const update=h.io.updateNote;h.io.updateNote=async(...args)=>{updates++;return update(...args);};
+ const writer=h.create();await writer.tick();assert.equal(h.calls.length,1);
+ clock=1500;await writer.tick();assert.equal(h.calls.length,2);const rendered=updates,state=h.files.get(h.paths.state);
+ h.document+='\nOrdinary text added during quiet polling.';h.answer('Exact final after missed feed',true);
+ clock=3000;await writer.tick();clock=4499;await writer.tick();
+ assert.equal(h.calls.length,2);assert.equal(updates,rendered);assert.equal(h.files.get(h.paths.state),state);
+ clock=4500;await writer.tick();assert.equal(h.calls.length,3);assert.equal(h.state.status,'complete');
+ assert.match(h.document,/Exact final after missed feed/);assert.match(h.document,/Ordinary text added during quiet polling/);
+ writer.stop();assert.equal((writer as any).canonicalPolls.size,0);
+});
+
+test('an explicit stop bypasses coordinated quiet polling immediately',async()=>{
+ const h=harness();h.dispatch();let clock=0;h.io.monotonic=()=>clock;h.io.quietCanonicalPolling=true;
+ const writer=h.create();await writer.tick();clock=1500;await writer.tick();
+ writer.requestStop(h.request.id);clock=1501;await writer.tick();
+ assert.equal(h.state.userStopped,true);assert.equal(h.state.status,'interrupted');assert.doesNotMatch(h.document,/t3-inline:/);
+ writer.stop();
+});
+
+test('fresh durable recovery state bypasses a coordinated quiet deadline',async()=>{
+ const h=harness();h.dispatch();let clock=0;h.io.monotonic=()=>clock;h.io.quietCanonicalPolling=true;
+ const writer=h.create();await writer.tick();clock=1500;await writer.tick();
+ const changed=h.state;changed.detail='External recovery changed the durable response';h.files.set(h.paths.state,JSON.stringify(changed));
+ h.answer('Fresh response after recovery',true);clock=1501;await writer.tick();
+ assert.equal(h.calls.length,3);assert.equal(h.state.status,'complete');assert.match(h.document,/Fresh response after recovery/);
+ writer.stop();
+});
+
+test('note relocation stays fresh during a coordinated quiet deadline',async()=>{
+ const h=harness();h.dispatch();let clock=0,location=h.request.notePath;h.io.monotonic=()=>clock;h.io.quietCanonicalPolling=true;
+ const oldUpdate=h.io.updateNote;h.io.locateNote=async()=>location;h.io.updateNote=async(_path,change)=>oldUpdate(h.request.notePath,change);
+ const writer=h.create();await writer.tick();clock=1500;await writer.tick();
+ location='Notes/renamed.md';clock=1501;await writer.tick();assert.equal(h.state.notePath,location);assert.equal(h.calls.length,3);
+ writer.stop();
+});
+
+test('a canonical failure clears quiet state and a live-state adapter remains exempt',async()=>{
+ const h=harness();h.dispatch();let clock=0;h.io.monotonic=()=>clock;h.io.quietCanonicalPolling=true;
+ const writer=h.create();await writer.tick();clock=1500;await writer.tick();
+ h.access(false);clock=4500;await writer.tick();assert.match(h.state.detail!,/not paired/);assert.equal((writer as any).canonicalPolls.size,0);
+ h.access(true);clock=4501;h.answer('Recovered final',true);await writer.tick();assert.equal(h.state.status,'complete');writer.stop();
+ const live=harness();live.dispatch();live.io.quietCanonicalPolling=true;live.io.monotonic=()=>0;
+ let text='Live A';live.io.threadState=async()=>({messages:[{id:live.request.messageId,role:'user',text:'Question',turnId:'turn',streaming:false},{id:'answer',role:'assistant',text,turnId:'turn',streaming:true}],activities:[],latestTurn:{turnId:'turn',state:'running'},bindings:{[live.request.messageId]:{turnId:'turn',kind:'explicit'}}});
+ const direct=live.create();await direct.tick();await direct.tick();text='Live B';await direct.tick();
+ assert.match(live.document,/Live B/);assert.equal((direct as any).canonicalPolls.size,0);direct.stop();
+});

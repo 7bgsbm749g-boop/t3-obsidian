@@ -133,6 +133,9 @@ export interface HostedWriterIO extends InlineFiles {
   threadState?(request:HostedInlineRequest,access:ThreadAccess,refresh?:boolean):Promise<import('./inline-thread').InlineThreadState|undefined>;
   replayBindings?(request:HostedInlineRequest,access:ThreadAccess,signal:AbortSignal,afterSequence:number):Promise<ThreadStreamItem[]>;
   monotonic?():number;
+  /** Coordinated desktop writers can defer unchanged canonical work for at
+   * most 3000 ms, driven by normal authority ticks rather than browser timers. */
+  quietCanonicalPolling?:boolean;
   accepts?(request:HostedInlineRequest):boolean;
   /** Keep missing-boundary jobs recoverable while their editor is open. */
   canResume?(path:string):boolean;
@@ -155,8 +158,9 @@ export class HostedInlineWriter {
   private renames:Array<{before:string;after:string}>=[];
   private history=new Map<string,{key:string;expires:number;state:import('./inline-thread').InlineThreadState}>();
   private bindingReplayAt=new Map<string,number>();
+  private canonicalPolls=new Map<string,{requestHash:string;guard?:string;snapshotHash:string;due:number;quiet:boolean}>();
   constructor(private identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},private io:HostedWriterIO){}
-  stop(){this.stopped=true;for(const cancel of this.networkCancels.values())cancel();}
+  stop(){this.stopped=true;this.canonicalPolls.clear();for(const cancel of this.networkCancels.values())cancel();}
   requestStop(id:string){this.stopIntents.add(id);this.stopPriority.add(id);this.networkCancels.get(hostedPaths(this.identity.directory,id).request)?.();}
   private async waitingTitle(request:HostedInlineRequest,state:HostedInlineState,title:string|undefined,save:()=>Promise<void>){
     if(!title)return;
@@ -228,11 +232,14 @@ export class HostedInlineWriter {
       const legacyProof=pendingCompletionCleanup(request,state)&&['complete','interrupted'].includes(state.status);
       if(!needsHostedProcessing(request,state))return;
       let savedIdentity=stored?durableResponseIdentity(state):undefined;
+      let canonicalRead=false;
       if(request.importTurn&&!state.bindingCheckpoint?.bindings?.[request.messageId]){const turn=request.importTurn,checkpoint=state.bindingCheckpoint;state.bindingCheckpoint={...checkpoint,bindings:{...checkpoint?.bindings,[request.messageId]:{turnId:turn.turnId,kind:'explicit'}},turns:{[turn.turnId]:turn,...checkpoint?.turns}};}
       const save=async()=>{
         const identity=durableResponseIdentity(state);
         if(identity!==savedIdentity){state.updatedAt=new Date().toISOString();await this.io.write(paths.state,JSON.stringify(state));savedIdentity=identity;}
         this.renameOffsets.set(path,renameEnd);
+        const poll=canonicalRead?this.canonicalPolls.get(path):undefined;
+        if(poll&&!this.stopped){poll.guard=contentHash(identity);poll.due=this.monotonic()+(poll.quiet?3000:0);}
       };
       try{
         const previousPath=state.notePath;
@@ -272,6 +279,13 @@ export class HostedInlineWriter {
           });
           if(!restored){this.networkRetryAt.set(path,this.monotonic()+5000);return;}
         }
+        const previousPoll=this.canonicalPolls.get(path);
+        // Stops, final-save cleanup and note relocation above are always fresh.
+        // A changed durable response (including steering/binding evidence) or
+        // request bypasses this quiet deadline. Keep only small digests, never
+        // another retained transcript. Direct/live-state adapters remain exempt.
+        const quietGuard=this.io.quietCanonicalPolling&&!this.io.threadState&&savedIdentity?contentHash(savedIdentity):undefined;
+        if(quietGuard&&previousPoll?.requestHash===hash&&previousPoll.guard===quietGuard&&this.monotonic()<previousPoll.due)return;
         const access=await this.network(path,()=>this.io.access(request.threadEnvironmentId));
         if(this.stopped)return;
         if(!state.accepted){
@@ -290,6 +304,13 @@ export class HostedInlineWriter {
           const snapshot=await this.network(path,()=>readInlineSnapshot(access,request.threadId,request.projectId));
           if(this.stopped)return;
           if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
+          if(this.io.quietCanonicalPolling&&!this.io.threadState){
+            const snapshotHash=contentHash(JSON.stringify({thread:snapshot.thread,historyComplete:snapshot.historyComplete}));
+            this.canonicalPolls.delete(path);
+            this.canonicalPolls.set(path,{requestHash:hash,snapshotHash,due:0,quiet:previousPoll?.requestHash===hash&&previousPoll.guard===quietGuard&&previousPoll.snapshotHash===snapshotHash});
+            while(this.canonicalPolls.size>256)this.canonicalPolls.delete(this.canonicalPolls.keys().next().value!);
+            canonicalRead=true;
+          }
           current=applyThreadItem({...state.bindingCheckpoint,messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
         }
         current=restoreInlineBindings(current,state.bindingCheckpoint);
@@ -494,6 +515,7 @@ export class HostedInlineWriter {
           await this.cleanup(request,state,save);
         }else await save();
       }catch(error){
+        this.canonicalPolls.delete(path);
         if(error instanceof StopStreamRequested)return;
         logFailure('response.writer.retry',error,{jobId:request.id,notePath:state.notePath,threadId:request.threadId});
         if(state.finalSaved)state.status='running';

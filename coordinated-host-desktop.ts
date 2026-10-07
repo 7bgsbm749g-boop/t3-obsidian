@@ -274,6 +274,7 @@ export class CoordinatedHost {
   io(base:HostedWriterIO):HostedWriterIO {
     const reads=new Map<string,{epoch:number;revision:number}>();
     return {...base,
+      quietCanonicalPolling:true,
       requests:async()=>[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&record.responseRemovedAt===undefined&&needsHostedProcessing(record.request,record.state)).map(record=>hostedPaths(this.identity.directory,record.request.id).request),
       accepts:request=>!!this.records.get(request.id)?.coordinated&&!this.records.get(request.id)?.migrating&&this.records.get(request.id)?.responseRemovedAt===undefined&&!this.failures.has(request.id)&&!this.stopped,
       canResume:()=>true,

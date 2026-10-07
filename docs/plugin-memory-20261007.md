@@ -766,3 +766,29 @@ was 0.003 cores / 324 MiB RSS (CPU-0 release checks ran concurrently). Complete
 receipt: `/home/ubuntu/backups/send-to-t3-code/releases/2.34.32/smoke-vps-qlo2.json`.
 The retained profile/trace establish repeated coordinated-host processing as
 another target; no host polling change was included in 2.34.32.
+
+### Bounded unchanged coordinated-host processing (2.34.33 candidate)
+
+The native 2.34.32 trace measured 118 host snapshots / 37.3M serialized
+characters in 45 seconds, versus eight quiet direct snapshots / 3.4M. The host
+writer also reconstructs bindings, compares durable state, renders and projects
+unchanged replies on each authority tick. Coordinated desktop IO now opts into
+quiet canonical polling; other adapters keep their existing behavior.
+
+After two equal canonical thread/history-completeness reads, an unchanged
+request and durable response can defer another download/render for 3000 ms.
+Normal authority ticks drive this deadline; their cadence and network latency
+add to observed spacing. No browser timer is needed. Changed canonical data
+returns to normal tick processing until another equal read confirms quiet.
+Only hashes/deadlines are retained, with at most 256 entries and no transcript
+cache. Global snapshotSequence is excluded from the canonical digest; the
+existing durable-state identity conservatively excludes its redundant cursor.
+
+Every tick still checks fresh request/state acceptance, ownership, relocation,
+final-save cleanup and explicit/local stop before the quiet skip. Changed
+requests or durable response/binding/steering state bypass the deadline. Errors
+clear the quiet record; stop clears all records. Fresh lease/journal integrity
+and checked commit behavior are unchanged. Regression checks cover missed feed
+completion with ordinary text edits, immediate stop, external durable recovery,
+rename, request failure and live-state adapter exemption. Native measurements
+are required before any memory-resolution claim.
