@@ -1,5 +1,6 @@
 import {prepareEventAction,executeEventAction,type ActionIO,type ActionPlan} from './event-actions';
 import {isClientCommand} from './client-command';
+import {markdownCodeCacheStatus} from './reply-html';
 import pluginManifest from './manifest.json';
 import {mergeSharedSettings} from './shared-settings';
 import {noteThreadTitle,threadTitleGeneration,type ThreadTitleGeneration} from './thread-title';
@@ -617,7 +618,7 @@ export default class SendToT3 extends Plugin {
       await this.refreshNoteCommandHost();
       if(!this.clientMaintenance||this.stopped)throw Error('Desktop client maintenance is unavailable.');
       const result=await this.clientMaintenance.execute(input);
-      return input.kind==='client-status'?{...result,responseHostOpening:!!this.inlineHostRefresh,...(this.inlineHostService?{responseHost:this.inlineHostService.status()}: {})}:result;
+      return input.kind==='client-status'?{...result,responseHostOpening:!!this.inlineHostRefresh,codeRangeCache:markdownCodeCacheStatus(),...(this.inlineHostService?{responseHost:this.inlineHostService.status()}: {})}:result;
     }
     if(isResponseCommand(input)){
       const command=validateResponseCommand(input);await this.refreshInlineHost();

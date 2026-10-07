@@ -1,5 +1,7 @@
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
+import {parse,preprocess} from 'micromark';
+import {subtokenize} from 'micromark-util-subtokenize';
 import type {Root,RootContent} from 'mdast';
 
 const parser=unified().use(remarkParse);
@@ -7,10 +9,10 @@ const parser=unified().use(remarkParse);
 // because reply escaping adds its own protected ranges.
 const codeCache=new Map<string,Array<[number,number]>>();
 let cachedCharacters=0,cachedRanges=0;
-let codeCacheHits=0,codeSourceParses=0;
+let codeCacheHits=0,codeSourceParses=0,codeSkippedTextGroups=0;
 const maxCachedCharacters=8_000_000;
 const maxCachedEntries=128,maxCachedRanges=65_536;
-export function markdownCodeCacheStatus(){return {entries:codeCache.size,characters:cachedCharacters,ranges:cachedRanges,maxCharacters:maxCachedCharacters,maxEntries:maxCachedEntries,maxRanges:maxCachedRanges,hits:codeCacheHits,sourceParses:codeSourceParses};}
+export function markdownCodeCacheStatus(){return {entries:codeCache.size,characters:cachedCharacters,ranges:cachedRanges,maxCharacters:maxCachedCharacters,maxEntries:maxCachedEntries,maxRanges:maxCachedRanges,hits:codeCacheHits,sourceParses:codeSourceParses,skippedTextGroups:codeSkippedTextGroups};}
 
 /** Source ranges remain stable even when HTML would swallow Markdown code. */
 export function markdownCodeRanges(markdown:string):Array<[number,number]> {
@@ -18,13 +20,29 @@ export function markdownCodeRanges(markdown:string):Array<[number,number]> {
   if(cached){codeCache.delete(markdown);codeCache.set(markdown,cached);codeCacheHits++;return cached.map(([from,to])=>[from,to]);}
   codeSourceParses++;
   const ranges:Array<[number,number]>=[];
-  function walk(node:Root|RootContent){
-    if(node.type==='code'||node.type==='inlineCode'){
-      const from=node.position?.start.offset,to=node.position?.end.offset;
-      if(from!==undefined&&to!==undefined)ranges.push([from,to]);
-    }else if('children' in node)for(const child of node.children)walk(child as RootContent);
+  // Keep the same CommonMark flow grammar and offset-preserving HTML mask.
+  // A complete linked text group without a literal backtick cannot contain
+  // inline code. Its other inline nodes are unnecessary for this code-only
+  // query, so do not allocate them. Groups with backticks use the full inline
+  // grammar, including links, escapes and spans across soft/container lines.
+  const events=parse().document().write(preprocess()(markdown.replace(/</g,' '),undefined,true));
+  for(;;){
+    const checked=new Set<object>();
+    for(const [kind,token,context] of events){
+      if(kind!=='enter'||token.contentType!=='text'||checked.has(token))continue;
+      let first=token;while(first.previous)first=first.previous;
+      const group:Array<typeof token>=[];let current:typeof token|undefined=first,backticks=false;
+      while(current){checked.add(current);group.push(current);if(context.sliceSerialize(current).includes('`'))backticks=true;current=current.next;}
+      if(!backticks){for(const part of group)part.contentType=undefined;codeSkippedTextGroups++;}
+    }
+    if(subtokenize(events))break;
   }
-  walk(parser.parse(markdown.replace(/</g,' ')) as Root);
+  for(const [kind,token] of events){
+    if(kind==='enter'&&(token.type==='codeFenced'||token.type==='codeIndented'||token.type==='codeText')){
+      const from=token.start.offset,to=token.end.offset;
+      if(from!==undefined&&to!==undefined)ranges.push([from,to]);
+    }
+  }
   if(markdown.length<=maxCachedCharacters&&ranges.length<=maxCachedRanges){
     codeCache.set(markdown,ranges);cachedCharacters+=markdown.length;cachedRanges+=ranges.length;
     while(codeCache.size>maxCachedEntries||cachedCharacters>maxCachedCharacters||cachedRanges>maxCachedRanges){

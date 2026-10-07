@@ -167,3 +167,15 @@ test('packaged desktop host delivers a renamed response while an older journal r
     assert.equal(calls,1,'repeated desktop ticks cannot duplicate the blocked response worker');
   }finally{release?.();await Promise.allSettled(pending);await h.close();}
 });
+
+test('packaged client status exposes only numeric code-range counters even without a response host',async()=>{
+ const h=await fixture();try{
+  const id=randomUUID();h.plugin.refreshNoteCommandHost=async()=>{};
+  h.plugin.clientMaintenance={execute:async()=>({id,ok:true,client:{instanceId:randomUUID(),loadedVersion:'fixture'}})};
+  const result=await h.plugin.executeAgentCommand({version:1,id,kind:'client-status'});
+  assert.equal(result.ok,true);assert.equal(result.responseHost,undefined);
+  assert.ok(Object.values(result.codeRangeCache).every(value=>typeof value==='number'&&Number.isFinite(value)));
+  assert.equal(result.codeRangeCache.maxCharacters,8_000_000);assert.equal(result.codeRangeCache.maxEntries,128);
+  assert.equal(typeof result.codeRangeCache.skippedTextGroups,'number');
+ }finally{await h.close();}
+});

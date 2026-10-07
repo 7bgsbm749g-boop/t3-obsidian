@@ -6,6 +6,7 @@ export interface ClientCommandResult {
   id:string;ok:boolean;error?:string;
   client?:{instanceId:string;loadedVersion:string};reloadScheduled?:boolean;
   responseHostOpening?:boolean;
+  codeRangeCache?:ReturnType<typeof import('./reply-html').markdownCodeCacheStatus>;
   responseHost?:{active:boolean;authority:{busy:boolean;stopped:boolean;recovered:boolean};storage:import('./authority-storage-desktop').AuthorityStorageStatus};
 }
 export function isClientCommand(value:{kind?:string}):value is ClientCommand{return value.kind==='client-status'||value.kind==='reload-client';}

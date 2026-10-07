@@ -680,3 +680,33 @@ is no consistent laptop CPU improvement and memory remains open. Evidence:
 `/home/ubuntu/backups/send-to-t3-code/releases/2.34.30/smoke-vps-qlo2.json`.
 The retained early CPU profile shows Markdown code-boundary parsing as another
 allocation/CPU cost; no parser change is included in 2.34.30.
+
+### Code-only parser allocation work (2.34.31 candidate)
+
+The 2.34.30 early native profile attributed 0.357 of 10.556 sampled seconds
+(inclusive) to markdownCodeRanges. The old query builds a complete mdast tree
+just to identify code positions. Simply dropping the AST compiler had little
+peak-memory benefit in a fresh-process benchmark and was not adopted alone.
+
+The new code-only query keeps pinned micromark 4.0.2 flow parsing and the exact
+HTML-opening mask. It skips inline subtokenization only for an entire linked
+text group with no literal backtick; such a group cannot contain an inline code
+span. All groups with any backtick use the full inline grammar. Fenced and
+indented code parsing is unchanged. Only this local parse's text tokens are
+changed, without modifying parser prototypes or other reply HTML parsing.
+Pinned micromark-util-subtokenize 2.1.0 supplies the existing public operation.
+The same character/entry/range cache bounds and defensive copies remain.
+
+Outside-checkout comparison passed 144 constructed combinations plus all 652
+[CommonMark 0.31.2 examples](https://spec.commonmark.org/0.31.2/spec.json): exact
+code ranges equal the original masked remark AST parser. A fresh-process,
+CPU-0 benchmark of five 349800-character prose-heavy parses produced equal
+2200 ranges/hash: old 8256 ms / 424316 KiB maximum RSS, candidate 4487 ms /
+256108 KiB. This is synthetic allocation evidence, not native laptop proof.
+Canonical regression tests additionally compare nested/linked chunks, CRLF,
+tabs, Unicode/null/lone-surrogate offsets and unfinished streamed prefixes.
+
+Client-status now returns numeric codeRangeCache counters on every desktop,
+including non-authority Windows clients, with no note paths or content. This
+makes the next native memory comparison observable without GUI input. Memory
+remains open until post-release native samples establish improvement.
