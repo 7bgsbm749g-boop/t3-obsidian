@@ -1,4 +1,5 @@
 import type {MarkdownView,TFile} from 'obsidian';
+import {regionBody} from './inline-thread';
 import type {Extension,Transaction as CMTransaction} from '@codemirror/state';
 import {changedEdits,changedInterval,mergeSavedEdits} from './coordinated-merge';
 import {displayToSaved,editableDisplayRange,projectResponses,savedProjection,responseRegion,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
@@ -59,6 +60,7 @@ export class NativeResponseView {
     };
     view.getViewData=this.getWrapper;view.setViewData=this.setWrapper;view.save=this.saveWrapper;
   }
+  responseBody(id:string){return regionBody(this.displayed(),id)?.body??this.responses.find(response=>response.id===id)?.body;}
   private displayed(){return this.originalGet.call(this.view);}
   saved(){
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);

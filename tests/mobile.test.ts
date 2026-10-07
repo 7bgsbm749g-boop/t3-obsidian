@@ -8,22 +8,23 @@ import {webcrypto,createHash} from 'node:crypto';
 import {contentHash,initialMessageId} from '../completion';
 import {settingsSocket} from './rpc-fixture';
 
-test('mobile upgrade removes old credentials and settings, retains uncertain work without replay or cleanup',async()=>{
+test('mobile upgrade removes old credentials and ends uncertain sends without replay or note cleanup',async()=>{
  globalThis.indexedDB=indexedDB;
  let local:any={mode:'https',deviceId:'retired-device',tokens:{'https://old.example':'old-secret'}};const shared:any[]=[];
  const connection={transport:'https',host:'laptop',url:'https://old.example',executable:''};
  const request={id:'old-id',project:{id:'p',title:'P',workspaceRoot:'/'},title:'Old note',prompt:'Keep me',connection};
  await deviceState(local.deviceId,{pending:[request],completionJobs:[{requestId:'j',threadId:'thread',projectId:'p',connection,status:'watching',notePath:'keep.md',action:'delete'}]});
+ const localValues=new Map<string,unknown>();
  class Base{}
  class Plugin{
-  app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,v:any)=>{local=v;},workspace:{onLayoutReady:()=>{},on:()=>{}}};
+  app={loadLocalStorage:(key:string)=>key==='send-to-t3-code-device-v1'?local:localValues.get(key),saveLocalStorage:(key:string,v:any)=>{if(key==='send-to-t3-code-device-v1')local=v;else localValues.set(key,v);},workspace:{onLayoutReady:()=>{},on:()=>{}}};
   async loadData(){return {remote:{url:'https://old.example'},remoteProjects:[{id:'p'}],remoteSelected:['laptop:p']};}
   async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}
  }
  const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};
  const module={exports:{} as any};runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout,clearTimeout,console},{timeout:5000});
- const p=new module.exports.default();await p.onload();assert.equal(p.mode,'direct');assert.equal(p.settings.pending.length,1);assert.equal(p.settings.pending[0].id,'old-id');assert.equal(p.settings.completionJobs[0].status,'kept');assert.match(p.settings.completionJobs[0].detail,/companion mode was removed/);
- await p.retry(p.settings.pending[0]);assert.equal(p.settings.pending.length,1,'Retired send remains for manual review');
+ const p=new module.exports.default();await p.onload();assert.equal(p.mode,'direct');assert.equal(p.settings.pending.length,0);assert.equal(p.settings.completionJobs[0].status,'kept');assert.match(p.settings.completionJobs[0].detail,/companion mode was removed/);
+ assert.equal(typeof p.retry,'undefined');
  assert.ok(!('tokens' in local));for(const d of shared){assert.ok(!('remote' in d));assert.ok(!('remoteProjects' in d));assert.ok(!JSON.stringify(d).includes('old-secret'));}
 });
 
@@ -35,15 +36,16 @@ test('portable fingerprints stay compatible with existing desktop jobs',()=>{
  assert.equal(initialMessageId(id).replace(/-/g,''),hash.toString('hex'));
 });
 
-test('direct pairing works in mobile bundle, keeps sessions local, and resumes only manual retry with original commands',async()=>{
+test('direct pairing works in mobile bundle, keeps sessions local, and never replays a failed send',async()=>{
  let local:any={mode:'direct',pairedSessions:{c:{url:'https://t3.example',environmentId:'env',token:'private-session',expiresAt:Date.now()+600000}}};
  const shared:any[]=[];let lose=true;const commands:any[]=[];
  const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=';
  const markdown='# Mobile 🧪\nBefore\n![[photo.png]]\nAfter\n![same](photo.png)';
  const project={id:'p',title:'P',workspaceRoot:'/',connectionId:'c',connectionName:'Laptop'};
+ const localValues=new Map<string,unknown>();
  class Base{};class File{path='direct.md';name='direct.md';basename='direct';extension='md';stat={ctime:123,size:50};};const file=new File();
  class Plugin{
-  app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,v:any)=>{local=v;},workspace:{onLayoutReady:()=>{},on:()=>{}},vault:{read:async()=>markdown,readBinary:async()=>Uint8Array.from(Buffer.from(png,'base64')).buffer,getName:()=> 'Notes'},metadataCache:{getFirstLinkpathDest:()=>file}};
+  app={loadLocalStorage:(key:string)=>key==='send-to-t3-code-device-v1'?local:localValues.get(key),saveLocalStorage:(key:string,v:any)=>{if(key==='send-to-t3-code-device-v1')local=v;else localValues.set(key,v);},workspace:{onLayoutReady:()=>{},on:()=>{}},vault:{read:async()=>markdown,readBinary:async()=>Uint8Array.from(Buffer.from(png,'base64')).buffer,getName:()=> 'Notes'},metadataCache:{getFirstLinkpathDest:()=>file}};
   async loadData(){return {paired:[{id:'c',name:'Laptop',url:'https://t3.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:p']};}
   async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}
  }
@@ -57,10 +59,10 @@ test('direct pairing works in mobile bundle, keeps sessions local, and resumes o
   const c=JSON.parse(o.body);commands.push(c);if(c.type==='thread.turn.start'&&lose){lose=false;throw Error('lost reply');}return new Response('{}');
  };
  const module={exports:{} as any};runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:settingsSocket(),AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout,clearTimeout,console},{timeout:5000});
- const p=new module.exports.default();await p.onload();assert.equal(p.mode,'direct');assert.equal(p.projects()[0].connectionId,'c');await p.send(file,project);assert.equal(p.settings.pending.length,1);const saved=p.settings.pending[0];assert.equal(saved.title,file.basename);assert.equal(commands[0].title,file.basename);assert.equal(saved.directPlan.phase,'created');assert.equal(saved.attachments.length,1);assert.equal(saved.attachments[0].dataUrl,'data:image/png;base64,'+png);assert.equal(saved.prompt.split('t3-context://').length-1,2);assert.ok(saved.prompt.startsWith('# Mobile 🧪\nBefore\n'));p.onunload();
- const q=new module.exports.default();await q.onload();assert.equal(commands.length,2);await q.retry(q.settings.pending[0]);assert.equal(commands.length,3);assert.deepEqual(commands[1],commands[2]);assert.equal(q.settings.pending.length,0);
+ const p=new module.exports.default();await p.onload();assert.equal(p.mode,'direct');assert.equal(p.projects()[0].connectionId,'c');await p.send(file,project);assert.equal(p.settings.pending.length,0);assert.equal(commands[0].title,file.basename);const sent=commands[1];assert.ok(sent.message.text.startsWith('# Mobile 🧪\nBefore\n'));assert.equal(sent.message.text.split('t3-context://').length-1,2);p.onunload();
+ const q=new module.exports.default();await q.onload();assert.equal(commands.length,2);assert.equal(typeof q.retry,'undefined');assert.equal(q.settings.pending.length,0);q.onunload();
  for(const s of shared){assert.ok(!JSON.stringify(s).includes('private-session'));assert.ok(!('pending' in s));}
- assert.ok(local.pairedSessions.c.token);assert.ok(!JSON.stringify(saved).includes('private-session'));
+ assert.ok(local.pairedSessions.c.token);assert.ok(!JSON.stringify(sent).includes('private-session'));
 });
 
 test('mobile OAuth sign-in discovers machines, persists credentials locally and ignores a cancelled response',async()=>{

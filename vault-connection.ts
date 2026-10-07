@@ -17,6 +17,7 @@ export function vaultIdentity(data:any):string|undefined{
   return Array.isArray(data?.folderLinks)?data.folderLinks.find((x:any)=>x?.folderPath==='/'&&typeof x.id==='string')?.id:undefined;
 }
 export interface VaultRemote {
+  readonly closed:boolean;
   projects():Promise<Project[]>;
   browse(path:string):Promise<{parentPath:string;entries:{name:string;fullPath:string}[]}>;
   matches(root:string,settingsPath:string,vaultId:string):Promise<boolean>;
@@ -34,6 +35,7 @@ export async function connectVaultRemote(c:Connection,s:PairedSession|undefined,
   const rpc=transport.call;
   const projects=async()=>parseProjects(await api('/api/orchestration/shell'));
   return {
+    get closed(){return transport.closed;},
     projects,
     browse:async path=>{const result=await rpc('filesystem.browse',{partialPath:path==='~'?path:path.replace(/[\\/]+$/,'')+'/'});if(typeof result?.parentPath!=='string'||!Array.isArray(result.entries)||result.entries.some((x:any)=>typeof x.name!=='string'||typeof x.fullPath!=='string'))throw Error('Invalid folder list from T3.');return result;},
     matches:async(root,settingsPath,id)=>{

@@ -2,6 +2,7 @@ import {prepareEventAction,executeEventAction,type ActionIO,type ActionPlan} fro
 import {isClientCommand} from './client-command';
 import {markdownCodeCacheStatus} from './reply-html';
 import pluginManifest from './manifest.json';
+import {appendSendFailure,type SendFailure} from './send-failures';
 import {mergeSharedSettings} from './shared-settings';
 import {noteThreadTitle,threadTitleGeneration,type ThreadTitleGeneration} from './thread-title';
 import {NativeConflictModal} from './native-conflict-modal';
@@ -64,7 +65,7 @@ import {handoffInline,hostedPaths,type HostedInlineRequest,type InlineHostTarget
 import {leasePaths,type LeaseRecord} from './inline-lease';
 import {installMobileSelectionAction} from './mobile-selection-action';
 import {hiddenInlineMarkerExtension} from './inline-markers';
-import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,selectionOverlapsInlineResponse,initialRegion,endInsertionOffset,endMarker,failedInlineIds,regionBody,startMarker,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,selectionOverlapsInlineResponse,initialRegion,endInsertionOffset,endMarker,failedInlineIds,regionBody,finalizeRegion,startMarker,type SelectionAnchor} from './inline-thread';
 import {QuestionController} from './question-controller';
 import {QuestionModal,questionButton,questionEditorExtension} from './question-ui';
 import {questionTargets,parseQuestionToken,clearResolvedQuestion,removeDismissedQuestions,type QuestionTarget} from './questions';
@@ -150,6 +151,33 @@ export default class SendToT3 extends Plugin {
   private eventLocalEnvironmentId?:string;
   private mobileSelectionAction?:{dispose():void};
   diagnostics?:EventJournal;
+  private failedRequests=new WeakSet<Request>();
+  private failureKey(){return `t3-send-failures-v1:${this.settings.vaultId}`;}
+  private recordSendFailure(request:Request|undefined,error:unknown,stage:string,startedAt:number){
+    const derived=(part:string)=>{try{return request?commandId(request.id,part):undefined;}catch{return undefined;}};
+    const failure:SendFailure={at:new Date().toISOString(),stage,elapsedMs:Math.max(0,Date.now()-startedAt),delivery:request?.directPlan?.delivery||['delivery-evidence','local-confirmation'].includes(stage)?'accepted':stage==='dispatch'?'unconfirmed':'not-started',...(request?{requestId:request.id,threadId:request.threadId??derived('thread'),messageId:derived('message'),environmentId:request.connection.environmentId,bindingIds:(request.inlineBindings??(request.inlineHost?[request.inlineHost]:[])).map(binding=>binding.id)}:{}),error};
+    try{this.app.saveLocalStorage(this.failureKey(),appendSendFailure(this.app.loadLocalStorage(this.failureKey()),failure));}catch{new Notice('The send failed. The device could not save its failure log.',10000);}
+  }
+  private async failRequest(request:Request,error:unknown,stage:string,startedAt:number){
+    if(this.failedRequests.has(request))return;this.failedRequests.add(request);
+    this.recordSendFailure(request,error,stage,startedAt);
+    this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);
+    if(request.agentCommand)this.app.saveLocalStorage(`${this.localKey}-note-command-${request.agentCommand.id}`,{command:request.agentCommand,discarded:true});
+    const bindings=request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]);
+    for(const binding of bindings){
+      if(binding.nativeProjection)nativeResponses(this.app).stop(binding.id,binding.notePath,true);
+      else try{await deviceNoteIO(this.app).updateNote(binding.notePath,document=>{const region=regionBody(document,binding.id);if(!region)return document;const change=finalizeRegion(document,binding.id,contentHash(region.body),'');return change?document.slice(0,change.from)+change.text+document.slice(change.to):document;},()=>!this.stopped);}catch(cleanupError){this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
+      this.deviceInline?.stopLocally(binding.id);
+      if(this.deviceInline&&[2,3,4].includes(binding.version))void this.deviceInline.failResponse(binding.host,binding.id).catch(cleanupError=>this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt));
+      else void this.stopHostedInline(binding.id,binding.host).catch(cleanupError=>this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt));
+    }
+    const attached=request.inlineSteering??request.inlineFollow;
+    if(attached){const existing=this.inlineChat?.find(attached.jobId);if(existing)await this.inlineChat!.stop(existing);else{nativeResponses(this.app).stop(attached.jobId,request.inlineFollow?.notePath??request.noteThread?.notePath);this.deviceInline?.stopLocally(attached.jobId);if(attached.host)void this.stopHostedInline(attached.jobId,attached.host).catch(cleanupError=>this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt));}}
+    const job=this.inlineChat?.find(request.id);if(job)this.inlineChat!.deliveryFailed(job);
+    // Save cleanup independently of the network. A cleanup failure never
+    // recreates a request or schedules another prompt dispatch.
+    try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'failure-save',startedAt);}
+  }
   private stopContentHash?:()=>void;
   async onload() {
     if(!Platform.isMobile)this.stopContentHash=(await import('./content-hash-desktop')).installDesktopContentHash();
@@ -179,7 +207,7 @@ export default class SendToT3 extends Plugin {
     if(adapter&&typeof adapter.exists==='function'&&typeof adapter.remove==='function'){
       try{await clearVaultDiagnostics(adapter,this.app.vault.configDir||'.obsidian');}catch(error){new Notice(`Could not clear plugin logs: ${message(error)}`);}
     }
-    this.addCommand({id:'export-diagnostics',name:'Export plugin diagnostics…',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
+    this.addCommand({id:'export-diagnostics',name:'Export send failure log…',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
     this.addCommand({id:'send-or-ask',name:'Send to T3 Code',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;
       if(this.stopped||this.busy||!file||file.extension.toLowerCase()!=='md')return false;
@@ -208,7 +236,8 @@ export default class SendToT3 extends Plugin {
     }),()=>this.settings.folderLinks.map(link=>({...link,environmentId:link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??this.eventLocalEnvironmentId})),this.settings.vaultId,{load:()=>this.settings.codebase,save:async state=>{this.settings.codebase=state;await this.save();},projectChanged:async(scope,change)=>{await this.updateCodebaseProjectLinks(scope,change);}});
     await this.codebase.install();
     }
-    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>{this.codebase?.observeSource(record.request,record.state?.notePath??record.request.notePath);return nativeResponses(this.app).receive(record,proof);},receiveDirect:update=>{this.codebase?.observeSource(update.request);return nativeResponses(this.app).stream(update);},receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
+    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),loadStops:()=>this.app.loadLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`)??[],saveStops:ids=>this.app.saveLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`,ids),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>{this.codebase?.observeSource(record.request,record.state?.notePath??record.request.notePath);return nativeResponses(this.app).receive(record,proof);},receiveDirect:update=>{this.codebase?.observeSource(update.request);return nativeResponses(this.app).stream(update);},receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
+    for(const request of [...this.settings.pending])await this.failRequest(request,Error('The previous send ended without a local confirmation.'),'startup-recovery',Date.now());
     this.addCommand({id:'stop-all-responses',name:'Stop all T3 responses in current note',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;if(this.stopped||!file||file.extension.toLowerCase()!=='md')return false;
       if(!checking)void this.inlineChat!.stopAllAt(editor,view,this.deviceInline?.stoppableResponses(file.path)).then(count=>new Notice(count?`Stopped ${count} T3 response${count===1?'':'s'} in this note.`:'No active or failed T3 responses in this note.')).catch(error=>new Notice(`T3: ${message(error)}`,10000));
@@ -1080,7 +1109,7 @@ export default class SendToT3 extends Plugin {
         job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
         await manager.prepare(job,request);
       }});delivered=true;if(job)manager.start(job);
-    }catch(error){if(job)manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&error.requestSaved));throw error;}
+    }catch(error){if(job)manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)));throw error;}
   }
 
   private async steeringRecord(id:string):Promise<{record:LeaseRecord;host:InlineHostTarget}|undefined>{
@@ -1290,6 +1319,7 @@ export default class SendToT3 extends Plugin {
     }catch(error){remote.close();throw error;}
   }
   private async stopHostedInline(id:string,target?:InlineHostTarget){
+    this.deviceInline?.stopLocally(id);
     const host=target??await this.inlineHostTarget(),opened=await this.inlineHostFiles(host);
     try{
       const paths=hostedPaths(host.directory,id);
@@ -1491,7 +1521,7 @@ export default class SendToT3 extends Plugin {
     if(!prompt.trim())throw Error('Enter a message before sending.');
     if(this.stopped)throw Error('The plugin has been disabled. Re-enable it before sending.');
     this.busy=true;
-    let saved=false;
+    const startedAt=Date.now();let request:Request|undefined;
     try{
       const initialImages=options?.barePrompt||options?.sourceContext?.anchor?undefined:await this.prepareImages(prompt,note?.path??'',true);
       if((initialImages||!/!\[/.test(prompt))&&(initialImages?.markdown??prompt).length+(options?.barePrompt?0:this.messageFooter(note?.absolutePath??note?.path??'(no note open)').length)>120_000)throw Error('The message and note path exceed T3’s 120,000-character limit. Shorten the message before sending.');
@@ -1530,20 +1560,24 @@ export default class SendToT3 extends Plugin {
       }
       if(this.stopped)throw Error('The plugin was disabled before sending.');
       const title=await this.requestTitle(connection,project,threadId,note?.path);
-      const request:Request={...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
+      request={...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
       if(prepared.blocks.length&&note)request.noteCoverage={notePath:note.path,blocks:prepared.blocks};
       await options?.onPrepared?.(request);
       logEvent('request.prepared',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,notePath:note?.path,promptHash:contentHash(request.prompt),promptLength:request.prompt.length});
       this.settings.pending.push(request);
-      try{await this.save();saved=true;logEvent('request.saved',{requestId:request.id});}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);throw e;}
+      try{await this.save();logEvent('request.saved',{requestId:request.id});}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);throw e;}
       await this.dispatch(request);
       const draft=this.app.loadLocalStorage(this.chatDraftKey);
       if(typeof draft==='string'&&draft&&(draft===prompt||[THREAD_REPLY_INSTRUCTION,INLINE_REPLY_INSTRUCTION].some(instruction=>prompt===`${draft}\n\n${instruction}`||prompt.endsWith(`\n\nQuestion:\n${draft}\n\n${instruction}`))))this.app.saveLocalStorage(this.chatDraftKey,'');
-    }catch(e){if(e instanceof ProjectCreationCancelled)throw e;throw new RequestDeliveryError(`${saved?message(e):unsavedMessage(e)} ${saved?'Check Unconfirmed requests in settings before sending again.':'No message was sent or queued.'}`,saved);}
+    }catch(e){if(request)await this.failRequest(request,e,'preparation',startedAt);else if(!(e instanceof ProjectCreationCancelled))this.recordSendFailure(undefined,e,'preparation',startedAt);if(e instanceof ProjectCreationCancelled)throw e;throw new RequestDeliveryError(`${unsavedMessage(e)} ${request?'The send failed. Its response was removed. See the send failure log.':'No message was sent or queued.'}`,false,Boolean(request));}
     finally{this.busy=false;}
   }
   async exportDiagnostics(){
-    throw Error('Plugin logging is disabled for the performance test. Existing logs have been cleared.');
+    const modal=new Modal(this.app);modal.titleEl.setText('Send failure log');
+    const entries=this.app.loadLocalStorage(this.failureKey())??[];
+    modal.contentEl.createEl('p',{text:'The last 64 send failures on this device. Message text and credentials are excluded.'});
+    const field=modal.contentEl.createEl('textarea');field.readOnly=true;field.value=JSON.stringify({version:1,pluginVersion:pluginManifest.version,deviceId:this.deviceId,failures:entries},null,2);field.style.width='100%';field.style.height='320px';
+    new Setting(modal.contentEl).addButton(button=>button.setButtonText('Copy log').onClick(()=>{field.select();document.execCommand('copy');}));modal.open();
   }
 
   projects(){
@@ -1896,7 +1930,7 @@ export default class SendToT3 extends Plugin {
   async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote;streamReply?:boolean;jobOptions?:ResolvedJobOptions;destinations?:string[];destinationSection?:string;onPrepared?:(request:Request)=>Promise<void>}) {
     if (this.busy) {if(options?.throwOnError)throw Error('Obsidian is sending another request. Retry shortly.');return;}
     this.busy = true;
-    let saved = false;
+    const startedAt=Date.now();let request:Request|undefined;
     const orchestration = {...this.settings.orchestration};
     const completion = {...this.settings.completion};
     try {
@@ -1928,10 +1962,10 @@ export default class SendToT3 extends Plugin {
       }
       if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path],undefined,options?.destinationSection);
       await options?.onPrepared?.(request);
-      this.settings.pending.push(request); await this.save(); saved = true;
+      this.settings.pending.push(request); await this.save();
       const sentThreadId=await this.dispatch(request,options?.quiet);
       return {threadId:sentThreadId,request};
-    } catch(e) {if(options?.throwOnError)throw new RequestDeliveryError(message(e),saved);new Notice(`Send to T3 Code: ${message(e)} ${saved ? "See settings for saved requests." : "No thread was created."}`,12000);}
+    } catch(e) {if(request)await this.failRequest(request,e,'preparation',startedAt);else this.recordSendFailure(undefined,e,'preparation',startedAt);const detail=`${unsavedMessage(e)} The send failed. See the send failure log.`;if(options?.throwOnError)throw new RequestDeliveryError(detail,false,Boolean(request));new Notice(`Send to T3 Code: ${detail}`,12000);}
     finally {this.busy = false;}
   }
   private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string,destinationSection?:string,sourcePath?:string){
@@ -1975,7 +2009,7 @@ export default class SendToT3 extends Plugin {
     if(this.stopped||this.busy)throw Error('Obsidian is unavailable or sending another request.');
     const key=`${this.localKey}-note-command-${command.id}`,stored=this.app.loadLocalStorage(key) as {command?:NoteCommand;request?:Request;result?:NoteCommandResult;discarded?:boolean}|undefined;
     if(stored?.command&&JSON.stringify(stored.command)!==JSON.stringify(command))throw Error('This command ID already belongs to different input.');
-    if(stored?.discarded)throw Error('This command was discarded. Check its original T3 thread before sending a new command.');
+    if(stored?.discarded)throw Error('This send failed and cannot be retried. Check its original T3 thread and the send failure log.');
     if(stored?.result){this.app.saveLocalStorage(key,{command,result:stored.result});return stored.result;}
     const persist=(value:{request?:Request;result?:NoteCommandResult})=>this.app.saveLocalStorage(key,JSON.parse(JSON.stringify(value.result?{command,result:value.result}:{command,...value})));
     let request=stored?.request,threadId:string;
@@ -2029,6 +2063,7 @@ export default class SendToT3 extends Plugin {
     this.rememberSettlement(request,threadId);
   }
   async dispatch(request:Request,quiet=false) {
+    const startedAt=Date.now();let stage='response-registration';
     logEvent('request.dispatch.started',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,jobId:request.inlineSteering?.jobId,kind:request.inlineSteering?'steering':request.inlineFollow?'continuation':'send'});
     try{
     if(request.inlineSteering){
@@ -2053,7 +2088,8 @@ export default class SendToT3 extends Plugin {
       try{await handoffInline(opened.files,request.inlineHost,()=>!this.stopped);}finally{opened.close();}
     }
     if(!quiet)new Notice(`Working in ${projectLabel(request.project)}…`);
-    const result=await sendRequest(request);
+    stage='dispatch';const result=await sendRequest(request);
+    stage='delivery-evidence';
     // Keep the acknowledged exact start even when the renderer/event feed
     // missed it. This is orchestration delivery, not a guessed provider turn.
     const delivery=request.directPlan?.delivery;
@@ -2063,14 +2099,14 @@ export default class SendToT3 extends Plugin {
       if(request.inlineSteering?.host)await this.deviceInline.delivered(request.inlineSteering.host,request.inlineSteering.jobId,delivery);
       if(request.inlineFollow?.host)await this.deviceInline.delivered(request.inlineFollow.host,request.inlineFollow.jobId,delivery);
     }
-    this.persistAgentCommand(request,result.threadId);
+    stage='local-confirmation';this.persistAgentCommand(request,result.threadId);
     logEvent('request.dispatch.acknowledged',{requestId:request.id,threadId:result.threadId,jobId:request.inlineSteering?.jobId,messageId:commandId(request.id,'message')});
     const before={jobs:this.settings.completionJobs,settlementJobs:this.settings.settlementJobs,pending:this.settings.pending,noteThreads:this.settings.noteThreads,folderLinks:this.settings.folderLinks};
     this.rememberStarted(request,result.threadId);
     this.settings.pending=this.settings.pending.filter(r=>r.id!==request.id);
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;this.settings.settlementJobs=before.settlementJobs;this.settings.noteThreads=before.noteThreads;this.settings.folderLinks=before.folderLinks;throw e;}
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
-    }catch(error){logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});throw error;}
+    }catch(error){logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});await this.failRequest(request,error,stage,startedAt);throw error;}
   }
   onunload(){this.stopContentHash?.();this.codebase?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
@@ -2170,12 +2206,7 @@ export default class SendToT3 extends Plugin {
       }catch{/* Keep the job for a later check after the connection or client recovers. */}
     }
   }
-  async retry(request:Request) {
-    const fields={requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId??request.inlineHost?.id,notePath:request.noteThread?.notePath??request.inlineHost?.notePath};
-    if (this.busy){logEvent('request.retry.skipped',{...fields,reason:'Another send is in progress.'},'warning');return;}
-    this.busy = true;logEvent('request.retry.started',fields);
-    try {await this.dispatch(request);logEvent('request.retry.completed',fields);} catch(e) {logFailure('request.retry.failed',e,fields);new Notice(message(e),12000);} finally {this.busy=false;}
-  }
+
 }
 function randomId():string {
   const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
@@ -2202,7 +2233,7 @@ class ExistingThreadModal extends FuzzySuggestModal<ThreadChoice>{
   onClose(){super.onClose?.();if(this.back)setTimeout(()=>{if(!this.selected)this.back?.();},0);}
   getItems(){return this.threads;}
   getItemText(thread:ThreadChoice){return `${thread.title} · ${thread.status} · ${thread.id.slice(0,8)}`;}
-  async onChooseItem(thread:ThreadChoice){this.selected=true;try{await this.choose(thread);}catch(error){new Notice(`T3 Code: ${message(error)}`,10000);if(!(error instanceof RequestDeliveryError&&error.requestSaved))this.back?.();}}
+  async onChooseItem(thread:ThreadChoice){this.selected=true;try{await this.choose(thread);}catch(error){new Notice(`T3 Code: ${message(error)}`,10000);if(!(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)))this.back?.();}}
 }
 type FolderLinkChoice=Project|{create:true;title:string};
 class FolderLinkProjectModal extends FuzzySuggestModal<FolderLinkChoice>{
@@ -2314,11 +2345,7 @@ class T3Settings extends PluginSettingTab {
       for(const job of this.plugin.settings.completionJobs) new Setting(el).setName(job.notePath).setDesc(`${job.action} · ${job.threadId} · ${job.detail || 'Waiting for successful completion'}`).addButton(b=>b.setButtonText(job.status==='watching'?'Stop monitoring':'Dismiss').onClick(async()=>{this.plugin.settings.completionJobs=this.plugin.settings.completionJobs.filter(j=>j!==job);await this.plugin.save();this.display();}));
       new Setting(el).addButton(b=>b.setButtonText('Check now').onClick(async()=>{b.setDisabled(true);await this.plugin.monitorCompletions();this.display();}));
     }
-    if(this.plugin.settings.pending.length) {
-      el.createEl('h3',{text:'Unconfirmed requests'});
-      el.createEl('p',{text:'T3 may already have started this request. Retry uses the same saved content and ID to avoid duplicates. Discard forgets local retry data; it does not cancel a T3 thread.'});
-      for(const request of this.plugin.settings.pending) new Setting(el).setName(`${request.noteThread?.notePath??request.title} → ${request.project.title}`).setDesc(retiredConnection(request.connection)?RETIRED_MESSAGE+' Request: '+request.id:request.id).addButton(b=>b.setButtonText('Retry').setDisabled(this.plugin.busy||retiredConnection(request.connection)).onClick(async()=>{b.setDisabled(true);await this.plugin.retry(request);this.display();})).addButton(b=>b.setButtonText('Discard').onClick(async()=>{await this.plugin.discardRequest(request);this.display();}));
-    }
+    new Setting(el).setName('Send failure log').setDesc('Failed sends end immediately. No requests are queued for Retry.').addButton(button=>button.setButtonText('View log').onClick(()=>this.plugin.exportDiagnostics()));
   }
 }
 

@@ -152,7 +152,7 @@ class SendDestinationModal extends Modal {
       if(error instanceof ProjectCreationCancelled)return;
       logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});
       new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
-      if(!this.opened&&!(error instanceof RequestDeliveryError&&error.requestSaved))this.open();
+      if(!this.opened&&!(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)))this.open();
     }finally{this.choosing=false;this.actions.setDisabled(Boolean(this.host.busy));if(this.defaultButton)this.defaultButton.disabled=Boolean(this.host.busy||this.defaultDisabled);}
   }
 }

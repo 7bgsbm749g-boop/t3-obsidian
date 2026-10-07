@@ -33,7 +33,7 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
         if(frame.exit?._tag==='Success')task.resolve(frame.exit.value);
         else {const causes=frame.exit?.cause;const failure=Array.isArray(causes)?causes.find((x:any)=>x._tag==='Fail')?.error:undefined;task.reject(new T3RpcError(failure?._tag??'RpcError'));}
       }
-    }catch{finish(Error('T3 returned an incompatible response.'));socket.close();}
+    }catch{closed=true;finish(Error('T3 returned an incompatible response.'));socket.close();}
   };
   try{await ready;}catch(error){socket.close();throw error;}
   const rpc=(tag:string,payload:any)=>new Promise<any>((resolve,reject)=>{

@@ -18,14 +18,14 @@ function record(binding=id,revision=1):LeaseRecord {
 }
 function completed(revision=2,document=final):LeaseRecord {const active=record(id,revision);return {...active,state:{...active.state!,status:'complete',finalBody:body,finalPhase:'complete',finalSaved:true,cleanupComplete:true,delivery:{commitId,hash:contentHash(document),verifiedOnHost:true,observedBy:[]}}};}
 function evidence(document=final){const from=document.indexOf(body);const proof:NativeCommitProof={version:1,bindingId:id,commitId,hash:contentHash(document),document,ranges:[{from,to:from+body.length}]};const bytes=JSON.stringify(proof);return {bytes,proofHash:contentHash(bytes)};}
-function fixture(panes=1){
+function fixture(panes=1,local=new Map<string,unknown>()){
   const file={path:'Note.md'},frames:string[][]=Array.from({length:panes},()=>[]),values=Array.from({length:panes},()=>before),conflicts:any[]=[];
   let disk=before,reads=0,read:()=>Promise<string>=async()=>disk;
   const views=values.map((_,i)=>({file,getViewData:()=>values[i],setViewData:(data:string)=>{values[i]=data;frames[i].push(data);},getMode:()=> 'preview',requestSave:()=>{},save:async()=>{disk=views[i].getViewData();}}));
   let leaves=views.map(view=>({view}));
-  const app:any={workspace:{getLeavesOfType:()=>leaves},vault:{getFileByPath:(path:string)=>path===file.path?file:null,read:async()=>{reads++;return read();}},saveLocalStorage:(_key:string,data:any)=>conflicts.push(data)};
+  const app:any={workspace:{getLeavesOfType:()=>leaves},vault:{getFileByPath:(path:string)=>path===file.path?file:null,read:async()=>{reads++;return read();}},loadLocalStorage:(key:string)=>local.get(key),saveLocalStorage:(key:string,data:any)=>{local.set(key,structuredClone(data));conflicts.push(data);}};
   const manager=new NativeResponseManager(app);
-  return {manager,views,frames,conflicts,file,visible:(pane=0)=>values[pane],edit:(text:string,pane=0)=>{values[pane]=text;},disk:(text:string)=>{disk=text;},readWith:(fn:()=>Promise<string>)=>{read=fn;},reads:()=>reads,open:(view:any)=>{leaves.push({view});},close:()=>{leaves=[];manager.refresh();}};
+  return {manager,views,frames,conflicts,file,local,visible:(pane=0)=>values[pane],edit:(text:string,pane=0)=>{values[pane]=text;},disk:(text:string)=>{disk=text;},readWith:(fn:()=>Promise<string>)=>{read=fn;},reads:()=>reads,open:(view:any)=>{leaves.push({view});},close:()=>{leaves=[];manager.refresh();}};
 }
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
 async function start(h:ReturnType<typeof fixture>){await h.manager.receive(record());await h.manager.receive(record(other));for(const frames of h.frames)frames.length=0;}
@@ -224,4 +224,22 @@ test('removed response drops direct and cached display without restoring a stale
  h.manager.stream({request:current.request,messageId:current.request.messageId,sequence:100,body:'Late removed reply'});
  await h.manager.receive({...current,revision:2});assert.doesNotMatch(h.visible(),/Late removed reply|Final answer/);
  assert.equal(h.manager.view(h.views[0] as any)!.saved(),saved);h.manager.dispose();
+});
+
+for(const hidden of [false,true])test(`local native ${hidden?'failure':'stop'} seals all panes before a host reply and survives stale streams and reload`,async()=>{
+  const h=fixture(2);h.manager.configurePreviewCache('vault',undefined,async()=>{});await start(h);
+  h.manager.stream({request:record().request,messageId:id,sequence:9,body:'**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n\n> Latest partial reply'});
+  h.manager.stop(id,'Note.md',hidden);
+  for(let pane=0;pane<2;pane++){
+    assert.doesNotMatch(h.visible(pane),/Working|spinner/);
+    assert.equal(h.visible(pane).includes('Latest partial reply'),!hidden);
+    assert.ok(h.visible(pane).includes(otherBody));assert.equal(h.views[pane].getViewData(),before);
+  }
+  await h.manager.receive({...record(),revision:10,state:{...record().state!,body:'**T3 · Working**\n\n> Stale host'}});
+  h.manager.stream({request:record().request,messageId:id,sequence:99,body:'**T3 · Working**\n\n> Late event'});
+  assert.doesNotMatch(h.visible(),/Working|Stale host|Late event/);h.manager.dispose();
+  const restarted=fixture(2,h.local);restarted.manager.configurePreviewCache('vault',undefined,async()=>{});
+  await start(restarted);restarted.manager.stream({request:record().request,messageId:id,sequence:200,body:'**T3 · Working**\n\n> After restart'});
+  assert.doesNotMatch(restarted.visible(),/Working|spinner|After restart/);
+  assert.equal(restarted.visible().includes('Latest partial reply'),!hidden);assert.equal(restarted.views[0].getViewData(),before);restarted.manager.dispose();
 });

@@ -17,6 +17,8 @@ export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
 
 export interface PendingResponseRename {id:string;actor:string;bindingId:string;host:InlineHostTarget;before:string;after:string}
 export interface DeviceInlineIO {
+  loadStops?():string[];
+  saveStops?(ids:string[]):void;
   loadRenames?():PendingResponseRename[];
   saveRenames?(renames:PendingResponseRename[]):void;
   receiveCoordinated?(record:LeaseRecord,proofBytes?:string):void|Promise<void>;
@@ -44,6 +46,7 @@ const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...s
  * only missing heartbeats allow another instance to take ownership. */
 export class DeviceInlineManager {
   private stopped=false;
+  private localStops=new Set<string>();
   private renames:PendingResponseRename[];
   private renameWork?:Promise<void>;
   private nextRenameRetry=0;
@@ -53,13 +56,19 @@ export class DeviceInlineManager {
   private previews=new Map<string,DirectInlinePreview>();
   private accessCache=new ThreadAccessCache((environmentId,reason)=>this.io.access(environmentId,reason),()=>this.now());
   private titles?:ThreadTitleFeed;
-  constructor(readonly actor:string,private vaultId:string,private io:DeviceInlineIO,private open:(target:InlineHostTarget)=>Promise<{files:InlineFiles;close():void}>,private now=()=>Date.now(),private monotonic=()=>performance.now(),private pause?:(milliseconds:number)=>Promise<void>){const saved=io.loadRenames?.();this.renames=Array.isArray(saved)?saved:[];for(const rename of this.renames)this.host(rename.host);if(io.receiveThreadTitle)this.titles=new ThreadTitleFeed(environmentId=>io.access(environmentId),(id,title)=>io.receiveThreadTitle!(id,title));}
+  constructor(readonly actor:string,private vaultId:string,private io:DeviceInlineIO,private open:(target:InlineHostTarget)=>Promise<{files:InlineFiles;readonly closed?:boolean;close():void}>,private now=()=>Date.now(),private monotonic=()=>performance.now(),private pause?:(milliseconds:number)=>Promise<void>){const stops=io.loadStops?.();this.localStops=new Set(Array.isArray(stops)?stops:[]);const saved=io.loadRenames?.();this.renames=Array.isArray(saved)?saved:[];for(const rename of this.renames)this.host(rename.host);if(io.receiveThreadTitle)this.titles=new ThreadTitleFeed(environmentId=>io.access(environmentId),(id,title)=>io.receiveThreadTitle!(id,title));}
   private host(target:InlineHostTarget){
     const key=hostKey(target),existing=this.hosts.get(key);if(existing)return existing;
-    let connection:Promise<{files:InlineFiles;close():void}>|undefined;
+    let connection:Promise<{files:InlineFiles;readonly closed?:boolean;close():void}>|undefined;
     const perform=async<T>(fn:(files:InlineFiles)=>Promise<T>)=>{
       const opened=connection??=this.open(target);
-      try{return await fn((await opened).files);}catch(error){if(connection===opened)connection=undefined;void opened.then(value=>value.close()).catch(()=>{});throw error;}
+      try{return await fn((await opened).files);}catch(error){
+        // A file/RPC failure belongs to this operation. Only replace a dead
+        // transport; closing a healthy shared socket cancels unrelated sends.
+        const value=await opened.catch(()=>undefined);
+        if(!value||value.closed!==false){if(connection===opened)connection=undefined;value?.close();}
+        throw error;
+      }
     };
     const files:InlineFiles={read:path=>perform(io=>io.read(path)),write:(path,value)=>perform(io=>io.write(path,value))};
     const host:Host={target,files,client:new InlineLeaseClient(this.actor,files,target.directory,this.now,this.monotonic,this.pause),lastDiscovery:0,responses:[],close:()=>{host.client.dispose();void connection?.then(value=>value.close()).catch(()=>{});}};
@@ -80,8 +89,22 @@ export class DeviceInlineManager {
     if(!reply.ok||!reply.record)throw Error(reply.error??'Could not retain the prompt delivery evidence.');
     this.receiveRecord(host,reply.record);this.tick();
   }
+  stopLocally(id:string){
+    this.localStops.add(id);this.io.saveStops?.([...this.localStops]);
+    this.previews.get(id)?.dispose();this.previews.delete(id);
+  }
+  async failResponse(target:InlineHostTarget,id:string){
+    this.stopLocally(id);
+    const host=this.host(target);
+    // This survives a registration acknowledgement arriving after failure.
+    await host.files.write(hostedPaths(target.directory,id).stop,JSON.stringify({id,discardResponse:true,requestedAt:new Date(this.now()).toISOString()}));
+    const reply=await host.client.command({kind:'stop',jobId:id,discardResponse:true});
+    if(reply.record)this.receiveRecord(host,reply.record);
+    if(!reply.ok)throw Error(reply.error??'Could not confirm failed response cleanup.');
+    this.tick();
+  }
   async stopResponse(target:InlineHostTarget,id:string){
-    this.previews.get(id)?.dispose();
+    this.stopLocally(id);
     this.renames=this.renames.filter(item=>item.bindingId!==id);this.io.saveRenames?.(this.renames);
     const host=this.host(target),reply=await host.client.command({kind:'stop',jobId:id});
     if(!reply.ok||!reply.record)throw Error(reply.error??'Could not record the response stop.');
@@ -118,6 +141,9 @@ export class DeviceInlineManager {
         await Promise.allSettled(requests.map(async value=>{
           const request=validateHostedRequest(value);
           if(![2,3,4].includes(request.version)||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(host.target)||this.jobs.has(request.id))return;
+          // Already materialized history needs no lease body or transport read.
+          const summary=host.responses.find(response=>response.id===request.id);
+          if(summary&&summary.complete&&!summary.active&&!summary.input){const note=await this.io.readNote(request.notePath);if(note===undefined||!hasResponseMarkers(note,request.id))return;}
           const bytes=await host.files.read(leasePaths(host.target.directory,request.id).record);if(!bytes||this.stopped)return;
           const record:LeaseRecord=JSON.parse(bytes);
           const path=await this.location(record);if(path===undefined)return;
@@ -129,8 +155,8 @@ export class DeviceInlineManager {
       })();host.discovery=work;void work.finally(()=>{host.discovery=undefined;}).catch(()=>{});
     }
   }
-  explorerResponses():ExplorerResponse[]{return [...this.hosts.values()].flatMap(host=>host.responses);}
-  stoppableResponses(path:string){return [...this.jobs.values()].filter(({record})=>(record.state?.notePath??record.request.notePath)===path&&!record.stopRequestedAt&&!record.state?.userStopped&&!terminalLease(record)).map(({record,host})=>({id:record.request.id,hostTarget:host.target}));}
+  explorerResponses():ExplorerResponse[]{return [...this.hosts.values()].flatMap(host=>host.responses).filter(response=>!this.localStops.has(response.id));}
+  stoppableResponses(path:string){return [...this.jobs.values()].filter(({record})=>(record.state?.notePath??record.request.notePath)===path&&!this.localStops.has(record.request.id)&&!record.stopRequestedAt&&!record.state?.userStopped&&!terminalLease(record)).map(({record,host})=>({id:record.request.id,hostTarget:host.target}));}
   private receiveRecord(host:Host,record:LeaseRecord){
     if(this.stopped||record.request.vaultId!==this.vaultId||hostKey(record.request.host)!==hostKey(host.target))return;
     if(this.bindings.get(record.request.id)?.removed&&record.responseRemovedAt===undefined)return;
@@ -143,7 +169,7 @@ export class DeviceInlineManager {
       if(record.coordinated)void Promise.resolve(this.io.receiveCoordinated?.(record)).catch(error=>logFailure('note.projection.receive',error,{bindingId:record.request.id}));
       return;
     }
-    if(record.coordinated&&this.io.receiveDirect){
+    if(record.coordinated&&this.io.receiveDirect&&!this.localStops.has(record.request.id)){
       let preview=this.previews.get(record.request.id);
       if(!preview){preview=new DirectInlinePreview(record,()=>this.access(record.request.threadEnvironmentId),update=>this.io.receiveDirect!(update));this.previews.set(record.request.id,preview);}
       else preview.update(record);
@@ -170,7 +196,7 @@ export class DeviceInlineManager {
         }
         return located;
       }:undefined,
-      read:async path=>path===paths.request?JSON.stringify(runtime.record.request):path===paths.state?(runtime.record.state?JSON.stringify(runtime.record.state):undefined):path===paths.stop&&runtime.record.stopRequestedAt?'{}':host.files.read(path),
+      read:async path=>path===paths.request?JSON.stringify(runtime.record.request):path===paths.state?(runtime.record.state?JSON.stringify(runtime.record.state):undefined):path===paths.stop&&runtime.record.stopRequestedAt?JSON.stringify({discardResponse:runtime.record.discardResponse===true}):host.files.read(path),
       write:async(path,value)=>{
         if(path!==paths.state||!allowed())throw Error('Writer ownership expired.');
         const state:HostedInlineState=JSON.parse(value);

@@ -282,7 +282,7 @@ export class CoordinatedHost {
       read:async path=>{
         const id=/\/([^/]+)\.json$/.exec(path)?.[1],record=id?this.records.get(id):undefined;
         if(record&&path===hostedPaths(this.identity.directory,id!).state){reads.set(id!,{epoch:record.epoch,revision:record.revision});return record.state?JSON.stringify(record.state):undefined;}
-        if(record&&path===hostedPaths(this.identity.directory,id!).stop)return record.stopRequestedAt?'{}':undefined;
+        if(record&&path===hostedPaths(this.identity.directory,id!).stop)return record.stopRequestedAt?JSON.stringify({discardResponse:record.discardResponse===true}):undefined;
         return base.read(path);
       },
       write:async(path,value)=>{

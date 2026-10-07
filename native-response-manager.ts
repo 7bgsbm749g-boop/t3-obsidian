@@ -1,4 +1,5 @@
 import {contentHash} from './completion';
+import {stoppedResponseBody} from './response-stop';
 import type {App,MarkdownView} from 'obsidian';
 import type {Transaction} from '@codemirror/state';
 import {NativeResponseView} from './native-response-view';
@@ -16,6 +17,8 @@ export function nativeResponses(app:App){let manager=managers.get(app);if(!manag
  * is compared independently across views; streaming never copies an editor
  * buffer over a competing view. Conflict snapshots are device-local. */
 export class NativeResponseManager {
+  private localStops=new Map<string,{id:string;path:string;body:string;hidden:boolean}>();
+  private stopKey?:string;
   private views=new Map<MarkdownView,NativeResponseView>();
   private provisional=new Map<string,{path:string;body:string}>();
   private streams=new Map<string,DirectInlineUpdate>();
@@ -36,6 +39,9 @@ export class NativeResponseManager {
   private previewWork?:Promise<void>;
   constructor(private app:App){}
   configurePreviewCache(vaultId:string,saved:unknown,save:(snapshot:NativePreviewSnapshot)=>Promise<void>){
+    this.stopKey=`t3-local-response-stops-v1:${vaultId}`;
+    const stops=this.app.loadLocalStorage?.(this.stopKey);
+    if(Array.isArray(stops))for(const stop of stops)if(typeof stop?.id==='string'&&typeof stop.path==='string'&&typeof stop.body==='string'&&typeof stop.hidden==='boolean')this.localStops.set(stop.id,stop);
     this.previewVault=vaultId;this.savePreviews=save;this.cached.clear();this.reconnecting.clear();
     for(const entry of loadNativePreviews(saved,vaultId)){this.cached.set(entry.id,entry);this.reconnecting.add(entry.id);}
     if(typeof this.app.workspace?.getLeavesOfType==='function')this.refresh();
@@ -56,6 +62,7 @@ export class NativeResponseManager {
   private forgetPreview(id:string){if(this.cached.delete(id))this.dirtyPreview();this.reconnecting.delete(id);}
   private rememberPreview(record:LeaseRecord,body:string){
     if(!this.previewVault||record.request.vaultId!==this.previewVault||this.reconnecting.has(record.request.id)||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict)return;
+    if(this.localStops.has(record.request.id))return;
     const request=record.request,stream=this.streams.get(request.id);
     const entry:NativePreviewEntry={id:request.id,vaultId:request.vaultId,notePath:record.state?.notePath??request.notePath,threadId:request.threadId,projectId:request.projectId,threadEnvironmentId:request.threadEnvironmentId,messageId:previewMessageId(record),epoch:record.epoch,revision:record.revision,sequence:stream?.sequence??-1,body};
     const old=this.cached.get(entry.id);if(old&&JSON.stringify(old)===JSON.stringify(entry))return;
@@ -78,6 +85,8 @@ export class NativeResponseManager {
       for(const [path,destination] of aliases)aliases.set(path,moved(destination));
       aliases.set(before,after);this.relocations.set(id,aliases);
     }
+    for(const stop of this.localStops.values())stop.path=moved(stop.path);
+    if(this.stopKey&&this.localStops.size)this.app.saveLocalStorage(this.stopKey,[...this.localStops.values()]);
     for(const item of this.provisional.values())item.path=moved(item.path);
     for(const entry of this.cached.values()){const path=moved(entry.notePath);if(path!==entry.notePath){entry.notePath=path;this.dirtyPreview();}}
     for(const item of this.streams.values())item.request={...item.request,notePath:moved(item.request.notePath)};
@@ -87,7 +96,18 @@ export class NativeResponseManager {
   view(view:MarkdownView){const adapter=this.views.get(view);return adapter&&!adapter.isDisposed()?adapter:undefined;}
   conflictedView(path:string){return [...this.views].find(([view,adapter])=>view.file?.path===path&&!adapter.isDisposed()&&adapter.conflictRecord())?.[0];}
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
+  stop(id:string,path?:string,hidden=false){
+    const record=this.records.get(id),provisional=this.provisional.get(id),cached=this.cached.get(id);
+    const current=[...this.views.values()].map(view=>view.responseBody(id)).find(body=>body!==undefined)??this.streams.get(id)?.body??provisional?.body??cached?.body??record?.state?.body??'';
+    const previous=this.localStops.get(id);
+    this.localStops.set(id,{id,path:path??previous?.path??provisional?.path??cached?.notePath??record?.state?.notePath??record?.request.notePath??'',body:hidden?'':previous?.body??stoppedResponseBody(current),hidden:hidden||previous?.hidden===true});
+    this.streams.delete(id);this.forgetPreview(id);
+    // The display is sealed synchronously, before persistence or remote work.
+    this.refresh();
+    if(this.stopKey)try{this.app.saveLocalStorage(this.stopKey,[...this.localStops.values()]);}catch(error){logFailure('response.stop.local-save.failed',error,{bindingId:id});}
+  }
   stream(update:DirectInlineUpdate){
+    if(this.localStops.has(update.request.id))return;
     const record=this.records.get(update.request.id),previous=this.streams.get(update.request.id);
     if(record&&(record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.request.vaultId!==update.request.vaultId||record.request.threadId!==update.request.threadId||record.request.projectId!==update.request.projectId||record.request.threadEnvironmentId!==update.request.threadEnvironmentId))return;
     if(previous&&previous.sequence>update.sequence)return;
@@ -116,6 +136,7 @@ export class NativeResponseManager {
       else if(cached.sequence===-1&&record.state?.body!==undefined)this.reconnecting.delete(record.request.id);
     }
     this.provisional.delete(record.request.id);this.records.set(record.request.id,record);
+    if(record.stopRequestedAt&&!record.state?.cleanupComplete&&(!this.localStops.has(record.request.id)||record.discardResponse&&!this.localStops.get(record.request.id)?.hidden))this.stop(record.request.id,path,record.discardResponse===true);
     if(record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete)this.streams.delete(record.request.id);
     this.refresh();
     if(record.state?.delivery&&record.state.cleanupComplete)await this.changed(record.state.notePath);
@@ -199,6 +220,12 @@ export class NativeResponseManager {
           const displayed=record.state?.cleanupComplete?body:this.titled(id,body);
           if(!restoring)this.rememberPreview(record,displayed);
           responses.push({id,body:restoring?this.reconnectingBody(cached):displayed});
+        }
+        for(const stop of this.localStops.values()){
+          if(stop.path!==view.file.path||!responseRegion(saved,stop.id)||adapter?.hasMaterialized(stop.id))continue;
+          const index=responses.findIndex(response=>response.id===stop.id);
+          const sealed={id:stop.id,body:stop.hidden?'':stop.body};
+          if(index>=0)responses[index]=sealed;else responses.push(sealed);
         }
         if(!adapter&&responses.length){
           const file=view.file;

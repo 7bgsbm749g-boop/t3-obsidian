@@ -750,3 +750,21 @@ test('durable removed delivery is idempotent across restart and cannot be stoppe
  assert.equal(JSON.parse(h.data.get(leasePaths(request.host.directory,'').catalog)!).some((r:HostedInlineRequest)=>r.id===request.id),false);
  client.dispose();h.authority().stop();
 });
+
+test('failure cleanup recorded before a late registration fences the response without any resend',async()=>{
+  const h=harness(),client=h.client();
+  await h.files.write(hostedPaths(h.request.host.directory,h.request.id).stop,JSON.stringify({discardResponse:true}));
+  const registered=await client.command({kind:'register',jobId:h.request.id,request:h.request});
+  assert.equal(registered.ok,true);assert.equal(h.record().discardResponse,true);assert.ok(h.record().stopRequestedAt);
+  const claim=await client.command({kind:'steer',jobId:h.request.id,steering:{messageId:randomUUID(),text:'must not send'}});
+  assert.equal(claim.ok,false);assert.match(claim.error!,/stopped/);client.dispose();h.authority().stop();
+});
+
+test('local stop clears shared explorer activity before the host can acknowledge it',async()=>{
+  const h=harness();let saved:string[]=[];
+  const io={loadStops:()=>saved,saveStops:(ids:string[])=>{saved=ids;},access:async()=>{throw Error('unused');},readNote:async()=>undefined,isOpen:()=>false,updateNote:async()=>undefined};
+  const create=()=>new DeviceInlineManager(h.actor,'vault',io,async()=>({files:{read:()=>new Promise<string|undefined>(()=>{}),write:async()=>{}},closed:false,close:()=>{}}));
+  const manager=create(),host=(manager as any).host(h.request.host);host.responses=[{id:h.request.id,notePath:'Note.md',epoch:1,revision:0,active:true,input:false,complete:false}];
+  manager.stopLocally(h.request.id);assert.deepEqual(manager.explorerResponses(),[]);manager.dispose();
+  const restarted=create(),next=(restarted as any).host(h.request.host);next.responses=host.responses;assert.deepEqual(restarted.explorerResponses(),[]);restarted.dispose();h.authority().stop();
+});

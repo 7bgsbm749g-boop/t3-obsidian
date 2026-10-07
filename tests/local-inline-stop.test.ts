@@ -7,18 +7,18 @@ import {randomUUID} from 'node:crypto';
 import {initialRegion,replaceRegion} from '../inline-thread';
 
 async function harness(hosted=false){
-  const result=await build({entryPoints:['inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+  const result=await build({stdin:{contents:"export {InlineChatManager} from './inline-chat'; export {nativeResponses} from './native-response-manager';",resolveDir:process.cwd(),sourcefile:'local-stop-harness.ts'},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
   const module={exports:{} as any},realRequire=createRequire(import.meta.url);
   runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Notice:class{}}:realRequire(id),console,setTimeout,clearTimeout,TextEncoder,Uint8Array});
   const id=randomUUID(),initial=initialRegion(id),change=replaceRegion(initial.text,id,initial.bodyHash,'**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n\n> Partial answer edited in the note.')!;
   let value='Before'+initial.text.slice(0,change.from)+change.text+initial.text.slice(change.to)+'After',saved:any[]=[];
   const editor={getValue:()=>value,offsetToPos:(offset:number)=>offset,replaceRange:(text:string,from:number,to:number)=>{value=value.slice(0,from)+text+value.slice(to);}};
-  const info={file:{path:'Note.md'},editor};
-  const app={loadLocalStorage:()=>saved,saveLocalStorage:(_key:string,jobs:any[])=>{saved=JSON.parse(JSON.stringify(jobs));},workspace:{getLeavesOfType:()=>[{view:info}]}};
+  const info:any={file:{path:'Note.md'},editor};
+  const local=new Map<string,unknown>();const app={loadLocalStorage:(key:string)=>key==='jobs'?saved:local.get(key),saveLocalStorage:(key:string,jobs:any[])=>{if(key==='jobs')saved=JSON.parse(JSON.stringify(jobs));else local.set(key,structuredClone(jobs));},workspace:{getLeavesOfType:()=>[{view:info}]}};
   const create=(remote=async()=>{})=>new module.exports.InlineChatManager(app,'jobs',async()=>undefined,hosted?{prepare:async()=>{},stop:remote}:undefined);
   const manager=create(),job:any={id,path:'Note.md',requestId:id,bodyHash:initial.bodyHash,phase:'running',createdAt:'',hosted,...(!hosted?{threadId:'thread',turnId:'turn',connection:{transport:'direct',url:'https://test'}}:{})};
   manager.jobs.push(job);manager.runtime(job).state={messages:[{id:'old',role:'assistant',text:'STALE CACHE',turnId:'turn',streaming:true}],activities:[]};
-  return {id,editor,info,manager,job,create,get value(){return value;},set value(next:string){value=next;},get saved(){return saved;}};
+  return {id,editor,info,app,native:()=>module.exports.nativeResponses(app),manager,job,create,get value(){return value;},set value(next:string){value=next;},get saved(){return saved;}};
 }
 
 for(const failure of ['reject','hang'])test(`local stop finalizes before remote ${failure}, ignores late snapshots, and survives reload`,async()=>{
@@ -84,4 +84,20 @@ test('stop all finishes each valid reply when another response has incomplete bo
     assert.match(h.value,/Keep this broken reply/);
     assert.ok(h.saved.every(job=>job.phase==='cancelled'));
   }finally{h.manager.dispose();}
+});
+
+for(const failure of ['reject','hang'])test(`native hosted Stop finishes locally before remote ${failure}, then stays sealed after reload`,async()=>{
+  const h=await harness(true),native=h.native(),body='**T3 · Working**\n\n> Keep the latest native partial reply';
+  h.value=`Before\n<!-- t3-inline:start:${h.id} -->\n\n<!-- t3-inline:end:${h.id} -->\nAfter`;
+  h.info.getViewData=()=>h.value;h.info.setViewData=(value:string)=>{h.value=value;};h.info.save=async()=>{};h.info.requestSave=()=>{};h.info.getMode=()=>'preview';
+  native.configurePreviewCache('vault',undefined,async()=>{});native.preview(h.info,h.id,body);
+  h.manager.hosted.stop=()=>failure==='reject'?Promise.reject(Error('offline')):new Promise(()=>{});
+  try{
+    await h.manager.stop(h.job);assert.doesNotMatch(h.value,/Working|spinner/);assert.match(h.value,/latest native partial reply/);
+    native.stream({request:{id:h.id,notePath:'Note.md'},sequence:100,body:'**T3 · Working**\nLate native stream'});
+    assert.doesNotMatch(h.value,/Late native stream|Working/);assert.equal(h.saved[0].finalized,true);
+    h.manager.dispose();native.dispose();
+    native.configurePreviewCache('vault',undefined,async()=>{});const reloaded=h.create();reloaded.resume();
+    assert.doesNotMatch(h.value,/Working|spinner/);assert.match(h.value,/latest native partial reply/);reloaded.dispose();
+  }finally{h.manager.dispose();native.dispose();}
 });

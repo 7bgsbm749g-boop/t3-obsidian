@@ -211,34 +211,29 @@ test('existing Ask header uses the canonical name before a delayed turn acknowle
   }finally{release?.();h.plugin.onunload();}
 });
 
-test('failed requests freeze their chosen title across setting changes and reload',async()=>{
-  let lose=true;
-  const h=await chatHarness(async command=>{if(command.type==='thread.create'&&lose){lose=false;throw Error('lost reply');}});
-  let plugin=h.plugin;
+test('failed requests end without replay across setting changes and reload',async()=>{
+  const h=await chatHarness(async command=>{if(command.type==='thread.create')throw Error('lost reply');});let plugin=h.plugin;
   try{
-    await assert.rejects(plugin.sendChat('Ask text',{path:'Notes/Release plan.md'},{newThread:true}));
-    const create=h.commands[0];assert.equal(create.title,'Release plan');
-    plugin.settings.threadTitleGeneration='always';await plugin.save();
-    plugin.onunload();plugin=await h.start();
-    await plugin.retry(plugin.settings.pending[0]);
-    assert.deepEqual(h.commands[1],create);assert.equal(plugin.settings.pending.length,0);
+    await assert.rejects(plugin.sendChat('Ask text',{path:'Notes/Release plan.md'},{newThread:true}),/send failed/);
+    assert.equal(h.commands[0].title,'Release plan');assert.equal(plugin.settings.pending.length,0);
+    plugin.settings.threadTitleGeneration='always';await plugin.save();const count=h.commands.length;
+    plugin.onunload();plugin=await h.start();assert.equal(h.commands.length,count);assert.equal(plugin.settings.pending.length,0);
   }finally{plugin.onunload();}
 });
 
-test('disabled logging leaves failed-send recovery and original-ID retries intact across reload',async()=>{
-  let lose=true;
-  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'&&lose){lose=false;throw Error('lost reply');}});
-  let plugin=h.plugin;
+test('failure-only logging survives reload without restoring a send or private prompt',async()=>{
+  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')throw Error('lost reply');});let plugin=h.plugin;
   try{
     assert.equal(plugin.diagnostics,undefined);
-    await assert.rejects(plugin.sendChat('Private diagnostic regression prompt'),/Unconfirmed requests/);
-    const request=plugin.settings.pending[0];assert.ok(request);
-    plugin.onunload();plugin=await h.start();
-    assert.equal(plugin.diagnostics,undefined);
-    assert.equal(plugin.settings.pending[0].id,request.id);
-    await plugin.retry(plugin.settings.pending[0]);assert.equal(plugin.settings.pending.length,0);
-    assert.equal(h.commands.filter(c=>c.type==='thread.turn.start').at(-1).commandId,h.commands.find(c=>c.type==='thread.turn.start').commandId);
-    await assert.rejects(plugin.exportDiagnostics(),/logging is disabled/);
+    await assert.rejects(plugin.sendChat('Private diagnostic regression prompt'),/send failure log/);
+    assert.equal(plugin.settings.pending.length,0);
+    const key=`t3-send-failures-v1:${plugin.settings.vaultId}`,entries=plugin.app.loadLocalStorage(key);
+    assert.equal(entries.length,1);assert.equal(entries[0].stage,'dispatch');assert.equal(entries[0].delivery,'unconfirmed');
+    assert.equal(entries[0].messageId,h.commands.find(c=>c.type==='thread.turn.start').message.messageId);
+    assert.doesNotMatch(JSON.stringify(entries),/Private diagnostic regression prompt|private-token/);
+    const count=h.commands.length;plugin.onunload();plugin=await h.start();
+    assert.equal(plugin.diagnostics,undefined);assert.equal(plugin.settings.pending.length,0);assert.equal(h.commands.length,count);
+    assert.deepEqual(plugin.app.loadLocalStorage(key),entries);
   }finally{plugin.onunload();}
 });
 
@@ -354,40 +349,14 @@ test('a full-note send keeps its note with a remembered thread and reuses the co
   }finally{h.plugin.onunload();}
 });
 
-test('an uncertain chat survives restart and retries the original immutable commands manually',async()=>{
-  let loseResponse=true;
-  const h=await chatHarness(async command=>{
-    if(command.type==='thread.turn.start'&&loseResponse){loseResponse=false;throw Error('Connection lost after accepting turn');}
-  });
-  const prompt='Draft a short project plan.\nPreserve this second line.';
-  try {
-    await assert.rejects(h.plugin.sendChat(prompt),(error:any)=>{
-      assert.match(error.message,/unconfirmed requests|saved|retry/i);
-      assert.equal(error.requestSaved,true,'The prompt UI must distinguish saved sends from safe-to-resubmit validation failures');
-      return true;
-    });
-    assert.equal(h.plugin.busy,false);
-    assert.equal(h.plugin.settings.pending.length,1);
-    const pending=h.plugin.settings.pending[0];
-    assert.ok(pending.prompt.startsWith(prompt));
-    assert.doesNotMatch(pending.prompt,/T3 EVENT HISTORY CAPABILITY/);
-    assert.equal(pending.completion,undefined);
-    assert.equal(pending.directPlan.phase,'created');
-    assert.equal(h.plugin.settings.completionJobs.length,0);
-    h.plugin.onunload();
-    const restarted=await h.start();
-    assert.equal(h.commands.length,2,'Reload must leave an uncertain send for manual retry');
-    restarted.settings.orchestration.waitForOtherThreads=true;
-    restarted.settings.folderLinks=[];
-    await restarted.retry(restarted.settings.pending[0]);
-    assert.equal(h.commands.length,3);
-    assert.deepEqual(h.commands[1],h.commands[2],'Retry preserves the command ID, thread ID, model, project and original text');
-    assert.equal(h.commands.filter(command=>command.type==='thread.create').length,1);
-    assert.equal(restarted.settings.pending.length,0);
-    assert.equal(restarted.settings.completionJobs.length,0);
-    assert.equal(h.vaultAccesses(),0);
-    restarted.onunload();
-  } finally {h.plugin.onunload();}
+test('a lost turn acknowledgement fails permanently and does not dispatch again on reload',async()=>{
+  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')throw Error('Connection lost after accepting turn');});let restarted:any;
+  try{
+    await assert.rejects(h.plugin.sendChat('Draft a short project plan.'),(error:any)=>error.requestSaved===false&&/send failed/.test(error.message));
+    assert.equal(h.plugin.busy,false);assert.equal(h.plugin.settings.pending.length,0);assert.equal(h.plugin.settings.completionJobs.length,0);
+    const count=h.commands.length;h.plugin.onunload();restarted=await h.start();
+    assert.equal(h.commands.length,count);assert.equal(restarted.settings.pending.length,0);assert.equal(typeof restarted.retry,'undefined');
+  }finally{restarted?.onunload();h.plugin.onunload();}
 });
 
 test('chat validates text before creating a thread and applies enabled orchestration within the size limit',async()=>{
@@ -946,17 +915,13 @@ test('mobile root setup rejects an unrelated folder and remains open to retry',a
   }finally{h.plugin.onunload();}
 });
 
-test('chat retry retains its original note path even after the active note and links change',async()=>{
-  let lose=true;
-  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'&&lose){lose=false;throw Error('Lost response');}});
+test('failed chat logs the original identity and leaves no send after active-note changes',async()=>{
+  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')throw Error('Lost response');});
   try{
-    await assert.rejects(h.plugin.sendChat('Edit this',{path:'Draft.md'}),/Unconfirmed/);
-    const original=h.commands[1];
-    assert.match(original.message.text,/Draft.md/);
+    await assert.rejects(h.plugin.sendChat('Edit this',{path:'Draft.md'}),/send failed/);
+    const original=h.commands[1];assert.match(original.message.text,/Draft.md/);
     h.setActiveNote('Different.md');h.plugin.settings.folderLinks=[];
-    await h.plugin.retry(h.plugin.settings.pending[0]);
-    assert.deepEqual(h.commands[2],original);
-    assert.equal(h.plugin.settings.completionJobs.length,0);
+    assert.equal(h.plugin.settings.pending.length,0);assert.equal(h.commands.length,2);assert.equal(h.plugin.settings.completionJobs.length,0);
   }finally{h.plugin.onunload();}
 });
 
@@ -1104,18 +1069,18 @@ for(const composer of [false,true])test(`the ${composer?'composer':'destination'
     const sending=composer?modal.choose():modal.choose(false);
     assert.equal(modal.closed,true,'The editor is usable before any network response');
     await enteredTurn;
-    assert.equal(h.plugin.settings.pending.length,1,'Retry is durable while sending');
+    assert.equal(h.plugin.settings.pending.length,1,'The in-flight command identity is durable while sending');
     release();await sending;
     assert.equal(modal.closed,true);assert.equal(h.plugin.settings.pending.length,0);
   }finally{release?.();h.plugin.onunload();}
 });
 
-test('a background delivery failure keeps its saved request without opening settings',async()=>{
+test('a background delivery failure ends without a saved request or opening settings',async()=>{
   const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')throw Error('Disconnected');});
   try{
     h.plugin.openSettings=()=>assert.fail('A background send must not take over the editor');
     await h.plugin.openChat('Keep this request');const modal=h.modals.at(-1);await modal.choose(false);
-    assert.equal(modal.closed,true);assert.equal(h.plugin.settings.pending.length,1);
+    assert.equal(modal.closed,true);assert.equal(h.plugin.settings.pending.length,0);
   }finally{h.plugin.onunload();}
 });
 
@@ -1468,14 +1433,14 @@ test('mobile reuses a chosen external project and links only after confirmed del
     const folder={...project,id:'existing-folder',title:'Unlinked',workspaceRoot:'/workspaces/unlinked'};
     h.setProjects([project,folder]);
     h.plugin.pickFolderProject=async()=>folder;
-    await assert.rejects(h.plugin.sendChat('Use existing project',{path:'Unlinked/draft.md'},{newThread:true}),/Unconfirmed/);
+    await assert.rejects(h.plugin.sendChat('Use existing project',{path:'Unlinked/draft.md'},{newThread:true}),/send failed/);
     assert.equal(h.commands[0].projectId,folder.id);
     assert.equal(h.commands.some(c=>c.type==='project.create'),false);
     assert.equal(h.plugin.settings.folderLinks.some((link:any)=>link.folderPath==='Unlinked'),false);
-    const pending=h.plugin.settings.pending[0];assert.equal(pending.folderLinkIntent.projectId,folder.id);
-    await h.plugin.retry(pending);
+    assert.equal(h.plugin.settings.pending.length,0);
+    await h.plugin.sendChat('Use existing project',{path:'Unlinked/draft.md'},{newThread:true});
     assert.equal(h.plugin.settings.folderLinks.find((link:any)=>link.folderPath==='Unlinked').projectId,folder.id);
-    assert.equal(h.commands.filter(c=>c.type==='thread.create').length,1);
+    assert.equal(h.commands.filter(c=>c.type==='thread.create').length,2);
   }finally{h.plugin.onunload();}
 });
 
@@ -1660,31 +1625,22 @@ test('discarding an unconfirmed agent command compacts its payload and refuses r
     const note=h.attachEditor('Notes/Discard.md','Private note body.');Object.assign(note.file,{basename:'Discard',stat:{ctime:123}});h.plugin.app.vault.getFileByPath=()=>note.file;
     const command={version:1,id:webcrypto.randomUUID(),kind:'send-note',notePath:note.file.path,destinations:[],streamReply:false};
     await assert.rejects(h.plugin.executeNoteCommand(command));
-    const request=h.plugin.settings.pending.find((r:any)=>r.id===command.id);assert.ok(request);
-    await h.plugin.discardRequest(request);
+    assert.equal(h.plugin.settings.pending.length,0);
     const receipt=h.plugin.app.loadLocalStorage(`send-to-t3-code-device-v1-note-command-${command.id}`);
     assert.equal(receipt.request,undefined);assert.equal(receipt.discarded,true);
-    const count=h.commands.length;await assert.rejects(h.plugin.executeNoteCommand(command),/discarded/);assert.equal(h.commands.length,count);
+    const count=h.commands.length;await assert.rejects(h.plugin.executeNoteCommand(command),/cannot be retried/);assert.equal(h.commands.length,count);
   }finally{h.plugin.onunload();}
 });
 
-test('an agent send retries a lost delivery acknowledgement with the exact durable commands',{timeout:10000},async()=>{
-  let fail=true,restarted:any;
-  const h=await chatHarness(async command=>{if(fail&&command.type==='thread.turn.start'){fail=false;throw Error('lost acknowledgement');}});
+test('a failed agent send clears its stream and refuses the same command after reload',{timeout:10000},async()=>{
+  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')throw Error('lost acknowledgement');});let restarted:any;
   try{
-    const note=h.attachEditor('Notes/AgentRetry.md','Retry this exact source.');
-    Object.assign(note.file,{basename:'AgentRetry',stat:{ctime:123}});
-    h.plugin.app.vault.getFileByPath=()=>note.file;
+    const note=h.attachEditor('Notes/AgentRetry.md','Keep this exact source.');Object.assign(note.file,{basename:'AgentRetry',stat:{ctime:123}});h.plugin.app.vault.getFileByPath=()=>note.file;
     const command={version:1,id:webcrypto.randomUUID(),kind:'send-note',notePath:note.file.path,destinations:[note.file.path],streamReply:true};
-    await assert.rejects(h.plugin.executeNoteCommand(command),/lost acknowledgement|retry|Cannot reach T3/i);
-    const original=h.commands.filter(item=>item.type==='thread.turn.start')[0];assert.ok(original);
-    h.plugin.onunload();restarted=await h.start();
-    const result=await restarted.executeNoteCommand(command);
-    assert.equal(result.ok,true);
-    const repeated=h.commands.filter(item=>item.type==='thread.turn.start');assert.equal(repeated.length,2);
-    assert.deepEqual(JSON.parse(JSON.stringify(repeated[1])),JSON.parse(JSON.stringify(original)),'Replay includes original timestamps, prompt and command IDs');
-    assert.equal((note.value.match(/t3-inline:start:/g)??[]).length,1);
-    assert.equal(h.commands.filter(item=>item.type==='thread.create').length,1,'An acknowledged thread creation is not repeated');
+    await assert.rejects(h.plugin.executeNoteCommand(command));assert.equal(h.plugin.settings.pending.length,0);
+    assert.doesNotMatch(note.value,/Working|spinner|t3-inline:start:/);assert.match(note.value,/Keep this exact source/);
+    const count=h.commands.length;h.plugin.onunload();restarted=await h.start();
+    await assert.rejects(restarted.executeNoteCommand(command),/cannot be retried/);assert.equal(h.commands.length,count);
   }finally{restarted?.onunload();h.plugin.onunload();}
 });
 
@@ -1824,18 +1780,14 @@ test('project changes, existing-picker cancellation and safe errors preserve the
   }finally{h.plugin.onunload();}
 });
 
-test('an overridden uncertain job replays its saved options, prompt and bindings across reload and opposite defaults',async()=>{
-  let lose=true;const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'&&lose){lose=false;throw Error('lost response');}});let restarted:any;
+test('an overridden failed inline job clears its response and does not return after reload',async()=>{
+  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')throw Error('lost acknowledgement');});let restarted:any;
   try{
-    h.attachEditor('Notes/Overrides.md','Question');h.plugin.settings.inlineStreaming.enabled=false;
+    const note=h.attachEditor('Notes/Overrides.md','Question');h.plugin.settings.inlineStreaming.enabled=false;
     await h.plugin.openPaletteAction('Explain.','');const destination=h.modals.at(-1);
     editOverrides(h,destination,{'Stream replies into the editor':'on','Final answer format':'raw-markdown'});await destination.choose('new');
-    assert.equal(destination.closed,true);const pending=h.plugin.settings.pending[0];assert.ok(pending);
-    assert.deepEqual(JSON.parse(JSON.stringify(pending.jobOptions)),{version:1,inline:{enabled:true,intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'}});
-    const bytes=JSON.stringify(pending),binding=JSON.stringify(pending.inlineHost);h.plugin.onunload();restarted=await h.start();
-    assert.equal(JSON.stringify(restarted.settings.pending[0]),bytes);
-    restarted.settings.inlineStreaming={enabled:false,keepIntermediate:false,intermediateMode:'remove',finalAnswerFormat:'formatted'};
-    await restarted.retry(restarted.settings.pending[0]);assert.deepEqual(h.commands[1],h.commands[2]);assert.equal(JSON.stringify(pending.inlineHost),binding);
+    assert.equal(destination.closed,true);assert.equal(h.plugin.settings.pending.length,0);assert.doesNotMatch(note.value,/Working|spinner|t3-inline:start:/);
+    const count=h.commands.length;h.plugin.onunload();restarted=await h.start();assert.equal(restarted.settings.pending.length,0);assert.equal(h.commands.length,count);
   }finally{restarted?.onunload();h.plugin.onunload();}
 });
 
@@ -1870,7 +1822,7 @@ for(const picker of ['project','existing'])test(`an override preserves the captu
   }finally{h.plugin.onunload();}
 });
 
-test('Missing 3 expands the captured snapshot before insertion, saves exact retry bytes and records only confirmed coverage',{timeout:15000},async()=>{
+test('Missing 3 expands the captured snapshot and records coverage only after a fresh successful send',{timeout:15000},async()=>{
   let fail=true;
   const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'&&fail){fail=false;throw Error('lost acknowledgement');}});
   const path='Notes/Missing-three.md',id='31111111-1111-4111-8111-111111111111',body='> Verified response 2';
@@ -1887,13 +1839,13 @@ test('Missing 3 expands the captured snapshot before insertion, saves exact retr
     const document=`Idea 1\n\n${body}\n\nMISSING-CAPTURED-CONTEXT\n\nImplement`;
     const view=h.attachEditor(path,document),start=document.lastIndexOf('Implement');
     const context={editor:view.editor,view:view.view,anchor:{text:'Implement',start,end:start+9,before:document.slice(start-24,start),after:''},snapshot:document};
-    await assert.rejects(h.plugin.sendResolvedChat('Implement',{path},context,true,{jobOptions:{inline:{enabled:false,intermediateMode:'remove',finalAnswerFormat:'formatted'}}}),/Unconfirmed requests/);
-    const pending=h.plugin.settings.pending[0];assert.ok(pending);
-    assert.match(pending.prompt,/Additional context preceding your selection:\nMISSING-CAPTURED-CONTEXT\n\nYour selected request:\nImplement/);
-    assert.doesNotMatch(pending.prompt,/Idea 1|Verified response 2/);
+    await assert.rejects(h.plugin.sendResolvedChat('Implement',{path},context,true,{jobOptions:{inline:{enabled:false,intermediateMode:'remove',finalAnswerFormat:'formatted'}}}),/send failed/);
+    assert.equal(h.plugin.settings.pending.length,0);
+    const prompt=h.commands.filter(command=>command.type==='thread.turn.start').at(-1).message.text;
+    assert.match(prompt,/Additional context preceding your selection:\nMISSING-CAPTURED-CONTEXT\n\nYour selected request:\nImplement/);
+    assert.doesNotMatch(prompt,/Idea 1|Verified response 2/);
     assert.equal(h.plugin.settings.noteDeliveries.length,0);
-    const prompt=pending.prompt;
-    await h.plugin.retry(pending);
+    await h.plugin.sendResolvedChat('Implement',{path},context,true,{jobOptions:{inline:{enabled:false,intermediateMode:'remove',finalAnswerFormat:'formatted'}}});
     assert.equal(h.commands.filter(command=>command.type==='thread.turn.start').at(-1).message.text,prompt);
     assert.equal(h.plugin.settings.noteDeliveries.length,1);
     await h.plugin.onExternalSettingsChange({...h.shared.at(-1),noteDeliveries:[]});

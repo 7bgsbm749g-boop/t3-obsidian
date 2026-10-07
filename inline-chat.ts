@@ -19,7 +19,7 @@ import {pendingApprovals} from './approvals';
 import {observeIncoming,mergeProse,selectionRange,steeringBoundary,validSteeringInput,type InlineSteering,type SteeringInput} from './inline-steering';
 import type {InlineMessage,InlineBindingCheckpoint} from './inline-thread';
 import {replaceChangedText} from './inline-note-io';
-import {boundedStopOperation,interruptStoppedResponse,stopResponseEdit} from './response-stop';
+import {boundedStopOperation,interruptStoppedResponse,stopResponseEdit,stoppedResponseBody} from './response-stop';
 
 export interface InlineJob {
   id:string;path:string;requestId:string;threadId?:string;turnId?:string;messageId?:string;projectId?:string;connection?:Connection;
@@ -109,18 +109,19 @@ export class InlineChatManager {
       }
     }
   }
-  deliveryFailed(job:InlineJob,uncertain:boolean){
-    if(!uncertain){
-      const editor=this.editorFor(job),found=editor&&regionBody(editor.getValue(),job.id);
-      if(editor&&found&&contentHash(found.body)===job.bodyHash){
-        const start=editor.getValue().indexOf(`<!-- t3-inline:start:${job.id} -->`);
-        const end=editor.getValue().indexOf(`<!-- t3-inline:end:${job.id} -->`,found.to);
-        if(start>=0&&end>=0)replaceInlineEditorText(editor,'',start-1,end+`<!-- t3-inline:end:${job.id} -->`.length+1);
+  deliveryFailed(job:InlineJob,_uncertain=false){
+    const runtime=this.runtime(job),native=nativeResponses(this.app);
+    if(job.hosted&&this.nativeViewFor(job))native.stop(job.id,job.path,true);
+    else {
+      const editor=this.editorFor(job),document=editor?.getValue(),found=document&&regionBody(document,job.id);
+      if(editor&&document&&found){
+        const body=contentHash(found.body)===job.bodyHash?'':stoppedResponseBody(found.body);
+        const change=finalizeRegion(document,job.id,contentHash(found.body),body);
+        if(change)replaceChangedText(editor,document,document.slice(0,change.from)+change.text+document.slice(change.to));
       }
-      this.jobs=this.jobs.filter(j=>j!==job);this.runtimes.delete(job.id);this.persist();return;
     }
-    job.phase='reconnecting';this.persist();
-    if(job.threadId&&job.connection)this.start(job);
+    runtime.monitor?.stop();if(runtime.timer)clearTimeout(runtime.timer);
+    this.jobs=this.jobs.filter(j=>j!==job);this.runtimes.delete(job.id);this.persist();
   }
   start(job:InlineJob){
     if(this.stopped||job.hosted||job.finalized||job.phase==='cancelled'||!job.threadId||!job.connection)return;
@@ -193,6 +194,10 @@ export class InlineChatManager {
   flushAvailable(){this.reconcileHosted();for(const job of this.jobs){if(job.phase==='cancelled'){try{this.finishStopped(job);}catch(error){logFailure('response.stop.cleanup.failed',error,{jobId:job.id});}this.requestRemoteStop(job);}else if(!job.hosted&&job.threadId&&!job.finalized&&job.phase!=='conflict')this.schedule(job);}}
   renamed(oldPath:string,newPath:string){let changed=false;for(const job of this.jobs)if((job.path===oldPath||job.path.startsWith(oldPath+'/'))){job.path=newPath+job.path.slice(oldPath.length);changed=true;}if(changed){this.persist();this.flushAvailable();}}
   deleted(path:string){let changed=false;for(const job of this.jobs)if((job.path===path||job.path.startsWith(path+'/'))){job.phase='conflict';this.runtimes.get(job.id)?.monitor?.stop();changed=true;}if(changed)this.persist();}
+  private nativeViewFor(job:InlineJob){
+    const native=nativeResponses(this.app),source=this.runtimes.get(job.id)?.source?.info as MarkdownView;
+    return native.view(source)??(this.app.workspace.getLeavesOfType?.('markdown')??[]).map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===job.path).map(view=>native.view(view)).find(Boolean);
+  }
   private editorFor(job:InlineJob):Editor|undefined {
     const leaves=this.app.workspace.getLeavesOfType?.('markdown')??[];
     for(const leaf of leaves){const view=leaf.view as MarkdownView;if(view.file?.path===job.path&&view.editor)return view.editor;}
@@ -274,7 +279,7 @@ export class InlineChatManager {
   private finishStopped(job:InlineJob){
     if(this.stopped)return;
     const editor=this.editorFor(job);if(!editor)return;
-    if(job.hosted&&nativeResponses(this.app).view(this.runtime(job).source?.info as MarkdownView))return;
+    if(job.hosted&&this.nativeViewFor(job)){nativeResponses(this.app).stop(job.id,job.path);job.finalized=true;this.persist();return;}
     const document=editor.getValue();
     if(job.finalized&&!hasResponseMarkers(document,job.id))return;
     const change=stopResponseEdit(document,job.id);
