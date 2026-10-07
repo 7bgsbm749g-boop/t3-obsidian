@@ -461,3 +461,40 @@ cast. The final expanded build, all 162 targeted tests and the complete 1006
 JavaScript/TypeScript plus 11 Python suite passed on CPU 0. The supported clean
 release must repeat these checks; native behavior and sustained measurements
 remain required.
+
+Immutable 2.34.24 passed its clean release checks and native bounded reply
+smoke. A hundred unchanged native saved reads caused zero Markdown parses;
+51 of 54 host updates in the restored method trace reused a validated
+projection. All original leaf states and physical note preimages were
+preserved, the synthetic note/tab was removed, CLI was turned off through
+native Settings, and the exact global config was restored without overwriting
+it. The four large journal counts remain 11,584, 9,955, 5,103 and 6,315.
+The complete receipt is `releases/2.34.24/smoke-vps-qlo2.json` under the
+external backup root. Its memory result remains open: the last five-minute
+VPS sample measured 0.696 renderer cores and 701–1089 MiB RSS; the locked
+Windows sample measured 0.266 cores and 440–715 MiB RSS. The root T3 thread
+remains an active streaming workload during these measurements. A quiet GUI
+does not establish absence of all reply work. Windows visible and mobile
+behavior are not claimed.
+
+The 2.34.24 CPU profile still showed repeated command mailbox scans. QLO2
+retains 559 command requests and results. Previously, the 250 ms mailbox tick
+checked each result separately even when the mailbox namespace was unchanged.
+The next correction checks both directory identities with fresh bigint
+`lstat` values (device, inode, modification and change timestamps). It skips
+the historical result loop only when the identities match the completed
+scan before and after that scan. Namespace additions, replacements and
+removals invalidate the proof immediately; interrupted scans cannot establish
+it. A full audit still runs every 30 seconds using a monotonic clock. Pending
+reload acknowledgement callbacks run on every tick, including skipped scans.
+Command validation, exact request IDs, atomic results and reload preflight
+remain unchanged. No request, result, journal or lease is removed. The cache
+contains two directory identity strings and a deadline, without file bodies.
+Numeric counters expose actual full/skipped scans for native verification.
+
+All 11 targeted command and client-maintenance tests pass. They verify that
+100 unchanged ticks perform no historical result access, while new requests,
+deleted failed results, full fallback audits and pending native reload
+acknowledgements retain their behavior. The build and complete suite pass:
+1008 JavaScript/TypeScript tests and 11 Python tests, serialized on CPU 0.
+A clean immutable release and native sustained measurements are still required.

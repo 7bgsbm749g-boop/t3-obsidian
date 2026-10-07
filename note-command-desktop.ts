@@ -8,6 +8,9 @@ export class NoteCommandServer {
   private stopped=false;private work?:Promise<void>;private stopTimer:()=>void;
   private inspected=new Set<string>();
   private reloads=new Map<string,{command:AgentCommand;result:AgentCommandResult}>();
+  private unchanged?:{revision:string;until:number};
+  private directoryChecks=0;private scans=0;private skippedScans=0;
+  status(){return {directoryChecks:this.directoryChecks,scans:this.scans,skippedScans:this.skippedScans,pendingReloads:this.reloads.size};}
   get active(){return !this.stopped;}
   private constructor(private base:string,private release:()=>Promise<void>,private execute:(command:AgentCommand)=>Promise<AgentCommandResult>,private ready:()=>boolean,private onStopped?:()=>void,private acknowledged?:(command:AgentCommand,result:AgentCommandResult)=>Promise<boolean>){
     this.stopTimer=desktopInterval(()=>void this.tick().catch(()=>{}),250);
@@ -20,7 +23,34 @@ export class NoteCommandServer {
     server=new NoteCommandServer(base,release,execute,ready,onStopped,acknowledged);return server;
   }
   tick(){if(this.work)return this.work;if(this.stopped||!this.ready())return Promise.resolve();const work=this.scan();this.work=work;void work.finally(()=>{this.work=undefined;}).catch(()=>{});return work;}
+  private async directoryRevision(){
+    this.directoryChecks++;
+    try{
+      const values=await Promise.all(['requests','results'].map(name=>fs.lstat(join(this.base,name),{bigint:true})));
+      if(values.some(value=>!value.isDirectory()))return undefined;
+      return values.map(value=>[value.dev,value.ino,value.mtimeNs,value.ctimeNs].join(':')).join('/');
+    }catch{return undefined;}
+  }
   private async scan(){
+    const revision=await this.directoryRevision();
+    // Requests and results are durable mailbox entries. Fresh directory
+    // identities detect additions, replacements and removals without one
+    // asynchronous access per historical command on every 250 ms tick.
+    // A full audit still runs at least every 30 seconds. Pending reloads
+    // retain their acknowledgement checks on every tick.
+    if(revision!==undefined&&this.unchanged?.revision===revision&&performance.now()<this.unchanged.until){
+      this.skippedScans++;
+      for(const pending of this.reloads.values()){
+        if(this.stopped||!this.ready())return;
+        if(await this.acknowledged?.(pending.command,pending.result))return;
+      }
+      return;
+    }
+    this.scans++;this.unchanged=undefined;
+    const complete=await this.scanRequests();
+    if(complete&&revision!==undefined&&revision===await this.directoryRevision())this.unchanged={revision,until:performance.now()+30_000};
+  }
+  private async scanRequests(){
     for(const name of (await fs.readdir(join(this.base,'requests'))).sort()){
       if(this.stopped||!this.ready())return;
       if(!/^[0-9a-f-]{36}\.json$/i.test(name))continue;
@@ -51,6 +81,7 @@ export class NoteCommandServer {
       const temporary=resultPath+'.tmp';await fs.writeFile(temporary,JSON.stringify(result),{mode:0o600});await fs.rename(temporary,resultPath);
       if(command&&this.acknowledged&&await this.acknowledged(command,result))return;
     }
+    return true;
   }
   dispose(){if(this.stopped)return Promise.resolve();this.stopped=true;this.stopTimer();this.onStopped?.();return Promise.resolve(this.work).finally(()=>this.release()).catch(()=>{});}
 }

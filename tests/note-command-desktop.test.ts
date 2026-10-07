@@ -5,9 +5,43 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
+import {promises as fs} from 'node:fs';
 import {NoteCommandServer} from '../note-command-desktop';
 
 const run=(args:string[])=>new Promise<{code:number|null;out:string}>(resolve=>{const child=spawn('python3',['scripts/obsidian-command.py',...args]);let out='';child.stdout.on('data',data=>out+=data);child.stderr.on('data',data=>out+=data);child.on('close',code=>resolve({code,out}));});
+test('unchanged mailbox history does not repeat result access; new commands and result deletion remain immediate',{timeout:10000},async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3-mailbox-idle-'));let calls=0,accesses=0;
+  const server=await NoteCommandServer.open(root,'.obsidian',async command=>{calls++;return {id:command.id,ok:calls>1};},()=>true);
+  const originalAccess=fs.access;
+  fs.access=(async(...args:Parameters<typeof fs.access>)=>{if(String(args[0]).startsWith(root))accesses++;return originalAccess(...args);}) as typeof fs.access;
+  try{
+    const base=join(root,'.obsidian/t3-code/commands/v1'),id=randomUUID();
+    await writeFile(join(base,'requests',id+'.json'),JSON.stringify({version:1,id,kind:'client-status'}));
+    await server.tick();await server.tick();
+    const warm=accesses;
+    for(let i=0;i<100;i++)await server.tick();
+    assert.equal(accesses,warm);assert.equal(calls,1);assert.ok(server.status().skippedScans>=100);
+    await rm(join(base,'results',id+'.json'));await server.tick();assert.equal(calls,2);
+    const next=randomUUID();await writeFile(join(base,'requests',next+'.json'),JSON.stringify({version:1,id:next,kind:'client-status'}));
+    await server.tick();assert.equal(calls,3);assert.equal(JSON.parse(await readFile(join(base,'results',next+'.json'),'utf8')).ok,true);
+    // The periodic full audit remains a separate fallback, even if directory
+    // metadata is restored by a filesystem or the system clock changes.
+    await server.tick();(server as any).unchanged.until=-1;
+    const before=accesses;await server.tick();assert.ok(accesses>before);assert.equal(calls,3);
+  }finally{fs.access=originalAccess;await server.dispose();await rm(root,{recursive:true,force:true});}
+});
+
+test('unchanged mailbox scans retain pending native reload acknowledgement checks',{timeout:10000},async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3-mailbox-reload-'));let attempts=0,allow=false,calls=0;
+  const server=await NoteCommandServer.open(root,'.obsidian',async command=>{calls++;return {id:command.id,ok:true,reloadScheduled:true,client:{instanceId:'client',loadedVersion:'1.2.3'}};},()=>true,undefined,async()=>{attempts++;return allow;});
+  try{
+    const base=join(root,'.obsidian/t3-code/commands/v1'),id=randomUUID();
+    await writeFile(join(base,'requests',id+'.json'),JSON.stringify({version:1,id,kind:'reload-client',releaseVersion:'1.2.4',runtimeSha256:{'main.js':'a'.repeat(64),'manifest.json':'b'.repeat(64),'styles.css':'c'.repeat(64)}}));
+    await server.tick();await server.tick();const before=attempts;
+    await server.tick();assert.ok(server.status().skippedScans>0);assert.equal(attempts,before+1);assert.equal(calls,1);
+    allow=true;await server.tick();assert.equal(attempts,before+2);assert.equal(calls,1);
+  }finally{await server.dispose();await rm(root,{recursive:true,force:true});}
+});
 test('agent CLI reaches the running plugin mailbox once, replays results, and rejects changed command IDs',{timeout:10000},async()=>{
   const root=await mkdtemp(join(tmpdir(),'t3-note-command-'));let calls=0;
   const server=await NoteCommandServer.open(root,'.obsidian',async command=>{calls++;return {id:command.id,ok:true,threadId:'created-thread',bindingIds:['binding-a','binding-b']};},()=>true);
