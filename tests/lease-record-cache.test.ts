@@ -18,7 +18,7 @@ test('discovery snapshots have count, source-size and object bounds and remove a
   const cache=new LeaseRecordCache(raw.length*2,2,100);
   cache.read('one',raw);cache.read('two',raw);cache.read('three',raw);
   assert.equal(cache.status().entries,2);assert.ok(cache.status().characters<=raw.length*2);
-  cache.retain(new Set(['three']));assert.equal(cache.status().entries,1);
+  cache.retain(new Set(['one']));assert.equal(cache.status().entries,1);
   cache.read('huge',JSON.stringify({state:{body:'x'.repeat(raw.length*3)}}));assert.equal(cache.status().entries,1);
   const objects=new LeaseRecordCache(10000,10,3);
   objects.read('nested',JSON.stringify({state:{a:{b:{c:{}}}}}));assert.equal(objects.status().entries,0);
@@ -27,4 +27,18 @@ test('discovery snapshots have count, source-size and object bounds and remove a
 test('large nested JSON collections remain safe to freeze without argument-stack expansion',()=>{
   const cache=new LeaseRecordCache(),value=cache.read('large',JSON.stringify({state:{hashes:Array(150000).fill('hash')}}));
   assert.equal(value.state!.hashes.length,150000);assert.ok(Object.isFrozen(value.state!.hashes));
+});
+
+test('default discovery budget fits 600 large records across repeated directory scans',()=>{
+  const cache=new LeaseRecordCache(),rows=Array.from({length:600},(_,i)=>JSON.stringify({request:{id:String(i)},revision:1,state:{body:'Retained response '.repeat(1200)}}));
+  for(let scan=0;scan<4;scan++)for(let i=0;i<rows.length;i++)cache.read(String(i),rows[i]);
+  assert.equal(cache.status().parses,600);assert.equal(cache.status().hits,1800);assert.equal(cache.status().entries,600);
+  assert.ok(cache.status().characters<=cache.status().maxCharacters);assert.ok(cache.status().objects<=cache.status().maxObjects);
+  const changed=cache.read('599',rows[599].replace('Retained response','Fresh response'));assert.ok(changed.state!.body!.startsWith('Fresh response'));assert.equal(cache.status().parses,601);
+});
+test('oversized sequential discovery scans preserve admitted snapshots instead of thrashing every entry',()=>{
+  const cache=new LeaseRecordCache(raw.length*2,2,100);const resident=cache.read('resident',raw);cache.read('second',raw);
+  for(let scan=0;scan<10;scan++){for(let i=0;i<100;i++)cache.read('cold-'+i,raw);assert.equal(cache.read('resident',raw),resident);}
+  assert.equal(cache.status().hits,10);assert.equal(cache.status().entries,2);assert.equal(cache.status().characters,raw.length*2);
+  cache.retain(new Set(['resident']));cache.read('new',raw);assert.equal(cache.status().entries,2);assert.equal(cache.read('resident',raw),resident);
 });

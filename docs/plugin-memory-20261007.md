@@ -570,3 +570,31 @@ Source build, all ten targeted tests, and the complete 1014 JavaScript/
 TypeScript plus 11 Python suite pass serially on CPU 0. The clean release
 must repeat these checks; native cache counters and both desktop measurements
 will determine the actual effect. This source result does not close memory.
+
+Immutable 2.34.27 repeated the full 1014 plus 11 validation and installed
+exactly, preserving data and completing fresh Sync. VPS and Windows loaded
+fresh 2.34.27 clients. Its real bounded reply saved exact host hash
+`90080e220858994ed9e29bbb2a549b8ddefee3e257e534858667f21ef5a9c394`,
+and owned-note cleanup preserved the original layout and physical notes.
+However, its native cache test FAILED: 586 lease files totalled 10,027,681
+characters, exceeding both configured limits. A 15-second trace recorded
+5,870 parses and zero hits. Do not claim a completed cache smoke or memory
+fix: the immutable deployment remains awaiting-live-smoke. External incomplete
+evidence is `memory-20261007/smoke-23427-incomplete.json`. The owned VPS
+sampler was stopped after 45 readings because the failure was already proved;
+these readings are not a ten-minute or quiet-last-five-minute comparison.
+The plugin was safely paused again before source validation. No user record
+or journal was removed, and the separate Windows read-only sampler can finish.
+
+The correction raises the measured working-set limits to 16 million source
+characters and 1024 entries, retaining the 65,536-object limit. Admission now
+preserves existing exact snapshots when full, rather than evicting one for
+each miss in a sequential scan. Changed/removed paths still invalidate their
+own entries; fresh changed bytes are returned even when too large to retain.
+Two new regression tests cover 600 large records over four complete scans
+and repeated oversized scans that still reuse admitted records. The latter
+prevents the same failure when a future vault exceeds any configured bound.
+The corrected source build, 12 targeted tests and full 1016 JavaScript/
+TypeScript plus 11 Python suite pass serially on CPU 0. Native working-set
+reuse must still pass after the newer immutable release; 2.34.27 is not
+retroactively repaired or promoted to a completed smoke result.
