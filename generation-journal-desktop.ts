@@ -2,7 +2,8 @@ import {promises as fs} from 'node:fs';
 import {basename,dirname,resolve,relative,isAbsolute} from 'node:path';
 import {randomUUID,randomBytes,createHmac,timingSafeEqual} from 'node:crypto';
 import {contentHash} from './completion';
-import type {GenerationJournal,NoteGeneration} from './generated-note-coordinator';
+import {applyGenerationCheckpoint,type GenerationJournal,type NoteGeneration} from './generated-note-coordinator';
+import type {HostedInlineState} from './hosted-inline';
 
 interface Revision {version:1;index:number;previous:string|null;event:string;at:string;state:NoteGeneration;hash:string}
 type FileIdentity={dev:bigint;ino:bigint;size:bigint;mtimeNs:bigint;ctimeNs:bigint;mode:bigint};
@@ -111,10 +112,29 @@ export class DesktopGenerationJournal implements GenerationJournal {
     return prefix;
   }
   async read(id:string){const state=(await this.revisions(id)).latest?.state;return state?structuredClone(state):undefined;}
+  private async queued<T>(id:string,run:()=>Promise<T>):Promise<T>{
+    const work=(this.queues.get(id)??Promise.resolve()).catch(()=>{}).then(run);
+    this.queues.set(id,work);try{return await work;}finally{if(this.queues.get(id)===work)this.queues.delete(id);}
+  }
+  async checkpoint(id:string,sequence:number,state:HostedInlineState,notePath?:string){
+    return this.queued(id,async()=>{
+      // Derive only private checkpoint fields from this freshly audited head.
+      // No cached time window and no asynchronous note mutation is involved.
+      const revisions=await this.revisions(id),record=revisions.latest?structuredClone(revisions.latest.state):undefined;
+      if(!record)throw Error('Unknown response registration.');
+      if(notePath!==undefined&&record.notePath!==notePath)return record;
+      if(applyGenerationCheckpoint(record,sequence,state))await this.publish(id,record,'checkpoint',revisions);
+      return record;
+    });
+  }
   async append(id:string,state:NoteGeneration,event:string){
-    const work=(this.queues.get(id)??Promise.resolve()).catch(()=>{}).then(async()=>{
+    return this.queued(id,async()=>{
       if(state.request.id!==id||state.originalHash!==contentHash(state.original))throw Error('Journal state identity or original checksum changed.');
-      const revisions=await this.revisions(id),last=revisions.latest;
+      await this.publish(id,state,event,await this.revisions(id));
+    });
+  }
+  private async publish(id:string,state:NoteGeneration,event:string,revisions:VerifiedPrefix){
+      const last=revisions.latest;
       if(state.journalRevision!==last?.index)throw Error('The journal predecessor changed; reload before retrying.');
       if(last&&(last.state.original!==state.original||JSON.stringify(last.state.request)!==JSON.stringify(state.request)))throw Error('The original request and note snapshot are immutable.');
       const directory=this.directory(id);await fs.mkdir(directory,{recursive:true,mode:0o700});
@@ -131,7 +151,5 @@ export class DesktopGenerationJournal implements GenerationJournal {
         const parent=await fs.open(directory,'r');try{await parent.sync();}finally{await parent.close();}
         state.journalRevision=body.index;
       }finally{await fs.rm(temporary,{force:true});}
-    });
-    this.queues.set(id,work);try{await work;}finally{if(this.queues.get(id)===work)this.queues.delete(id);}
   }
 }

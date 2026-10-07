@@ -27,6 +27,16 @@ export interface GenerationJournal {
   /** Append a new immutable revision; implementations must persist it before
    * returning and reject a changed or skipped predecessor. */
   append(id:string,state:NoteGeneration,event:string):Promise<void>;
+  /** Audit, derive and publish a private checkpoint under the append queue.
+   * A different verified note path must return its unchanged record so the
+   * coordinator can first join that note's save/staging/rename queue. */
+  checkpoint?(id:string,sequence:number,state:HostedInlineState,notePath:string):Promise<NoteGeneration>;
+}
+
+export function applyGenerationCheckpoint(record:NoteGeneration,sequence:number,state:HostedInlineState){
+  if(!Number.isSafeInteger(sequence)||sequence<0)throw Error('Invalid response sequence.');
+  if(sequence<=(record.sequence??-1)||!['accepted','streaming'].includes(record.status))return false;
+  record.sequence=sequence;record.checkpoint=structuredClone(state);record.status='streaming';return true;
 }
 export interface GeneratedNoteIO {
   read(path:string):Promise<string|undefined>;
@@ -56,12 +66,21 @@ export class GeneratedNoteCoordinator {
     });
   }
   async checkpoint(id:string,sequence:number,state:HostedInlineState){
+    if(this.journal.checkpoint){
+      let path=state.notePath;
+      for(let attempt=0;attempt<8;attempt++){
+        const record=await this.serial(path,()=>this.journal.checkpoint!(id,sequence,state,path));
+        if(record.notePath===path)return record;
+        // The freshly audited path differs (for example after a rename).
+        // No checkpoint was written; join its actual note queue before retry.
+        path=record.notePath;
+      }
+      throw Error('The response note keeps moving; reload before retrying.');
+    }
     const initial=await this.require(id);
     return this.serial(initial.notePath,async()=>{
       const record=await this.require(id);
-      if(!Number.isSafeInteger(sequence)||sequence<0)throw Error('Invalid response sequence.');
-      if(sequence<=(record.sequence??-1)||!['accepted','streaming'].includes(record.status))return record;
-      record.sequence=sequence;record.checkpoint=state;record.status='streaming';
+      if(!applyGenerationCheckpoint(record,sequence,state))return record;
       await this.journal.append(id,record,'checkpoint');return record;
     });
   }

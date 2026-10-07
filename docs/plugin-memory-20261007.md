@@ -598,3 +598,38 @@ The corrected source build, 12 targeted tests and full 1016 JavaScript/
 TypeScript plus 11 Python suite pass serially on CPU 0. Native working-set
 reuse must still pass after the newer immutable release; 2.34.27 is not
 retroactively repaired or promoted to a completed smoke result.
+
+Immutable 2.34.28 repeated all 1016 plus 11 tests and passed native cache reuse:
+5,838 hits and 32 parses in 15 seconds, versus 5,870 parses in failed 2.34.27.
+A real bounded reply saved exact host hash
+`fdfcf9fa110ca366b7debaf3b83b22ac858b1d570a22ebca067ca945caafbd1b`.
+Own note/tab cleanup, original leaf and physical-note checks, native CLI off,
+closed Settings and exact global configuration restoration all passed. The
+complete external receipt is `releases/2.34.28/smoke-vps-qlo2.json` with 57
+hashed artifacts. Memory remains open: VPS last five minutes were 0.521 cores
+and 586–1020 MiB RSS (665 MiB final); Windows 0.221 cores and 443–793 MiB
+(712 MiB final). Windows had 6.77 GiB physical memory available at the end.
+The root thread is still active, and the locked laptop has no visible or
+mobile smoke proof. All four original large journal revision counts match
+the earlier verified counts. The post-reload journal trace showed repeated
+full audits of active histories with 1,765–6,315 revisions.
+
+The next correction removes duplicate audits inside private checkpoint
+updates. The desktop journal audits the entire current chain under its
+existing per-registration append queue, derives only checkpoint/sequence/
+streaming status synchronously from that verified head, and publishes with
+the same predecessor, request/original and exclusive immutable-file checks.
+There is no timed integrity cache or skipped file check. Other appends retain
+their caller predecessor checks. The coordinator also retains its note-level
+queue: a requested path mismatch returns the audited record without writing,
+then retries under its verified path. This preserves serialization with
+staged edits, saves and renames. Journal implementations without this optional
+desktop operation retain the existing read/read/append path.
+Source build, all 43 targeted tests and the complete 1021 JavaScript/
+TypeScript plus 11 Python suite pass serially on CPU 0. The new real-journal
+tests count one identity check for each of 32 existing revisions, preserve
+caller metadata isolation and immutable preimages, reject same-size old-file
+tampering and truncation, retain stale-append and terminal-state fences, retry
+an injected publication failure, and wait for the verified note queue after
+a requested-path mismatch. Native installation, checkpoint audit count and
+both desktop resource measurements remain required before completion.

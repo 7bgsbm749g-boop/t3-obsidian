@@ -5,9 +5,70 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DesktopGenerationJournal} from '../generation-journal-desktop';
 import {contentHash} from '../completion';
-import type {NoteGeneration} from '../generated-note-coordinator';
+import {GeneratedNoteCoordinator,type NoteGeneration} from '../generated-note-coordinator';
+import type {HostedInlineState} from '../hosted-inline';
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const state=():NoteGeneration=>({request:{id} as any,notePath:'Arms.md',original:'Workout data',originalHash:contentHash('Workout data'),status:'accepted',conflicts:[],acknowledgements:[]});
+
+const checkpointState=():HostedInlineState=>({requestHash:'fixture',accepted:true,notePath:'Arms.md',status:'running',hashes:[],body:'Fresh response',updatedAt:''});
+test('desktop coordinator checkpoints audit every existing revision once and isolate caller metadata',async t=>{
+  const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-atomic-'));
+  try{
+    const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);const initial=state();
+    for(let n=0;n<32;n++)await journal.append(id,initial,'fixture');
+    await journal.read(id);const first=await fs.readFile(join(journal.root,id,'0000000000.json'));let checks=0,noteReads=0;
+    const lstat=fs.lstat;t.mock.method(fs,'lstat',async(...args:any[])=>{if(String(args[0]).startsWith(join(journal.root,id)+'/')&&/\/\d{10}\.json$/.test(String(args[0])))checks++;return (lstat as any)(...args);});
+    const coordinator=new GeneratedNoteCoordinator(journal,{read:async()=>{noteReads++;return undefined;},compareAndSet:async()=>false}),input=checkpointState();
+    const result=await coordinator.checkpoint(id,50,input);assert.equal(checks,32,'one complete fresh identity audit, not three');assert.equal(result.journalRevision,32);assert.equal(noteReads,0);
+    input.body='Changed caller';assert.equal(result.checkpoint!.body,'Fresh response');
+    checks=0;const unchanged=await coordinator.checkpoint(id,49,checkpointState());assert.equal(checks,33,'even no-op checkpoints audit the full current chain');assert.equal(unchanged.sequence,50);assert.equal(unchanged.journalRevision,32);
+    t.mock.restoreAll();assert.deepEqual(await fs.readFile(join(journal.root,id,'0000000000.json')),first);assert.equal((await journal.read(id))!.checkpoint!.body,'Fresh response');
+  }finally{t.mock.restoreAll();await fs.rm(root,{recursive:true,force:true});}
+});
+test('atomic checkpoints serialize sequences, retain terminal state and keep ordinary stale-append rejection',async()=>{
+  const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-atomic-'));
+  try{
+    const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);await journal.append(id,state(),'accepted');const stale=(await journal.read(id))!;
+    const results=await Promise.all([journal.checkpoint(id,4,checkpointState()),journal.checkpoint(id,3,checkpointState()),journal.checkpoint(id,5,checkpointState())]);assert.deepEqual(results.map(r=>r.sequence),[4,4,5]);
+    await assert.rejects(journal.append(id,stale,'stale'),/predecessor/);
+    const final=(await journal.read(id))!;final.status='result-ready';await journal.append(id,final,'result-ready');
+    const stopped=await journal.checkpoint(id,100,checkpointState());assert.equal(stopped.status,'result-ready');assert.equal(stopped.sequence,5);assert.equal(stopped.journalRevision,3);
+    await assert.rejects(journal.checkpoint(id,NaN,checkpointState()),/Invalid response sequence/);
+    await assert.rejects(journal.checkpoint('bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',1,checkpointState()),/Unknown response registration/);
+  }finally{await fs.rm(root,{recursive:true,force:true});}
+});
+test('atomic checkpoints reject old same-size tampering and truncated cached history before publishing',async()=>{
+  const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-atomic-'));
+  try{
+    const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);await journal.append(id,state(),'accepted');await journal.checkpoint(id,1,checkpointState());await journal.read(id);
+    const path=join(journal.root,id,'0000000000.json'),stat=await fs.stat(path),original=await fs.readFile(path,'utf8');await fs.writeFile(path,original.replace('"status":"accepted"','"status":"verified"'));await fs.utimes(path,stat.atime,stat.mtime);assert.equal((await fs.stat(path)).size,stat.size);
+    await assert.rejects(journal.checkpoint(id,2,checkpointState()),/integrity/);await assert.rejects(fs.access(join(journal.root,id,'0000000002.json')),/ENOENT/);
+    await fs.writeFile(path,original);await journal.read(id);await fs.rm(join(journal.root,id,'0000000001.json'));
+    await assert.rejects(journal.checkpoint(id,3,checkpointState()),/missing/);
+  }finally{await fs.rm(root,{recursive:true,force:true});}
+});
+test('failed atomic checkpoint publication leaves the original durable and the queue can retry',async t=>{
+  const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-atomic-'));
+  try{
+    const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);await journal.append(id,state(),'accepted');const original=await fs.readFile(join(journal.root,id,'0000000000.json')),link=fs.link;let fail=true;
+    t.mock.method(fs,'link',async(...args:any[])=>{if(fail){fail=false;throw Error('Synthetic publication failure');}return (link as any)(...args);});
+    await assert.rejects(journal.checkpoint(id,1,checkpointState()),/Synthetic publication failure/);assert.equal((await journal.read(id))!.status,'accepted');
+    const retried=await journal.checkpoint(id,2,checkpointState());assert.equal(retried.journalRevision,1);assert.equal(retried.sequence,2);assert.deepEqual(await fs.readFile(join(journal.root,id,'0000000000.json')),original);
+    assert.ok(!(await fs.readdir(join(journal.root,id))).some(name=>name.endsWith('.tmp')));
+  }finally{t.mock.restoreAll();await fs.rm(root,{recursive:true,force:true});}
+});
+test('checkpoint routing writes only under the freshly verified note queue after a path mismatch',async()=>{
+  const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-atomic-'));
+  try{
+    const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);await journal.append(id,state(),'accepted');
+    const coordinator=new GeneratedNoteCoordinator(journal,{read:async()=>undefined,compareAndSet:async()=>false});let release!:()=>void,entered!:()=>void,settled=false;
+    const ready=new Promise<void>(r=>{entered=r;}),gate=new Promise<void>(r=>{release=r;});
+    const held=(coordinator as any).serial('Arms.md',async()=>{entered();await gate;});await ready;
+    const input={...checkpointState(),notePath:'Old name.md'},pending=coordinator.checkpoint(id,2,input).then(record=>{settled=true;return record;});
+    await new Promise(r=>setTimeout(r,20));assert.equal(settled,false);assert.equal((await journal.read(id))!.status,'accepted','mismatched first queue must not publish');
+    release();await held;const result=await pending;assert.equal(result.notePath,'Arms.md');assert.equal(result.sequence,2);assert.equal(result.journalRevision,1);
+  }finally{await fs.rm(root,{recursive:true,force:true});}
+});
 test('real private journal survives reopen and publishes immutable checksum-verified revisions',async()=>{
   const root=await fs.mkdtemp(join(tmpdir(),'t3-generation-'));try{
     const vault=join(root,'vault');await fs.mkdir(vault);const journal=await DesktopGenerationJournal.open(join(root,'private'),[vault]);
