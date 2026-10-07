@@ -725,3 +725,26 @@ Memory remains OPEN: late VPS CPU 0.424 cores with 635–985 MiB RSS; Windows
 102 source parses and 9771 hits over ten minutes. Synthetic parser savings
 are not sufficient to establish a native memory fix. Complete receipt:
 `/home/ubuntu/backups/send-to-t3-code/releases/2.34.31/smoke-vps-qlo2.json`.
+
+### Bounded quiet direct-stream polling (2.34.32 candidate)
+
+A connected direct thread stream previously downloaded its canonical recent
+history every 1200 ms even when the returned thread was unchanged. The direct
+poll now stays at 1200 ms on first read, changed history, live stream activity,
+or failure. Unchanged canonical thread/history-completeness data backs off to
+2400, 4800, then at most 5000 ms. A 64-character digest is retained instead of
+history text. Global snapshotSequence is excluded from the digest because
+unrelated threads can advance it; every snapshot is still delivered so cursors
+and binding evidence advance normally.
+
+Live events accelerate an existing quiet deadline without postponing an earlier
+read. Reads do not overlap; activity during an in-flight read keeps the fast
+fallback. Reconnect starts fresh, stopped/old accesses cannot deliver late
+results, and hosts with pollSnapshots=false remain excluded. Full canonical
+history recovery and WebSocket delivery remain intact. Regression checks cover
+missing completion deltas, unrelated sequence changes, live-event timing,
+slow requests, errors and stop races using a deterministic clock.
+
+This changes direct stream polling only. Coordinated-host canonical polling and
+fresh integrity audits remain unchanged. Native CPU/memory resolution is not
+claimed before measurement.

@@ -1,5 +1,6 @@
 import {logEvent,logFailure} from './diagnostics';
 import {Buffer} from 'buffer';
+import {contentHash} from './completion';
 import {applyThreadItem,turnForMessage,type InlineThreadState} from './inline-thread';
 
 export type ThreadAccessCloseReason='cache-expired'|'auth-rejected'|'host-disposed'|'stop-complete'|'stop-timeout'|'stream-reconnect'|'stream-stopped'|'late-access'|'caller-closed';
@@ -85,15 +86,31 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       if(typeof issued?.ticket!=='string'||!issued.ticket)throw Error('T3 did not issue a stream ticket.');
       const url=new URL('/ws',ready.origin);url.protocol=url.protocol==='https:'?'wss:':'ws:';
       url.searchParams.set('wsTicket',issued.ticket);url.searchParams.set('orchestrationProtocol','1');
-      const ws=socket=makeSocket(url.href);let ended=false;
+      const ws=socket=makeSocket(url.href);let ended=false,polling=false,pollDue=0,pollDelay=1200,activityVersion=0,lastSnapshotHash:string|undefined;
       const fail=(error:Error)=>{if(ended||stopped)return;ended=true;ws.close();retry(error);};
+      const schedulePoll=(delay:number)=>{
+        if(stopped||ended||access!==ready||replay?.pollSnapshots===false)return;
+        const due=Date.now()+delay;
+        // Frequent live deltas must never postpone an already due canonical read.
+        if(pollTimer&&pollDue<=due)return;
+        if(pollTimer)clearTimeout(pollTimer);
+        pollDue=due;pollTimer=setTimeout(()=>{pollTimer=undefined;void poll();},delay);
+      };
       const poll=async()=>{
-        if(stopped||ended||access!==ready)return;
+        if(stopped||ended||access!==ready||polling)return;
+        polling=true;const beforeActivity=activityVersion;
         try{
           const snapshot=historyTargets?await readInlineSnapshot(ready,threadId,undefined,historyTargets()):await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true&turnLimit=20`);
-          if(!stopped&&!ended&&access===ready&&snapshot?.thread)callbacks.item({kind:'snapshot',snapshot});
-        }catch(error){logFailure('stream.poll.failed',error,{threadId});}
-        if(!stopped&&!ended&&access===ready)pollTimer=setTimeout(()=>{void poll();},1200);
+          if(!stopped&&!ended&&access===ready&&snapshot?.thread){
+            // The global snapshot cursor can advance for unrelated threads.
+            // Keep only a small digest; still deliver every canonical snapshot
+            // so replay cursors and binding evidence continue to advance.
+            const hash=contentHash(JSON.stringify({thread:snapshot.thread,historyComplete:snapshot.historyComplete}));
+            pollDelay=beforeActivity===activityVersion&&hash===lastSnapshotHash?Math.min(5000,pollDelay*2):1200;
+            lastSnapshotHash=hash;callbacks.item({kind:'snapshot',snapshot});
+          }else pollDelay=1200;
+        }catch(error){pollDelay=1200;logFailure('stream.poll.failed',error,{threadId});}
+        finally{polling=false;schedulePoll(pollDelay);}
       };
       const opening=setTimeout(()=>fail(Error('T3 thread stream did not connect.')),15_000);
       ws.onopen=()=>{
@@ -103,7 +120,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         ws.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,reasoningMessages:true,...(replay?{afterSequence:replay.afterSequence(),requestCompletionMarker:true}:{})},headers:[]}));
         // Subscription hosts already own a full canonical polling loop. A second
         // recent-history poll would repeatedly replace it with partial history.
-        if(replay?.pollSnapshots!==false)pollTimer=setTimeout(()=>{void poll();},1200);
+        schedulePoll(1200);
       };
       ws.onmessage=message=>{
         try{
@@ -116,7 +133,12 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
             if(frame._tag==='Chunk'){
               if(!Array.isArray(frame.values))throw Error('T3 returned an invalid stream chunk.');
               logEvent('stream.chunk',{threadId,count:frame.values.length,sequence:frame.values.at(-1)?.event?.sequence??frame.values.at(-1)?.snapshot?.snapshotSequence});
-              for(const value of frame.values)callbacks.item(value);
+              for(const value of frame.values){
+                if(value.kind==='event'||value.kind==='snapshot'){
+                  activityVersion++;pollDelay=1200;lastSnapshotHash=undefined;schedulePoll(1200);
+                }
+                callbacks.item(value);
+              }
               ws.send(JSON.stringify({_tag:'Ack',requestId:'1'}));
             }else if(frame._tag==='Exit'){
               throw Error('T3 thread stream ended.');
