@@ -43,3 +43,34 @@ RSS fell to 501,124 KiB, compared with approximately 1.5 GB before the pause.
 The final reviewed build and complete suite passed 976 JavaScript/TypeScript
 tests and 11 Python tests. Native post-release observations are recorded in the
 immutable release receipt and its retained evidence, not inferred from tests.
+
+## Unchanged checkpoints and repeated failures
+
+Release 2.34.15 passed the checked native reload, signed image, bounded image
+cache and real reply save checks. Its immutable complete receipt is
+`/home/ubuntu/backups/send-to-t3-code/releases/2.34.15/smoke-vps-qlo2.json`.
+The laptop loaded that exact release in a fresh client instance. A sixty-second
+Windows sample measured renderer CPU at 0.410 cores, down from 1.20 cores, and
+working memory at 401–459 MiB. This is native loaded-version and OS evidence;
+Windows visual rendering was not tested. The VPS still had excessive sustained
+background CPU, so the memory investigation continued before language work.
+
+Two retained private journal chains had over 11,500 and 9,900 revisions. Their
+successive checkpoints differed only by the update timestamp and a repeated
+error being cleared and restored. No user response, journal or lease was removed.
+
+The follow-up writer compares durable response contents before saving. It ignores
+the update timestamp and a snapshot-only global stream watermark. Unchanged
+responses retain the earlier durable cursor, so a restart replays conservatively
+instead of skipping lifecycle evidence. Changed prose, exact start sequences,
+bindings, turns, recovery checkpoints, errors and delivery proofs still save the
+full current state and cursor. Comparison advances only after a successful save.
+
+The writer clears an old error only after the actual note/commit operation
+succeeds. An identical unchanged failure waits five seconds before retrying;
+healthy responses remain independent. The integrity checks and finished-response
+boundary rejection remain intact. Real coordinator regression tests verify no
+journal/lease growth over twenty unchanged snapshots, retention of the old cursor,
+persistence of meaningful new progress, stable repeated errors, bounded retries
+and eventual checked final completion. Existing crash and answer-history recovery
+tests remain required. Performance claims require new post-release measurements.

@@ -68,6 +68,53 @@ test('production host streams only to journal, stages a table and commits the re
   assert.equal((await h.client.command({kind:'claim',jobId:h.id})).ok,false);
  }finally{await h.close();}
 });
+
+test('unchanged live snapshots do not grow the private journal or advance the durable recovery cursor',async()=>{
+ const h=await setup();try{
+  let sequence=100,text='Stable live response';
+  h.base.threadState=async()=>({sequence,messages:[{id:h.request.messageId,role:'user',text:'Add 25kg',createdAt:h.request.createdAt,turnId:'turn',streaming:false},{id:'answer',role:'assistant',text,turnId:'turn',streaming:true}],activities:[],latestTurn:{turnId:'turn',messageId:h.request.messageId,state:'running',requestedAt:h.request.createdAt,assistantMessageId:'answer'},session:{status:'running',activeTurnId:'turn'}});
+  // Install the changed IO before constructing a writer, as production does.
+  const writer=new HostedInlineWriter(h.identity,h.host.io(h.base));
+  try{
+   await writer.tick();
+   const first=(await h.host.journal.read(h.id))!,lease=await h.files.read(leasePaths(h.identity.directory,h.id).record);
+   for(let i=0;i<20;i++){sequence++;await writer.tick();}
+   const unchanged=(await h.host.journal.read(h.id))!;
+   assert.equal(unchanged.journalRevision,first.journalRevision);
+   assert.equal(await h.files.read(leasePaths(h.identity.directory,h.id).record),lease);
+   assert.equal(unchanged.checkpoint?.bindingCheckpoint?.sequence,100,'restart must replay from the earlier durable cursor');
+   text='Meaningful new progress';await writer.tick();
+   const changed=(await h.host.journal.read(h.id))!;
+   assert.ok(changed.journalRevision!>first.journalRevision!);
+   assert.equal(changed.checkpoint?.bindingCheckpoint?.sequence,sequence);
+   assert.ok(changed.checkpoint?.body?.includes(text));
+   assert.equal(h.writes(),0,'live progress must remain outside saved note bytes');
+  }finally{writer.stop();}
+ }finally{await h.close();}
+});
+
+test('an unchanged rejected final keeps its error and journal stable, then completes after a bounded retry',async()=>{
+ const h=await setup();try{
+  let reject=true,now=0,attempts=0;
+  const io=h.host.io({...h.base,monotonic:()=>now}),commit=io.commitFinal!;
+  io.commitFinal=async(...args)=>{attempts++;if(reject)throw Error('Retained final cannot be committed yet');return commit(...args);};
+  const writer=new HostedInlineWriter(h.identity,io);
+  try{
+   h.complete();await writer.tick();
+   const before=(await h.host.journal.read(h.id))!,lease=await h.files.read(leasePaths(h.identity.directory,h.id).record);
+   await writer.tick();
+   assert.equal((await h.host.journal.read(h.id))!.journalRevision,before.journalRevision);
+   assert.equal(await h.files.read(leasePaths(h.identity.directory,h.id).record),lease);
+   assert.equal(attempts,2);
+   for(let i=0;i<20;i++){now+=100;await writer.tick();}
+   assert.equal(attempts,2,'same failure must not retry every renderer tick');
+   reject=false;now=5001;await writer.tick();
+   const complete=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
+   assert.equal(complete.state.status,'complete');assert.equal(complete.state.cleanupComplete,true);
+   assert.equal(complete.state.detail,undefined);assert.ok(h.notes.get('Note.md')!.includes('Added **25kg**.'));
+  }finally{writer.stop();}
+ }finally{await h.close();}
+});
 for(const side of ['before','after','both'] as const)test(`ordinary text touching the ${side} marker survives final host delivery`,async()=>{
  const h=await setup();try{
   await h.writer.tick();const anchor=responseAnchor(h.id),ordinary='User writing';

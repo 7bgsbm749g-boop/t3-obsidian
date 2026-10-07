@@ -16,6 +16,14 @@ import {interruptStoppedResponse,stoppedResponseBody} from './response-stop';
 import {DuplicateResponseLocation} from './response-location';
 class StopStreamRequested extends Error {}
 
+// A snapshot's global stream watermark can advance without any change to this
+// response. Keep the last durable cursor in that case: replaying from an older
+// cursor is conservative, whereas discarding exact start/recovery evidence is
+// not. Every meaningful change still persists the full current checkpoint.
+function durableResponseIdentity(state:HostedInlineState):string {
+  return JSON.stringify({...state,updatedAt:undefined,bindingCheckpoint:state.bindingCheckpoint?{...state.bindingCheckpoint,sequence:undefined}:undefined});
+}
+
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface HostedInlineRequest {
   /** Exact source lifecycle retained when importing an already existing run. */
@@ -204,13 +212,18 @@ export class HostedInlineWriter {
       const identity=this.identity;
       if(request.vaultId!==identity.vaultId||request.host.environmentId!==identity.environmentId||!sameWorkspacePath(request.host.workspaceRoot,identity.workspaceRoot)||request.host.directory!==identity.directory||path!==hostedPaths(identity.directory,request.id).request)return;
       const paths=hostedPaths(identity.directory,request.id),hash=hostedRequestHash(request);
-      let state:HostedInlineState;
-      try{state=JSON.parse((await this.io.read(paths.state))??'null')??{requestHash:hash,accepted:false,notePath:request.notePath,status:'waiting',hashes:[request.initialHash],updatedAt:new Date().toISOString()};}catch{return;}
+      let state:HostedInlineState,stored:HostedInlineState|null;
+      try{stored=JSON.parse((await this.io.read(paths.state))??'null');state=stored??{requestHash:hash,accepted:false,notePath:request.notePath,status:'waiting',hashes:[request.initialHash],updatedAt:new Date().toISOString()};}catch{return;}
       if(state.requestHash!==hash||!Array.isArray(state.hashes)||!safeNotePath(state.notePath))return;
+      let savedIdentity=stored?durableResponseIdentity(state):undefined;
       if(request.importTurn&&!state.bindingCheckpoint?.bindings?.[request.messageId]){const turn=request.importTurn,checkpoint=state.bindingCheckpoint;state.bindingCheckpoint={...checkpoint,bindings:{...checkpoint?.bindings,[request.messageId]:{turnId:turn.turnId,kind:'explicit'}},turns:{[turn.turnId]:turn,...checkpoint?.turns}};}
       const legacyProof=pendingCompletionCleanup(request,state)&&['complete','interrupted'].includes(state.status);
       if(['complete','interrupted','conflict'].includes(state.status)&&!legacyQuestionReply(state)&&!legacyProof)return;
-      const save=async()=>{state.updatedAt=new Date().toISOString();await this.io.write(paths.state,JSON.stringify(state));this.renameOffsets.set(path,renameEnd);};
+      const save=async()=>{
+        const identity=durableResponseIdentity(state);
+        if(identity!==savedIdentity){state.updatedAt=new Date().toISOString();await this.io.write(paths.state,JSON.stringify(state));savedIdentity=identity;}
+        this.renameOffsets.set(path,renameEnd);
+      };
       try{
         const previousPath=state.notePath;
         for(const move of renames)if(state.notePath===move.before||state.notePath.startsWith(move.before+'/'))state.notePath=move.after+state.notePath.slice(move.before.length);
@@ -409,7 +422,10 @@ export class HostedInlineWriter {
         // vault edit cannot turn our own output into an apparent user edit.
         const nextHash=contentHash(next);
         if(!state.hashes.includes(nextHash))state.hashes.push(nextHash);
-        state.body=next;state.status=state.bindingRecoveryIssue?'waiting':'running';delete state.detail;
+        // Retain the last failure until the actual note/commit operation
+        // succeeds. Clearing it here journals an error/clear/error cycle even
+        // when a retained reply and its failed operation are unchanged.
+        state.body=next;state.status=state.bindingRecoveryIssue?'waiting':'running';
         if(terminal&&this.io.commitFinal){state.finalBody=next;state.finalPhase=phase as 'complete'|'interrupted';}
         await save();
         if(this.stopped)return;
@@ -459,7 +475,7 @@ export class HostedInlineWriter {
           });
         }
         if(conflict){if(!['paused','conflict'].includes(state.status))logFailure('note.write.conflict',new Error('Response markers were removed or malformed.'),{jobId:request.id,notePath:state.notePath,knownHashes:state.hashes.slice(-5)});state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='Response markers removed or malformed. Restore the response boundaries to resume streaming.';}
-        else if(applied)state.status=state.bindingRecoveryIssue||phase==='complete'&&questions.waiting?'waiting':phase;
+        else if(applied){state.status=state.bindingRecoveryIssue||phase==='complete'&&questions.waiting?'waiting':phase;delete state.detail;}
         else state.detail='Waiting for the note to become available and saved on the host.';
         if(applied)for(const input of selectionsApplied)input.selectionApplied=true;
         if(applied&&terminal&&request.independent){
@@ -471,7 +487,9 @@ export class HostedInlineWriter {
         if(error instanceof StopStreamRequested)return;
         logFailure('response.writer.retry',error,{jobId:request.id,notePath:state.notePath,threadId:request.threadId});
         if(state.finalSaved)state.status='running';
-        state.detail=error instanceof Error?error.message:'The streaming host will retry.';
+        const detail=error instanceof Error?error.message:'The streaming host will retry.';
+        if(state.detail===detail&&durableResponseIdentity(state)===savedIdentity)this.networkRetryAt.set(path,this.monotonic()+5000);
+        state.detail=detail;
         if(error instanceof DuplicateResponseLocation){state.status='paused';state.locationConflict=error.paths;}
         // A failed proof-save acknowledgement must not persist finalSaved via
         // this retry checkpoint: the device adapter verifies that transition.
