@@ -106,6 +106,9 @@ function markerLines(document:string,prefix:'t3-inline'|'t3-response') {
     .filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to));
 }
 function trackedRegion(document:string,id:string,prefix:'t3-inline'|'t3-response'):{from:number;to:number;body:string}|null {
+  // An absent exact boundary cannot form a valid region. Avoid parsing an
+  // unrelated historical response's whole Markdown document in this case.
+  if(!document.includes(`<!-- ${prefix}:start:${id} -->`)||!document.includes(`<!-- ${prefix}:end:${id} -->`))return null;
   const lines=markerLines(document,prefix).filter(match=>match[2]===id);
   if(lines.length!==2||lines[0][1]!=='start'||lines[1][1]!=='end')return null;
   const from=lines[0].index!+lines[0][0].length+1,to=lines[1].index!-1;

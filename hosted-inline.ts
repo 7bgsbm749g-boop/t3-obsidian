@@ -220,10 +220,10 @@ export class HostedInlineWriter {
       let state:HostedInlineState,stored:HostedInlineState|null;
       try{stored=JSON.parse((await this.io.read(paths.state))??'null');state=stored??{requestHash:hash,accepted:false,notePath:request.notePath,status:'waiting',hashes:[request.initialHash],updatedAt:new Date().toISOString()};}catch{return;}
       if(state.requestHash!==hash||!Array.isArray(state.hashes)||!safeNotePath(state.notePath))return;
-      let savedIdentity=stored?durableResponseIdentity(state):undefined;
-      if(request.importTurn&&!state.bindingCheckpoint?.bindings?.[request.messageId]){const turn=request.importTurn,checkpoint=state.bindingCheckpoint;state.bindingCheckpoint={...checkpoint,bindings:{...checkpoint?.bindings,[request.messageId]:{turnId:turn.turnId,kind:'explicit'}},turns:{[turn.turnId]:turn,...checkpoint?.turns}};}
       const legacyProof=pendingCompletionCleanup(request,state)&&['complete','interrupted'].includes(state.status);
       if(['complete','interrupted','conflict'].includes(state.status)&&!legacyQuestionReply(state)&&!legacyProof)return;
+      let savedIdentity=stored?durableResponseIdentity(state):undefined;
+      if(request.importTurn&&!state.bindingCheckpoint?.bindings?.[request.messageId]){const turn=request.importTurn,checkpoint=state.bindingCheckpoint;state.bindingCheckpoint={...checkpoint,bindings:{...checkpoint?.bindings,[request.messageId]:{turnId:turn.turnId,kind:'explicit'}},turns:{[turn.turnId]:turn,...checkpoint?.turns}};}
       const save=async()=>{
         const identity=durableResponseIdentity(state);
         if(identity!==savedIdentity){state.updatedAt=new Date().toISOString();await this.io.write(paths.state,JSON.stringify(state));savedIdentity=identity;}
@@ -254,7 +254,7 @@ export class HostedInlineWriter {
             reopened=true;
             return document.slice(0,from)+startMarker(request.id)+'\n'+state.body+'\n'+endMarker(request.id)+document.slice(from+body.length);
           });
-          if(!reopened)return;
+          if(!reopened){this.networkRetryAt.set(path,this.monotonic()+5000);return;}
           state.questionFollows=questionTargets(state.body!).map(target=>({requestId:target.requestId,turnId:state.turnId??null,completed:true}));
           state.status='waiting';delete state.finalDocumentHash;await save();
         }
@@ -265,7 +265,7 @@ export class HostedInlineWriter {
             restored=!!region;
             return document;
           });
-          if(!restored)return;
+          if(!restored){this.networkRetryAt.set(path,this.monotonic()+5000);return;}
         }
         const access=await this.network(path,()=>this.io.access(request.threadEnvironmentId));
         if(this.stopped)return;
@@ -437,7 +437,7 @@ export class HostedInlineWriter {
         if(terminal&&this.io.commitFinal){
           if(await this.io.commitFinal(request,state,next)){
             state.finalBody=next;state.finalPhase=phase as 'complete'|'interrupted';state.finalSaved=true;state.cleanupComplete=true;state.status=phase;delete state.detail;
-          }else state.detail='Waiting for a checked coordinated save or conflict resolution.';
+          }else {state.detail='Waiting for a checked coordinated save or conflict resolution.';this.networkRetryAt.set(path,this.monotonic()+5000);}
           await save();return;
         }
         let conflict=false,applied=false;

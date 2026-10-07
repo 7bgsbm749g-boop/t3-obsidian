@@ -35,6 +35,28 @@ async function setup(native=true,liveLease=false,collapse=false){
   return {root,app,identity,base,host,authority,client,files,storage,request,id,notes,file,writer,complete:()=>{completed=true;},writes:()=>writes,close:async()=>{writer.stop();host.stop();authority.stop();client.dispose();await rm(root,{recursive:true,force:true});}};
 }
 
+test('a failed checked final save waits between retries and then saves current outside text',async()=>{
+ const h=await setup();let writer:HostedInlineWriter|undefined;
+ try{
+  let clock=0,attempts=0,allow=false;
+  const io=h.host.io(h.base),commit=io.commitFinal!;
+  io.monotonic=()=>clock;
+  io.commitFinal=async(...args)=>{attempts++;return allow?commit(...args):false;};
+  writer=new HostedInlineWriter(h.identity,io);h.complete();
+  await writer.tick();assert.equal(attempts,1);
+  const journal=await h.host.journal.read(h.id),before=h.notes.get('Note.md')!;
+  for(let i=0;i<20;i++)await writer.tick();
+  assert.equal(attempts,1,'unchanged failed saves must not rebuild on every tick');
+  assert.equal((await h.host.journal.read(h.id))!.journalRevision,journal!.journalRevision);
+  h.notes.set('Note.md',before+'New ordinary text\n');allow=true;clock=4999;
+  await writer.tick();assert.equal(attempts,1);
+  clock=5000;await writer.tick();assert.equal(attempts,2);
+  assert.match(h.notes.get('Note.md')!,/Added \*\*25kg\*\*/);
+  assert.ok(h.notes.get('Note.md')!.endsWith('New ordinary text\n'));
+  assert.equal(JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!).state.finalSaved,true);
+ }finally{writer?.stop();await h.close();}
+});
+
 test('history close uses a completed lease and publishes a shortened immutable delivery proof',async()=>{
  const h=await setup(true,false,true);try{
   await h.writer.tick();h.complete();await h.writer.tick();await h.host.scan();

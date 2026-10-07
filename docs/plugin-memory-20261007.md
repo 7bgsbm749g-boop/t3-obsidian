@@ -146,3 +146,46 @@ restored through native Settings without overwriting newer device data. The
 laptop's newly installed standard-user Cua diagnostic driver reports a locked
 desktop; Windows remains last verified on 2.34.15 until it can receive Sync and
 undergo native checks. No Windows input, policy change or forced restart occurred.
+
+## Retry work on retained replies
+
+The native 2.34.18 trace no longer shows timestamp/watermark-only writes. The
+four large journals retain their revision counts. This removes the growth
+fault but does not establish a CPU or memory resolution: the active native
+renderer still uses about 1.3 cores. Its ten-second CPU profile attributes
+18 percent of samples to Markdown code-range parsing, often through repeated
+note projections and marker searches. The profile is retained separately from
+the sustained OS measurement, and its time is excluded from the later quiet
+measurement window.
+
+Several retained replies repeatedly return an unsuccessful checked save or
+wait for paused boundaries. These paths now use the existing
+five-second per-request retry wait, rather than rebuilding the same large
+response on every tick. A newly arriving reply remains independent; explicit
+Stop continues to bypass the wait. The saved state is retained and the next
+attempt reads current data. A real coordinator regression verifies no repeated
+attempt or journal growth during the wait, then completes the checked save
+while preserving newer ordinary text. Explicit Stop and restored-boundary
+tests cover the other deferred paths. New-response acknowledgement and renamed
+destination arrival retain their immediate checks: the first targeted run
+exposed regressions when those checks were deferred, and that broader change
+was removed before release.
+
+Terminal historical replies return before allocating their durable comparison.
+An entirely absent native identity and an incomplete legacy region can return
+before parsing unrelated Markdown. Native single-boundary, nested and fenced
+marker validation remains on the normal path. New native measurements are
+required before declaring the memory problem fixed.
+
+The 2.34.18 ten-minute native measurement retained all four large journal
+counts exactly. The last five minutes measured 1.295 renderer CPU cores and
+767–1153 MiB RSS. The bounded real reply saved exact host hash
+`258e0162c4313e8a325e07390a9c4788b4b4b16846781aaa6568f6046763c0c0`.
+Own note/tab cleanup and original leaves, physical notes, active note and native
+CLI OFF were checked. The functional immutable receipt records these positive
+checks and explicitly leaves the memory problem open. A guarded temporary pause
+preserved the saved enabled setting before the next source validation.
+
+The narrower retry correction passed all 156 targeted tests, the build, the
+full 987 JavaScript/TypeScript tests and 11 Python tests. The two failures from
+the discarded broader retry change remain in the outside evidence log.

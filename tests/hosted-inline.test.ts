@@ -25,6 +25,30 @@ function harness(input?:string){
     dispatch:()=>{dispatched=true;},answer:(text:string,complete=false)=>{answer=text;phase=complete?'completed':'running';},missing:()=>{document=undefined;},unsaved:(value:boolean)=>{unsaved=value;},access:(value:boolean)=>{accessible=value;},crash:(value:boolean)=>{crashAfterEdit=value;if(!value)failState=false;}};
 }
 
+test('an explicit Stop bypasses the paused-boundary retry wait',async()=>{
+ const h=harness();let clock=0,reads=0;
+ h.io.monotonic=()=>clock;
+ h.files.set(h.paths.state,JSON.stringify({requestHash:hostedRequestHash(h.request),accepted:false,notePath:h.request.notePath,status:'paused',hashes:[h.request.initialHash],updatedAt:''}));
+ h.document='Ordinary text only';const update=h.io.updateNote;
+ h.io.updateNote=async(...args)=>{reads++;return update(...args);};
+ const writer=h.create();await writer.tick();const before=h.document,saved=h.files.get(h.paths.state);
+ for(let i=0;i<20;i++)await writer.tick();
+ assert.equal(reads,1);assert.equal(h.files.get(h.paths.state),saved);assert.equal(h.document,before);
+ writer.requestStop(h.request.id);await writer.tick();assert.ok(reads>1,'explicit Stop must not wait for background retry');assert.equal(h.document,before);writer.stop();
+});
+
+test('a paused missing response can recover when its exact boundaries return',async()=>{
+ const h=harness();let clock=0,reads=0;
+ h.io.monotonic=()=>clock;h.dispatch();h.answer('Restored exact answer',true);
+ h.files.set(h.paths.state,JSON.stringify({requestHash:hostedRequestHash(h.request),accepted:false,notePath:h.request.notePath,status:'paused',hashes:[h.request.initialHash],updatedAt:''}));
+ const original=h.document,update=h.io.updateNote;h.document='Ordinary text only';
+ h.io.updateNote=async(...args)=>{reads++;return update(...args);};
+ const writer=h.create();await writer.tick();
+ for(let i=0;i<20;i++)await writer.tick();assert.equal(reads,1);assert.equal(h.document,'Ordinary text only');
+ h.document=original+'New ordinary suffix\n';clock=5000;await writer.tick();
+ assert.equal(h.state.status,'complete');assert.match(h.document,/Restored exact answer/);assert.ok(h.document.endsWith('New ordinary suffix\n'));writer.stop();
+});
+
 function stranded(h:ReturnType<typeof harness>){
   // Older turns are absent from canonical latestTurn. Recovery needs saved
   // exact bindings; a bare prose interval no longer proves a run association.
