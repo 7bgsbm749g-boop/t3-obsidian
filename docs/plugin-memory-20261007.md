@@ -536,3 +536,37 @@ entry, ordinary replacement invalidation, bounded negative results, and
 changed code/image syntax. Build and the complete 1010 JavaScript/TypeScript
 plus 11 Python tests pass on CPU 0. The supported clean release must repeat
 validation; actual native behavior and resource measurements remain required.
+
+Immutable 2.34.26 passed the checked native reload and a real bounded reply
+whose saved document matches its host hash. Original notes, leaf states and
+settings were restored, CLI turned off, and the plugin safely paused before
+further source work. Its native image-cache trace saw 275 ordinary reads and
+221 exact candidate hits without new parses or ordinary retained entries.
+The complete external receipt is `releases/2.34.26/smoke-vps-qlo2.json`.
+The last five minutes of the ten-minute samples measured 0.537 CPU cores and
+700–1083 MiB renderer RSS on the VPS, and 0.206 cores and 474–574 MiB on
+Windows. Windows ended at 488 MiB, with 7.10 GiB physical memory available.
+That interval did not show system-wide memory exhaustion, but does not prove
+the reported laptop delay is fixed. Root-thread streaming remains active;
+Windows has loaded-client and OS evidence, without visible or mobile proof.
+
+The post-sample CPU profile identified repeated `scanRecords` decoding.
+Fresh storage reads already reuse authenticated file bytes, but discovery
+still allocated a full JSON object for every lease on every tick. A separate
+numeric journal survey found 19 cached prefixes, 21,355 revision identities
+and 7,450,950 serialized latest-state characters; this does not account for
+the entire renderer peak and is not proof of a journal-cache leak.
+
+The next correction caches immutable discovery-only lease snapshots after
+fresh storage reads. Exact raw bytes, rather than epoch or revision, control
+reuse. A same-revision replacement therefore parses immediately. Authority
+mutation and commit fences are unchanged and keep their own mutable reads.
+The cache is limited to 8 million source characters, 128 entries and 65,536
+objects, discards removed files, and clears on host shutdown. Numeric counters
+expose actual parses and hits. Tests cover nested mutation rejection, changed
+or malformed bytes, removal, all bounds, large JSON arrays, and the packaged
+host reading fresh storage 100 times while decoding the unchanged reply once.
+Source build, all ten targeted tests, and the complete 1014 JavaScript/
+TypeScript plus 11 Python suite pass serially on CPU 0. The clean release
+must repeat these checks; native cache counters and both desktop measurements
+will determine the actual effect. This source result does not close memory.

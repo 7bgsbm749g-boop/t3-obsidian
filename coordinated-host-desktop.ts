@@ -18,11 +18,14 @@ import {streamBlock,removeStreamBlock} from './stream-block';
 import {hostedPaths,needsHostedProcessing,type HostedInlineRequest,type HostedInlineState,type HostedWriterIO} from './hosted-inline';
 import {leasePaths,terminalLease,type InlineLeaseAuthority,type LeaseRecord,type LeaseIdentity,type LeaseFiles} from './inline-lease';
 import {ResponseProjectionCache} from './response-projection-cache';
+import {LeaseRecordCache} from './lease-record-cache';
 
 /** Host lock is owned by DesktopInlineHost. Mailbox mutations, migration fences
  * and checkpoints share that authority's serialization. Journal bytes live
  * outside the vault and are never transported through Markdown or Sync. */
 export class CoordinatedHost {
+  private leaseCache=new LeaseRecordCache();
+  leaseCacheStatus(){return this.leaseCache.status();}
   private projections=new ResponseProjectionCache();
   projectionStatus(){return this.projections.status();}
   private records=new Map<string,LeaseRecord>();
@@ -107,8 +110,10 @@ export class CoordinatedHost {
   }
   private async scanRecords(background=false){
     const active:LeaseRecord[]=[],terminal:LeaseRecord[]=[],changedTerminal:LeaseRecord[]=[];
-    for(const path of await this.files.list(`${this.identity.directory}/leases`)){
-      try{const raw=await this.files.read(path);if(!raw)continue;const record:LeaseRecord=JSON.parse(raw);if(!this.work.has(record.request.id))this.records.set(record.request.id,record);
+    const paths=await this.files.list(`${this.identity.directory}/leases`);
+    this.leaseCache.retain(new Set(paths));
+    for(const path of paths){
+      try{const raw=await this.files.read(path);if(!raw){this.leaseCache.remove(path);continue;}const record=this.leaseCache.read(path,raw);if(!this.work.has(record.request.id))this.records.set(record.request.id,record);
         if(terminalLease(record)||record.state?.finalSaved){
           const previous=this.terminalRevisions.get(record.request.id);
           if(background&&this.terminalDiscoveryComplete&&(!previous||previous.epoch!==record.epoch||previous.revision!==record.revision))changedTerminal.push(record);
@@ -414,5 +419,5 @@ export class CoordinatedHost {
     throw Error('Unsupported response command.');
   }
   async renamed(before:string,after:string){await this.authority.renameNative(before,after);await this.scan();}
-  stop(){this.stopped=true;this.backgroundChecks.clear();this.terminalRevisions.clear();this.projections.clear();}
+  stop(){this.stopped=true;this.backgroundChecks.clear();this.terminalRevisions.clear();this.projections.clear();this.leaseCache.clear();}
 }

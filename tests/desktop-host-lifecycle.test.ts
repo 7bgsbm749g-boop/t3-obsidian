@@ -25,6 +25,23 @@ async function fixture(){
   return {root,directory,vaultId,plugin,async close(){plugin.stopped=true;await plugin.inlineHostService?.dispose();await plugin.noteCommandServer?.dispose();await rm(root,{recursive:true,force:true});}};
 }
 
+test('packaged lease discovery still reads fresh bytes while parsing unchanged large replies once',async()=>{
+  const h=await fixture();
+  try{
+    await h.plugin.refreshInlineHost();const host=h.plugin.inlineHostService.coordinated,files=host.files,read=files.read;
+    const id=randomUUID(),path=`${h.directory}/leases/${id}.json`,record={request:{id,notePath:'Original.md',version:4},epoch:1,revision:1,state:{status:'conflict',body:'Large retained reply '.repeat(10000),hashes:[],updatedAt:''}};
+    await files.write(path,JSON.stringify(record));let freshReads=0;
+    files.read=async(p:string)=>{if(p===path)freshReads++;return read(p);};
+    for(let i=0;i<100;i++)await host.scanRecords(true);
+    assert.equal(freshReads,100,'cache must never substitute for a fresh storage read');
+    assert.equal(host.leaseCacheStatus().parses,1);assert.equal(host.leaseCacheStatus().hits,99);
+    await files.write(path,JSON.stringify({...record,state:{...record.state,body:'Fresh same-revision replacement'}}));
+    await host.scanRecords(true);assert.equal(host.records.get(id).state.body,'Fresh same-revision replacement');
+    await files.remove(path);await host.scanRecords(true);assert.equal(host.leaseCacheStatus().entries,0);
+    await h.plugin.inlineHostService.dispose();assert.equal(host.leaseCacheStatus().characters,0);
+  }finally{await h.close();}
+});
+
 test('lost host lock is reacquired and an original registration is acknowledged without redispatch',async()=>{
   const h=await fixture();
   try{
