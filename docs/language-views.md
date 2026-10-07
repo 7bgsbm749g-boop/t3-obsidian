@@ -91,3 +91,39 @@ Complete immutable receipt: `/home/ubuntu/backups/send-to-t3-code/releases/2.34.
 ### C source and headers
 
 C source (`.c`) and headers (`.h`) use the named `c` view and the official CodeMirror C stream grammar from `@codemirror/legacy-modes` 6.5.4. The grammar handles C directives, types, keywords, strings, comments, and block indentation. It is syntax highlighting and editing support, not a C compiler or language server. Headers shared with C++ default to C; existing handlers keep ownership. The lazy C branch does not initialize the other stream grammars or change ordinary Markdown extensions. Source: https://github.com/codemirror/legacy-modes/blob/main/mode/clike.js .
+
+
+### Completed C native tests, 2.34.34
+
+C source was committed separately as `68592eb` and first installed in
+immutable 2.34.14. That original installed smoke was interrupted and remains
+incomplete; its archive and records are untouched. The user later authorized
+finishing only C's tests after pausing the remaining language run. Completion
+is now proven on current immutable 2.34.34, which preserves that C source.
+
+The actual native project-link click opened a unique `.c` fixture in the named
+C view on QLO2 core 1.14.4. Source and Reading showed C syntax colors with the
+same monospace font and four-column tabs. Native typing and exact checked save
+preserved the original spaces, literal tab, mixed CRLF/LF and absence of a final
+newline. Saved SHA-256: `cdbe88aceacd1df16d21453bfc7e644896ed335941794740738f4eb235d257ae`.
+Checked **Reload app without saving** restored C Reading on fresh client
+`fd3f9631-ac38-48d0-955d-4fc8d3edab85`; returning to Source preserved all raw
+buffers and the exact host file. Thirty Markdown edit pairs caused zero C
+transaction callbacks or additional grammar loads and kept Markdown settings
+unchanged. C routing/grammar/Enter tests passed 2/2. The existing release had
+already passed build and full 1040 JS/TS + 11 Python checks twice.
+
+All owned C files, notes, tabs, references, drafts and source origins were
+removed. The original 19 Markdown / 28 total ordered leaves and active leaf
+`6cce1a497e0757d9` were restored; eleven physical leaf preimages remained
+byte-identical. Native CLI is OFF, Settings closed, global configuration equals
+its exact preimage. Only normal noteThreads metadata changed. A first typing
+action missed editor focus; raw bytes were checked before one focused retry.
+One owned-note ENOENT warning followed its deletion; independent cleanup checks
+passed. These observations remain in the evidence.
+
+Complete receipt: `/home/ubuntu/backups/send-to-t3-code/releases/2.34.34/smoke-vps-qlo2.json`.
+Evidence SHA-256: `d57bea4e2f0ffa96ec5ba5a7d159bfeae10773f9eedcbc8d1081486fc72e4f42`
+(100 retained artifacts). This is native VPS proof; no Windows C or mobile
+rendering claim. The memory issue remains unresolved and the other 23 formats
+remain paused. No new format or release was started to finish these tests.

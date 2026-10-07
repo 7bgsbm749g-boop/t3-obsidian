@@ -817,7 +817,7 @@ no reload or settings changes. Obsidian remained open and the actor returned
 explicit HOLD. No mobile proof. Complete immutable functional receipt:
 `/home/ubuntu/backups/send-to-t3-code/releases/2.34.33/smoke-vps-qlo2.json`.
 
-### Native desktop SHA-256 (2.34.34 candidate)
+### Native desktop SHA-256 (2.34.34)
 
 The retained 2.34.33 CPU profile contains repeated portable SHA-256 loops and
 full-size TextEncoder buffers for large response bodies. Desktop startup now
@@ -841,3 +841,20 @@ synthetic hashing results, not whole-application memory measurements. Build
 and full source checks passed 1040 JS/TS + 11 Python. The first small targeted
 check overlapped the end of the CPU-0 build; the subsequent full suite ran
 after build completion, serially. Release validation remains serial.
+
+
+2.34.34 functional release smoke was completed on 2026-10-07 at 10:30 UTC
+while finishing the separately authorized C tests. The retained bounded reply
+saved exact host hash 63065c7fab57f64a89939d9d6f68769ef98947ec5fa7efd650b3aae097b54942,
+with finalSaved/cleanupComplete and ordinary prefix preserved. Its owned note
+and tab were removed. Native C Source/Reading, checked reload and raw file save
+passed on fresh client fd3f9631-ac38-48d0-955d-4fc8d3edab85; original workspace,
+physical preimages and global config were checked, CLI OFF / Settings closed.
+Receipt: `/home/ubuntu/backups/send-to-t3-code/releases/2.34.34/smoke-vps-qlo2.json`.
+
+Memory remains OPEN. The user stopped the investigation and authorized only C
+test completion. No new VPS resource interval was captured, no quiet comparison
+is claimed, and no further memory release was started. The prepared one-minute
+sample/profile helpers are retained outside checkout but were not executed.
+The laptop actor acknowledged no owned sampler or command running and HOLD.
+The remaining language goal remains paused at the user's request.
