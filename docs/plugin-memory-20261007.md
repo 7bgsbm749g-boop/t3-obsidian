@@ -660,3 +660,23 @@ and device discovery races. A product memory resolution still requires native
 CPU/RSS measurements after this release. 2.34.29 functional smoke passed but
 late VPS CPU remained 0.518 cores with 547–1056 MiB RSS; Windows remained
 0.228 cores with 481–779 MiB RSS. These measurements do not establish a fix.
+
+
+2.34.30 native smoke completed at 08:25 UTC. Both original removed leases
+have durable tombstones, identical retained state hashes, no remote stop flags,
+and no host/device preview jobs. A 15-second trace had six audits, all for the
+active language reply, versus 24 in 2.34.29; neither removed history was audited.
+A real bounded reply saved exact SHA-256
+e50c76e623bfc592260ca6ee6a1c969eb3a7545e9074b2a7e0cd67a94405b9bb.
+Its own completed binding removal was idempotent and retained all note/state
+bytes. Original notes and leaf state survived strict cleanup, guarded pause,
+and native CLI OFF/config restoration. All 1026 JS/TS and 11 Python checks
+passed before the reviewed source commit and again in clean release tooling.
+
+The 121-sample quiet late VPS interval averaged 0.429 cores with 552–1091 MiB
+RSS, versus 0.518 cores previously (17% less CPU). Windows loaded exact 2.34.30
+and returned HOLD after 121 samples: late 0.235 cores, 468–711 MiB RSS. There
+is no consistent laptop CPU improvement and memory remains open. Evidence:
+`/home/ubuntu/backups/send-to-t3-code/releases/2.34.30/smoke-vps-qlo2.json`.
+The retained early CPU profile shows Markdown code-boundary parsing as another
+allocation/CPU cost; no parser change is included in 2.34.30.
