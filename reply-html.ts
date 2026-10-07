@@ -7,12 +7,15 @@ const parser=unified().use(remarkParse);
 // because reply escaping adds its own protected ranges.
 const codeCache=new Map<string,Array<[number,number]>>();
 let cachedCharacters=0;
-const maxCachedCharacters=2_000_000;
+let codeCacheHits=0,codeSourceParses=0;
+const maxCachedCharacters=8_000_000;
+export function markdownCodeCacheStatus(){return {entries:codeCache.size,characters:cachedCharacters,maxCharacters:maxCachedCharacters,maxEntries:32,hits:codeCacheHits,sourceParses:codeSourceParses};}
 
 /** Source ranges remain stable even when HTML would swallow Markdown code. */
 export function markdownCodeRanges(markdown:string):Array<[number,number]> {
   const cached=codeCache.get(markdown);
-  if(cached){codeCache.delete(markdown);codeCache.set(markdown,cached);return cached.map(([from,to])=>[from,to]);}
+  if(cached){codeCache.delete(markdown);codeCache.set(markdown,cached);codeCacheHits++;return cached.map(([from,to])=>[from,to]);}
+  codeSourceParses++;
   const ranges:Array<[number,number]>=[];
   function walk(node:Root|RootContent){
     if(node.type==='code'||node.type==='inlineCode'){

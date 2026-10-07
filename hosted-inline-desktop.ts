@@ -16,6 +16,7 @@ import {HostedInlineWriter,type HostedInlineRequest,type InlineFiles} from './ho
 import {readInlineEvents,type ThreadAccess,type ThreadAccessCloseReason} from './thread-stream';
 import {ThreadAccessCache} from './thread-access-cache';
 import {DesktopInlineReadCache} from './inline-file-cache-desktop';
+import {markdownCodeCacheStatus} from './reply-html';
 
 const inlineReadCache=new DesktopInlineReadCache();
 
@@ -42,7 +43,7 @@ export class DesktopInlineHost {
   private authority:InlineLeaseAuthority;
   private stopAuthorityReads:()=>void;
   private authorityStorage:ReturnType<typeof interruptibleAuthorityFiles>;
-  status(){return {active:this.active,authority:this.authority.status(),storage:this.authorityStorage.status(),readCache:inlineReadCache.status()};}
+  status(){return {active:this.active,authority:this.authority.status(),storage:this.authorityStorage.status(),readCache:inlineReadCache.status(),codeRangeCache:markdownCodeCacheStatus()};}
   private stopAuthorityTimer:()=>void;
   private work=new Set<Promise<void>>();
   private stopped=false;

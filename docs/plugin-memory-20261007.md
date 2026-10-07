@@ -355,3 +355,46 @@ The source build and complete suite passed 999 JavaScript/TypeScript tests and
 stopped-save retry and lost-native-acknowledgement recovery checks. The clean
 supported release must repeat validation, followed by actual native behavior
 and sustained measurements; this source result is not a memory-resolution claim.
+
+## Reusing unchanged native projections
+
+Immutable 2.34.22 passed its actual native delivery and cleanup checks. The two
+retained structurally rejected replies changed from running to conflict, with
+the original reasons and body lengths retained. Each received one classification
+checkpoint; the other two large journals stayed unchanged. The ten-minute VPS
+sample still measured 0.755 renderer cores and 778–1124 MiB RSS in its last
+five minutes. The locked Windows client measured 0.229 cores and 432–781 MiB
+RSS in the same bounded interval. Neither result proves memory resolution.
+The complete functional receipt retains 65 hashed artifacts. The temporary
+VPS pause preserved the saved enabled setting, original notes and leaves;
+native CLI OFF, Settings CLOSED and the exact global config were restored.
+
+The native view repeatedly reconstructs projections and parses Markdown even
+when its actual displayed bytes and local response bodies are unchanged. The
+next correction reuses only that view's previously validated projection, after
+an exact comparison with its fresh native display. Changed ordinary text,
+changed response bodies, damaged boundaries and blocked views still take the
+full validation or preserved-conflict path. The general saved-projection helper
+continues to validate every supplied document.
+
+The existing Markdown code-range cache has a two-million-character source
+budget. This correction raises its budget to eight million characters, keeps
+the 32-entry limit and adds numeric hit/parse/bound counters to host status.
+Only source strings and independent offset pairs are retained; no syntax tree,
+credential or persistent cache is added. UTF-16 source retention is bounded to
+about 16 MB, excluding tuple overhead. Uncached or changed source receives a
+fresh parse, and callers cannot mutate the cached ranges.
+
+All 100 targeted tests pass. The first new projection test correctly rejected
+its damaged end marker, but then attempted disposal without restoring its own
+fixture. The corrected test retains the rejection assertions and restores the
+valid fixture before disposal; the original failure log is preserved outside
+the checkout. Tests also verify 100 unchanged view cycles reuse one projection,
+ordinary edits remain fresh, changed replies replace old text, and cache source
+and entry bounds evict old documents. Build and full validation run serially
+on CPU 0 with the VPS plugin temporarily paused. No language addition is part
+of this correction.
+
+The projection/cache correction passed its build and all 1002
+JavaScript/TypeScript tests plus 11 Python tests, pinned to CPU 0. Native
+sustained measurements remain necessary before any memory-resolution claim.

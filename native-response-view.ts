@@ -62,9 +62,15 @@ export class NativeResponseView {
   private displayed(){return this.originalGet.call(this.view);}
   saved(){
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
-    return savedProjection(this.displayed(),this.projection);
+    const display=this.displayed();
+    // Reuse only this view's already validated projection and only when its
+    // actual native bytes are identical. Every ordinary edit takes the full
+    // projection path; a cached whole-note snapshot never strips changed text.
+    return display===this.projection.display?this.projection.saved:savedProjection(display,this.projection);
   }
   currentProjection(){
+    if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
+    if(this.displayed()===this.projection.display)return this.projection;
     const saved=this.saved();
     this.projection=projectResponses(saved,this.responses);
     return this.projection;
@@ -75,6 +81,8 @@ export class NativeResponseView {
   }
   setResponses(responses:readonly LocalResponse[]){
     if(this.disposed)throw Error('Native response view is disposed.');
+    if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
+    if(responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body)&&this.displayed()===this.projection.display)return;
     const saved=this.saved(),projection=projectResponses(saved,responses);
     this.responses=responses.map(response=>({...response}));this.projection=projection;
     for(const response of responses)this.materialized.delete(response.id);

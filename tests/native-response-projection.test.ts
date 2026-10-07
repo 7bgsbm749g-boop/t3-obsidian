@@ -42,6 +42,22 @@ function fakeView(document:string,normalizeIncoming?:(text:string)=>string){
   const adapter=new NativeResponseView(view,document,record=>conflicts.push(record),async()=>disk,normalizeIncoming);
   return {view,adapter,conflicts,read:()=>value,edit:(data:string)=>{value=data;},saves:()=>saves};
 }
+test('unchanged native response reads retain a validated projection, while ordinary edits and changed boundaries remain fresh',()=>{
+ const h=fakeView(saved),responses=[{id,body:'> Retained large reply '.repeat(5000)},{id:other,body:'> Independent reply'}];
+ h.adapter.setResponses(responses);const projection=h.adapter.currentProjection();
+ for(let i=0;i<100;i++){
+  assert.equal(h.adapter.saved(),saved);h.adapter.setResponses(responses.map(response=>({...response})));
+  assert.equal(h.adapter.currentProjection(),projection);
+ }
+ h.edit(h.read().replace('Between','New ordinary text between'));
+ assert.equal(h.adapter.saved(),saved.replace('Between','New ordinary text between'));
+ const edited=h.adapter.currentProjection();assert.notEqual(edited,projection);assert.equal(edited.saved,saved.replace('Between','New ordinary text between'));
+ h.adapter.setResponses([{id,body:'> Changed reply'},{id:other,body:'> Independent reply'}]);
+ assert.ok(h.read().includes('Changed reply'));assert.ok(!h.read().includes('Retained large reply'));assert.equal(h.view.getViewData(),edited.saved);
+ const validDisplay=h.read();h.edit(validDisplay.replace(`<!-- t3-inline:end:${id} -->`,''));
+ assert.throws(()=>h.adapter.saved(),/boundaries/);assert.throws(()=>h.adapter.currentProjection(),/boundaries/);assert.throws(()=>h.adapter.setResponses([{id,body:'> Changed reply'},{id:other,body:'> Independent reply'}]),/boundaries/);
+ h.edit(validDisplay);h.adapter.dispose();
+});
 test('incoming compatible ordinary edits preserve unsaved local edits and local response state',()=>{
   const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);
   fixture.edit(fixture.read().replace('Before','Local before'));
