@@ -10,8 +10,8 @@ export const HEARTBEAT_MS=3000;
 export const LEASE_MARGIN_MS=2000;
 export type LeaseIdentity={vaultId:string;environmentId:string;workspaceRoot:string;directory:string};
 export const COORDINATED_OWNER="00000000-0000-5000-8000-000000000001";
-export interface LeaseRecord {relocations?:Array<{before:string;after:string}>;coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;responseRemovedAt?:number;stopRequestedAt?:number;discardResponse?:boolean;state?:HostedInlineState}
-export interface LeaseCommand {discardResponse?:boolean;id:string;jobId:string;actor:string;kind:'relocate'|'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';previousNotePath?:string;observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
+export interface LeaseRecord {relocations?:Array<{before:string;after:string}>;coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;responseRemovedAt?:number;stopRequestedAt?:number;discardResponse?:boolean;stoppedBody?:string;state?:HostedInlineState}
+export interface LeaseCommand {stoppedBody?:string;discardResponse?:boolean;id:string;jobId:string;actor:string;kind:'relocate'|'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';previousNotePath?:string;observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
 export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;ttlMs:number;answeredAt?:number;retryAfterMs?:number}
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -176,7 +176,7 @@ export class InlineLeaseAuthority {
         record={request,owner:request.nativeProjection?COORDINATED_OWNER:writer??command.actor,epoch:1,expiresAt:request.nativeProjection?Number.MAX_SAFE_INTEGER:this.now()+LEASE_MS,revision:0,...(request.nativeProjection?{coordinated:true,migrating:true}:{})};
         await this.files.write(hostedPaths(directory,request.id).request,JSON.stringify(request));
         const stop=await this.files.read(hostedPaths(directory,request.id).stop);
-        if(stop!==undefined){record.stopRequestedAt=this.now();try{record.discardResponse=JSON.parse(stop).discardResponse===true;}catch{/* Legacy stop files are valid. */}}
+        if(stop!==undefined){record.stopRequestedAt=this.now();try{const intent=JSON.parse(stop);record.discardResponse=intent.discardResponse===true;if(typeof intent.stoppedBody==='string')record.stoppedBody=intent.stoppedBody;}catch{/* Legacy stop files are valid. */}}
       }else{
         if(!record)throw Error('The response is not registered.');
         if(command.kind==='observe'){
@@ -201,8 +201,9 @@ export class InlineLeaseAuthority {
             record={...record,relocations:[...record.relocations??[],{before,after}],revision:record.revision+1,state:{...record.state??{requestHash:hostedRequestHash(record.request),accepted:false,status:'waiting',hashes:[record.request.initialHash],updatedAt:new Date().toISOString()},notePath:after}};
           }
         }else if(command.kind==='stop'){
+          if(command.stoppedBody!==undefined&&typeof command.stoppedBody!=='string')throw Error('Invalid stopped response body.');
           if(record.responseRemovedAt!==undefined)return respond(true);
-          if(!record.stopRequestedAt||command.discardResponse&&!record.discardResponse)record={...record,stopRequestedAt:record.stopRequestedAt??this.now(),...(command.discardResponse?{discardResponse:true}:{}),revision:record.revision+1};
+          if(!record.stopRequestedAt||command.discardResponse&&!record.discardResponse||command.stoppedBody!==undefined&&record.stoppedBody===undefined)record={...record,stopRequestedAt:record.stopRequestedAt??this.now(),...(command.discardResponse?{discardResponse:true}:{}),...(command.stoppedBody!==undefined&&record.stoppedBody===undefined?{stoppedBody:command.stoppedBody}:{}),revision:record.revision+1};
         }else if(command.kind==='steer'){
           if(record.responseRemovedAt!==undefined)throw Error('The response was removed from its note.');
           if(record.stopRequestedAt)throw Error('The response was stopped.');

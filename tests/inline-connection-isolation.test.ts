@@ -6,7 +6,7 @@ import {connectVaultRemote} from '../vault-connection';
 import {InlineLeaseAuthority,type LeaseFiles} from '../inline-lease';
 import {initialRegion} from '../inline-thread';
 
-test('a truncated historical lease does not close a shared RPC socket or abort concurrent registration',async()=>{
+for(const exposeStatus of [true,false])test(`status ${exposeStatus?'present':'absent'}: a truncated historical lease does not close a shared RPC socket or abort concurrent registration`,async()=>{
   const directory='.obsidian/t3-code/inline/v1',vaultId=randomUUID(),actor=randomUUID(),id=randomUUID(),identity={vaultId,environmentId:'host',workspaceRoot:'/vault',directory};
   const data=new Map<string,string>(),files:LeaseFiles={read:async path=>data.get(path),write:async(path,bytes)=>{data.set(path,bytes);},remove:async path=>{data.delete(path);},list:async directory=>[...data.keys()].filter(path=>path.startsWith(directory+'/'))};
   const authority=new InlineLeaseAuthority(identity,files);let closes=0,opens=0;const sockets:any[]=[];
@@ -24,7 +24,7 @@ test('a truncated historical lease does not close a shared RPC socket or abort c
   };
   const manager=new DeviceInlineManager(actor,vaultId,{access:async()=>{throw Error('not needed');},readNote:async()=>undefined,isOpen:()=>false,updateNote:async()=>undefined},async()=>{
     const remote=await connectVaultRemote({host:'direct',executable:'',transport:'direct',url:'https://host.example',environmentId:'host'},{url:'https://host.example',environmentId:'host',token:'test-only',expiresAt:Date.now()+600000},fetcher,socket);
-    return {get closed(){return remote.closed;},files:{read:(path:string)=>remote.readFile('/vault',path),write:(path:string,bytes:string)=>remote.writeFile('/vault',path,bytes)},close:()=>remote.close()};
+    const opened={files:{read:(path:string)=>remote.readFile('/vault',path),write:(path:string,bytes:string)=>remote.writeFile('/vault',path,bytes)},close:()=>remote.close()};if(exposeStatus)Object.defineProperty(opened,'closed',{get:()=>remote.closed});return opened;
   });
   const request={version:2 as const,id,initialOwner:actor,vaultId,host:identity,notePath:'Note.md',threadId:'thread',messageId:randomUUID(),projectId:'project',threadEnvironmentId:'host',initialHash:initialRegion(id).bodyHash,createdAt:new Date().toISOString()};
   try{
@@ -32,7 +32,6 @@ test('a truncated historical lease does not close a shared RPC socket or abort c
     const failed=host.files.read('historical-large.json');const registration=manager.register(request);
     await assert.rejects(failed,/complete file/);await registration;assert.equal(closes,0);assert.equal(opens,1);
     await host.files.write('healthy.json','still connected');assert.equal(await host.files.read('healthy.json'),'still connected');
-    sockets[0].onclose();await assert.rejects(host.files.read('healthy.json'),/connection closed/);
-    assert.equal(await host.files.read('healthy.json'),'still connected');assert.equal(opens,2);
+    if(exposeStatus){sockets[0].onclose();await assert.rejects(host.files.read('healthy.json'),/connection closed/);assert.equal(await host.files.read('healthy.json'),'still connected');assert.equal(opens,2);}
   }finally{manager.dispose();authority.stop();}
 });

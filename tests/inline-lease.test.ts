@@ -546,6 +546,18 @@ test('stop intent is idempotent, durable, and fences stale and resumed checkpoin
   assert.equal((await owner.command({kind:'checkpoint',jobId:h.request.id,epoch:1,revision:stopped.revision,state:{...h.state,userStopped:true,status:'interrupted'}})).ok,true);
 });
 
+test('a stopped response accepts its first frozen client body and preserves it across repeated commands',async()=>{
+  const h=harness(),client=h.client();
+  await client.command({kind:'register',jobId:h.request.id,request:h.request});
+  await client.command({kind:'stop',jobId:h.request.id});
+  const revision=h.record().revision;
+  assert.equal((await client.command({kind:'stop',jobId:h.request.id,stoppedBody:'Latest local paragraph'})).ok,true);
+  assert.equal(h.record().stoppedBody,'Latest local paragraph');assert.equal(h.record().revision,revision+1);
+  await client.command({kind:'stop',jobId:h.request.id,stoppedBody:'Older paragraph'});
+  assert.equal(h.record().stoppedBody,'Latest local paragraph');assert.equal(h.record().revision,revision+1);
+  await h.restart();assert.equal(h.record().stoppedBody,'Latest local paragraph');client.dispose();h.authority().stop();
+});
+
 test('a coordinated stop checkpoints a block already cleaned by the sending editor and survives takeover',async()=>{
   const h=devices(true),phone=h.create(h.actor),laptop=h.create(randomUUID());
   try{

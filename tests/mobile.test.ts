@@ -24,7 +24,7 @@ test('mobile upgrade removes old credentials and ends uncertain sends without re
  const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};
  const module={exports:{} as any};runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout,clearTimeout,console},{timeout:5000});
  const p=new module.exports.default();await p.onload();assert.equal(p.mode,'direct');assert.equal(p.settings.pending.length,0);assert.equal(p.settings.completionJobs[0].status,'kept');assert.match(p.settings.completionJobs[0].detail,/companion mode was removed/);
- assert.equal(typeof p.retry,'undefined');
+ assert.equal(typeof p.retry,'undefined');assert.equal((await deviceState(local.deviceId)).pending.length,0);assert.ok(!(localValues.get(`t3-send-failures-v1:${p.settings.vaultId}`) as any[])?.some(e=>e.stage==='failure-save'));
  assert.ok(!('tokens' in local));for(const d of shared){assert.ok(!('remote' in d));assert.ok(!('remoteProjects' in d));assert.ok(!JSON.stringify(d).includes('old-secret'));}
 });
 

@@ -778,3 +778,11 @@ test('a canonical failure clears quiet state and a live-state adapter remains ex
  const direct=live.create();await direct.tick();await direct.tick();text='Live B';await direct.tick();
  assert.match(live.document,/Live B/);assert.equal((direct as any).canonicalPolls.size,0);direct.stop();
 });
+
+test('native stop commits the latest frozen client body when the host snapshot is older',async()=>{
+ const h=harness();h.dispatch();const writer=h.create();await writer.tick();
+ const frozen='> Latest direct paragraph seen and edited on the stopping device.';
+ h.files.set(h.paths.stop,JSON.stringify({stoppedBody:frozen}));
+ let committed:string|undefined;h.io.commitFinal=async(_request,_state,body)=>{committed=body;return true;};
+ await writer.tick();assert.equal(committed,frozen);assert.equal(h.state.finalBody,frozen);assert.equal(h.state.cleanupComplete,true);writer.stop();
+});

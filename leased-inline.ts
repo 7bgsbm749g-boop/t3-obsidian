@@ -66,7 +66,7 @@ export class DeviceInlineManager {
         // A file/RPC failure belongs to this operation. Only replace a dead
         // transport; closing a healthy shared socket cancels unrelated sends.
         const value=await opened.catch(()=>undefined);
-        if(!value||value.closed!==false){if(connection===opened)connection=undefined;value?.close();}
+        if(!value||value.closed===true){if(connection===opened)connection=undefined;value?.close();}
         throw error;
       }
     };
@@ -103,10 +103,10 @@ export class DeviceInlineManager {
     if(!reply.ok)throw Error(reply.error??'Could not confirm failed response cleanup.');
     this.tick();
   }
-  async stopResponse(target:InlineHostTarget,id:string){
+  async stopResponse(target:InlineHostTarget,id:string,stoppedBody?:string){
     this.stopLocally(id);
     this.renames=this.renames.filter(item=>item.bindingId!==id);this.io.saveRenames?.(this.renames);
-    const host=this.host(target),reply=await host.client.command({kind:'stop',jobId:id});
+    const host=this.host(target),reply=await host.client.command({kind:'stop',jobId:id,...(stoppedBody!==undefined?{stoppedBody}:{})});
     if(!reply.ok||!reply.record)throw Error(reply.error??'Could not record the response stop.');
     this.receiveRecord(host,reply.record);this.tick();
   }
@@ -196,7 +196,7 @@ export class DeviceInlineManager {
         }
         return located;
       }:undefined,
-      read:async path=>path===paths.request?JSON.stringify(runtime.record.request):path===paths.state?(runtime.record.state?JSON.stringify(runtime.record.state):undefined):path===paths.stop&&runtime.record.stopRequestedAt?JSON.stringify({discardResponse:runtime.record.discardResponse===true}):host.files.read(path),
+      read:async path=>path===paths.request?JSON.stringify(runtime.record.request):path===paths.state?(runtime.record.state?JSON.stringify(runtime.record.state):undefined):path===paths.stop&&runtime.record.stopRequestedAt?JSON.stringify({discardResponse:runtime.record.discardResponse===true,stoppedBody:runtime.record.stoppedBody}):host.files.read(path),
       write:async(path,value)=>{
         if(path!==paths.state||!allowed())throw Error('Writer ownership expired.');
         const state:HostedInlineState=JSON.parse(value);

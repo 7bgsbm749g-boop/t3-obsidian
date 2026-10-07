@@ -67,6 +67,7 @@ export interface HostedInlineState {
   cleanupComplete?:boolean;
   userStopped?:boolean;
   deliveryFailed?:boolean;
+  stoppedBody?:string;
   prose?:InlineMessage[];turnIds?:string[];steering?:InlineSteering[];incoming?:InlineSteering[];questionFollows?:InlineQuestionFollow[];
 }
 export interface InlineFiles {
@@ -255,7 +256,7 @@ export class HostedInlineWriter {
         if(legacyProof){state.finalPhase=state.status as 'complete'|'interrupted';state.finalSaved=true;state.status='running';await save();}
         if(state.finalSaved){await this.cleanup(request,state,save);return;}
         const stop=await this.io.read(paths.stop);
-        if(stop!==undefined)try{if(JSON.parse(stop).discardResponse===true)state.deliveryFailed=true;}catch{/* Older stop files can be empty. */}
+        if(stop!==undefined)try{const intent=JSON.parse(stop);if(intent.discardResponse===true)state.deliveryFailed=true;if(typeof intent.stoppedBody==='string')state.stoppedBody=intent.stoppedBody;}catch{/* Older stop files can be empty. */}
         if(state.userStopped||this.stopIntents.has(request.id)||stop!==undefined){await this.finishStopped(request,state,save);return;}
         if(legacyQuestionReply(state)){
           // Older releases sealed pending questions. Reopen only byte-identical
@@ -541,7 +542,7 @@ export class HostedInlineWriter {
         .catch(error=>logFailure('response.stop.interrupt.failed',error,{jobId:request.id,threadId:request.threadId}));
     }
     if(this.io.commitFinal){
-      const body=state.deliveryFailed?'':stoppedResponseBody(state.body??'');
+      const body=state.deliveryFailed?'':stoppedResponseBody(state.stoppedBody??state.body??'');
       if(await this.io.commitFinal(request,state,body)){state.body=body;state.finalBody=body;state.finalPhase='interrupted';state.finalSaved=true;state.cleanupComplete=true;state.status='interrupted';delete state.detail;}
       else this.networkRetryAt.set(hostedPaths(this.identity.directory,request.id).request,this.monotonic()+5000);
       await save();return;
@@ -550,7 +551,7 @@ export class HostedInlineWriter {
     await this.io.updateNote(state.notePath,document=>{
       const region=regionBody(document,request.id);
       if(region){
-        const body=state.deliveryFailed?'':stoppedResponseBody(region.body);
+        const body=state.deliveryFailed?'':stoppedResponseBody(state.stoppedBody??region.body);
         const change=finalizeRegion(document,request.id,contentHash(region.body),request.independent?completionProof(request.id,body):body);
         if(!change)throw Error('Stopped response boundaries are ambiguous. Your text is preserved.');
         state.body=body;state.finalBody=body;
@@ -559,7 +560,7 @@ export class HostedInlineWriter {
         // The sending editor may already have cleaned this block while offline.
         const cleaned=removeCompletionProof(document,request.id);
         if(cleaned===null&&hasResponseMarkers(document,request.id))throw Error('Stopped response boundaries are incomplete. Your text is preserved.');
-        state.finalBody??=state.deliveryFailed?'':stoppedResponseBody(state.body??'');
+        state.finalBody??=state.deliveryFailed?'':stoppedResponseBody(state.stoppedBody??state.body??'');
         before=document;after=cleaned??document;
       }
       return document;

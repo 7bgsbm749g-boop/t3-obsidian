@@ -96,6 +96,7 @@ export class NativeResponseManager {
   view(view:MarkdownView){const adapter=this.views.get(view);return adapter&&!adapter.isDisposed()?adapter:undefined;}
   conflictedView(path:string){return [...this.views].find(([view,adapter])=>view.file?.path===path&&!adapter.isDisposed()&&adapter.conflictRecord())?.[0];}
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
+  stoppedBody(id:string){return this.localStops.get(id)?.body;}
   stop(id:string,path?:string,hidden=false){
     const record=this.records.get(id),provisional=this.provisional.get(id),cached=this.cached.get(id);
     const current=[...this.views.values()].map(view=>view.responseBody(id)).find(body=>body!==undefined)??this.streams.get(id)?.body??provisional?.body??cached?.body??record?.state?.body??'';

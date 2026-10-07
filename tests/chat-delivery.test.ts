@@ -1905,3 +1905,8 @@ test('a real completed writer retains marker-free positional provenance usable b
     assert.match(prepared.prompt,/Additional context preceding your selection:\nFresh idea 3\n\nYour selected request:\nImplement/);
   }finally{h.plugin.onunload();}
 });
+
+test('the real remote vault wrapper exposes transport health to the shared manager',async()=>{
+ const h=await chatHarness();
+ try{const target=await h.plugin.inlineHostTarget(),opened=await h.plugin.inlineHostFiles(target);try{assert.equal(opened.closed,false);await opened.files.write(`${target.directory}/health-test.json`,'healthy');assert.equal(await opened.files.read(`${target.directory}/health-test.json`),'healthy');}finally{opened.close();}assert.equal(opened.closed,true);}finally{h.plugin.onunload();}
+});
