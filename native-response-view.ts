@@ -4,7 +4,7 @@ import type {Extension,Transaction as CMTransaction} from '@codemirror/state';
 import {changedEdits,changedInterval,mergeSavedEdits} from './coordinated-merge';
 import {displayToSaved,editableDisplayRange,projectResponses,savedProjection,responseRegion,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
 
-export interface NativeViewConflict {base:string;local:string;incoming:string;reason:string}
+export interface NativeViewConflict {base:string;local:string;incoming:string;reason:string;awaitingCompletion?:boolean}
 /** Native rendering with a separate saved projection. */
 export class NativeResponseView {
   private originalGet:MarkdownView['getViewData'];
@@ -23,7 +23,7 @@ export class NativeResponseView {
   private materialized=new Set<string>();
   private ownSave?:{text:string};
   private materialization?:{before:string;after:string;ids:string[]};
-  constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[]){
+  constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[],private reconciled?:()=>void){
     this.file=view.file;this.base=saved;this.diskBase=saved;this.projection=projectResponses(saved,[]);
     this.originalGet=view.getViewData;this.originalSet=view.setViewData;
     this.originalSave=view.save;
@@ -136,13 +136,21 @@ export class NativeResponseView {
       this.base=incoming;this.projection=projection;
       this.render(projection.display,clear);
       if(merge.text!==incoming)this.view.requestSave();
-    }catch(error){this.block({base:this.base,local,incoming,reason:error instanceof Error?error.message:String(error)});}
+    }catch(error){
+      const reason=error instanceof Error?error.message:String(error);
+      // Sync can deliver the final note before its independent completion
+      // receipt. Preserve both versions and fence autosave while the manager
+      // obtains proof; a missing marker alone is not a user-edit conflict.
+      const awaitingCompletion=reason==='The exact durable response anchor is missing.';
+      this.block({base:this.base,local,incoming,reason,...(awaitingCompletion?{awaitingCompletion:true}:{})});
+    }
   }
   editSaved(saved:string){
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
     this.projection=projectResponses(saved,this.responses);this.render(this.projection.display,false);this.view.requestSave();
   }
   conflictRecord(){return this.blocked;}
+  confirmPendingConflict(reason:string){if(this.blocked?.awaitingCompletion)this.block({...this.blocked,reason,awaitingCompletion:false});}
   reconcileDisk(document:string){if(document!==this.diskBase){this.incoming(document,false);if(!this.blocked)this.diskBase=document;}}
   markMaterialized(id:string){this.materialized.add(id);}
   preserveConflict(record:NativeViewConflict){if(!this.blocked)this.block(record);}
@@ -151,6 +159,7 @@ export class NativeResponseView {
     const chosen=choice==='local'?this.blocked.local:saved;
     const responses=this.responses.filter(response=>{try{return !!responseRegion(chosen,response.id);}catch{return false;}});
     this.projection=projectResponses(chosen,responses);this.responses=responses;this.base=saved;this.blocked=undefined;this.render(this.projection.display,false);
+    this.reconciled?.();
     if(chosen!==saved)this.view.requestSave();
   }
   hasMaterialized(id:string){return this.materialized.has(id);}
@@ -160,18 +169,19 @@ export class NativeResponseView {
     const base=this.blocked?.base??this.base;
     const local=this.blocked?.local??(this.displayed()===saved?this.base:this.saved());
     const merge=mergeSavedEdits(base,saved,changedEdits(base,local));
-    if(!merge.ok){if(!this.blocked)this.block({base,local,incoming:saved,reason:merge.reason});return false;}
+    if(!merge.ok){if(!this.blocked||this.blocked.awaitingCompletion)this.block({base,local,incoming:saved,reason:merge.reason});return false;}
     const responses=this.responses.filter(r=>!ids.includes(r.id));
     let projection:ResponseProjection;
     try{
       if(ids.some(id=>responseRegion(saved,id)))throw new ProjectionConflict('The saved result still contains a response anchor.');
       projection=projectResponses(merge.text,responses);
-    }catch(error){if(!this.blocked)this.block({base,local,incoming:saved,reason:error instanceof Error?error.message:String(error)});return false;}
+    }catch(error){if(!this.blocked||this.blocked.awaitingCompletion)this.block({base,local,incoming:saved,reason:error instanceof Error?error.message:String(error)});return false;}
     // All validation precedes this single transition. A failed merge cannot
     // retire a response, clear a conflict or briefly render an empty anchor.
     this.blocked=undefined;this.base=saved;this.diskBase=saved;this.ownSave=undefined;this.responses=responses;this.projection=projection;
     for(const id of ids)this.materialized.add(id);
     this.render(projection.display,clear);
+    this.reconciled?.();
     if(merge.text!==saved)this.view.requestSave();return true;
   }
   isDisposed(){return this.disposed;}

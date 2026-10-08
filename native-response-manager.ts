@@ -152,6 +152,7 @@ export class NativeResponseManager {
       else if(cached.sequence===-1&&record.state?.body!==undefined)this.reconnecting.delete(record.request.id);
     }
     this.provisional.delete(record.request.id);this.records.set(record.request.id,record);
+    if(record.state?.status==='conflict')for(const [view,adapter] of this.views)if(view.file?.path===path&&adapter.responseIds().includes(record.request.id))adapter.confirmPendingConflict(record.state.detail??'The response could not verify its saved note. Both versions are preserved.');
     if(record.stopRequestedAt&&!record.state?.cleanupComplete&&(!this.localStops.has(record.request.id)||record.discardResponse&&!this.localStops.get(record.request.id)?.hidden))this.stop(record.request.id,path,record.discardResponse===true);
     if(record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete)this.streams.delete(record.request.id);
     this.refresh();
@@ -167,7 +168,9 @@ export class NativeResponseManager {
       if((document.includes(startMarker(id))||document.includes(endMarker(id)))&&responseRegion(document,id))continue;
       if(hash===delivery.hash||proof?.commitId===delivery.commitId&&proof.hash===delivery.hash&&nativeCommitMatches(proof,document))ids.push(id);
     }
-    return ids;
+    // A single incoming file can finish several responses. Do not retire one
+    // while another missing anchor still awaits its independent proof.
+    return [...pending].some(id=>!responseRegion(document,id)&&!ids.includes(id))?[]:ids;
   }
   /** File events keep adoption alive even after the device's disk observation
    * has stopped lease polling. Reads are coalesced per note, never per pane. */
@@ -185,6 +188,11 @@ export class NativeResponseManager {
         const pending=new Set([...this.views].filter(([view])=>view.file===file).flatMap(([,adapter])=>adapter.responseIds()));
         const ids=this.completed(path,disk,pending);
         if(ids.length)for(const [view,adapter] of this.views)if(view.file===file&&!adapter.isDisposed())adapter.resolveCommitted(disk,ids);
+        for(const [view,adapter] of this.views){
+          if(view.file!==file||!adapter.conflictRecord()?.awaitingCompletion)continue;
+          const unmatched=[...this.records.values()].some(record=>adapter.responseIds().includes(record.request.id)&&!responseRegion(disk,record.request.id)&&record.state?.notePath===path&&record.state.cleanupComplete&&record.state.delivery&&this.proofs.has(record.request.id)&&!this.completed(path,disk,new Set([record.request.id])).includes(record.request.id));
+          if(unmatched)adapter.confirmPendingConflict('The saved note differs from the verified completed response. Both versions are preserved.');
+        }
         this.refresh();
       }while(this.changedDuringRead.has(path));
     })();
@@ -253,7 +261,7 @@ export class NativeResponseManager {
             this.app.saveLocalStorage(`t3-native-conflict:${file.path}:${Date.now()}`,conflict);
             logFailure('note.projection.conflict',Error(conflict.reason),{notePath:file.path});
             this.recoverConflict?.(view);
-          },async()=>view.file===file?this.app.vault.read(file):undefined,incoming=>this.normalize(file.path,incoming),incoming=>this.completed(file.path,incoming,new Set(adapter!.responseIds())));
+          },async()=>view.file===file?this.app.vault.read(file):undefined,incoming=>this.normalize(file.path,incoming),incoming=>this.completed(file.path,incoming,new Set(adapter!.responseIds())),()=>this.recoverConflict?.(view));
           this.views.set(view,adapter);
           opened.add(file.path);
         }

@@ -54,6 +54,7 @@ export class DeviceResponseCompletion {
   private grants=new Map<string,FinalResponseGrant>();
   private preparations=new Map<string,(proof:NativeCommitProof)=>Promise<void>>();
   private paths=new Map<string,string>();
+  private reportedConflicts=new Map<string,string>();
   private coordinator:GeneratedNoteCoordinator;
   constructor(private actor:string,private store:DeviceCompletionStore,private notes:DeviceCompletionNoteIO,private committed:(path:string,proof:NativeCommitProof)=>void,private conflict?:(record:NoteGeneration)=>void){
     const journal:GenerationJournal={
@@ -103,10 +104,16 @@ export class DeviceResponseCompletion {
     }
     const pending=await this.store.read(request.id);
     if(pending?.status==='commit-pending'&&pending.attempt){await prepare?.(this.intentProof(pending));await this.notes.recover?.(path,pending.attempt.expected,[request.id]);}
+    if(pending?.status==='conflict')await this.coordinator.recheckSeparatedConflict(request.id);
     const result=await this.coordinator.commit(request.id);
-    if(result.status==='conflict'){this.conflict?.(result);return undefined;}
+    if(result.status==='conflict'){
+      const fingerprint=contentHash(JSON.stringify(result.conflicts.at(-1)));
+      if(this.reportedConflicts.get(request.id)!==fingerprint){this.reportedConflicts.set(request.id,fingerprint);this.conflict?.(result);}
+      return undefined;
+    }
     if(result.status!=='verified'||!result.verified)return undefined;
     const proof=this.coordinator.materialization(result);
+    this.reportedConflicts.delete(request.id);
     this.committed(path,proof);return proof;
   }
 }

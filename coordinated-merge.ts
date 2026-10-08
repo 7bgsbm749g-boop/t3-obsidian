@@ -66,7 +66,11 @@ export function mergeSavedEdits(original:string,latest:string,proposed:readonly 
     // A checked response replacement owns the comment pair, but ordinary
     // insertions exactly outside that pair belong before/after the result.
     // Other staged edits retain the conservative touching-edit rule.
-    const outside=(user:SavedEdit)=>edit.preserveBoundaryInsertions===true&&user.from===user.to&&(user.from===edit.from||user.from===edit.to);
+    // An exact, unique response preimage proves that changes ending before
+    // or starting after it do not change the response. This includes blank
+    // line removal next to the marker, not just zero-width insertions.
+    const checked=anchors.some(anchor=>anchor.from===edit.from&&anchor.to===edit.to);
+    const outside=(user:SavedEdit)=>edit.preserveBoundaryInsertions===true&&(user.from===user.to||checked)&&(user.to===edit.from||user.from===edit.to);
     // A native pane can echo an independently registered anchor (or an
     // ordinary edit) already included in the incoming saved revision. Exact
     // identical edits are one change, not competing changes. Other touching

@@ -17,7 +17,10 @@ export class NativeConflictRecovery {
   constructor(private app:App){this.manager=nativeResponses(app);}
   queue(view:MarkdownView,manual=false){
     const file=view.file,conflict=this.manager.view(view)?.conflictRecord();
-    if(this.disposed||!file||!conflict||!manual&&this.shown.has(conflict))return;
+    if(this.disposed)return;
+    if(this.activeView===view&&(!file||this.activeConflict!==conflict))this.active?.close();
+    if(!file||!conflict||!manual&&conflict.awaitingCompletion){this.pending.delete(view);return;}
+    if(!manual&&this.shown.has(conflict))return;
     if(this.activeView===view){if(this.activeConflict===conflict)return;this.active?.close();}
     this.pending.set(view,{file,conflict});this.schedule();
   }

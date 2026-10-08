@@ -149,6 +149,20 @@ export class GeneratedNoteCoordinator {
     record.status='conflict';record.conflicts.push({original:record.original,latest,proposed:record.attempt?.expected??record.staged,reason});
     await this.journal.append(record.request.id,record,'conflict');return record;
   }
+  /** Recheck a never-written local result after separated boundary edits.
+   * Preserve its conflict history. Pending writes and damaged/overlapping
+   * content still require their existing recovery paths. */
+  async recheckSeparatedConflict(id:string){
+    const initial=await this.require(id);
+    return this.serial(initial.notePath,async()=>{
+      const record=await this.require(id);
+      if(record.status!=='conflict'||record.attempt||record.staged===undefined||record.finalBody===undefined)return record;
+      if(record.conflicts.at(-1)?.reason!=='Generated and ordinary edits overlap or touch. Both versions are preserved.')return record;
+      const latest=await this.notes.read(record.notePath);
+      if(latest===undefined||!mergeSavedEdits(record.original,latest,this.edits(record)).ok)return record;
+      record.status='result-ready';await this.journal.append(id,record,'separated-conflict-rechecked');return record;
+    });
+  }
   async commit(id:string){
     const initial=await this.require(id);
     return this.serial(initial.notePath,async()=>{
