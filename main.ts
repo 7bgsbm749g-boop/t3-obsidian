@@ -5,7 +5,7 @@ import pluginManifest from './manifest.json';
 import {appendSendFailure,type SendFailure} from './send-failures';
 import {mergeSharedSettings} from './shared-settings';
 import {noteThreadTitle,threadTitleGeneration,type ThreadTitleGeneration} from './thread-title';
-import {NativeConflictModal} from './native-conflict-modal';
+import {NativeConflictRecovery} from './native-conflict-modal';
 import {ResponseLocationModal} from './response-location-ui';
 import {stagedNoteInstruction} from './staged-note-instruction';
 import {isResponseCommand,validateResponseCommand} from './response-command';
@@ -152,6 +152,7 @@ export default class SendToT3 extends Plugin {
   private mobileSelectionAction?:{dispose():void};
   diagnostics?:EventJournal;
   private failedRequests=new WeakSet<Request>();
+  private nativeConflictRecovery?:NativeConflictRecovery;
   private failureKey(){return `t3-send-failures-v1:${this.settings.vaultId}`;}
   private recordSendFailure(request:Request|undefined,error:unknown,stage:string,startedAt:number){
     const derived=(part:string)=>{try{return request?commandId(request.id,part):undefined;}catch{return undefined;}};
@@ -227,6 +228,8 @@ export default class SendToT3 extends Plugin {
     if(Array.isArray(storedTargets))this.inlineTargets=storedTargets.filter(target=>target&&typeof target.environmentId==='string'&&typeof target.workspaceRoot==='string'&&typeof target.directory==='string');
     if(typeof this.registerEditorExtension==='function'){const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)));}
     const previewKey=`native-preview:${this.deviceId}:${this.settings.vaultId}`;
+    this.nativeConflictRecovery=new NativeConflictRecovery(this.app);
+    nativeResponses(this.app).configureConflictRecovery(view=>this.nativeConflictRecovery?.queue(view));
     let savedPreviews:unknown;try{savedPreviews=await deviceState(previewKey);}catch(error){logFailure('note.preview.cache-load',error);}
     nativeResponses(this.app).configurePreviewCache(this.settings.vaultId,savedPreviews,async snapshot=>{await deviceState(previewKey,snapshot);});
     if(typeof this.registerView==='function'){
@@ -246,7 +249,7 @@ export default class SendToT3 extends Plugin {
       const refresh=()=>{void this.refreshNoteCommandHost().catch(()=>{});void this.refreshEventHost().catch(()=>{});};
       refresh();this.registerInlineInterval(refresh,5000);
     });
-    this.addCommand({id:'resolve-native-response-conflict',name:'Resolve response view conflict…',checkCallback:checking=>{const active=this.app.workspace.getActiveViewOfType(MarkdownView),view=active?.file?nativeResponses(this.app).conflictedView(active.file.path):undefined;if(!view)return false;if(!checking)new NativeConflictModal(this.app,view).open();return true;}});
+    this.addCommand({id:'resolve-native-response-conflict',name:'Resolve response view conflict…',checkCallback:checking=>{const active=this.app.workspace.getActiveViewOfType(MarkdownView),view=active?.file?nativeResponses(this.app).conflictedView(active.file.path):undefined;if(!view)return false;if(!checking)this.nativeConflictRecovery?.queue(view,true);return true;}});
     this.addCommand({id:'send-note-to-multiple-notes',name:'Send note with streaming destinations…',checkCallback:checking=>{
       const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;if(!file||this.busy)return false;
       if(!checking)new StreamDestinationsModal(this.app,file.path,command=>this.executeNoteCommand(command)).open();return true;
@@ -2108,7 +2111,7 @@ export default class SendToT3 extends Plugin {
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
     }catch(error){logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});await this.failRequest(request,error,stage,startedAt);throw error;}
   }
-  onunload(){this.stopContentHash?.();this.codebase?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.stopContentHash?.();this.codebase?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();this.nativeConflictRecovery?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;

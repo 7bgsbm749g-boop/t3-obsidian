@@ -37,7 +37,12 @@ export class NativeResponseManager {
   private previewDirty=false;
   private previewTimer?:ReturnType<typeof setTimeout>;
   private previewWork?:Promise<void>;
+  private recoverConflict?:(view:MarkdownView)=>void;
   constructor(private app:App){}
+  configureConflictRecovery(recover:(view:MarkdownView)=>void){
+    this.recoverConflict=recover;
+    for(const [view,adapter] of this.views)if(adapter.conflictRecord())recover(view);
+  }
   configurePreviewCache(vaultId:string,saved:unknown,save:(snapshot:NativePreviewSnapshot)=>Promise<void>){
     this.stopKey=`t3-local-response-stops-v1:${vaultId}`;
     const stops=this.app.loadLocalStorage?.(this.stopKey);
@@ -233,6 +238,7 @@ export class NativeResponseManager {
           adapter=new NativeResponseView(view,saved,conflict=>{
             this.app.saveLocalStorage(`t3-native-conflict:${file.path}:${Date.now()}`,conflict);
             logFailure('note.projection.conflict',Error(conflict.reason),{notePath:file.path});
+            this.recoverConflict?.(view);
           },async()=>view.file===file?this.app.vault.read(file):undefined,incoming=>this.normalize(file.path,incoming),incoming=>this.completed(file.path,incoming,new Set(adapter!.responseIds())));
           this.views.set(view,adapter);
           opened.add(file.path);
@@ -255,5 +261,5 @@ export class NativeResponseManager {
   prepare(path:string,before:string,after:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.prepareMaterialization(before,after,ids);}
   cancel(path:string){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.cancelMaterialization();}
   committed(path:string,saved:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path&&!adapter.acceptCommitted(saved,ids))throw Error('A native pane did not adopt the saved result.');}
-  dispose(){void this.flushPreviewCache();this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.proofs.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
+  dispose(){this.recoverConflict=undefined;void this.flushPreviewCache();this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.proofs.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
 }

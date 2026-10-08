@@ -10,6 +10,7 @@ import {InlineLeaseAuthority,leasePaths} from '../inline-lease';
 import {hostedRequestHash} from '../hosted-inline';
 import {initialRegion,replaceRegion,regionBody} from '../inline-thread';
 import {contentHash} from '../completion';
+import {responseAnchor} from '../native-response-projection';
 
 const project={id:'chat-project',title:'Personal notes',workspaceRoot:'/projects/notes',connectionId:'chat-connection',connectionName:'Laptop'};
 
@@ -178,8 +179,101 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     (plugin.app.workspace as any).getLeaf=()=>leaf;
     activeNote=file;activeEditor=view;
     return {file,view,editor:view.editor,get value(){return value;}};
-  },vaultAccesses:()=>vaultAccesses};
+  },localStorage,vaultAccesses:()=>vaultAccesses};
 }
+
+function nativeConflicts(h:Awaited<ReturnType<typeof chatHarness>>,panes=1){
+  const binding='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const original=`Before\n\n${responseAnchor(binding)}\n\nAfter\n`,disk=new Map<string,string>();
+  const notes=Array.from({length:panes},(_,i)=>{
+    const note=h.attachEditor(`Notes/Conflict ${i}.md`,original),view=note.view as any;
+    const edit=(text:string)=>note.editor.replaceRange(text,note.editor.offsetToPos(0),note.editor.offsetToPos(note.value.length));
+    Object.assign(view,{getViewData:()=>note.value,setViewData:edit,getMode:()=> 'preview',requestSave:()=>{},save:async()=>{disk.set(note.file.path,view.getViewData());}});
+    disk.set(note.file.path,original);return {...note,view,edit,visible:()=>note.value};
+  });
+  h.plugin.app.workspace.getLeavesOfType=()=>notes.map(note=>({view:note.view}));
+  h.plugin.app.vault.read=async(file:any)=>disk.get(file.path)!;
+  const manager=h.plugin.nativeConflictRecovery.manager;
+  for(const note of notes)manager.preview(note.view,binding,'> Synthetic local response');
+  const conflict=(pane=0)=>{const note=notes[pane],incoming=original.replace('Before','Saved before');note.edit(note.visible().replace('Before','Local before'));disk.set(note.file.path,incoming);note.view.setViewData(incoming,false);return manager.view(note.view).conflictRecord();};
+  return {notes,manager,disk,original,conflict,dialogs:()=>h.modals.filter(modal=>modal.titleEl.text==='Resolve response view conflict')};
+}
+
+test('native conflicts automatically open recovery after preserving both versions, without stacking manual recovery',async()=>{
+  const h=await chatHarness(),n=nativeConflicts(h);
+  try{
+    const conflict=n.conflict();assert.ok(conflict.local.includes('Local before'));assert.ok(conflict.incoming.includes('Saved before'));
+    assert.ok([...h.localStorage].some(([key,value])=>key.startsWith('t3-native-conflict:')&&value===conflict));
+    assert.equal(n.dialogs().length,0,'Native update completes before opening UI');
+    await waitForReply(()=>n.dialogs().length===1,'Recovery opens without running a command');
+    const command=h.registered.find(command=>command.id==='resolve-native-response-conflict');assert.equal(command.checkCallback(false),true);
+    n.manager.refresh();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(n.dialogs().length,1);
+    const button=h.settingsControls.flatMap(control=>control.buttons).find(button=>button.text==='Use preserved local edits');assert.ok(button);button.click();
+    await waitForReply(()=>n.dialogs()[0].closed,'Choosing local edits closes recovery');
+    assert.equal(n.notes[0].view.getViewData(),n.original.replace('Before','Local before'));
+    assert.equal(n.disk.get(n.notes[0].file.path),n.original.replace('Before','Local before'));
+    assert.equal(n.manager.view(n.notes[0].view).conflictRecord(),undefined);
+    assert.equal(h.commands.length,0,'Recovery does not send or retry T3 work');
+  }finally{h.plugin.onunload();}
+});
+
+test('dismissed conflicts stay preserved and can be reopened manually',async()=>{
+  const h=await chatHarness(),n=nativeConflicts(h);
+  try{
+    n.conflict();await waitForReply(()=>n.dialogs().length===1,'Automatic dialog opens');n.dialogs()[0].close();
+    for(let i=0;i<5;i++){h.plugin.nativeConflictRecovery.queue(n.notes[0].view);n.manager.refresh();}
+    await new Promise(resolve=>setTimeout(resolve,10));assert.equal(n.dialogs().length,1);assert.ok(n.manager.view(n.notes[0].view).conflictRecord());
+    h.registered.find(command=>command.id==='resolve-native-response-conflict').checkCallback(false);
+    await waitForReply(()=>n.dialogs().length===2,'Manual command reopens a dismissed conflict');
+  }finally{h.plugin.onunload();}
+});
+
+test('a new conflict in the same pane replaces an obsolete open recovery dialog',async()=>{
+  const h=await chatHarness(),n=nativeConflicts(h);
+  try{
+    n.conflict();await waitForReply(()=>n.dialogs().length===1,'First conflict opens');
+    const saved=n.disk.get(n.notes[0].file.path)!;await n.manager.resolve(n.notes[0].view,saved,'saved');
+    n.notes[0].edit(n.notes[0].visible().replace('Saved before','Second local before'));
+    const incoming=n.original.replace('Before','Second saved before');n.disk.set(n.notes[0].file.path,incoming);n.notes[0].view.setViewData(incoming,false);
+    await waitForReply(()=>n.dialogs().length===2,'A new conflict opens automatically');
+    assert.equal(n.dialogs()[0].closed,true);assert.equal(n.dialogs().filter(modal=>!modal.closed).length,1);
+  }finally{h.plugin.onunload();}
+});
+
+test('recovery serializes independent pane conflicts and rejects a changed saved revision',async()=>{
+  const h=await chatHarness(),n=nativeConflicts(h,2);
+  try{
+    n.conflict(0);n.conflict(1);await waitForReply(()=>n.dialogs().length===1,'First conflict opens');
+    n.disk.set(n.notes[0].file.path,n.original.replace('Before','Newer saved before'));
+    h.settingsControls.flatMap(control=>control.buttons).find(button=>button.text==='Use saved note').click();
+    await waitForReply(()=>h.notices.some(notice=>notice.includes('saved conflict version changed')),'Changed saved bytes require another review');
+    assert.equal(n.dialogs()[0].closed,false);assert.ok(n.manager.view(n.notes[0].view).conflictRecord());
+    n.dialogs()[0].close();await waitForReply(()=>n.dialogs().length===2,'Second pane opens after the first closes');
+    assert.equal(n.dialogs().filter(modal=>!modal.closed).length,1);
+  }finally{h.plugin.onunload();}
+});
+
+test('resolved, closed and switched panes do not open stale automatic recovery',async()=>{
+  for(const action of ['resolved','closed','switched'] as const){
+    const h=await chatHarness(),n=nativeConflicts(h);
+    try{
+      n.conflict();
+      if(action==='resolved'){const saved=n.disk.get(n.notes[0].file.path)!;await n.manager.resolve(n.notes[0].view,saved,'saved');}
+      if(action==='closed')h.plugin.app.workspace.getLeavesOfType=()=>[];
+      if(action==='switched')n.notes[0].view.file={path:'Notes/Another.md'};
+      await new Promise(resolve=>setTimeout(resolve,10));assert.equal(n.dialogs().length,0,action);
+    }finally{h.plugin.onunload();}
+  }
+});
+
+test('plugin unload cancels queued recovery and closes an open recovery dialog',async()=>{
+  for(const opened of [false,true]){
+    const h=await chatHarness(),n=nativeConflicts(h);n.conflict();
+    if(opened)await waitForReply(()=>n.dialogs().length===1,'Automatic dialog opens before unload');
+    h.plugin.onunload();await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(n.dialogs().length,opened?1:0);assert.ok(n.dialogs().every(modal=>modal.closed));
+  }
+});
 
 for(const mode of ['untitled-only','always'])for(const name of ['Release plan','Untitled 1'])test(`Send and Ask share ${mode} naming for ${name}`,async()=>{
   const h=await chatHarness(),path=`Notes/${name}.md`;
