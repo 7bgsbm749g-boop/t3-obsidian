@@ -139,6 +139,9 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
       if(req.tag==='server.getConfig')value=modelConfig();
       else if(req.tag==='filesystem.browse')value={parentPath:req.payload.partialPath==='~'?'/home/person':req.payload.partialPath.replace(/\/$/,''),entries:[]};
       else if(req.tag==='projects.writeFile'){hostFiles.set(req.payload.relativePath,req.payload.contents);value={};}
+      else if(req.tag==='projects.readFile'&&req.payload.relativePath==='.obsidian/t3-code/storage-route.json'){
+        this.onmessage?.({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'ProjectReadFileError'}}]}})});return;
+      }
       else if(req.tag==='projects.readFile'&&req.payload.relativePath.startsWith('.obsidian/t3-code/inline/')){
         if(req.payload.relativePath.includes('/replies/'))await hostTick();
         const contents=hostFiles.get(req.payload.relativePath);

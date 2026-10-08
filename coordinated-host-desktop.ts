@@ -6,7 +6,7 @@ import {contentHash} from './completion';
 import {generatedEventContent} from './generated-event-content';
 import {GeneratedNoteCoordinator,validateFinalResponseBody,type NoteGeneration} from './generated-note-coordinator';
 import {nativeCommitPath,readNativeCommitProof} from './native-response-commit';
-import {DesktopGenerationJournal} from './generation-journal-desktop';
+import {CurrentGenerationJournal} from './current-generation-journal-desktop';
 import {nativeResponses} from './native-response-manager';
 import {deviceNoteIO} from './inline-note-io';
 import {planNativeMigration} from './coordinated-migration';
@@ -57,11 +57,11 @@ export class CoordinatedHost {
     const updated=await this.authority.checkpoint(record.request.id,state,{epoch:record.epoch,revision:record.revision});
     this.records.set(record.request.id,updated);await nativeResponses(this.app).receive(updated,published.bytes);return updated;
   }
-  private constructor(private app:App,private identity:LeaseIdentity,private files:LeaseFiles,private authority:InlineLeaseAuthority,readonly journal:DesktopGenerationJournal,readonly coordinator:GeneratedNoteCoordinator){}
+  private constructor(private app:App,private identity:LeaseIdentity,private files:LeaseFiles,private authority:InlineLeaseAuthority,readonly journal:CurrentGenerationJournal,readonly coordinator:GeneratedNoteCoordinator){}
   static async open(app:App,identity:LeaseIdentity,files:LeaseFiles,authority:InlineLeaseAuthority,options?:{journalRoot?:string}){
     const roots=[identity.workspaceRoot];
     try{const registry=JSON.parse(await fs.readFile(join(homedir(),'.config/obsidian/obsidian.json'),'utf8'));for(const vault of Object.values(registry.vaults??{}) as any[])if(vault.path)roots.push(vault.path);}catch{}
-    const journal=await DesktopGenerationJournal.open(options?.journalRoot??join(homedir(),'backups/send-to-t3-code/coordinated-journals',contentHash(identity.workspaceRoot+identity.vaultId)),roots);
+    const journal=await CurrentGenerationJournal.open(options?.journalRoot??join(homedir(),'backups/send-to-t3-code/coordinated-journals',contentHash(identity.workspaceRoot+identity.vaultId)),roots);
     let host:CoordinatedHost;
     const coordinator=new GeneratedNoteCoordinator(journal,{
       read:async path=>{const file=app.vault.getFileByPath(path);return file?app.vault.read(file):undefined;},
@@ -159,6 +159,17 @@ export class CoordinatedHost {
           if(journal.staged===undefined)await this.coordinator.result(id,completedSelectionDraft(journal.stagedDraft??journal.original,id,record.state?.steering),record.finalWriter.body);
           const delivery=record.state?.delivery;
           if(delivery&&!journal.deviceProof){const bytes=await this.files.read(nativeCommitPath(this.identity.directory,id,delivery.commitId));if(bytes)await this.coordinator.adoptDeviceCommit(id,readNativeCommitProof(bytes,id,delivery));}
+          if(delivery&&record.state?.cleanupComplete){
+            const completed=await this.journal.read(id);
+            if(completed?.status==='verified'&&completed.verified?.commitId===delivery.commitId&&completed.verified.hash===delivery.hash){
+              for(const actor of delivery.observedBy)await this.coordinator.acknowledge(id,actor,delivery.commitId,completed.verified.document);
+              await this.journal.settle(id,delivery.commitId,delivery.hash);
+              if(record.request.deviceCompletion&&delivery.observedBy.includes(record.request.deviceCompletion.actor)){
+                await this.files.remove(deviceOriginalPath(this.identity.directory,id));
+                for(const path of await (this.files as ReturnType<typeof import('./hosted-inline-desktop').localInlineFiles>).listSidecars?.(`${this.identity.directory}/staged-results/${id}`)??[])await this.files.remove(path);
+              }
+            }
+          }
           await nativeResponses(this.app).receive(record);return;
         }
       }
@@ -254,6 +265,7 @@ export class CoordinatedHost {
             const observed=await this.coordinator.observe(id);
             record=await this.publishHistoryRemoval(record,observed);
             for(const actor of record.state?.delivery?.observedBy??[])await this.coordinator.acknowledge(id,actor,record.state!.delivery!.commitId,observed.historyRemoval?.status==='verified'?observed.historyRemoval.proof.document:observed.verified!.document).catch(()=>{});
+            if(record.state?.delivery)await this.journal.settle(id,record.state.delivery.commitId,record.state.delivery.hash);
           }
         }
         return;
@@ -285,6 +297,7 @@ export class CoordinatedHost {
       await nativeResponses(this.app).receive(record);
       }catch(error){const detail=error instanceof Error?error.message:String(error);this.failures.set(identity,detail);logFailure('response.coordinator.scan-conflict',error,{bindingId:identity});}
   }
+  maintain(){return this.stopped?Promise.resolve():this.journal.maintain();}
   legacyRequests(paths:string[]):string[]{
     // Unknown paths retain the original discovery behavior. A freshly read
     // lease proves which known requests the version-one writer cannot accept.

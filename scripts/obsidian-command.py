@@ -191,7 +191,18 @@ def main():
         if args.kind not in ['send-note', 'attach-response', 'stream-thread']:
             parser.error('--destination-section requires a streaming destination command.')
         command['destinationSection'] = args.destination_section
-    base = args.vault / args.config_dir / 't3-code' / 'commands' / 'v1'
+    storage_root = args.vault
+    route_path = args.vault / args.config_dir / 't3-code' / 'storage-route.json'
+    if route_path.exists():
+        route = json.loads(route_path.read_text())
+        destination = Path(route.get('storageRoot', ''))
+        if (route.get('version') != 1 or route.get('configDir') != args.config_dir
+                or Path(route.get('workspaceRoot', '')).resolve() != args.vault.resolve()
+                or not destination.is_absolute()
+                or destination.resolve().is_relative_to(args.vault.resolve())):
+            parser.error('Invalid private vault storage route.')
+        storage_root = destination
+    base = storage_root / args.config_dir / 't3-code' / 'commands' / 'v1'
     if not (base / 'requests').is_dir():
         parser.error('Command mailbox not found. Open the vault in Obsidian with the updated plugin enabled.')
     request = base / 'requests' / (command_id + '.json')

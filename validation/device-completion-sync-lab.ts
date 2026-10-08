@@ -36,7 +36,7 @@ export default class DeviceCompletionSyncLab extends Plugin {
     const leaf=app.workspace.getLeaf(false);await leaf.openFile(file);await leaf.setViewState({type:'markdown',state:{file:note,mode:'source',source:false}});
     const view=leaf.view as MarkdownView;
     for(let n=0;n<100&&view.getViewData()!==c.original;n++)await pause(50);
-    if(view.getViewData()!==c.original)throw Error('The native initial editor has not adopted the synthetic original.');
+    if(view.getViewData()!==c.original){this.write('initial-mismatch',{disk:await app.vault.read(file),savedProjection:view.getViewData(),editor:view.editor.getValue(),expected:c.original});throw Error('The native initial editor has not adopted the synthetic original.');}
     let initial:LeaseRecord={request,coordinated:true,migrating:false,owner:'00000000-0000-5000-8000-000000000001',epoch:1,revision:0,expiresAt:Number.MAX_SAFE_INTEGER};
     if(c.role==='b'){
       const data=new Map<string,string>(),identity={...request.host,vaultId:request.vaultId};
@@ -61,8 +61,12 @@ export default class DeviceCompletionSyncLab extends Plugin {
       let record:LeaseRecord=initial;
       for(let n=0;n<300&&!this.stopped;n++){this.manager.tick();record=JSON.parse(data.get(leasePaths(identity.directory,request.id).record)!);if(record.state?.cleanupComplete)break;await pause(50);}
       if(!record.state?.cleanupComplete)throw Error('Local completion did not finish.');
-      const saved=await app.vault.read(file),proof=await storage.store.read(request.id);
-      fs.writeFileSync(path.join(c.evidence,'completed.json'),JSON.stringify({record,proof:nativeCommit(proof),saved}));
+      const saved=await app.vault.read(file),proof=await storage.store.read(request.id),materialization=nativeCommit(proof);
+      await completion.acknowledged(record);
+      const retired=await storage.store.retired!(request.id);
+      if(!retired||await storage.store.read(request.id)||retired.receipt.hash!==record.state.delivery?.hash||!retired.proof)throw Error('Acknowledged completion recovery was not retired safely.');
+      fs.writeFileSync(path.join(c.evidence,'retired.json'),JSON.stringify({fullJournalAbsent:true,receipt:retired.receipt,proofHash:contentHash(JSON.stringify(retired.proof))}));
+      fs.writeFileSync(path.join(c.evidence,'completed.json'),JSON.stringify({record,proof:materialization,saved}));
       this.write('completed',{elapsedMs:performance.now()-started,saved,savedProjection:view.getViewData(),visible:native.view(view)?.currentProjection().display,verifiedOnHost:record.state.delivery?.verifiedOnHost,actor:record.finalWriter?.actor,diskHash:contentHash(saved),deliveryHash:record.state.delivery?.hash});await this.capture('completed');
       for(const mode of ['reading','source'] as const){await leaf.setViewState({type:'markdown',state:{file:note,mode:mode==='reading'?'preview':'source',source:mode==='source'}});native.refresh();await pause(200);this.write(mode,{savedProjection:view.getViewData(),saved:await app.vault.read(file)});await this.capture(mode);}
       return;

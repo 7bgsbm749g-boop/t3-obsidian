@@ -11,6 +11,7 @@ import lockfile from 'proper-lockfile';
 import {promises as fs} from 'node:fs';
 import {InlineLeaseClient} from '../inline-lease';
 import {localInlineFiles} from '../hosted-inline-desktop';
+import {existingPrivateStorage,ensurePrivateStorage} from '../private-storage-desktop';
 import {contentHash} from '../completion';
 import {responseAnchor} from '../native-response-projection';
 
@@ -22,7 +23,7 @@ async function fixture(){
   const plugin=new module.exports.default(),directory='.obsidian/t3-code/inline/v1',vaultId=randomUUID();
   plugin.app={workspace:{getLeavesOfType:()=>[]},vault:{configDir:'.obsidian',adapter:{getFullPath:()=>root},getFileByPath:()=>undefined}};
   plugin.settings={vaultId,paired:[],connection:{host:'local'}};plugin.localInlineEnvironment=async()=> 'fixture';
-  return {root,directory,vaultId,plugin,async close(){plugin.stopped=true;await plugin.inlineHostService?.dispose();await plugin.noteCommandServer?.dispose();await rm(root,{recursive:true,force:true});}};
+  return {root,directory,vaultId,plugin,async close(){plugin.stopped=true;await plugin.inlineHostService?.dispose();await plugin.noteCommandServer?.dispose();const route=await existingPrivateStorage(root,".obsidian");if(route)await rm(route.storageRoot,{recursive:true,force:true});await rm(root,{recursive:true,force:true});}};
 }
 
 test('packaged lease discovery still reads fresh bytes while parsing unchanged large replies once',async()=>{
@@ -47,7 +48,7 @@ test('lost host lock is reacquired and an original registration is acknowledged 
   try{
     await h.plugin.refreshInlineHost();const old=h.plugin.inlineHostService;
     // Only this synthetic test lock is removed to reproduce compromise.
-    await rm(join(h.root,h.directory)+'.lock',{recursive:true});
+    await rm(join((await existingPrivateStorage(h.root,'.obsidian'))!.storageRoot,h.directory)+'.lock',{recursive:true});
     for(let n=0;n<65&&!old.stopped;n++)await pause(100);
     assert.equal(old.stopped,true,'actual lock compromise stops the old host');
     await Promise.all([h.plugin.refreshInlineHost(),h.plugin.refreshInlineHost()]);
@@ -71,7 +72,7 @@ test('command bridge retries a startup lock refusal and processes the same retai
     await release();release=async()=>{};
     await Promise.all([h.plugin.refreshNoteCommandHost(),h.plugin.refreshNoteCommandHost()]);
     await h.plugin.noteCommandServer.tick();
-    assert.equal(JSON.parse(await readFile(join(base,'results',id+'.json'),'utf8')).id,id);assert.equal(calls,1);
+    assert.equal(JSON.parse(await readFile(join((await existingPrivateStorage(h.root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1/results',id+'.json'),'utf8')).id,id);assert.equal(calls,1);
     await h.plugin.refreshNoteCommandHost();await h.plugin.noteCommandServer.tick();assert.equal(calls,1);
     await h.plugin.noteCommandServer.dispose();await h.plugin.refreshNoteCommandHost();
     assert.equal(h.plugin.noteCommandServer.active,true);await h.plugin.noteCommandServer.tick();assert.equal(calls,1,'restart retains the acknowledgement and never repeats a command');
@@ -95,8 +96,9 @@ test('packaged authority abandons a lost read and acknowledges an immutable regi
     // Missing files now return after a fresh metadata check. Supply a real
     // catalog so this fault stalls a byte read rather than nonexistent IO.
     await mkdir(join(h.root,h.directory),{recursive:true});await writeFile(join(h.root,h.directory,'lease-catalog.json'),'[]');
+    const route=await ensurePrivateStorage(h.root,'.obsidian');
     fs.readFile=((path:any,...args:any[])=>{
-      if(lose&&String(path)===join(h.root,h.directory,'lease-catalog.json')){lose=false;return new Promise(resolve=>{late=resolve;});}
+      if(lose&&String(path)===join(route.storageRoot,h.directory,'lease-catalog.json')){lose=false;return new Promise(resolve=>{late=resolve;});}
       return (read as any)(path,...args);
     }) as typeof read;
     await h.plugin.refreshInlineHost();
@@ -118,8 +120,9 @@ test('shutdown cancels a lost authority read before reacquiring ownership',async
   const started=new Promise<void>(resolve=>{entered=resolve;});
   try{
     await mkdir(join(h.root,h.directory),{recursive:true});await writeFile(join(h.root,h.directory,'lease-catalog.json'),'[]');
+    const route=await ensurePrivateStorage(h.root,'.obsidian');
     fs.readFile=((path:any,...args:any[])=>{
-      if(lose&&String(path)===join(h.root,h.directory,'lease-catalog.json')){lose=false;entered();return new Promise(()=>{});}
+      if(lose&&String(path)===join(route.storageRoot,h.directory,'lease-catalog.json')){lose=false;entered();return new Promise(()=>{});}
       return (read as any)(path,...args);
     }) as typeof read;
     await h.plugin.refreshInlineHost();const host=h.plugin.inlineHostService;

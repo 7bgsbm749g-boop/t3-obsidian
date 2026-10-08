@@ -31,6 +31,16 @@ function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>
 async function start(h:ReturnType<typeof fixture>){await h.manager.receive(record());await h.manager.receive(record(other));for(const frames of h.frames)frames.length=0;}
 function neverBlank(h:ReturnType<typeof fixture>){for(const frames of h.frames)assert.ok(frames.every(frame=>frame.includes(body)),JSON.stringify(frames));}
 
+test('resolved native conflicts delete full copies only after the chosen text reaches disk',async()=>{
+  const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));const incoming=before.replace('Before','Remote edit');h.disk(incoming);h.views[0].setViewData(incoming);const conflict=h.manager.view(h.views[0] as any)!.conflictRecord()!;assert.ok(conflict);
+  const keys=[...h.local.keys()].filter(key=>key.startsWith('t3-native-conflict:'));assert.equal(keys.length,1);
+  await h.manager.resolve(h.views[0] as any,incoming,'local');assert.equal(h.local.get(keys[0]),null);assert.equal(h.views[0].getViewData(),conflict.local);const receipts=h.local.get('t3-native-resolutions:local') as any[];assert.equal(receipts.length,1);assert.equal('local' in receipts[0],false);h.manager.dispose();
+});
+test('a failed native conflict save preserves the full conflict and requires another review',async()=>{
+  const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));const incoming=before.replace('Before','Remote edit');h.disk(incoming);h.views[0].setViewData(incoming);const adapter=h.manager.view(h.views[0] as any)!,conflict=adapter.conflictRecord()!;h.readWith(async()=>incoming);
+  await assert.rejects(h.manager.resolve(h.views[0] as any,incoming,'local'),/not reached/);assert.deepEqual(adapter.conflictRecord(),conflict);assert.ok([...h.local].some(([key,value])=>key.startsWith('t3-native-conflict:')&&value!==null));h.manager.dispose();
+});
+
 test('device completion tombstones protect a reloaded native pane from a late old response anchor',async()=>{
  const h=fixture();h.edit(final);h.disk(final);const proof:NativeCommitProof={version:1,bindingId:id,commitId,hash:contentHash(final),document:final,ranges:[{from:final.indexOf(body),to:final.indexOf(body)+body.length}]};
  h.manager.deviceCommitted('Note.md',proof);assert.ok(h.manager.view(h.views[0] as any));

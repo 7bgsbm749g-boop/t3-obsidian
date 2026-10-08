@@ -18,9 +18,9 @@ export const COORDINATED_OWNER="00000000-0000-5000-8000-000000000001";
 export interface FinalResponseIntent {checkpoint?:InlineBindingCheckpoint;turnIds?:string[];messageId:string;turnId:string|null;sequence:number;body:string;phase:'complete'|'interrupted'}
 export interface FinalResponseGrant extends FinalResponseIntent {actor:string;token:string}
 export interface LeaseRecord {preparedFinal?:{commitId:string;hash:string;proofHash:string};presenceUntil?:number;finalWriter?:FinalResponseGrant;relocations?:Array<{before:string;after:string}>;coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;responseRemovedAt?:number;stopRequestedAt?:number;discardResponse?:boolean;stoppedBody?:string;state?:HostedInlineState}
-export interface LeaseCommand {original?:string;final?:FinalResponseIntent;token?:string;proof?:NativeCommitProof;stoppedBody?:string;discardResponse?:boolean;id:string;jobId:string;actor:string;kind:'prepare-final'|'presence'|'reserve-final'|'commit-final'|'relocate'|'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';previousNotePath?:string;observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
-export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;ttlMs:number;answeredAt?:number;retryAfterMs?:number}
-export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
+export interface LeaseCommand {compactReply?:1;original?:string;final?:FinalResponseIntent;token?:string;proof?:NativeCommitProof;stoppedBody?:string;discardResponse?:boolean;id:string;jobId:string;actor:string;kind:'prepare-final'|'presence'|'reserve-final'|'commit-final'|'relocate'|'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';previousNotePath?:string;observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
+export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;recordRef?:{id:string;epoch:number;revision:number};ttlMs:number;answeredAt?:number;retryAfterMs?:number}
+export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;listBatch?(directory:string,limit:number):Promise<string[]>;close?():Promise<void>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export const leasePaths=(directory:string,id:string)=>({record:`${directory}/leases/${id}.json`,command:`${directory}/mailbox/${id}.json`,reply:`${directory}/replies/${id}.json`,catalog:`${directory}/lease-catalog.json`});
 export const deviceOriginalPath=(directory:string,id:string)=>{if(!uuid.test(id))throw Error('Invalid completion original identity.');return `${directory}/originals/${id}.md`;};
@@ -30,6 +30,7 @@ export const terminalLease=(record:LeaseRecord)=>record.responseRemovedAt!==unde
 /** The existing desktop host lock admits exactly one authority. Clients only
  * submit commands; only this serialized coordinator mutates lease records. */
 export class InlineLeaseAuthority {
+  private cleanupWork?:Promise<void>;
   private work?:Promise<void>;
   private stopped=false;
   private recovered=false;
@@ -100,23 +101,34 @@ export class InlineLeaseAuthority {
         if(trace)logEvent('ownership.coordinator.received',fields);
         const reply=await this.apply(command);
         if(this.stopped)return;
-        await this.files.write(replyPath,JSON.stringify(reply));
+        const compact=command.compactReply===1&&reply.record?{...reply,record:undefined,recordRef:{id:reply.record.request.id,epoch:reply.record.epoch,revision:reply.record.revision}}:reply;
+        await this.files.write(replyPath,JSON.stringify(compact));
         if(trace||command.kind==='claim'&&reply.ok)logEvent('ownership.coordinator.replied',{...fields,ok:reply.ok,error:reply.error,durationMs:this.now()-started,epoch:reply.record?.epoch,revision:reply.record?.revision,owner:reply.record?.owner},reply.ok?'info':'warning');
       }
       await this.files.remove(path);
     }
     // Receipt cleanup is maintenance, never a prerequisite for answering a
     // send. Rotate a bounded slice so retained replies cannot stall the lock.
-    if(this.now()-this.lastCleanup>30_000){
-      this.lastCleanup=this.now();const replies=await this.files.list(`${directory}/replies`);
-      if(this.cleanupCursor>=replies.length)this.cleanupCursor=0;
-      const slice=replies.slice(this.cleanupCursor,this.cleanupCursor+32);this.cleanupCursor+=slice.length;
-      for(const path of slice){
-        if(this.stopped)return;
-        const raw=await this.files.read(path);if(!raw)continue;
-        try{const reply:LeaseReply=JSON.parse(raw);if(reply.answeredAt!==undefined&&reply.answeredAt<this.now()-60_000&&!await this.files.read(leasePaths(directory,reply.id).command))await this.files.remove(path);}catch{/* Leave unfamiliar files alone. */}
-      }
-    }
+    if(this.now()-this.lastCleanup>30_000){this.lastCleanup=this.now();void this.cleanupReplies().catch(error=>logFailure('ownership.receipt-cleanup.failed',error,this.identity));}
+  }
+  /** Maintenance never holds the authority transaction. Keep at least one
+   * minute for acknowledgements and preserve every pending command. A streaming
+   * directory cursor avoids constructing hundreds of thousands of paths. */
+  cleanupReplies(){
+    if(this.cleanupWork)return this.cleanupWork;if(this.stopped)return Promise.resolve();
+    const work=(async()=>{
+      const directory=this.identity.directory;
+      let slice:string[];
+      if(this.files.listBatch)slice=await this.files.listBatch(`${directory}/replies`,2048);
+      else{const replies=await this.files.list(`${directory}/replies`);if(this.cleanupCursor>=replies.length)this.cleanupCursor=0;slice=replies.slice(this.cleanupCursor,this.cleanupCursor+2048);this.cleanupCursor+=slice.length;}
+      for(let offset=0;offset<slice.length&&!this.stopped;offset+=8)await Promise.all(slice.slice(offset,offset+8).map(async path=>{
+        const name=path.slice(path.lastIndexOf('/')+1);if(!uuid.test(name.slice(0,-5))||!name.endsWith('.json'))return;
+        const raw=await this.files.read(path);if(!raw||this.stopped)return;
+        let reply:LeaseReply;try{reply=JSON.parse(raw);}catch{return;}
+        if(reply.id!==name.slice(0,-5)||typeof reply.answeredAt!=='number'||reply.answeredAt>=this.now()-60_000||await this.files.read(leasePaths(directory,reply.id).command)!==undefined||this.stopped)return;
+        await this.files.remove(path);
+      }));
+    })();this.cleanupWork=work;void work.finally(()=>{if(this.cleanupWork===work)this.cleanupWork=undefined;}).catch(()=>{});return work;
   }
   async exclusive<T>(run:()=>Promise<T>):Promise<T>{
     while(this.work)await this.work.catch(()=>{});
@@ -416,7 +428,7 @@ export class InlineLeaseClient {
   valid(id:string,epoch:number){const grant=this.grants.get(id);return !this.stopped&&grant?.epoch===epoch&&this.now()<grant.wall&&this.monotonic()<grant.monotonic;}
   async command(input:Omit<LeaseCommand,'id'|'actor'>,identity?:{id:string;actor:string}){
     if(this.stopped)throw Error('Response writer stopped.');
-    const command:LeaseCommand={...input,id:identity?.id??crypto.randomUUID(),actor:identity?.actor??this.actor},paths=leasePaths(this.directory,command.id),wall=this.now(),monotonic=this.monotonic();
+    const command:LeaseCommand={...input,compactReply:1,id:identity?.id??crypto.randomUUID(),actor:identity?.actor??this.actor},paths=leasePaths(this.directory,command.id),wall=this.now(),monotonic=this.monotonic();
     const fields={jobId:input.jobId,commandId:command.id,actor:this.actor,directory:this.directory,kind:input.kind,epoch:input.epoch,revision:input.revision,messageId:input.steering?.messageId??input.request?.messageId,notePath:input.notePath??input.request?.notePath,threadId:input.request?.threadId,environmentId:input.request?.host.environmentId};
     const trace=input.kind!=='heartbeat'&&input.kind!=='claim';
     let phase='writing-command',attempts=0,writeMs=0,readMs=0,maxReadMs=0;
@@ -433,6 +445,12 @@ export class InlineLeaseClient {
       if(raw){
         const reply:LeaseReply=JSON.parse(raw);
         if(reply.id!==command.id)throw Error('Invalid ownership acknowledgement.');
+        if(reply.recordRef){
+          const reference=reply.recordRef;if(reference.id!==input.jobId||!Number.isSafeInteger(reference.epoch)||!Number.isSafeInteger(reference.revision))throw Error('Invalid ownership record reference.');
+          const raw=await this.files.read(leasePaths(this.directory,reference.id).record);if(!raw){await this.pause(100);continue;}
+          const current:LeaseRecord=JSON.parse(raw);if(current.request.id!==reference.id||current.epoch<reference.epoch||current.epoch===reference.epoch&&current.revision<reference.revision){await this.pause(100);continue;}
+          reply.record=current;reply.ttlMs=Math.max(0,Math.min(reply.ttlMs,current.expiresAt-this.now()));
+        }
         const record=reply.record;
         if(reply.ok&&record?.owner===this.actor&&record.request.id===input.jobId){
           const duration=Math.max(0,Math.min(LEASE_MS,reply.ttlMs)-LEASE_MARGIN_MS);

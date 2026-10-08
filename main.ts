@@ -56,6 +56,7 @@ import {existingThreadTurn,threadIsActive,responseOwnsActiveTurn} from './thread
 import {DeviceInlineManager} from './leased-inline';
 import {deviceNoteIO,deviceFinalNoteIO} from './inline-note-io';
 import {DeviceResponseCompletion,deviceCompletionStore} from './device-response-completion';
+import {privateStorageResolver} from './private-storage';
 import {projectReplyReference as resolveReplyReference} from './project-reference';
 import {type CodebaseState,CodebaseBridge} from './codebase-native';
 import {codebaseTransport} from './codebase-transport';
@@ -239,8 +240,8 @@ export default class SendToT3 extends Plugin {
       const conflict=record.conflicts.at(-1);if(!conflict)return;
       nativeResponses(this.app).completionConflict(record.notePath,conflict.original,conflict.latest,conflict.proposed??conflict.latest,conflict.reason);
       new Notice('T3 Code: Final note edits conflict. Both versions are preserved on this device.',10000);
-    });
-    try{const restored=await completionStorage.restore();for(const record of restored)deviceCompletion.restore(record);if(restored.length)nativeResponses(this.app).refresh();}catch(error){logFailure('response.device-completion.restore',error);new Notice(message(error),10000);}finally{restoringCompletions=false;}
+    },receipt=>nativeResponses(this.app).retiredCommitted(receipt));
+    try{const restored=await completionStorage.restore();for(const record of restored)deviceCompletion.restore(record);const receipts=await completionStorage.restoreReceipts();for(const record of receipts)deviceCompletion.restoreReceipt(record);if(restored.length||receipts.length)nativeResponses(this.app).refresh();}catch(error){logFailure('response.device-completion.restore',error);new Notice(message(error),10000);}finally{restoringCompletions=false;}
     if(typeof this.registerView==='function'){
     this.codebase=new CodebaseBridge(this.app,this,codebaseTransport(async(environmentId,reason)=>{
       if(!Platform.isMobile){try{if(environmentId===await this.localInlineEnvironment())return (await import('./desktop')).desktopThreadAccess({...this.settings.connection,host:'local'});}catch{/* Remote paired access remains available when local discovery fails. */}}
@@ -248,7 +249,15 @@ export default class SendToT3 extends Plugin {
     }),()=>this.settings.folderLinks.map(link=>({...link,environmentId:link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??this.eventLocalEnvironmentId})),this.settings.vaultId,{load:()=>this.settings.codebase,save:async state=>{this.settings.codebase=state;await this.save();},projectChanged:async(scope,change)=>{await this.updateCodebaseProjectLinks(scope,change);}});
     await this.codebase.install();
     }
-    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),completionActor:this.deviceId,completeResponse:(record,original,staged,prepare)=>deviceCompletion.complete(record,original,staged,prepare),completionFailed:error=>new Notice(`T3 Code: ${message(error)}`,10000),loadStops:()=>this.app.loadLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`)??[],saveStops:ids=>this.app.saveLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`,ids),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>{this.codebase?.observeSource(record.request,record.state?.notePath??record.request.notePath);return nativeResponses(this.app).receive(record,proof);},receiveDirect:update=>{this.codebase?.observeSource(update.request);return nativeResponses(this.app).stream(update);},receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target,false),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
+    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),completionActor:this.deviceId,completionAcknowledged:record=>deviceCompletion.acknowledged(record),completeResponse:(record,original,staged,prepare)=>deviceCompletion.complete(record,original,staged,prepare),completionFailed:error=>new Notice(`T3 Code: ${message(error)}`,10000),loadStops:()=>this.app.loadLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`)??[],saveStops:ids=>this.app.saveLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`,ids),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>{this.codebase?.observeSource(record.request,record.state?.notePath??record.request.notePath);return nativeResponses(this.app).receive(record,proof);},receiveDirect:update=>{this.codebase?.observeSource(update.request);return nativeResponses(this.app).stream(update);},receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target,false),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
+    let completionCleanupCursor=0,completionCleanupBusy=false,lastProofCleanup=0;
+    this.app.workspace.onLayoutReady(()=>this.registerInlineInterval(()=>{
+      if(completionCleanupBusy||this.stopped)return;completionCleanupBusy=true;
+      void (async()=>{if(Date.now()-lastProofCleanup>=60_000){await completionStorage.pruneProofs();lastProofCleanup=Date.now();}return completionStorage.candidates(completionCleanupCursor);})().then(batch=>{
+        completionCleanupCursor=batch.next;for(const record of batch.records)this.rememberInlineTarget(record.host);
+        this.deviceInline?.discover(this.inlineTargets,batch.records.map(record=>record.id));
+      }).catch(error=>logFailure('response.completion-cleanup.discovery',error)).finally(()=>{completionCleanupBusy=false;});
+    },5000));
     this.addCommand({id:'stop-all-responses',name:'Stop all T3 responses in current note',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;if(this.stopped||!file||file.extension.toLowerCase()!=='md')return false;
       if(!checking)void this.inlineChat!.stopAllAt(editor,view,this.deviceInline?.stoppableResponses(file.path)).then(count=>new Notice(count?`Stopped ${count} T3 response${count===1?'':'s'} in this note.`:'No active or failed T3 responses in this note.')).catch(error=>new Notice(`T3: ${message(error)}`,10000));
@@ -552,7 +561,8 @@ export default class SendToT3 extends Plugin {
     const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId},await this.sessionFor(paired.id));
     try{
       if(!await remote.matches(host.workspaceRoot,`${this.app.vault.configDir||'.obsidian'}/plugins/${this.manifest.id}/data.json`,host.vaultId))throw Error('The subscription host no longer matches this vault.');
-      return {files:{read:path=>remote.readFile(host.workspaceRoot,path),write:(path,value)=>remote.writeFile(host.workspaceRoot,path,value),remove:path=>remote.deleteFile(host.workspaceRoot,path)},close:()=>remote.close()};
+      const storage=privateStorageResolver(path=>remote.readFile(host.workspaceRoot,path),host.workspaceRoot,this.app.vault.configDir||'.obsidian');
+      return {files:{read:async path=>remote.readFile(await storage(),path),write:async(path,value)=>remote.writeFile(await storage(),path,value),remove:async path=>remote.deleteFile(await storage(),path)},close:()=>remote.close()};
     }catch(error){remote.close();throw error;}
   }
   private eventActionIO():ActionIO {
@@ -1348,7 +1358,8 @@ export default class SendToT3 extends Plugin {
     const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId},await this.sessionFor(paired.id));
     try{
       if(!await remote.matches(target.workspaceRoot,`${this.app.vault.configDir||'.obsidian'}/plugins/${this.manifest?.id||'send-to-t3-code'}/data.json`,this.settings.vaultId))throw Error('The streaming host no longer matches this vault. Reconnect the vault project machine.');
-      return {get closed(){return remote.closed;},files:{read:path=>remote.readFile(target.workspaceRoot,path),write:(path,contents)=>remote.writeFile(target.workspaceRoot,path,contents)},close:()=>remote.close()};
+      const storage=privateStorageResolver(path=>remote.readFile(target.workspaceRoot,path),target.workspaceRoot,this.app.vault.configDir||'.obsidian');
+      return {get closed(){return remote.closed;},files:{read:async path=>remote.readFile(await storage(),path),write:async(path,contents)=>remote.writeFile(await storage(),path,contents)},close:()=>remote.close()};
     }catch(error){remote.close();throw error;}
   }
   private async stopHostedInline(id:string,target?:InlineHostTarget){

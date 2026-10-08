@@ -11,6 +11,7 @@ import {streamBlock,removeStreamBlock} from './stream-block';
 export function validateFinalResponseBody(body:string){if(/<!-- t3-(?:inline|response):/.test(body))throw Error('A finished response cannot introduce tracking boundaries.');}
 
 export interface NoteGeneration {
+  retiredOriginalHash?:string;
   deviceProof?:NativeCommitProof;
   journalRevision?:number;
   request:HostedInlineRequest;notePath:string;original:string;originalHash:string;

@@ -21,6 +21,7 @@ export interface DeviceInlineIO {
   completionActor?:string;
   completeResponse?(record:LeaseRecord,original:string,staged:string|undefined,prepare:(proof:NativeCommitProof)=>Promise<void>):Promise<NativeCommitProof|undefined>;
   completionFailed?(error:unknown,id:string):void;
+  completionAcknowledged?(record:LeaseRecord):void|Promise<void>;
   loadStops?():string[];
   saveStops?(ids:string[]):void;
   loadRenames?():PendingResponseRename[];
@@ -155,6 +156,7 @@ export class DeviceInlineManager {
     const bytes=await host.files.read(leasePaths(host.target.directory,id).record);if(!bytes||this.stopped)return;
     const record:LeaseRecord=JSON.parse(bytes),request=validateHostedRequest(record.request);
     if(request.id!==id||![2,3,4].includes(request.version)||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(host.target))return;
+    void Promise.resolve(this.io.completionAcknowledged?.(record)).catch(error=>logFailure('response.completion-cleanup.failed',error,{bindingId:id}));
     // A validated host record can update an exact open native anchor before
     // local disk/location checks finish. This does not adopt a writer job.
     if(record.coordinated&&this.io.isOpen(record.state?.notePath??request.notePath)){
@@ -216,6 +218,7 @@ export class DeviceInlineManager {
     if(this.bindings.get(record.request.id)?.removed&&record.responseRemovedAt===undefined)return;
     const current=this.jobs.get(record.request.id)?.record;
     if(current&&(current.epoch>record.epoch||current.epoch===record.epoch&&current.revision>record.revision))return;
+    void Promise.resolve(this.io.completionAcknowledged?.(record)).catch(error=>logFailure('response.completion-cleanup.failed',error,{bindingId:record.request.id}));
     this.bindings.set(record.request.id,{host,notePath:record.state?.notePath??record.request.notePath,coordinated:record.coordinated===true,removed:record.responseRemovedAt!==undefined,stopped:record.responseRemovedAt!==undefined||!!record.stopRequestedAt});
     if(record.responseRemovedAt!==undefined){
       const old=this.jobs.get(record.request.id);old?.refresh?.cancel(Error('Response removed.'));old?.monitor?.stop();old?.writer.stop();

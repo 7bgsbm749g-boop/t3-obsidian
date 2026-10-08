@@ -3,6 +3,7 @@ import {join} from 'node:path';
 import lockfile from 'proper-lockfile';
 import {desktopInterval} from './desktop-timers';
 import {localInlineFiles} from './hosted-inline-desktop';
+import {ensurePrivateStorage} from './private-storage-desktop';
 import {eventCanonical,eventRequest,type EventHostIdentity} from './event-host';
 import {validateEventCommand,type EventSubscriptionCommand,type EventCommandResult,type EventState} from './event-subscriptions';
 /** One designated desktop owns the private state and consumes authenticated file requests. */
@@ -16,7 +17,8 @@ export class EventHostServer {
     this.stopTimer=desktopInterval(()=>void this.tick().catch(()=>{}),250);
   }
   static async open(identity:EventHostIdentity,execute:(command:EventSubscriptionCommand)=>Promise<EventCommandResult>,ready:()=>boolean,onStopped:()=>void){
-    const base=join(identity.workspaceRoot,identity.directory);
+    const route=await ensurePrivateStorage(identity.workspaceRoot,identity.directory.slice(0,identity.directory.indexOf('/t3-code/')));
+    const base=join(route.storageRoot,identity.directory);
     for(const name of ['requests','results'])await fs.mkdir(join(base,name),{recursive:true,mode:0o700});
     let server:EventHostServer|undefined;
     const release=await lockfile.lock(base,{realpath:true,stale:30_000,update:5000,onCompromised:()=>void server?.dispose()});

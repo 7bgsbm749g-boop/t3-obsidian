@@ -7,6 +7,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import {DesktopClientMaintenance} from '../client-maintenance-desktop';
 import {validateClientCommand,type ClientCommand} from '../client-command';
 import {NoteCommandServer} from '../note-command-desktop';
+import {existingPrivateStorage} from '../private-storage-desktop';
 
 async function fixture(){
   const root=await mkdtemp(join(tmpdir(),'t3-native-reload-')),directory=join(root,'.obsidian/plugins/send-to-t3-code');await mkdir(directory,{recursive:true});
@@ -15,18 +16,18 @@ async function fixture(){
   let reloads=0;const file={path:'Ordinary.md'},view={file,getViewData:()=> 'saved note'};
   const app:any={workspace:{getLeavesOfType:()=>[{view}]},vault:{read:async()=> 'saved note'},commands:{commands:{'app:reload':{name:'Reload app without saving'}},executeCommandById:(id:string)=>{assert.equal(id,'app:reload');reloads++;return true;}}};
   const command:ClientCommand={version:1,id:randomUUID(),kind:'reload-client',releaseVersion:'3.4.5',runtimeSha256:hashes};
-  return {root,directory,app,view,command,maintenance:new DesktopClientMaintenance(app,root,'.obsidian','3.4.4'),reloads:()=>reloads,close:()=>rm(root,{recursive:true,force:true})};
+  return {root,directory,app,view,command,maintenance:new DesktopClientMaintenance(app,root,'.obsidian','3.4.4'),reloads:()=>reloads,close:async()=>{const route=await existingPrivateStorage(root,'.obsidian');if(route)await rm(route.storageRoot,{recursive:true,force:true});await rm(root,{recursive:true,force:true});}};
 }
 test('private mailbox saves the reload acknowledgement before native dispatch and never repeats it across instances',async()=>{
   const h=await fixture();let server:NoteCommandServer|undefined;
   try{
     server=await NoteCommandServer.open(h.root,'.obsidian',command=>h.maintenance.execute(validateClientCommand(command)),()=>true,undefined,async(command,result)=>{
-      const stored=JSON.parse(await readFile(join(h.root,'.obsidian/t3-code/commands/v1/results',command.id+'.json'),'utf8'));
+      const stored=JSON.parse(await readFile(join((await existingPrivateStorage(h.root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1/results',command.id+'.json'),'utf8'));
       assert.deepEqual(stored,result);return h.maintenance.acknowledged(validateClientCommand(command),result);
     });
-    await writeFile(join(h.root,'.obsidian/t3-code/commands/v1/requests',h.command.id+'.json'),JSON.stringify(h.command));
+    await writeFile(join((await existingPrivateStorage(h.root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1/requests',h.command.id+'.json'),JSON.stringify(h.command));
     await server.tick();assert.equal(h.reloads(),1);await server.tick();assert.equal(h.reloads(),1);
-    const result=JSON.parse(await readFile(join(h.root,'.obsidian/t3-code/commands/v1/results',h.command.id+'.json'),'utf8'));
+    const result=JSON.parse(await readFile(join((await existingPrivateStorage(h.root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1/results',h.command.id+'.json'),'utf8'));
     const fresh=new DesktopClientMaintenance(h.app,h.root,'.obsidian','3.4.5');
     assert.equal(await fresh.acknowledged(h.command,result),false);assert.equal(h.reloads(),1);
     const status=await fresh.execute({version:1,id:randomUUID(),kind:'client-status'});

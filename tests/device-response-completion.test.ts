@@ -10,9 +10,9 @@ import {responseAnchor} from '../native-response-projection';
 import {contentHash} from '../completion';
 import {nativeCommitPath} from '../native-response-commit';
 
-async function fixture(){
+async function fixture(actorOverride?:string){
   let time=100_000,writes=0,allowed=true;
-  const id=randomUUID(),actor=randomUUID(),instance=randomUUID(),identity={vaultId:'vault',environmentId:'host',workspaceRoot:'/vault',directory:'private/inline'};
+  const id=randomUUID(),actor=actorOverride??randomUUID(),instance=randomUUID(),identity={vaultId:'vault',environmentId:'host',workspaceRoot:'/vault',directory:'private/inline'};
   const original=`Before\n\n${responseAnchor(id)}\n\nAfter\n`,request={version:4 as const,id,initialOwner:instance,nativeProjection:true,independent:true,vaultId:identity.vaultId,host:identity,notePath:'Note.md',threadId:'thread',projectId:'project',messageId:randomUUID(),threadEnvironmentId:'host',initialHash:'0'.repeat(64),createdAt:'2026-10-08T00:00:00Z',deviceCompletion:{version:1 as const,actor,originalHash:contentHash(original)}};
   let document=original,authority:InlineLeaseAuthority;
   const data=new Map<string,string>(),local=new Map<string,DeviceGeneration>();
@@ -45,6 +45,30 @@ test('a reloaded sending manager finishes a closed note through canonical host e
     for(let n=0;n<100&&!h.record().state?.cleanupComplete;n++)await new Promise(resolve=>setImmediate(resolve));
     assert.deepEqual(errors,[]);assert.equal(h.record().state?.cleanupComplete,true);assert.equal(h.record().finalWriter?.actor,h.actor);assert.equal(h.writes(),1);assert.match(h.document(),/Finished response/);
   }finally{manager.dispose();}
+});
+
+test('acknowledged device completion retires its full journal atomically and duplicate completion never writes',async()=>{
+  const h=await fixture(),storage=deviceCompletionStore(h.actor,h.request.vaultId);await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+  const completion=new DeviceResponseCompletion(h.actor,storage.store,h.notes,()=>{}),proof=await completion.complete(h.record(),h.original,undefined,async proof=>{assert.equal((await h.client().command({kind:"prepare-final",jobId:h.id,token:h.record().finalWriter!.token,proof})).ok,true);});assert.ok(proof);
+  await completion.acknowledged(h.record());assert.ok(await storage.store.read(h.id),'verified local save alone is not a host receipt');
+  assert.equal((await h.client().command({kind:'commit-final',jobId:h.id,token:h.record().finalWriter!.token,proof})).ok,true);
+  await completion.acknowledged(h.record());assert.equal(await storage.store.read(h.id),undefined);const retired=await storage.store.retired!(h.id);assert.equal(retired?.receipt.hash,proof.hash);assert.equal('original' in retired!.receipt,false);assert.deepEqual(await storage.restore(),[]);
+  h.edit('User replaced the note');assert.deepEqual(await completion.complete(h.record(),h.original),proof);assert.equal(h.document(),'User replaced the note');assert.equal(h.writes(),1);assert.equal((await storage.restoreReceipts()).length,1);
+});
+
+test('completed device proof retention has count and age bounds without removing replay identities',async()=>{
+  const actor=randomUUID();let now=100_000;const storage=deviceCompletionStore(actor,'vault',()=>now),ids:string[]=[];
+  for(let n=0;n<35;n++){
+    const h=await fixture(actor);ids.push(h.id);await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});const completion=new DeviceResponseCompletion(actor,storage.store,h.notes,()=>{}),proof=await completion.complete(h.record(),h.original,undefined,async proof=>{assert.equal((await h.client().command({kind:"prepare-final",jobId:h.id,token:h.record().finalWriter!.token,proof})).ok,true);});assert.ok(proof);await h.client().command({kind:'commit-final',jobId:h.id,token:h.record().finalWriter!.token,proof});await completion.acknowledged(h.record());now++;
+  }
+  const restored=await storage.restoreReceipts();assert.equal(restored.length,35);assert.equal(restored.filter(record=>record.proof).length,32);assert.ok((await storage.store.retired!(ids[0]))?.receipt);assert.equal((await storage.store.retired!(ids[0]))?.proof,undefined);
+  now+=31*24*60*60*1000;const expired=await storage.restoreReceipts();assert.equal(expired.length,35);assert.ok(expired.every(record=>!record.proof));assert.deepEqual(await storage.restore(),[]);
+});
+
+test('a pending or unresolved device completion is never eligible for retirement',async()=>{
+  const h=await fixture(),storage=deviceCompletionStore(h.actor,h.request.vaultId);await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});h.allow(false);
+  const completion=new DeviceResponseCompletion(h.actor,storage.store,h.notes,()=>{});assert.equal(await completion.complete(h.record(),h.original),undefined);await completion.acknowledged(h.record());assert.equal((await storage.store.read(h.id))!.status,'commit-pending');
+  h.allow(true);h.edit(h.original.replace('Before','Competing content'));const before=await storage.store.read(h.id);assert.equal(await completion.complete(h.record(),h.original),undefined);await completion.acknowledged(h.record());const preserved=await storage.store.read(h.id);assert.equal(preserved!.status,'conflict');assert.ok(preserved!.conflicts.length);assert.equal(preserved!.original,before!.original);
 });
 
 test('the device journal index is atomic, revision-fenced and private to the durable actor',async()=>{

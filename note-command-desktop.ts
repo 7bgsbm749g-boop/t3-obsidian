@@ -3,6 +3,7 @@ import {join} from 'node:path';
 import lockfile from 'proper-lockfile';
 import {desktopInterval} from './desktop-timers';
 import {validateAgentCommand,type AgentCommand,type AgentCommandResult} from './note-command';
+import {ensurePrivateStorage} from './private-storage-desktop';
 /** Local, private, unsynced mailbox. One plugin instance consumes it. */
 export class NoteCommandServer {
   private stopped=false;private work?:Promise<void>;private stopTimer:()=>void;
@@ -16,7 +17,8 @@ export class NoteCommandServer {
     this.stopTimer=desktopInterval(()=>void this.tick().catch(()=>{}),250);
   }
   static async open(root:string,configDir:string,execute:(command:AgentCommand)=>Promise<AgentCommandResult>,ready:()=>boolean,onStopped?:()=>void,acknowledged?:(command:AgentCommand,result:AgentCommandResult)=>Promise<boolean>){
-    const base=join(root,configDir,'t3-code','commands','v1');
+    const route=await ensurePrivateStorage(root,configDir);
+    const base=join(route.storageRoot,configDir,'t3-code','commands','v1');
     for(const directory of ['requests','results'])await fs.mkdir(join(base,directory),{recursive:true,mode:0o700});
     let server:NoteCommandServer|undefined;
     const release=await lockfile.lock(base,{realpath:true,stale:30_000,update:5000,onCompromised:()=>server?.dispose()});

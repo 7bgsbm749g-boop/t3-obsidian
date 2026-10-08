@@ -45,7 +45,17 @@ def mailbox(config: dict, command: dict, *, retry: bool = False, cleanup: bool =
     script = r'''
 $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'
 $p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('PAYLOAD')) | ConvertFrom-Json
-$base=Join-Path $p.vault '.obsidian/t3-code/commands/v1'
+$storage=$p.vault; $routePath=Join-Path $p.vault '.obsidian/t3-code/storage-route.json'
+if(Test-Path $routePath) {
+  $route=Get-Content $routePath -Raw | ConvertFrom-Json
+  if($route.version -ne 1 -or $route.configDir -ne '.obsidian' -or
+     [IO.Path]::GetFullPath($route.workspaceRoot) -ne [IO.Path]::GetFullPath($p.vault) -or
+     -not [IO.Path]::IsPathRooted($route.storageRoot) -or
+     [IO.Path]::GetFullPath($route.storageRoot).StartsWith([IO.Path]::GetFullPath($p.vault).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -or
+     [IO.Path]::GetFullPath($route.storageRoot) -eq [IO.Path]::GetFullPath($p.vault)) { throw 'Invalid private mailbox route' }
+  $storage=$route.storageRoot
+}
+$base=Join-Path $storage '.obsidian/t3-code/commands/v1'
 if(-not (Test-Path (Join-Path $p.vault '.obsidian/plugins/send-to-t3-code/manifest.json'))) { throw 'QLO2 plugin is unavailable' }
 $request=Join-Path $base ('requests/'+$p.command.id+'.json'); $result=Join-Path $base ('results/'+$p.command.id+'.json')
 if($p.cleanup) {

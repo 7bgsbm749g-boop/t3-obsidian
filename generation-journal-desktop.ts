@@ -26,6 +26,7 @@ export class DesktopGenerationJournal implements GenerationJournal {
   private auditWaiters:Array<()=>void>=[];
   private prefixKey?:Buffer;
   private constructor(readonly root:string){}
+  forget(id:string){this.verified.delete(id);}
   static async open(root:string,syncedVaultRoots:readonly string[]){
     if(!isAbsolute(root)||!syncedVaultRoots.length||syncedVaultRoots.some(path=>!isAbsolute(path)))throw Error('Explicit absolute private storage and vault roots are required.');
     const actual=await canonical(root),vaults=await Promise.all(syncedVaultRoots.map(canonical));
