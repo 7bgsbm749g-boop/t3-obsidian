@@ -4,11 +4,22 @@ import {finalizeRegion,regionBody} from './inline-thread';
 import type {NoteGeneration} from './generated-note-coordinator';
 import type {HostedInlineState} from './hosted-inline';
 import {removeStreamBlock} from './stream-block';
+import type {NativeCommitProof} from './native-response-commit';
 
 /** Strip only ranges proven by immutable materialization intents. Map ordinary
  * edits outside those ranges; an edited/ambiguous generated range is user text. */
-export function generatedEventContent(content:string,records:NoteGeneration[],legacy:HostedInlineState[]=[]):string {
+export function generatedEventContent(content:string,records:NoteGeneration[],legacy:HostedInlineState[]=[],prepared:Array<{proof:NativeCommitProof;body:string}>=[]):string {
   const ranges:Array<{from:number;to:number}>=[];
+  const retain=(expected:string,from:number,to:number)=>{
+    const generated=expected.slice(from,to),expectedTo=to,edits=changedEdits(expected,content);
+    if(edits.some(edit=>edit.from<to&&edit.to>from||edit.from===edit.to&&edit.from>from&&edit.from<to))return;
+    const offset=edits.filter(edit=>edit.to<=from).reduce((delta,edit)=>delta+edit.text.length-(edit.to-edit.from),0);
+    from+=offset;to+=offset;if(content.slice(from,to)!==generated)return;
+    if(expected[expectedTo]==='\n'&&content[to]==='\n')to++;
+    ranges.push({from,to});
+  };
+  const retainProof=(proof:NativeCommitProof,body:string)=>{const range=proof.responseRange;if(range&&proof.document.slice(range.from,range.to)==='\n'+body.replace(/\n+$/,''))retain(proof.document,range.from,range.to);};
+  for(const item of prepared)retainProof(item.proof,item.body);
   for(const state of legacy){
     const anchor=state.responseAnchor,body=state.finalBody;
     if(!state.finalSaved||!anchor||body===undefined||anchor.length<1)continue;
@@ -17,6 +28,10 @@ export function generatedEventContent(content:string,records:NoteGeneration[],le
     if(content[from]==='\n'&&content[to-1]==='\n')ranges.push({from,to});
   }
   for(const record of records){
+    if(record.deviceProof&&record.finalBody!==undefined&&record.status!=='removed'){
+      const history=record.historyRemoval?.status==='verified'?record.historyRemoval:undefined;
+      retainProof(history?.proof??record.deviceProof,history?removeStreamBlock(record.finalBody,history.key,history.blockHash).text:record.finalBody);continue;
+    }
     if(!record.attempt||record.finalBody===undefined||record.staged===undefined||record.status==='removed')continue;
     const region=regionBody(record.original,record.request.id);
     const final=region&&finalizeRegion(record.original,record.request.id,contentHash(region.body),record.finalBody);
@@ -32,17 +47,7 @@ export function generatedEventContent(content:string,records:NoteGeneration[],le
       from=map(from);to=map(to);expected=removal.text;
       generated=removeStreamBlock(generated,record.historyRemoval.key,record.historyRemoval.blockHash).text;
     }
-    const expectedTo=to;
-    const edits=changedEdits(expected,content);
-    if(edits.some(edit=>edit.from<to&&edit.to>from||edit.from===edit.to&&edit.from>from&&edit.from<to))continue;
-    const offset=edits.filter(edit=>edit.to<=from).reduce((delta,edit)=>delta+edit.text.length-(edit.to-edit.from),0);
-    from+=offset;to+=offset;
-    if(content.slice(from,to)!==generated)continue;
-    // The anchor's terminating newline is inserted with the registration and
-    // survives finalization. Match active-marker filtering without consuming
-    // any additional ordinary whitespace.
-    if(expected[expectedTo]==='\n'&&content[to]==='\n')to++;
-    ranges.push({from,to});
+    retain(expected,from,to);
   }
   const unique=ranges.sort((a,b)=>a.from-b.from).filter((range,i,all)=>!i||range.from>=all[i-1].to);
   for(const range of unique.reverse())content=content.slice(0,range.from)+content.slice(range.to);

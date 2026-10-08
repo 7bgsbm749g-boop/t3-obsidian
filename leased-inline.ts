@@ -1,14 +1,15 @@
 import {explorerResponsePath,leaseExplorerResponse,loadExplorerResponses,relocateExplorerResponses,type ExplorerResponse} from './explorer-responses';
 import {contentHash} from './completion';
 import {HostedInlineWriter,hostedPaths,validateHostedRequest,pendingCompletionCleanup,type HostedInlineRequest,type HostedInlineState,type InlineFiles,type InlineHostTarget} from './hosted-inline';
-import {InlineLeaseClient,HEARTBEAT_MS,leasePaths,terminalLease,type LeaseRecord,type LeaseReply} from './inline-lease';
+import {InlineLeaseClient,HEARTBEAT_MS,deviceOriginalPath,deviceStagedPath,leasePaths,terminalLease,type LeaseRecord,type LeaseReply} from './inline-lease';
 import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,turnForMessage,hasCompletionProof,hasResponseMarkers,regionBody,type InlineThreadState,type InlineStartRequest} from './inline-thread';
 import {readInlineEvents,readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem,type ThreadAccessCloseReason} from './thread-stream';
 import {ThreadAccessCache} from './thread-access-cache';
 import type {ReplyReference} from './reply-assets';
 import type {SteeringInput} from './inline-steering';
 import {logFailure} from './diagnostics';
-import {nativeCommitPath,readNativeCommitProof} from './native-response-commit';
+import {nativeCommitPath,readNativeCommitProof,type NativeCommitProof} from './native-response-commit';
+import {rewriteReplyReferences} from './reply-assets';
 import {ThreadTitleFeed} from './thread-title-feed';
 import {DirectInlinePreview,type DirectInlineUpdate} from './direct-inline-preview';
 
@@ -17,6 +18,9 @@ export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
 
 export interface PendingResponseRename {id:string;actor:string;bindingId:string;host:InlineHostTarget;before:string;after:string}
 export interface DeviceInlineIO {
+  completionActor?:string;
+  completeResponse?(record:LeaseRecord,original:string,staged:string|undefined,prepare:(proof:NativeCommitProof)=>Promise<void>):Promise<NativeCommitProof|undefined>;
+  completionFailed?(error:unknown,id:string):void;
   loadStops?():string[];
   saveStops?(ids:string[]):void;
   loadRenames?():PendingResponseRename[];
@@ -37,7 +41,7 @@ export interface DeviceInlineIO {
   resolveReplyReference?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
 type SnapshotRefresh={epoch:number;startedAt:number;work:Promise<InlineThreadState|undefined>;cancel(error:Error):void};
-type Runtime={record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;maintenanceFailures?:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void};proof?:{hash:string;bytes:string};observedBytes?:string;observedRecord?:LeaseRecord};
+type Runtime={original?:string;finalUpdate?:DirectInlineUpdate;finalWork?:Promise<void>;nextFinal?:number;nextPresence?:number;finalFailure?:string;record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;maintenanceFailures?:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void};proof?:{hash:string;bytes:string};observedBytes?:string;observedRecord?:LeaseRecord};
 type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;close():void;discovery?:Promise<void>;lastDiscovery:number;responses:ExplorerResponse[]};
 const hostKey=(target:InlineHostTarget)=>JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);
 const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...state,updatedAt:''}):'';
@@ -79,9 +83,21 @@ export class DeviceInlineManager {
   }
   async register(request:HostedInlineRequest){
     if(this.stopped)throw Error('The plugin stopped before registering the response.');
-    const host=this.host(request.host),reply=await host.client.command({kind:'register',jobId:request.id,request});
+    const host=this.host(request.host);let original:string|undefined;
+    if(request.version===4&&request.nativeProjection&&!request.deviceCompletion&&this.io.completeResponse){
+      const previous=await host.files.read(leasePaths(host.target.directory,request.id).record);
+      if(previous){const registered:LeaseRecord=JSON.parse(previous);if(registered.request.deviceCompletion)request.deviceCompletion=registered.request.deviceCompletion;}
+      else{
+        const raw=await host.files.read(`${host.target.directory}/coordinated-capabilities.json`);
+        if(raw&&JSON.parse(raw).deviceCompletion===1){
+          original=await this.io.readNote(request.notePath);if(original===undefined)throw Error('Save the response destination before registration.');
+          request.deviceCompletion={version:1,actor:this.io.completionActor??this.actor,originalHash:contentHash(original)};
+        }
+      }
+    }
+    const reply=await host.client.command({kind:'register',jobId:request.id,request,...(original!==undefined?{original}:{})});
     if(!reply.ok||!reply.record)throw Error(reply.error??'Response registration failed.');
-    this.receiveRecord(host,reply.record);const runtime=this.jobs.get(request.id);if(runtime)runtime.lastHeartbeat=this.now();this.tick();
+    this.receiveRecord(host,reply.record);const runtime=this.jobs.get(request.id);if(runtime){runtime.lastHeartbeat=this.now();if(original!==undefined)runtime.original=original;}this.tick();
   }
   async delivered(target:InlineHostTarget,id:string,delivery:InlineStartRequest){
     this.previews.get(id)?.delivery(delivery);
@@ -171,7 +187,7 @@ export class DeviceInlineManager {
     }
     if(record.coordinated&&this.io.receiveDirect&&!this.localStops.has(record.request.id)){
       let preview=this.previews.get(record.request.id);
-      if(!preview){preview=new DirectInlinePreview(record,()=>this.access(record.request.threadEnvironmentId),update=>this.io.receiveDirect!(update));this.previews.set(record.request.id,preview);}
+      if(!preview){preview=new DirectInlinePreview(record,()=>this.access(record.request.threadEnvironmentId),update=>{this.io.receiveDirect!(update);const runtime=this.jobs.get(update.request.id);if(runtime&&update.completionVerified&&update.turnId&&(update.phase==='complete'||update.phase==='interrupted')){runtime.finalUpdate=update;this.finishOnDevice(runtime);}});this.previews.set(record.request.id,preview);}
       else preview.update(record);
     }
     const projected=leaseExplorerResponse(record),previous=host.responses.find(r=>r.id===projected.id);
@@ -305,8 +321,9 @@ export class DeviceInlineManager {
       const {record,host}=runtime,id=record.request.id;
       if(record.coordinated){
         runtime.refresh?.cancel(Error('Generated changes are coordinated by the host.'));runtime.monitor?.stop();runtime.monitor=undefined;runtime.writer.stop();
-        this.previews.get(id)?.tick(isOpen(record.state?.notePath??record.request.notePath));
-        if(record.state?.cleanupComplete&&record.state.delivery?.observedBy.includes(this.actor)){this.previews.get(id)?.dispose();this.previews.delete(id);this.jobs.delete(id);continue;}
+        this.previews.get(id)?.tick(isOpen(record.state?.notePath??record.request.notePath)||!!this.io.completeResponse&&record.request.deviceCompletion?.actor===(this.io.completionActor??this.actor));
+        this.finishOnDevice(runtime);
+        if(record.state?.cleanupComplete&&(record.state.delivery?.observedBy.includes(this.actor)||record.request.deviceCompletion?.actor===(this.io.completionActor??this.actor)&&record.state.delivery?.observedBy.includes(this.io.completionActor??this.actor))){this.previews.get(id)?.dispose();this.previews.delete(id);this.jobs.delete(id);continue;}
         if(!runtime.heartbeat&&this.now()-runtime.lastHeartbeat>=1000){runtime.lastHeartbeat=this.now();const work=this.observeCoordinated(runtime);runtime.heartbeat=work;void work.finally(()=>runtime.heartbeat=undefined).catch(()=>{});}
         continue;
       }
@@ -340,6 +357,40 @@ export class DeviceInlineManager {
       }
     }
   }
+  private finishOnDevice(runtime:Runtime){
+    const record=runtime.record,actor=this.io.completionActor??this.actor;
+    if(this.stopped||!this.io.completeResponse||record.request.deviceCompletion?.actor!==actor||record.state?.cleanupComplete||record.responseRemovedAt!==undefined||record.finalWriter&&record.finalWriter.actor!==actor||runtime.finalWork||this.now()<(runtime.nextFinal??0))return;
+    const state=record.state,turn=state?.bindingCheckpoint?.turns?.[state.turnId??''];
+    if(!runtime.finalUpdate&&state?.directFinalBody!==undefined&&state.finalPhase&&state.turnId&&!state.bindingRecoveryIssue&&(turn?.state==='completed'&&state.finalPhase==='complete'||turn?.state==='interrupted'&&state.finalPhase==='interrupted'))runtime.finalUpdate={request:record.request,messageId:state.pendingMessageId??state.messageId??record.request.messageId,turnId:state.turnId,turnIds:state.turnIds,sequence:state.bindingCheckpoint?.sequence??0,body:state.directFinalBody,phase:state.finalPhase,checkpoint:state.bindingCheckpoint,completionVerified:true};
+    if(!record.finalWriter&&(!runtime.finalUpdate||this.localStops.has(record.request.id)||record.stopRequestedAt))return;
+    const work=(async()=>{
+      let lease=runtime.record;
+      if(!lease.finalWriter){
+        const update=runtime.finalUpdate!;
+        let body=update.body;
+        if(update.phase==='complete'&&this.io.resolveReplyReference){const access=await this.access(lease.request.threadEnvironmentId);body=await rewriteReplyReferences(body,reference=>this.io.resolveReplyReference!(reference,lease.request,access).catch(()=>undefined));}
+        if(this.stopped||this.localStops.has(lease.request.id))return;
+        const reply=await runtime.host.client.command({kind:'reserve-final',jobId:lease.request.id,final:{messageId:update.messageId,turnId:update.turnId!,sequence:update.sequence,body,phase:update.phase as 'complete'|'interrupted',checkpoint:update.checkpoint,turnIds:update.turnIds}},{id:crypto.randomUUID(),actor});
+        if(reply.record)this.receiveRecord(runtime.host,reply.record);
+        if(!reply.ok||!reply.record)throw Error(reply.error??'Could not authorize the local final save.');
+        lease=reply.record;
+      }
+      const directory=runtime.host.target.directory,staged=lease.state?.deviceStaged;
+      const [original,draft]=await Promise.all([runtime.original!==undefined?Promise.resolve(runtime.original):runtime.host.files.read(deviceOriginalPath(directory,lease.request.id)),staged?runtime.host.files.read(deviceStagedPath(directory,lease.request.id,staged.hash)):Promise.resolve(undefined)]);
+      if(original===undefined)throw Error('The private completion original is unavailable.');runtime.original=original;
+      const proof=await this.io.completeResponse!(lease,original,draft,async proof=>{
+        const reply=await runtime.host.client.command({kind:'prepare-final',jobId:lease.request.id,token:lease.finalWriter!.token,proof},{id:crypto.randomUUID(),actor});
+        if(reply.record)this.receiveRecord(runtime.host,reply.record);
+        if(!reply.ok)throw Error(reply.error??'The host did not retain the immutable final-save intent.');
+      });if(!proof)return;
+      if(this.stopped)return;
+      const reply=await runtime.host.client.command({kind:'commit-final',jobId:lease.request.id,token:lease.finalWriter!.token,proof},{id:crypto.randomUUID(),actor});
+      if(reply.record)this.receiveRecord(runtime.host,reply.record);
+      if(!reply.ok)throw Error(reply.error??'The local final-save receipt is waiting for the host.');
+      runtime.finalFailure=undefined;
+    })().catch(error=>{const detail=error instanceof Error?error.message:String(error);if(runtime.finalFailure!==detail){runtime.finalFailure=detail;this.io.completionFailed?.(error,record.request.id);logFailure('response.device-completion.failed',error,{bindingId:record.request.id});}}).finally(()=>{runtime.finalWork=undefined;runtime.nextFinal=this.now()+1000;});
+    runtime.finalWork=work;
+  }
   private async observeCoordinated(runtime:Runtime){
     const {host}=runtime,raw=await host.files.read(leasePaths(host.target.directory,runtime.record.request.id).record);if(!raw||this.stopped)return;
     let record:LeaseRecord;
@@ -350,6 +401,12 @@ export class DeviceInlineManager {
       else{runtime.observedBytes=undefined;runtime.observedRecord=undefined;}
     }
     if(record.responseRemovedAt!==undefined)return;
+    const actor=this.io.completionActor??this.actor;
+    if(record.request.deviceCompletion?.actor===actor&&!record.finalWriter&&!record.stopRequestedAt&&this.now()>=(runtime.nextPresence??0)){
+      runtime.nextPresence=this.now()+HEARTBEAT_MS;
+      const reply=await host.client.command({kind:'presence',jobId:record.request.id},{id:crypto.randomUUID(),actor});
+      if(reply.record)this.receiveRecord(host,reply.record);
+    }
     const delivery=record.state?.delivery;
     if(delivery?.proofHash&&this.io.receiveCoordinated){
       if(runtime.proof?.hash!==delivery.proofHash){
@@ -390,6 +447,7 @@ export class DeviceInlineManager {
   }
   private available(record:LeaseRecord,document:string){
     const {request,state}=record;
+    if(request.deviceCompletion?.actor===(this.io.completionActor??this.actor)&&record.finalWriter?.actor===request.deviceCompletion.actor&&record.preparedFinal)return true;
     return !!record.stopRequestedAt||state?.finalSaved===true||pendingCompletionCleanup(request,state)&&hasResponseMarkers(document,request.id)||!!regionBody(document,request.id)||contentHash(document)===state?.finalDocumentHash||state?.finalBody!==undefined&&hasCompletionProof(document,request.id,state.finalBody);
   }
   private item(runtime:Runtime,item:ThreadStreamItem){

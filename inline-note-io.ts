@@ -1,6 +1,7 @@
 import {nativeResponses} from './native-response-manager';
 import {hasCompletionProof,hasResponseMarkers} from './inline-thread';
 import {logEvent} from './diagnostics';
+import {logFailure} from './diagnostics';
 import {contentHash} from './completion';
 import type {App,Editor,MarkdownView} from 'obsidian';
 import {replaceInlineEditorText} from './inline-editor';
@@ -87,4 +88,41 @@ export function replaceChangedText(editor:Editor,before:string,after:string){
   let start=0;while(start<before.length&&start<after.length&&before[start]===after[start])start++;
   let oldEnd=before.length,newEnd=after.length;while(oldEnd>start&&newEnd>start&&before[oldEnd-1]===after[newEnd-1]){oldEnd--;newEnd--;}
   replaceInlineEditorText(editor,after.slice(start,newEnd),start,oldEnd);
+}
+
+/** Commit the live saved projection, including ordinary unsaved edits. Native
+ * saves first reconcile their disk baseline; every pane must then agree with
+ * disk before the single final atomic mutation is prepared. */
+export function deviceFinalNoteIO(app:App,allowed:()=>boolean){
+  const io=deviceNoteIO(app),manager=nativeResponses(app);
+  const observed=new Map<string,{file:unknown;disk:string;current:string}>();
+  const recovered=new Map<string,{file:unknown;expected:string}>();
+  return {
+    recover:async(path:string,expected:string,ids:string[])=>{
+      const file=app.vault.getFileByPath(path);if(!file||!allowed())return;
+      if(await app.vault.read(file)!==expected||!allowed()||file.path!==path||app.vault.getFileByPath(path)!==file)return;
+      recovered.set(path,{file,expected});
+      try{manager.committed(path,expected,ids);}catch(error){logFailure('response.device-completion.pane-recovery',error,{notePath:path});}
+    },
+    read:async(path:string)=>{
+      const file=app.vault.getFileByPath(path);if(!file||!allowed())return;
+      const disk=await app.vault.read(file);if(!allowed()||file.path!==path||app.vault.getFileByPath(path)!==file)return;
+      const own=recovered.get(path);if(own?.file===file&&own.expected===disk)return disk;
+      for(const {view} of manager.savedViews(path))manager.view(view)?.reconcileDisk(disk);
+      const current=await io.readNote(path);if(current!==undefined)observed.set(path,{file,disk,current});return current;
+    },
+    compareAndSet:async(path:string,before:string,after:string)=>{
+      const file=app.vault.getFileByPath(path);if(!file||!allowed())return false;
+      const same=()=>allowed()&&file.path===path&&app.vault.getFileByPath(path)===file&&manager.savedViews(path).every(view=>view.saved()===before);
+      const snapshot=observed.get(path);
+      if(!snapshot||snapshot.file!==file||snapshot.current!==before||!same()||await app.vault.read(file)!==snapshot.disk||!same())return false;
+      const ids=[...before.matchAll(/<!-- t3-(?:inline|response):start:([0-9a-f-]{36}) -->/g)].map(match=>match[1]).filter(id=>responseRegion(before,id)&&!responseRegion(after,id));
+      manager.prepare(path,before,after,ids);
+      try{
+        await app.vault.process(file,current=>{if(!same()||current!==snapshot.disk)throw Error('The local note changed before final save.');return after;});
+        const disk=await app.vault.read(file);if(!allowed()||disk!==after)return false;
+        manager.committed(path,disk,ids);return true;
+      }finally{manager.cancel(path);}
+    },
+  };
 }

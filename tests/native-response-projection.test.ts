@@ -42,6 +42,16 @@ function fakeView(document:string,normalizeIncoming?:(text:string)=>string){
   const adapter=new NativeResponseView(view,document,record=>conflicts.push(record),async()=>disk,normalizeIncoming);
   return {view,adapter,conflicts,read:()=>value,edit:(data:string)=>{value=data;},saves:()=>saves};
 }
+
+test('verified readback resolves a transient projection conflict but retains competing ordinary edits',()=>{
+  const before=`Before\n\n${responseAnchor(id)}\n\nAfter`,final=before.replace(responseAnchor(id),'\n> Finished');
+  const matching=fakeView(before);matching.adapter.setResponses([{id,body:'> Working'}]);
+  matching.adapter.preserveConflict({base:before,local:before,incoming:final,reason:'The exact durable response anchor is missing.'});
+  assert.equal(matching.adapter.acceptCommitted(final,[id]),true);assert.equal(matching.adapter.conflictRecord(),undefined);assert.equal(matching.view.getViewData(),final);
+  const competing=fakeView(before);competing.adapter.setResponses([{id,body:'> Working'}]);
+  competing.adapter.preserveConflict({base:before,local:before.replace('Before','User heading'),incoming:final,reason:'Transient native update'});
+  assert.equal(competing.adapter.acceptCommitted(final.replace('Before','Generated heading'),[id]),false);assert.match(competing.adapter.conflictRecord()!.local,/User heading/);
+});
 test('unchanged native response reads retain a validated projection, while ordinary edits and changed boundaries remain fresh',()=>{
  const h=fakeView(saved),responses=[{id,body:'> Retained large reply '.repeat(5000)},{id:other,body:'> Independent reply'}];
  h.adapter.setResponses(responses);const projection=h.adapter.currentProjection();

@@ -38,12 +38,16 @@ export interface HostedInlineRequest {
   initialInput?:InitialInlineInput;
   independent?:boolean;
   nativeProjection?:boolean;
+  /** Negotiated once, before dispatch. Its immutable original travels in a
+   * private sidecar, keeping full notes out of frequently polled metadata. */
+  deviceCompletion?:{version:1;actor:string;originalHash:string};
   destinationSection?:string;
   threadTitle?:string;
   version:1|2|3|4;initialOwner?:string;id:string;vaultId:string;host:InlineHostTarget;notePath:string;
   threadId:string;messageId:string;projectId:string;threadEnvironmentId:string;initialHash:string;createdAt:string;
 }
 export interface HostedInlineState {
+  deviceStaged?:{originalHash:string;hash:string};
   assetFailures?:Array<{source:string;error:string}>;
   delivery?:{commitId:string;hash:string;verifiedOnHost:boolean;observedBy:string[];proofHash?:string};
   requestHash:string;accepted:boolean;notePath:string;turnId?:string;messageId?:string;pendingMessageId?:string;
@@ -61,6 +65,8 @@ export interface HostedInlineState {
   /** Positional provenance outside the note; never a retained Markdown marker. */
   responseAnchor?:{length:number;hash:string};
   finalBody?:string;
+  /** Canonical formatted result before device-local asset import. */
+  directFinalBody?:string;
   /** The proof was verified on disk before its temporary boundaries were removed. */
   finalSaved?:boolean;
   finalPhase?:'complete'|'interrupted';
@@ -88,6 +94,7 @@ export function validateHostedRequest(value:any):HostedInlineRequest {
   if(value?.importTurn!==undefined){const turn=value.importTurn;if(value.version!==4||turn.messageId!==value.messageId||typeof turn.turnId!=='string'||!turn.turnId||turn.turnId.length>200||!['running','completed','interrupted','error','cancelled'].includes(turn.state)||!Number.isFinite(Date.parse(turn.requestedAt)))throw Error('Invalid imported run evidence.');}
   if(value?.replyFolders!==undefined)validateReplyFolders(value.replyFolders);
   if(value?.nativeProjection!==undefined&&typeof value.nativeProjection!=='boolean')throw Error('Invalid native projection preference.');
+  if(value?.deviceCompletion!==undefined&&(value.version!==4||value.nativeProjection!==true||value.deviceCompletion?.version!==1||!uuid.test(value.deviceCompletion.actor??'')||! /^[0-9a-f]{64}$/.test(value.deviceCompletion.originalHash??'')))throw Error('Invalid device completion registration.');
   validateDestinationSection(value?.destinationSection);
   if(value?.initialInput!==undefined&&(!uuid.test(value.initialInput?.messageId??'')||value.initialInput.messageId!==value.messageId||typeof value.initialInput.text!=='string'||!value.initialInput.text.trim()||value.initialInput.text.length>120_000||value.initialInput.label!==undefined&&(typeof value.initialInput.label!=='string'||value.initialInput.label.length>200)))throw Error('Invalid initial response input.');
   if(value?.threadTitle!==undefined&&(typeof value.threadTitle!=='string'||value.threadTitle.length>200))throw Error('Invalid thread title.');
@@ -130,7 +137,7 @@ export interface HostedWriterIO extends InlineFiles {
   access(environmentId:string):Promise<ThreadAccess>;
   // undefined means the file is missing or has unsaved editor changes. The
   // callback must execute against the latest content in an atomic vault edit.
-  updateNote(path:string,change:(current:string)=>string):Promise<string|undefined>;
+  updateNote(path:string,change:(current:string)=>string,bindingId?:string):Promise<string|undefined>;
   locateNote?(id:string,path:string):Promise<string|undefined>;
   threadState?(request:HostedInlineRequest,access:ThreadAccess,refresh?:boolean):Promise<import('./inline-thread').InlineThreadState|undefined>;
   replayBindings?(request:HostedInlineRequest,access:ThreadAccess,signal:AbortSignal,afterSequence:number):Promise<ThreadStreamItem[]>;
@@ -174,7 +181,7 @@ export class HostedInlineWriter {
       const hash=contentHash(next);if(!state.hashes.includes(hash))state.hashes.push(hash);
       // Persist the proposed body before replacing the waiting header.
       return document;
-    });
+    },request.id);
     if(!changed)return;
     await save();
     if(this.stopped)return;
@@ -184,7 +191,7 @@ export class HostedInlineWriter {
       if(next!==state.body)return document;
       const edit=replaceRegion(document,request.id,contentHash(region.body),next);
       return edit?document.slice(0,edit.from)+edit.text+document.slice(edit.to):document;
-    });
+    },request.id);
   }
   private async network<T>(path:string,work:()=>Promise<T>):Promise<T>{
     const id=path.slice(path.lastIndexOf('/')+1,-5);
@@ -269,7 +276,7 @@ export class HostedInlineWriter {
             if(from<0||document.indexOf(body,from+body.length)>=0)return document;
             reopened=true;
             return document.slice(0,from)+startMarker(request.id)+'\n'+state.body+'\n'+endMarker(request.id)+document.slice(from+body.length);
-          });
+          },request.id);
           if(!reopened){this.networkRetryAt.set(path,this.monotonic()+5000);return;}
           state.questionFollows=questionTargets(state.body!).map(target=>({requestId:target.requestId,turnId:state.turnId??null,completed:true}));
           state.status='waiting';delete state.finalDocumentHash;await save();
@@ -280,7 +287,7 @@ export class HostedInlineWriter {
             const region=regionBody(document,request.id);
             restored=!!region;
             return document;
-          });
+          },request.id);
           if(!restored){this.networkRetryAt.set(path,this.monotonic()+5000);return;}
         }
         const previousPoll=this.canonicalPolls.get(path);
@@ -297,7 +304,7 @@ export class HostedInlineWriter {
           await this.io.updateNote(state.notePath,current=>{
             found=!!regionBody(current,request.id);
             return current;
-          });
+          },request.id);
           if(!found){state.detail='Waiting for the response marker to reach the vault project machine.';await save();return;}
           state.accepted=true;delete state.detail;await save();
         }
@@ -432,6 +439,13 @@ export class HostedInlineWriter {
         state.bindingCheckpoint=inlineBindingCheckpoint(current);
         const inputs=questionConversationInputs(current,state.incoming??[],state.questionFollows,state.prose);
         const conversation=state.turnIds.length>1||inputs.length?{messages:state.prose,steering:inputs,preserveHistory:questions.continued}:undefined;
+        if(request.deviceCompletion&&(phase==='complete'&&!questions.waiting||phase==='interrupted')){
+          state.finishedAt??=completionTime(current,state.turnId);state.finalPhase=phase as 'complete'|'interrupted';
+          state.directFinalBody=renderInlineTurn(current,state.turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,request.threadTitle,{startedAt:request.createdAt,finishedAt:state.finishedAt},finalAnswerFormat(request.finalAnswerFormat));
+          // A foreground device can finish from this canonical evidence even
+          // when its direct feed is recovering. Publish before asset work.
+          await save();
+        }else delete state.directFinalBody;
         const resolveReference=async(reference:ReplyReference)=>{
           try{return await this.io.resolveReplyReference!(reference,request,access);}
           catch(error){
@@ -500,14 +514,14 @@ export class HostedInlineWriter {
           applied=true;
           const change=replaceRegion(document,request.id,contentHash(region.body),next)!;
           return document.slice(0,change.from)+change.text+document.slice(change.to);
-        });
+        },request.id);
         if(finalBefore!==undefined&&finalAfter!==undefined){
           state.finalDocumentHash=contentHash(finalAfter);if(request.independent)state.finalBody=next;await save();
           if(this.stopped)return;
           await this.io.updateNote(state.notePath,document=>{
             if(document!==finalBefore)return document;
             applied=true;return finalAfter!;
-          });
+          },request.id);
         }
         if(conflict){if(!['paused','conflict'].includes(state.status))logFailure('note.write.conflict',new Error('Response markers were removed or malformed.'),{jobId:request.id,notePath:state.notePath,knownHashes:state.hashes.slice(-5)});state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='Response markers removed or malformed. Restore the response boundaries to resume streaming.';}
         else if(applied){state.status=state.bindingRecoveryIssue||phase==='complete'&&questions.waiting?'waiting':phase;delete state.detail;}
@@ -564,11 +578,11 @@ export class HostedInlineWriter {
         before=document;after=cleaned??document;
       }
       return document;
-    });
+    },request.id);
     if(before===undefined||after===undefined)return;
     state.finalDocumentHash=contentHash(after);state.finalPhase='interrupted';await save();
     let applied=false;
-    await this.io.updateNote(state.notePath,document=>{if(document!==before)return document;applied=true;return after!;});
+    await this.io.updateNote(state.notePath,document=>{if(document!==before)return document;applied=true;return after!;},request.id);
     if(!applied)return;
     if(request.independent){state.finalSaved=true;await save();await this.cleanup(request,state,save);}
     else{state.status='interrupted';delete state.detail;await save();}
@@ -582,7 +596,7 @@ export class HostedInlineWriter {
       // crash before its checkpoint. Never reconstruct or overwrite the body.
       cleaned=true;state.finalDocumentHash=contentHash(next??document);
       return next??document;
-    });
+    },request.id);
     if(!cleaned)return;
     state.cleanupComplete=true;state.status=state.finalPhase!;delete state.detail;
     await save();

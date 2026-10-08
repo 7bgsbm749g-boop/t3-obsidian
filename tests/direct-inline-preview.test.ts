@@ -14,17 +14,38 @@ class TestClock implements PreviewClock {
   cancel=(id:unknown)=>{this.pending.delete(id as number);};
   advance(ms:number){const end=this.time+ms;for(;;){const entry=[...this.pending].sort((a,b)=>a[1].at-b[1].at)[0];if(!entry||entry[1].at>end)break;this.time=entry[1].at;this.pending.delete(entry[0]);entry[1].callback();}this.time=end;}
 }
-function fixture(paced=true){
+function fixture(paced=true,verify?:()=>Promise<any>){
   const request={version:4 as const,nativeProjection:true,id:randomUUID(),vaultId:randomUUID(),host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/inline'},initialOwner:randomUUID(),notePath:'Note.md',threadId:'thread',messageId:'prompt',projectId:'project',threadEnvironmentId:'host',initialHash:'hash',createdAt:'2026-10-06T03:00:00Z',intermediateMode:'keep' as const};
   const record:LeaseRecord={request,coordinated:true,migrating:true,owner:'host',epoch:1,revision:0,expiresAt:Number.MAX_SAFE_INTEGER};
   const streams:Array<{callbacks:ThreadStreamCallbacks;cursor:()=>number|undefined;stopped:boolean}>=[],updates:DirectInlineUpdate[]=[];
   const watch:typeof watchThread=(_id,_access,callbacks,_socket,_targets,replay)=>{const stream={callbacks,cursor:replay!.afterSequence,stopped:false};streams.push(stream);return {stop:()=>{stream.stopped=true;}};};
   const clock=new TestClock();
-  const preview=new DirectInlinePreview(record,async()=>{throw Error('No file or writer access in preview fixture');},update=>updates.push(update),watch,clock);
+  const preview=new DirectInlinePreview(record,async()=>{if(verify)return {origin:'https://fixture',api:verify};throw Error('No file or writer access in preview fixture');},update=>updates.push(update),watch,clock);
   const snapshot=(sequence=2,text='First paragraph',messageId='prompt',turnId='turn'):ThreadStreamItem=>({kind:'snapshot',snapshot:{snapshotSequence:sequence,thread:{id:'thread',projectId:'project',title:'Test',messages:[{id:messageId,role:'user',text:'Question',turnId,streaming:false},{id:'answer',role:'assistant',text,turnId,streaming:true}],activities:[],latestTurn:{turnId,state:'running',messageId},session:{status:'running',activeTurnId:turnId}}}});
   const item=(item:ThreadStreamItem,index=streams.length-1)=>{if(paced)clock.advance(80);streams[index].callbacks.item(item);};
   return {preview,record,streams,updates,clock,item,snapshot,event:(sequence:number,text:string,aggregateId='thread')=>item({kind:'event',event:{sequence,aggregateId,type:'thread.message-sent',payload:{messageId:'answer',role:'assistant',text,turnId:'turn',streaming:true}}})};
 }
+
+test('direct completion verifies canonical final prose instead of sealing a session-ready commentary message',async()=>{
+ let release!:(value:any)=>void;const pending=new Promise(resolve=>{release=resolve;}),h=fixture(false,()=>pending);
+ h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};
+ h.preview.tick(true);const initial=h.snapshot() as any;initial.snapshot.thread.messages[1].streaming=false;h.item(initial);
+ h.item({kind:'event',event:{sequence:3,aggregateId:'thread',type:'thread.session-set',payload:{session:{status:'ready',activeTurnId:null}}}});
+ assert.equal(h.updates.at(-1)!.phase,'complete');assert.equal(h.updates.at(-1)!.completionVerified,false);
+ const canonical=h.snapshot(4,'Actual final response') as any;canonical.snapshot.thread.messages[1].streaming=false;canonical.snapshot.thread.latestTurn.state='completed';canonical.snapshot.thread.latestTurn.assistantMessageId='answer';canonical.snapshot.thread.session={status:'ready',activeTurnId:null};release(canonical.snapshot);
+ for(let n=0;n<5;n++)await new Promise(resolve=>setImmediate(resolve));
+ assert.match(h.updates.at(-1)!.body,/Actual final response/);assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.updates.at(-1)!.sequence,4);h.preview.dispose();
+});
+
+test('a streaming final message cannot be committed on session-ready and stale verification cannot finish after suspension',async()=>{
+ let release!:(value:any)=>void;const pending=new Promise(resolve=>{release=resolve;}),h=fixture(false,()=>pending);
+ h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};
+ h.preview.tick(true);h.item(h.snapshot());h.item({kind:'event',event:{sequence:3,aggregateId:'thread',type:'thread.session-set',payload:{session:{status:'ready',activeTurnId:null}}}});
+ assert.equal(h.updates.at(-1)!.phase,'running');assert.equal(h.updates.at(-1)!.completionVerified,false);
+ h.item({kind:'event',event:{sequence:4,aggregateId:'thread',type:'thread.message-sent',payload:{messageId:'answer',role:'assistant',turnId:'turn',text:'Final',streaming:false}}});
+ const count=h.updates.length;h.preview.tick(false);const canonical=h.snapshot(5,'Late verification') as any;canonical.snapshot.thread.messages[1].streaming=false;canonical.snapshot.thread.latestTurn.state='completed';release(canonical.snapshot);
+ for(let n=0;n<5;n++)await new Promise(resolve=>setImmediate(resolve));assert.equal(h.updates.length,count);h.preview.dispose();
+});
 test('direct text appears while the host is still waiting for Sync and old or duplicate data cannot regress it',()=>{
   const h=fixture();h.preview.tick(true);assert.equal(h.streams[0].cursor(),0);h.item(h.snapshot());
   assert.match(h.updates.at(-1)!.body,/First paragraph/);assert.match(h.updates.at(-1)!.body,/Working/);assert.equal(h.record.migrating,true);

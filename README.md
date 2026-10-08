@@ -161,7 +161,7 @@ Questions retain the optional wait instruction and 120,000-character limit (incl
 
 ## Inline responses
 
-Under **Settings → Send to T3 Code → Inline responses**, **Stream replies into the editor** is on by default for all manual Send and Ask actions. With an updated host, the sending device displays new replies locally while the **Vault project machine** saves their final result. Older hosts retain exclusive device writer ownership, even when a folder link sends the T3 thread to a different machine. Turning streaming off keeps answers in T3 threads.
+Under **Settings → Send to T3 Code → Inline responses**, **Stream replies into the editor** is on by default for all manual Send and Ask actions. With an updated host and sending device, new replies stream locally and the sending device saves their final result without waiting for Obsidian Sync. A durable grant permits one final writer. If the sending device closes before that grant, the **Vault project machine** can finish after its presence expires. Existing responses and older clients retain host completion. Older hosts retain exclusive device writer ownership, even when a folder link sends the T3 thread to a different machine. Turning streaming off keeps answers in T3 threads.
 
 The open note receives reply text directly from T3 as soon as its response is registered. It does not wait for the new note anchor to reach the vault project machine through Sync. Older host updates cannot replace newer local text. The host still checks and saves the final reply, including its imported files; Sync then carries that saved note to other devices. The visible status stays **Working** while the response runs or reconnects.
 
@@ -643,7 +643,7 @@ this detector's scope; changes to its saved prefix require explicit review.
 
 ### Native coordinated responses
 
-With an updated vault host, streaming Markdown is displayed in Obsidian's native view and excluded from saves. The host journals checkpoints and writes the finished response once. Generated note edits can join that save through `stage-note-edit` and `submit-note-edit`; privileged direct filesystem writes bypass this protocol. The existing formatter, per-destination identities, progress settings and controls remain in use. Older hosts retain the previous writer until they advertise support.
+With an updated vault host, streaming Markdown is displayed in Obsidian's native view and excluded from saves. The host journals checkpoints. For newly negotiated responses, the sending device takes a permanent final-write grant, journals and publishes its save intent, and saves the finished response once. Other devices receive it through Sync. The host can finish only if the sender becomes unavailable before the grant. Older registrations keep host completion. Generated note edits can join the same checked save through `stage-note-edit` and `submit-note-edit`; privileged direct filesystem writes bypass this protocol. The existing formatter, per-destination identities, progress settings and controls remain in use. Older hosts retain the previous writer until they advertise support.
 
 The final response stays visible while the saved note travels through Sync. Each pane replaces its local display only when it can adopt the verified saved result and preserve ordinary edits. Host completion alone never clears the block. Immutable commit evidence also recognizes intact results in later note versions containing outside edits or another completed response; uncertain or conflicting updates preserve the local display for review.
 

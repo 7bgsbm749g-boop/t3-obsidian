@@ -134,3 +134,27 @@ Primary references:
 - [Android Emulator acceleration](https://developer.android.com/studio/run/emulator-acceleration)
 - [Official Obsidian downloads](https://obsidian.md/download)
 - [Xcode system requirements](https://developer.apple.com/xcode/system-requirements)
+
+## Synthetic device completion fixture
+
+`node --import tsx scripts/build-device-completion-sync-lab.mjs PRIVATE_EVIDENCE_DIRECTORY`
+installs a synthetic fixture only in these two lab vaults, backs up their app and
+community-plugin configuration outside Sync, and records a unique note/binding.
+Use a new directory under `/home/ubuntu/backups/send-to-t3-code/`. Launch the two
+profiles separately with Cua Driver. Wait for both `a-ready.json` and
+`b-ready.json`; the fixture checks native editor adoption of the original before
+registration. Stop only B's Sync, then create `finish.json` in the evidence
+directory. B uses the production registration, authority, device manager,
+IndexedDB journal, coordinator and native note IO. Its T3 completion evidence is
+synthetic; it has no provider connection or dispatch permission.
+
+Check B's completed editor and disk bytes while A remains on the original. Then
+restart B Sync and require `a-adopted.json` to report visible adoption without a
+reload. Screenshots and all private proof records remain outside the vaults.
+Close only these synthetic lab windows, run the builder with `--restore`, remove
+only its unique temporary note through Sync, and restore previous service states.
+`--rebuild` updates an already installed lab fixture for diagnostics; retain all
+failed-attempt evidence and source hashes. This command never installs QLO2 or
+copies production settings. The October 8 fixture used desktop Obsidian 1.14.4
+and official Headless Sync; desktop core Sync and native mobile remain separate
+coverage limits.

@@ -91,7 +91,7 @@ export class DesktopInlineHost {
     let host:DesktopInlineHost|undefined;
     const release=await lockfile.lock(base,{realpath:true,stale:30_000,update:5000,onCompromised:error=>{logFailure('ownership.coordinator.lock-lost',error,identity);host?.dispose();}});
     host=new DesktopInlineHost(release,app,identity,localInlineFiles(identity.workspaceRoot,identity.directory),access);
-    try{host.coordinated=await CoordinatedHost.open(app,identity,localInlineFiles(identity.workspaceRoot,identity.directory),host.authority);host.nativeWriter=new HostedInlineWriter(identity,host.coordinated.io(host.writerIO));await localInlineFiles(identity.workspaceRoot,identity.directory).write(`${identity.directory}/coordinated-capabilities.json`,JSON.stringify({version:1,nativeProjection:true}));}catch(error){host.dispose();throw error;}
+    try{host.coordinated=await CoordinatedHost.open(app,identity,localInlineFiles(identity.workspaceRoot,identity.directory),host.authority);host.nativeWriter=new HostedInlineWriter(identity,host.coordinated.io(host.writerIO));await localInlineFiles(identity.workspaceRoot,identity.directory).write(`${identity.directory}/coordinated-capabilities.json`,JSON.stringify({version:1,nativeProjection:true,deviceCompletion:1}));}catch(error){host.dispose();throw error;}
     logEvent('ownership.coordinator.opened',identity);return host;
     }catch(error){logFailure('ownership.coordinator.open.failed',error,identity);throw error;}
   }

@@ -5,7 +5,7 @@ import type {App} from 'obsidian';
 import {contentHash} from './completion';
 import {generatedEventContent} from './generated-event-content';
 import {GeneratedNoteCoordinator,validateFinalResponseBody,type NoteGeneration} from './generated-note-coordinator';
-import {nativeCommitPath} from './native-response-commit';
+import {nativeCommitPath,readNativeCommitProof} from './native-response-commit';
 import {DesktopGenerationJournal} from './generation-journal-desktop';
 import {nativeResponses} from './native-response-manager';
 import {deviceNoteIO} from './inline-note-io';
@@ -16,9 +16,10 @@ import {regionBody,initialRegion,startMarker,endMarker} from './inline-thread';
 import {logFailure} from './diagnostics';
 import {streamBlock,removeStreamBlock} from './stream-block';
 import {hostedPaths,needsHostedProcessing,type HostedInlineRequest,type HostedInlineState,type HostedWriterIO} from './hosted-inline';
-import {leasePaths,terminalLease,type InlineLeaseAuthority,type LeaseRecord,type LeaseIdentity,type LeaseFiles} from './inline-lease';
+import {deviceOriginalPath,leasePaths,terminalLease,type InlineLeaseAuthority,type LeaseRecord,type LeaseIdentity,type LeaseFiles} from './inline-lease';
 import {ResponseProjectionCache} from './response-projection-cache';
 import {LeaseRecordCache} from './lease-record-cache';
+import {completedSelectionDraft} from './inline-steering';
 
 /** Host lock is owned by DesktopInlineHost. Mailbox mutations, migration fences
  * and checkpoints share that authority's serialization. Journal bytes live
@@ -86,9 +87,14 @@ export class CoordinatedHost {
     }finally{manager.cancel(path);}
   }
   async eventContent(path:string,content:string){
-    const leases=[...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===path);
+    const leases=this.authority.responsesFor(path);
     const records=await Promise.all(leases.map(record=>this.journal.read(record.request.id)));
-    return generatedEventContent(content,records.filter((record):record is NonNullable<typeof record>=>!!record),leases.filter(record=>!record.coordinated&&record.state).map(record=>record.state!));
+    const prepared=await Promise.all(leases.filter(record=>record.preparedFinal&&record.finalWriter).map(async record=>{
+      const delivery={...record.preparedFinal!,verifiedOnHost:false,observedBy:[]},bytes=await this.files.read(nativeCommitPath(this.identity.directory,record.request.id,delivery.commitId));
+      if(!bytes)throw Error('A prepared device completion proof is unavailable.');
+      return {proof:readNativeCommitProof(bytes,record.request.id,delivery),body:record.finalWriter!.body};
+    }));
+    return generatedEventContent(content,records.filter((record):record is NonNullable<typeof record>=>!!record),leases.filter(record=>!record.coordinated&&record.state).map(record=>record.state!),prepared);
   }
   async scan(background=false){
     // Coalesce discovery, not the lifetime of every response. A native save
@@ -140,6 +146,22 @@ export class CoordinatedHost {
       try{
       const id=record.request.id,notePath=record.state?.notePath??record.request.notePath;
       if(record.responseRemovedAt!==undefined){this.records.set(id,record);await nativeResponses(this.app).receive(record);return;}
+      if(record.request.deviceCompletion){
+        if(!await this.journal.read(id)){
+          const original=await this.files.read(deviceOriginalPath(this.identity.directory,id));
+          if(original===undefined||contentHash(original)!==record.request.deviceCompletion.originalHash)throw Error('The private completion original changed.');
+          await this.coordinator.accept(record.request,original);
+        }
+        if(record.migrating)record=await this.authority.migrated(id);
+        this.records.set(id,record);
+        if(record.finalWriter&&record.finalWriter.actor!==record.owner){
+          const journal=(await this.journal.read(id))!;
+          if(journal.staged===undefined)await this.coordinator.result(id,completedSelectionDraft(journal.stagedDraft??journal.original,id,record.state?.steering),record.finalWriter.body);
+          const delivery=record.state?.delivery;
+          if(delivery&&!journal.deviceProof){const bytes=await this.files.read(nativeCommitPath(this.identity.directory,id,delivery.commitId));if(bytes)await this.coordinator.adoptDeviceCommit(id,readNativeCommitProof(bytes,id,delivery));}
+          await nativeResponses(this.app).receive(record);return;
+        }
+      }
       if(record.relocations?.length){
         const original=await this.journal.read(id);
         for(const move of record.relocations){
@@ -275,10 +297,10 @@ export class CoordinatedHost {
     const reads=new Map<string,{epoch:number;revision:number}>();
     return {...base,
       quietCanonicalPolling:true,
-      requests:async()=>[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&record.responseRemovedAt===undefined&&needsHostedProcessing(record.request,record.state)).map(record=>hostedPaths(this.identity.directory,record.request.id).request),
+      requests:async()=>[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&record.responseRemovedAt===undefined&&(!record.finalWriter||record.finalWriter.actor===record.owner)&&needsHostedProcessing(record.request,record.state)).map(record=>hostedPaths(this.identity.directory,record.request.id).request),
       accepts:request=>!!this.records.get(request.id)?.coordinated&&!this.records.get(request.id)?.migrating&&this.records.get(request.id)?.responseRemovedAt===undefined&&!this.failures.has(request.id)&&!this.stopped,
       canResume:()=>true,
-      locateNote:(id,path)=>deviceNoteIO(this.app).locateNote(id,path),
+      locateNote:(id,path)=>this.records.get(id)?.request.deviceCompletion?Promise.resolve(path):deviceNoteIO(this.app).locateNote(id,path),
       read:async path=>{
         const id=/\/([^/]+)\.json$/.exec(path)?.[1],record=id?this.records.get(id):undefined;
         if(record&&path===hostedPaths(this.identity.directory,id!).state){reads.set(id!,{epoch:record.epoch,revision:record.revision});return record.state?JSON.stringify(record.state):undefined;}
@@ -290,7 +312,16 @@ export class CoordinatedHost {
         const state:HostedInlineState=JSON.parse(value),record=await this.authority.checkpoint(id,state,reads.get(id));reads.set(id,{epoch:record.epoch,revision:record.revision});this.records.set(id,record);
         await this.coordinator.checkpoint(id,record.revision,record.state!);await nativeResponses(this.app).receive(record);
       },
-      updateNote:async(path,change)=>{
+      updateNote:async(path,change,bindingId)=>{
+        const local=bindingId?this.records.get(bindingId):undefined;
+        if(local?.request.deviceCompletion&&!local.state?.cleanupComplete){
+          const journal=(await this.journal.read(local.request.id))!,document=journal.stagedDraft??journal.original;
+          const region=responseRegion(document,local.request.id)!;
+          const displayed=document.slice(0,region.from)+startMarker(local.request.id)+'\n'+(local.state?.body??regionBody(initialRegion(local.request.id).text,local.request.id)!.body)+'\n'+endMarker(local.request.id)+document.slice(region.to);
+          // The host keeps display/checkpoint work private. Ordinary staged
+          // changes and the response are applied together by the granted writer.
+          return change(displayed);
+        }
         const saved=await deviceNoteIO(this.app).readNote(path);if(saved===undefined)return;
         // Historical removed/conflicted bindings can outlive their anchors.
         // Only anchors present in this note participate in its projection;
@@ -305,9 +336,16 @@ export class CoordinatedHost {
       },
       commitFinal:async(request,state,body)=>{
         try{validateFinalResponseBody(body);}catch(error){state.status='conflict';throw error;}
+        if(request.deviceCompletion){
+          const record=await this.authority.reserveHostFinal(request.id,{messageId:state.messageId??request.messageId,turnId:state.turnId??null,sequence:state.bindingCheckpoint?.sequence??0,body,phase:state.finalPhase??'interrupted'});
+          if(!record){state.detail='Waiting for the sending device to save the finished response.';return false;}
+          this.records.set(request.id,record);
+          reads.set(request.id,{epoch:record.epoch,revision:record.revision});
+          if(record.finalWriter?.actor!==record.owner)return false;
+        }
         const journal=await this.journal.read(request.id);if(!journal)throw Error('Missing durable generation original.');
         if(journal.status==='conflict'){state.status='conflict';state.detail=journal.conflicts.at(-1)?.reason;return false;}
-        if(journal.staged===undefined)await this.coordinator.result(request.id,journal.stagedDraft??journal.original,body);
+        if(journal.staged===undefined)await this.coordinator.result(request.id,request.deviceCompletion?completedSelectionDraft(journal.stagedDraft??journal.original,request.id,state.steering):journal.stagedDraft??journal.original,body);
         const result=await this.coordinator.commit(request.id);
         if(result.status==='conflict'){state.status='conflict';state.detail=result.conflicts.at(-1)?.reason;return false;}
         if(result.status!=='verified'||!result.verified)return false;
@@ -393,7 +431,9 @@ export class CoordinatedHost {
     }
     if(kind==='submit-note-edit'){
       const path=join(this.journal.root,id,'staged.md'),stat=await fs.lstat(path);if(!stat.isFile()||stat.isSymbolicLink())throw Error('Invalid staged file.');
-      await this.coordinator.stage(id,await fs.readFile(path,'utf8'),hash!);return {staged:true};
+      const draft=await fs.readFile(path,'utf8');
+      if(record.request.deviceCompletion){const lease=await this.authority.stageDevice(id,draft,hash!,()=>this.coordinator.stage(id,draft,hash!));this.records.set(id,lease);}
+      else await this.coordinator.stage(id,draft,hash!);return {staged:true};
     }
     if(kind==='repair-response'){
       const repairableAnchor=(value:NoteGeneration)=>['accepted','streaming'].includes(value.status)||value.status==='conflict'&&!value.attempt&&!value.verified&&value.finalBody!==undefined;

@@ -1,21 +1,30 @@
 import {logEvent,logFailure} from './diagnostics';
 import {explorerResponsePath,leaseExplorerResponse,loadExplorerResponses,relocateExplorerResponses,type ExplorerResponse} from './explorer-responses';
 import {legacyQuestionReply,pendingCompletionCleanup,hostedPaths,hostedRequestHash,safeNotePath,validateHostedRequest,type HostedInlineRequest,type HostedInlineState,type InlineFiles} from './hosted-inline';
-import type {InlineStartRequest} from './inline-thread';
+import type {InlineStartRequest,InlineBindingCheckpoint} from './inline-thread';
 import {sameWorkspacePath} from './folder-link';
 import {steeringBoundary,validSteeringInput,type SteeringInput} from './inline-steering';
+import {contentHash} from './completion';
+import {nativeCommitPath,readNativeCommitProof,type NativeCommitProof} from './native-response-commit';
+import {validateFinalResponseBody} from './generated-note-coordinator';
+import {responseAnchor,responseRegion} from './native-response-projection';
+import {stoppedResponseBody} from './response-stop';
 
 export const LEASE_MS=15_000;
 export const HEARTBEAT_MS=3000;
 export const LEASE_MARGIN_MS=2000;
 export type LeaseIdentity={vaultId:string;environmentId:string;workspaceRoot:string;directory:string};
 export const COORDINATED_OWNER="00000000-0000-5000-8000-000000000001";
-export interface LeaseRecord {relocations?:Array<{before:string;after:string}>;coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;responseRemovedAt?:number;stopRequestedAt?:number;discardResponse?:boolean;stoppedBody?:string;state?:HostedInlineState}
-export interface LeaseCommand {stoppedBody?:string;discardResponse?:boolean;id:string;jobId:string;actor:string;kind:'relocate'|'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';previousNotePath?:string;observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
+export interface FinalResponseIntent {checkpoint?:InlineBindingCheckpoint;turnIds?:string[];messageId:string;turnId:string|null;sequence:number;body:string;phase:'complete'|'interrupted'}
+export interface FinalResponseGrant extends FinalResponseIntent {actor:string;token:string}
+export interface LeaseRecord {preparedFinal?:{commitId:string;hash:string;proofHash:string};presenceUntil?:number;finalWriter?:FinalResponseGrant;relocations?:Array<{before:string;after:string}>;coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;responseRemovedAt?:number;stopRequestedAt?:number;discardResponse?:boolean;stoppedBody?:string;state?:HostedInlineState}
+export interface LeaseCommand {original?:string;final?:FinalResponseIntent;token?:string;proof?:NativeCommitProof;stoppedBody?:string;discardResponse?:boolean;id:string;jobId:string;actor:string;kind:'prepare-final'|'presence'|'reserve-final'|'commit-final'|'relocate'|'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';previousNotePath?:string;observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
 export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;ttlMs:number;answeredAt?:number;retryAfterMs?:number}
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export const leasePaths=(directory:string,id:string)=>({record:`${directory}/leases/${id}.json`,command:`${directory}/mailbox/${id}.json`,reply:`${directory}/replies/${id}.json`,catalog:`${directory}/lease-catalog.json`});
+export const deviceOriginalPath=(directory:string,id:string)=>{if(!uuid.test(id))throw Error('Invalid completion original identity.');return `${directory}/originals/${id}.md`;};
+export const deviceStagedPath=(directory:string,id:string,hash:string)=>{if(!uuid.test(id)||! /^[0-9a-f]{64}$/.test(hash))throw Error('Invalid staged completion identity.');return `${directory}/staged-results/${id}/${hash}.md`;};
 export const terminalLease=(record:LeaseRecord)=>record.responseRemovedAt!==undefined||!!record.state&&['complete','interrupted','conflict'].includes(record.state.status)&&!legacyQuestionReply(record.state)&&!pendingCompletionCleanup(record.request,record.state);
 
 /** The existing desktop host lock admits exactly one authority. Clients only
@@ -27,6 +36,7 @@ export class InlineLeaseAuthority {
   private explorerResponses:ExplorerResponse[]=[];
   private records=new Map<string,LeaseRecord>();
   private catalog=new Map<string,HostedInlineRequest>();
+  responsesFor(path:string){return [...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===path);}
   private explorerDirty=false;private catalogDirty=false;
   private relocations:Array<{before:string;after?:string}>=[];
   renamed(before:string,after:string){this.relocations.push({before,after});}
@@ -122,6 +132,24 @@ export class InlineLeaseAuthority {
     const reply=await this.apply({id:crypto.randomUUID(),jobId:id,actor:COORDINATED_OWNER,kind:'checkpoint',epoch:record.epoch,revision:record.revision,state});
     if(!reply.ok)throw Error(reply.error);return reply.record!;
   });}
+  /** A final grant never expires. Presence permits host fallback only BEFORE
+   * any final mutation is authorized; a slow or suspended save cannot race it. */
+  async reserveHostFinal(id:string,final:FinalResponseIntent){return this.exclusive(async()=>{
+    const reply=await this.apply({id:crypto.randomUUID(),jobId:id,actor:COORDINATED_OWNER,kind:'reserve-final',final});
+    if(!reply.ok){if(reply.error==='Waiting for the sending device.')return undefined;throw Error(reply.error);}
+    return reply.record!;
+  });}
+  async stageDevice(id:string,document:string,originalHash:string,stage:()=>Promise<unknown>){return this.exclusive(async()=>{
+    const path=leasePaths(this.identity.directory,id).record,raw=await this.files.read(path);if(!raw)throw Error('Unknown response registration.');
+    const record:LeaseRecord=JSON.parse(raw);
+    if(!record.request.deviceCompletion||record.finalWriter||record.stopRequestedAt||record.responseRemovedAt!==undefined)throw Error('The response no longer accepts staged edits.');
+    await stage();
+    const hash=contentHash(document),stagedPath=deviceStagedPath(this.identity.directory,id,hash),previous=await this.files.read(stagedPath);
+    if(previous!==undefined&&previous!==document)throw Error('The immutable staged completion changed.');
+    if(previous===undefined)await this.files.write(stagedPath,document);
+    record.state={...record.state??{requestHash:hostedRequestHash(record.request),accepted:false,notePath:record.request.notePath,status:'waiting',hashes:[record.request.initialHash],updatedAt:new Date(this.now()).toISOString()},deviceStaged:{originalHash,hash}};
+    record.revision++;await this.files.write(path,JSON.stringify(record));await this.publishCatalog(record);return record;
+  });}
   /** Intentional note removal ends delivery only. Retain the complete lease
    * and journal evidence, and never invoke the remote thread stop control. */
   async removeResponse(id:string){return this.exclusive(async()=>{
@@ -172,17 +200,73 @@ export class InlineLeaseAuthority {
         if(![2,3,4].includes(request.version)||request.id!==command.jobId||request.vaultId!==this.identity.vaultId||request.host.environmentId!==this.identity.environmentId||!sameWorkspacePath(request.host.workspaceRoot,this.identity.workspaceRoot)||request.host.directory!==directory)throw Error('The response belongs to another host or vault.');
         if(record){if(hostedRequestHash(record.request)!==hostedRequestHash(request))throw Error('This response ID already belongs to another request.');await this.publishCatalog(record);return respond(true);}
         if(command.actor!==request.initialOwner)throw Error('Only the sending instance can register a response.');
+        if(request.deviceCompletion){
+          const path=deviceOriginalPath(directory,request.id),previous=await this.files.read(path),original=command.original??previous;
+          if(typeof original!=='string'||original.length>2_000_000||contentHash(original)!==request.deviceCompletion.originalHash||previous!==undefined&&previous!==original)throw Error('The immutable device completion original changed.');
+          const region=responseRegion(original,request.id);if(!region||original.slice(region.from,region.to)!==responseAnchor(request.id))throw Error('Device completion requires its unique saved response anchor.');
+          if(previous===undefined)await this.files.write(path,original);
+        }
         const writer=request.nativeProjection?undefined:this.noteWriter(request.notePath,request.id);
         record={request,owner:request.nativeProjection?COORDINATED_OWNER:writer??command.actor,epoch:1,expiresAt:request.nativeProjection?Number.MAX_SAFE_INTEGER:this.now()+LEASE_MS,revision:0,...(request.nativeProjection?{coordinated:true,migrating:true}:{})};
+        if(request.deviceCompletion)record.presenceUntil=this.now()+LEASE_MS;
         await this.files.write(hostedPaths(directory,request.id).request,JSON.stringify(request));
         const stop=await this.files.read(hostedPaths(directory,request.id).stop);
         if(stop!==undefined){record.stopRequestedAt=this.now();try{const intent=JSON.parse(stop);record.discardResponse=intent.discardResponse===true;if(typeof intent.stoppedBody==='string')record.stoppedBody=intent.stoppedBody;}catch{/* Legacy stop files are valid. */}}
       }else{
         if(!record)throw Error('The response is not registered.');
-        if(command.kind==='observe'){
+        if(command.kind==='presence'){
+          if(!record.request.deviceCompletion||command.actor!==record.request.deviceCompletion.actor)throw Error('Only the sending device can renew completion presence.');
+          if(record.finalWriter||terminalLease(record)||record.stopRequestedAt)return respond(true);
+          record={...record,presenceUntil:this.now()+LEASE_MS,revision:record.revision+1};
+        }else if(command.kind==='reserve-final'){
+          if(!record.request.deviceCompletion||!record.coordinated)throw Error('Device completion is not supported by this response.');
+          if(command.actor!==record.request.deviceCompletion.actor&&command.actor!==COORDINATED_OWNER)throw Error('This device cannot finish this response.');
+          if(record.finalWriter){if(record.finalWriter.actor!==command.actor)throw Error('Another final writer already owns this response.');return respond(true);}
+          const stopped=!!record.stopRequestedAt||record.state?.userStopped===true;
+          const finalStop=stopped&&command.actor===COORDINATED_OWNER&&command.final?.phase==='interrupted'&&command.final.body===(record.discardResponse?'':stoppedResponseBody(record.stoppedBody??record.state?.stoppedBody??record.state?.body??''));
+          if(record.responseRemovedAt!==undefined||stopped&&!finalStop||record.state?.cleanupComplete||record.state?.status==='conflict'||record.state?.locationConflict)throw Error('The response cannot be finalized.');
+          if(command.actor===COORDINATED_OWNER&&!finalStop&&(record.presenceUntil??0)>this.now())throw Error('Waiting for the sending device.');
+          const final=command.final,messageId=record.state?.pendingMessageId??record.state?.messageId??record.request.messageId;
+          const checkpoint=final?.checkpoint,turnIds=final?.turnIds;
+          if(checkpoint&&(!final||checkpoint.sequence!==final.sequence||!Array.isArray(turnIds)||!turnIds.length||turnIds.some(id=>typeof id!=='string'||!id||id.length>200)||!turnIds.includes(checkpoint.bindings?.[messageId]?.turnId??'')||!turnIds.includes(final.turnId??'')||!checkpoint.turns?.[final.turnId??'']||!['completed','interrupted'].includes(checkpoint.turns[final.turnId!].state)))throw Error('The direct completion lacks exact lifecycle evidence.');
+          if(!final||final.messageId!==messageId||!(typeof final.turnId==='string'&&final.turnId||finalStop&&final.turnId===null)||!Number.isSafeInteger(final.sequence)||final.sequence<0||!['complete','interrupted'].includes(final.phase)||typeof final.body!=='string'||final.body.length>2_000_000||!finalStop&&record.state?.steering?.some(input=>!input.confirmed&&!turnIds?.includes(checkpoint?.bindings?.[input.messageId]?.turnId??'')))throw Error('Invalid exact-turn completion intent.');
+          validateFinalResponseBody(final.body);
+          const known=record.state?.bindingCheckpoint?.bindings?.[messageId]?.turnId;
+          if(known&&checkpoint?.bindings?.[messageId]?.turnId&&known!==checkpoint.bindings[messageId].turnId||known&&known!==final.turnId&&![...record.state?.turnIds??[],...turnIds??[]].includes(final.turnId??'')&&!finalStop)throw Error('The completion belongs to another turn.');
+          if(checkpoint){
+            const previous=record.state?.bindingCheckpoint;
+            record.state={...record.state??{requestHash:hostedRequestHash(record.request),accepted:true,status:'running',hashes:[record.request.initialHash],notePath:record.request.notePath,updatedAt:new Date(this.now()).toISOString()},turnIds,bindingCheckpoint:{...previous,...checkpoint,bindings:{...previous?.bindings,...checkpoint.bindings},starts:{...previous?.starts,...checkpoint.starts},turns:{...previous?.turns,...checkpoint.turns}},steering:record.state?.steering?.map(input=>({...input,confirmed:input.confirmed||turnIds!.includes(checkpoint.bindings?.[input.messageId]?.turnId??'')}))};
+          }
+          record={...record,finalWriter:{...final,actor:command.actor,token:crypto.randomUUID()},revision:record.revision+1};
+        }else if(command.kind==='prepare-final'||command.kind==='commit-final'){
+          const grant=record.finalWriter,proof=command.proof;
+          if(!grant||grant.actor!==command.actor||grant.token!==command.token||!proof)throw Error('The final write was not authorized for this device.');
+          if(record.state?.delivery){if(record.state.delivery.commitId===proof.commitId&&record.state.delivery.hash===proof.hash)return respond(true);throw Error('The final completion receipt changed.');}
+          if(record.responseRemovedAt!==undefined)throw Error('The response was removed.');
+          const bytes=JSON.stringify(proof),delivery={commitId:proof.commitId,hash:proof.hash,proofHash:contentHash(bytes),verifiedOnHost:false,observedBy:[command.actor]};
+          readNativeCommitProof(bytes,record.request.id,delivery);
+          if(responseRegion(proof.document,record.request.id)||grant.body&&!proof.document.includes(grant.body.replace(/\n+$/,'')))throw Error('The saved completion does not contain the granted result.');
+          const response=proof.responseRange;
+          if(!response||proof.document.slice(response.from,response.to)!=='\n'+grant.body.replace(/\n+$/,''))throw Error('The completion lacks exact generated response placement.');
+          if(record.preparedFinal&&(record.preparedFinal.commitId!==proof.commitId||record.preparedFinal.hash!==proof.hash||record.preparedFinal.proofHash!==delivery.proofHash))throw Error('The immutable prepared final save changed.');
+          const path=nativeCommitPath(directory,record.request.id,proof.commitId),previous=await this.files.read(path);
+          if(previous!==undefined&&previous!==bytes)throw Error('An immutable device commit proof changed.');
+          if(previous===undefined)await this.files.write(path,bytes);
+          if(command.kind==='prepare-final'){
+            if(record.preparedFinal)return respond(true);
+            record={...record,revision:record.revision+1,preparedFinal:{commitId:proof.commitId,hash:proof.hash,proofHash:delivery.proofHash}};
+          }
+          else{
+            if(!record.preparedFinal)throw Error('The device final-save intent was not retained before writing.');
+            record={...record,revision:record.revision+1,state:{...record.state??{requestHash:hostedRequestHash(record.request),accepted:true,notePath:record.request.notePath,hashes:[record.request.initialHash],updatedAt:new Date(this.now()).toISOString()},body:grant.body,finalBody:grant.body,turnId:grant.turnId??undefined,messageId:grant.messageId,finalPhase:grant.phase,status:grant.phase,finalSaved:true,cleanupComplete:true,finalDocumentHash:proof.hash,delivery}};
+          }
+        }else if(command.kind==='observe'){
           if(!record.coordinated||!record.state?.delivery||command.observed?.commitId!==record.state.delivery.commitId||command.observed?.hash!==record.state.delivery.hash)throw Error('Observed delivery does not match a host-verified commit.');
           record={...record,revision:record.revision+1,state:{...record.state,delivery:{...record.state.delivery,observedBy:[...new Set([...record.state.delivery.observedBy,command.actor])]}}};
           await this.files.write(paths.record,JSON.stringify(record));return respond(true);
+        }
+        if(['presence','reserve-final','prepare-final','commit-final'].includes(command.kind)){
+          await this.files.write(paths.record,JSON.stringify(record));await this.publishCatalog(record);return respond(true);
         }
         if(command.kind==='follow'&&record.state?.messageId===command.messageId&&command.previousMessageId!==command.messageId)return respond(true);
         if(command.kind==='relocate'){
@@ -252,6 +336,7 @@ export class InlineLeaseAuthority {
           else if(command.kind==='checkpoint'){
             if(record.responseRemovedAt!==undefined)throw Error('The response was removed from its note.');
             if(command.revision!==record.revision)return respond(false,'Response checkpoint changed.');
+            if(record.finalWriter&&record.finalWriter.actor!==COORDINATED_OWNER&&!(record.state?.finalSaved&&command.state?.finalSaved&&command.state.cleanupComplete))throw Error('The sending device owns the final write.');
             const state=command.state;
             if(state?.userStopped!==undefined&&typeof state.userStopped!=='boolean')throw Error('Invalid response stop checkpoint.');
             if(record.state?.userStopped&&!state?.userStopped)throw Error('The response was stopped.');
@@ -260,6 +345,7 @@ export class InlineLeaseAuthority {
             // Destination ownership belongs to native rename/relocation records.
             // A writer's cached body checkpoint must not undo that decision.
             if(record.coordinated)state.notePath=record.state?.notePath??record.request.notePath;
+            if(record.state?.deviceStaged)state.deviceStaged=record.state.deviceStaged;
             if(record.state?.pendingMessageId&&state.pendingMessageId!==record.state.pendingMessageId&&state.messageId!==record.state.pendingMessageId)throw Error('The pending continuation changed.');
             if(state.steering!==undefined&&(!Array.isArray(state.steering)||state.steering.length!==(record.state?.steering?.length??0)||state.steering.some(input=>!validSteeringInput(input)||!Array.isArray(input.before))))throw Error('Invalid steering checkpoint.');
             if(state.status==='complete'&&state.steering?.some(input=>!input.confirmed))throw Error('Waiting for steering delivery before finalizing.');

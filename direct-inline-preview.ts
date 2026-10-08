@@ -1,21 +1,21 @@
 import type {LeaseRecord} from './inline-lease';
 import type {HostedInlineRequest} from './hosted-inline';
-import {applyThreadItem,restoreInlineBindings,turnForMessage,renderInlineTurn,rememberInlineTurns,type InlineThreadState,type InlineStartRequest} from './inline-thread';
+import {applyThreadItem,inlineBindingCheckpoint,inlineTurnMessages,restoreInlineBindings,turnForMessage,renderInlineTurn,rememberInlineTurns,type InlineThreadState,type InlineStartRequest} from './inline-thread';
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs} from './inline-questions';
 import {mergeProse,observeIncoming} from './inline-steering';
 import {completionTime,finalAnswerFormat,intermediateMode} from './response-presentation';
-import {watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
+import {watchThread,readInlineSnapshot,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import {logFailure} from './diagnostics';
 
-export interface DirectInlineUpdate {request:HostedInlineRequest;messageId:string;sequence:number;body:string}
+export interface DirectInlineUpdate {request:HostedInlineRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>}
 type Watch=typeof watchThread;
 export interface PreviewClock {now():number;later(callback:()=>void,ms:number):unknown;cancel(handle:unknown):void}
 const displayClock:PreviewClock={now:()=>performance.now(),later:(callback,ms)=>setTimeout(callback,ms),cancel:handle=>clearTimeout(handle as ReturnType<typeof setTimeout>)};
 export const DIRECT_DISPLAY_INTERVAL_MS=80;
 
-/** A device consumes T3 events only for its native display. It never acquires
- * a writer lease, imports attachments, or saves generated Markdown. The host
- * remains responsible for durable generation and checked final commits. */
+/** Read-only T3 rendering and exact canonical completion evidence. The caller
+ * can request a durable final-write grant for a negotiated device completion;
+ * this preview itself never mutates the note or grants write authority. */
 export class DirectInlinePreview {
   private state:InlineThreadState={messages:[],activities:[]};
   private record:LeaseRecord;
@@ -29,6 +29,10 @@ export class DirectInlinePreview {
   private minimumSequence:number;
   private pending?:unknown;
   private lastRender=-Infinity;
+  private verifiedSequence=-1;
+  private verification?:Promise<void>;
+  private nextVerification=0;
+  private terminal=false;
   constructor(record:LeaseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
   update(record:LeaseRecord){
     this.record=record;
@@ -52,7 +56,7 @@ export class DirectInlinePreview {
     if(this.stopped)return;
     const record=this.record;
     if(!open||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.state?.status==='conflict'){this.suspend();return;}
-    if(this.monitor)return;
+    if(this.monitor){if(this.terminal&&record.request.deviceCompletion&&this.verifiedSequence<(this.state.sequence??0))this.verifyCompletion();return;}
     const generation=++this.generation;
     this.monitor=this.watch(record.request.threadId,this.access,{
       item:item=>{if(!this.stopped&&this.generation===generation)this.item(item);},
@@ -94,11 +98,32 @@ export class DirectInlinePreview {
     const conversation=this.turnIds.length>1||inputs.length?{messages:this.prose,steering:inputs,preserveHistory:questions.continued}:undefined;
     let phase=inlineQuestionPhase(this.state,turnId,this.follows);
     if(steering.some(input=>!input.confirmed||!turnForMessage(this.state,input.messageId)))phase='running';
+    // Session-ready can precede the final assistant message. Display can
+    // update immediately, but completion requires non-streaming final prose.
+    if(phase==='complete'&&(!inlineTurnMessages(this.state,turnId).length||inlineTurnMessages(this.state,turnId).at(-1)!.streaming))phase='running';
     const current={...this.state,messages:mergeProse(this.prose,this.state.messages,this.turnIds),turns:{...this.record.state?.presentationTurns,...this.state.turns}};
     if(request.finalAnswerFormat==='raw-markdown')current.turns=rememberInlineTurns(current,this.turnIds,current.turns);
     const body=renderInlineTurn(current,turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,this.state.title??request.threadTitle,{startedAt:request.createdAt,finishedAt:phase==='complete'||phase==='interrupted'?completionTime(this.state,turnId):undefined},finalAnswerFormat(request.finalAnswerFormat));
-    this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body});
+    const terminal=phase==='complete'||phase==='interrupted',completionVerified=terminal&&this.verifiedSequence>=(this.state.sequence??0);
+    this.terminal=terminal;
+    this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,turnId,turnIds:this.turnIds.slice(),phase,completionVerified,checkpoint:inlineBindingCheckpoint(this.state)});
+    if(request.deviceCompletion&&terminal&&!completionVerified)this.verifyCompletion();
     return true;
+  }
+  private verifyCompletion(){
+    if(this.verification||this.clock.now()<this.nextVerification||this.stopped)return;
+    const generation=this.generation,request=this.record.request,sequence=this.state.sequence??0;
+    let timeout:unknown;
+    const work=Promise.race([
+      this.access().then(access=>readInlineSnapshot(access,request.threadId,request.projectId,{messageIds:[this.messageId()],turnIds:this.turnIds})),
+      new Promise<never>((_resolve,reject)=>{timeout=this.clock.later(()=>reject(Error('T3 completion verification timed out.')),10_000);}),
+    ]).then(snapshot=>{
+      if(this.stopped||generation!==this.generation||snapshot.snapshotSequence<sequence)return;
+      this.state=applyThreadItem(this.state,{kind:'snapshot',snapshot}).state;
+      this.verifiedSequence=snapshot.snapshotSequence;
+      this.schedule(true);
+    }).catch(error=>{if(!this.stopped&&generation===this.generation)logFailure('stream.direct.completion-verification',error,{bindingId:request.id});}).finally(()=>{this.clock.cancel(timeout);if(this.verification===work){this.verification=undefined;this.nextVerification=this.clock.now()+1000;}});
+    this.verification=work;
   }
   suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
   dispose(){this.stopped=true;this.suspend();}

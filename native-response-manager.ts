@@ -25,6 +25,7 @@ export class NativeResponseManager {
   private records=new Map<string,LeaseRecord>();
   private titles=new Map<string,string>();
   private proofs=new Map<string,NativeCommitProof>();
+  private deviceCommits=new Map<string,{path:string;proof:NativeCommitProof}>();
   private reads=new Map<string,Promise<void>>();
   private changedDuringRead=new Set<string>();
   private lifetime=0;
@@ -91,6 +92,7 @@ export class NativeResponseManager {
       aliases.set(before,after);this.relocations.set(id,aliases);
     }
     for(const stop of this.localStops.values())stop.path=moved(stop.path);
+    for(const commit of this.deviceCommits.values())commit.path=moved(commit.path);
     if(this.stopKey&&this.localStops.size)this.app.saveLocalStorage(this.stopKey,[...this.localStops.values()]);
     for(const item of this.provisional.values())item.path=moved(item.path);
     for(const entry of this.cached.values()){const path=moved(entry.notePath);if(path!==entry.notePath){entry.notePath=path;this.dirtyPreview();}}
@@ -128,6 +130,14 @@ export class NativeResponseManager {
   }
   title(id:string,title:string){if(!title.trim()||this.titles.get(id)===title)return;this.titles.set(id,title);this.refresh();}
   private titled(id:string,body:string){const title=this.titles.get(id);return title?renameInlineHeader(body,title):body;}
+  deviceCommitted(path:string,proof:NativeCommitProof,refresh=true){
+    this.deviceCommits.set(proof.bindingId,{path,proof});this.streams.delete(proof.bindingId);this.provisional.delete(proof.bindingId);this.forgetPreview(proof.bindingId);
+    if(refresh){this.refresh();void this.flushPreviewCache();}
+  }
+  completionConflict(path:string,base:string,local:string,incoming:string,reason:string){
+    this.refresh();
+    for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.preserveConflict({base,local,incoming,reason});
+  }
   async receive(record:LeaseRecord,proofBytes?:string){
     if(!record.coordinated)return;
     const cached=this.cached.get(record.request.id);
@@ -183,7 +193,7 @@ export class NativeResponseManager {
   private normalize(path:string,document:string){
     const ids=[...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===path).map(record=>record.request.id);
     ids.push(...[...this.provisional].filter(([,item])=>item.path===path).map(([id])=>id));
-    for(const id of new Set(ids)){if(!document.includes(startMarker(id))&&!document.includes(endMarker(id)))continue;const region=responseRegion(document,id);if(region)document=document.slice(0,region.from)+responseAnchor(id)+document.slice(region.to);}
+    for(const id of new Set(ids)){if(this.deviceCommits.has(id)||!document.includes(startMarker(id))&&!document.includes(endMarker(id)))continue;const region=responseRegion(document,id);if(region)document=document.slice(0,region.from)+responseAnchor(id)+document.slice(region.to);}
     return document;
   }
   refresh(){
@@ -207,6 +217,9 @@ export class NativeResponseManager {
       }
       try{
         let adapter=this.view(view),saved=adapter?adapter.saved():view.getViewData();
+        const commits=[...this.deviceCommits.values()].filter(commit=>commit.path===view.file!.path);
+        let savedHash:string|undefined;
+        const settled=[...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===view.file!.path&&record.state?.cleanupComplete&&record.state.delivery&&!adapter?.hasMaterialized(record.request.id)&&!responseRegion(saved,record.request.id)&&((savedHash??=contentHash(saved))===record.state.delivery.hash||this.proofs.has(record.request.id)&&nativeCommitMatches(this.proofs.get(record.request.id)!,saved))).map(record=>record.request.id);
         const responses:LocalResponse[]=[...this.provisional.entries()].filter(([,item])=>item.path===view.file!.path).map(([id,item])=>({id,body:this.titled(id,item.body)}));
         for(const entry of [...this.cached.values()]){
           if(!this.reconnecting.has(entry.id)||entry.notePath!==view.file.path)continue;
@@ -217,6 +230,7 @@ export class NativeResponseManager {
         for(const record of this.records.values()){
           if(record.responseRemovedAt!==undefined||(record.state?.notePath??record.request.notePath)!==view.file.path)continue;
           const id=record.request.id;
+          if(this.deviceCommits.has(id))continue;
           if(!saved.includes(startMarker(id))&&!saved.includes(endMarker(id)))continue;
           const region=responseRegion(saved,id);
           if(!region||saved.slice(region.from,region.to)!==responseAnchor(id))continue;
@@ -233,7 +247,7 @@ export class NativeResponseManager {
           const sealed={id:stop.id,body:stop.hidden?'':stop.body};
           if(index>=0)responses[index]=sealed;else responses.push(sealed);
         }
-        if(!adapter&&responses.length){
+        if(!adapter&&(responses.length||commits.length||settled.length)){
           const file=view.file;
           adapter=new NativeResponseView(view,saved,conflict=>{
             this.app.saveLocalStorage(`t3-native-conflict:${file.path}:${Date.now()}`,conflict);
@@ -244,6 +258,11 @@ export class NativeResponseManager {
           opened.add(file.path);
         }
         if(adapter){
+          for(const id of settled)adapter.markMaterialized(id);
+          for(const {proof} of commits){
+            adapter.markMaterialized(proof.bindingId);
+            if(responseRegion(saved,proof.bindingId))adapter.preserveConflict({base:proof.document,local:proof.document,incoming:saved,reason:'An incoming note resurrected an already completed response anchor.'});
+          }
           adapter.setResponses(responses);
         }
       }catch(error){logFailure('note.projection.retry',error,{notePath:view.file.path});}
@@ -261,5 +280,5 @@ export class NativeResponseManager {
   prepare(path:string,before:string,after:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.prepareMaterialization(before,after,ids);}
   cancel(path:string){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.cancelMaterialization();}
   committed(path:string,saved:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path&&!adapter.acceptCommitted(saved,ids))throw Error('A native pane did not adopt the saved result.');}
-  dispose(){this.recoverConflict=undefined;void this.flushPreviewCache();this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.proofs.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
+  dispose(){this.recoverConflict=undefined;void this.flushPreviewCache();this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.proofs.clear();this.deviceCommits.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
 }

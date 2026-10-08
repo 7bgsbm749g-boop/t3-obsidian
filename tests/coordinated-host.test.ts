@@ -13,8 +13,9 @@ import {initialRegion} from '../inline-thread';
 import {responseAnchor} from '../native-response-projection';
 import {contentHash} from '../completion';
 import {streamBlock,streamBlocks} from '../stream-block';
+import {DeviceResponseCompletion,type DeviceGeneration} from '../device-response-completion';
 
-async function setup(native=true,liveLease=false,collapse=false){
+async function setup(native=true,liveLease=false,collapse=false,device=false){
   const root=await mkdtemp(join(tmpdir(),'coordinated-production-')),vault=join(root,'vault');await import('node:fs/promises').then(fs=>fs.mkdir(vault));
   const identity={vaultId:randomUUID(),environmentId:'host',workspaceRoot:vault,directory:'.obsidian/t3-code/inline/v1'},id=randomUUID(),actor=randomUUID(),initial=initialRegion(id);
   const request:HostedInlineRequest={version:2,nativeProjection:native,independent:true,id,initialOwner:actor,vaultId:identity.vaultId,host:identity,notePath:'Note.md',threadId:'thread',messageId:randomUUID(),projectId:'project',threadEnvironmentId:'host',initialHash:initial.bodyHash,createdAt:'2026-10-03T00:00:00Z',...(collapse?{intermediateMode:'collapse'}:{})};
@@ -25,7 +26,9 @@ async function setup(native=true,liveLease=false,collapse=false){
   const extraFiles=new Map<string,{path:string}>();
   const getFile=(path:string)=>{if(path===file.path)return file;if(!notes.has(path))return undefined;let extra=extraFiles.get(path);if(!extra){extra={path};extraFiles.set(path,extra);}return extra;};
   const app:any={workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:getFile,getMarkdownFiles:()=>[...notes.keys()].map(getFile),read:async(target:any)=>notes.get(target.path),process:async(target:any,change:any)=>{const next=change(notes.get(target.path));notes.set(target.path,next);writes++;return next;}},saveLocalStorage:()=>{}};
-  await client.command({kind:'register',jobId:id,request});
+  const original=notes.get('Note.md')!;
+  if(device){request.version=4;request.deviceCompletion={version:1,actor,originalHash:contentHash(original)};}
+  await client.command({kind:'register',jobId:id,request,...(device?{original}:{})});
   if(!native){const record=JSON.parse(storage.get(leasePaths(identity.directory,id).record)!);record.state={requestHash:hostedRequestHash(request),accepted:true,notePath:file.path,status:'running',hashes:[initial.bodyHash],updatedAt:'',bindingCheckpoint:{bindings:{[request.messageId]:{turnId:'turn',kind:'start'}}},incoming:[{messageId:randomUUID(),text:'Keep data',label:'You · Author',before:[]}]};record.expiresAt=liveLease?Date.now()+25:Date.now()-3000;storage.set(leasePaths(identity.directory,id).record,JSON.stringify(record));}
   const host=await CoordinatedHost.open(app,identity,files,authority,{journalRoot:join(root,'journal')});await host.scan();
   let completed=false;
@@ -34,6 +37,40 @@ async function setup(native=true,liveLease=false,collapse=false){
   const writer=new HostedInlineWriter(identity,host.io(base));
   return {root,app,identity,base,host,authority,client,files,storage,request,id,notes,file,writer,complete:()=>{completed=true;},writes:()=>writes,close:async()=>{writer.stop();host.stop();authority.stop();client.dispose();await rm(root,{recursive:true,force:true});}};
 }
+
+test('negotiated host keeps a final result private while the sender saves with Sync disconnected',async()=>{
+ const h=await setup(true,false,false,true);try{
+  const original=h.notes.get('Note.md')!;h.notes.delete('Note.md');
+  await h.writer.tick();let record=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
+  assert.equal(record.migrating,false);assert.equal(record.state.accepted,true);assert.equal(h.writes(),0);
+  h.complete();await h.writer.tick();record=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);
+  assert.match(record.state.finalBody,/Added/);assert.equal(record.state.finalSaved,undefined);assert.equal(h.writes(),0);
+  const reserve=await h.client.command({kind:'reserve-final',jobId:h.id,final:{messageId:h.request.messageId,turnId:'turn',sequence:10,body:record.state.finalBody,phase:'complete'}});assert.equal(reserve.ok,true);
+  let local=original+'Sender outside edit\n',localWrites=0;const journals=new Map<string,DeviceGeneration>();
+  const completion=new DeviceResponseCompletion(h.request.deviceCompletion!.actor,{read:async id=>structuredClone(journals.get(id)),write:async(id,value)=>{journals.set(id,structuredClone(value));}},{read:async()=>local,compareAndSet:async(_path,before,after)=>{if(local!==before)return false;local=after;localWrites++;return true;}},()=>{});
+  const proof=await completion.complete(reserve.record!,original,undefined,async proof=>{const prepared=await h.client.command({kind:'prepare-final',jobId:h.id,token:reserve.record!.finalWriter!.token,proof});assert.equal(prepared.ok,true,prepared.error);assert.equal(h.writes(),0);const planned=await h.host.eventContent('Note.md',proof.document);assert.ok(!planned.includes('Added **25kg**.'));});assert.ok(proof);assert.equal(localWrites,1);assert.match(local,/Sender outside edit/);assert.doesNotMatch(local,/t3-inline:/);
+  assert.equal((await h.client.command({kind:'commit-final',jobId:h.id,token:reserve.record!.finalWriter!.token,proof})).ok,true);
+  await h.host.scan();await h.writer.tick();assert.equal(h.writes(),0);assert.equal(h.notes.has('Note.md'),false);
+  const retained=(await h.host.journal.read(h.id))!;assert.equal(retained.status,'verified');assert.equal(retained.deviceProof!.hash,proof.hash);
+  h.notes.set('Note.md',local);await h.host.scan();assert.equal(h.writes(),0);
+ }finally{await h.close();}
+});
+
+test('negotiated host still completes after the sender closes before taking a final grant',async()=>{
+ const h=await setup(true,false,false,true);try{
+  await h.writer.tick();const path=leasePaths(h.identity.directory,h.id).record,record=JSON.parse((await h.files.read(path))!);record.presenceUntil=Date.now()-1;record.revision++;await h.files.write(path,JSON.stringify(record));
+  await h.host.scan();h.complete();await h.writer.tick();await h.host.scan();
+  const final=JSON.parse((await h.files.read(path))!);assert.equal(final.finalWriter.actor,COORDINATED_OWNER);assert.equal(final.state.finalSaved,true);assert.equal(final.state.cleanupComplete,true);assert.equal(h.writes(),1);assert.match(h.notes.get('Note.md')!,/Added/);
+  const late=await h.client.command({kind:'reserve-final',jobId:h.id,final:{messageId:h.request.messageId,turnId:'turn',sequence:99,body:'Late duplicate',phase:'complete'}});assert.equal(late.ok,false);assert.equal(h.writes(),1);
+ }finally{await h.close();}
+});
+
+test('negotiated early Stop removes the response without waiting for the sender presence timeout',async()=>{
+ const h=await setup(true,false,false,true);try{
+  await h.client.command({kind:'stop',jobId:h.id,discardResponse:true});await h.host.scan();await h.writer.tick();await h.host.scan();
+  const record=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!);assert.equal(record.state.cleanupComplete,true);assert.equal(record.state.finalPhase,'interrupted');assert.equal(h.writes(),1);assert.doesNotMatch(h.notes.get('Note.md')!,/t3-inline:/);
+ }finally{await h.close();}
+});
 
 test('legacy discovery excludes known native requests and retains unknown paths',async()=>{
  const h=await setup();try{

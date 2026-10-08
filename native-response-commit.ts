@@ -7,6 +7,7 @@ import type {HostedInlineState} from './hosted-inline';
 export interface NativeCommitProof {
   version:1;bindingId:string;commitId:string;hash:string;document:string;
   ranges:Array<{from:number;to:number}>;
+  responseRange?:{from:number;to:number};
 }
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export function nativeCommitPath(directory:string,id:string,commitId:string){
@@ -22,6 +23,8 @@ export function readNativeCommitProof(bytes:string,id:string,delivery:NonNullabl
     if(!Number.isSafeInteger(range.from)||!Number.isSafeInteger(range.to)||range.from<0||range.to<range.from||range.to>proof.document.length||range.from<=end)throw Error('Invalid native commit evidence ranges.');
     end=range.to;
   }
+  const response=proof.responseRange;
+  if(response&&(!Number.isSafeInteger(response.from)||!Number.isSafeInteger(response.to)||response.from<0||response.to<response.from||response.to>proof.document.length||!proof.ranges.some(range=>range.from<=response.from&&range.to>=response.to)))throw Error('Invalid native response evidence range.');
   return proof;
 }
 /** Later ordinary edits and independent commits may change the note checksum.

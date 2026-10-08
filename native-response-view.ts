@@ -143,6 +143,9 @@ export class NativeResponseView {
     this.projection=projectResponses(saved,this.responses);this.render(this.projection.display,false);this.view.requestSave();
   }
   conflictRecord(){return this.blocked;}
+  reconcileDisk(document:string){if(document!==this.diskBase){this.incoming(document,false);if(!this.blocked)this.diskBase=document;}}
+  markMaterialized(id:string){this.materialized.add(id);}
+  preserveConflict(record:NativeViewConflict){if(!this.blocked)this.block(record);}
   resolveConflict(saved:string,choice:'saved'|'local'){
     if(!this.blocked)throw Error('This native view has no preserved conflict.');
     const chosen=choice==='local'?this.blocked.local:saved;
@@ -196,10 +199,12 @@ export class NativeResponseView {
   /** Call only with a coordinator-verified saved document. Ordinary unsaved
    * edits still take part in the same conservative three-way merge. */
   acceptCommitted(saved:string,ids:readonly string[]){
-    if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
     // A native file update can load the exact verified bytes before our
     // materialization callback runs. The old projection no longer has anchors
     // in that document; it is already the authoritative committed version.
+    // A save hook can preserve a transient projection conflict during that
+    // update. Recheck its preserved versions with the same conservative merge;
+    // disk verification does not justify discarding competing ordinary edits.
     return this.resolveCommitted(saved,ids);
   }
   /** Registered only on this view's native CodeMirror instance by the lab.

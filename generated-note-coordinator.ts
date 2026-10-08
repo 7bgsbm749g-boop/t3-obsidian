@@ -11,6 +11,7 @@ import {streamBlock,removeStreamBlock} from './stream-block';
 export function validateFinalResponseBody(body:string){if(/<!-- t3-(?:inline|response):/.test(body))throw Error('A finished response cannot introduce tracking boundaries.');}
 
 export interface NoteGeneration {
+  deviceProof?:NativeCommitProof;
   journalRevision?:number;
   request:HostedInlineRequest;notePath:string;original:string;originalHash:string;
   checkpoint?:HostedInlineState;sequence?:number;stagedDraft?:string;staged?:string;finalBody?:string;
@@ -121,6 +122,7 @@ export class GeneratedNoteCoordinator {
   }
   materialization(record:NoteGeneration):NativeCommitProof {
     if(record.historyRemoval?.status==='verified')return record.historyRemoval.proof;
+    if(record.deviceProof&&record.verified?.commitId===record.deviceProof.commitId)return record.deviceProof;
     if(record.status!=='verified'||!record.verified||!record.attempt)throw Error('Native materialization requires a verified journal commit.');
     const merged=mergeSavedEdits(record.original,record.attempt.before,this.edits(record));
     if(!merged.ok||merged.text!==record.verified.document)throw Error('Native materialization does not match the verified result.');
@@ -128,7 +130,20 @@ export class GeneratedNoteCoordinator {
     const ranges=[...merged.edits].sort((a,b)=>a.from-b.from).map(edit=>{
       const from=edit.from+shift;shift+=edit.text.length-(edit.to-edit.from);return {from,to:from+edit.text.length};
     });
-    return {version:1,bindingId:record.request.id,commitId:record.verified.commitId,hash:record.verified.hash,document:record.verified.document,ranges};
+    const placed=merged.edits.at(-1)!,from=placed.from+merged.edits.filter(edit=>edit.from<placed.from).reduce((delta,edit)=>delta+edit.text.length-(edit.to-edit.from),0);
+    return {version:1,bindingId:record.request.id,commitId:record.verified.commitId,hash:record.verified.hash,document:record.verified.document,ranges,responseRange:{from,to:from+placed.text.length}};
+  }
+  /** Retain a device's verified receipt without a host note write or host
+   * observation. This also preserves checked completed-history commands. */
+  async adoptDeviceCommit(id:string,proof:NativeCommitProof){
+    const initial=await this.require(id);
+    return this.serial(initial.notePath,async()=>{
+      const record=await this.require(id);
+      if(!record.request.deviceCompletion||proof.bindingId!==id||contentHash(proof.document)!==proof.hash||record.finalBody===undefined)throw Error('Invalid device completion receipt.');
+      if(record.deviceProof){if(JSON.stringify(record.deviceProof)!==JSON.stringify(proof))throw Error('The retained device completion receipt changed.');return record;}
+      record.deviceProof=structuredClone(proof);record.verified={commitId:proof.commitId,hash:proof.hash,document:proof.document};record.status='verified';
+      await this.journal.append(id,record,'device-saved-and-verified');return record;
+    });
   }
   private async conflict(record:NoteGeneration,latest:string,reason:string){
     record.status='conflict';record.conflicts.push({original:record.original,latest,proposed:record.attempt?.expected??record.staged,reason});
@@ -217,6 +232,11 @@ export class GeneratedNoteCoordinator {
           return {from:map(from),to:map(to)};
         });
         const proof:NativeCommitProof={version:1,bindingId:id,commitId:this.id(),hash:contentHash(removal.text),document:removal.text,ranges};
+        if(base.responseRange){
+          const shift=outside.filter(edit=>edit.to<base.responseRange!.from).reduce((sum,edit)=>sum+edit.text.length-(edit.to-edit.from),0);
+          const map=(offset:number)=>offset<=removal.from?offset:offset>=removal.to?offset-(removal.to-removal.from):removal.from;
+          proof.responseRange={from:map(base.responseRange.from+shift),to:map(base.responseRange.to+shift)};
+        }
         record.status='verified';intent=record.historyRemoval={key,blockHash,before:latest,proof,status:'pending'};
         await this.journal.append(id,record,'history-removal-pending');
       }
@@ -266,6 +286,10 @@ export class GeneratedNoteCoordinator {
         return this.conflict(record,latest??'','A later note version changed the explicitly shortened response.');
       }
       if(latest===record.verified.document)return record;
+      if(record.deviceProof){
+        if(latest!==undefined&&nativeCommitMatches(record.deviceProof,latest))return record;
+        return this.conflict(record,latest??'','A later note version changed or removed a device-committed result.');
+      }
       if(latest!==undefined){
         const user=changedInterval(record.verified.document,latest);
         const generated=mergeSavedEdits(record.original,record.attempt!.before,this.edits(record));

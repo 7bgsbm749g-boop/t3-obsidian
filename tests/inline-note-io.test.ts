@@ -1,8 +1,39 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {deviceNoteIO} from '../inline-note-io';
+import {deviceNoteIO,deviceFinalNoteIO} from '../inline-note-io';
+import {nativeResponses} from '../native-response-manager';
+import {randomUUID} from 'node:crypto';
 import {completionProof,initialRegion} from '../inline-thread';
 import {responseAnchor} from '../native-response-projection';
+
+function localFinalFixture(panes=1){
+ const id=randomUUID(),file={path:'Note.md'},before='Before\n\n'+responseAnchor(id)+'\n\nAfter\n';let disk=before,writes=0,saves=0;
+ const values=Array.from({length:panes},()=>before),views=values.map((_,index)=>({file,editor:{getValue:()=>values[index]},getViewData:()=>values[index],setViewData:(text:string)=>{values[index]=text;},getMode:()=> 'source',requestSave:()=>{},save:async()=>{saves++;disk=views[index].getViewData();}}));
+ const app:any={workspace:{getLeavesOfType:()=>views.map(view=>({view}))},vault:{getFileByPath:(path:string)=>path===file.path?file:undefined,read:async()=>disk,process:async(_file:unknown,change:(value:string)=>string)=>{disk=change(disk);writes++;for(const view of views)view.setViewData(disk);return disk;}},saveLocalStorage:()=>{}};
+ const manager=nativeResponses(app);manager.preview(views[0] as any,id,'> Working preview');
+ return {id,app,manager,views,io:deviceFinalNoteIO(app,()=>true),before,edit:(text:string,index=0)=>{values[index]=text;},visible:(index=0)=>values[index],disk:()=>disk,writes:()=>writes,saves:()=>saves,setDisk:(text:string)=>{disk=text;}};
+}
+
+test('device final IO includes dirty ordinary text in one atomic save without waiting for native autosave',async()=>{
+ const h=localFinalFixture();h.edit(h.visible().replace('Before','Dirty ordinary edit'));
+ const before=(await h.io.read('Note.md'))!,after=before.replace(responseAnchor(h.id),'> Final response');
+ assert.equal(await h.io.compareAndSet('Note.md',before,after),true);assert.equal(h.writes(),1);assert.equal(h.saves(),0);assert.equal(h.disk(),after);assert.equal(h.views[0].getViewData(),after);h.manager.dispose();
+});
+
+test('divergent native panes prevent the final write and retain their separate ordinary edits',async()=>{
+ const h=localFinalFixture(2);h.edit(h.visible().replace('Before','Pane one edit'),0);h.edit(h.visible(1).replace('After','Pane two edit'),1);
+ assert.equal(await h.io.read('Note.md'),undefined);assert.equal(h.writes(),0);assert.match(h.visible(),/Pane one edit/);assert.match(h.visible(1),/Pane two edit/);h.manager.dispose();
+});
+
+test('a pane edit after planning the final write is preserved before any atomic mutation',async()=>{
+ const h=localFinalFixture(),before=(await h.io.read('Note.md'))!,after=before.replace(responseAnchor(h.id),'> Final response');h.edit(h.visible().replace('After','New outside edit'));
+ assert.equal(await h.io.compareAndSet('Note.md',before,after),false);assert.equal(h.writes(),0);assert.match(h.visible(),/New outside edit/);h.manager.dispose();
+});
+
+test('exact pending local materialization can recover before a delayed native file notification',async()=>{
+ const h=localFinalFixture(),after=h.before.replace(responseAnchor(h.id),'> Final response');h.setDisk(after);
+ await h.io.recover('Note.md',after,[h.id]);assert.equal(await h.io.read('Note.md'),after);assert.equal(h.views[0].getViewData(),after);assert.equal(h.writes(),0);h.manager.dispose();
+});
 
 test('completion checks distinguish saved proof from saved cleanup despite another stream changing the note',async()=>{
   const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',body='> Answer\n';

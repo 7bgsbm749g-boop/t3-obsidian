@@ -1,4 +1,15 @@
 import {turnForMessage,type InlineMessage,type InlineThreadState,type SelectionAnchor} from './inline-thread';
+import {responseRegion} from './native-response-projection';
+
+export function completedSelectionDraft(document:string,id:string,steering:InlineSteering[]=[]){
+  for(const input of steering){
+    if(!input.confirmed||!input.selection)continue;
+    const region=responseRegion(document,id);if(!region)throw Error('The response anchor changed before selection consumption.');
+    const range=selectionRange(document,input.selection,region);
+    if(range&&!/<!-- t3-(?:inline|response):/.test(document.slice(range.from,range.to)))document=document.slice(0,range.from)+document.slice(range.to);
+  }
+  return document;
+}
 
 /** Stored with the response checkpoint, never inferred from editable Markdown. */
 export interface InlineSteering {

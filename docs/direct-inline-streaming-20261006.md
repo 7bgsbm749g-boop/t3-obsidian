@@ -1,3 +1,5 @@
+Current completion behavior is described in [device response completion](device-response-completion-20261008.md). The implementation and evidence below describe the earlier display-only release.
+
 # Direct device streaming
 
 The coordinated response path previously disabled the device's T3 stream and

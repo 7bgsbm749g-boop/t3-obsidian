@@ -31,6 +31,25 @@ function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>
 async function start(h:ReturnType<typeof fixture>){await h.manager.receive(record());await h.manager.receive(record(other));for(const frames of h.frames)frames.length=0;}
 function neverBlank(h:ReturnType<typeof fixture>){for(const frames of h.frames)assert.ok(frames.every(frame=>frame.includes(body)),JSON.stringify(frames));}
 
+test('device completion tombstones protect a reloaded native pane from a late old response anchor',async()=>{
+ const h=fixture();h.edit(final);h.disk(final);const proof:NativeCommitProof={version:1,bindingId:id,commitId,hash:contentHash(final),document:final,ranges:[{from:final.indexOf(body),to:final.indexOf(body)+body.length}]};
+ h.manager.deviceCommitted('Note.md',proof);assert.ok(h.manager.view(h.views[0] as any));
+ h.edit(h.visible().replace('Before','New ordinary edit'));
+ h.views[0].setViewData(before);assert.equal(h.conflicts.length,1);assert.match(h.conflicts[0].local,/New ordinary edit/);assert.equal(h.conflicts[0].incoming,before);
+ await assert.rejects(h.views[0].save(),/resurrected/);h.manager.dispose();
+});
+
+test('a stale anchor already on disk at reload is preserved against the retained verified device result',()=>{
+ const h=fixture();const proof:NativeCommitProof={version:1,bindingId:id,commitId,hash:contentHash(final),document:final,ranges:[{from:final.indexOf(body),to:final.indexOf(body)+body.length}]};
+ h.manager.deviceCommitted('Note.md',proof);assert.equal(h.conflicts.length,1);assert.equal(h.conflicts[0].local,final);assert.equal(h.conflicts[0].incoming,before);h.manager.dispose();
+});
+
+test('a reopened observer pane with a proven saved result also rejects late stale anchors',async()=>{
+ const h=fixture();h.edit(final);h.disk(final);const proof=evidence(),done=completed();done.state!.delivery!.proofHash=proof.proofHash;
+ await h.manager.receive(done,proof.bytes);assert.ok(h.manager.view(h.views[0] as any));
+ h.views[0].setViewData(before);assert.equal(h.conflicts.length,1);assert.equal(h.conflicts[0].local,final);assert.equal(h.conflicts[0].incoming,before);h.manager.dispose();
+});
+
 async function previewCheckpoint(){
   const h=fixture(2);let saved:unknown;
   h.manager.configurePreviewCache('vault',undefined,async value=>{saved=structuredClone(value);});
