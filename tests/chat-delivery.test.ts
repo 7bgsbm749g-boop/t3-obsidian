@@ -709,7 +709,7 @@ test('Enter on the destination dialog uses the purple new or last used thread bu
   }finally{h.plugin.onunload();}
 });
 
-test('existing-thread picker uses the nested folder project even when the note remembers a vault thread',async()=>{
+test('existing-thread picker keeps the displayed remembered project across folder-link changes',async()=>{
   const h=await chatHarness();
   try{
     const nested={id:'nested-project',title:'Nested project',workspaceRoot:'/projects/nested',connectionId:project.connectionId};
@@ -724,15 +724,63 @@ test('existing-thread picker uses the nested folder project even when the note r
     await h.plugin.openChat('Continue in the nested project');
     await h.modals.at(-1).choose(true);
     const picker=h.modals.at(-1);
-    assert.equal(picker.getItems().map((thread:any)=>thread.id).join(','),'nested-thread');
+    assert.equal(picker.getItems().map((thread:any)=>thread.id).join(','),'vault-thread');
     h.plugin.settings.folderLinks.at(-1).projectId=project.id;
-    await assert.rejects(picker.choose(picker.getItems()[0]),/linked project changed/i);
-    assert.equal(h.commands.length,0);
-    h.plugin.settings.folderLinks.at(-1).projectId=nested.id;
     await picker.choose(picker.getItems()[0]);
     assert.equal(h.commands.length,1);
-    assert.equal(h.commands[0].threadId,'nested-thread');
+    assert.equal(h.commands[0].threadId,'vault-thread');
     assert.match(h.commands[0].message.text,/Destination note path: "\/projects\/notes\/Notes\/Inner\/Subfolder\/Draft.md"/);
+  }finally{h.plugin.onunload();}
+});
+
+for(const surface of ['ask','note'])for(const action of ['new','default'])for(const target of ['vault','other'])test(`unlinked folder ${surface} ${action} keeps the displayed ${target} project`,async()=>{
+  const h=await chatHarness();
+  try{
+    const other={...project,id:'remembered-project',title:'Remembered project',workspaceRoot:'/projects/remembered'};
+    h.plugin.settings.directProjects.push(other);h.setProjects([project,other]);
+    const selected=target==='vault'?project:other,path='Unlinked/Subfolder/Diagnose.md';
+    h.plugin.settings.noteThreads.push({notePath:path,threadId:'remembered-thread',projectId:selected.id,workspaceRoot:selected.workspaceRoot,connectionId:selected.connectionId,selectedAt:'2026-10-08T00:00:00Z'});
+    h.setThreads([{id:'remembered-thread',projectId:selected.id,title:'Remembered thread'}]);
+    h.setSnapshotOverride(()=>({thread:{id:'remembered-thread',projectId:selected.id,title:'Remembered thread',messages:[],activities:[]}}));
+    h.setActiveNote(path);h.setActiveEditorView(false);h.plugin.settings.inlineStreaming.enabled=false;
+    h.plugin.app.vault.read=async()=> 'Bounded full-note prompt';
+    h.plugin.pickFolderProject=async()=>{throw Error('Unexpected project creation');};
+    const links=JSON.stringify(h.plugin.settings.folderLinks);
+    if(surface==='ask')await h.plugin.openChat('Bounded question');
+    else h.plugin.openNoteSend({path,basename:'Diagnose',extension:'md',stat:{ctime:123}});
+    const modal=h.modals.at(-1);await modal.ready;
+    assert.equal(modal.contentEl.children[0].children[0].text,selected.title);
+    if(target==='vault'){
+      modal.contentEl.children[0].children[0].click();
+      const picker=h.modals.at(-1);picker.onChooseItem(picker.getItems().find((item:any)=>item.key==='vault:root'));
+      const destination=await modal.ready;assert.equal(destination.threadId,'remembered-thread');assert.equal(destination.unavailable,undefined);
+    }
+    await modal.choose(action);
+    assert.equal(h.notices.some((notice:string)=>notice.includes('Unexpected project creation')),false);
+    assert.deepEqual(h.commands.map(c=>c.type),action==='new'?['thread.create','thread.turn.start']:['thread.turn.start']);
+    if(action==='new')assert.equal(h.commands[0].projectId,selected.id);
+    else assert.equal(h.commands[0].threadId,'remembered-thread');
+    assert.equal(JSON.stringify(h.plugin.settings.folderLinks),links);
+    // Reopen after delivery: a second New thread must use the same displayed project.
+    if(surface==='ask')await h.plugin.openChat('Second question');
+    else h.plugin.openNoteSend({path,basename:'Diagnose',extension:'md',stat:{ctime:123}});
+    const reopened=h.modals.at(-1);await reopened.ready;
+    assert.equal(reopened.contentEl.children[0].children[0].text,selected.title);
+    await reopened.choose('new');assert.equal(h.commands.at(-2).type,'thread.create');assert.equal(h.commands.at(-2).projectId,selected.id);
+  }finally{h.plugin.onunload();}
+});
+
+test('unlinked note without history uses the vault project unless New project is selected',async()=>{
+  const h=await chatHarness();
+  try{
+    h.setActiveNote('Unlinked/Fresh.md');h.plugin.settings.inlineStreaming.enabled=false;
+    let created=0;h.plugin.pickFolderProject=async()=>{created++;return project;};
+    await h.plugin.openChat('Use displayed project');const modal=h.modals.at(-1);
+    assert.equal(modal.contentEl.children[0].children[0].text,project.title);
+    await modal.choose('new');assert.equal(created,0);assert.equal(h.commands[0].projectId,project.id);
+    await h.plugin.openChat('Explicit folder setup');const next=h.modals.at(-1);next.contentEl.children[0].children[0].click();
+    const picker=h.modals.at(-1);picker.onChooseItem(picker.getItems().find((item:any)=>item.key==='folder:new'));
+    await next.choose('new');assert.equal(created,1);
   }finally{h.plugin.onunload();}
 });
 
@@ -877,6 +925,9 @@ test('unlinked mobile sends choose an external workspace and descendants inherit
     h.plugin.pickFolderProject=async()=>{const location=await h.plugin.projectLocation({id:project.connectionId,name:'Laptop'});try{return await location.create('/workspaces/unlinked','Unlinked');}finally{location.close();}};
     h.setActiveNote('Unlinked/draft.md');await h.plugin.openChat('Edit draft');
     const modal=h.modals.at(-1);
+    assert.equal(modal.contentEl.children[0].children[0].text,project.title);
+    modal.contentEl.children[0].children[0].click();
+    const projects=h.modals.at(-1);projects.onChooseItem(projects.getItems().find((item:any)=>item.key==='folder:new'));
     assert.equal(modal.contentEl.children[0].children[0].text,'New project: Unlinked');
     assert.equal(h.commands.length,0);
     assert.equal(modal.host.getProjectChoices()[0].key,'folder:new');

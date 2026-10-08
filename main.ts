@@ -992,7 +992,7 @@ export default class SendToT3 extends Plugin {
       if(images.markdown.length+this.messageFooter(this.noteContext(file).absolutePath??file.path).length+(jobOptions.inline.enabled?INLINE_REPLY_INSTRUCTION.length+2:0)>120_000)throw Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
       const saved=this.noteThread(file.path);
       const chosen=expectedProjectKey?undefined:threadId?this.previousNoteThread(file.path,threadId):!newThread?saved:undefined;
-      const {project,link}=await this.chatTarget(file.path,chosen,Boolean(newThread||expectedProjectKey),overrideKey);
+      const {project,link}=await this.chatTarget(file.path,chosen,Boolean(newThread||expectedProjectKey),overrideKey??expectedProjectKey);
       if(expectedProjectKey&&projectKey(project)!==expectedProjectKey)throw Error('The folder’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
       await this.send(file,project,{threadId,newThread,projectOverrideKey:overrideKey,folderPicker:Boolean(expectedProjectKey),folderLink:link,prepared:{content,images},jobOptions,throwOnError:true});
@@ -1029,10 +1029,15 @@ export default class SendToT3 extends Plugin {
   private needsFolderProject(notePath?:string):boolean {
     return Boolean(notePath?.includes('/')&&!folderLinkForPath(this.settings.folderLinks.filter(link=>link.folderPath!=='/'),notePath));
   }
-  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'getDefaultDestination'|'onProjectChange'>{
+  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getDefaultProjectKey'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'getDefaultDestination'|'onProjectChange'>{
     // Capture the destination once. A later editor update must not redirect a send.
     const responseId=inline&&inlineSteeringTarget(inline.editor.getValue(),inline.editor.posToOffset(inline.editor.getCursor()),inline.responseId);
     const remembered=this.noteThread(note?.path);
+    const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
+    const linkKey=(link:FolderLink)=>`${link.connectionId?link.connectionId+':':''}${link.projectId}`;
+    const rememberedKey=remembered?`${remembered.connectionId?remembered.connectionId+':':''}${remembered.projectId}`:undefined;
+    const selectedKey=rememberedKey??(link?linkKey(link):VAULT_PROJECT);
+    const canonicalKey=(key?:string)=>key===VAULT_PROJECT?this.settings.folderLinks.find(item=>item.folderPath==='/')&&linkKey(this.settings.folderLinks.find(item=>item.folderPath==='/')!):key;
     const projectName=(key?:string)=>{
       const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
       if(key===VAULT_PROJECT)return this.settings.folderLinks.find(item=>item.folderPath==='/')?.projectTitle??this.app.vault.getName();
@@ -1040,20 +1045,21 @@ export default class SendToT3 extends Plugin {
       if(key)return [...this.projects(),...this.settings.directProjects,...this.settings.projects].find(project=>projectKey(project)===key)?.title??'Unavailable project';
       const remembered=this.noteThread(note?.path);
       if(remembered)return [...this.settings.directProjects,...this.settings.projects].find(project=>project.id===remembered.projectId&&sameWorkspacePath(project.workspaceRoot,remembered.workspaceRoot))?.title??`T3 project ${remembered.projectId.slice(0,8)}`;
-      return this.needsFolderProject(note?.path)?`New project: ${note!.path.split('/').at(-2)}`:link?.projectTitle??this.app.vault.getName();
+      return link?.projectTitle??this.app.vault.getName();
     };
     return {
       getInlineDefaults:()=>({...this.settings.inlineStreaming}),
       steering:!!responseId,
       getNotePath:()=>note?.path??'No note open',
       getProjectName:projectName,
+      getDefaultProjectKey:()=>responseId&&!remembered?undefined:selectedKey,
       getTargetDescription:key=>`${note?.path??'No note open'} → ${projectName(key)}`,
       onProjectChange:listener=>this.watchProjects(listener),
       getProjectChoices:()=>{
         const root=this.settings.folderLinks.find(item=>item.folderPath==='/');
         return [...(this.needsFolderProject(note?.path)?[{key:NEW_FOLDER_PROJECT,label:`New project: ${note!.path.split('/').at(-2)}`}]:[]),{key:VAULT_PROJECT,label:`Vault project: ${root?.projectTitle??this.app.vault.getName()}`},...this.projects().filter(project=>!root||project.id!==root.projectId||(project.connectionId??'')!==root.connectionId||!sameWorkspacePath(project.workspaceRoot,root.workspaceRoot)).map(project=>({key:projectKey(project),label:this.projectChoiceLabel(project)}))];
       },
-      getDefaultThread:key=>!key||remembered&&key===`${remembered.connectionId?remembered.connectionId+':':''}${remembered.projectId}`?remembered?.threadId:undefined,
+      getDefaultThread:key=>!key||canonicalKey(key)===rememberedKey?remembered?.threadId:undefined,
       getDefaultDestination:async key=>{
         try{
           const hosted=responseId?await this.steeringRecord(responseId):undefined;
@@ -1064,7 +1070,7 @@ export default class SendToT3 extends Plugin {
           const threadId=source?.threadId??remembered?.threadId;
           if(!threadId)throw Error('This response has not reached a T3 thread. Choose New thread or Existing thread…');
           const project=source?await this.recoveryProject(source.projectId!,hosted?.record.request.threadEnvironmentId??job?.connection?.environmentId):this.projectForNoteThread(remembered!);
-          if(key&&key!==projectKey(project))throw Error('This conversation belongs to another project. Choose New thread or Existing thread…');
+          if(key&&canonicalKey(key)!==projectKey(project))throw Error('This conversation belongs to another project. Choose New thread or Existing thread…');
           const thread=await this.readChatThread(this.connection(project),project,threadId);
           const active=threadIsActive(thread);
           if(thread.hasPendingApprovals||thread.hasPendingUserInput)throw Error('This conversation is waiting for approval or input. Resolve it in T3 before sending.');
@@ -1081,7 +1087,7 @@ export default class SendToT3 extends Plugin {
     const send=(text:string,options:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions})=>this.sendResolvedChat(text,note,inline,answerOnly,options);
     const host:ChatHost={...this.destinationContext(note,inline),
       sendChat:(text,key,resolve,_back,destination)=>send(text,{threadId:destination?.threadId,responseId:destination?.responseId,expectedProjectKey:destination?.projectKey,projectOverrideKey:key,jobOptions:resolve?.()}),
-      sendToNew:(text,key,resolve)=>send(text,{newThread:true,projectOverrideKey:key,jobOptions:resolve?.()}),
+      sendToNew:(text,key,resolve)=>send(text,{newThread:true,projectOverrideKey:key??VAULT_PROJECT,jobOptions:resolve?.()}),
       sendToExisting:(text,key,resolve,back)=>this.openChatThreads(text,note,inline,answerOnly,key,resolve,back),
     };
     return openChatFlow(this.app,host,prompt);
@@ -1538,7 +1544,7 @@ export default class SendToT3 extends Plugin {
       const initialImages=options?.barePrompt||options?.sourceContext?.anchor?undefined:await this.prepareImages(prompt,note?.path??'',true);
       if((initialImages||!/!\[/.test(prompt))&&(initialImages?.markdown??prompt).length+(options?.barePrompt?0:this.messageFooter(note?.absolutePath??note?.path??'(no note open)').length)>120_000)throw Error('The message and note path exceed T3’s 120,000-character limit. Shorten the message before sending.');
       const historical=note&&options?.threadId&&!options.expectedProjectKey?this.previousNoteThread(note.path,options.threadId):undefined;
-      let {project,link}=await this.chatTarget(note?.path,historical,Boolean(options?.newThread||options?.expectedProjectKey),options?.projectOverrideKey);
+      let {project,link}=await this.chatTarget(note?.path,historical,Boolean(options?.newThread||options?.expectedProjectKey),options?.projectOverrideKey??options?.expectedProjectKey);
       if(options?.expectedProjectKey&&projectKey(project)!==options.expectedProjectKey)throw Error('The note’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
       const connection=this.connection(project);

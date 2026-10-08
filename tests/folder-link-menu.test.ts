@@ -193,19 +193,19 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
     assert.equal(sent.length,1);assert.equal(sent[0].file,file);assert.equal(sent[0].project.id,'nested');assert.equal(sent[0].options.threadId,undefined);
     h.plugin.settings.noteThreads.push({notePath:'Notes/Inner/note.md',threadId:'previous-parent-thread',projectId:h.project.id,workspaceRoot:h.project.workspaceRoot,connectionId:'c',selectedAt:'2026-09-28T00:00:00Z'});
     h.setThreads([{id:'thread',projectId:'nested',title:'Existing',updatedAt:'2026-09-19',session:{status:'running',activeTurnId:'turn'},latestTurn:{state:'running'}},
-      {id:'foreign',projectId:h.project.id,title:'Wrong project',updatedAt:'2026-09-20'},
+      {id:'foreign',projectId:h.project.id,title:'Remembered project',updatedAt:'2026-09-20'},
       {id:'archived',projectId:'nested',title:'Archived',archivedAt:'2026-09-19'}]);
     if(mobile){h.plugin.openNoteSend(file);await h.button(h.modals.at(-1),'Existing thread…').click();}
     else {h.plugin.openNoteSend(file);await h.button(h.modals.at(-1),'Existing thread…').click();}
     const picker=h.modals.at(-1);assert.equal(picker.getItems().length,1);
-    assert.equal(picker.getItems()[0].id,'thread');
-    assert.match(picker.getItemText(picker.getItems()[0]),/Existing · Active/);
+    assert.equal(picker.getItems()[0].id,'foreign');
+    assert.match(picker.getItemText(picker.getItems()[0]),/Remembered project · Idle/);
     await picker.onChooseItem(picker.getItems()[0]);
-    assert.equal(sent.length,2);assert.equal(sent[1].options.threadId,'thread');assert.equal(sent[1].project.id,'nested');
+    assert.equal(sent.length,2);assert.equal(sent[1].options.threadId,'foreign');assert.equal(sent[1].project.id,h.project.id);
     h.plugin.settings.folderLinks[1].projectId=h.project.id;
     await picker.onChooseItem(picker.getItems()[0]);
-    assert.equal(sent.length,2,'Changing the link while choosing a thread must not send to a stale target');
-    assert.match(h.notices.at(-1)!,/linked project changed/i);
+    assert.equal(sent.length,3,'Changing a folder link does not change the displayed project choice');
+    assert.equal(sent[2].project.id,h.project.id);
   }finally{h.plugin.onunload();}
 });
 
@@ -214,7 +214,7 @@ test('unlinked and root notes open the project-name destination dialog on deskto
   try{
     await h.fileMenu('Unlinked/note.md',false).menu.items[0].callback();
     let modal=h.modals.at(-1);
-    assert.equal(modal.host.getProjectName(),'New project: Unlinked');
+    assert.equal(modal.host.getProjectName(),'QLO2');
     assert.equal(modal.host.getProjectChoices().slice(0,2).map((item:any)=>item.key).join(','),'folder:new,vault:root');
     modal.close();
     h.plugin.settings.folderLinks=[{id:'root',folderPath:'/',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot,connectionId:'c',self:false}];

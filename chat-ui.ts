@@ -18,6 +18,7 @@ export interface ChatHost {
   busy?:boolean;
   getNotePath():string;
   getProjectName(projectKey?:string):string;
+  getDefaultProjectKey?():string|undefined;
   getTargetDescription(projectKey?:string):string;
   onProjectChange?(listener:()=>void):()=>void;
   getProjectChoices():{key:string;label:string}[];
@@ -74,7 +75,7 @@ class SendDestinationModal extends Modal {
   private field?:HTMLTextAreaElement;
   private projectKey?:string;
   private composing:boolean;
-  constructor(app:App,private host:ChatHost,private prompt?:string){super(app);this.composing=prompt===undefined;}
+  constructor(app:App,private host:ChatHost,private prompt?:string){super(app);this.composing=prompt===undefined;this.projectKey=host.getDefaultProjectKey?.();}
   onOpen(){
     this.opened=true;const revision=++this.revision;
     logEvent('ui.destination.opened',{notePath:this.host.getNotePath(),steering:this.host.steering,composing:this.composing,projectKey:this.projectKey});
@@ -113,6 +114,7 @@ class SendDestinationModal extends Modal {
         this.checkingDefault=true;
         this.defaultDisabled=true;button.setDisabled(true);detail.setText('Checking the selected T3 conversation…');
         this.ready=this.host.getDefaultDestination(this.projectKey).catch(()=>({label:'Thread unavailable',unavailable:true,detail:'Cannot check this conversation. Reconnect T3 or choose another thread.'})).then(destination=>{
+          if(this.opened&&revision===this.revision&&this.projectKey===undefined&&'projectKey' in destination&&destination.projectKey){this.projectKey=destination.projectKey;projectButton.setText(this.host.getProjectName(this.projectKey));}
           if(this.opened&&revision===this.revision){this.defaultDisabled=Boolean(destination.unavailable);button.setButtonText(destination.label).setDisabled(Boolean(this.host.busy||this.defaultDisabled));detail.setText(destination.detail??'');}
           return destination;
         });
@@ -141,7 +143,8 @@ class SendDestinationModal extends Modal {
     const resolve=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
     const returnToDraft=()=>this.open();
     try{
-      const destination=target==='default'&&this.checkingDefault?await this.ready:undefined;
+      const checked=this.checkingDefault&&(target==='default'||this.projectKey===undefined)?await this.ready:undefined;
+      const destination=target==='default'?checked:undefined;
       if(!this.opened||revision!==this.revision)return;
       if(destination?.unavailable)throw new RequestDeliveryError(destination.detail??'This conversation is unavailable. Choose another thread.',false);
       this.close();
