@@ -42,7 +42,7 @@ export interface DeviceInlineIO {
 }
 type SnapshotRefresh={epoch:number;startedAt:number;work:Promise<InlineThreadState|undefined>;cancel(error:Error):void};
 type Runtime={original?:string;finalUpdate?:DirectInlineUpdate;finalWork?:Promise<void>;nextFinal?:number;nextPresence?:number;finalFailure?:string;record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;maintenanceFailures?:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void};proof?:{hash:string;bytes:string};observedBytes?:string;observedRecord?:LeaseRecord};
-type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;close():void;discovery?:Promise<void>;lastDiscovery:number;responses:ExplorerResponse[]};
+type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;close():void;discovery?:Promise<void>;lastDiscovery:number;priorityDiscovery?:Promise<void>;priorityKey?:string;lastPriorityDiscovery?:number;responses:ExplorerResponse[]};
 const hostKey=(target:InlineHostTarget)=>JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);
 const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...state,updatedAt:''}):'';
 
@@ -138,10 +138,41 @@ export class DeviceInlineManager {
     if(!reply.ok||!reply.record)throw Error(reply.error??'Could not attach the steering message.');
     this.receiveRecord(host,reply.record);this.tick();
   }
-  discover(targets:InlineHostTarget[]){
+  /** App return starts a new read-only feed without the old retry deadline.
+   * Writer grants, response identity and applied event cursors remain intact. */
+  resume(targets:InlineHostTarget[],priorityIds:readonly string[]=[]){
+    if(this.stopped)return;
+    for(const host of this.hosts.values()){host.lastDiscovery=-Infinity;host.priorityKey=undefined;}
+    for(const runtime of this.jobs.values()){
+      const record=runtime.record;
+      if(!record.coordinated)continue;
+      const open=this.io.isOpen(record.state?.notePath??record.request.notePath)||!!this.io.completeResponse&&record.request.deviceCompletion?.actor===(this.io.completionActor??this.actor);
+      this.previews.get(record.request.id)?.reconnect(open);
+    }
+    this.discover(targets,priorityIds);this.tick();
+  }
+  private async discoverResponse(host:Host,id:string){
+    if(this.stopped||this.jobs.has(id))return;
+    const bytes=await host.files.read(leasePaths(host.target.directory,id).record);if(!bytes||this.stopped)return;
+    const record:LeaseRecord=JSON.parse(bytes),request=validateHostedRequest(record.request);
+    if(request.id!==id||![2,3,4].includes(request.version)||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(host.target))return;
+    const path=await this.location(record);if(path===undefined)return;
+    const document=await this.io.readNote(path);
+    if(this.stopped||document===undefined||!this.available(record,document))return;
+    this.receiveRecord(host,record);this.tick();
+  }
+  discover(targets:InlineHostTarget[],priorityIds:readonly string[]=[]){
     if(this.stopped)return;
     for(const target of targets)this.host(target);
     for(const host of this.hosts.values()){
+      // Restored previews already identify their exact records. Completed
+      // responses leave the active catalog, so recover them by ID as well.
+      const ids=[...new Set(priorityIds)].filter(id=>/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)&&!this.jobs.has(id)),key=ids.join(',');
+      if(ids.length&&!host.priorityDiscovery&&(host.priorityKey!==key||this.now()-(host.lastPriorityDiscovery??-Infinity)>=3000)){
+        host.priorityKey=key;host.lastPriorityDiscovery=this.now();
+        const work=Promise.allSettled(ids.map(id=>this.discoverResponse(host,id))).then(()=>{});
+        host.priorityDiscovery=work;void work.finally(()=>{if(host.priorityDiscovery===work)host.priorityDiscovery=undefined;});
+      }
       if(host.discovery||this.now()-host.lastDiscovery<3000)continue;
       host.lastDiscovery=this.now();
       const work=(async()=>{
@@ -160,12 +191,7 @@ export class DeviceInlineManager {
           // Already materialized history needs no lease body or transport read.
           const summary=host.responses.find(response=>response.id===request.id);
           if(summary&&summary.complete&&!summary.active&&!summary.input){const note=await this.io.readNote(request.notePath);if(note===undefined||!hasResponseMarkers(note,request.id))return;}
-          const bytes=await host.files.read(leasePaths(host.target.directory,request.id).record);if(!bytes||this.stopped)return;
-          const record:LeaseRecord=JSON.parse(bytes);
-          const path=await this.location(record);if(path===undefined)return;
-          const document=await this.io.readNote(path);
-          if(document===undefined||!this.available(record,document))return;
-          this.receiveRecord(host,record);
+          await this.discoverResponse(host,request.id);
         }));
         this.tick();
       })();host.discovery=work;void work.finally(()=>{host.discovery=undefined;}).catch(()=>{});

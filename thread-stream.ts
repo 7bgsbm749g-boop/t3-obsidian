@@ -63,7 +63,7 @@ export async function readInlineEvents(access:ThreadAccess,threadId:string,after
 
 /** The Effect RPC stream stays open until stopped. Every reconnect asks for a
  * fresh snapshot, so lost deltas cannot duplicate text or leave a gap. */
-export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets,replay?:{afterSequence:()=>number|undefined;pollSnapshots?:boolean}) {
+export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets,replay?:{afterSequence:()=>number|undefined;pollSnapshots?:boolean;pollImmediately?:boolean}) {
   let stopped=false,socket:WebSocket|undefined,timer:ReturnType<typeof setTimeout>|undefined,rotation:ReturnType<typeof setTimeout>|undefined,pollTimer:ReturnType<typeof setTimeout>|undefined,attempt=0;
   let access:ThreadAccess|undefined;
   const closeAccess=(reason:ThreadAccessCloseReason)=>{if(pollTimer)clearTimeout(pollTimer);pollTimer=undefined;const old=access;access=undefined;if(old?.close)void Promise.resolve(old.close(reason)).catch(()=>{});};
@@ -113,6 +113,9 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         finally{polling=false;schedulePoll(pollDelay);}
       };
       const opening=setTimeout(()=>fail(Error('T3 thread stream did not connect.')),15_000);
+      // Native recovery can read current text while the new socket connects.
+      // Hosts with their own canonical loop still opt out of this poll entirely.
+      if(replay?.pollImmediately)schedulePoll(0);
       ws.onopen=()=>{
         clearTimeout(opening);if(stopped){ws.close();return;}
         logEvent('stream.connected',{threadId});attempt=0;
@@ -120,7 +123,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         ws.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,reasoningMessages:true,...(replay?{afterSequence:replay.afterSequence(),requestCompletionMarker:true}:{})},headers:[]}));
         // Subscription hosts already own a full canonical polling loop. A second
         // recent-history poll would repeatedly replace it with partial history.
-        schedulePoll(1200);
+        schedulePoll(replay?.pollImmediately?0:1200);
       };
       ws.onmessage=message=>{
         try{

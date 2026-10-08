@@ -371,7 +371,18 @@ export default class SendToT3 extends Plugin {
       const queueNative=()=>{if(queued)return;queued=true;queueMicrotask(()=>{queued=false;refreshNative();});};
       this.registerEvent(this.app.workspace.on('layout-change',queueNative));
       this.registerEvent(this.app.workspace.on('file-open',queueNative));
-      const tick=()=>{if(performance.now()>=nextNativeRefresh)refreshNative();this.deviceInline?.tick();this.deviceInline?.discover(this.inlineTargets);};
+      let lastResume=-Infinity,lastTick=Date.now();
+      const resume=()=>{
+        if(this.stopped||document.hidden)return;
+        const now=performance.now();if(now-lastResume<250)return;lastResume=now;
+        refreshNative();this.deviceInline?.resume(this.inlineTargets,nativeResponses(this.app).reconnectingResponseIds());
+      };
+      if(typeof document.addEventListener==='function')this.registerDomEvent(document,'visibilitychange',()=>{if(!document.hidden)resume();});
+      if(typeof window.addEventListener==='function'){this.registerDomEvent(window,'focus',resume);this.registerDomEvent(window,'online',resume);}
+      const tick=()=>{
+        const now=Date.now();if(now-lastTick>2000)resume();lastTick=now;
+        if(performance.now()>=nextNativeRefresh)refreshNative();this.deviceInline?.tick();this.deviceInline?.discover(this.inlineTargets,nativeResponses(this.app).reconnectingResponseIds());
+      };
       tick();this.registerInlineInterval(tick,150);
       const remember=()=>{if(this.settings.folderLinks.some(link=>link.folderPath==='/'))void this.inlineHostTarget().then(target=>this.rememberInlineTarget(target)).catch(()=>{});};
       remember();this.registerInterval(window.setInterval(remember,5000));

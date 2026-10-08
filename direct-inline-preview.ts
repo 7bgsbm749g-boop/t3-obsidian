@@ -61,7 +61,7 @@ export class DirectInlinePreview {
     this.monitor=this.watch(record.request.threadId,this.access,{
       item:item=>{if(!this.stopped&&this.generation===generation)this.item(item);},
       reconnecting:error=>{if(!this.stopped&&this.generation===generation)logFailure('stream.direct.reconnecting',error,{bindingId:record.request.id});},
-    },undefined,()=>({messageIds:[this.messageId(),...this.record.state?.steering?.map(input=>input.messageId)??[]],turnIds:this.turnIds}),{afterSequence:()=>this.state.sequence??0});
+    },undefined,()=>({messageIds:[this.messageId(),...this.record.state?.steering?.map(input=>input.messageId)??[]],turnIds:this.turnIds}),{afterSequence:()=>this.state.sequence??0,pollImmediately:true});
   }
   private messageId(){return this.record.state?.pendingMessageId??this.record.state?.messageId??this.record.request.messageId;}
   private item(item:ThreadStreamItem){
@@ -125,6 +125,7 @@ export class DirectInlinePreview {
     }).catch(error=>{if(!this.stopped&&generation===this.generation)logFailure('stream.direct.completion-verification',error,{bindingId:request.id});}).finally(()=>{this.clock.cancel(timeout);if(this.verification===work){this.verification=undefined;this.nextVerification=this.clock.now()+1000;}});
     this.verification=work;
   }
-  suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
+  reconnect(open:boolean){if(this.stopped)return;this.suspend();this.tick(open);}
+  suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;this.verification=undefined;this.nextVerification=0;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
   dispose(){this.stopped=true;this.suspend();}
 }
