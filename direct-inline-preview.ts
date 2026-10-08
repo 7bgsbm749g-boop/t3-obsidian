@@ -35,6 +35,7 @@ export class DirectInlinePreview {
   private terminal=false;
   constructor(record:LeaseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
   update(record:LeaseRecord){
+    if(record.epoch<this.record.epoch||record.epoch===this.record.epoch&&record.revision<this.record.revision)return;
     this.record=record;
     if(record.responseRemovedAt!==undefined){this.dispose();return;}
     if(record.state?.status==='conflict')this.suspend();
@@ -47,6 +48,7 @@ export class DirectInlinePreview {
     this.follows??=record.state?.questionFollows;
     this.incoming??=record.state?.incoming;
   }
+  get notePath(){return this.record.state?.notePath??this.record.request.notePath;}
   delivery(delivery:InlineStartRequest){
     if(this.stopped)return;
     this.state=restoreInlineBindings(this.state,{starts:{[delivery.messageId]:delivery}});

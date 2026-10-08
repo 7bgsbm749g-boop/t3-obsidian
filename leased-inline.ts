@@ -143,11 +143,10 @@ export class DeviceInlineManager {
   resume(targets:InlineHostTarget[],priorityIds:readonly string[]=[]){
     if(this.stopped)return;
     for(const host of this.hosts.values()){host.lastDiscovery=-Infinity;host.priorityKey=undefined;}
-    for(const runtime of this.jobs.values()){
-      const record=runtime.record;
-      if(!record.coordinated)continue;
-      const open=this.io.isOpen(record.state?.notePath??record.request.notePath)||!!this.io.completeResponse&&record.request.deviceCompletion?.actor===(this.io.completionActor??this.actor);
-      this.previews.get(record.request.id)?.reconnect(open);
+    for(const [id,preview] of this.previews){
+      const record=this.jobs.get(id)?.record;
+      const open=this.io.isOpen(preview.notePath)||!!record&&!!this.io.completeResponse&&record.request.deviceCompletion?.actor===(this.io.completionActor??this.actor);
+      preview.reconnect(open);
     }
     this.discover(targets,priorityIds);this.tick();
   }
@@ -156,6 +155,13 @@ export class DeviceInlineManager {
     const bytes=await host.files.read(leasePaths(host.target.directory,id).record);if(!bytes||this.stopped)return;
     const record:LeaseRecord=JSON.parse(bytes),request=validateHostedRequest(record.request);
     if(request.id!==id||![2,3,4].includes(request.version)||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(host.target))return;
+    // A validated host record can update an exact open native anchor before
+    // local disk/location checks finish. This does not adopt a writer job.
+    if(record.coordinated&&this.io.isOpen(record.state?.notePath??request.notePath)){
+      this.receivePreview(record);
+      void Promise.resolve(this.io.receiveCoordinated?.(record)).catch(error=>logFailure('note.projection.receive',error,{bindingId:id}));
+      this.previews.get(id)?.tick(true);
+    }
     const path=await this.location(record);if(path===undefined)return;
     const document=await this.io.readNote(path);
     if(this.stopped||document===undefined||!this.available(record,document))return;
@@ -199,6 +205,12 @@ export class DeviceInlineManager {
   }
   explorerResponses():ExplorerResponse[]{return [...this.hosts.values()].flatMap(host=>host.responses).filter(response=>!this.localStops.has(response.id));}
   stoppableResponses(path:string){return [...this.jobs.values()].filter(({record})=>(record.state?.notePath??record.request.notePath)===path&&!this.localStops.has(record.request.id)&&!record.stopRequestedAt&&!record.state?.userStopped&&!terminalLease(record)).map(({record,host})=>({id:record.request.id,hostTarget:host.target}));}
+  private receivePreview(record:LeaseRecord){
+    if(!record.coordinated||!this.io.receiveDirect||this.localStops.has(record.request.id))return;
+    let preview=this.previews.get(record.request.id);
+    if(!preview){preview=new DirectInlinePreview(record,()=>this.access(record.request.threadEnvironmentId),update=>{this.io.receiveDirect!(update);const runtime=this.jobs.get(update.request.id);if(runtime&&update.completionVerified&&update.turnId&&(update.phase==='complete'||update.phase==='interrupted')){runtime.finalUpdate=update;this.finishOnDevice(runtime);}});this.previews.set(record.request.id,preview);}
+    else preview.update(record);
+  }
   private receiveRecord(host:Host,record:LeaseRecord){
     if(this.stopped||record.request.vaultId!==this.vaultId||hostKey(record.request.host)!==hostKey(host.target))return;
     if(this.bindings.get(record.request.id)?.removed&&record.responseRemovedAt===undefined)return;
@@ -211,11 +223,7 @@ export class DeviceInlineManager {
       if(record.coordinated)void Promise.resolve(this.io.receiveCoordinated?.(record)).catch(error=>logFailure('note.projection.receive',error,{bindingId:record.request.id}));
       return;
     }
-    if(record.coordinated&&this.io.receiveDirect&&!this.localStops.has(record.request.id)){
-      let preview=this.previews.get(record.request.id);
-      if(!preview){preview=new DirectInlinePreview(record,()=>this.access(record.request.threadEnvironmentId),update=>{this.io.receiveDirect!(update);const runtime=this.jobs.get(update.request.id);if(runtime&&update.completionVerified&&update.turnId&&(update.phase==='complete'||update.phase==='interrupted')){runtime.finalUpdate=update;this.finishOnDevice(runtime);}});this.previews.set(record.request.id,preview);}
-      else preview.update(record);
-    }
+    this.receivePreview(record);
     const projected=leaseExplorerResponse(record),previous=host.responses.find(r=>r.id===projected.id);
     if(!previous||projected.epoch>previous.epoch||projected.epoch===previous.epoch&&projected.revision>previous.revision)host.responses=host.responses.filter(r=>r.id!==projected.id).concat(projected);
     if(record.coordinated)void Promise.resolve(this.io.receiveCoordinated?.(record)).catch(error=>logFailure('note.projection.receive',error,{bindingId:record.request.id}));
@@ -341,6 +349,7 @@ export class DeviceInlineManager {
     // replies in the same note need only one fresh open-view query; never
     // retain this result across ticks or asynchronous work.
     const opened=new Map<string,boolean>(),isOpen=(path:string)=>{if(!opened.has(path))opened.set(path,this.io.isOpen(path));return opened.get(path)!;};
+    for(const [id,preview] of this.previews)if(!this.jobs.has(id))preview.tick(isOpen(preview.notePath));
     this.titles?.sync([...this.jobs.values()].filter(({record})=>record.coordinated&&!record.stopRequestedAt&&!terminalLease(record)&&isOpen(record.state?.notePath??record.request.notePath)).map(({record})=>record.request));
     this.flushRenames();
     for(const runtime of this.jobs.values()){
