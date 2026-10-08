@@ -35,3 +35,41 @@ This removes Obsidian Sync from the sending device's final-save path. Canonical 
 Tests cover missing host notes, closed destinations, permanent grants, expired presence fallback, early Stop, canonical final-message freshness, staged/ordinary conflicts, storage failure before mutation, interrupted readback/receipt, local journal discovery, native panes and stale anchors, generated-event filtering before receipt, independent responses and checked history removal. The full repository suite and real native QLO2 delivery remain release requirements.
 
 The synthetic Sync lab uses two independent desktop editors and official Headless Sync. File propagation, visible editor adoption and sender completion while Sync is stopped must be reported separately. It does not prove desktop core Sync engine behavior or native iPhone/Android behavior. Native mobile verification remains a coverage limit.
+
+## Verified release 2.35.0
+
+Source commit `cb0db818ab2960d17e916499d607af0f5c1243e7` passed the build,
+1,081 TypeScript tests and 11 Python tests. The immutable 2.35.0 release passed
+both installation checks and a fresh official QLO2 Sync scan with installation
+settings preserved. The production QLO2 client reloaded through the verified
+native `app:reload` command and reported a new instance running 2.35.0.
+
+One bounded real T3 delivery returned `DEVICE_COMPLETION_SMOKE_OK` in the native
+editor. Its stable sending actor held the final grant; saved bytes matched the
+immutable proof and receipt, ordinary note text remained intact, and
+`verifiedOnHost` remained false. The original note view and disabled CLI setting
+were restored. The temporary note was deleted through normal vault observation;
+its active thread link was removed and no pending test send remained.
+
+The independent desktop Sync fixture completed a checked local save in 122 ms
+from synthetic canonical completion evidence while sender Sync was stopped.
+The receiver's saved file and editor remained on the original anchor. After
+real Headless Sync resumed, the already-open receiving editor adopted the exact
+completed bytes and ordinary edit without a reload. That measured fixture time
+excludes real T3 generation/canonical reads and does not claim end-to-end zero
+network latency. The fixture used Obsidian 1.14.4; desktop core Sync and native
+phone coverage remain unverified.
+
+The native experiment also exposed a transient projection conflict during final
+file adoption. The verified-readback callback now rechecks preserved versions
+through the existing conservative merge. Matching final bytes can resolve that
+transient state immediately; competing ordinary edits still remain conflicts.
+The corrected fixture completed without a completion warning.
+
+Immutable live smoke receipt:
+`/home/ubuntu/backups/send-to-t3-code/releases/2.35.0/smoke-vps-qlo2-desktop.json`.
+Evidence SHA-256:
+`fc2129dd38651cb2e183257bf9fb5845f2915649e63c6380849d53caf870c36c`.
+Native evidence and failed-attempt diagnostics remain outside all synced vaults.
+Release automation queued the Windows laptop reload pending arrival of exact
+release files; this receipt does not claim a laptop smoke test.
