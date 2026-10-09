@@ -3,6 +3,7 @@ import {regionBody} from './inline-thread';
 import type {Extension,Transaction as CMTransaction} from '@codemirror/state';
 import {changedEdits,changedInterval,mergeSavedEdits} from './coordinated-merge';
 import {displayToSaved,editableDisplayRange,projectResponses,savedProjection,responseRegion,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
+import {ResponseScroll} from './response-scroll';
 
 export interface NativeViewConflict {base:string;local:string;incoming:string;reason:string;awaitingCompletion?:boolean}
 /** Native rendering with a separate saved projection. */
@@ -23,8 +24,10 @@ export class NativeResponseView {
   private materialized=new Set<string>();
   private ownSave?:{text:string};
   private materialization?:{before:string;after:string;ids:string[]};
+  private scroll:ResponseScroll;
   constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[],private reconciled?:()=>void){
     this.file=view.file;this.base=saved;this.diskBase=saved;this.projection=projectResponses(saved,[]);
+    this.scroll=new ResponseScroll(view,()=>this.currentProjection());
     this.originalGet=view.getViewData;this.originalSet=view.setViewData;
     this.originalSave=view.save;
     this.getWrapper=()=>this.saved();
@@ -100,6 +103,7 @@ export class NativeResponseView {
       // becoming user undo steps. Native rendering and folds stay in place.
       cm.dispatch({changes:{from:change.from,to:change.to,insert:change.text},annotations:[Transaction.addToHistory.of(false),Transaction.userEvent.of('send-to-t3-projection')],filter:false,scrollIntoView:false});
     }else this.originalSet.call(this.view,display,clear);
+    this.scroll.updated();
   }
   private incoming(incoming:string,clear:boolean){
     if(this.disposed)return this.originalSet.call(this.view,incoming,clear);
@@ -186,12 +190,13 @@ export class NativeResponseView {
   }
   isDisposed(){return this.disposed;}
   private unwrap(){
+    this.scroll.dispose();
     if(this.view.getViewData===this.getWrapper)this.view.getViewData=this.originalGet;
     if(this.view.setViewData===this.setWrapper)this.view.setViewData=this.originalSet;
     if(this.view.save===this.saveWrapper)this.view.save=this.originalSave;
     this.disposed=true;
   }
-  private block(record:NativeViewConflict){this.blocked=record;this.conflict(record);}
+  private block(record:NativeViewConflict){this.scroll.suspend();this.blocked=record;this.conflict(record);}
   /** Install only AFTER the coordinator's immutable write intent is durable,
    * before vault.process can synchronously notify native views. The incoming
    * exact bytes may be displayed, but coordinator delivery remains pending
