@@ -144,17 +144,22 @@ not identify a physical Stop-button action.
 continuation failure, including failure before dispatch. That can interrupt
 unrelated ongoing execution. The preceding accepted input copied the response's
 literal end marker into its text. Rendering that marker in the user quote
-reproduces `Missing, duplicate or reversed response boundaries`. This is a
-plausible failure trigger, not proof of the originating laptop's exact failed
-stage. Its two later “acidentally wrote…” attempts remain saved in the note and
-have no corresponding T3 input event. VPS failure logs have no matching failure.
+reproduces `Missing, duplicate or reversed response boundaries`. The later SSH
+log read from the laptop identifies the failed stage at 17:40:14.300 UTC:
+`response-registration`, delivery `not-started`, with “Wait for a running
+response before steering. If it finished or paused, ask again after it finishes.”
+This failure precedes the recorded Stop request and confirms the failed-steer
+cleanup path. It does not establish why that response was unavailable to the
+laptop; the copied marker is still a separate reproduction, not a proven cause
+of that check. Its two later “acidentally wrote…” attempts remain saved in the
+note and have no corresponding T3 input event. VPS failure logs have no matching failure.
 No marker, user text, steering cleanup or projection guard was changed.
 
 A separately reviewed correction should scope cleanup to the failed new send,
 retain an existing active response, preserve accepted/uncertain delivery evidence,
 and render literal control comments without interpreting them as boundaries.
-It needs the actual originating-device failure and tests for confirmed, rejected,
-and uncertain steers before implementation.
+The originating-device log is retained outside the vault. Tests for confirmed,
+rejected and uncertain steers still need a separate authorized implementation.
 
 ## Read-only failure logs over SSH
 
@@ -202,3 +207,61 @@ with “Response markers removed or malformed” at 18:01:25 UTC, while app run 
 continues. The later new queued app run 11 was cancelled at 18:05:43 UTC. These
 states must not be described as another interruption of the active app run.
 Its note and response markers remain untouched.
+
+## Windows command bridge correction
+
+The private mailbox opener and response journal both checked a relative parent
+path using only `../`. Windows returns `..\`, so the laptop's outside-vault
+mailbox was falsely classified as inside QLO2 and rejected before its route was
+created. A direct reproduction with `node:path.win32` confirms that result.
+The laptop had 2.36.6 on disk, no storage route and no private vault directory.
+
+Release 2.36.7 shares a corrected native path-containment check. It accepts
+outside-vault Windows paths, including another drive and another UNC share,
+while still rejecting the vault itself and descendants. It changes no migration
+algorithm, note save, typing, steering delivery, ownership or Sync behavior.
+The SSH helper reports `bootstrapRequired` without writing a command into the
+synced vault when that private route is absent. An affected running client must
+load the fixed release once before its bridge can serve future requests.
+
+The user loaded 2.36.7 on the laptop. Its private mailbox then answered status
+and read-only failure-log requests. A guarded SSH reload acknowledged the exact
+immutable runtime hashes and changed instance `2987145b-70ed-4cb6-9baa-9a612b278780`
+to `33911afd-11b6-4848-b3a7-50e89b89fc37`, still reporting loaded version 2.36.7.
+The Windows private writer lock exists and all three runtime files match the
+immutable release. The existing saved-editor and release-hash guards remain.
+
+## Live verification of 2.36.7
+
+Build and the complete suite passed: 1,164 TypeScript tests and 13 Python tests.
+Reviewed source commit `56380f1` and version commit `6db4187` preserve the 2.36.4
+memory work. The supported release command installed development and QLO2,
+preserved both installations' settings, and required a fresh Fully synced scan.
+
+The real QLO2 VPS client passed a guarded native reload from 2.36.6 to 2.36.7,
+changing its loaded instance to `30a5bc8e-3664-4cb9-9320-b11f1b1b4dc9`. Native
+screenshots verify public Thought and Plan in native Reading view and Live
+Preview across the follow-up releases. The 2.36.7 checks also verify query labels,
+ordinary tool weight, compaction icons and labels without separators,
+independently folded Plan, and contained Windows CRLF/CR output in Live Preview.
+
+The actual initial migration response was imported through the native picker:
+thread `d072fae6-0c59-48be-8ddc-5385cf6b8df4`, run ordinal 1, input
+`390a1b1b-5eab-4f90-a933-a4c23bd09bd2`. Binding `894f99b8-14b7-5052-8f38-b994e7c78e32`
+saved, removed its active/proof anchors, and reported checked completion and
+two device acknowledgements. The source remained at 10 runs and 1,037 items;
+no prompt was sent. The imported result remained visible after the 2.36.7 reload.
+
+A real canonical MCP agent message passed the plugin's authenticated sender
+metadata lookup and rendered as `Agent · Orchestrator v2 upgrade` in the native
+editor. No replacement message or sender context was sent. Four owned test notes
+were backed up and removed; the original VPS note and Live Preview mode were
+restored. The destination upgrade note, orphan anchors and user writing were
+not edited. Its malformed response remains paused; registration stays enabled.
+
+Durable artifacts are under
+`/home/ubuntu/backups/send-to-t3-code/orchestrator-display-2.36.5/` (the directory
+name predates the later releases). The combined immutable release evidence is
+`/home/ubuntu/backups/send-to-t3-code/releases/2.36.7/smoke-vps-qlo2-evidence.json`.
+Earlier 2.36.5 and 2.36.6 packages remain immutable; this verification covers
+their changes in the final 2.36.7 release.
