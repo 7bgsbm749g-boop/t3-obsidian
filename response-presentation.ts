@@ -142,7 +142,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   const remember=(event:Event)=>{
     if(restoring)return;
     const target=event.target instanceof Element?event.target.closest('.callout-title'):null;
-    const fold=target?.closest('.callout[data-callout="t3-progress"]');if(!fold)return;
+    const fold=target?.closest('.callout[data-callout="t3-progress"]');if(!fold||target!==title(fold))return;
     const id=key(fold);if(!id)return;
     const container=owner(fold);let saved=choices.get(container);if(!saved){saved=new Map();choices.set(container,saved);}
     const expanded=fold.classList.contains('is-collapsed');saved.set(id,expanded);

@@ -66,14 +66,18 @@ export function steeringSegments(messages:InlineMessage[],steering:InlineSteerin
   append(messages);return result;
 }
 
-/** Attribution is structured data, never a guess based on the user role or prose.
- * Fleet validates the source against its local provider session before sending.
- * This is a display convention between trusted clients, not a signed identity. */
+/** Native v2 sender identity takes precedence. Older fleet messages retain
+ * their validated display convention. Neither path changes delivery/bindings. */
 export function incomingLabel(message:InlineMessage,local=false):string {
+  const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+  if(message.createdBy==='agent'&&uuid.test(message.senderThreadId??'')){
+    const title=message.senderThreadTitle;
+    return `Agent · ${typeof title==='string'&&title.trim()&&title.length<=160?title:message.senderThreadId!.slice(0,8)}`;
+  }
   const records=(message.context as any)?.records;
   const senders=Array.isArray(records)?records.filter(record=>record?.kind==='fleet-sender'):[];
   if(senders.length===1){
-    const record=senders[0],p=record.payload,uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+    const record=senders[0],p=record.payload;
     if(record.version===1&&p?.version===1&&p.kind==='agent'&&uuid.test(p.environmentId??'')&&uuid.test(p.threadId??'')&&typeof p.title==='string'&&p.title.trim()&&p.title.length<=160)return `Agent · ${p.title}`;
   }
   return local?'You':'User';

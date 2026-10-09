@@ -7,6 +7,7 @@ import {pendingApprovals} from '../approvals';
 import {t3Api} from '../t3-api';
 import {environmentApi} from '../direct';
 import {settingsSocket} from './rpc-fixture';
+import {incomingLabel} from '../inline-steering';
 
 const at='2026-10-09T12:00:00.000Z';
 const run={id:'app-run',ordinal:1,userMessageId:'prompt',status:'running',requestedAt:at,completedAt:null};
@@ -14,6 +15,38 @@ const message={id:'prompt',role:'user',runId:run.id,text:'Hello',streaming:false
 function snapshot(overrides:any={}){return {snapshotSequence:10,hasMoreHistory:false,projection:{thread:{id:'thread',projectId:'project',title:'Test',runtimeMode:'approval-required'},messages:[message],runs:[run],turnItems:[],runtimeRequests:[],...overrides}};}
 const initial=()=>applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:normalizeV2Snapshot(snapshot())}).state;
 const event=(state:any,sequence:number,type:string,payload:any)=>applyThreadItem(state,normalizeV2StreamItem({kind:'event',sequence,event:{type,payload}})).state;
+
+test('native v2 sender identity survives snapshots and live absolute message replacements',()=>{
+ const senderThreadId='2c9cb7b6-a4c9-5746-b9b7-bc463c5024fa';
+ const input={...message,createdBy:'agent',senderThreadId,senderThreadTitle:'Orchestrator v2 upgrade'};
+ let state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:normalizeV2Snapshot(snapshot({messages:[input]}))}).state;
+ state=event(state,11,'message.updated',{...input,senderThreadTitle:undefined,text:'Changed'});
+ assert.equal(state.messages[0].senderThreadId,senderThreadId);
+ assert.equal(incomingLabel(state.messages[0]),'Agent · Orchestrator v2 upgrade');
+ const unknown=event(initial(),11,'message.updated',{...input,senderThreadTitle:undefined}).messages[0];
+ assert.equal(incomingLabel(unknown),'Agent · 2c9cb7b6');
+ assert.equal(incomingLabel({...unknown,createdBy:'user'}),'User');
+ assert.equal(incomingLabel({...unknown,senderThreadId:'invalid'}),'User');
+});
+
+test('sender titles use only exact same-environment shell IDs and survive paged history',async()=>{
+ const senderThreadId='2c9cb7b6-a4c9-5746-b9b7-bc463c5024fa',calls:string[]=[];
+ const older={id:'older',type:'user_message',messageId:'older-input',text:'Coordination',runId:run.id,createdBy:'agent',senderThreadId,startedAt:at,ordinal:1};
+ const api=t3Api(async path=>{calls.push(path);if(path.endsWith('/bounded'))return {...snapshot(),hasMoreHistory:true,historyCursor:'older'};if(path.includes('/history?'))return {items:[{sourceThreadId:'thread',item:older}],hasMoreHistory:false};if(path==='/api/orchestration/shell')return {threads:[{id:'wrong-id',title:'Wrong source'}],archivedThreads:[{id:senderThreadId,title:'Source thread'}]};throw Error('Unexpected source body read');},'https://t3.example');
+ const result=await api('/api/orchestration/threads/thread');
+ assert.equal(incomingLabel(result.thread.messages.find((m:any)=>m.id==='older-input')),'Agent · Source thread');
+ await api('/api/orchestration/threads/thread');assert.equal(calls.filter(path=>path==='/api/orchestration/shell').length,1);
+});
+
+test('unavailable or deleted sender metadata preserves canonical input and uses a source ID label',async()=>{
+ const senderThreadId='2c9cb7b6-a4c9-5746-b9b7-bc463c5024fa';
+ for(const unavailable of [true,false]){
+  const api=t3Api(async path=>{if(path==='/api/orchestration/shell'){if(unavailable)throw Error('offline');return {threads:[]};}return snapshot({messages:[{...message,createdBy:'agent',senderThreadId}]});},'https://t3.example');
+  const result=await api('/api/orchestration/threads/thread?turnLimit=1');
+  assert.equal(result.thread.messages[0].text,'Hello');assert.equal(result.snapshotSequence,10);
+  assert.equal(incomingLabel(result.thread.messages[0]),'Agent · 2c9cb7b6');
+ }
+});
 
 test('v2 flat snapshots and absolute message updates bind app runs and preserve the event cursor',()=>{
   let state=initial();assert.equal(turnForMessage(state,'prompt'),run.id);

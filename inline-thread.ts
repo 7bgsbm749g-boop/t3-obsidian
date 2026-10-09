@@ -11,7 +11,7 @@ import {applyV2ControlEvent,responseRun} from './orchestration-v2';
 import {responseEmissions} from './response-emissions';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
-export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string;context?:unknown}
+export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string;context?:unknown;createdBy?:string;senderThreadId?:string|null;senderThreadTitle?:string}
 export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null;createdAt?:string;sequence?:number;payload?:Record<string,any>}
 export interface InlineTurn {turnId:string;state:string;messageId?:string;requestedAt?:string;completedAt?:string|null;assistantMessageId?:string|null;ordinal?:number}
 export interface InlineStartRequest {messageId:string;requestedAt:string;sequence:number;activeTurnId?:string;turnId?:string;failed?:boolean}
@@ -247,7 +247,9 @@ export function applyThreadItem(previous:InlineThreadState,item:any):{state:Inli
   }
   if(event.type==='thread.message-sent'&&p&&typeof p.messageId==='string'&&typeof p.text==='string'&&typeof p.role==='string'){
     const old=state.messages.find(m=>m.id===p.messageId);
-    const message:InlineMessage={id:p.messageId,role:p.role,turnId:p.turnId??null,streaming:p.streaming===true,text:old&&!p.replace?(p.streaming?old.text+p.text:p.text||old.text):p.text,createdAt:old?.createdAt??p.createdAt,context:p.context??old?.context};
+    const senderThreadId=p.senderThreadId!==undefined?p.senderThreadId:old?.senderThreadId;
+    const senderThreadTitle=senderThreadId?state.messages.find(m=>m.senderThreadId===senderThreadId&&m.senderThreadTitle)?.senderThreadTitle:undefined;
+    const message:InlineMessage={id:p.messageId,role:p.role,turnId:p.turnId??null,streaming:p.streaming===true,text:old&&!p.replace?(p.streaming?old.text+p.text:p.text||old.text):p.text,createdAt:old?.createdAt??p.createdAt,context:p.context??old?.context,createdBy:p.createdBy??old?.createdBy,senderThreadId,senderThreadTitle};
     const latestTurn=p.role==='assistant'&&p.turnId&&state.latestTurn&&state.latestTurn.turnId===p.turnId?{...state.latestTurn,assistantMessageId:p.messageId}:state.latestTurn;
     const starts={...state.starts};
     // T3's detail stream omits turn-start-requested. A message-mode question

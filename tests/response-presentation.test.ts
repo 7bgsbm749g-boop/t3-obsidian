@@ -229,6 +229,10 @@ test('native fold transitions finish, hidden clones do not cause repeated clicks
     dispose=installResponsePresentation(root);
     visible.heading.click();await new Promise(resolve=>setTimeout(resolve,20));
     assert.equal(visible.collapsed,false);assert.equal(clicks,1,'a native click is not replayed against retained titles or hidden clones');
+    // A nested Plan/Thought title also has the progress fold as an ancestor.
+    // Its native click must not record or change the outer fold's choice.
+    const nestedTitle=new NativeElement(visible);
+    root.fire('click',{target:nestedTitle,preventDefault:()=>assert.fail('nested click intercepted'),stopImmediatePropagation:()=>assert.fail('nested click intercepted')});
     const fresh=new NativeFold();root.folds=[fresh];observed([{addedNodes:[fresh.content],removedNodes:[]}]);
     await new Promise(resolve=>setTimeout(resolve,20));
     assert.equal(fresh.collapsed,false,'replacement retains the explicit expansion');assert.equal(clicks,2,'restoration runs once despite transition mutations');

@@ -34,6 +34,14 @@ test('private mailbox saves the reload acknowledgement before native dispatch an
     assert.equal(status.client?.loadedVersion,'3.4.5');assert.notEqual(status.client?.instanceId,result.client.instanceId);
   }finally{await server?.dispose();await h.close();}
 });
+test('failure log command validates its timestamp and performs no reload or document read',async()=>{
+ const h=await fixture();try{
+  const command:ClientCommand={version:1,id:randomUUID(),kind:'send-failure-log',since:'2026-10-09T17:40:00Z'};
+  h.app.vault.read=()=>{throw Error('must not read a note');};
+  assert.equal((await h.maintenance.execute(command)).ok,true);assert.equal(h.reloads(),0);
+  for(const value of [{...command,since:'yesterday'},{...command,kind:'client-status'},{...command,releaseVersion:'3.4.5'}])assert.throws(()=>validateClientCommand(value));
+ }finally{await h.close();}
+});
 test('reload waits for exact Sync bytes and ordinary saved edits, and rechecks both after acknowledgement',async()=>{
   const h=await fixture();try{
     h.view.getViewData=()=> 'unsaved user edit';await assert.rejects(h.maintenance.execute(h.command),/unsaved edits/);assert.equal(h.reloads(),0);

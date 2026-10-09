@@ -117,3 +117,88 @@ editing cost; the user's client version and actual typing after updating must be
 checked before making a device-level claim. No typing optimization is implemented
 here. Detailed measurements and the gap screenshots are retained outside the
 vault in the completion-watch evidence.
+
+## Native v2 agent attribution
+
+V2 MCP messages already contain canonical `createdBy: agent` and
+`senderThreadId`. The older renderer recognized only fleet context records;
+the live event and paged-history adapters also dropped the native sender fields.
+These fields now survive both paths. Exact source IDs resolve against shell
+metadata in the same authenticated environment, including returned archived
+threads. A bounded 256-entry cache limits lookups; missing or unavailable source
+metadata shows an agent label with its short ID. Human inputs stay neutral, and
+validated old fleet records still work. Titles use the existing escaped quote
+heading. No steering dispatch, selection consumption or execution binding changes.
+
+## Unexpected interruption: read-only findings
+
+The exact interrupt command `498dd4ed-c8e2-5a57-9a1c-a9013d521f72` was accepted
+at 17:40:18.467 UTC. It is the plugin's deterministic interrupt ID for response
+`fde3fe56-7fe2-4587-bf9d-6f8d45f0633f`, not the GUI-release notification command.
+The private stop file was requested at 17:40:15.041 UTC. The other thread's
+notification had entered `queue_after_active` at 17:37:40.361 UTC; its event
+record contains no interrupt. T3's generic “Run interrupted by user” text does
+not identify a physical Stop-button action.
+
+`failRequest` calls Stop on an existing attached response after a steering or
+continuation failure, including failure before dispatch. That can interrupt
+unrelated ongoing execution. The preceding accepted input copied the response's
+literal end marker into its text. Rendering that marker in the user quote
+reproduces `Missing, duplicate or reversed response boundaries`. This is a
+plausible failure trigger, not proof of the originating laptop's exact failed
+stage. Its two later “acidentally wrote…” attempts remain saved in the note and
+have no corresponding T3 input event. VPS failure logs have no matching failure.
+No marker, user text, steering cleanup or projection guard was changed.
+
+A separately reviewed correction should scope cleanup to the failed new send,
+retain an existing active response, preserve accepted/uncertain delivery evidence,
+and render literal control comments without interpreting them as boundaries.
+It needs the actual originating-device failure and tests for confirmed, rejected,
+and uncertain steers before implementation.
+
+## Read-only failure logs over SSH
+
+`send-failure-log` returns the existing device-local log through the private
+command mailbox. It includes the loaded instance/version, device ID, and at most
+64 failures. Optional `--since` filters by UTC time. Export whitelists metadata
+and rechecks error redaction; prompts, typed text, credentials and arbitrary
+stored fields are excluded. It does not clear the log, save a note, dispatch a
+prompt or reload a client. Use a new request UUID for a fresh log; an exact replay
+returns the original snapshot.
+
+From the VPS, the CLI reuses the existing Windows private SSH mailbox transport:
+
+```bash
+python3 scripts/obsidian-command.py \
+  --vault 'C:\Users\jacks\Documents\QLO2' --ssh-host fleet-laptop \
+  --request-id REQUEST_UUID send-failure-log --since 2026-10-09T17:39:00Z
+```
+
+This narrow SSH option cannot send notes or request reloads. The remote vault
+must be open with the updated plugin loaded. A pending result means the running
+client has not answered; an on-disk manifest is not loaded-version evidence.
+
+## Plan recording follow-up
+
+The supplied 40.7-second recording exposes two Markdown display failures. A plan
+following ordinary quoted prose merges into the same nested blockquote, so its
+callout header is literal text. Generated display-only block separators now keep
+Thought, Plan and Notice callouts separate from neighbouring prose. They are not
+response anchors and do not change ownership, save filtering or cursor mapping.
+A Markdown AST test verifies that neighbouring commentary stays outside Plan.
+
+A native QLO2 check also showed that clicking Plan was captured by the outer
+progress click handler. That handler now accepts only its own direct title;
+nested callouts keep their native controls and cannot change the outer choice.
+
+Windows SSH output contains CRLF and lone CR characters. The tool HTML encoder
+previously replaced only LF, leaving physical CR characters in a quoted HTML
+line. Markdown then split that line, showing `&#10;` and tool output outside the
+closed row. The renderer now encodes CRLF, CR and LF as one visible newline each.
+Canonical tool output retains its original bytes; no editor/save path changes.
+
+The later stream failure is separately recorded: response `037a0cac` is paused
+with “Response markers removed or malformed” at 18:01:25 UTC, while app run 10
+continues. The later new queued app run 11 was cancelled at 18:05:43 UTC. These
+states must not be described as another interruption of the active app run.
+Its note and response markers remain untouched.

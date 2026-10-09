@@ -5,6 +5,12 @@ import {responseActivityLabel} from '../response-activity';
 import {stoppedResponseBody} from '../response-stop';
 import {renderInlineTurn,type InlineThreadState,type InlineActivity} from '../inline-thread';
 const a=(id:string,sequence:number,kind:string,payload:any):InlineActivity=>({id,turnId:'turn',sequence,kind,summary:'Tool',createdAt:new Date(sequence*1000).toISOString(),payload});
+test('Windows tool output stays inside one HTML line without losing visible line breaks',()=>{
+ const state={messages:[],activities:[a('windows',1,'tool.completed',{toolCallId:'windows',status:'completed',data:{toolName:'exec_command',command:'ssh laptop',output:'first\r\n** second\rthird <script>'}})]};
+ const tool=responseTools(state,['turn'])[0],body=renderResponseTool(tool);
+ assert.equal(tool.output,'first\r\n** second\rthird <script>');
+ assert.doesNotMatch(body,/[\r\n]/);assert.match(body,/first&#10;\*\* second&#10;third &lt;script&gt;/);
+});
 test('v2 web search and T3 thread reads use specific labels with neutral live text',()=>{
   const state={messages:[],activities:[a('search',1,'tool.updated',{toolCallId:'search',itemType:'web_search',data:{toolName:'web_search',input:'{"query":"Obsidian docs"}'}}),
     a('read',2,'tool.updated',{toolCallId:'read',itemType:'dynamic_tool',data:{toolName:'t3-code.t3_thread_read',input:"{'threadId': 'bc4a870c-6287-59c1-8d17-861e7a9cb050'}"}})]};

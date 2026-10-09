@@ -182,3 +182,14 @@ test('packaged client status exposes only numeric code-range counters even witho
   assert.equal(typeof result.codeRangeCache.skippedTextGroups,'number');
  }finally{await h.close();}
 });
+test('packaged SSH log command reads only the current device failure key and returns loaded client identity',async()=>{
+ const h=await fixture();try{
+  const id=randomUUID(),saved=[{at:'2026-10-09T17:40:15Z',stage:'response-registration',elapsedMs:5,delivery:'not-started',error:{message:'Duplicate response boundaries'}}];
+  h.plugin.refreshNoteCommandHost=async()=>{};h.plugin.deviceId='this-device';
+  h.plugin.app.loadLocalStorage=(key:string)=>{assert.equal(key,`t3-send-failures-v1:${h.plugin.settings.vaultId}`);return saved;};
+  h.plugin.clientMaintenance={execute:async()=>({id,ok:true,client:{instanceId:'this-instance',loadedVersion:'loaded-release'}})};
+  const result=await h.plugin.executeAgentCommand({version:1,id,kind:'send-failure-log',since:'2026-10-09T17:40:00Z'});
+  assert.equal(result.failureLog.pluginVersion,'loaded-release');assert.equal(result.failureLog.deviceId,'this-device');assert.deepEqual(JSON.parse(JSON.stringify(result.failureLog.failures)),saved);
+  assert.equal(result.reloadScheduled,undefined);assert.equal(result.responseHost,undefined);
+ }finally{await h.close();}
+});

@@ -2,6 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {normalizeV2Snapshot,normalizeV2StreamItem} from '../orchestration-v2';
 import {applyThreadItem,renderInlineTurn,turnPhase} from '../inline-thread';
+import {unified} from 'unified';
+import remarkParse from 'remark-parse';
 
 const at=(n:number)=>new Date(n*1000).toISOString();
 function fixture(items:any[]){return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:normalizeV2Snapshot({snapshotSequence:1,projection:{
@@ -37,4 +39,14 @@ test('unrelated run emissions are excluded and completed errors are visible with
   const state=fixture([{id:'other',type:'reasoning',runId:'other-run',text:'Unrelated',streaming:false},{id:'error',type:'error',status:'failed',failure:{message:'The tool failed.'}}]);
   const body=renderInlineTurn(state,'run','thread','running','collapse');
   assert.doesNotMatch(body,/Unrelated|Running error/);assert.match(body,/\[!t3-notification\] Error/);assert.match(body,/The tool failed\./);
+});
+test('a plan after prose is a separate native quote block and following prose stays outside it',()=>{
+ const state=fixture([{id:'plan',type:'todo_list',startedAt:at(5),steps:[{step:'Check display',status:'in_progress'}]}]);
+ state.messages.push({id:'after',role:'assistant',turnId:'run',text:'Following commentary.',streaming:false,createdAt:at(6)});
+ const body=renderInlineTurn(state,'run','thread','running','collapse'),tree:any=unified().use(remarkParse).parse(body);
+ const quotes:any[]=[];const visit=(node:any)=>{if(node.type==='blockquote')quotes.push(node);for(const child of node.children??[])visit(child);};visit(tree);
+ const text=(node:any):string=>node.value??(node.children??[]).map(text).join('');
+ const plans=quotes.filter(quote=>text(quote.children[0]).startsWith('[!t3-plan]'));
+ assert.equal(plans.length,1);assert.match(text(plans[0]),/Check display/);assert.doesNotMatch(text(plans[0]),/Checking\.|Following commentary/);
+ assert.equal(state.messages.find(message=>message.id==='prose')?.text,'Checking.');
 });

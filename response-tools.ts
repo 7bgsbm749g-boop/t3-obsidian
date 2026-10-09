@@ -5,7 +5,7 @@ export interface ResponseToolGroup {id:string;turnId:string;createdAt?:string;to
 const object=(value:any):Record<string,any>=>value&&typeof value==='object'&&!Array.isArray(value)?value:{};
 const string=(value:any)=>typeof value==='string'?value.trim():'';
 const compact=(value:string)=>value.replace(/\s+/g,' ').slice(0,160);
-const html=(value:string)=>value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\n/g,'&#10;');
+const html=(value:string)=>value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\r\n?|\n/g,'&#10;');
 const done=(status:string)=>['completed','failed','declined','stopped'].includes(status);
 /** Unwrap shell launchers for the label; keep the exact command in details. */
 export function commandProgram(command:string):string {

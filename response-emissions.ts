@@ -2,6 +2,9 @@ import type {InlineThreadState} from './inline-thread';
 
 export interface ResponseEmission {id:string;turnId:string|null;createdAt?:string;sequence:number;body:string;active:boolean;kind:string}
 const html=(text:string)=>text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\n/g,'&#10;');
+// Blank lines alone let consecutive Markdown quotes merge. A zero-size HTML
+// block makes each native callout a separate block, including inside progress.
+const separateCallout=(body:string)=>`<!-- t3-display-block -->\n\n${body}\n\n<!-- t3-display-block -->`;
 
 /** Public timeline emissions are display data, never run completion evidence. */
 export function responseEmissions(state:InlineThreadState,turns:string[],markdown:(text:string)=>string):ResponseEmission[] {
@@ -9,7 +12,7 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
   for(const message of state.messages){
     if(message.role!=='reasoning'||!turns.includes(message.turnId??'')||!message.text.trim())continue;
     result.push({id:message.id,turnId:message.turnId,createdAt:message.createdAt,sequence:0,active:false,kind:'reasoning',
-      body:`> [!t3-thought]- Thought\n>\n${markdown(message.text)}`});
+      body:separateCallout(`> [!t3-thought]- Thought\n>\n${markdown(message.text)}`)});
   }
   for(const activity of state.activities){
     if(!turns.includes(activity.turnId??'')||!['context-compaction','response.plan','response.notification'].includes(activity.kind))continue;
@@ -21,10 +24,10 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
     }else if(activity.kind==='response.plan'){
       const text=typeof p.text==='string'?p.text:(p.steps??[]).map((step:any)=>`- [${step.status==='completed'?'x':' '}] ${String(step.step??step.text??step.content??'').replace(/[\r\n]+/g,' ')}${step.status==='in_progress'?' (In progress)':''}`).join('\n');
       if(!text.trim())continue;
-      body=`> [!t3-plan]- Plan\n>\n${markdown(text)}`;
+      body=separateCallout(`> [!t3-plan]- Plan\n>\n${markdown(text)}`);
     }else{
       const text=typeof p.text==='string'?p.text:activity.summary;if(!text.trim())continue;
-      body=`> [!t3-notification] ${p.error?'Error':'Notice'}\n>\n${markdown(text)}`;
+      body=separateCallout(`> [!t3-notification] ${p.error?'Error':'Notice'}\n>\n${markdown(text)}`);
     }
     result.push({id:activity.id,turnId:activity.turnId,createdAt:activity.createdAt,sequence:activity.sequence??0,body,active,kind:activity.kind});
   }

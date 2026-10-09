@@ -48,6 +48,10 @@ test('plain prose, invalid or conflicting sender records stay neutral; titles ca
  assert.equal(incomingLabel({...msg,context:{version:1,records:[sender.records[0],sender.records[0]]}}),'User');
  const incoming=observeIncoming({...state(),messages:[{...msg,context:{...sender,records:[{...sender.records[0],payload:{...sender.records[0].payload,title:'Bad\n> [!danger]'}}]}}]},['turn']);
  const rendered=renderInlineTurn(state(),'turn','thread','running',true,undefined,{messages:[],steering:incoming});assert.doesNotMatch(rendered,/\n> \[!danger\]/);
+ const native={...msg,createdBy:'agent',senderThreadId:sender.records[0].payload.threadId,senderThreadTitle:'Native\n> [!danger]',context:sender};
+ assert.equal(incomingLabel(native),'Agent · Native\n> [!danger]');
+ const nativeInput=observeIncoming({...state(),messages:[native]},['turn']);
+ assert.doesNotMatch(renderInlineTurn(state(),'turn','thread','running',true,undefined,{messages:[],steering:nativeInput}),/\n> \[!danger\]/);
 });
 
 test('recovery requires a dated canonical lifecycle before associating an unbound input',()=>{

@@ -2,7 +2,7 @@ import {prepareEventAction,executeEventAction,type ActionIO,type ActionPlan} fro
 import {isClientCommand} from './client-command';
 import {markdownCodeCacheStatus} from './reply-html';
 import pluginManifest from './manifest.json';
-import {appendSendFailure,type SendFailure} from './send-failures';
+import {appendSendFailure,sendFailureLog,type SendFailure} from './send-failures';
 import {hasPluginPermissions} from './environment-permissions';
 import {mergeSharedSettings} from './shared-settings';
 import {noteThreadTitle,threadTitleGeneration,type ThreadTitleGeneration} from './thread-title';
@@ -685,6 +685,7 @@ export default class SendToT3 extends Plugin {
       await this.refreshNoteCommandHost();
       if(!this.clientMaintenance||this.stopped)throw Error('Desktop client maintenance is unavailable.');
       const result=await this.clientMaintenance.execute(input);
+      if(input.kind==='send-failure-log')return {...result,failureLog:sendFailureLog(this.app.loadLocalStorage(this.failureKey()),result.client!.loadedVersion,this.deviceId,input.since)};
       return input.kind==='client-status'?{...result,responseHostOpening:!!this.inlineHostRefresh,codeRangeCache:markdownCodeCacheStatus(),...(this.inlineHostService?{responseHost:this.inlineHostService.status()}: {})}:result;
     }
     if(isResponseCommand(input)){
@@ -1641,9 +1642,9 @@ export default class SendToT3 extends Plugin {
   }
   async exportDiagnostics(){
     const modal=new Modal(this.app);modal.titleEl.setText('Send failure log');
-    const entries=this.app.loadLocalStorage(this.failureKey())??[];
+    const log=sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId);
     modal.contentEl.createEl('p',{text:'The last 64 send failures on this device. Message text and credentials are excluded.'});
-    const field=modal.contentEl.createEl('textarea');field.readOnly=true;field.value=JSON.stringify({version:1,pluginVersion:pluginManifest.version,deviceId:this.deviceId,failures:entries},null,2);field.style.width='100%';field.style.height='320px';
+    const field=modal.contentEl.createEl('textarea');field.readOnly=true;field.value=JSON.stringify(log,null,2);field.style.width='100%';field.style.height='320px';
     new Setting(modal.contentEl).addButton(button=>button.setButtonText('Copy log').onClick(()=>{field.select();document.execCommand('copy');}));modal.open();
   }
 

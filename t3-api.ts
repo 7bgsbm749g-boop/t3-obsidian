@@ -5,8 +5,33 @@ import {normalizeV2Snapshot,v2Command} from './orchestration-v2';
  * path is an internal routing key for durable plugin commands, never sent. */
 export function t3Api(raw:T3Api,origin:string,makeSocket?:SocketFactory):T3Api {
   const outputs=new Map<string,any>();
+  const senderTitles=new Map<string,string|undefined>();let senderRefresh=-Infinity;
+  const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+  async function senderMessages(snapshot:any){
+    const messages=snapshot.projection.messages;
+    const ids=[...new Set<string>(messages.filter((m:any)=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')).map((m:any)=>m.senderThreadId))].slice(-256);
+    const age=Date.now()-senderRefresh;
+    if(ids.length&&(age>=30_000||age>=1000&&ids.some(id=>!senderTitles.has(id)))){
+      senderRefresh=Date.now();
+      try{
+        // Shell metadata resolves exact IDs without reading other conversations.
+        const shell=await raw('/api/orchestration/shell');
+        if(Array.isArray(shell?.threads)){
+          const threads=[...shell.threads,...(Array.isArray(shell.archivedThreads)?shell.archivedThreads:[])];
+          for(const id of ids){
+            const title=threads.find((t:any)=>t.id===id)?.title;
+            senderTitles.delete(id);
+            senderTitles.set(id,typeof title==='string'&&title.trim()&&title.length<=160?title:undefined);
+          }
+          while(senderTitles.size>256)senderTitles.delete(senderTitles.keys().next().value!);
+        }
+      }catch{/* Missing sender metadata must not block reply recovery. */}
+    }
+    return messages.map((m:any)=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')?{...m,senderThreadTitle:senderTitles.get(m.senderThreadId)}:m);
+  }
   async function hydrate(snapshot:any){
     if(!snapshot?.projection)return snapshot;
+    const messages=await senderMessages(snapshot);
     const items=snapshot.projection.turnItems??[],needed=items.filter((i:any)=>i.outputOmitted===true).slice(-40);
     let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
     try{
@@ -20,7 +45,7 @@ export function t3Api(raw:T3Api,origin:string,makeSocket?:SocketFactory):T3Api {
     }catch{/* A missing tool detail must not block canonical reply recovery. */}
     finally{rpc?.close();}
     while(outputs.size>256)outputs.delete(outputs.keys().next().value!);
-    return {...snapshot,projection:{...snapshot.projection,turnItems:items.map((i:any)=>outputs.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??i)}};
+    return {...snapshot,projection:{...snapshot.projection,messages,turnItems:items.map((i:any)=>outputs.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??i)}};
   }
   return async(path,payload)=>{
     if(path==='/api/orchestration/dispatch'){
@@ -87,7 +112,7 @@ export function t3Api(raw:T3Api,origin:string,makeSocket?:SocketFactory):T3Api {
       const p=snapshot.projection,items=new Map<string,any>(),messages=new Map<string,any>();
       for(const row of rows)if(row.sourceThreadId===p.thread.id)items.set(row.item.id,row.item);
       for(const item of p.turnItems??[])items.set(item.id,item);
-      for(const item of items.values())if(item.type==='user_message'||item.type==='assistant_message')messages.set(item.messageId,{id:item.messageId,threadId:p.thread.id,runId:item.runId,nodeId:item.nodeId,role:item.type==='user_message'?'user':'assistant',text:item.text,streaming:item.streaming===true,createdAt:item.startedAt??item.updatedAt,context:item.context,attachments:item.attachments??[]});
+      for(const item of items.values())if(item.type==='user_message'||item.type==='assistant_message')messages.set(item.messageId,{id:item.messageId,threadId:p.thread.id,runId:item.runId,nodeId:item.nodeId,role:item.type==='user_message'?'user':'assistant',text:item.text,streaming:item.streaming===true,createdAt:item.startedAt??item.updatedAt,context:item.context,attachments:item.attachments??[],createdBy:item.createdBy,senderThreadId:item.senderThreadId});
       for(const message of p.messages)messages.set(message.id,message);
       return normalizeV2Snapshot(await hydrate({...snapshot,hasMoreHistory:false,projection:{...p,turnItems:[...items.values()].sort((a,b)=>a.ordinal-b.ordinal),messages:[...messages.values()].sort((a,b)=>(a.createdAt??'').localeCompare(b.createdAt??''))}}));
     }
