@@ -48,8 +48,9 @@ output rather than blocking response recovery.
 
 T3 preserves v1 transcript IDs but does not copy provider runs, runtime controls,
 or v1 command receipts. The plugin resets the saved v1 event watermark when it
-receives a v2 snapshot. Existing response bindings whose messages were imported
-are marked interrupted; they do not resume or attach to a new app run. New
+receives a v2 snapshot. Unfinished response bindings whose messages were imported
+are marked interrupted; they do not resume or attach to a new app run. Saved
+completed runs and their exact final message IDs remain valid. New
 messages can continue the migrated thread. Old responses without a preserved
 exact run association cannot be imported as a verified run.
 

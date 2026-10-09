@@ -138,14 +138,26 @@ export function finalizeRegion(document:string,id:string,expectedHash:string,fin
 export function inlineBindingCheckpoint(state:InlineThreadState):InlineBindingCheckpoint {
   return {protocolVersion:state.protocolVersion,bindings:state.bindings,starts:state.starts,turns:{...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})},sequence:state.sequence,inputBoundaries:state.inputBoundaries,inputTurns:state.inputTurns,session:state.session?{status:state.session.status,activeTurnId:state.session.activeTurnId}:undefined,latestTurn:state.latestTurn};
 }
+function retiredV1Turn(turn:InlineTurn):InlineTurn {
+  return ['preparing','starting','running','waiting','queued'].includes(turn.state)?{...turn,state:'interrupted'}:turn;
+}
+function legacyMessages(state:InlineThreadState,turns:Record<string,InlineTurn>,bindings?:Record<string,InlineBinding>){
+  const imported=new Set(state.legacyMessageIds);
+  return state.messages.map(message=>{
+    if(message.turnId||!imported.has(message.id))return message;
+    const ids=message.role==='user'&&bindings?.[message.id]?[bindings[message.id].turnId]:message.role==='assistant'?Object.values(turns).filter(turn=>turn.assistantMessageId===message.id).map(turn=>turn.turnId):[];
+    return ids.length===1?{...message,turnId:ids[0]}:message;
+  });
+}
 export function restoreInlineBindings(state:InlineThreadState,saved?:InlineBindingCheckpoint):InlineThreadState {
   if(state.protocolVersion===2&&saved&&saved.protocolVersion!==2)saved={...saved,sequence:undefined,starts:undefined,session:undefined,latestTurn:undefined};
   if(saved?.sequence!==undefined&&state.sequence!==undefined&&saved.sequence>state.sequence)return {...saved,messages:[],activities:[],historyComplete:false};
   const turns={...saved?.turns};
   for(const [id,turn] of Object.entries({...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})}))turns[id]={...turns[id],...turn,...(turns[id]?.messageId?{messageId:turns[id].messageId,requestedAt:turns[id].requestedAt}:{})};
-  for(const [messageId,binding] of Object.entries(saved?.bindings??{}))if(state.legacyMessageIds?.includes(messageId)&&!state.turns?.[binding.turnId]&&turns[binding.turnId])turns[binding.turnId]={...turns[binding.turnId],state:'interrupted'};
+  for(const [messageId,binding] of Object.entries(saved?.bindings??{}))if(state.legacyMessageIds?.includes(messageId)&&!state.turns?.[binding.turnId]&&turns[binding.turnId])turns[binding.turnId]=retiredV1Turn(turns[binding.turnId]);
   const latestTurn=state.latestTurn??saved?.latestTurn;
-  return establishBindings({...state,session:state.session??saved?.session,inputBoundaries:{...saved?.inputBoundaries,...state.inputBoundaries},inputTurns:{...saved?.inputTurns,...state.inputTurns},sequence:state.sequence??saved?.sequence,latestTurn:latestTurn?turns[latestTurn.turnId]??latestTurn:undefined,turns,bindings:{...saved?.bindings,...state.bindings},starts:{...saved?.starts,...state.starts}});
+  const bindings={...saved?.bindings,...state.bindings};
+  return establishBindings({...state,messages:legacyMessages(state,turns,bindings),session:state.session??saved?.session,inputBoundaries:{...saved?.inputBoundaries,...state.inputBoundaries},inputTurns:{...saved?.inputTurns,...state.inputTurns},sequence:state.sequence??saved?.sequence,latestTurn:latestTurn?turns[latestTurn.turnId]??latestTurn:undefined,turns,bindings,starts:{...saved?.starts,...state.starts}});
 }
 function establishBindings(state:InlineThreadState):InlineThreadState {
   const bindings={...state.bindings},turns={...state.turns},starts={...state.starts};
@@ -208,9 +220,10 @@ export function applyThreadItem(previous:InlineThreadState,item:any):{state:Inli
     // V1 import preserves transcript IDs but removes provider runs. Retained
     // old response bindings are terminal; never attach them to a new app run.
     if(thread.protocolVersion===2)for(const [messageId,binding] of Object.entries(state.bindings??{})){
-      if(thread.legacyMessageIds?.includes(messageId)&&!thread.turns?.[binding.turnId]&&turns[binding.turnId])turns[binding.turnId]={...turns[binding.turnId],state:'interrupted'};
+      if(thread.legacyMessageIds?.includes(messageId)&&!thread.turns?.[binding.turnId]&&turns[binding.turnId])turns[binding.turnId]=retiredV1Turn(turns[binding.turnId]);
     }
-    return finish({...state,protocolVersion:thread.protocolVersion,legacyMessageIds:thread.legacyMessageIds,title:typeof thread.title==='string'?thread.title:state.title,messages:thread.messages.filter(validMessage),activities:Array.isArray(thread.activities)?thread.activities.filter(validActivity):[],session:thread.session??undefined,latestTurn,turns,v2Requests:thread.v2Requests,v2Controls:thread.v2Controls,historyComplete:!item.snapshot.page?.hasMore,checkpoints:Array.isArray(thread.checkpoints)?thread.checkpoints:[]});
+    const messages=legacyMessages({...state,messages:thread.messages.filter(validMessage),legacyMessageIds:thread.legacyMessageIds},turns,state.bindings);
+    return finish({...state,protocolVersion:thread.protocolVersion,legacyMessageIds:thread.legacyMessageIds,title:typeof thread.title==='string'?thread.title:state.title,messages,activities:Array.isArray(thread.activities)?thread.activities.filter(validActivity):[],session:thread.session??undefined,latestTurn,turns,v2Requests:thread.v2Requests,v2Controls:thread.v2Controls,historyComplete:!item.snapshot.page?.hasMore,checkpoints:Array.isArray(thread.checkpoints)?thread.checkpoints:[]});
   }
   if(item?.kind!=='event')return {state:previous};
   const event=item.event,p=event?.payload;

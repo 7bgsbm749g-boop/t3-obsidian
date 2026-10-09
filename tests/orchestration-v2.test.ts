@@ -72,6 +72,16 @@ test('v1 saved cursors cannot suppress a v2 snapshot or revive a migrated provid
   const newer=restoreInlineBindings(initial(),{...checkpoint,sequence:100});assert.equal(newer.sequence,100,'Same-protocol cursor protection remains intact');
 });
 
+test('v1 completed responses retain their exact saved final message and completion after migration',()=>{
+  const saved:any={sequence:999999,bindings:{prompt:{turnId:'old-provider',kind:'explicit'}},turns:{'old-provider':{turnId:'old-provider',messageId:'prompt',assistantMessageId:'old-answer',requestedAt:at,state:'completed'}}};
+  const wire=snapshot({thread:{id:'thread',projectId:'project',historyOrigin:'v1_import'},messages:[{...message,runId:null},{...message,id:'old-answer',runId:null,role:'assistant',text:'Saved final answer'}],runs:[]});
+  const current=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:normalizeV2Snapshot(wire)}).state;
+  const recovered=restoreInlineBindings(current,saved);
+  assert.equal(turnPhase(recovered,'old-provider'),'complete');assert.equal(recovered.messages.find(m=>m.id==='old-answer')?.turnId,'old-provider');
+  const refreshed=applyThreadItem(recovered,{kind:'snapshot',snapshot:normalizeV2Snapshot({...wire,snapshotSequence:11})}).state;
+  assert.equal(turnPhase(refreshed,'old-provider'),'complete');assert.equal(refreshed.messages.at(-1)?.text,'Saved final answer');
+});
+
 test('v2 mutations use RPC, server delivery policy, runtime IDs, and the separate project API',async()=>{
   const calls:any[]=[],wire:any[]=[];
   const Socket=settingsSocket(undefined,undefined,(tag,payload)=>{wire.push({tag,payload});return {sequence:42};});
