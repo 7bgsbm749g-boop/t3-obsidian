@@ -73,3 +73,25 @@ immutable 2.36.2 archive hash, folder-link acknowledgements, before/after RPC
 metadata, failed New/Previous commands, successful replies and native editor
 captures. Before the fix, settings were 2,465,324 bytes and the server returned
 1,048,576 bytes. Both streaming choices returned the user's exact host mismatch.
+
+The repaired build completed New and Previous in the same linked folder and
+thread. Exact T3 reply markers, both saved files, and both already-open editors
+were verified without another reload. The full suite passed 1,135 TypeScript
+tests and 11 Python tests, including the release pipeline's repeat run.
+
+Release **2.36.3** was created from clean source commit `67913b1`, installed with
+unchanged device settings, and published by a fresh official Sync scan. The
+real QLO2 VPS client changed instance after its guarded reload, reported loaded
+version 2.36.3, verified the small identity over real RPC despite its still-large
+settings, and completed a bounded delivery with the saved reply visible. The
+temporary QLO2 note was removed; the original open note remained unchanged and
+became active again. The immutable receipt is
+`/home/ubuntu/backups/send-to-t3-code/releases/2.36.3/smoke-vps-qlo2.json`.
+
+The user canceled laptop testing; the diagnostic task stopped without changing
+the plugin or creating test content. The release used `--skip-laptop-reload`.
+The user subsequently reported that the laptop works. This is user confirmation,
+not an agent-run native Windows test. The generic lab folder and links remain;
+its temporary bearer session was revoked and both dedicated desktops were closed.
+Release 2.36.2's immutable awaiting-smoke receipt remains unchanged; 2.36.3
+supersedes it.
