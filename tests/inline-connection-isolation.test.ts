@@ -10,7 +10,7 @@ for(const exposeStatus of [true,false])test(`status ${exposeStatus?'present':'ab
   const directory='.obsidian/t3-code/inline/v1',vaultId=randomUUID(),actor=randomUUID(),id=randomUUID(),identity={vaultId,environmentId:'host',workspaceRoot:'/vault',directory};
   const data=new Map<string,string>(),files:LeaseFiles={read:async path=>data.get(path),write:async(path,bytes)=>{data.set(path,bytes);},remove:async path=>{data.delete(path);},list:async directory=>[...data.keys()].filter(path=>path.startsWith(directory+'/'))};
   const authority=new InlineLeaseAuthority(identity,files);let closes=0,opens=0;const sockets:any[]=[];
-  const fetcher=async(url:any)=>new Response(JSON.stringify(String(url).endsWith('/.well-known/t3/environment')?{environmentId:'host',label:'Test host',orchestrationProtocolVersion:1}: {ticket:'test-only'}));
+  const fetcher=async(url:any)=>new Response(JSON.stringify(String(url).endsWith('/.well-known/t3/environment')?{environmentId:'host',label:'Test host',orchestrationProtocolVersion:2}: {ticket:'test-only'}));
   const socket=()=>{
     opens++;const ws:any={close(){closes++;queueMicrotask(()=>ws.onclose?.());},send(raw:string){void (async()=>{
       const request=JSON.parse(raw);let value:any;

@@ -7,9 +7,12 @@ import type {InlineStartRequest} from './inline-thread';
 import {existingThreadTurn} from './thread-target';
 import {readNewThreadDefaults} from './model-defaults';
 import {T3HttpError} from './thread-access-cache';
+import {t3Api} from './t3-api';
+import {T3_PROTOCOL_VERSION,T3_PROTOCOL_HEADER} from './orchestration-v2';
+import type {SocketFactory} from './t3-rpc';
 export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean}
 export interface PairedSession {token:string;expiresAt:number;environmentId:string;url:string;dpopKeyId?:string;accountId?:string}
-export interface DirectPlan {hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:any;turn:any;observedActiveTurnId?:string;delivery?:InlineStartRequest}
+export interface DirectPlan {protocolVersion?:2;hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:any;turn:any;observedActiveTurnId?:string;delivery?:InlineStartRequest}
 export type Fetcher=typeof fetch;
 export function endpoint(value:string):string {
  let u:URL;try{u=new URL(value.trim());}catch{throw Error('Enter a T3 HTTPS address or pairing link.');}
@@ -45,7 +48,8 @@ export async function jsonHttp(url:string,options:RequestInit={},fetcher:Fetcher
 }
 export async function descriptor(url:string,fetcher?:Fetcher){
  const d=await jsonHttp(endpoint(url)+'/.well-known/t3/environment',{},fetcher);
- if(typeof d?.environmentId!=='string'||typeof d?.label!=='string'||d.orchestrationProtocolVersion!==1)throw Error('This address is not a compatible T3 environment. Use its T3 pairing link, not the old companion URL.');
+ if(typeof d?.environmentId!=='string'||typeof d?.label!=='string')throw Error('This address is not a compatible T3 environment. Use its T3 pairing link.');
+ if(d.orchestrationProtocolVersion!==T3_PROTOCOL_VERSION)throw Error('Update this T3 machine to Orchestrator v2 before connecting.');
  return d;
 }
 export async function pair(address:string,code:string,fetcher?:Fetcher,expectedEnvironmentId?:string):Promise<{descriptor:any;session:PairedSession}>{
@@ -57,13 +61,13 @@ export async function pair(address:string,code:string,fetcher?:Fetcher,expectedE
  const scopes=new Set(String(token.scope).split(' '));if(!scopes.has('orchestration:read')||!scopes.has('orchestration:operate'))throw Error('This pairing link does not permit creating threads. Create a new link with thread access.');
  return {descriptor:d,session:{token:token.access_token,expiresAt:Date.now()+token.expires_in*1000,environmentId:d.environmentId,url:input.url}};
 }
-export async function environmentApi(c:Connection,s:PairedSession|undefined,fetcher?:Fetcher){
+export async function environmentApi(c:Connection,s:PairedSession|undefined,fetcher?:Fetcher,makeSocket?:SocketFactory){
  const url=endpoint(c.url||'');
  if(!s||!s.token||s.url!==url||s.environmentId!==c.environmentId)throw Error('Pair this connection on this device first. Session credentials do not sync.');
  if(s.expiresAt<=Date.now()+5000)throw Error('T3 pairing session expired. Pair this device again using a fresh T3 link.');
  const d=await descriptor(url,fetcher);if(d.environmentId!==c.environmentId)throw Error('The address now points to a different T3 environment. Nothing was sent; add it as a new connection.');
  const key=s.dpopKeyId?await proofKey(s.dpopKeyId,false):undefined;
- return async(path:string,payload?:any)=>{if(!path.startsWith('/api/')||path.includes('..')||path.includes('\\'))throw Error('Invalid T3 API path.');const target=url+path;const method=payload===undefined?'GET':'POST';return jsonHttp(target,{method,headers:{Authorization:(key?'DPoP ':'Bearer ')+s.token,'Content-Type':'application/json',...(key?{DPoP:await proof(key,method,target,s.token)}:{})},...(payload===undefined?{}:{body:JSON.stringify(payload)})},fetcher);};
+ return t3Api(async(path:string,payload?:any)=>{if(!path.startsWith('/api/')||path.includes('..')||path.includes('\\'))throw Error('Invalid T3 API path.');const target=url+path;const method=payload===undefined?'GET':'POST';return jsonHttp(target,{method,headers:{Authorization:(key?'DPoP ':'Bearer ')+s.token,'Content-Type':'application/json',[T3_PROTOCOL_HEADER]:String(T3_PROTOCOL_VERSION),...(key?{DPoP:await proof(key,method,target,s.token)}:{})},...(payload===undefined?{}:{body:JSON.stringify(payload)})},fetcher);},url,makeSocket);
 }
 async function apiFor(c:Connection,s:PairedSession|undefined,fetcher?:Fetcher){const api=await environmentApi(c,s,fetcher);return (path:string,payload?:any)=>api('/api/orchestration/'+path,payload);}
 export async function readDirect(c:Connection,args:string[],s?:PairedSession,fetcher?:Fetcher){
@@ -86,18 +90,18 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
   if(r.threadId){
    const thread=(await api('threads/'+encodeURIComponent(r.threadId)+'?turnLimit=1')).thread;
    const turn=existingThreadTurn(thread,{threadId:r.threadId,projectId:r.project.id},commandId(r.id,'turn'),{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})});
-   r.directPlan={hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
+   r.directPlan={protocolVersion:2,hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{
   const shell=await api('shell');const project=shell.projects.find((p:any)=>p.id===r.project.id);if(!project)throw Error('Project no longer exists. Scan this connection again.');
   const defaults=await readNewThreadDefaults(environment,endpoint(r.connection.url||''),project);
   const common={threadId:commandId(r.id,'thread'),...defaults,interactionMode:'default',createdAt:new Date().toISOString()};
-  r.directPlan={hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title:r.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
+  r.directPlan={protocolVersion:2,hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title:r.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
   }
  }
  // Persist the complete commands before their first attempt AND on every retry.
  // A lost reply can only replay the same commands, including timestamps/model.
  await save();const plan=r.directPlan;
- if(plan.phase==='prepared'){await api('dispatch',plan.create);plan.phase='created';await save();}
- if(plan.phase==='created'){const acknowledged=await api('dispatch',plan.turn);if(Number.isSafeInteger(acknowledged?.sequence)&&acknowledged.sequence>=0)plan.delivery={messageId:plan.turn.message.messageId,requestedAt:plan.turn.createdAt,sequence:acknowledged.sequence,activeTurnId:plan.observedActiveTurnId};plan.phase='started';await save();}
+ if(plan.phase==='prepared'){await api('dispatch',{...plan.create,...(plan.protocolVersion===2?{}:{__legacyV1:true})});plan.phase='created';await save();}
+ if(plan.phase==='created'){const acknowledged=await api('dispatch',{...plan.turn,...(plan.protocolVersion===2?{}:{__legacyV1:true})});if(Number.isSafeInteger(acknowledged?.sequence)&&acknowledged.sequence>=0)plan.delivery={messageId:plan.turn.message.messageId,requestedAt:plan.turn.createdAt,sequence:acknowledged.sequence,activeTurnId:plan.observedActiveTurnId};plan.phase='started';await save();}
  return {threadId:plan.turn.threadId as string,phase:'started' as const};
 }

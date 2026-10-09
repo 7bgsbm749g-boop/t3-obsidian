@@ -2,6 +2,8 @@
 
 One Obsidian plugin for desktop and mobile. Chat from the command palette, send a Markdown note to a T3 project, or ask a thread to watch a note or folder. Linked folders choose the destination for notes below them. Manual sends preserve Markdown and embedded images.
 
+The plugin requires T3 Orchestrator v2 on each destination computer. Update T3 before connecting. Existing project, thread, and message IDs remain valid after T3's migration. T3 does not migrate old provider runs or pending approvals; those old controls cannot resume. New messages use the v2 delivery policy and keep the existing thread's permissions and model. See [Orchestrator v2 compatibility](docs/orchestrator-v2.md) for recovery and validation details.
+
 ## Incoming messages and senders
 
 Steer callouts come from T3-confirmed incoming messages, including messages sent through fleet or T3's own composer. Local Obsidian sends retain their **You** label and only remove the unchanged originating selection after that exact message ID is confirmed. External inputs never remove editor text. Canonical display records and local selection receipts are separate, and message IDs deduplicate snapshots, live events, reloads and recovery.

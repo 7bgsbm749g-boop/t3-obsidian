@@ -5,7 +5,7 @@ import type {Request} from '../bridge';
 import {modelConfig,settingsSocket} from './rpc-fixture';
 const eid='environment';const url='https://t3.example';const now=Date.now();
 const session={url,environmentId:eid,token:'device-token',expiresAt:now+600000};
-const descriptor={environmentId:eid,label:'Computer',orchestrationProtocolVersion:1};
+const descriptor={environmentId:eid,label:'Computer',orchestrationProtocolVersion:2};
 const response=(d:any,status=200)=>new Response(JSON.stringify(d),{status});
 test('pairing parses native and hosted links without leaking secrets into endpoints',()=>{
  assert.deepEqual(pairingInput(url+'/pair#token=one-time'),{url,code:'one-time'});
@@ -21,19 +21,19 @@ test('pairing exchanges code once for scoped device credentials, no cookies or r
 test('direct sends use current T3 defaults, then persist model and commands across lost responses',async(t)=>{
  const commands:any[]=[];let lose=true;let saved=0,reads=0;const config=modelConfig();
  const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
- globalThis.WebSocket=settingsSocket(()=>config,()=>{reads++;}) as any;
+ globalThis.WebSocket=settingsSocket(()=>config,()=>{reads++;},async(tag,payload)=>{assert.equal(tag,'orchestration.dispatchCommand');return (await fetcher('rpc:dispatch',{headers:{Authorization:'Bearer device-token'},body:JSON.stringify(payload)})).json();}) as any;
  const fetcher=async(u:any,o:any)=>{
   if(u.endsWith('/.well-known/t3/environment'))return response(descriptor);
   assert.equal(o.headers.Authorization,'Bearer device-token');
   if(u.endsWith('/websocket-ticket'))return response({ticket:'ephemeral'});
   if(u.endsWith('/shell'))return response({projects:[{id:'p',defaultModelSelection:{instanceId:'codex',model:'stale'}}],threads:[{projectId:'unrelated',runtimeMode:'approval-required',updatedAt:'2026-09-19',modelSelection:{instanceId:'codex',model:'gpt-6-astra',options:[{id:'reasoningEffort',value:'xhigh'}]}}]});
   assert.ok(saved>0);const cmd=JSON.parse(o.body);commands.push(cmd);
-  if(cmd.type==='thread.turn.start'&&lose){lose=false;throw Error('lost reply');}return response({});
+  if(cmd.type==='message.dispatch'&&lose){lose=false;throw Error('lost reply');}return response({});
  };
  const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',connectionId:'c',environmentId:eid,url,host:'direct',executable:''},title:'literal $(whoami)',prompt:'image here',attachments:[{type:'image',id:'i',name:'i.png',mimeType:'image/png',sizeBytes:1,dataUrl:'data:image/png;base64,YQ=='}]};
  const save=async()=>{saved++;};
  await assert.rejects(sendDirect(request,session,save,fetcher as any),/Cannot reach/);
- assert.equal(reads,1);assert.equal(commands[0].runtimeMode,'full-access');assert.equal(commands[1].runtimeMode,'full-access');assert.deepEqual(commands[0].modelSelection,config.settings.defaultModelSelection);assert.deepEqual(commands[1].modelSelection,commands[0].modelSelection);
+ assert.equal(reads,1);assert.equal(commands[0].runtimeMode,'full-access');assert.equal(commands[1].runtimeMode,undefined,'V2 message delivery does not override thread permissions');assert.deepEqual(commands[0].modelSelection,config.settings.defaultModelSelection);assert.deepEqual(commands[1].modelSelection,commands[0].modelSelection);
  config.settings.defaultModelSelection.model='changed-default';
  config.settings.defaultRuntimeMode='approval-required';
  const restored=JSON.parse(JSON.stringify(request));const result=await sendDirect(restored,session,save,fetcher as any);assert.equal(result.threadId,commandId(request.id,'thread'));assert.equal(commands.length,3);assert.deepEqual(commands[1],commands[2]);
@@ -42,7 +42,7 @@ test('direct sends use current T3 defaults, then persist model and commands acro
  await assert.rejects(sendDirect({...restored,prompt:'changed'},session,save,fetcher as any),/no longer matches/);
  let dispatched=false;await assert.rejects(sendDirect({...request,directPlan:undefined},session,async()=>{throw Error('disk full');},(async(u:any,o:any)=>{if(u.endsWith('/dispatch'))dispatched=true;return fetcher(u,o);}) as any),/disk full/);assert.equal(dispatched,false);
  const fresh={...request,id:'7619d88f-320d-4882-8824-e45d930715db',directPlan:undefined};
- await sendDirect(fresh,session,save,fetcher as any);assert.equal(commands.at(-1).modelSelection.model,'changed-default');assert.equal(commands.at(-1).runtimeMode,'approval-required');
+ await sendDirect(fresh,session,save,fetcher as any);assert.equal(commands.at(-1).modelSelection.model,'changed-default');assert.equal(commands.at(-2).runtimeMode,'approval-required');
 });
 test('new direct sends never dispatch or copy history when settings cannot be read',async()=>{
  const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',connectionId:'c',environmentId:eid,url,host:'direct',executable:''},title:'Note',prompt:'Content'};
@@ -65,25 +65,28 @@ test('direct credentials are bound to origin/environment and expired sessions re
  await assert.rejects(readDirect({...c,url:'https://other.example'},['projects'],session,wrong as any),/Pair this connection/);assert.equal(calls,1);
 });
 
-test('existing-thread sends preserve conversation settings and retry one immutable message without creating a thread',async()=>{
+test('existing-thread sends preserve conversation settings and retry one immutable message without creating a thread',async(t)=>{
  const commands:any[]=[];let lose=true,saves=0,reads=0;
  const thread={id:'existing-thread',projectId:'p',title:'Ongoing',runtimeMode:'approval-required',interactionMode:'plan',modelSelection:{instanceId:'codex',model:'existing-model'},session:{status:'running',runtimeMode:'approval-required'},hasPendingApprovals:false,hasPendingUserInput:false};
  const fetcher=async(u:any,o:any)=>{
   if(u.endsWith('/environment'))return response(descriptor);
   if(u.includes('/threads/')){reads++;return response({thread});}
+  if(u.endsWith('/websocket-ticket'))return response({ticket:'test'});
   assert.ok(saves>0);const command=JSON.parse(o.body);commands.push(command);
   if(lose){lose=false;throw Error('Lost ack');}return response({});
  };
  const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',threadId:thread.id,project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',connectionId:'c',environmentId:eid,url,host:'direct',executable:''},title:'Note',prompt:'Markdown with image',attachments:[{type:'image',id:'i',name:'i.png',mimeType:'image/png',sizeBytes:1,dataUrl:'data:image/png;base64,YQ=='}]};
+ const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
+ globalThis.WebSocket=settingsSocket(modelConfig,()=>{},async(tag,payload)=>{assert.equal(tag,'orchestration.dispatchCommand');return (await fetcher('rpc:dispatch',{body:JSON.stringify(payload)})).json();}) as any;
  const save=async()=>{saves++;};
  await assert.rejects(sendDirect(request,session,save,fetcher as any),/Cannot reach/);
  const restored=JSON.parse(JSON.stringify(request));
  const result=await sendDirect(restored,session,save,fetcher as any);
  assert.equal(result.threadId,thread.id);assert.equal(reads,1);
  assert.equal(commands.length,2);assert.deepEqual(commands[0],commands[1]);
- assert.equal(commands[0].type,'thread.turn.start');assert.equal(commands[0].runtimeMode,'approval-required');assert.equal(commands[0].interactionMode,'plan');
+ assert.equal(commands[0].type,'message.dispatch');assert.equal(commands[0].runtimeMode,undefined);assert.equal(commands[0].interactionMode,undefined);assert.equal(commands[0].deliveryIntent,'auto');
  assert.equal(commands[0].modelSelection,undefined,'Omitting a model preserves the existing conversation selection');
- assert.deepEqual(commands[0].message.attachments,request.attachments);
+ assert.equal(commands[0].attachments[0].name,request.attachments![0].name);assert.ok(!('dataUrl' in commands[0].attachments[0]));
  await assert.rejects(sendDirect({...restored,threadId:'different'},session,save,fetcher as any),/no longer matches/);
 });
 
@@ -97,14 +100,17 @@ test('existing-thread validation rejects other projects, archived threads, and p
  }
 });
 
-test('direct acknowledgement persists exact prompt delivery and the observed active run across a retry',async()=>{
+test('direct acknowledgement persists exact prompt delivery and the observed active run across a retry',async(t)=>{
   const request:Request={id:'c3b04c8e-f340-4202-bfa2-ae65ed4e2a3a',threadId:'thread',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',connectionId:'c',environmentId:eid,url,host:'direct',executable:''},title:'Steer',prompt:'Ordinary mid-run input'};
   const snapshots:any[]=[];let dispatches=0;
   const fetcher=async(u:any)=>{
     if(u.endsWith('/.well-known/t3/environment'))return response(descriptor);
     if(u.includes('/threads/'))return response({thread:{id:'thread',projectId:'p',session:{status:'running',activeTurnId:'existing',runtimeMode:'approval-required'}}});
+    if(u.endsWith('/websocket-ticket'))return response({ticket:'test'});
     dispatches++;return response({sequence:123});
   };
+  const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
+  globalThis.WebSocket=settingsSocket(modelConfig,()=>{},async(tag,payload)=>{assert.equal(tag,'orchestration.dispatchCommand');return (await fetcher('rpc:dispatch')).json();}) as any;
   await sendDirect(request,session,async()=>{snapshots.push(structuredClone(request));},fetcher as any);
   assert.deepEqual(request.directPlan?.delivery,{messageId:commandId(request.id,'message'),requestedAt:request.directPlan!.turn.createdAt,sequence:123,activeTurnId:'existing'});
   const restored=structuredClone(snapshots.at(-1));await sendDirect(restored,session,async()=>{},fetcher as any);

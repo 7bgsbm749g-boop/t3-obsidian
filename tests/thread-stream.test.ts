@@ -16,8 +16,8 @@ test('thread subscription authenticates, acknowledges chunks, and interrupts on 
   const watcher=watchThread('thread-1',async()=>({origin:'https://t3.example',api:async(path,payload)=>{assert.equal(path,'/api/auth/websocket-ticket');assert.deepEqual(payload,{});issueCount++;return {ticket:'short-lived'};}}),{item:item=>items.push(item),reconnecting:error=>assert.fail(error.message)},url=>new Socket(url) as unknown as WebSocket);
   await new Promise(resolve=>setTimeout(resolve,30));
   assert.equal(issueCount,1);assert.match(urls[0],/^wss:\/\/t3\.example\/ws\?/);
-  assert.equal(new URL(urls[0]).searchParams.get('orchestrationProtocol'),'1');
-  assert.deepEqual(sent[0],{_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId:'thread-1',reasoningMessages:true},headers:[]});
+  assert.equal(new URL(urls[0]).searchParams.get('orchestrationProtocol'),'2');
+  assert.deepEqual(sent[0],{_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId:'thread-1'},headers:[]});
   assert.equal(items.length,2);assert.deepEqual(sent[1],{_tag:'Ack',requestId:'1'});
   watcher.stop();assert.deepEqual(sent[2],{_tag:'Interrupt',requestId:'1'});assert.equal(closed,1);
 });

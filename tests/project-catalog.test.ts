@@ -17,7 +17,7 @@ async function harness(){
  const api={Plugin,Platform:{isMobile:true},TFolder:Folder,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};const module={exports:{} as any};
  const fetcher=async(url:string)=>{
   const response=(value:any,status=200)=>new Response(JSON.stringify(value),{status});const id=new URL(url).hostname[0];
-  if(url.endsWith('/environment'))return response({environmentId:id,label:id,orchestrationProtocolVersion:1});
+  if(url.endsWith('/environment'))return response({environmentId:id,label:id,orchestrationProtocolVersion:2});
   if(url.endsWith('/shell')){reads++;if(delay&&id==='b')await new Promise<void>(resolve=>{release=resolve;});if(id==='b'&&offline)return response({},503);return response({projects:empty?[]:[{id:'same',title:'Same name',workspaceRoot:'/repo'},{id:'new',title:'Previously unchecked',workspaceRoot:'/new'}]});}
   throw Error('unexpected request');
  };

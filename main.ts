@@ -751,7 +751,7 @@ export default class SendToT3 extends Plugin {
       const access=await (await import('./desktop')).desktopThreadAccess(connection);
       try{
         const environment=await access.api('/.well-known/t3/environment');
-        if(environment.environmentId!==command.environmentId||environment.orchestrationProtocolVersion!==1)throw Error('The requested environment is not this desktop’s T3 machine.');
+        if(environment.environmentId!==command.environmentId||environment.orchestrationProtocolVersion!==2)throw Error('The requested environment is not this desktop’s T3 v2 machine.');
         reply=await access.api('/api/orchestration/shell');
       }finally{await access.close?.();}
     }else reply=await runBridge(connection,['projects']);

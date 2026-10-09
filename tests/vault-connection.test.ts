@@ -13,11 +13,11 @@ function harness(){
     requests.push(String(url));
     assert.equal(options.credentials,'omit');assert.equal(options.redirect,'error');
     const response=(v:any)=>new Response(JSON.stringify(v));
-    if(String(url).endsWith('/.well-known/t3/environment'))return response({environmentId:c.environmentId,label:'Laptop',orchestrationProtocolVersion:1});
+    if(String(url).endsWith('/.well-known/t3/environment'))return response({environmentId:c.environmentId,label:'Laptop',orchestrationProtocolVersion:2});
     assert.equal(options.headers.Authorization,'Bearer private-token');
     if(String(url).endsWith('/websocket-ticket'))return response({ticket:'short-lived-ticket'});
     if(String(url).endsWith('/shell'))return response({projects});
-    assert.ok(String(url).endsWith('/dispatch'));
+    assert.ok(String(url).endsWith('/api/projects/mutate'));
     const command=JSON.parse(options.body);commands.push(command);
     if(!projects.length)projects.push({id:command.projectId,title:command.title,workspaceRoot:command.workspaceRoot});
     if(lose){lose=false;throw Error('Lost response after commit');}
@@ -62,7 +62,7 @@ test('remote project registration reuses an existing root and recovers a lost cr
     h.lose();await assert.rejects(r.ensureProject(registration),/Cannot reach T3/);
     const result=await r.ensureProject(registration);
     assert.equal(result.id,registration.projectId);assert.equal(h.commands.length,1);
-    assert.deepEqual(h.commands[0],registration);
+    const {createdAt,...wire}=registration;assert.deepEqual(h.commands[0],wire);
     assert.ok(!('createWorkspaceRootIfMissing' in h.commands[0]),'Only register a verified existing folder');
     const same=vaultRegistration(h.c.environmentId,'c:/users/alex/vault',h.id,'Renamed');
     assert.equal(same.projectId,registration.projectId);

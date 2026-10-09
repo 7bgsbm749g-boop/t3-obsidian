@@ -27,7 +27,7 @@ test('account connects without pairing codes and uses scoped DPoP for subsequent
   calls++;assert.equal(o.credentials,'omit');assert.equal(o.redirect,'error');
   if(url.endsWith('/dpop-token')){const f=new URLSearchParams(o.body);assert.equal(f.get('subject_token'),a.accessToken);assert.equal(f.get('scope'),'environment:connect');assert.ok(o.headers.DPoP);return response({token_type:'DPoP',access_token:'relay-secret',scope:'environment:connect'});}
   if(url.endsWith('/connect')){assert.equal(o.headers.Authorization,'DPoP relay-secret');assert.equal(JSON.parse(o.body).clientProofKeyThumbprint,await thumbprint(await proofKey('connect')));return response({environmentId:'env',endpoint:{httpBaseUrl:m.url},credential:'bootstrap-secret'});}
-  if(url.endsWith('/environment')){assert.equal(o.headers?.Authorization,undefined);return response({environmentId:'env',label:'Computer',orchestrationProtocolVersion:1});}
+  if(url.endsWith('/environment')){assert.equal(o.headers?.Authorization,undefined);return response({environmentId:'env',label:'Computer',orchestrationProtocolVersion:2});}
   if(url.endsWith('/oauth/token')){const f=new URLSearchParams(o.body);assert.equal(f.get('subject_token'),'bootstrap-secret');assert.equal(f.get('scope'),'orchestration:read orchestration:operate');assert.ok(o.headers.DPoP);return response({token_type:'DPoP',access_token:'env-secret',expires_in:600,scope:'orchestration:read orchestration:operate'});}
   assert.equal(o.headers.Authorization,'DPoP env-secret');assert.ok(o.headers.DPoP);return response({projects:[]});
  };

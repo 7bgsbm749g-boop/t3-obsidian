@@ -1,4 +1,5 @@
 import {Buffer} from 'buffer';
+import {T3_PROTOCOL_VERSION} from './orchestration-v2';
 
 export type T3Api=(path:string,payload?:any)=>Promise<any>;
 export type SocketFactory=(url:string)=>WebSocket;
@@ -11,7 +12,7 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
   const issued=await api('/api/auth/websocket-ticket',{});
   if(typeof issued?.ticket!=='string'||!issued.ticket)throw Error('T3 did not issue a connection ticket.');
   const url=new URL('/ws',origin);url.protocol=url.protocol==='https:'?'wss:':'ws:';
-  url.searchParams.set('wsTicket',issued.ticket);url.searchParams.set('orchestrationProtocol','1');
+  url.searchParams.set('wsTicket',issued.ticket);url.searchParams.set('orchestrationProtocol',String(T3_PROTOCOL_VERSION));
   const socket=makeSocket(url.href);let closed=false,nextId=0;
   const pending=new Map<string,{resolve:(value:any)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
   const finish=(error:Error)=>{for(const task of pending.values()){clearTimeout(task.timer);task.reject(error);}pending.clear();};

@@ -14,6 +14,8 @@ import {readNewThreadDefaults,type NewThreadDefaults} from './model-defaults';
 import {workspaceChildPath} from './workspace-picker';
 import {T3HttpError} from './thread-access-cache';
 import {recordDesktopAuth} from './desktop-auth-audit';
+import {t3Api} from './t3-api';
+import {T3_PROTOCOL_HEADER,T3_PROTOCOL_VERSION} from './orchestration-v2';
 
 export function desktopDefaults():Connection {return {executable:'',host:'local',native:true,baseDir:join(homedir(),'.t3')};}
 export function cli(command:string[],args:string[]):Promise<string> {
@@ -75,18 +77,26 @@ export function parseOperation(args:string[],input:string):any {
  if(typeof req.prompt!=='string' || !req.prompt.trim() || req.prompt.length>120000 || !req.title.trim() || req.title.length>160)throw new Error('Invalid prompt or title.');
  return req;
 }
-export function requestJson(origin:string,token:string,path:string,payload?:any):Promise<any> {
+function rawRequestJson(origin:string,token:string,path:string,payload?:any):Promise<any> {
  const url=new URL(origin);if(url.protocol!=='http:' || !['localhost','127.0.0.1','[::1]'].includes(url.hostname) || url.username || url.password || url.pathname!=='/' || url.search || url.hash)throw new Error('T3 runtime must use a loopback HTTP origin.');
  const apiPath=path.startsWith('/api/')||path==='/.well-known/t3/environment'?path:'/api/orchestration/'+path;
  if(apiPath.includes('..')||apiPath.includes('\\')||apiPath.includes('#'))throw new Error('Invalid T3 API path.');
  return new Promise((resolve,reject)=>{
   const data=payload===undefined?undefined:JSON.stringify(payload);
-  const r=http.request(new URL(apiPath,origin),{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',...(data?{'Content-Length':Buffer.byteLength(data)}:{})}},res=>{
+  const r=http.request(new URL(apiPath,origin),{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',[T3_PROTOCOL_HEADER]:String(T3_PROTOCOL_VERSION),...(data?{'Content-Length':Buffer.byteLength(data)}:{})}},res=>{
    let out='';let bytes=0;res.setEncoding('utf8');res.on('data',(s:string)=>{bytes+=Buffer.byteLength(s);if(bytes>4_000_000)r.destroy(new Error('T3 response too large.'));else out+=s;});
    res.on('error',reject);res.on('end',()=>{if(res.statusCode!==200){reject(new T3HttpError(res.statusCode??0,`T3 API returned HTTP ${res.statusCode}.`));return;}try{resolve(JSON.parse(out));}catch{reject(new Error('Invalid T3 API response.'));}});
   });
   r.setTimeout(20_000,()=>r.destroy(new Error('T3 API timed out. Retry the saved request.')));r.on('error',reject);r.end(data);
  });
+}
+function desktopApi(origin:string,token:string){
+  const url=new URL(origin);if(url.protocol!=='http:' || !['localhost','127.0.0.1','[::1]'].includes(url.hostname) || url.username || url.password || url.pathname!=='/' || url.search || url.hash)throw new Error('T3 runtime must use a loopback HTTP origin.');
+  return t3Api((target,body)=>rawRequestJson(origin,token,target,body),origin);
+}
+export function requestJson(origin:string,token:string,path:string,payload?:any):Promise<any> {
+  const apiPath=path.startsWith('/api/')||path==='/.well-known/t3/environment'?path:'/api/orchestration/'+path;
+  return desktopApi(origin,token)(apiPath,payload);
 }
 async function save(path:string,value:any){const temp=path+'.tmp';const f=await fs.open(temp,'w',0o600);try{await f.writeFile(JSON.stringify(value));await f.sync();}finally{await f.close();}await fs.rename(temp,path);}
 const locks=new Map<string,Promise<any>>();
@@ -104,7 +114,7 @@ export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any
    if(req.threadId){
     const thread=(await api('threads/'+encodeURIComponent(req.threadId)+'?turnLimit=1')).thread;
     const turn=existingThreadTurn(thread,{threadId:req.threadId,projectId:req.project},uuid5(id,'turn'),{messageId:uuid5(id,'message'),role:'user',text:req.prompt,attachments:req.attachments??[],...(req.context?{context:req.context}:{})});
-    ledger={requestHash:hash,requestId:id,threadId:req.threadId,project:{id:req.project},phase:'created',create:null,turn};
+    ledger={protocolVersion:2,requestHash:hash,requestId:id,threadId:req.threadId,project:{id:req.project},phase:'created',create:null,turn};
     await save(path,ledger);
    }else{
    const shell=await api('shell');const project=shell.projects.find((p:any)=>p.id===req.project);if(!project)throw new Error('Project no longer exists. Scan projects again.');
@@ -112,13 +122,13 @@ export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any
    const defaults=await loadDefaults(project);
    const stamp=new Date().toISOString();const threadId=uuid5(id,'thread');
    const common={threadId,...defaults,interactionMode:'default',createdAt:stamp};
-   ledger={requestHash:hash,requestId:id,threadId,project,phase:'prepared',create:{...common,type:'thread.create',commandId:uuid5(id,'create'),projectId:project.id,title:req.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:uuid5(id,'turn'),message:{messageId:uuid5(id,'message'),role:'user',text:req.prompt,attachments:req.attachments??[],...(req.context?{context:req.context}:{})}}};await save(path,ledger);
+   ledger={protocolVersion:2,requestHash:hash,requestId:id,threadId,project,phase:'prepared',create:{...common,type:'thread.create',commandId:uuid5(id,'create'),projectId:project.id,title:req.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:uuid5(id,'turn'),message:{messageId:uuid5(id,'message'),role:'user',text:req.prompt,attachments:req.attachments??[],...(req.context?{context:req.context}:{})}}};await save(path,ledger);
    }
   }
   if(compromised)throw compromised;
-  if(ledger.phase==='prepared'){await api('dispatch',ledger.create);ledger.phase='created';await save(path,ledger);}
+  if(ledger.phase==='prepared'){await api('dispatch',{...ledger.create,...(ledger.protocolVersion===2?{}:{__legacyV1:true})});ledger.phase='created';await save(path,ledger);}
   if(compromised)throw compromised;
-  if(ledger.phase==='created'){await api('dispatch',ledger.turn);ledger.phase='started';await save(path,ledger);}
+  if(ledger.phase==='created'){await api('dispatch',{...ledger.turn,...(ledger.protocolVersion===2?{}:{__legacyV1:true})});ledger.phase='started';await save(path,ledger);}
   if(ledger.phase==='started'&&(ledger.create||ledger.turn)){
    ledger={requestHash:ledger.requestHash,requestId:ledger.requestId,threadId:ledger.threadId,project:{id:ledger.project.id},phase:'started'};await save(path,ledger);
   }
@@ -136,7 +146,8 @@ export async function runDesktop(connection:Connection,args:string[],input=''):P
   const issued=await cli(command,['auth','session','issue','--base-dir',base,'--ttl','5m','--label','send-to-t3-code','--json']);
   try{session=JSON.parse(issued);}catch{throw new Error('Invalid T3 session response; credential output withheld.');}
   if(!session.token || !session.sessionId)throw new Error('Unexpected T3 session response.');
-  const api=(path:string,payload?:any)=>requestJson(runtime.origin,session.token,path,payload);
+  const transport=desktopApi(runtime.origin,session.token);
+  const api=(path:string,payload?:any)=>transport(path.startsWith('/api/')?path:'/api/orchestration/'+path,payload);
   if(req.action==='start')return await start(api,req,connection.stateDir||join(base,'send-to-t3-code','desktop'),project=>readNewThreadDefaults(api,runtime.origin,project));
   if(req.action==='read')return (await api('threads/'+encodeURIComponent(req.threadId)+'?turnLimit=10')).thread;
   const shell=await api('shell');if(req.action==='projects')return {projects:shell.projects};
@@ -154,10 +165,11 @@ export async function desktopThreadAccess(connection:Connection,component:'respo
   if(typeof issued.token!=='string'||!issued.token||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(issued.sessionId??''))throw Error('T3 did not issue a local stream session.');
   const issuedAt=Date.now(),expiry=Date.parse(issued.expiresAt),expiresAt=Number.isFinite(expiry)?expiry:undefined;
   const metadata={sessionId:issued.sessionId,component,issuedAt,expiresAt};
+  const api=desktopApi(runtime.origin,issued.token);
   const audit=(event:import('./desktop-auth-audit').DesktopAuthRecord['event'],reason?:import('./thread-stream').ThreadAccessCloseReason,caller?:string[])=>recordDesktopAuth(base,{...metadata,event,reason,caller});
   void audit('issued');let closed=false,rejectionRecorded=false,recoveryRecorded=false;
   return {origin:runtime.origin,expiresAt,trace:(event,reason)=>{if(event==='recovered'){if(recoveryRecorded)return;recoveryRecorded=true;}void audit(event,reason);},async api(path,payload){
-    try{return await requestJson(runtime.origin,issued.token,path,payload);}catch(error){
+    try{return await api(path,payload);}catch(error){
       if(error instanceof T3HttpError&&error.status===401&&!rejectionRecorded){rejectionRecorded=true;void audit('rejected');}throw error;
     }
   },async close(reason='caller-closed'){
@@ -173,6 +185,6 @@ export async function desktopEnvironment(connection:Connection):Promise<string>{
   const base=connection.baseDir||join(homedir(),'.t3');
   const runtime=JSON.parse(await fs.readFile(join(base,'userdata','server-runtime.json'),'utf8'));
   const descriptor=await requestJson(runtime.origin,'','/.well-known/t3/environment');
-  if(typeof descriptor?.environmentId!=='string'||descriptor.orchestrationProtocolVersion!==1)throw Error('Local T3 environment is unavailable.');
+  if(typeof descriptor?.environmentId!=='string'||descriptor.orchestrationProtocolVersion!==T3_PROTOCOL_VERSION)throw Error('Update local T3 to Orchestrator v2 before connecting.');
   return descriptor.environmentId;
 }

@@ -106,16 +106,19 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     assert.equal(options.credentials,'omit');
     assert.equal(options.redirect,'error');
     const response=(value:any)=>new Response(JSON.stringify(value));
-    if(url.endsWith('/.well-known/t3/environment'))return response({environmentId:url.includes('second.example')?'second-env':'chat-env',label:'Laptop',orchestrationProtocolVersion:1});
+    if(url.endsWith('/.well-known/t3/environment'))return response({environmentId:url.includes('second.example')?'second-env':'chat-env',label:'Laptop',orchestrationProtocolVersion:2});
     assert.equal(options.headers.Authorization,'Bearer dummy-chat-session');
     if(url.endsWith('/websocket-ticket'))return response({ticket:'short-ticket'});
     if(url.endsWith('/shell'))return response({projects:catalog.map(p=>({...p,defaultModelSelection:{instanceId:'codex',model:'default'}})),threads});
     if(url.includes('/threads/')){
-      const id=decodeURIComponent(url.split('/threads/')[1].split('?')[0]);
+      const id=decodeURIComponent(url.split('/threads/')[1].split(/[/?]/)[0]);
       const overridden=await readOverride?.(id);if(overridden)return overridden;
       return response(snapshotOverride?.(id)??(commands.some(command=>command.threadId===id&&command.type==='thread.turn.start')?snapshot(id):{thread:threads.find(thread=>thread.id===id)??{id,projectId:project.id,runtimeMode:'approval-required',interactionMode:'default'}}));
     }
-    const command=JSON.parse(options.body);
+    // These UI tests retain their original response fixtures. Wire contracts
+    // and real v2 projections are tested separately in orchestration-v2.test.
+    const wire=JSON.parse(options.body);
+    const command=wire.type==='message.dispatch'?{...wire,type:'thread.turn.start',createdAt:new Date().toISOString(),message:{messageId:wire.messageId,text:wire.text,attachments:wire.attachments,context:wire.context}}:wire;
     commands.push(command);
     if(command.type==='project.create')catalog.push({id:command.projectId,title:command.title,workspaceRoot:command.workspaceRoot});
     await onCommand?.(command);
@@ -124,11 +127,11 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   };
   const sockets:any[]=[];
   class Socket {
-    onopen?:()=>void;onclose?:()=>void;onmessage?:(event:any)=>void;
+    onopen?:()=>void;onclose?:()=>void;onmessage?:(event:any)=>void;onerror?:()=>void;
     closed=false;
     constructor(public url:string){sockets.push(this);queueMicrotask(()=>this.onopen?.());}
     close(){this.closed=true;this.onclose?.();}
-    send(raw:string){void this.respond(raw);}
+    send(raw:string){void this.respond(raw).catch(()=>this.onerror?.());}
     async respond(raw:string){
       const req=JSON.parse(raw);if(req._tag==='Ack'||req._tag==='Interrupt'||req._tag==='Pong')return;
       if(req.tag==='orchestration.subscribeThread'){
@@ -136,7 +139,9 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
         return;
       }
       let value:any;
-      if(req.tag==='server.getConfig')value=modelConfig();
+      if(req.tag==='orchestration.dispatchCommand')value=await (await fetcher('rpc:dispatch',{credentials:'omit',redirect:'error',headers:{Authorization:'Bearer dummy-chat-session'},body:JSON.stringify(req.payload)})).json();
+      else if(req.tag==='assets.persistChatAttachments')value={attachments:req.payload.attachments.map((a:any,i:number)=>({type:a.type,id:`stored-${req.payload.messageId}-${i}`,name:a.name,mimeType:a.mimeType,sizeBytes:a.sizeBytes}))};
+      else if(req.tag==='server.getConfig')value=modelConfig();
       else if(req.tag==='filesystem.browse')value={parentPath:req.payload.partialPath==='~'?'/home/person':req.payload.partialPath.replace(/\/$/,''),entries:[]};
       else if(req.tag==='projects.writeFile'){hostFiles.set(req.payload.relativePath,req.payload.contents);value={};}
       else if(req.tag==='projects.readFile'&&req.payload.relativePath==='.obsidian/t3-code/storage-route.json'){
@@ -840,8 +845,9 @@ test('stopping a local editor response removes both tracking tags and the Stop m
     assert.match(opened.value,/Before/);assert.match(opened.value,/After/);
     assert.equal(manager.activeFor(path).length,0);
     assert.ok(!h.menuFor(opened.view).items.some(item=>item.title==='Stop T3 response'));
-    for(let n=0;n<20&&!h.commands.some(command=>command.type==='thread.turn.interrupt');n++)await new Promise(resolve=>setTimeout(resolve,25));
-    assert.equal(h.commands.filter(command=>command.type==='thread.turn.interrupt').length,1);
+    for(let n=0;n<20&&!h.commands.some(command=>command.type==='run.interrupt');n++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.equal(h.commands.filter(command=>command.type==='run.interrupt').length,1);
+    assert.equal(h.commands.find(command=>command.type==='run.interrupt').holdQueue,true);
   }finally{h.plugin.onunload();}
 });
 
@@ -1015,7 +1021,7 @@ test('mobile can register a synced folder as a remote project and keeps the bind
     assert.deepEqual(h.commands.map(c=>c.type),['project.create','thread.create','thread.turn.start']);
     assert.equal(h.commands[0].workspaceRoot,project.workspaceRoot);
     assert.equal(h.commands[1].projectId,h.commands[0].projectId);
-    assert.equal(h.commands[0].createdAt,h.plugin.vaultRegistrations[h.commands[0].commandId].createdAt);
+    assert.equal(h.commands[0].createdAt,undefined,'The v2 project API assigns its timestamp');
     h.plugin.onunload();const restarted=await h.start();
     await restarted.sendChat('Continue from the saved vault association');
     assert.equal(h.commands.filter(c=>c.type==='project.create').length,1);
@@ -1113,7 +1119,7 @@ test('sending a note into an existing thread retains Markdown and images and cle
     assert.match(h.commands[0].message.text,/\nAfter\n\nSent from Obsidian\./);
     assert.match(h.commands[0].message.text,/Obsidian vault: "Notes"\nDestination note path: "\/projects\/notes\/note.md"$/);
     assert.doesNotMatch(h.commands[0].message.text,/Vault-relative note path/);
-    assert.equal(h.commands[0].message.attachments[0].dataUrl,'data:image/png;base64,'+png);
+    assert.equal(h.commands[0].message.attachments[0].dataUrl,undefined,'V2 references persisted image assets');
     assert.equal(result.request.completion.action,'keep');
     assert.equal(h.plugin.settings.completionJobs.length,0);
     assert.equal(h.plugin.settings.pending.length,0);
@@ -1490,7 +1496,7 @@ for(const streaming of [false,true])test(`selection questions attach local image
     await h.modals.at(-1).choose(false);
     const first=h.commands.find(command=>command.type==='thread.turn.start');
     assert.equal(first.message.attachments.length,1,'Repeated embeds share the same native attachment');
-    assert.equal(first.message.attachments[0].dataUrl,'data:image/png;base64,'+png.toString('base64'));
+    assert.equal(first.message.attachments[0].dataUrl,undefined,'V2 references persisted image assets');
     assert.equal(first.message.context.records[0].attachmentId,first.message.attachments[0].id);
     assert.match(first.message.text,/Before\n\[.*\]\(t3-context:\/\/.*\)\n\[.*\]\(t3-context:\/\/.*\)\nAfter/);
     assert.doesNotMatch(first.message.text,/Tail/,'Unselected text stays out of the request');

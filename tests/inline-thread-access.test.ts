@@ -17,7 +17,7 @@ async function fixture(isMobile=false){
     fetch:async(url:string,options:any)=>{
       requests.push(url);
       assert.equal(new URL(url).origin,'https://vps.example');
-      if(url.endsWith('/.well-known/t3/environment'))return new Response(JSON.stringify({environmentId:'vps',label:'VPS',orchestrationProtocolVersion:1}));
+      if(url.endsWith('/.well-known/t3/environment'))return new Response(JSON.stringify({environmentId:'vps',label:'VPS',orchestrationProtocolVersion:2}));
       assert.equal(options.headers.Authorization,'Bearer device-session');
       return new Response(JSON.stringify({thread:{id:'thread',messages:[{role:'assistant',text:'Remote reply'}]}}));
     },
@@ -38,7 +38,7 @@ for(const isMobile of [false,true])test(`${isMobile?'mobile':'desktop with local
   assert.equal(snapshot.thread.messages[0].text,'Remote reply');
   assert.equal(h.localChecks(),0);
   assert.deepEqual(h.sessions,['vps-connection']);
-  assert.deepEqual(h.requests,['https://vps.example/.well-known/t3/environment','https://vps.example/api/orchestration/threads/thread?turnLimit=20']);
+  assert.deepEqual(h.requests,['https://vps.example/.well-known/t3/environment','https://vps.example/api/orchestration/threads/thread/bounded']);
 });
 
 test('a missing remote session fails without falling back to a local server',async()=>{

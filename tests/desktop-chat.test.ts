@@ -70,7 +70,7 @@ if(args[0]==='auth'){
   runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,
     require:(name:string)=>name==='obsidian'?api:realRequire(name),indexedDB,
     global:{},process,Buffer,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
-    WebSocket:settingsSocket(),Headers,Response,AbortController,URL,URLSearchParams,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval,console,
+    WebSocket:settingsSocket(undefined,undefined,(tag,payload)=>{assert.equal(tag,'orchestration.dispatchCommand');commands.push(payload);return {}; }),Headers,Response,AbortController,URL,URLSearchParams,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval,console,
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();return plugin;};
   const plugin=await start();
@@ -88,9 +88,9 @@ for(const existing of [false,true])test(`desktop chat ${existing?'reuses':'creat
     h.setNote('draft.md');await h.plugin.sendChat('Edit this note',{path:'draft.md',absolutePath:join(h.vaultRoot,'draft.md')});
     assert.equal(h.commands[0].projectId,h.project.id);
     assert.equal(h.commands[0].title,'draft');
-    assert.match(h.commands[1].message.text,/draft.md/);
-    assert.ok(h.commands[1].message.text.includes(JSON.stringify(join(h.vaultRoot,'draft.md'))));
-    assert.equal(h.commands[1].message.attachments.length,0);
+    assert.match(h.commands[1].text,/draft.md/);
+    assert.ok(h.commands[1].text.includes(JSON.stringify(join(h.vaultRoot,'draft.md'))));
+    assert.equal(h.commands[1].attachments.length,0);
     assert.equal(h.shared.at(-1).folderLinks[0].folderPath,'/');
     assert.equal(h.shared.at(-1).folderLinks[0].workspaceRoot,h.vaultRoot);
     assert.equal(h.shared.at(-1).folderLinks[0].tagTrigger,undefined);
@@ -100,8 +100,8 @@ for(const existing of [false,true])test(`desktop chat ${existing?'reuses':'creat
     h.plugin.onunload();const restarted=await h.start();
     h.setNote();await restarted.sendChat('Work in the vault');
     assert.equal(h.commands[2].projectId,h.project.id);
-    assert.ok(h.commands[3].message.text.startsWith('Work in the vault'));
-    assert.doesNotMatch(h.commands[3].message.text,/T3 EVENT HISTORY CAPABILITY/);
+    assert.ok(h.commands[3].text.startsWith('Work in the vault'));
+    assert.doesNotMatch(h.commands[3].text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal((await h.cliCalls()).filter(args=>args[0]==='project').length,existing?0:1);
     assert.equal(restarted.settings.completionJobs.length,0);
     restarted.onunload();
