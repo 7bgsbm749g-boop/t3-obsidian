@@ -1,14 +1,14 @@
 import {promises as fs} from 'node:fs';
-import {join,resolve,dirname,relative,isAbsolute} from 'node:path';
+import {join,resolve,dirname,isAbsolute} from 'node:path';
 import {homedir} from 'node:os';
 import {createHash,randomUUID} from 'node:crypto';
 import {createReadStream} from 'node:fs';
 import lockfile from 'proper-lockfile';
 import {contentHash} from './completion';
 import {readPrivateStorageRoute,storageRoutePath,type PrivateStorageRoute} from './private-storage';
+import {isPathInsideDirectory} from './desktop-path';
 
 const openings=new Map<string,Promise<PrivateStorageRoute>>();
-const inside=(root:string,path:string)=>{const part=relative(root,path);return !part||!isAbsolute(part)&&part!=='..'&&!part.startsWith('../');};
 async function syncDirectory(path:string){if(process.platform==='win32')return;const directory=await fs.open(path,'r');try{await directory.sync();}finally{await directory.close();}}
 async function fingerprint(path:string){const hash=createHash('sha256');for await(const chunk of createReadStream(path))hash.update(chunk);return hash.digest('hex');}
 async function copyChecked(source:string,destination:string){
@@ -48,7 +48,7 @@ export function ensurePrivateStorage(root:string,configDir:string,options?:{stor
     const route:PrivateStorageRoute={version:1,workspaceRoot:root,configDir,storageRoot:resolve(options?.storageRoot??join(homedir(),'.t3','send-to-t3-code','vaults',contentHash(root+'\0'+configDir)))};
     const prior=await existingPrivateStorage(root,configDir);if(prior){if(await fs.realpath(prior.storageRoot)!==prior.storageRoot)throw Error('Symlinked private storage.');await retireCopiedTrees(prior);return prior;}
     const vaults=[root];try{const registry=JSON.parse(await fs.readFile(join(homedir(),'.config/obsidian/obsidian.json'),'utf8'));for(const item of Object.values(registry.vaults??{}) as any[])if(item.path)vaults.push(await fs.realpath(item.path));}catch{}
-    if(vaults.some(vault=>inside(vault,route.storageRoot)))throw Error('Operational storage must be outside every synced vault.');
+    if(vaults.some(vault=>isPathInsideDirectory(vault,route.storageRoot)))throw Error('Operational storage must be outside every synced vault.');
     await fs.mkdir(route.storageRoot,{recursive:true,mode:0o700});if(await fs.realpath(route.storageRoot)!==route.storageRoot)throw Error('Symlinked private storage.');
     const release=await lockfile.lock(route.storageRoot,{realpath:true,stale:30_000,update:5000,retries:{retries:8,minTimeout:250,maxTimeout:1000}}),releases:Array<()=>Promise<void>>=[];
     try{

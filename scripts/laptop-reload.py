@@ -45,7 +45,11 @@ def mailbox(config: dict, command: dict, *, retry: bool = False, cleanup: bool =
     script = r'''
 $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'
 $p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('PAYLOAD')) | ConvertFrom-Json
-$storage=$p.vault; $routePath=Join-Path $p.vault '.obsidian/t3-code/storage-route.json'
+$routePath=Join-Path $p.vault '.obsidian/t3-code/storage-route.json'
+if(-not (Test-Path $routePath)) {
+  @{id=$p.command.id;ok=$false;pending=$true;bootstrapRequired=$true;error='The plugin command bridge is not initialized. Load the current plugin once to create its private mailbox.'} | ConvertTo-Json -Compress; exit
+}
+$storage=$null
 if(Test-Path $routePath) {
   $route=Get-Content $routePath -Raw | ConvertFrom-Json
   if($route.version -ne 1 -or $route.configDir -ne '.obsidian' -or

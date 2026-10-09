@@ -1,9 +1,10 @@
 import {promises as fs} from 'node:fs';
-import {basename,dirname,resolve,relative,isAbsolute} from 'node:path';
+import {basename,dirname,resolve,isAbsolute} from 'node:path';
 import {randomUUID,randomBytes,createHmac,timingSafeEqual} from 'node:crypto';
 import {contentHash} from './completion';
 import {applyGenerationCheckpoint,type GenerationJournal,type NoteGeneration} from './generated-note-coordinator';
 import type {HostedInlineState} from './hosted-inline';
+import {isPathInsideDirectory} from './desktop-path';
 
 interface Revision {version:1;index:number;previous:string|null;event:string;at:string;state:NoteGeneration;hash:string}
 type FileIdentity={dev:bigint;ino:bigint;size:bigint;mtimeNs:bigint;ctimeNs:bigint;mode:bigint};
@@ -11,7 +12,6 @@ type VerifiedFile={name:string;path:string;identity:FileIdentity};
 type VerifiedPrefix={files:VerifiedFile[];hashes:string[];latest?:Revision};
 const sameFile=(a:FileIdentity,b:FileIdentity)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs&&a.mode===b.mode;
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-const inside=(root:string,path:string)=>{const part=relative(root,path);return !part||!isAbsolute(part)&&part!=='..'&&!part.startsWith('../');};
 async function canonical(path:string):Promise<string>{
   try{return await fs.realpath(path);}catch(error:any){if(error.code!=='ENOENT')throw error;const parent=dirname(path);if(parent===path)throw error;return resolve(await canonical(parent),basename(path));}
 }
@@ -30,7 +30,7 @@ export class DesktopGenerationJournal implements GenerationJournal {
   static async open(root:string,syncedVaultRoots:readonly string[]){
     if(!isAbsolute(root)||!syncedVaultRoots.length||syncedVaultRoots.some(path=>!isAbsolute(path)))throw Error('Explicit absolute private storage and vault roots are required.');
     const actual=await canonical(root),vaults=await Promise.all(syncedVaultRoots.map(canonical));
-    if(vaults.some(vault=>inside(vault,actual)))throw Error('The response journal must be outside synced vaults.');
+    if(vaults.some(vault=>isPathInsideDirectory(vault,actual)))throw Error('The response journal must be outside synced vaults.');
     await fs.mkdir(actual,{recursive:true,mode:0o700});
     if(await fs.realpath(actual)!==actual)throw Error('Journal location changed while opening.');
     const journal=new DesktopGenerationJournal(actual);
