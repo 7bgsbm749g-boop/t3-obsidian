@@ -11,6 +11,7 @@ import {hostedRequestHash} from '../hosted-inline';
 import {initialRegion,replaceRegion,regionBody} from '../inline-thread';
 import {contentHash} from '../completion';
 import {responseAnchor} from '../native-response-projection';
+import {compactImportRecord} from '../run-import';
 
 const project={id:'chat-project',title:'Personal notes',workspaceRoot:'/projects/notes',connectionId:'chat-connection',connectionName:'Laptop'};
 
@@ -1675,7 +1676,7 @@ test('run import rejects unavailable associations and wrong source projects befo
   }finally{h.plugin.onunload();}
 });
 
-test('run import recovers terminal response evidence outside the active catalog and reuses an existing note response',async()=>{
+test('run import skips unrelated leases and recovers terminal evidence outside the active catalog without a duplicate',async()=>{
   const h=await chatHarness(),threadId=webcrypto.randomUUID(),messageId=webcrypto.randomUUID(),createdAt='2026-10-06T10:00:00Z',id=webcrypto.randomUUID();
   const note=h.attachEditor('Notes/Already-imported.md','Existing saved answer');
   const host={environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1',connectionId:'chat-connection'};
@@ -1683,9 +1684,17 @@ test('run import recovers terminal response evidence outside the active catalog 
   const state={status:'complete',finalSaved:true,notePath:note.file.path,turnId:'old-run',bindingCheckpoint:{bindings:{[messageId]:{turnId:'old-run',kind:'explicit'}},turns:{'old-run':{turnId:'old-run',messageId,requestedAt:createdAt,state:'completed'}}}};
   h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,state}));
   h.hostFiles.set(`${host.directory}/explorer-responses.json`,JSON.stringify([{id,notePath:note.file.path,epoch:1,revision:1,active:false,input:false,complete:true}]));
-  h.hostFiles.set(leasePaths(host.directory,'').catalog,'[]');
+  const unrelated={...request,id:webcrypto.randomUUID(),threadId:webcrypto.randomUUID()};
+  h.hostFiles.set(leasePaths(host.directory,'').catalog,JSON.stringify([unrelated]));
+  h.hostFiles.set(leasePaths(host.directory,unrelated.id).record,'An unrelated large or unreadable lease must not block this picker.');
   h.setSnapshotOverride(()=>({thread:{id:threadId,projectId:project.id,messages:[{id:messageId,role:'user',text:'Original',createdAt,turnId:null,streaming:false},{id:'old-answer',role:'assistant',text:'Existing saved answer',turnId:'old-run',createdAt,streaming:false},{id:'new',role:'user',text:'Later',createdAt:'2026-10-06T11:00:00Z',turnId:null,streaming:false}],activities:[],latestTurn:{turnId:'new-run',state:'running',requestedAt:'2026-10-06T11:00:00Z'},session:{status:'running',activeTurnId:'new-run'}}}));
-  try{const result=await h.plugin.importRun(note.file.path,project,threadId,messageId);assert.equal(result.duplicate,true);assert.equal(note.value,'Existing saved answer');assert.equal(h.commands.length,0);}finally{h.plugin.onunload();}
+  try{
+    const result=await h.plugin.importRun(note.file.path,project,threadId,messageId);assert.equal(result.duplicate,true);assert.equal(note.value,'Existing saved answer');assert.equal(h.commands.length,0);
+    const open=h.plugin.inlineHostFiles.bind(h.plugin);let compactReads=0;
+    h.plugin.inlineHostFiles=async(...args:any[])=>{const opened=await open(...args),read=opened.files.read;opened.files.read=async(path:string)=>{if(path===leasePaths(host.directory,id).record)throw Error(`T3 could not read the complete file: ${path}`);return read(path);};return opened;};
+    h.plugin.executeAgentCommand=async(command:any)=>{assert.equal(command.kind,'response-import-info');assert.equal(command.bindingId,id);compactReads++;return {id:command.id,ok:true,importRecord:compactImportRecord({request,state} as any)};};
+    const retried=await h.plugin.importRun(note.file.path,project,threadId,messageId);assert.equal(retried.duplicate,true);assert.equal(compactReads,1);assert.equal(note.value,'Existing saved answer');assert.equal(h.commands.length,0);
+  }finally{h.plugin.onunload();}
 });
 
 test('run import future following is explicit, reused on repeat and resumed after pause',async()=>{

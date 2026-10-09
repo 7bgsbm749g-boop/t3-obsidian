@@ -1,5 +1,5 @@
 import type {InlineActivity,InlineThreadState} from './inline-thread';
-export type ToolAction='command'|'edit'|'read'|'browser'|'device'|'search'|'code-search'|'link-pr'|'unlink-pr'|'list-prs'|'other';
+export type ToolAction='command'|'edit'|'read'|'browser'|'device'|'search'|'code-search'|'thread'|'link-pr'|'unlink-pr'|'list-prs'|'other';
 export interface ResponseTool {id:string;turnId:string;key:string;status:string;label:string;activeLabel:string;icon:string;action:ToolAction;createdAt?:string;sequence:number;command?:string;cwd?:string;output?:string;exitCode?:number;durationMs?:number;files?:string[]}
 export interface ResponseToolGroup {id:string;turnId:string;createdAt?:string;tools:ResponseTool[]}
 const object=(value:any):Record<string,any>=>value&&typeof value==='object'&&!Array.isArray(value)?value:{};
@@ -35,12 +35,16 @@ function fields(activity:InlineActivity){
   const p=object(activity.payload),data=object(p.data),item=object(data.item),input=object(item.input??data.input??object(data.state).input),result=object(item.result??data.result??data.output);
   const command=string(item.command)||string(input.command)||string(result.command)||string(data.command);
   const name=string(data.toolName)||[string(data.server),string(data.tool)].filter(Boolean).join('.')||string(p.title)||string(activity.summary).replace(/ started$/i,'');
+  const rawInput=item.input??data.input;let structuredInput=object(rawInput);
+  if(typeof rawInput==='string'){try{structuredInput=object(JSON.parse(rawInput));}catch{/* Provider summaries may be plain text. */}}
   const path=string(input.path??input.file_path??data.path??item.path);
   const rawOutput=content(item.aggregatedOutput)||content(result.content)||content(data.content)||content(item.content)||content(result.output)||content(data.output)||string(p.detail);
   const exitCode=item.exitCode??result.exitCode??data.exitCode,durationMs=item.durationMs??result.durationMs??data.durationMs;
   const status=string(p.status)||(activity.kind==='tool.completed'?'completed':'inProgress');
   const files=changedFiles(data);for(const file of [...(Array.isArray(p.files)?p.files:[]),...(Array.isArray(data.files)?data.files:[])])if(string(typeof file==='string'?file:file?.path))files.add(string(typeof file==='string'?file:file?.path));
-  return {status,name:/^(?:Tool|Tool updated)$/i.test(name)?undefined:name||undefined,path:path||undefined,kind:data.kind,itemType:p.itemType,requestKind:p.requestKind,
+  const query=string(structuredInput.query??structuredInput.q??structuredInput.search_query?.[0]?.q);
+  const threadId=string(structuredInput.threadId)||(/['"]threadId['"]\s*:\s*['"]([\w:-]+)['"]/.exec(typeof rawInput==='string'?rawInput:'')?.[1]??'');
+  return {status,name:/^(?:Tool|Tool updated)$/i.test(name)?undefined:name||undefined,path:path||undefined,kind:data.kind,itemType:p.itemType,requestKind:p.requestKind,query:query||undefined,threadId:threadId||undefined,
     command:command||undefined,cwd:string(item.cwd??input.workdir??data.cwd)||undefined,output:rawOutput&&rawOutput!==command?rawOutput:undefined,
     exitCode:typeof exitCode==='number'?exitCode:undefined,durationMs:typeof durationMs==='number'?durationMs:undefined,
     files:files.size?[...files]:undefined};
@@ -48,18 +52,20 @@ function fields(activity:InlineActivity){
 function toolAction(info:ReturnType<typeof fields>):ToolAction {
   const name=info.name??'',clean=name.replace(/^mcp__t3_code__|^mcp__t3-code__|^(?:t3-code|t3_code)[.·] */,'');
   const t3=/^(?:mcp__(?:t3_code|t3-code)__|(?:t3-code|t3_code)[.·] *)/.test(name);
-  if(t3){if(clean==='link_pull_request')return 'link-pr';if(clean==='unlink_pull_request')return 'unlink-pr';if(clean==='list_thread_pull_requests')return 'list-prs';if(clean.startsWith('preview_'))return 'browser';if(clean.startsWith('device_'))return 'device';}
+  if(t3){if(clean==='link_pull_request')return 'link-pr';if(clean==='unlink_pull_request')return 'unlink-pr';if(clean==='list_thread_pull_requests')return 'list-prs';if(clean.startsWith('preview_'))return 'browser';if(clean.startsWith('device_'))return 'device';if(clean.startsWith('t3_thread_'))return 'thread';}
   if(info.requestKind==='file-read'||info.itemType==='image_view'||info.kind==='read'||/^(?:Read|Read file|Reading file)$/i.test(name)||/read.?file|view.?image/i.test(name))return 'read';
   if(info.requestKind==='file-change'||info.itemType==='file_change'||info.kind==='edit'||/apply.?patch|edit|write.?file/i.test(name)||info.files?.length)return 'edit';
   if(info.command||info.itemType==='command_execution'||info.requestKind==='command')return 'command';
-  if(info.itemType==='web_search')return /grep/i.test(name)?'code-search':'search';
+  if(info.itemType==='web_search'||/^(?:web[._]run|mcp__web__run)$/.test(name))return /grep/i.test(name)?'code-search':'search';
   return 'other';
 }
 function presentation(info:ReturnType<typeof fields>){
   const {command,path,status}=info,name=info.name??'';
   const clean=name.replace(/^mcp__t3_code__|^mcp__[^_]+__|^functions[._]/,'').split('.').at(-1)??name;
   let target=command?commandProgram(command):compact(clean).replace(/_/g,' '),icon=command?'terminal':'wrench',action='run';
-  if(/view.?image|image.?view/i.test(clean)){action='view';target=path?.split(/[\\/]/).at(-1)||'image';icon='image';}
+  if(info.itemType==='web_search'||/^(?:web[._]run|mcp__web__run)$/.test(name)){action='search';target=info.query?`“${compact(info.query)}”`:'web';icon='search';}
+  else if(/^(?:mcp__t3_code__|mcp__t3-code__|t3-code[.]|t3_code[.])t3_thread_read$/.test(name)){action='read';target=info.threadId?`thread ${info.threadId.slice(0,8)}`:'thread';icon='messages-square';}
+  else if(/view.?image|image.?view/i.test(clean)){action='view';target=path?.split(/[\\/]/).at(-1)||'image';icon='image';}
   else if(/read.?file|^read$|^reading file$|file.?read/i.test(clean)||info.kind==='read'){action='read';target=path?.split(/[\\/]/).at(-1)||'file';icon='file-text';}
   else if(/search|^rg$|^grep$/.test(command?target:clean)){action='search';icon='search';}
   else if(/apply.?patch|edit|write.?file/i.test(clean)){action='edit';icon='pencil';}
@@ -131,7 +137,7 @@ export function currentResponseToolGroup(state:InlineThreadState,turnId:string,g
 export function renderResponseToolGroup(group:ResponseToolGroup,current?:{tool:ResponseTool;active:boolean}):string {
   const failures=group.tools.filter(t=>t.status==='failed').length,stopped=group.tools.filter(t=>t.status==='stopped'||t.status==='declined').length;
   const label=current?(current.active?current.tool.activeLabel:current.tool.label):`${summarizeResponseTools(group.tools)}${failures?` · ${failures} failed`:''}${stopped?` · ${stopped} stopped or declined`:''}`;
-  const summary=`<span data-t3-tool-icon="${html(current?.tool.icon??'hammer')}" aria-hidden="true"></span>`+(current?`<strong>${html(label)}</strong>${current.active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':''}`:`<span>${html(label)}</span>`);
+  const summary=`<span data-t3-tool-icon="${html(current?.tool.icon??'hammer')}" aria-hidden="true"></span><span>${html(label)}</span>`+(current?.active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'');
   return `<details class="${current?'send-to-t3-response-activity':'send-to-t3-tool-group'}" data-t3-tool-group="${html(group.id)}" data-t3-tool-summary="${html(summarizeResponseTools(group.tools))}"${current?' data-t3-live-tool="true"':''}><summary>${summary}</summary><div class="send-to-t3-tool-group-content">${group.tools.map(renderResponseTool).join('')}</div></details>`;
 }
 
@@ -150,6 +156,7 @@ export function summarizeResponseTools(tools:ResponseTool[]):string {
       case 'device':return `Used device controls ${count} ${plural('time')}`;
       case 'search':return `Searched the web ${count} ${plural('time')}`;
       case 'code-search':return `Searched code ${count} ${plural('time')}`;
+      case 'thread':return `Used T3 thread controls ${count} ${plural('time')}`;
       case 'link-pr':return `Linked ${count} ${plural('pull request')}`;
       case 'unlink-pr':return `Unlinked ${count} ${plural('pull request')}`;
       case 'list-prs':return count===1?'Checked linked pull requests':`Checked linked pull requests ${count} times`;

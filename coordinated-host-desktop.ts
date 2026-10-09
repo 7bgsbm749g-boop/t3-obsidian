@@ -20,6 +20,7 @@ import {deviceOriginalPath,leasePaths,terminalLease,type InlineLeaseAuthority,ty
 import {ResponseProjectionCache} from './response-projection-cache';
 import {LeaseRecordCache} from './lease-record-cache';
 import {completedSelectionDraft} from './inline-steering';
+import {compactImportRecord} from './run-import';
 
 /** Host lock is owned by DesktopInlineHost. Mailbox mutations, migration fences
  * and checkpoints share that authority's serialization. Journal bytes live
@@ -394,6 +395,16 @@ export class CoordinatedHost {
     }finally{if(detach)manager.cancel(path);}
   }
   async command(kind:string,id:string,hash?:string,notePath?:string){
+    if(kind==='response-import-info'){
+      if(!/^[0-9a-f-]{36}$/i.test(id))throw Error('Choose the exact response binding UUID.');
+      const raw=await this.files.read(leasePaths(this.identity.directory,id).record);
+      if(!raw)throw Error('Unknown response import record.');
+      const record:LeaseRecord=JSON.parse(raw);
+      if(record.request.id!==id||record.request.vaultId!==this.identity.vaultId)throw Error('Invalid response import identity.');
+      const importRecord=compactImportRecord(record);
+      if(new TextEncoder().encode(JSON.stringify(importRecord)).length>512_000)throw Error('The exact import evidence exceeds its read limit.');
+      return {importRecord};
+    }
     if(kind==='close-stream-block'){
       if(!notePath||!hash)throw Error('Choose the exact streaming block and note.');
       const matches=[...this.records.values()].filter(record=>record.coordinated&&(record.state?.notePath??record.request.notePath)===notePath&&record.state?.status==='complete'&&record.state.cleanupComplete&&record.state.finalSaved&&record.state.finalBody&&streamBlock(record.state.finalBody,id));

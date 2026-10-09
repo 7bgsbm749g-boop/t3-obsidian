@@ -8,6 +8,7 @@ import {responseActivityLabel,responseActivityRow} from './response-activity';
 import {visibleInlineInput} from './input-presentation';
 import {responseToolGroups,currentResponseToolGroup,renderResponseToolGroup} from './response-tools';
 import {applyV2ControlEvent,responseRun} from './orchestration-v2';
+import {responseEmissions} from './response-emissions';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;createdAt?:string;context?:unknown}
@@ -513,10 +514,19 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const heading=`**${label} · ${phase==='running'||phase==='sending'?'Working':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const timer=timing?' '+runTimer(timing):'';
   const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
-  const toolGroups=responseToolGroups(state,[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])]);
-  const currentTool=phase==='running'?currentResponseToolGroup(state,turnId,toolGroups):undefined;
+  const displayedTurns=[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])];
+  const toolGroups=responseToolGroups(state,displayedTurns);
+  const emissions=responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim())));
+  let currentTool=phase==='running'?currentResponseToolGroup(state,turnId,toolGroups):undefined;
+  const latestEmission=phase==='running'?emissions.at(-1):undefined;
+  const currentEmission=latestEmission?.active&&latestEmission.turnId===turnId&&
+    !state.messages.some(message=>message.turnId===turnId&&Date.parse(message.createdAt??'')>Date.parse(latestEmission.createdAt??''))&&
+    (!currentTool||Date.parse(currentTool.tool.createdAt??'')<=Date.parse(latestEmission.createdAt??''))?latestEmission:undefined;
+  if(currentEmission)currentTool=undefined;
   const historyGroups=toolGroups.filter(group=>group!==currentTool?.group);
-  const bottom=spinner?`\n\n${currentTool?renderResponseToolGroup(currentTool.group,currentTool):responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Thinking')}`:'';
+  const historyRows=[...historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.tools[0].sequence,body:renderResponseToolGroup(group)})),
+    ...emissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
+  const bottom=spinner?`\n\n${currentEmission?.body??(currentTool?renderResponseToolGroup(currentTool.group,currentTool):responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Thinking'))}`:'';
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
@@ -546,7 +556,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const finalIndex=finalId?pieces.reduce((last,piece,index)=>piece.role==='assistant'&&piece.messageId===finalId?index:last,-1):-1;
     const history:string[]=[];let final='';
     let toolIndex=0;
-    const toolsBefore=(at=Infinity)=>{while(toolIndex<historyGroups.length&&(Date.parse(historyGroups[toolIndex].createdAt??'')||0)<=at)history.push(renderResponseToolGroup(historyGroups[toolIndex++]));};
+    const toolsBefore=(at=Infinity)=>{while(toolIndex<historyRows.length&&(Date.parse(historyRows[toolIndex].createdAt??'')||0)<=at)history.push(historyRows[toolIndex++].body);};
     for(const [index,piece] of pieces.entries()){
       const message=state.messages.find(message=>message.id===piece.messageId)??all.find(message=>message.id===piece.messageId);if(message?.createdAt)toolsBefore(Date.parse(message.createdAt));
       if(index===finalIndex)final=assistant(piece.text,piece.messageId);
@@ -561,7 +571,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):approvals;
     return input+fold+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }
-  const toolHistory=retain?historyGroups.map(group=>renderResponseToolGroup(group)).join('\n\n'):'';
+  const toolHistory=(retain?historyRows:phase!=='complete'?emissions.filter(item=>item!==currentEmission):[]).map(item=>item.body).join('\n\n');
   if(phase==='complete')return input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
   const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):approvals?'\n\n'+approvals:'';
   const body=prose?`\n\n${prose}\n`:'';

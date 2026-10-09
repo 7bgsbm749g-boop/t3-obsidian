@@ -42,8 +42,11 @@ export function itemActivities(item:any,requests:Record<string,any>={}):InlineAc
     if(!pending)result.push({...base,createdAt:request?.resolvedAt??item.completedAt??item.updatedAt,id:`v2:${item.id}:resolved`,kind:`${kind}.resolved`,summary:'Request closed',payload});
     return result;
   }
-  if(['user_message','assistant_message','reasoning','proposed_plan','todo_list','checkpoint','notification'].includes(item.type))return [];
+  if(['user_message','assistant_message','reasoning','checkpoint'].includes(item.type))return [];
   const status=terminal(item.status)?item.status==='failed'?'failed':item.status==='interrupted'||item.status==='cancelled'?'stopped':'completed':'inProgress';
+  if(['compaction','proposed_plan','todo_list','notification','error'].includes(item.type))return [{...base,id:`v2:${item.id}`,
+    kind:item.type==='compaction'?'context-compaction':['proposed_plan','todo_list'].includes(item.type)?'response.plan':'response.notification',
+    summary:item.title??item.type.replace(/_/g,' '),payload:{status,text:item.text??item.summary??item.failure?.message,steps:item.steps,error:item.type==='error'}}];
   return [{...base,id:`v2:${item.id}`,kind:terminal(item.status)?'tool.completed':'tool.updated',summary:item.title??item.toolName??item.type.replace(/_/g,' '),
     payload:{toolCallId:item.id,itemType:item.type,status,title:item.title??item.toolName,
       files:item.fileName?[item.fileName]:undefined,data:{toolName:item.toolName??item.type,kind:item.type,

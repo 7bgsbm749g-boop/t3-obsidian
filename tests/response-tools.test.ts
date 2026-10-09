@@ -5,6 +5,13 @@ import {responseActivityLabel} from '../response-activity';
 import {stoppedResponseBody} from '../response-stop';
 import {renderInlineTurn,type InlineThreadState,type InlineActivity} from '../inline-thread';
 const a=(id:string,sequence:number,kind:string,payload:any):InlineActivity=>({id,turnId:'turn',sequence,kind,summary:'Tool',createdAt:new Date(sequence*1000).toISOString(),payload});
+test('v2 web search and T3 thread reads use specific labels with neutral live text',()=>{
+  const state={messages:[],activities:[a('search',1,'tool.updated',{toolCallId:'search',itemType:'web_search',data:{toolName:'web_search',input:'{"query":"Obsidian docs"}'}}),
+    a('read',2,'tool.updated',{toolCallId:'read',itemType:'dynamic_tool',data:{toolName:'t3-code.t3_thread_read',input:"{'threadId': 'bc4a870c-6287-59c1-8d17-861e7a9cb050'}"}})]};
+  const tools=responseTools(state,['turn']);assert.equal(tools[0].label,'Searching “Obsidian docs”');assert.equal(tools[0].action,'search');assert.equal(tools[1].label,'Reading thread bc4a870c');assert.equal(tools[1].icon,'messages-square');
+  state.activities[0].payload!.data.input='';assert.equal(responseTools(state,['turn'])[0].label,'Searching web');
+  const live=renderInlineTurn(state,'turn','thread','running','collapse');assert.doesNotMatch(live,/<strong>Reading thread/);
+});
 test('shell labels match the program while details retain the exact command',()=>{
   const command="/bin/bash -lc 'npm test > /tmp/test.log 2>&1'";assert.equal(commandProgram(command),'npm');assert.equal(commandProgram('cd /tmp && python3 check.py'),'python3');
   const [tool]=responseTools({messages:[],activities:[a('start',1,'tool.started',{toolCallId:'cmd',data:{item:{command,cwd:'/tmp/work'},files:[{path:'/tmp/test.txt'}]}})]},['turn']);
@@ -39,16 +46,16 @@ test('consecutive calls become one collapsed history group; the current batch ap
   for(const mode of ['keep','collapse','remove'] as const){
     const body=renderInlineTurn(state,'turn','thread','running',mode);
     assert.equal(body.match(/data-t3-tool-id="three"/g)?.length,1);
-    assert.match(body,/<details class="send-to-t3-response-activity"[^\n]+<strong>Running npm<\/strong>/);
+    assert.match(body,/<details class="send-to-t3-response-activity"[^\n]+<span>Running npm<\/span>/);
     assert.match(body,mode==='collapse'?/^> <details class="send-to-t3-response-activity"/m:/^<details class="send-to-t3-response-activity"/m);
     assert.match(body,/data-t3-tool-id="three"[^>]+data-t3-tool-status="completed"[^\n]+Ran npm/);
     if(mode!=='remove'){assert.match(body,/<details class="send-to-t3-tool-group"[^>]*><summary>[^\n]*<span>Ran 2 commands<\/span><\/summary>/);assert.equal(body.match(/first output/g)?.length,1);}
     const stopped=stoppedResponseBody(body);assert.doesNotMatch(stopped,/data-t3-live-tool|response-activity|inline-spinner/);assert.match(stopped,/build passed/);
   }
   const collapsed=renderInlineTurn(state,'turn','thread','running','collapse');assert.ok(collapsed.indexOf('Before.')<collapsed.indexOf('Ran 2 commands')&&collapsed.indexOf('Ran 2 commands')<collapsed.indexOf('Between batches.'));
-  state.messages.push(message('reason',7,'Private reasoning','reasoning'));
+  state.messages.push(message('reason',7,'Public reasoning summary','reasoning'));
   assert.equal(currentResponseToolGroup(state,'turn'),undefined);assert.equal(responseActivityLabel(state,'turn'),'Thinking');
-  const advanced=renderInlineTurn(state,'turn','thread','running','collapse');assert.match(advanced,/<span>Ran 1 command<\/span><\/summary>/);assert.doesNotMatch(advanced,/Private reasoning|<strong>Running npm/);
+  const advanced=renderInlineTurn(state,'turn','thread','running','collapse');assert.match(advanced,/<span>Ran 1 command<\/span><\/summary>/);assert.match(advanced,/\[!t3-thought\]- Thought/);assert.match(advanced,/Public reasoning summary/);assert.doesNotMatch(advanced,/<strong>Running npm/);
 });
 
 test('new prose, user input and turns split groups without merging reused tool IDs or reopening results',()=>{

@@ -958,11 +958,24 @@ export default class SendToT3 extends Plugin {
       // index retains their IDs so old checkpoints and duplicate proofs survive.
       const explorer=loadExplorerResponses(JSON.parse((await opened.files.read(explorerResponsePath(host.directory)))??'[]'));
       const ids=new Set([...catalog.map(request=>request.id),...explorer.map(response=>response.id)]);
-      const records:LeaseRecord[]=[];
+      const records:import('./run-import').ImportRecord[]=[];
       for(const id of ids){
-        const raw=await opened.files.read(leasePaths(host.directory,id).record);
+        // Requests are immutable and small. Do not read large unrelated lease
+        // histories merely to show this source's run picker. Legacy missing
+        // requests still fall back to the authoritative record.
+        const candidate=catalog.find(request=>request.id===id)??JSON.parse((await opened.files.read(hostedPaths(host.directory,id).request))??'null');
+        if(candidate?.id===id&&typeof candidate.threadId==='string'&&typeof candidate.projectId==='string'&&typeof candidate.threadEnvironmentId==='string'&&
+          (candidate.threadId!==source.threadId||candidate.projectId!==source.projectId||candidate.threadEnvironmentId!==source.environmentId||candidate.vaultId!==this.settings.vaultId))continue;
+        const recordPath=leasePaths(host.directory,id).record;
+        let raw:string|undefined;
+        try{raw=await opened.files.read(recordPath);}catch(error){
+          if((error as any)?.message!==`T3 could not read the complete file: ${recordPath}`)throw error;
+          const result=await this.executeAgentCommand({version:1,id:randomId(),kind:'response-import-info',bindingId:id}) as {importRecord?:import('./run-import').ImportRecord};
+          if(result.importRecord?.request.id!==id)throw Error('The response host returned invalid import evidence. Update and reload the host.');
+          raw=JSON.stringify(result.importRecord);
+        }
         if(!raw)continue;
-        const record:LeaseRecord=JSON.parse(raw),request=record.request;
+        const record:import('./run-import').ImportRecord=JSON.parse(raw),request=record.request;
         if(request.vaultId===this.settings.vaultId&&request.threadId===source.threadId&&request.projectId===source.projectId&&request.threadEnvironmentId===source.environmentId)records.push(record);
       }
       return records;

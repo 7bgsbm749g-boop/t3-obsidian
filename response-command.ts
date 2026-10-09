@@ -1,5 +1,5 @@
 import {safeNotePath} from './hosted-inline';
-export const RESPONSE_COMMANDS=['resolve-response-location','response-status','resume-response','stage-note-edit','submit-note-edit','repair-response','remove-response','close-stream-block'] as const;
+export const RESPONSE_COMMANDS=['resolve-response-location','response-status','response-import-info','resume-response','stage-note-edit','submit-note-edit','repair-response','remove-response','close-stream-block'] as const;
 export interface CloseStreamBlockCommand {version:1;id:string;kind:'close-stream-block';foldKey:string;hash:string;notePath:string}
 export type ResponseCommand=CloseStreamBlockCommand|{version:1;id:string;kind:Exclude<typeof RESPONSE_COMMANDS[number],'close-stream-block'>;bindingId:string;hash?:string;notePath?:string};
 const uuid=(value:unknown)=>typeof value==='string'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);

@@ -38,6 +38,20 @@ async function setup(native=true,liveLease=false,collapse=false,device=false){
   return {root,app,identity,base,host,authority,client,files,storage,request,id,notes,file,writer,complete:()=>{completed=true;},writes:()=>writes,close:async()=>{writer.stop();host.stop();authority.stop();client.dispose();await rm(root,{recursive:true,force:true});}};
 }
 
+test('import-info returns compact exact bindings from a large lease without writing the lease, journal or note',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const path=leasePaths(h.identity.directory,h.id).record,record=JSON.parse((await h.files.read(path))!);
+  record.state.body='Large response'.repeat(130000);
+  record.state.bindingCheckpoint={bindings:{[h.request.messageId]:{turnId:'turn',kind:'explicit'}},turns:{turn:{turnId:'turn',messageId:h.request.messageId,state:'completed'}},inputBoundaries:{input:[{text:record.state.body}]}};
+  const bytes=JSON.stringify(record);await h.files.write(path,bytes);const note=h.notes.get('Note.md'),journal=JSON.stringify(await h.host.journal.read(h.id)),writes=h.writes();
+  const result:any=await h.host.command('response-import-info',h.id);
+  assert.ok(JSON.stringify(result).length<5000);assert.equal(result.importRecord.state.bindingCheckpoint.turns.turn.messageId,h.request.messageId);
+  assert.equal(result.importRecord.state.body,undefined);assert.equal(result.importRecord.state.bindingCheckpoint.inputBoundaries,undefined);
+  assert.equal(await h.files.read(path),bytes);assert.equal(h.notes.get('Note.md'),note);assert.equal(h.writes(),writes);assert.equal(JSON.stringify(await h.host.journal.read(h.id)),journal);
+  await assert.rejects(h.host.command('response-import-info','../wrong'),/binding UUID/);
+ }finally{await h.close();}
+});
+
 test('negotiated host keeps a final result private while the sender saves with Sync disconnected',async()=>{
  const h=await setup(true,false,false,true);try{
   const original=h.notes.get('Note.md')!;h.notes.delete('Note.md');

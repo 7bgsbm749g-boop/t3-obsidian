@@ -157,6 +157,12 @@
   overflow-wrap: anywhere;
 }
 .send-to-t3-response-activity[role="status"] { display: inline-flex; align-items: center; gap: .5em; }
+.send-to-t3-response-activity > summary > strong { font-weight: inherit; }
+.send-to-t3-context { display: inline-flex; align-items: center; gap: .5em; color: var(--text-muted); font-size: var(--font-smaller); }
+.callout[data-callout="t3-thought"], .callout[data-callout="t3-plan"] { background: transparent; border: 0; padding: .35em 0; }
+.callout[data-callout="t3-thought"] { --callout-icon: lucide-brain; }
+.callout[data-callout="t3-plan"] { --callout-icon: lucide-list-checks; }
+.callout[data-callout="t3-thought"] > .callout-title, .callout[data-callout="t3-plan"] > .callout-title { font-size: var(--font-smaller); font-weight: normal; color: var(--text-muted); }
 
 .send-to-t3-destination-top {
   display: flex;

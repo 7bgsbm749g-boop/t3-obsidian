@@ -53,7 +53,7 @@ test('one bottom row inside the collapse fold, outside prose and controls in oth
   const live={...state([activity('read','tool.started',{data:{toolName:'Read'}})]),messages:[{id:'prose',role:'assistant',turnId:'turn',text:'Progress\n\n```ts\nunfinished',streaming:true}]};
   for(const mode of ['remove','keep','collapse'] as const){
     const text=renderInlineTurn(live,'turn','thread','running',mode);
-    assert.equal(text.split('class="send-to-t3-response-activity"').length-1,1);assert.match(text,/<strong>Reading file<\/strong>/);
+    assert.equal(text.split('class="send-to-t3-response-activity"').length-1,1);assert.match(text,/<span>Reading file<\/span>/);
     assert.equal(text.split('class="send-to-t3-inline-spinner"').length-1,2);
     const ast=unified().use(remarkParse).parse(text+'\nFOLLOWING USER CONTENT');
     const blocks=ast.children.filter(n=>n.type==='blockquote'||n.type==='code').map(node=>text.slice(node.position!.start.offset!,node.position!.end.offset!));
@@ -69,14 +69,14 @@ test('one bottom row inside the collapse fold, outside prose and controls in oth
     const initial=initialRegion('id',undefined,'Title',mode).text;
     assert.match(initial,/response-activity/);
     assert.match(initial,/\*\*Title · Working\*\*/);
-    assert.match(initial,/<span data-t3-tool-icon="brain" aria-hidden="true"><\/span><strong>Thinking<\/strong>/);
+    assert.match(initial,/<span data-t3-tool-icon="brain" aria-hidden="true"><\/span><span>Thinking<\/span>/);
     assert.match(initial,mode==='collapse'?/^> <span class="send-to-t3-response-activity"/m:/^<span class="send-to-t3-response-activity"/m);
     assert.doesNotMatch(stoppedResponseBody(initial),/response-activity|spinner/);
     const fallback=renderInlineTurn(state(),'turn','thread','reconnecting',mode);
-    assert.match(fallback,/<span data-t3-tool-icon="brain" aria-hidden="true"><\/span><strong>Thinking<\/strong>/);
+    assert.match(fallback,/<span data-t3-tool-icon="brain" aria-hidden="true"><\/span><span>Thinking<\/span>/);
     assert.doesNotMatch(stoppedResponseBody(fallback),/response-activity|spinner/);
   }
-  assert.match(renderInlineTurn(live,'turn','thread','reconnecting'),/<strong>Thinking<\/strong>/);
+  assert.match(renderInlineTurn(live,'turn','thread','reconnecting'),/<span>Thinking<\/span>/);
 });
 
 test('labels cannot inject HTML; Stop preserves examples and neighboring content',()=>{
