@@ -50,7 +50,7 @@ export class DesktopInlineHost {
   private authority:InlineLeaseAuthority;
   private stopAuthorityReads:()=>void;
   private authorityStorage:ReturnType<typeof interruptibleAuthorityFiles>;
-  status(){return {active:this.active,authority:this.authority.status(),storage:this.authorityStorage.status(),readCache:inlineReadCache.status(),codeRangeCache:markdownCodeCacheStatus(),projectionCache:this.coordinated?.projectionStatus(),leaseCache:this.coordinated?.leaseCacheStatus()};}
+  status(){return {active:this.active,authority:this.authority.status(),storage:this.authorityStorage.status(),readCache:inlineReadCache.status(),codeRangeCache:markdownCodeCacheStatus(),projectionCache:this.coordinated?.projectionStatus(),leaseCache:this.coordinated?.leaseCacheStatus(),journal:this.coordinated?.journalStatus()};}
   private stopAuthorityTimer:()=>void;
   private stopMaintenanceTimer:()=>void=()=>{};
   private work=new Set<Promise<void>>();
@@ -119,10 +119,10 @@ export class DesktopInlineHost {
   deleted(path:string){this.authority.deleted(path);}
   dispose(){
     if(this.closing)return this.closing;
-    this.stopped=true;this.stopAuthorityTimer();this.stopMaintenanceTimer();this.coordinated?.stop();this.authority.stop();this.stopAuthorityReads();this.writer.stop();this.nativeWriter?.stop();
+    this.stopped=true;this.stopAuthorityTimer();this.stopMaintenanceTimer();const journals=this.coordinated?.stop();this.authority.stop();this.stopAuthorityReads();this.writer.stop();this.nativeWriter?.stop();
     this.closing=(async()=>{
       try{
-        await Promise.allSettled([...this.work,this.authority.tick(),this.authority.cleanupReplies()]);
+        await Promise.allSettled([...this.work,journals,this.authority.tick(),this.authority.cleanupReplies()]);
         await this.accessCache.dispose();
         await this.closeStorage();
       }finally{await this.release();}

@@ -39,7 +39,7 @@ test('legacy migration checks the full chain before retiring it and retains an u
     for(let n=0;n<40;n++){state.sequence=n;await legacy.append(id,state,'checkpoint');}
     state.status='conflict';state.conflicts=[{original:state.original,latest:'Local version '.repeat(1000),proposed:'Generated version '.repeat(1000),reason:'Unresolved overlap'}];await legacy.append(id,state,'conflict');
     const journal=await CurrentGenerationJournal.open(h.privateRoot,[h.vault]),migrated=(await journal.read(id))!;
-    assert.deepEqual(migrated,state);assert.equal((await fs.readdir(join(h.privateRoot,id))).filter(name=>/^\d{10}\.json$/.test(name)).length,0);
+    assert.deepEqual(migrated,state);await journal.maintain();assert.equal((await fs.readdir(join(h.privateRoot,id))).filter(name=>/^\d{10}\.json$/.test(name)).length,0);
     await journal.maintain();const reopened=await CurrentGenerationJournal.open(h.privateRoot,[h.vault]);assert.deepEqual(await reopened.read(id),state);
     await reopened.settle(id,'not-a-commit','0'.repeat(64));assert.equal((await reopened.read(id))!.conflicts[0].reason,'Unresolved overlap');
   }finally{await h.close();}
@@ -55,7 +55,7 @@ test('many streaming checkpoints retain one head, bounded events, and only usefu
   const h=await fixture(),id=randomUUID();try{
     const journal=await CurrentGenerationJournal.open(h.privateRoot,[h.vault]),state=initial(id);await journal.append(id,state,'accepted');
     for(let n=0;n<100;n++)await journal.checkpoint(id,n,{requestHash:'fixture',accepted:true,notePath:'Note.md',status:'running',hashes:[],updatedAt:'',body:('Reply '+n+'\n').repeat(1000)},'Note.md');
-    const directory=join(h.privateRoot,id,'current'),head=JSON.parse(await fs.readFile(join(directory,'state.json'),'utf8')),objects=await fs.readdir(join(directory,'objects'));
+    await journal.maintain();const directory=join(h.privateRoot,id,'current'),head=JSON.parse(await fs.readFile(join(directory,'state.json'),'utf8')),objects=await fs.readdir(join(directory,'objects'));
     assert.equal(head.events.length,64);assert.equal(objects.length,2,'the original and current reply survive; past streams do not');
     const reopened=await CurrentGenerationJournal.open(h.privateRoot,[h.vault]);assert.equal((await reopened.read(id))!.sequence,99);
     const stale=(await journal.read(id))!;await journal.checkpoint(id,101,{requestHash:'fixture',accepted:true,notePath:'Note.md',status:'running',hashes:[],updatedAt:''},'Note.md');await assert.rejects(journal.append(id,stale,'stale'),/predecessor/);
@@ -66,7 +66,7 @@ test('settled conflict copies clear only after the exact verified result and ack
     const journal=await CurrentGenerationJournal.open(h.privateRoot,[h.vault]),state=initial(id);state.status='verified';state.verified={commitId:'commit',hash:contentHash('Saved'),document:'Saved'};state.conflicts=[{original:state.original,latest:'Old conflict '.repeat(1000),reason:'Resolved overlap'}];await journal.append(id,state,'verified');
     const draft=join(h.privateRoot,id,'staged.md');await fs.writeFile(draft,state.original);await journal.settle(id,'commit',state.verified.hash);assert.equal((await journal.read(id))!.conflicts.length,1);assert.equal(await fs.readFile(draft,'utf8'),state.original);
     state.acknowledgements=[{deviceId:'sender',commitId:'commit',hash:state.verified.hash,observedAt:''}];await journal.append(id,state,'device-observed');await journal.settle(id,'wrong',state.verified.hash);assert.equal((await journal.read(id))!.conflicts.length,1);
-    await journal.settle(id,'commit',state.verified.hash);assert.equal((await journal.read(id))!.conflicts.length,0);assert.equal((await fs.readdir(join(h.privateRoot,id,'current','objects'))).length,1);await assert.rejects(fs.access(draft),/ENOENT/);
+    await journal.settle(id,'commit',state.verified.hash);await journal.maintain();assert.equal((await journal.read(id))!.conflicts.length,0);assert.equal((await fs.readdir(join(h.privateRoot,id,'current','objects'))).length,1);await assert.rejects(fs.access(draft),/ENOENT/);
     await fs.writeFile(draft,'Unsubmitted user draft');await journal.settle(id,'commit',state.verified.hash);assert.equal(await fs.readFile(draft,'utf8'),'Unsubmitted user draft');
   }finally{await h.close();}
 });

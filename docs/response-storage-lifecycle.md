@@ -13,6 +13,22 @@ and syncs the head atomically, verifies readback, then records an authenticated
 publication anchor. Stale revisions, changed objects, missing published heads
 and authenticated rollback are rejected.
 
+Recovery maintenance verifies small heads separately from full document reads.
+Unchanged records make no full-state copies. Changed checksum objects are hashed
+in 64 KiB buffers; fresh file identities, head authentication and publication
+anchors remain required. Public reads receive isolated mutable states. Small
+verified heads and hydrated states have separate entry and character budgets;
+scans beyond either limit do not evict every warm record.
+
+Publication, matched acknowledgements, conflict settlement and removal queue
+cleanup. Startup discovers unfinished work. A 30-second safety scan resumes in
+small directory slices. Each maintenance call selects at most four records and
+each cleanup slice visits at most 512 files, with at most eight retained cleanup
+cursors. Calls coalesce, active delivery queues take priority, and shutdown
+cancels cleanup and closes cursors. Failed integrity checks retain evidence and
+retry slowly. If removal publishes a retired state, collection uses its verified
+new head. Delivery and ownership intervals are unchanged.
+
 Migration verifies the entire legacy hash chain and publishes its exact latest
 state without changing the revision or authorizing a note write. Old snapshots
 are deleted only after verified publication. Bounded maintenance resumes
@@ -75,6 +91,13 @@ rollback, replay protection, retention bounds, pending commands, explicit remova
 and failed conflict saves. The existing suite checks Stop, reload, rename,
 concurrent destinations, staged edits, subscriptions and permanent final grants.
 Full build/tests and real QLO2 smoke remain required release gates.
+
+Focused maintenance tests cover zero document copies over both cache limits,
+mutable read isolation, same-size replacement, missing files, authenticated
+rollback, pending rename retention, restarted cleanup, bounded file visits,
+changed publication during cleanup, cancellation and delivery priority. Numeric
+journal counters in desktop status expose verification, hydration, copy and
+cleanup counts without document contents.
 
 The independent desktop Sync fixture checks local completion and retirement
 while sender Sync is stopped, then exact file propagation and visible receiving

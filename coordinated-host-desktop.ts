@@ -298,6 +298,7 @@ export class CoordinatedHost {
       }catch(error){const detail=error instanceof Error?error.message:String(error);this.failures.set(identity,detail);logFailure('response.coordinator.scan-conflict',error,{bindingId:identity});}
   }
   maintain(){return this.stopped?Promise.resolve():this.journal.maintain();}
+  journalStatus(){return this.journal.status();}
   legacyRequests(paths:string[]):string[]{
     // Unknown paths retain the original discovery behavior. A freshly read
     // lease proves which known requests the version-one writer cannot accept.
@@ -484,5 +485,5 @@ export class CoordinatedHost {
     throw Error('Unsupported response command.');
   }
   async renamed(before:string,after:string){await this.authority.renameNative(before,after);await this.scan();}
-  stop(){this.stopped=true;this.backgroundChecks.clear();this.terminalRevisions.clear();this.projections.clear();this.leaseCache.clear();}
+  stop(){this.stopped=true;this.backgroundChecks.clear();this.terminalRevisions.clear();this.projections.clear();this.leaseCache.clear();return this.journal.stop();}
 }
