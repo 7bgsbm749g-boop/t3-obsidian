@@ -47,6 +47,8 @@ test('import-info returns compact exact bindings from a large lease without writ
   const result:any=await h.host.command('response-import-info',h.id);
   assert.ok(JSON.stringify(result).length<5000);assert.equal(result.importRecord.state.bindingCheckpoint.turns.turn.messageId,h.request.messageId);
   assert.equal(result.importRecord.state.body,undefined);assert.equal(result.importRecord.state.bindingCheckpoint.inputBoundaries,undefined);
+  const page:any=await h.host.command('response-import-records',randomUUID(),undefined,undefined,{version:1,id:randomUUID(),kind:'response-import-records',source:{threadId:h.request.threadId,projectId:h.request.projectId,environmentId:h.request.threadEnvironmentId}});
+  assert.equal(page.importRecords.length,1);assert.equal(page.importRecords[0].request.id,h.id);assert.ok(JSON.stringify(page).length<5000);
   assert.equal(await h.files.read(path),bytes);assert.equal(h.notes.get('Note.md'),note);assert.equal(h.writes(),writes);assert.equal(JSON.stringify(await h.host.journal.read(h.id)),journal);
   await assert.rejects(h.host.command('response-import-info','../wrong'),/binding UUID/);
  }finally{await h.close();}

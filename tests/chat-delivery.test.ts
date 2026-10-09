@@ -12,6 +12,7 @@ import {initialRegion,replaceRegion,regionBody} from '../inline-thread';
 import {contentHash} from '../completion';
 import {responseAnchor} from '../native-response-projection';
 import {compactImportRecord} from '../run-import';
+import {readImportRecordsPage} from '../import-records';
 
 const project={id:'chat-project',title:'Personal notes',workspaceRoot:'/projects/notes',connectionId:'chat-connection',connectionName:'Laptop'};
 
@@ -144,11 +145,23 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
       else if(req.tag==='assets.persistChatAttachments')value={attachments:req.payload.attachments.map((a:any,i:number)=>({type:a.type,id:`stored-${req.payload.messageId}-${i}`,name:a.name,mimeType:a.mimeType,sizeBytes:a.sizeBytes}))};
       else if(req.tag==='server.getConfig')value=modelConfig();
       else if(req.tag==='filesystem.browse')value={parentPath:req.payload.partialPath==='~'?'/home/person':req.payload.partialPath.replace(/\/$/,''),entries:[]};
-      else if(req.tag==='projects.writeFile'){hostFiles.set(req.payload.relativePath,req.payload.contents);value={};}
+      else if(req.tag==='projects.writeFile'){
+        hostFiles.set(req.payload.relativePath,req.payload.contents);value={};
+        if(req.payload.relativePath.includes('/commands/v1/requests/')){
+          const command=JSON.parse(req.payload.contents);let result:any;
+          try{
+            if(command.kind==='response-import-records')result=await readImportRecordsPage({read:async path=>hostFiles.get(path),list:async directory=>[...hostFiles.keys()].filter(path=>path.startsWith(directory+'/'))},{vaultId:shared.at(-1).vaultId,environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1'},command.source,command.cursor);
+            else if(command.kind==='response-import-info'){const raw=hostFiles.get(leasePaths('.obsidian/t3-code/inline/v1',command.bindingId).record);if(!raw)throw Error('Unknown response import record.');result={importRecord:compactImportRecord(JSON.parse(raw))};}
+            else throw Error('Unexpected response command in import fixture');
+            result={id:command.id,ok:true,...result};
+          }catch(error){result={id:command.id,ok:false,error:(error as Error).message};}
+          hostFiles.set(req.payload.relativePath.replace('/requests/','/results/'),JSON.stringify(result));
+        }
+      }
       else if(req.tag==='projects.readFile'&&req.payload.relativePath==='.obsidian/t3-code/storage-route.json'){
         this.onmessage?.({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'ProjectReadFileError'}}]}})});return;
       }
-      else if(req.tag==='projects.readFile'&&req.payload.relativePath.startsWith('.obsidian/t3-code/inline/')){
+      else if(req.tag==='projects.readFile'&&/^\.obsidian\/t3-code\/(inline|commands)\//.test(req.payload.relativePath)){
         if(req.payload.relativePath.includes('/replies/'))await hostTick();
         const contents=hostFiles.get(req.payload.relativePath);
         if(contents===undefined){this.onmessage?.({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'ProjectReadFileError'}}]}})});return;}
@@ -168,7 +181,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();const timer=setInterval(()=>plugin.deviceInline?.tick(),20);const unload=plugin.onunload.bind(plugin);plugin.onunload=()=>{clearInterval(timer);unload();};return plugin;};
   const plugin=await start();
-  return {setSnapshotOverride:(value:typeof snapshotOverride)=>{snapshotOverride=value;},setReadOverride:(value:typeof readOverride)=>{readOverride=value;},notices,setStreaming:(value:boolean)=>{streaming=value;},plugin,start,commands,shared,hostFiles,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+  return {platform:api.Platform,setSnapshotOverride:(value:typeof snapshotOverride)=>{snapshotOverride=value;},setReadOverride:(value:typeof readOverride)=>{readOverride=value;},notices,setStreaming:(value:boolean)=>{streaming=value;},plugin,start,commands,shared,hostFiles,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
     const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
     let value=selection+'\nTail';
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
@@ -1687,13 +1700,17 @@ test('run import skips unrelated leases and recovers terminal evidence outside t
   const unrelated={...request,id:webcrypto.randomUUID(),threadId:webcrypto.randomUUID()};
   h.hostFiles.set(leasePaths(host.directory,'').catalog,JSON.stringify([unrelated]));
   h.hostFiles.set(leasePaths(host.directory,unrelated.id).record,'An unrelated large or unreadable lease must not block this picker.');
+  h.hostFiles.set(`${host.directory}/requests/${unrelated.id}.json`,JSON.stringify(unrelated));
   h.setSnapshotOverride(()=>({thread:{id:threadId,projectId:project.id,messages:[{id:messageId,role:'user',text:'Original',createdAt,turnId:null,streaming:false},{id:'old-answer',role:'assistant',text:'Existing saved answer',turnId:'old-run',createdAt,streaming:false},{id:'new',role:'user',text:'Later',createdAt:'2026-10-06T11:00:00Z',turnId:null,streaming:false}],activities:[],latestTurn:{turnId:'new-run',state:'running',requestedAt:'2026-10-06T11:00:00Z'},session:{status:'running',activeTurnId:'new-run'}}}));
   try{
     const result=await h.plugin.importRun(note.file.path,project,threadId,messageId);assert.equal(result.duplicate,true);assert.equal(note.value,'Existing saved answer');assert.equal(h.commands.length,0);
-    const open=h.plugin.inlineHostFiles.bind(h.plugin);let compactReads=0;
-    h.plugin.inlineHostFiles=async(...args:any[])=>{const opened=await open(...args),read=opened.files.read;opened.files.read=async(path:string)=>{if(path===leasePaths(host.directory,id).record)throw Error(`T3 could not read the complete file: ${path}`);return read(path);};return opened;};
-    h.plugin.executeAgentCommand=async(command:any)=>{assert.equal(command.kind,'response-import-info');assert.equal(command.bindingId,id);compactReads++;return {id:command.id,ok:true,importRecord:compactImportRecord({request,state} as any)};};
-    const retried=await h.plugin.importRun(note.file.path,project,threadId,messageId);assert.equal(retried.duplicate,true);assert.equal(compactReads,1);assert.equal(note.value,'Existing saved answer');assert.equal(h.commands.length,0);
+    const open=h.plugin.inlineHostFiles.bind(h.plugin);let fullLeaseReads=0;
+    h.plugin.inlineHostFiles=async(...args:any[])=>{const opened=await open(...args),read=opened.files.read;opened.files.read=async(path:string)=>{if(path===leasePaths(host.directory,id).record){fullLeaseReads++;throw Error(`T3 could not read the complete file: ${path}`);}return read(path);};return opened;};
+    h.plugin.inlineHostService={stop:()=>{},responseCommand:()=>{throw Error('The importing device is not the selected response host.');}};
+    h.platform.isMobile=false;h.plugin.app.vault.adapter.getFullPath=()=>project.workspaceRoot;h.plugin.localInlineEnvironment=async()=> 'other-device';
+    const retried=await h.plugin.importRun(note.file.path,project,threadId,messageId);assert.equal(retried.duplicate,true);assert.equal(fullLeaseReads,0);assert.equal(note.value,'Existing saved answer');assert.equal(h.commands.length,0);
+    const evidence=await h.plugin.executeAgentCommand({version:1,id:webcrypto.randomUUID(),kind:'response-import-info',bindingId:id});assert.equal(evidence.importRecord.request.id,id);
+    h.plugin.inlineHostService=undefined;
   }finally{h.plugin.onunload();}
 });
 

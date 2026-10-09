@@ -41,14 +41,31 @@ T3's `projects.readFile` returned a truncated one-MiB preview. Parsing or trusti
 that preview would lose exact history evidence. T3's preview resource API also
 rejects JSON, so it cannot serve as a complete lease download.
 
-The picker now checks immutable small requests before reading unrelated leases.
-When a relevant lease exceeds the preview limit, `response-import-info` uses the
-existing authenticated host command mailbox to return a bounded, read-only
-projection: the source request, exact bindings and turn records, terminal state,
-run IDs and input IDs needed to detect duplicate imports. It excludes response
-bodies, save documents, boundary prose and steering text. The host verifies the
-binding and vault identities and limits the reply to 512,000 UTF-8 bytes. An
-unsupported or failed host read still fails rather than inventing an association.
+The first fix checked immutable small requests before reading unrelated leases.
+It still made hundreds of sequential cross-device reads. An oversized relevant
+lease also exposed a routing bug: an active service on the laptop could receive
+an import-evidence command intended for the selected VPS response host.
+
+The picker now uses `response-import-records` to filter requests on that exact
+host. It returns compact pages of at most 64 records and 500,000 payload bytes.
+Local request files filter unrelated leases; missing legacy requests fall back
+to their authoritative local lease. Completed records remain available without
+depending on the active response catalog. Import reads require both the selected
+environment and workspace to match before using a local desktop service;
+otherwise they use that selected host's authenticated command mailbox. The
+single-binding `response-import-info` read follows the same route.
+
+Run-list reads request the native v2 compact bounded snapshot and conversation
+history pages. They preserve exact input/run IDs and legacy binding recovery,
+without fetching omitted tool outputs or source-thread titles. The chosen
+response still uses the existing full rendering path. Compact host evidence
+includes the source request, bindings, turn records, terminal state and input
+IDs, while excluding response bodies, save documents and boundary prose. An
+unsupported or failed host read fails rather than inventing an association.
+
+This change does not restore a completed import whose note block was removed.
+The existing duplicate rule and failures caused by literal structural tags
+remain separate proposals, as requested by the user.
 
 Normal note reads, writes, save acknowledgements, ownership and Sync handling
 are unchanged. Existing v1 saved bindings can still recover migrated completed

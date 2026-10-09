@@ -92,7 +92,7 @@ export class DesktopInlineHost {
     };
     this.writer=new HostedInlineWriter(identity,this.writerIO);
   }
-  async responseCommand(kind:string,id:string,hash?:string,notePath?:string){return this.coordinated.command(kind,id,hash,notePath);}
+  async responseCommand(kind:string,id:string,hash?:string,notePath?:string,importPage?:import('./response-command').ImportRecordsCommand){return this.coordinated.command(kind,id,hash,notePath,importPage);}
   eventContent(path:string,content:string){return this.coordinated.eventContent(path,content);}
   static async open(app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},access:(environmentId:string,reason?:ThreadAccessCloseReason)=>Promise<ThreadAccess>){
     logEvent('ownership.coordinator.opening',identity);

@@ -689,7 +689,9 @@ export default class SendToT3 extends Plugin {
       return input.kind==='client-status'?{...result,responseHostOpening:!!this.inlineHostRefresh,codeRangeCache:markdownCodeCacheStatus(),...(this.inlineHostService?{responseHost:this.inlineHostService.status()}: {})}:result;
     }
     if(isResponseCommand(input)){
-      const command=validateResponseCommand(input);await this.refreshInlineHost();
+      const command=validateResponseCommand(input);
+      if(command.kind==='response-import-records'||command.kind==='response-import-info')return this.executeImportRead(command,await this.inlineHostTarget());
+      await this.refreshInlineHost();
       if(!this.inlineHostService){
         const target=await this.inlineHostTarget(),opened=await this.inlineHostFiles(target);
         const directory=target.directory.replace(/inline\/v1$/,'commands/v1');
@@ -951,35 +953,34 @@ export default class SendToT3 extends Plugin {
     else await this.executeAgentCommand({version:1,id:history.length?randomId():importFollowId(source,notePath),kind:'stream-thread',scope:'thread',source,destinations:[notePath],start:'future'});
   }
   private async readImportRecords(source:{threadId:string;projectId:string;environmentId:string}){
-    const host=await this.inlineHostTarget(),opened=await this.inlineHostFiles(host);
+    const host=await this.inlineHostTarget(),records:import('./run-import').ImportRecord[]=[],seen=new Set<string>();let cursor:string|undefined;
+    for(let page=0;page<100;page++){
+      const result=await this.executeImportRead({version:1,id:randomId(),kind:'response-import-records',source,...(cursor?{cursor}:{})},host) as import('./import-records').ImportRecordsPage;
+      if(!Array.isArray(result.importRecords)||result.importRecords.some(record=>!record?.request||record.request.vaultId!==this.settings.vaultId||record.request.threadId!==source.threadId||record.request.projectId!==source.projectId||record.request.threadEnvironmentId!==source.environmentId))throw Error('The response host returned invalid import evidence. Update and reload the host.');
+      records.push(...result.importRecords);
+      if(result.nextCursor===undefined)return records;
+      if(!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(result.nextCursor)||seen.has(result.nextCursor)||cursor&&result.nextCursor<=cursor)throw Error('The response host returned an invalid import history cursor.');
+      cursor=result.nextCursor;seen.add(cursor);
+    }
+    throw Error('The import history exceeds its page limit.');
+  }
+  private async executeImportRead(command:import('./response-command').ResponseCommand,target:InlineHostTarget){
+    if(command.kind!=='response-import-records'&&command.kind!=='response-import-info')throw Error('Choose a read-only import command.');
+    const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
+    // A desktop service can exist on the importing device while the selected
+    // vault response host is on another machine. Bind both identity and root.
+    if(!Platform.isMobile&&adapter.getFullPath&&sameWorkspacePath(adapter.getFullPath(''),target.workspaceRoot)&&await this.localInlineEnvironment()===target.environmentId){
+      await this.refreshInlineHost();
+      if(this.inlineHostService)return {id:command.id,ok:true,...await this.inlineHostService.responseCommand(command.kind,command.kind==='response-import-records'?command.id:command.bindingId,undefined,undefined,command.kind==='response-import-records'?command:undefined)};
+    }
+    const opened=await this.inlineHostFiles(target),directory=target.directory.replace(/inline\/v1$/,'commands/v1');
     try{
-      const catalog=JSON.parse((await opened.files.read(leasePaths(host.directory,'').catalog))??'[]') as HostedInlineRequest[];
-      if(!Array.isArray(catalog))throw Error('Response history is unavailable. Try again after the host reconnects.');
-      // The active lease catalog excludes completed responses. The explorer
-      // index retains their IDs so old checkpoints and duplicate proofs survive.
-      const explorer=loadExplorerResponses(JSON.parse((await opened.files.read(explorerResponsePath(host.directory)))??'[]'));
-      const ids=new Set([...catalog.map(request=>request.id),...explorer.map(response=>response.id)]);
-      const records:import('./run-import').ImportRecord[]=[];
-      for(const id of ids){
-        // Requests are immutable and small. Do not read large unrelated lease
-        // histories merely to show this source's run picker. Legacy missing
-        // requests still fall back to the authoritative record.
-        const candidate=catalog.find(request=>request.id===id)??JSON.parse((await opened.files.read(hostedPaths(host.directory,id).request))??'null');
-        if(candidate?.id===id&&typeof candidate.threadId==='string'&&typeof candidate.projectId==='string'&&typeof candidate.threadEnvironmentId==='string'&&
-          (candidate.threadId!==source.threadId||candidate.projectId!==source.projectId||candidate.threadEnvironmentId!==source.environmentId||candidate.vaultId!==this.settings.vaultId))continue;
-        const recordPath=leasePaths(host.directory,id).record;
-        let raw:string|undefined;
-        try{raw=await opened.files.read(recordPath);}catch(error){
-          if((error as any)?.message!==`T3 could not read the complete file: ${recordPath}`)throw error;
-          const result=await this.executeAgentCommand({version:1,id:randomId(),kind:'response-import-info',bindingId:id}) as {importRecord?:import('./run-import').ImportRecord};
-          if(result.importRecord?.request.id!==id)throw Error('The response host returned invalid import evidence. Update and reload the host.');
-          raw=JSON.stringify(result.importRecord);
-        }
-        if(!raw)continue;
-        const record:import('./run-import').ImportRecord=JSON.parse(raw),request=record.request;
-        if(request.vaultId===this.settings.vaultId&&request.threadId===source.threadId&&request.projectId===source.projectId&&request.threadEnvironmentId===source.environmentId)records.push(record);
-      }
-      return records;
+      const path=`${directory}/requests/${command.id}.json`,bytes=JSON.stringify(command),previous=await opened.files.read(path);
+      if(previous!==undefined&&previous!==bytes)throw Error('This command ID already has different input.');
+      if(previous===undefined)await opened.files.write(path,bytes);
+      const deadline=Date.now()+60_000;
+      while(!this.stopped&&Date.now()<deadline){const raw=await opened.files.read(`${directory}/results/${command.id}.json`);if(raw){const result=JSON.parse(raw);if(!result.ok)throw Error(result.error);return result;}await new Promise(resolve=>window.setTimeout(resolve,250));}
+      throw Error(`The response host has not acknowledged command ${command.id}. Check the saved result before retrying.`);
     }finally{opened.close();}
   }
   private async readImportHistory(project:Project,threadId:string){
@@ -987,7 +988,7 @@ export default class SendToT3 extends Plugin {
     const connection=this.connection(project),environmentId=connection.environmentId??await this.localInlineEnvironment();
     const source={threadId,projectId:project.id,environmentId},access=await this.inlineThreadAccess(environmentId);
     let snapshot:any;
-    try{snapshot=await readInlineSnapshot(access,threadId,project.id,undefined,true);}finally{await access.close?.();}
+    try{snapshot=await readInlineSnapshot(access,threadId,project.id,undefined,true,true);}finally{await access.close?.();}
     if(snapshot.thread.deletedAt||snapshot.thread.archivedAt)throw Error('This source thread is no longer available.');
     let state:InlineThreadState=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
     const records=await this.readImportRecords(source);

@@ -21,6 +21,8 @@ import {ResponseProjectionCache} from './response-projection-cache';
 import {LeaseRecordCache} from './lease-record-cache';
 import {completedSelectionDraft} from './inline-steering';
 import {compactImportRecord} from './run-import';
+import {readImportRecordsPage} from './import-records';
+import type {ImportRecordsCommand} from './response-command';
 
 /** Host lock is owned by DesktopInlineHost. Mailbox mutations, migration fences
  * and checkpoints share that authority's serialization. Journal bytes live
@@ -394,7 +396,11 @@ export class CoordinatedHost {
       if(detach)manager.committed(path,after,[id]);
     }finally{if(detach)manager.cancel(path);}
   }
-  async command(kind:string,id:string,hash?:string,notePath?:string){
+  async command(kind:string,id:string,hash?:string,notePath?:string,importPage?:ImportRecordsCommand){
+    if(kind==='response-import-records'){
+      if(!importPage)throw Error('Choose the exact import source.');
+      return readImportRecordsPage(this.files,this.identity,importPage.source,importPage.cursor);
+    }
     if(kind==='response-import-info'){
       if(!/^[0-9a-f-]{36}$/i.test(id))throw Error('Choose the exact response binding UUID.');
       const raw=await this.files.read(leasePaths(this.identity.directory,id).record);

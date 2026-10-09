@@ -150,6 +150,21 @@ test('full recovery follows opaque history cursors without advancing past concur
   assert.equal(full.thread.messages[0].id,'old-prompt');assert.ok(paths.at(-1)?.endsWith('cursor=opaque%20%2F%20cursor'));
 });
 
+test('import run history requests compact conversation pages without hydrating tools or reading sender titles',async()=>{
+ const calls:string[]=[],older={id:'old-input-item',type:'user_message',messageId:'old-input',runId:'old-run',text:'Original old prompt',ordinal:0,startedAt:'2026-10-08T00:00:00Z',createdBy:'agent',senderThreadId:'2c9cb7b6-a4c9-5746-b9b7-bc463c5024fa'};
+ const tool={id:'tool',type:'command_execution',runId:run.id,ordinal:2,status:'completed',outputOmitted:true,updatedAt:at};
+ const api=t3Api(async path=>{
+  calls.push(path);
+  if(path.endsWith('/bounded?compactTurnItems=1'))return {...snapshot({turnItems:undefined,visibleTurnItems:[{sourceThreadId:'thread',item:tool}]}),hasMoreHistory:true,historyCursor:'opaque / cursor'};
+  if(path.endsWith('/history?cursor=opaque%20%2F%20cursor&view=conversation'))return {snapshotSequence:50,items:[{sourceThreadId:'thread',item:older},{sourceThreadId:'other',item:{...older,id:'foreign',messageId:'foreign'}}],hasMoreHistory:false};
+  throw Error('Import metadata must not hydrate tool outputs or titles');
+ },'https://t3.example',()=>{throw Error('Import metadata must not open a tool RPC socket');});
+ const result=await api('/api/orchestration/threads/thread?importRuns=true');
+ assert.equal(result.snapshotSequence,10);assert.equal(result.page.hasMore,false);assert.equal(result.thread.activities.length,0);assert.equal(result.thread.messages[0].id,'old-input');
+ assert.equal(result.thread.messages[0].senderThreadId,older.senderThreadId);assert.equal(result.thread.messages.some((message:any)=>message.id==='foreign'),false);
+ const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:result}).state;assert.equal(turnForMessage(state,'prompt'),run.id);assert.equal(calls.length,2);
+});
+
 test('a saved v1 request with a lost receipt checks migrated history before any resend',async()=>{
   const command={type:'thread.turn.start',commandId:'command',threadId:'thread',__legacyV1:true,message:{messageId:'old',text:'Original',attachments:[]}};
   let dispatches=0;
