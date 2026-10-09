@@ -17,9 +17,9 @@ export function needsInlineHistory(state:InlineThreadState,targets:InlineHistory
 
 /** Recent polling stays small. A stranded response can request the complete
  * canonical transcript, including prompts older than the polling window. */
-export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets,full=false,importOnly=false):Promise<any> {
+export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets,full=false,importOnly=false,importRunId?:string):Promise<any> {
   const read=async(all:boolean)=>{
-    const snapshot=normalizeV2Snapshot(await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}${importOnly?'&importRuns=true':''}`));
+    const snapshot=normalizeV2Snapshot(await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}${importOnly?'&importRuns=true':''}${importRunId?'&importRunId='+encodeURIComponent(importRunId):''}`));
     if(snapshot?.thread?.id!==threadId||projectId&&snapshot.thread.projectId!==projectId)throw Error('Waiting for the requested T3 thread.');
     return snapshot;
   };

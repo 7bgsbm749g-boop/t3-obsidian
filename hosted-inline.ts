@@ -312,7 +312,7 @@ export class HostedInlineWriter {
         // their intact response block, even when Sync changed its contents.
         let current=restored?undefined:await this.network(path,()=>Promise.resolve(this.io.threadState?.(request,access)));
         if(!current){
-          const snapshot=await this.network(path,()=>readInlineSnapshot(access,request.threadId,request.projectId));
+          const snapshot=await this.network(path,()=>readInlineSnapshot(access,request.threadId,request.projectId,undefined,!!request.importTurn,false,request.importTurn?.turnId));
           if(this.stopped)return;
           if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
           if(this.io.quietCanonicalPolling&&!this.io.threadState){
@@ -333,7 +333,7 @@ export class HostedInlineWriter {
           const key=JSON.stringify(targets),cached=this.history.get(path);
           if(cached?.key===key&&cached.expires>Date.now()&&(cached.state.sequence??-1)>=(current.sequence??-1))current=restoreInlineBindings(cached.state,inlineBindingCheckpoint(current));
           else{
-            const snapshot=await this.network(path,()=>readInlineSnapshot(access,request.threadId,request.projectId,undefined,true));
+            const snapshot=await this.network(path,()=>readInlineSnapshot(access,request.threadId,request.projectId,undefined,true,false,request.importTurn?.turnId));
             if(this.stopped)return;
             current=applyThreadItem(current,{kind:'snapshot',snapshot}).state;
             this.history.set(path,{key,expires:Date.now()+3000,state:current});

@@ -57,8 +57,13 @@ single-binding `response-import-info` read follows the same route.
 
 Run-list reads request the native v2 compact bounded snapshot and conversation
 history pages. They preserve exact input/run IDs and legacy binding recovery,
-without fetching omitted tool outputs or source-thread titles. The chosen
-response still uses the existing full rendering path. Compact host evidence
+without fetching omitted tool outputs or source-thread titles. After selection,
+imported-response reads also use the compact bounded snapshot and retain only
+conversation messages and that exact run's display items. They hydrate omitted
+tool output only for that run, then use the existing full rendering path. This
+avoids the duplicate full snapshot that exceeded the unchanged four-MB response
+limit while importing the table run. Ordinary streaming reads remain unchanged.
+Compact host evidence
 includes the source request, bindings, turn records, terminal state and input
 IDs, while excluding response bodies, save documents and boundary prose. An
 unsupported or failed host read fails rather than inventing an association.

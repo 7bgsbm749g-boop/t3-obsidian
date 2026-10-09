@@ -165,6 +165,15 @@ test('import run history requests compact conversation pages without hydrating t
  const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:result}).state;assert.equal(turnForMessage(state,'prompt'),run.id);assert.equal(calls.length,2);
 });
 
+test('selected imports reconstruct compact display items and hydrate only the exact run',async()=>{
+ const calls:any[]=[],selected={id:'selected-tool',type:'command_execution',runId:run.id,ordinal:2,status:'completed',outputOmitted:true,updatedAt:at},unrelated={...selected,id:'unrelated-tool',runId:'other-run'};
+ const Socket=settingsSocket(undefined,undefined,(tag,payload)=>{calls.push({tag,payload});assert.equal(payload.itemId,selected.id);return {item:{...selected,output:'SELECTED OUTPUT',outputOmitted:false}};});
+ const api=t3Api(async path=>{if(path.endsWith('/bounded?compactTurnItems=1'))return snapshot({turnItems:undefined,visibleTurnItems:[{sourceThreadId:'thread',item:selected},{sourceThreadId:'thread',item:unrelated}]});if(path.endsWith('/websocket-ticket'))return {ticket:'ticket'};throw Error('Unexpected full-thread read');},'https://t3.example',url=>new Socket(url) as any);
+ const result=await api('/api/orchestration/threads/thread?importRunId='+encodeURIComponent(run.id));
+ assert.equal(result.snapshotSequence,10);assert.equal(result.page.hasMore,false);assert.equal(calls.length,1);assert.equal(result.thread.activities.length,1);assert.equal(result.thread.activities[0].payload.data.output,'SELECTED OUTPUT');
+ const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:result}).state;assert.equal(turnForMessage(state,'prompt'),run.id);
+});
+
 test('a saved v1 request with a lost receipt checks migrated history before any resend',async()=>{
   const command={type:'thread.turn.start',commandId:'command',threadId:'thread',__legacyV1:true,message:{messageId:'old',text:'Original',attachments:[]}};
   let dispatches=0;
