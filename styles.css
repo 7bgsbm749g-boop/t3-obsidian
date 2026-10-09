@@ -110,7 +110,7 @@
   min-height: var(--input-height);
 }
 
-/* A default-closed native fold with the requested H6 thread/status header.
+/* A default-closed native fold with the H6-sized thread/status header.
    Its blockquote boundary, rather than heading level, bounds the history. */
 .callout[data-callout="t3-progress"] {
   background: transparent;
@@ -120,12 +120,13 @@
 }
 .callout[data-callout="t3-progress"] > .callout-title {
   font-size: var(--h6-size);
-  font-weight: var(--h6-weight);
+  font-weight: normal;
   font-family: var(--h6-font);
   color: var(--h6-color, var(--text-muted));
   gap: 0.4em;
   cursor: pointer;
 }
+.callout[data-callout="t3-progress"] > .callout-title strong { font-weight: inherit; }
 .callout[data-callout="t3-progress"] > .callout-title > .callout-icon { display: none; }
 /* Align the native editor action with the header, including wrapped titles. */
 .markdown-source-view.mod-cm6 .embed-actions.send-to-t3-progress-actions {

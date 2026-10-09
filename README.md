@@ -483,7 +483,7 @@ Send and Ask use the note name for new thread titles. `Untitled`, `Untitled 1`, 
 
 Open editors follow T3 title metadata directly, so generated titles do not wait for an assistant message or a host response commit.
 
-Streaming headers display the thread name, such as **Alpha plan · Working**, and update from the canonical thread title. The thread-name header disappears when the reply completes. Titles are escaped as plain text. Before the thread is available, the prepared send title labels its block. Multi-response controls show the name and short block ID.
+Streaming headers display the thread name, such as **Alpha plan · Working**, and update from the canonical thread title. The collapsible thread/status header uses regular-weight text while retaining its heading size, timer, spinner, and fold controls. The thread-name header disappears when the reply completes. Titles are escaped as plain text. Before the thread is available, the prepared send title labels its block. Multi-response controls show the name and short block ID.
 
 
 For an explicitly requested version, use `npm run release:qlo2 -- --version 2.28.1`. The same clean-worktree, strictly newer version, immutable archive and live-smoke requirements apply as for `--bump`.
