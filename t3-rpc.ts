@@ -4,7 +4,7 @@ import {T3_PROTOCOL_VERSION} from './orchestration-v2';
 export type T3Api=(path:string,payload?:any)=>Promise<any>;
 export type SocketFactory=(url:string)=>WebSocket;
 export class T3RpcError extends Error {
-  constructor(public kind:string){super(kind==='ProjectReadFileError'?'Cannot read the synced vault settings in this folder.':kind==='FilesystemBrowseError'?'Cannot open this folder on the selected machine.':'The selected machine could not complete the T3 request.');}
+  constructor(public kind:string,public requiredPermission?:string,public rpcMethod?:string){super(kind==='EnvironmentAuthorizationError'&&['filesystem:read','filesystem:write'].includes(requiredPermission??'')?'The T3 connection does not permit note access. Reconnect this machine in Send to T3 Code settings with filesystem read and write access.':kind==='ProjectReadFileError'?'Cannot read the synced vault settings in this folder.':kind==='FilesystemBrowseError'?'Cannot open this folder on the selected machine.':'The selected machine could not complete the T3 request.');}
 }
 
 /** Unary requests over T3's authenticated Effect RPC protocol. */
@@ -14,7 +14,7 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
   const url=new URL('/ws',origin);url.protocol=url.protocol==='https:'?'wss:':'ws:';
   url.searchParams.set('wsTicket',issued.ticket);url.searchParams.set('orchestrationProtocol',String(T3_PROTOCOL_VERSION));
   const socket=makeSocket(url.href);let closed=false,nextId=0;
-  const pending=new Map<string,{resolve:(value:any)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
+  const pending=new Map<string,{resolve:(value:any)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>;method:string}>();
   const finish=(error:Error)=>{for(const task of pending.values()){clearTimeout(task.timer);task.reject(error);}pending.clear();};
   let opened=false,resolveOpen!:()=>void,rejectOpen!:(e:Error)=>void;
   const ready=new Promise<void>((resolve,reject)=>{resolveOpen=resolve;rejectOpen=reject;});
@@ -32,7 +32,7 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
         const id=String(frame.requestId),task=pending.get(id);if(!task||frame._tag!=='Exit')continue;
         pending.delete(id);clearTimeout(task.timer);
         if(frame.exit?._tag==='Success')task.resolve(frame.exit.value);
-        else {const causes=frame.exit?.cause;const failure=Array.isArray(causes)?causes.find((x:any)=>x._tag==='Fail')?.error:undefined;task.reject(new T3RpcError(failure?._tag??'RpcError'));}
+        else {const causes=frame.exit?.cause;const failure=Array.isArray(causes)?causes.find((x:any)=>x._tag==='Fail')?.error:undefined;const permission=['filesystem:read','filesystem:write','orchestration:read','orchestration:operate'].includes(failure?.requiredPermission)?failure.requiredPermission:undefined;task.reject(new T3RpcError(failure?._tag??'RpcError',permission,task.method));}
       }
     }catch{closed=true;finish(Error('T3 returned an incompatible response.'));socket.close();}
   };
@@ -40,7 +40,7 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
   const rpc=(tag:string,payload:any)=>new Promise<any>((resolve,reject)=>{
     if(closed){reject(Error('The machine connection closed. Choose the machine again.'));return;}
     const id=String(++nextId),timer=setTimeout(()=>{pending.delete(id);reject(Error('The selected machine took too long. Try again.'));},15000);
-    pending.set(id,{resolve,reject,timer});
+    pending.set(id,{resolve,reject,timer,method:tag});
     try{socket.send(JSON.stringify({_tag:'Request',id,tag,payload,headers:[]}));}catch{pending.delete(id);clearTimeout(timer);reject(Error('Cannot send the request to this machine.'));}
   });
   return {call:rpc,get closed(){return closed;},close(){closed=true;finish(Error('T3 connection closed.'));socket.close();}};

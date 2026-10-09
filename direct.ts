@@ -10,8 +10,9 @@ import {T3HttpError} from './thread-access-cache';
 import {t3Api} from './t3-api';
 import {T3_PROTOCOL_VERSION,T3_PROTOCOL_HEADER} from './orchestration-v2';
 import type {SocketFactory} from './t3-rpc';
+import {PLUGIN_SCOPE,hasPluginPermissions} from './environment-permissions';
 export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean}
-export interface PairedSession {token:string;expiresAt:number;environmentId:string;url:string;dpopKeyId?:string;accountId?:string}
+export interface PairedSession {token:string;expiresAt:number;environmentId:string;url:string;dpopKeyId?:string;accountId?:string;permissions?:string[]}
 export interface DirectPlan {protocolVersion?:2;hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:any;turn:any;observedActiveTurnId?:string;delivery?:InlineStartRequest}
 export type Fetcher=typeof fetch;
 export function endpoint(value:string):string {
@@ -55,11 +56,12 @@ export async function descriptor(url:string,fetcher?:Fetcher){
 export async function pair(address:string,code:string,fetcher?:Fetcher,expectedEnvironmentId?:string):Promise<{descriptor:any;session:PairedSession}>{
  const input=pairingInput(address,code);if(!input.code)throw Error('Paste a fresh one-time pairing link or pairing code from T3 Settings → Connections.');
  const d=await descriptor(input.url,fetcher);if(expectedEnvironmentId&&d.environmentId!==expectedEnvironmentId)throw Error("The address no longer matches the selected T3 machine. Discover machines again; no pairing code was sent.");
- const body=new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:input.code,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:'orchestration:read orchestration:operate',client_label:'Send to T3 Code (Obsidian)'}).toString();
+ const body=new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:input.code,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:PLUGIN_SCOPE,client_label:'Send to T3 Code (Obsidian)'}).toString();
  const token=await jsonHttp(input.url+'/oauth/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body},fetcher);
  if(token.token_type!=='Bearer'||typeof token.access_token!=='string'||!Number.isFinite(token.expires_in)||token.expires_in<=0)throw Error('T3 returned an unsupported pairing session.');
- const scopes=new Set(String(token.scope).split(' '));if(!scopes.has('orchestration:read')||!scopes.has('orchestration:operate'))throw Error('This pairing link does not permit creating threads. Create a new link with thread access.');
- return {descriptor:d,session:{token:token.access_token,expiresAt:Date.now()+token.expires_in*1000,environmentId:d.environmentId,url:input.url}};
+ const permissions=String(token.scope).split(/\s+/);
+ if(!hasPluginPermissions({permissions}))throw Error('This pairing link does not permit thread and note access. Create a new T3 pairing link with filesystem read and write access, then reconnect this machine.');
+ return {descriptor:d,session:{token:token.access_token,expiresAt:Date.now()+token.expires_in*1000,environmentId:d.environmentId,url:input.url,permissions}};
 }
 export async function environmentApi(c:Connection,s:PairedSession|undefined,fetcher?:Fetcher,makeSocket?:SocketFactory){
  const url=endpoint(c.url||'');

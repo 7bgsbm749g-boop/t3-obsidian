@@ -5,6 +5,7 @@ import {webcrypto,createHash} from 'node:crypto';
 import {proofKey,proof,thumbprint} from '../dpop';
 import {connectMachine} from '../cloud';
 import {readDirect} from '../direct';
+import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../environment-permissions';
 globalThis.indexedDB=indexedDB;
 Object.defineProperty(globalThis,'crypto',{value:webcrypto,configurable:true});
 const response=(d:any)=>new Response(JSON.stringify(d));
@@ -28,11 +29,22 @@ test('account connects without pairing codes and uses scoped DPoP for subsequent
   if(url.endsWith('/dpop-token')){const f=new URLSearchParams(o.body);assert.equal(f.get('subject_token'),a.accessToken);assert.equal(f.get('scope'),'environment:connect');assert.ok(o.headers.DPoP);return response({token_type:'DPoP',access_token:'relay-secret',scope:'environment:connect'});}
   if(url.endsWith('/connect')){assert.equal(o.headers.Authorization,'DPoP relay-secret');assert.equal(JSON.parse(o.body).clientProofKeyThumbprint,await thumbprint(await proofKey('connect')));return response({environmentId:'env',endpoint:{httpBaseUrl:m.url},credential:'bootstrap-secret'});}
   if(url.endsWith('/environment')){assert.equal(o.headers?.Authorization,undefined);return response({environmentId:'env',label:'Computer',orchestrationProtocolVersion:2});}
-  if(url.endsWith('/oauth/token')){const f=new URLSearchParams(o.body);assert.equal(f.get('subject_token'),'bootstrap-secret');assert.equal(f.get('scope'),'orchestration:read orchestration:operate');assert.ok(o.headers.DPoP);return response({token_type:'DPoP',access_token:'env-secret',expires_in:600,scope:'orchestration:read orchestration:operate'});}
+  if(url.endsWith('/oauth/token')){const f=new URLSearchParams(o.body);assert.equal(f.get('subject_token'),'bootstrap-secret');assert.equal(f.get('scope'),PLUGIN_SCOPE);assert.ok(o.headers.DPoP);return response({token_type:'DPoP',access_token:'env-secret',expires_in:600,scope:PLUGIN_SCOPE});}
   assert.equal(o.headers.Authorization,'DPoP env-secret');assert.ok(o.headers.DPoP);return response({projects:[]});
  };
- const s=await connectMachine(a,m,'connect',mock as any);assert.equal(s.dpopKeyId,'connect');
+ const s=await connectMachine(a,m,'connect',mock as any);assert.equal(s.dpopKeyId,'connect');assert.deepEqual(s.permissions,PLUGIN_PERMISSIONS);
  assert.deepEqual(await readDirect({transport:'direct',url:m.url,environmentId:'env',host:'direct',executable:''},['projects'],s,mock as any),{projects:[]});assert.equal(calls,6);
  let environmentCalled=false;
  await assert.rejects(connectMachine(a,m,'connect',(async(url:any,o:any)=>{if(url.startsWith(m.url))environmentCalled=true;if(url.endsWith('/connect'))return response({environmentId:'wrong',endpoint:{httpBaseUrl:m.url},credential:'secret'});return mock(url,o);}) as any),/environment_changed/);assert.equal(environmentCalled,false);
+});
+
+for(const missing of ['filesystem:read','filesystem:write'])test(`account connection refuses a token without ${missing}`,async()=>{
+ const mock=async(url:any)=>{
+  if(url.endsWith('/dpop-token'))return response({token_type:'DPoP',access_token:'relay',scope:'environment:connect'});
+  if(url.endsWith('/connect'))return response({environmentId:'env',endpoint:{httpBaseUrl:'https://t3.example'},credential:'bootstrap'});
+  if(url.endsWith('/environment'))return response({environmentId:'env',label:'Computer',orchestrationProtocolVersion:2});
+  assert.ok(url.endsWith('/oauth/token'));
+  return response({token_type:'DPoP',access_token:'partial-grant',expires_in:600,scope:PLUGIN_PERMISSIONS.filter(p=>p!==missing).join(' ')});
+ };
+ await assert.rejects(connectMachine({accessToken:'account',expiresAt:Date.now()+60000,identity:'Account'},{environmentId:'env',name:'Computer',url:'https://t3.example'},'connect',mock as any),(error:any)=>error.code==='environment_note_access_required');
 });

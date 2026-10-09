@@ -5,6 +5,7 @@ import {runInNewContext} from 'node:vm';
 import {settingsSocket} from './rpc-fixture';
 import {webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
+import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../environment-permissions';
 
 test('mobile account sign-in connects all machines, preserves selections, survives restart, renews, and signs out without replay',async()=>{
  let local:any={deviceId:'account-mobile-device',mode:'direct',pairedSessions:{manual:{url:'https://manual.example',environmentId:'manual',token:'manual-private',expiresAt:Date.now()+600000}}};
@@ -36,7 +37,7 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
   if(url.startsWith('https://manual.example')){if(url.endsWith('/environment'))return response({environmentId:'manual',label:'Manual',orchestrationProtocolVersion:2});assert.equal(o.headers.Authorization,'Bearer manual-private');return response({projects:[],threads:[]});}
   const id=new URL(url).hostname[0];
   if(url.endsWith('/environment'))return response({environmentId:id,label:id,orchestrationProtocolVersion:2});
-  if(url.endsWith('/oauth/token'))return response({token_type:'DPoP',access_token:'environment-private-'+id,expires_in:600,scope:'orchestration:read orchestration:operate'});
+  if(url.endsWith('/oauth/token')){assert.equal(new URLSearchParams(o.body).get('scope'),PLUGIN_SCOPE);return response({token_type:'DPoP',access_token:'environment-private-'+id,expires_in:600,scope:PLUGIN_SCOPE});}
   assert.equal(o.headers.Authorization,'DPoP environment-private-'+id);assert.ok(o.headers.DPoP);
   if(url.endsWith('/websocket-ticket'))return response({ticket:'ephemeral'});
   if(url.endsWith('/shell'))return response({projects:[{id:'p-'+id,title:'Project '+id,workspaceRoot:'/',defaultModelSelection:{instanceId:'codex',model:'default'}}],threads:[]});
@@ -55,6 +56,14 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
  await p.finishEmailSignIn('123456');assert.equal(p.nativeAccount.userId,'user-native');assert.ok(p.machineErrors.b);assert.equal(p.directAccountReady(),true,'completed discovery unlocks settings when at least one computer connected');assert.equal(p.settings.paired.length,2);assert.equal(p.settings.directSelected[0],'a-connection:p-a');
  offline=false;await p.refreshMachines();assert.equal(p.settings.paired.length,3);assert.equal(p.settings.directProjects.length,2);assert.equal(Object.keys(p.machineErrors).length,0);assert.equal(p.directAccountReady(),true);
  const c=p.settings.paired.find((c:any)=>c.environmentId==='a');assert.equal(c.id,'a-connection');assert.equal(c.managed,true);
+ for(const legacyPermissions of [undefined,['orchestration:read','orchestration:operate'],['orchestration:read','orchestration:operate','filesystem:read']]){
+  const before:number=connects;p.pairedSessions[c.id].permissions=legacyPermissions;
+  assert.ok(p.pairedSessions[c.id].expiresAt>Date.now()+60000,'Migration must not wait for expiry');
+  const [first,second]=await Promise.all([p.sessionFor(c.id),p.sessionFor(c.id)]);
+  assert.equal(connects,before+1,'Legacy permission upgrade is coalesced');assert.equal(first,second);assert.deepEqual(Array.from(first.permissions),Array.from(PLUGIN_PERMISSIONS));
+  assert.equal(await p.sessionFor(c.id),first);assert.equal(connects,before+1,'Complete grants reuse the same valid session');
+ }
+ assert.equal((await p.sessionFor('manual')).token,'manual-private','An unmanaged pairing must not use account credentials');assert.equal(dispatches.length,0,'Permission migration must not replay sends');
  const previousConnects=connects;p.pairedSessions[c.id].expiresAt=0;await Promise.all([p.sessionFor(c.id),p.sessionFor(c.id)]);assert.equal(connects,previousConnects+1,'Renewal is coalesced');
  const project=p.settings.directProjects.find((p:any)=>p.id==='p-a');await p.send(new File(),project);assert.equal(dispatches.length,2);assert.ok(dispatches[1].text.startsWith('Account connection test'));assert.doesNotMatch(dispatches[1].text,/T3 EVENT HISTORY CAPABILITY/);assert.equal(p.settings.pending.length,0);p.onunload();
  const q=new module.exports.default();await q.onload();assert.equal(q.nativeAccount.userId,'user-native');assert.equal(q.directAccountReady(),false,'reload stays gated until this device refreshes its connections');assert.equal(dispatches.length,2,'Reload must not send work');

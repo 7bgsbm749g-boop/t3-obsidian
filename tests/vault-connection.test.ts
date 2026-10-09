@@ -2,8 +2,12 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {connectVaultRemote,discoverVaultRoots,vaultRegistration,vaultIdentity,waitForVaultNote,type VaultRemote} from '../vault-connection';
 import {randomUUID} from 'node:crypto';
+import {pair} from '../direct';
+import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../environment-permissions';
+import {T3RpcError} from '../t3-rpc';
 
-function harness(){
+function harness(initialPermissions:readonly string[]=PLUGIN_PERMISSIONS){
+  let permissions=initialPermissions;
   const id=randomUUID(),c={host:'direct',executable:'',transport:'direct' as const,url:'https://laptop.example',environmentId:'laptop-env'};
   const session={url:c.url,environmentId:c.environmentId,token:'private-token',expiresAt:Date.now()+600_000};
   let projects:any[]=[],lose=false,closed=0,noteChecks=0,folderEntries:any[]|undefined;
@@ -14,6 +18,7 @@ function harness(){
     assert.equal(options.credentials,'omit');assert.equal(options.redirect,'error');
     const response=(v:any)=>new Response(JSON.stringify(v));
     if(String(url).endsWith('/.well-known/t3/environment'))return response({environmentId:c.environmentId,label:'Laptop',orchestrationProtocolVersion:2});
+    if(String(url).endsWith('/oauth/token')){permissions=new URLSearchParams(options.body).get('scope')!.split(' ');return response({token_type:'Bearer',access_token:'private-token',expires_in:600,scope:permissions.join(' ')});}
     assert.equal(options.headers.Authorization,'Bearer private-token');
     if(String(url).endsWith('/websocket-ticket'))return response({ticket:'short-lived-ticket'});
     if(String(url).endsWith('/shell'))return response({projects});
@@ -27,6 +32,8 @@ function harness(){
     const u=new URL(url);assert.equal(u.origin,'wss://laptop.example');assert.equal(u.pathname,'/ws');assert.equal(u.searchParams.get('wsTicket'),'short-lived-ticket');assert.ok(!url.includes(session.token));
     const ws:any={close(){closed++;queueMicrotask(()=>ws.onclose?.());},send(text:string){
       const req=JSON.parse(text);rpc.push(req);
+      const requiredPermission=req.tag==='projects.writeFile'||req.tag==='projects.deleteEntry'?'filesystem:write':'filesystem:read';
+      if(!permissions.includes(requiredPermission)){queueMicrotask(()=>ws.onmessage({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'EnvironmentAuthorizationError',requiredScope:'orchestration:operate',requiredPermission,message:'Bearer DO_NOT_LEAK'}}]}})}));return;}
       let value:any;
       if(req.tag==='filesystem.browse')value={parentPath:'C:\\Users\\Alex\\Vault',entries:[]};
       else if(req.tag==='projects.readFile'){
@@ -41,8 +48,32 @@ function harness(){
       queueMicrotask(()=>ws.onmessage({data:JSON.stringify([{_tag:'Exit',requestId:req.id,exit:{_tag:'Success',value}}])}));
     }};queueMicrotask(()=>ws.onopen());return ws as WebSocket;
   };
-  return {id,c,session,commands,rpc,requests,files,connect:()=>connectVaultRemote(c,session,fetcher,socket),lose:()=>{lose=true;},setProjects:(p:any[])=>{projects=p;},setFolderEntries:(entries:any[])=>{folderEntries=entries;},closed:()=>closed};
+  return {id,c,session,commands,rpc,requests,files,connect:()=>connectVaultRemote(c,session,fetcher,socket),pairConnect:async()=>{const paired=await pair(c.url+'/pair#token=one-time','',fetcher);assert.equal(paired.session.permissions!.join(' '),PLUGIN_SCOPE);return connectVaultRemote(c,paired.session,fetcher,socket);},lose:()=>{lose=true;},setProjects:(p:any[])=>{projects=p;},setFolderEntries:(entries:any[])=>{folderEntries=entries;},closed:()=>closed};
 }
+
+test('v2 permissions reproduce the remote note failure and repaired pairing permits vault checks and reply storage',async()=>{
+ const h=harness(['orchestration:read','orchestration:operate']);const old=await h.connect();
+ try{
+  await assert.rejects(old.matches('/vault','.obsidian/plugins/send-to-t3-code/data.json',h.id),(error:any)=>error instanceof T3RpcError&&error.kind==='EnvironmentAuthorizationError'&&error.requiredPermission==='filesystem:read'&&error.rpcMethod==='projects.readFile'&&/Reconnect/.test(error.message)&&!error.message.includes('DO_NOT_LEAK'));
+ }finally{old.close();}
+ const repaired=await h.pairConnect();
+ try{
+  assert.equal(await repaired.matches('/vault','.obsidian/plugins/send-to-t3-code/data.json',h.id),true);
+  await repaired.writeFile('/private-storage','replies/test.json','synthetic reply');
+  assert.equal(await repaired.readFile('/private-storage','replies/test.json'),'synthetic reply');
+  await repaired.deleteFile('/private-storage','replies/test.json');assert.equal(h.files.has('replies/test.json'),false);
+ }finally{repaired.close();}
+ assert.equal(h.commands.length,0,'Permission repair must not create projects or dispatch work');
+});
+
+test('read-only v2 grants report the missing write permission instead of a missing vault',async()=>{
+ const h=harness(['orchestration:read','orchestration:operate','filesystem:read']);const remote=await h.connect();
+ try{
+  assert.equal(await remote.matches('/vault','.obsidian/plugins/send-to-t3-code/data.json',h.id),true);
+  await assert.rejects(remote.writeFile('/private-storage','reply.json','synthetic'),(error:any)=>error.requiredPermission==='filesystem:write'&&error.rpcMethod==='projects.writeFile');
+  assert.equal(h.files.size,0);
+ }finally{remote.close();}
+});
 
 test('remote vault discovery uses identity across different folder names and handles missing settings',async()=>{
   const h=harness(),r=await h.connect();

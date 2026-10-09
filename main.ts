@@ -3,6 +3,7 @@ import {isClientCommand} from './client-command';
 import {markdownCodeCacheStatus} from './reply-html';
 import pluginManifest from './manifest.json';
 import {appendSendFailure,type SendFailure} from './send-failures';
+import {hasPluginPermissions} from './environment-permissions';
 import {mergeSharedSettings} from './shared-settings';
 import {noteThreadTitle,threadTitleGeneration,type ThreadTitleGeneration} from './thread-title';
 import {NativeConflictRecovery} from './native-conflict-modal';
@@ -1670,7 +1671,9 @@ export default class SendToT3 extends Plugin {
   async sessionFor(id:string,forceRefresh=false):Promise<PairedSession|undefined>{
     const session=this.pairedSessions[id];const c=this.settings.paired.find(c=>c.id===id);
     if(session?.accountId&&session.accountId!==this.nativeAccount?.userId)throw Error('Sign in to the T3 account that owns this connection.');
-    if(session&&session.expiresAt>Date.now()+60000&&!forceRefresh)return session;
+    // Pre-v2 account sessions requested only the two orchestration scopes.
+    // Refresh them before any remote vault check; token expiry is not enough.
+    if(session&&session.expiresAt>Date.now()+60000&&!forceRefresh&&(!c?.managed||hasPluginPermissions(session)))return session;
     if(!c?.managed||!this.nativeAccount)return session;
     const existing=this.sessionRefreshing.get(id);if(existing)return existing;
     const account=this.nativeAccount;const generation=this.cloudGeneration;

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {pair, pairingInput,sendDirect,readDirect,commandId} from '../direct';
 import type {Request} from '../bridge';
 import {modelConfig,settingsSocket} from './rpc-fixture';
+import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../environment-permissions';
 const eid='environment';const url='https://t3.example';const now=Date.now();
 const session={url,environmentId:eid,token:'device-token',expiresAt:now+600000};
 const descriptor={environmentId:eid,label:'Computer',orchestrationProtocolVersion:2};
@@ -14,9 +15,14 @@ test('pairing parses native and hosted links without leaking secrets into endpoi
 });
 test('pairing exchanges code once for scoped device credentials, no cookies or redirects',async()=>{
  const calls:any[]=[];
- const fetcher=async(u:any,o:any)=>{calls.push({u,o});assert.equal(o.redirect,'error');assert.equal(o.credentials,'omit');return response(calls.length===1?descriptor:{token_type:'Bearer',access_token:'new-token',expires_in:3600,scope:'orchestration:read orchestration:operate'});};
+ const fetcher=async(u:any,o:any)=>{calls.push({u,o});assert.equal(o.redirect,'error');assert.equal(o.credentials,'omit');return response(calls.length===1?descriptor:{token_type:'Bearer',access_token:'new-token',expires_in:3600,scope:PLUGIN_SCOPE});};
  const result=await pair(url+'/pair#token=secret-code','',fetcher as any);
  assert.equal(calls[0].u,url+'/.well-known/t3/environment');assert.equal(calls[1].u,url+'/oauth/token');assert.equal(new URLSearchParams(calls[1].o.body).get('subject_token'),'secret-code');assert.equal(result.session.token,'new-token');assert.ok(!JSON.stringify(result).includes('secret-code'));
+ assert.equal(new URLSearchParams(calls[1].o.body).get('scope'),PLUGIN_SCOPE);assert.deepEqual(result.session.permissions,PLUGIN_PERMISSIONS);
+});
+for(const missing of ['filesystem:read','filesystem:write'])test(`pairing refuses a partial grant without ${missing}`,async()=>{
+ const fetcher=async(u:any)=>response(u.endsWith('/environment')?descriptor:{token_type:'Bearer',access_token:'partial-token',expires_in:600,scope:PLUGIN_PERMISSIONS.filter(p=>p!==missing).join(' ')});
+ await assert.rejects(pair(url+'/pair#token=one-time','',fetcher as any),/filesystem read and write access/);
 });
 test('direct sends use current T3 defaults, then persist model and commands across lost responses',async(t)=>{
  const commands:any[]=[];let lose=true;let saved=0,reads=0;const config=modelConfig();

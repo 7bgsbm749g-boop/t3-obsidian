@@ -1,12 +1,13 @@
 import {Buffer} from 'buffer';
 import {endpoint,descriptor,type PairedSession,type Fetcher} from './direct';
 import {proofKey,proof,thumbprint} from './dpop';
+import {PLUGIN_SCOPE,hasPluginPermissions} from './environment-permissions';
 // Public client configuration shipped by T3 Code; these are not secrets.
 export const CLOUD={issuer:'https://clerk.t3.codes',relay:'https://relay.t3.codes',clientId:'hzxSgY2cH10sDU2r'};
 export interface CloudAccount {accessToken:string;refreshToken?:string;expiresAt:number;identity:string}
 export interface DeviceLogin {deviceCode:string;userCode:string;verificationUrl:string;expiresAt:number;interval:number;nextPollAt:number}
 export interface CloudMachine {environmentId:string;name:string;url:string}
-export class CloudError extends Error {constructor(public code:string,public status=0){super(code==='access_denied'?'T3 sign-in was denied.':code==='expired_token'?'T3 sign-in expired. Start again.':code==='invalid_grant'?'T3 sign-in expired or was revoked. Sign in again.':`T3 Connect request failed (${code}).`);}}
+export class CloudError extends Error {constructor(public code:string,public status=0){super(code==='environment_note_access_required'?'This T3 connection does not permit note access. Reconnect this machine with filesystem read and write access.':code==='access_denied'?'T3 sign-in was denied.':code==='expired_token'?'T3 sign-in expired. Start again.':code==='invalid_grant'?'T3 sign-in expired or was revoked. Sign in again.':`T3 Connect request failed (${code}).`);}}
 async function request(url:string,options:RequestInit={},fetcher:Fetcher=fetch):Promise<any>{
  const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),30000);
  try{
@@ -57,9 +58,10 @@ export async function connectMachine(a:CloudAccount,m:CloudMachine,keyId:string,
  const connected=await request(url,{method:'POST',headers:{Authorization:'DPoP '+t.access_token,DPoP:await proof(key,'POST',url,t.access_token),'Content-Type':'application/json'},body:JSON.stringify({clientProofKeyThumbprint:await thumbprint(key)})},fetcher);
  if(connected.environmentId!==m.environmentId||endpoint(connected.endpoint.httpBaseUrl)!==m.url||typeof connected.credential!=='string')throw new CloudError('environment_changed');
  const d=await descriptor(m.url,fetcher);if(d.environmentId!==m.environmentId)throw new CloudError('environment_changed');
- const tokenUrl=m.url+'/oauth/token';const tokenOpts=form({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:connected.credential,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:'orchestration:read orchestration:operate',client_label:'Send to T3 Code (Obsidian)'});
+ const tokenUrl=m.url+'/oauth/token';const tokenOpts=form({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:connected.credential,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:PLUGIN_SCOPE,client_label:'Send to T3 Code (Obsidian)'});
  const session=await request(tokenUrl,{...tokenOpts,headers:{...tokenOpts.headers,DPoP:await proof(key,'POST',tokenUrl)}},fetcher);
- const scopes=new Set(String(session.scope).split(' '));
- if(session.token_type!=='DPoP'||typeof session.access_token!=='string'||!Number.isFinite(session.expires_in)||session.expires_in<=0||!scopes.has('orchestration:read')||!scopes.has('orchestration:operate'))throw new CloudError('invalid_environment_token');
- return {token:session.access_token,expiresAt:Date.now()+session.expires_in*1000,url:m.url,environmentId:m.environmentId,dpopKeyId:keyId};
+ if(session.token_type!=='DPoP'||typeof session.access_token!=='string'||!Number.isFinite(session.expires_in)||session.expires_in<=0)throw new CloudError('invalid_environment_token');
+ const permissions=String(session.scope).split(/\s+/);
+ if(!hasPluginPermissions({permissions}))throw new CloudError('environment_note_access_required');
+ return {token:session.access_token,expiresAt:Date.now()+session.expires_in*1000,url:m.url,environmentId:m.environmentId,dpopKeyId:keyId,permissions};
 }

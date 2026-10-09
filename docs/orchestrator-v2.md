@@ -46,6 +46,20 @@ output rather than blocking response recovery.
 
 ## Migration and recovery
 
+V2 checks filesystem permissions separately from orchestration permissions.
+Remote vault identity checks and note reads require `filesystem:read`; reply
+mailbox writes require `filesystem:write`. Both account connections and manual
+pairing now request those grants alongside `orchestration:read` and
+`orchestration:operate`. Token exchanges must return all four grants before the
+plugin saves a new session. Relay tokens still request only
+`environment:connect`.
+
+Existing account-managed sessions without a complete recorded grant are renewed
+before remote access, even if their tokens have not expired. Concurrent access
+shares one renewal. Renewal does not resend notes or change folder links.
+Unmanaged pairings remain device-local; a denied filesystem request gives a
+specific reconnect message and records its required permission and RPC method.
+
 T3 preserves v1 transcript IDs but does not copy provider runs, runtime controls,
 or v1 command receipts. The plugin resets the saved v1 event watermark when it
 receives a v2 snapshot. Unfinished response bindings whose messages were imported
@@ -71,6 +85,14 @@ either arrival order, closed requests, v1 recovery, image ID mapping, opaque
 history paging, protocol rejection, and tool detail caching. Existing desktop
 and mobile bundle tests exercise routing, note sends, questions, approvals,
 Stop, recovery, subscriptions, code views, and storage.
+
+Permission tests use a remote RPC fixture that rejects file reads and writes
+without the corresponding v2 grant. They reproduce the Windows-to-VPS vault
+check failure, verify repaired pairing and reply storage, and check migration
+of unexpired account sessions without replay. A local VPS delivery bypasses
+these remote file calls, so it cannot establish that Windows delivery works.
+Delivery releases must also exercise New thread and Previous thread from the
+affected Windows folder route and verify the returned replies.
 
 The bounded local server check is:
 
