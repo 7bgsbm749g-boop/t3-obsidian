@@ -5,6 +5,7 @@ import {parseProjects} from './bridge';
 import {environmentApi,endpoint,commandId,type PairedSession,type Fetcher} from './direct';
 import {sameWorkspacePath} from './folder-link';
 import {workspaceChildPath,type NewWorkspaceFolder} from './workspace-picker';
+import {identityPathForSettings,readVaultIdentityRecord} from './vault-identity';
 
 export interface VaultLocation {environmentId:string;workspaceRoot:string}
 export interface VaultRegistration {type:'project.create';commandId:string;projectId:string;title:string;workspaceRoot:string;createdAt:string}
@@ -39,7 +40,14 @@ export async function connectVaultRemote(c:Connection,s:PairedSession|undefined,
     projects,
     browse:async path=>{const result=await rpc('filesystem.browse',{partialPath:path==='~'?path:path.replace(/[\\/]+$/,'')+'/'});if(typeof result?.parentPath!=='string'||!Array.isArray(result.entries)||result.entries.some((x:any)=>typeof x.name!=='string'||typeof x.fullPath!=='string'))throw Error('Invalid folder list from T3.');return result;},
     matches:async(root,settingsPath,id)=>{
-      try{const result=await rpc('projects.readFile',{cwd:root,relativePath:settingsPath});if(result.truncated||typeof result.contents!=='string')return false;let data;try{data=JSON.parse(result.contents);}catch{return false;}return vaultIdentity(data)===id;}
+      const identityPath=identityPathForSettings(settingsPath);
+      if(identityPath){
+        try{const result=await rpc('projects.readFile',{cwd:root,relativePath:identityPath});return !result.truncated&&typeof result.contents==='string'&&readVaultIdentityRecord(result.contents)===id;}
+        catch(error){if(!(error instanceof VaultRpcError&&error.kind==='ProjectReadFileError'))throw error;}
+      }
+      // Older hosts remain compatible only when the complete settings can be
+      // read. Never infer a vault identity from a truncated JSON prefix.
+      try{const result=await rpc('projects.readFile',{cwd:root,relativePath:settingsPath});if(result.truncated)throw Error('Update and reload Send to T3 Code on the vault project machine to verify its large settings file.');if(typeof result.contents!=='string')return false;let data;try{data=JSON.parse(result.contents);}catch{return false;}return vaultIdentity(data)===id;}
       catch(error){if(error instanceof VaultRpcError&&error.kind==='ProjectReadFileError')return false;throw error;}
     },
     hasNote:async(root,path)=>{

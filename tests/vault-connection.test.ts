@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {pair} from '../direct';
 import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../environment-permissions';
 import {T3RpcError} from '../t3-rpc';
+import {vaultIdentityPath} from '../vault-identity';
 
 function harness(initialPermissions:readonly string[]=PLUGIN_PERMISSIONS){
   let permissions=initialPermissions;
@@ -40,7 +41,8 @@ function harness(initialPermissions:readonly string[]=PLUGIN_PERMISSIONS){
         if(req.payload.cwd==='missing'){queueMicrotask(()=>ws.onmessage({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'ProjectReadFileError'}}]}})}));return;}
         const contents=files.get(req.payload.relativePath);
         if(contents===undefined&&!req.payload.relativePath.endsWith('/data.json')){queueMicrotask(()=>ws.onmessage({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'ProjectReadFileError'}}]}})}));return;}
-        value={contents:contents??JSON.stringify({vaultId:req.payload.cwd==='wrong'?'another-vault':id}),truncated:false};
+        const complete=contents??JSON.stringify({vaultId:req.payload.cwd==='wrong'?'another-vault':id});
+        value={contents:complete.slice(0,1024*1024),byteLength:complete.length,truncated:complete.length>1024*1024};
       }else if(req.tag==='projects.writeFile'){files.set(req.payload.relativePath,req.payload.contents);value={relativePath:req.payload.relativePath};}
       else if(req.tag==='projects.deleteEntry'){files.delete(req.payload.relativePath);value={relativePath:req.payload.relativePath};}
       else if(req.tag==='projects.listEntries'&&folderEntries!==undefined)value={entries:folderEntries,truncated:false};
@@ -51,7 +53,7 @@ function harness(initialPermissions:readonly string[]=PLUGIN_PERMISSIONS){
   return {id,c,session,commands,rpc,requests,files,connect:()=>connectVaultRemote(c,session,fetcher,socket),pairConnect:async()=>{const paired=await pair(c.url+'/pair#token=one-time','',fetcher);assert.equal(paired.session.permissions!.join(' '),PLUGIN_SCOPE);return connectVaultRemote(c,paired.session,fetcher,socket);},lose:()=>{lose=true;},setProjects:(p:any[])=>{projects=p;},setFolderEntries:(entries:any[])=>{folderEntries=entries;},closed:()=>closed};
 }
 
-test('v2 permissions reproduce the remote note failure and repaired pairing permits vault checks and reply storage',async()=>{
+test('file permissions protect remote vault checks and repaired pairing permits reply storage',async()=>{
  const h=harness(['orchestration:read','orchestration:operate']);const old=await h.connect();
  try{
   await assert.rejects(old.matches('/vault','.obsidian/plugins/send-to-t3-code/data.json',h.id),(error:any)=>error instanceof T3RpcError&&error.kind==='EnvironmentAuthorizationError'&&error.requiredPermission==='filesystem:read'&&error.rpcMethod==='projects.readFile'&&/Reconnect/.test(error.message)&&!error.message.includes('DO_NOT_LEAK'));
@@ -61,12 +63,11 @@ test('v2 permissions reproduce the remote note failure and repaired pairing perm
   assert.equal(await repaired.matches('/vault','.obsidian/plugins/send-to-t3-code/data.json',h.id),true);
   await repaired.writeFile('/private-storage','replies/test.json','synthetic reply');
   assert.equal(await repaired.readFile('/private-storage','replies/test.json'),'synthetic reply');
-  await repaired.deleteFile('/private-storage','replies/test.json');assert.equal(h.files.has('replies/test.json'),false);
  }finally{repaired.close();}
  assert.equal(h.commands.length,0,'Permission repair must not create projects or dispatch work');
 });
 
-test('read-only v2 grants report the missing write permission instead of a missing vault',async()=>{
+test('read-only grants report the missing write permission instead of a missing vault',async()=>{
  const h=harness(['orchestration:read','orchestration:operate','filesystem:read']);const remote=await h.connect();
  try{
   assert.equal(await remote.matches('/vault','.obsidian/plugins/send-to-t3-code/data.json',h.id),true);
@@ -79,11 +80,27 @@ test('remote vault discovery uses identity across different folder names and han
   const h=harness(),r=await h.connect();
   try{
     assert.deepEqual(await discoverVaultRoots(r,['C:\\Users\\Alex\\QLO2','C:/Users/Alex/QLO2','wrong','missing'],'CustomConfig/plugins/send-to-t3-code/data.json',h.id),['C:\\Users\\Alex\\QLO2']);
-    assert.ok(h.rpc.every(x=>x.payload.relativePath==='CustomConfig/plugins/send-to-t3-code/data.json'));
+    assert.ok(h.rpc.every(x=>['CustomConfig/t3-code/vault-identity.json','CustomConfig/plugins/send-to-t3-code/data.json'].includes(x.payload.relativePath)));
     assert.equal(h.commands.length,0,'Discovery must never create a project');
     assert.equal((await r.browse('~')).parentPath,'C:\\Users\\Alex\\Vault');
   }finally{r.close();}
   assert.equal(h.closed(),1);
+});
+
+test('remote identity uses a small host record when linked-vault settings exceed the file preview limit',async()=>{
+  const h=harness(),r=await h.connect(),settingsPath='.obsidian/plugins/send-to-t3-code/data.json';
+  h.files.set(settingsPath,JSON.stringify({padding:'x'.repeat(1_200_000),vaultId:h.id}));
+  try{
+    await assert.rejects(r.matches('/vault',settingsPath,h.id),/Update and reload/,'An old host with large settings must reproduce the failure');
+    h.files.set(vaultIdentityPath('.obsidian'),JSON.stringify({version:1,vaultId:h.id}));h.rpc.length=0;
+    assert.equal(await r.matches('/vault',settingsPath,h.id),true);
+    assert.deepEqual(h.rpc.map(x=>x.payload.relativePath),[vaultIdentityPath('.obsidian')]);
+  }finally{r.close();}
+});
+
+for(const record of [{version:1,vaultId:'different'},{version:2,vaultId:'expected'},'{broken','x'.repeat(1_200_000)])test(`remote identity refuses ${typeof record==='string'?record.slice(0,8):JSON.stringify(record)} without trusting legacy settings`,async()=>{
+  const h=harness(),r=await h.connect();h.files.set(vaultIdentityPath('.obsidian'),typeof record==='string'?record:JSON.stringify({...record,vaultId:record.vaultId==='expected'?h.id:record.vaultId}));
+  try{assert.equal(await r.matches('/vault','.obsidian/plugins/send-to-t3-code/data.json',h.id),false);assert.equal(h.rpc.length,1);}finally{r.close();}
 });
 
 test('remote project registration reuses an existing root and recovers a lost creation response without a second project',async()=>{

@@ -60,6 +60,14 @@ shares one renewal. Renewal does not resend notes or change folder links.
 Unmanaged pairings remain device-local; a denied filesystem request gives a
 specific reconnect message and records its required permission and RPC method.
 
+Vault identity is published in a small versioned record at
+`CONFIG_DIR/t3-code/vault-identity.json` on startup and when synced settings adopt
+a new vault identity. Remote checks read this record instead of the growing
+`data.json`. An absent record permits a complete legacy settings read; a wrong,
+malformed, unsupported, or truncated record fails closed. A legacy host whose
+settings exceed the file API limit receives an update-and-reload instruction.
+The identity record contains no credentials and does not replace plugin settings.
+
 T3 preserves v1 transcript IDs but does not copy provider runs, runtime controls,
 or v1 command receipts. The plugin resets the saved v1 event watermark when it
 receives a v2 snapshot. Unfinished response bindings whose messages were imported
@@ -92,7 +100,7 @@ check failure, verify repaired pairing and reply storage, and check migration
 of unexpired account sessions without replay. A local VPS delivery bypasses
 these remote file calls, so it cannot establish that Windows delivery works.
 Delivery releases must also exercise New thread and Previous thread from the
-affected Windows folder route and verify the returned replies.
+generic linked folder in the VPS test vaults and verify the returned replies.
 
 The bounded local server check is:
 

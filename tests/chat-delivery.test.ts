@@ -153,7 +153,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
         if(contents===undefined){this.onmessage?.({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'ProjectReadFileError'}}]}})});return;}
         value={contents,truncated:false};
       }
-      else if(req.tag==='projects.readFile')value={contents:JSON.stringify(req.payload.cwd===project.workspaceRoot?{vaultId:shared.at(-1).vaultId}:{vaultId:'different-vault'}),truncated:false};
+      else if(req.tag==='projects.readFile')value={contents:JSON.stringify({...req.payload.relativePath.endsWith('/vault-identity.json')?{version:1}:{},vaultId:req.payload.cwd===project.workspaceRoot?shared.at(-1).vaultId:'different-vault'}),truncated:false};
       else value={entries:['Notes/Draft.md','Notes/Send.md','Unlinked/draft.md','Fresh/deep/draft.md'].map(path=>({path,kind:'file'}))};
       queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Success',value}})}));
     }

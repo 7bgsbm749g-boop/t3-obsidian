@@ -317,6 +317,7 @@ def publish_release(
     dirty: list[str],
     *,
     resumed: bool,
+    skip_laptop_reload: bool = False,
 ) -> None:
     archive_hashes = validate_archive(archive, version, compare_source=not resumed)
     with zipfile.ZipFile(archive) as bundle:
@@ -354,6 +355,9 @@ def publish_release(
     # Publishing remains on the VPS. A private laptop mailbox performs the
     # native reload only after matching Sync files, with a timer for offline
     # recovery. This is loaded-version verification, not laptop smoke testing.
+    if skip_laptop_reload:
+        print('Laptop reload omitted by explicit release option.')
+        return
     try:
         run([sys.executable, str(ROOT / 'scripts/laptop-reload.py'), '--retry'], timeout=55)
     except (subprocess.SubprocessError, OSError):
@@ -401,7 +405,7 @@ def complete_smoke(version: str, device: str, evidence: Path, notes: str) -> Non
     print(json.dumps(receipt, indent=2))
 
 
-def new_release(bump: str | None, allow_dirty: bool, requested_version: str | None = None) -> None:
+def new_release(bump: str | None, allow_dirty: bool, requested_version: str | None = None, *, skip_laptop_reload: bool = False) -> None:
     canonical_root_required()
     commit, dirty = git_state()
     if dirty and not allow_dirty:
@@ -442,10 +446,10 @@ def new_release(bump: str | None, allow_dirty: bool, requested_version: str | No
                 atomic_write(path, value)
         raise
 
-    publish_release(version, archive, commit, dirty, resumed=False)
+    publish_release(version, archive, commit, dirty, resumed=False, skip_laptop_reload=skip_laptop_reload)
 
 
-def resume_release(version: str, allow_dirty: bool) -> None:
+def resume_release(version: str, allow_dirty: bool, *, skip_laptop_reload: bool = False) -> None:
     canonical_root_required()
     commit, dirty = git_state()
     archive = archive_path(version)
@@ -473,7 +477,7 @@ def resume_release(version: str, allow_dirty: bool) -> None:
     validate_version_alignment(version)
     if release_receipt_dir(version).exists():
         raise SystemExit(f'Release {version} already has an immutable deployment receipt.')
-    publish_release(version, archive, commit, dirty, resumed=True)
+    publish_release(version, archive, commit, dirty, resumed=True, skip_laptop_reload=skip_laptop_reload)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -484,6 +488,7 @@ def parser() -> argparse.ArgumentParser:
     action.add_argument('--resume', metavar='VERSION')
     action.add_argument('--complete-smoke', metavar='VERSION')
     result.add_argument('--allow-dirty', action='store_true')
+    result.add_argument('--skip-laptop-reload', action='store_true', help='Publish on the VPS without contacting the laptop reload helper.')
     result.add_argument('--device')
     result.add_argument('--evidence', type=Path)
     result.add_argument('--notes', default='')
@@ -502,9 +507,9 @@ def main() -> None:
     if args.device or args.evidence or args.notes:
         raise SystemExit('--device, --evidence, and --notes are valid only with --complete-smoke.')
     if args.resume:
-        resume_release(args.resume, args.allow_dirty)
+        resume_release(args.resume, args.allow_dirty, skip_laptop_reload=args.skip_laptop_reload)
         return
-    new_release(args.bump, args.allow_dirty, args.version)
+    new_release(args.bump, args.allow_dirty, args.version, skip_laptop_reload=args.skip_laptop_reload)
 
 
 if __name__ == '__main__':

@@ -34,6 +34,7 @@ import { setIcon, App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, 
 import { Buffer } from 'buffer';
 import { deviceState,clearDeviceDiagnostics } from './device-state';
 import { downloadImage,nativeAccountFetch } from './network';
+import {ensureVaultIdentityRecord} from './vault-identity';
 import { collectImages, imageReferenceDefinitions, MAX_IMAGE_BYTES } from './images';
 import { applyOrchestration, OrchestrationSettings } from './orchestration';
 import { CompletionSettings, CompletionJob, CompletionAction, archiveFolder, contentHash, completionState, isOriginalCompletedTurn, cleanCompletedNote } from './completion';
@@ -341,6 +342,7 @@ export default class SendToT3 extends Plugin {
     // unconditional startup snapshot write, and uses the conflict-safe path.
     if(typeof data?.vaultId!=='string'||!data.vaultId)await this.save(true);
     else if(migratedNoteThreads||restoreFolderLinks)await this.save(true);
+    await this.publishVaultIdentity();
     this.addSettingTab(new T3Settings(this.app,this));
     this.app.workspace.onLayoutReady(()=>{
       if(this.stopped)return;
@@ -817,6 +819,7 @@ export default class SendToT3 extends Plugin {
     this.settings.autoSettleThreads=adopted.autoSettleThreads;
     if(!this.settings.autoSettleThreads&&this.settings.settlementJobs.length){this.settings.settlementJobs=[];await this.saveDeviceState();}
     this.settings.vaultId=vaultIdentity(data)??this.settings.vaultId;
+    await this.publishVaultIdentity();
     this.settings.vaultLocations=adopted.vaultLocations;
     const connectionsChanged=JSON.stringify(adopted.paired)!==JSON.stringify(this.settings.paired);
     if(connectionsChanged)this.settings.paired=adopted.paired.map((c:PairedConnection)=>this.settings.paired.find(existing=>JSON.stringify(existing)===JSON.stringify(c))??c);
@@ -827,6 +830,12 @@ export default class SendToT3 extends Plugin {
     this.settings.noteDeliveries=mergedDeliveries;
     if(restoreFolderLinks||JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads)||JSON.stringify(mergedDeliveries)!==JSON.stringify(remoteDeliveries))await this.save(restoreFolderLinks);
     this.refreshFolderIndicators();
+  }
+  private async publishVaultIdentity():Promise<void>{
+    const files=this.app.vault?.adapter;
+    if(!files||typeof files.exists!=='function'||typeof files.read!=='function'||typeof files.mkdir!=='function'||typeof files.write!=='function')return;
+    try{await ensureVaultIdentityRecord(files,this.app.vault.configDir||'.obsidian',this.settings.vaultId);}
+    catch(error){new Notice(`Could not publish the T3 vault identity: ${message(error)}`,10000);}
   }
   openSettings(){
     const settings=(this.app as App & {setting?:{open():void;openTabById(id:string):void}}).setting;
