@@ -45,7 +45,6 @@ export class NativeResponseManager {
   private lifetime=0;
   private relocations=new Map<string,Map<string,string>>();
   private warnings=new Map<MarkdownView,Map<string,HTMLElement>>();
-  private deliveryWarnings=new Map<MarkdownView,HTMLElement>();
   private previewVault?:string;
   private cached=new Map<string,NativePreviewEntry>();
   private reconnecting=new Set<string>();
@@ -309,7 +308,6 @@ export class NativeResponseManager {
     const opened=new Set<string>();
     const live=new Set(this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView));
     for(const [view,warnings] of this.warnings)if(!live.has(view)){for(const element of warnings.values())element.remove();this.warnings.delete(view);}
-    for(const [view,banner] of this.deliveryWarnings)if(!live.has(view)){banner.remove();this.deliveryWarnings.delete(view);}
     for(const [view,adapter] of this.views)if(!live.has(view)||adapter.isDisposed()){if(!adapter.isDisposed())adapter.dispose();this.views.delete(view);}
     for(const view of live){
       if(!view.file||typeof view.getViewData!=='function')continue;
@@ -324,15 +322,6 @@ export class NativeResponseManager {
         const list=banner.createEl('ul');for(const path of record.state!.locationConflict!)list.createEl('li',{text:path});
         banner.createEl('button',{text:'Review response destination…'}).onclick=()=>banner.dispatchEvent(new CustomEvent('t3-review-response-location',{bubbles:true,detail:{bindingId:record.request.id}}));
         view.contentEl.prepend(banner);warnings.set(record.request.id,banner);
-      }
-      const pending=[...this.records.values()].filter(record=>record.finalWriter&&record.responseRemovedAt===undefined&&!record.state?.cleanupComplete&&(record.state?.notePath??record.request.notePath)===view.file!.path);
-      let delivery=this.deliveryWarnings.get(view);
-      if(!pending.length){delivery?.remove();this.deliveryWarnings.delete(view);}
-      else if(view.contentEl){
-        if(!delivery?.isConnected){delivery=view.contentEl.createDiv({cls:'send-to-t3-save-pending'});delivery.setAttribute('role','status');view.contentEl.prepend(delivery);this.deliveryWarnings.set(view,delivery);}
-        const review=pending.some(record=>record.state?.status==='conflict'||record.state?.locationConflict)||!!this.view(view)?.conflictRecord();
-        const message=review?'T3 response finished. Final note save needs review.':'T3 response finished. Final note save pending.';
-        if(delivery.textContent!==message)delivery.setText(message);
       }
       try{
         let adapter=this.view(view);
@@ -462,5 +451,5 @@ export class NativeResponseManager {
   prepare(path:string,before:string,after:string,ids:string[]){if(this.activeFinalSaves.has(path)&&!this.finalSaveReady(path))throw Error('The native panes changed before final delivery.');for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.prepareMaterialization(before,after,ids);}
   cancel(path:string){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.cancelMaterialization();}
   committed(path:string,saved:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path){if(this.uninitializedViews.has(adapter)){adapter.initializeDiskBaseline(saved,true);this.uninitializedViews.delete(adapter);}if(!adapter.acceptCommitted(saved,ids))throw Error('A native pane did not adopt the saved result.');}}
-  dispose(){this.recoverConflict=undefined;void this.flushPreviewCache();this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();for(const warning of this.deliveryWarnings.values())warning.remove();this.deliveryWarnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.proofs.clear();this.deviceCommits.clear();this.completionIdentities.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
+  dispose(){this.recoverConflict=undefined;void this.flushPreviewCache();this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.proofs.clear();this.deviceCommits.clear();this.completionIdentities.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
 }

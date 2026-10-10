@@ -1,5 +1,12 @@
 # Typing, Stop, final-save, and reload repair
 
+## Final-save banner removal
+
+The final-save progress banner is removed from the native note view. Final
+delivery continues through the existing save barrier and recovery journal in
+the background. The retained-grant regression still checks full reply recovery
+and the exact saved projection through pending and conflict states.
+
 ## Observed failures
 
 The original large-note diagnosis was incomplete. Large generated tool HTML

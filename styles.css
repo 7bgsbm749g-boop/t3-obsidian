@@ -187,7 +187,7 @@
   margin-inline-start: 0.25em;
   vertical-align: baseline;
 }
- .send-to-t3-location-conflict, .send-to-t3-save-pending { margin: 8px 16px; padding: 12px; border: 1px solid var(--text-warning); border-radius: 6px; background: var(--background-secondary); overflow-wrap: anywhere; }
+ .send-to-t3-location-conflict { margin: 8px 16px; padding: 12px; border: 1px solid var(--text-warning); border-radius: 6px; background: var(--background-secondary); overflow-wrap: anywhere; }
 .send-to-t3-workspace-folders { max-height: 30vh; overflow-y: auto; }
 .send-to-t3-new-folder { flex-direction: column; align-items: stretch; gap: 8px; }
 .send-to-t3-new-folder .setting-item-info { margin: 0; }

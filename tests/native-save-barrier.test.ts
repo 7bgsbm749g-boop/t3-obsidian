@@ -202,13 +202,13 @@ function contentElement(){
   const children:any[]=[];return {ownerDocument:{defaultView:undefined},children,createDiv:()=>{const element:any={isConnected:true,textContent:'',setAttribute(){},setText(text:string){this.textContent=text;},remove(){this.isConnected=false;}};return element;},prepend:(element:any)=>{children.unshift(element);}};
 }
 function granted(revision=2):LeaseRecord {return {...record(revision),state:{...record().state!,body:'**T3 · Working**\n\n> Stale checkpoint reply'},finalWriter:{actor:'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',token:'retained-token',messageId:id,turnId:'completed-turn',sequence:20,body,phase:'complete'}};}
-test('a retained final grant replaces stale stream and reconnect text and shows save state outside the response body',async()=>{
+test('a retained final grant replaces stale stream and reconnect text without adding a save banner',async()=>{
   const initial=nativeFixture(),first=new NativeResponseManager(initial.app);let checkpoint:unknown;first.configurePreviewCache('vault',undefined,async value=>{checkpoint=structuredClone(value);});await first.receive(record());first.stream({request:record().request,messageId:id,sequence:10,body:'**T3 · Working**\n\n> Stale cached reply'});await first.prepareReload();first.dispose();
   const h=nativeFixture(),manager=new NativeResponseManager(h.app),element=contentElement();h.view.contentEl=element;
   manager.configurePreviewCache('vault',checkpoint,async()=>{});await manager.receive(granted());
   assert.match(h.visible(),/Final reply/);assert.equal(h.visible().split('retained output ').length-1,1000);assert.doesNotMatch(h.visible(),/Working|Stale|Reconnecting/);assert.equal(h.view.getViewData(),before);
-  let badge=element.children.find(child=>child.isConnected);assert.equal(badge.textContent,'T3 response finished. Final note save pending.');assert.doesNotMatch(h.visible(),/Final note save pending/);
-  await manager.receive({...granted(3),state:{...granted().state!,status:'conflict'}});badge=element.children.find(child=>child.isConnected);assert.equal(badge.textContent,'T3 response finished. Final note save needs review.');assert.equal(h.view.getViewData(),before);manager.dispose();assert.equal(badge.isConnected,false);
+  assert.equal(element.children.length,0);
+  await manager.receive({...granted(3),state:{...granted().state!,status:'conflict'}});assert.equal(element.children.length,0);assert.equal(h.view.getViewData(),before);manager.dispose();
 });
 
 test('a closed-pane Stop uses the permanent final body rather than stale checkpoint prose',async()=>{
