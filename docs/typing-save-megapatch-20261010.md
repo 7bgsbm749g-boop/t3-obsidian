@@ -7,6 +7,17 @@ delivery continues through the existing save barrier and recovery journal in
 the background. The retained-grant regression still checks full reply recovery
 and the exact saved projection through pending and conflict states.
 
+Released as 2.37.1 from reviewed commit
+`f5ef9e7427a285b56cde9c9334ac95f760d5c395`. Build, all 1,286 TypeScript tests,
+and all 13 Python tests passed. Both the laptop and VPS reported new loaded
+2.37.1 instances. In the real VPS QLO2 editor, an existing completed test reply
+was attached, saved, and acknowledged with its full text visible and no
+final-save banner. The original active note's file hash stayed unchanged;
+the temporary note was removed. Pending and conflict cases were checked by the
+existing regression, without forcing a production conflict. The immutable
+receipt is
+`/home/ubuntu/backups/send-to-t3-code/releases/2.37.1/smoke-vps-qlo2.json`.
+
 ## Observed failures
 
 The original large-note diagnosis was incomplete. Large generated tool HTML
