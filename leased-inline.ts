@@ -15,12 +15,15 @@ import {DirectInlinePreview,type DirectInlineUpdate} from './direct-inline-previ
 import {commandId} from './direct';
 import {responseStopReceipt,stoppedBodyPath,stoppedBodyReference,validResponseStopReceipt,type ResponseStopReceipt} from './response-stop-receipt';
 import type {FinalAttemptAbort} from './completion-attempt';
+import {T3ConnectionTimeoutError} from './t3-rpc';
 
 export const INLINE_SNAPSHOT_INTERVAL_MS=10_000;
 export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
 
 export interface PendingResponseRename {id:string;actor:string;bindingId:string;host:InlineHostTarget;before:string;after:string}
 export interface DeviceInlineIO {
+  connectionTimeout?(target:InlineHostTarget,error:T3ConnectionTimeoutError):void;
+  connectionRecovered?(target:InlineHostTarget):void;
   completionActor?:string;
   completeResponse?(record:LeaseRecord,original:string,staged:string|undefined,prepare:(proof:NativeCommitProof)=>Promise<void>,abort?:(proof:NativeCommitProof,evidence:FinalAttemptAbort)=>Promise<void>):Promise<NativeCommitProof|undefined>;
   completionFailed?(error:unknown,id:string):void;
@@ -71,17 +74,23 @@ export class DeviceInlineManager {
   private host(target:InlineHostTarget){
     const key=hostKey(target),existing=this.hosts.get(key);if(existing)return existing;
     let connection:Promise<{files:InlineFiles;readonly closed?:boolean;close():void}>|undefined;
-    const perform=async<T>(fn:(files:InlineFiles)=>Promise<T>)=>{
+    const perform=async<T>(fn:(files:InlineFiles)=>Promise<T>,retryRead=false):Promise<T>=>{
+      for(let attempt=0; ;attempt++){
       const opened=connection??=this.open(target);
-      try{return await fn((await opened).files);}catch(error){
+      try{const result=await fn((await opened).files);this.io.connectionRecovered?.(target);return result;}catch(error){
         // A file/RPC failure belongs to this operation. Only replace a dead
         // transport; closing a healthy shared socket cancels unrelated sends.
         const value=await opened.catch(()=>undefined);
         if(!value||value.closed===true){if(connection===opened)connection=undefined;value?.close();}
+        if(error instanceof T3ConnectionTimeoutError)this.io.connectionTimeout?.(target,error);
+        // Reads are safe to repeat once on a new transport. Writes and prompt
+        // dispatch retain their original uncertain result and durable identity.
+        if(retryRead&&attempt===0&&(!value||value.closed===true)&&!this.stopped)continue;
         throw error;
       }
+      }
     };
-    const files:InlineFiles={read:path=>perform(io=>io.read(path)),write:(path,value)=>perform(io=>io.write(path,value))};
+    const files:InlineFiles={read:path=>perform(io=>io.read(path),true),write:(path,value)=>perform(io=>io.write(path,value))};
     const host:Host={target,files,client:new InlineLeaseClient(this.actor,files,target.directory,this.now,this.monotonic,this.pause),lastDiscovery:0,responses:[],close:()=>{host.client.dispose();void connection?.then(value=>value.close()).catch(()=>{});}};
     this.hosts.set(key,host);return host;
   }

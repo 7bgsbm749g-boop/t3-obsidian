@@ -9,7 +9,25 @@ import {validateClientCommand,type ClientCommand,type ClientCommandResult} from 
 export class DesktopClientMaintenance {
   readonly client:{instanceId:string;loadedVersion:string};
   private initiated=false;
-  constructor(private app:App,private root:string,private configDir:string,loadedVersion:string,private codeViewTypes:()=>readonly string[]=()=>[],private beforeReload?:()=>Promise<void>){this.client={instanceId:randomUUID(),loadedVersion};}
+  private runtime:Promise<ClientCommand['runtimeSha256']|undefined>;
+  constructor(private app:App,private root:string,private configDir:string,loadedVersion:string,private codeViewTypes:()=>readonly string[]=()=>[],private beforeReload?:()=>Promise<void>){
+    this.client={instanceId:randomUUID(),loadedVersion};
+    this.runtime=this.loadedRuntime().catch(()=>undefined);
+  }
+  private async loadedRuntime(){
+    const directory=join(this.root,this.configDir,'plugins','send-to-t3-code'),hashes={} as NonNullable<ClientCommand['runtimeSha256']>;
+    for(const name of ['main.js','manifest.json','styles.css'] as const){
+      const bytes=await fs.readFile(join(directory,name));
+      if(name==='manifest.json'&&JSON.parse(bytes.toString('utf8')).version!==this.client.loadedVersion)throw Error('The installed version differs from the running plugin.');
+      hashes[name]=createHash('sha256').update(bytes).digest('hex');
+    }
+    return hashes;
+  }
+  async reloadCurrent(beforeDispatch:()=>boolean){
+    const runtimeSha256=await this.runtime;if(!runtimeSha256)throw Error('Waiting for the running plugin release before automatic reload.');
+    const command:ClientCommand={version:1,id:randomUUID(),kind:'reload-client',releaseVersion:this.client.loadedVersion,runtimeSha256};
+    return this.acknowledged(command,await this.execute(command),beforeDispatch);
+  }
   private async ready(command:ClientCommand){
     await this.beforeReload?.();
     await nativeResponses(this.app).prepareReload();
@@ -35,9 +53,10 @@ export class DesktopClientMaintenance {
   }
   /** Called only after the acknowledgement is durable. Replayed requests are
    * harmless on a new instance, and a crash before dispatch can recover. */
-  async acknowledged(command:ClientCommand,result:ClientCommandResult){
+  async acknowledged(command:ClientCommand,result:ClientCommandResult,beforeDispatch?:()=>boolean){
     if(command.kind!=='reload-client'||!result.ok||!result.reloadScheduled||result.client?.instanceId!==this.client.instanceId||this.initiated)return false;
     await this.ready(command);
+    if(beforeDispatch&&!beforeDispatch())return false;
     this.initiated=true;
     try{
       if(!(this.app as any).commands.executeCommandById('app:reload'))throw Error('Obsidian refused the native reload command.');

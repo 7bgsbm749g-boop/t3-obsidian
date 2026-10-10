@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {appendSendFailure,sendFailureLog,type SendFailure} from '../send-failures';
-import {T3RpcError} from '../t3-rpc';
+import {T3RpcError,T3ConnectionTimeoutError} from '../t3-rpc';
 test('failure log bounds retention, keeps nested transport causes and RPC kinds, and removes credentials',()=>{
   const error=Object.assign(Error('socket failed at https://private.example/?token=secret'),{kind:'ProjectReadFileError',cause:Error('Bearer secret-token ticket=secret')});
   const failure:SendFailure={at:'now',stage:'response-registration',elapsedMs:17,delivery:'not-started',requestId:'request',error};
@@ -22,4 +22,10 @@ test('remote authorization failures retain the required permission and method wi
  const error=new T3RpcError('EnvironmentAuthorizationError','filesystem:read','projects.readFile');
  const [failure]=appendSendFailure([],{at:'now',stage:'response-registration',elapsedMs:10,delivery:'not-started',error});
  assert.equal((failure.error as any).requiredPermission,'filesystem:read');assert.equal((failure.error as any).rpcMethod,'projects.readFile');assert.match((failure.error as any).message,/Reconnect/);
+});
+test('confirmed connection failures retain bounded timing and exact RPC method without payloads',()=>{
+ const error=new T3ConnectionTimeoutError('rpc-1','projects.readFile',8000,3,8000);
+ const saved=appendSendFailure([],{at:'2026-10-10T05:20:00Z',stage:'connection-timeout',elapsedMs:8000,delivery:'not-started',error});
+ const exported=sendFailureLog(saved,'test','device').failures[0].error as any;
+ assert.equal(exported.confirmed,true);assert.equal(exported.kind,'ConnectionTimeout');assert.equal(exported.rpcMethod,'projects.readFile');assert.equal(exported.elapsedMs,8000);assert.equal(exported.pendingCount,3);assert.equal(exported.idleMs,8000);
 });

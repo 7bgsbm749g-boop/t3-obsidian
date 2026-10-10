@@ -7,7 +7,9 @@ export function sendFailureLog(saved:unknown,pluginVersion:string,deviceId:strin
   const error=(value:any,depth=0):unknown=>{
     if(!value||typeof value!=='object')return redact(value);
     const result:Record<string,unknown>={};
-    for(const key of ['name','message','stack','kind','requiredPermission','rpcMethod'])if(typeof value[key]==='string')result[key]=redact(value[key]);
+    for(const key of ['name','message','stack','kind','requiredPermission','rpcMethod','connectionId'])if(typeof value[key]==='string')result[key]=redact(value[key]);
+    for(const key of ['elapsedMs','pendingCount','idleMs'])if(Number.isFinite(value[key]))result[key]=value[key];
+    if(value.confirmed===true)result.confirmed=true;
     if(value.cause!==undefined&&depth<3)result.cause=error(value.cause,depth+1);
     return result;
   };
@@ -22,6 +24,6 @@ export function sendFailureLog(saved:unknown,pluginVersion:string,deviceId:strin
 /** Failures only. Never retain prompts, attachments, sessions or a stream log. */
 export function appendSendFailure(saved:unknown,failure:SendFailure):SendFailure[]{
   const previous=Array.isArray(saved)?saved.filter(entry=>typeof entry?.at==='string'&&typeof entry.stage==='string'):[];
-  const cause=(error:unknown,depth=0):unknown=>{if(error&&typeof error==='object'&&'message' in error)return {name:(error as Error).name,message:(error as Error).message,stack:(error as Error).stack,...('kind' in error?{kind:error.kind}:{}),...('requiredPermission' in error?{requiredPermission:error.requiredPermission}:{}),...('rpcMethod' in error?{rpcMethod:error.rpcMethod}:{}),...('cause' in error&&depth<3?{cause:cause(error.cause,depth+1)}:{})};return error;};
+  const cause=(error:unknown,depth=0):unknown=>{if(error&&typeof error==='object'&&'message' in error){const result:Record<string,unknown>={name:(error as Error).name,message:(error as Error).message,stack:(error as Error).stack};for(const key of ['kind','requiredPermission','rpcMethod','connectionId','elapsedMs','pendingCount','idleMs','confirmed'])if(key in error)result[key]=(error as any)[key];if('cause' in error&&depth<3)result.cause=cause(error.cause,depth+1);return result;}return error;};
   return [...previous,{...failure,error:redact(cause(failure.error))}].slice(-64);
 }

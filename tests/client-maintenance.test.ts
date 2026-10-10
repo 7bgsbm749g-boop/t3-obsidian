@@ -53,6 +53,23 @@ test('native client commands require a complete immutable release and cannot req
   const id=randomUUID();
   for(const value of [{version:1,id,kind:'reload-client'},{version:1,id,kind:'client-status',releaseVersion:'3.4.5'},{version:1,id,kind:'app:save'}])assert.throws(()=>validateClientCommand(value));
 });
+test('automatic recovery uses the running release and persists its decision before native reload',async()=>{
+ const h=await fixture();try{
+  const current=new DesktopClientMaintenance(h.app,h.root,'.obsidian','3.4.5');let recorded=false;
+  const execute=h.app.commands.executeCommandById;h.app.commands.executeCommandById=(id:string)=>{assert.equal(recorded,true);return execute(id);};
+  h.view.getViewData=()=> 'unsaved edit';await assert.rejects(current.reloadCurrent(()=>{recorded=true;return true;}),/unsaved edits/);assert.equal(recorded,false);
+  h.view.getViewData=()=> 'saved note';assert.equal(await current.reloadCurrent(()=>false),false);assert.equal(h.reloads(),0);
+  assert.equal(await current.reloadCurrent(()=>{recorded=true;return true;}),true);assert.equal(h.reloads(),1);
+ }finally{await h.close();}
+});
+test('automatic recovery cannot load newly synced bytes under the old running version',async()=>{
+ const h=await fixture();try{
+  const current=new DesktopClientMaintenance(h.app,h.root,'.obsidian','3.4.5');
+  await (current as any).runtime;
+  await writeFile(join(h.directory,'main.js'),'another release');
+  await assert.rejects(current.reloadCurrent(()=>true),/exact release/);assert.equal(h.reloads(),0);
+ }finally{await h.close();}
+});
 test('checked reload includes owned code views and rechecks a code edit after acknowledgement',async()=>{
   const h=await fixture();try{
     const code={file:{path:'Code.ts'},getMode:()=> 'source',getViewData:()=> 'const saved = 1;'};

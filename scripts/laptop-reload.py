@@ -44,6 +44,7 @@ def mailbox(config: dict, command: dict, *, retry: bool = False, cleanup: bool =
     payload = base64.b64encode(json.dumps({'vault': config['vault'], 'command': command, 'retry': retry, 'cleanup': cleanup}).encode()).decode()
     script = r'''
 $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 $p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('PAYLOAD')) | ConvertFrom-Json
 $routePath=Join-Path $p.vault '.obsidian/t3-code/storage-route.json'
 if(-not (Test-Path $routePath)) {

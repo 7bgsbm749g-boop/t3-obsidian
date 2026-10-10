@@ -5,6 +5,7 @@ import {DeviceInlineManager} from '../leased-inline';
 import {connectVaultRemote} from '../vault-connection';
 import {InlineLeaseAuthority,type LeaseFiles} from '../inline-lease';
 import {initialRegion} from '../inline-thread';
+import {T3ConnectionTimeoutError} from '../t3-rpc';
 
 for(const exposeStatus of [true,false])test(`status ${exposeStatus?'present':'absent'}: a truncated historical lease does not close a shared RPC socket or abort concurrent registration`,async()=>{
   const directory='.obsidian/t3-code/inline/v1',vaultId=randomUUID(),actor=randomUUID(),id=randomUUID(),identity={vaultId,environmentId:'host',workspaceRoot:'/vault',directory};
@@ -32,6 +33,21 @@ for(const exposeStatus of [true,false])test(`status ${exposeStatus?'present':'ab
     const failed=host.files.read('historical-large.json');const registration=manager.register(request);
     await assert.rejects(failed,/complete file/);await registration;assert.equal(closes,0);assert.equal(opens,1);
     await host.files.write('healthy.json','still connected');assert.equal(await host.files.read('healthy.json'),'still connected');
-    if(exposeStatus){sockets[0].onclose();await assert.rejects(host.files.read('healthy.json'),/connection closed/);assert.equal(await host.files.read('healthy.json'),'still connected');assert.equal(opens,2);}
+    if(exposeStatus){sockets[0].onclose();assert.equal(await host.files.read('healthy.json'),'still connected');assert.equal(opens,2);}
   }finally{manager.dispose();authority.stop();}
+});
+
+test('concurrent failed reads share one new connection, while an uncertain write is never repeated',async()=>{
+ const target={environmentId:'synthetic',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'};
+ let opens=0,writes=0;const dead=new Set<number>(),failures:string[]=[];
+ const manager=new DeviceInlineManager(randomUUID(),randomUUID(),{access:async()=>{throw Error('unused');},readNote:async()=>undefined,isOpen:()=>false,updateNote:async()=>undefined,connectionTimeout:(_target,error)=>failures.push(error.connectionId)},async()=>{
+  const attempt=++opens;
+  return {get closed(){return dead.has(attempt);},close:()=>{dead.add(attempt);},files:{read:async()=>{
+   if(attempt===1){await Promise.resolve();dead.add(attempt);throw new T3ConnectionTimeoutError('old','projects.readFile',8000,2,8000);}return 'fresh';
+  },write:async()=>{writes++;dead.add(attempt);throw new T3ConnectionTimeoutError('write','projects.writeFile',8000,1,8000);}}};
+ });
+ try{
+  const host=(manager as any).host(target);assert.deepEqual(await Promise.all([host.files.read('a'),host.files.read('b')]),['fresh','fresh']);assert.equal(opens,2);
+  await assert.rejects(host.files.write('command','same immutable bytes'),T3ConnectionTimeoutError);assert.equal(writes,1);assert.deepEqual(failures,['old','old','write']);
+ }finally{manager.dispose();}
 });

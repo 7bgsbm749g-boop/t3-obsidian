@@ -8,6 +8,7 @@ export interface ClientCommandResult {
   client?:{instanceId:string;loadedVersion:string};reloadScheduled?:boolean;
   failureLog?:import('./send-failures').SendFailureLog;
   responseHostOpening?:boolean;
+  connectionRecovery?:import('./connection-recovery').ConnectionReloadState&{pending:boolean;reloading:boolean};
   codeRangeCache?:ReturnType<typeof import('./reply-html').markdownCodeCacheStatus>;
   responseHost?:{active:boolean;authority:{busy:boolean;stopped:boolean;recovered:boolean};storage:import('./authority-storage-desktop').AuthorityStorageStatus};
 }
