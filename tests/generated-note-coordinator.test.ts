@@ -57,7 +57,7 @@ test('staged table patch and final response land in one checked save with durabl
   const record=await f.coordinator.commit(id);
   assert.equal(f.writes(),1);assert.equal(record.status,'verified');assert.equal(record.verified?.document,f.get());assert.equal(record.acknowledgements.length,0);
   assert.ok(f.get().includes('| Barb | 20 | |'));assert.ok(f.get().includes('> Added 25kg.'));assert.ok(f.get().includes('User tail edit'));assert.ok(!f.get().includes('t3-inline'));
-  assert.deepEqual(f.events.map(event=>event.event),['accepted','result-ready','commit-pending','saved-and-verified']);
+  assert.deepEqual(f.events.map(event=>event.event),['accepted','result-ready','commit-pending','attempt-write-started','attempt-write-written-unverified','saved-and-verified']);
 });
 test('overlapping table edit keeps all three versions and performs no note write',async()=>{
   const f=fixture();await f.coordinator.accept(request(),f.original);await f.coordinator.result(id,staged(f.original),'> Added 25kg.');

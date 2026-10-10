@@ -1,5 +1,6 @@
 import {startMarker,endMarker} from './inline-thread';
 import {markdownCodeRanges} from './reply-html';
+import type {Transaction} from '@codemirror/state';
 
 export interface LocalResponse {id:string;body:string}
 export interface ProjectionRange {id:string;savedFrom:number;savedTo:number;displayFrom:number;displayTo:number;anchor:string}
@@ -61,6 +62,27 @@ export function savedProjection(display:string,projection:ResponseProjection):st
   let result='',cursor=0;
   for(const edit of edits){if(edit.from<cursor)throw new ProjectionConflict('Overlapping displayed responses.');result+=display.slice(cursor,edit.from)+edit.anchor;cursor=edit.to;}
   return result+display.slice(cursor);
+}
+
+/** Map a validated native transaction. The protected response bytes cannot
+ * change, so only ordinary Markdown and the small durable anchors need to be
+ * parsed again. Document identity, rather than an old note snapshot, scopes
+ * this result to the exact transaction that was checked. */
+export function advanceProjection(transaction:Transaction,projection:ResponseProjection):ResponseProjection {
+  let allowed=true;
+  transaction.changes.iterChangedRanges((from,to)=>{if(!editableDisplayRange(projection,from,to))allowed=false;});
+  if(!allowed)throw new ProjectionConflict('Generated response text is protected.');
+  const ranges=projection.ranges.map(range=>({...range,displayFrom:transaction.changes.mapPos(range.displayFrom,1),displayTo:transaction.changes.mapPos(range.displayTo,-1)}));
+  let saved='',cursor=0;
+  for(const range of ranges){
+    saved+=transaction.newDoc.sliceString(cursor,range.displayFrom);
+    range.savedFrom=saved.length;saved+=range.anchor;range.savedTo=saved.length;cursor=range.displayTo;
+  }
+  saved+=transaction.newDoc.sliceString(cursor);
+  // This also rejects duplicate markers and edits that hide a marker in code.
+  const checked=projectResponses(saved,ranges.map(range=>({id:range.id,body:''})));
+  if(checked.ranges.some((range,index)=>range.savedFrom!==ranges[index].savedFrom||range.savedTo!==ranges[index].savedTo))throw new ProjectionConflict('The response boundary moved outside its checked range.');
+  return {saved,display:transaction.newDoc.toString(),ranges};
 }
 
 export function displayToSaved(projection:ResponseProjection,offset:number):{kind:'saved';offset:number}|{kind:'response';id:string;offset:number} {

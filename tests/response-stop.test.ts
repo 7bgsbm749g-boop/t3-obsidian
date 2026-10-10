@@ -53,9 +53,19 @@ test('stopping removes pending question controls while preserving the prompt and
   assert.equal(stopped.split('> [Answer]').length-1,1);
 });
 
-test('an unbound stop resolves the original message turn rather than interrupting the newest turn',async()=>{
+test('an unbound stop resolves the completed original turn and does not interrupt a newer turn',async()=>{
   const commands:any[]=[];
   const snapshot={thread:{id:'thread',messages:[{id:'original',role:'user',turnId:'original-turn',streaming:false,text:'Question',createdAt:'2026-10-01T00:00:00Z'},{id:'partial',role:'assistant',text:'Partial',turnId:'original-turn',streaming:false},{id:'new',role:'user',streaming:false,text:'Later',createdAt:'2026-10-02T00:00:00Z'}],activities:[],latestTurn:{turnId:'new-turn',state:'running',requestedAt:'2026-10-02T00:00:00Z'},checkpoints:[{turnId:'original-turn',status:'ready',checkpointRef:'refs/t3/checkpoints/thread/turn/1',assistantMessageId:'partial',completedAt:'2026-10-01T01:00:00Z'}]}};
   await interruptStoppedResponse(async()=>({origin:'https://test',api:async(_path,payload)=>{if(payload){commands.push(payload);return {};}return snapshot;}}),randomUUID(),'thread',undefined,1000,'original');
-  assert.equal(commands.length,1);assert.equal(commands[0].turnId,'original-turn');
+  assert.equal(commands.length,0);
+});
+
+test('a permanent terminal grant needs no remote interrupt or connection',async()=>{
+  let accesses=0;await interruptStoppedResponse(async()=>{accesses++;throw Error('Must not connect');},randomUUID(),'thread','completed-turn',1000,'message','project','2026-10-10T00:00:00Z',true);assert.equal(accesses,0);
+});
+
+test('an active exact bound turn is interrupted after checking its canonical state',async()=>{
+  const commands:any[]=[];
+  await interruptStoppedResponse(async()=>({origin:'https://test',api:async(_path,payload)=>{if(payload){commands.push(payload);return {};}return {thread:{id:'thread',messages:[],activities:[],latestTurn:{turnId:'active',state:'running'},session:{status:'running',activeTurnId:'active'}}};}}),randomUUID(),'thread','active');
+  assert.equal(commands.length,1);assert.equal(commands[0].turnId,'active');
 });

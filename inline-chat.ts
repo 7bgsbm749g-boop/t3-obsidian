@@ -19,13 +19,15 @@ import {pendingApprovals} from './approvals';
 import {observeIncoming,mergeProse,selectionRange,steeringBoundary,validSteeringInput,type InlineSteering,type SteeringInput} from './inline-steering';
 import type {InlineMessage,InlineBindingCheckpoint} from './inline-thread';
 import {replaceChangedText} from './inline-note-io';
-import {boundedStopOperation,interruptStoppedResponse,stopResponseEdit,stoppedResponseBody} from './response-stop';
+import {interruptStoppedResponse,stopResponseEdit,stoppedResponseBody} from './response-stop';
+import type {ResponseStopReceipt} from './response-stop-receipt';
 
 export interface InlineJob {
   id:string;path:string;requestId:string;threadId?:string;turnId?:string;messageId?:string;projectId?:string;connection?:Connection;
   bodyHash:string;phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'|'conflict';createdAt:string;finalized?:boolean;
   hosted?:boolean;bindingCheckpoint?:InlineBindingCheckpoint;
   remoteStopPending?:boolean;
+  remoteStopOperationId?:string;remoteStopFailures?:number;remoteStopNextAt?:number;stopReceipt?:ResponseStopReceipt;stopRunTerminal?:boolean;
   keepIntermediate?:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat;presentationTurns?:Record<string,InlineTurn>;finishedAt?:string;
   hostTarget?:InlineHostTarget;
   initialInput?:InitialInlineInput;
@@ -38,7 +40,7 @@ export class InlineChatManager {
   private jobs:InlineJob[]=[];
   private runtimes=new Map<string,Runtime>();
   private stopped=false;
-  constructor(private app:App,private key:string,private sessionFor:(id:string)=>Promise<PairedSession|undefined>,private hosted?:{prepare(job:InlineJob,request:Request):Promise<void>;stop(job:InlineJob):Promise<void>},private keepIntermediate:()=>boolean|IntermediateMode=()=>false,private answerFormat:()=>FinalAnswerFormat=()=> 'formatted') {
+  constructor(private app:App,private key:string,private sessionFor:(id:string)=>Promise<PairedSession|undefined>,private hosted?:{prepare(job:InlineJob,request:Request):Promise<void>;stop(job:InlineJob):Promise<void|ResponseStopReceipt>;status?(job:Pick<InlineJob,'id'>):ResponseStopReceipt|undefined},private keepIntermediate:()=>boolean|IntermediateMode=()=>false,private answerFormat:()=>FinalAnswerFormat=()=> 'formatted') {
     const saved=this.app.loadLocalStorage(key);
     if(Array.isArray(saved))this.jobs=saved.filter(validJob).map(job=>{
       // 2.12.6 mistook the client command ID for T3's provider-assigned turn ID.
@@ -49,7 +51,7 @@ export class InlineChatManager {
   }
   resume(){for(const job of this.jobs)if(!job.hosted&&job.threadId&&job.connection&&!job.finalized&&!['conflict','cancelled'].includes(job.phase))this.start(job);this.flushAvailable();}
   dispose(){this.stopped=true;for(const runtime of this.runtimes.values()){runtime.monitor?.stop();if(runtime.timer)clearTimeout(runtime.timer);if(runtime.stopRetryTimer)clearTimeout(runtime.stopRetryTimer);}this.runtimes.clear();}
-  activeFor(path:string){this.reconcileHosted();return this.jobs.filter(j=>j.path===path&&!j.finalized&&!['cancelled','conflict'].includes(j.phase));}
+  activeFor(path:string){this.reconcileHosted();return this.jobs.filter(j=>j.path===path&&!j.finalized&&!j.stopRunTerminal&&!['cancelled','conflict'].includes(j.phase));}
   find(id:string){return this.jobs.find(job=>job.id===id&&!job.finalized);}
   steeringJob(id:string,messageId:string){return this.jobs.find(job=>job.id===id&&job.steering?.some(input=>input.messageId===messageId&&input.confirmed));}
   settlementStatus(id:string):'wait'|'ready'|'discard'{
@@ -58,7 +60,18 @@ export class InlineChatManager {
     if(['conflict','interrupted','error','cancelled'].includes(job.phase))return 'discard';
     return job.phase==='complete'&&job.finalized?'ready':'wait';
   }
-  private reconcileHosted(){let changed=false;for(const job of this.jobs){if(!job.hosted||job.finalized||job.phase==='cancelled')continue;const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region){job.finalized=true;changed=true;}else if(/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · Error\*\*/m.test(region.body)&&job.phase!=='error'){job.phase='error';changed=true;}else if(/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Working|Reconnecting)\*\*/m.test(region.body)&&job.phase==='error'){job.phase='running';changed=true;}}if(changed)this.persist();}
+  private reconcileHosted(){let changed=false;for(const job of this.jobs){
+    if(!job.hosted)continue;
+    const status=this.hosted?.status?.(job);
+    if(status){
+      if(status.hostRecorded&&job.remoteStopPending){job.remoteStopPending=false;job.stopReceipt=status;delete job.remoteStopNextAt;changed=true;}
+      if(status.runTerminal&&!job.stopRunTerminal){job.stopRunTerminal=true;changed=true;}
+      if(status.runTerminal&&job.phase!=='cancelled'&&job.phase!=='conflict'&&job.phase!=='complete'){job.phase='complete';changed=true;}
+      if(status.finalSaved&&!job.finalized){job.finalized=true;changed=true;}
+    }
+    if(job.finalized||job.phase==='cancelled'||job.stopRunTerminal)continue;
+    const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region){job.finalized=true;changed=true;}else if(/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · Error\*\*/m.test(region.body)&&job.phase!=='error'){job.phase='error';changed=true;}else if(/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Working|Reconnecting)\*\*/m.test(region.body)&&job.phase==='error'){job.phase='running';changed=true;}
+  }if(changed)this.persist();}
   follow(job:InlineJob,messageId:string){
     if(job.hosted)throw Error('Hosted responses need their owner to attach the continuation.');
     if(job.messageId===messageId&&job.phase!=='error')return;
@@ -109,9 +122,9 @@ export class InlineChatManager {
       }
     }
   }
-  deliveryFailed(job:InlineJob,_uncertain=false){
+  async deliveryFailed(job:InlineJob,_uncertain=false){
     const runtime=this.runtime(job),native=nativeResponses(this.app);
-    if(job.hosted&&this.nativeViewFor(job))native.stop(job.id,job.path,true);
+    if(job.hosted&&this.nativeViewFor(job))await native.stop(job.id,job.path,true);
     else {
       const editor=this.editorFor(job),document=editor?.getValue(),found=document&&regionBody(document,job.id);
       if(editor&&document&&found){
@@ -191,7 +204,7 @@ export class InlineChatManager {
     const runtime=this.runtime(job);if(runtime.timer)clearTimeout(runtime.timer);
     runtime.timer=setTimeout(()=>{runtime.timer=undefined;this.flush(job);},100);
   }
-  flushAvailable(){this.reconcileHosted();for(const job of this.jobs){if(job.phase==='cancelled'){try{this.finishStopped(job);}catch(error){logFailure('response.stop.cleanup.failed',error,{jobId:job.id});}this.requestRemoteStop(job);}else if(!job.hosted&&job.threadId&&!job.finalized&&job.phase!=='conflict')this.schedule(job);}}
+  flushAvailable(){this.reconcileHosted();for(const job of this.jobs){if(job.phase==='cancelled'){void this.finishStopped(job).catch(error=>logFailure('response.stop.cleanup.failed',error,{jobId:job.id})).finally(()=>this.requestRemoteStop(job));}else if(!job.hosted&&job.threadId&&!job.finalized&&job.phase!=='conflict')this.schedule(job);}}
   renamed(oldPath:string,newPath:string){let changed=false;for(const job of this.jobs)if((job.path===oldPath||job.path.startsWith(oldPath+'/'))){job.path=newPath+job.path.slice(oldPath.length);changed=true;}if(changed){this.persist();this.flushAvailable();}}
   deleted(path:string){let changed=false;for(const job of this.jobs)if((job.path===path||job.path.startsWith(path+'/'))){job.phase='conflict';this.runtimes.get(job.id)?.monitor?.stop();changed=true;}if(changed)this.persist();}
   private nativeViewFor(job:InlineJob){
@@ -205,7 +218,7 @@ export class InlineChatManager {
     return source?.info.file?.path===job.path?source.editor:undefined;
   }
   private flush(job:InlineJob){
-    if(job.phase==='cancelled'){this.finishStopped(job);return;}
+    if(job.phase==='cancelled'){void this.finishStopped(job).catch(error=>logFailure('response.stop.cleanup.failed',error,{jobId:job.id}));return;}
     if(this.stopped||job.hosted||!this.jobs.includes(job)||job.finalized||!job.threadId)return;
     const editor=this.editorFor(job);if(!editor)return;
     const runtime=this.runtime(job);
@@ -270,16 +283,17 @@ export class InlineChatManager {
   async stopAllAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,hosted:Array<{id:string;hostTarget:InlineHostTarget}>=[]){
     const path=info.file?.path;if(!path)return 0;
     const document=editor.getValue(),targets=new Map(hosted.map(job=>[job.id,job.hostTarget]));
-    const ids=[...new Set([...this.activeFor(path).map(job=>job.id),...activeInlineIds(document),...failedInlineIds(document),...targets.keys()])];
+    const ids=[...new Set([...this.activeFor(path).map(job=>job.id),...activeInlineIds(document),...failedInlineIds(document),...targets.keys()])].filter(id=>!this.hosted?.status?.({id})?.runTerminal);
     const results=await Promise.allSettled(ids.map(id=>this.stopAt(id,editor,info,targets.get(id))));
     const failures=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected');
     if(failures.length)throw Error(`Could not finish ${failures.length} of ${ids.length} T3 responses: ${failures.map(result=>result.reason instanceof Error?result.reason.message:String(result.reason)).join('; ')}`);
     return ids.length;
   }
-  private finishStopped(job:InlineJob){
+  private async finishStopped(job:InlineJob){
     if(this.stopped)return;
     const editor=this.editorFor(job);if(!editor)return;
-    if(job.hosted&&this.nativeViewFor(job)){nativeResponses(this.app).stop(job.id,job.path);job.finalized=true;this.persist();return;}
+    const nativeView=job.hosted?this.nativeViewFor(job):undefined;
+    if(nativeView){const source=this.runtimes.get(job.id)?.source?.info as MarkdownView|undefined;await nativeResponses(this.app).stop(job.id,job.path,false,source);job.finalized=true;this.persist();return;}
     const document=editor.getValue();
     if(job.finalized&&!hasResponseMarkers(document,job.id))return;
     const change=stopResponseEdit(document,job.id);
@@ -291,23 +305,36 @@ export class InlineChatManager {
   private requestRemoteStop(job:InlineJob){
     if(this.stopped||!job.remoteStopPending)return;
     const runtime=this.runtime(job);
-    if(runtime.stopWork||(runtime.stopRetryAt??0)>Date.now())return;
-    runtime.stopRetryAt=Date.now()+30_000;
+    if(runtime.stopWork)return;
+    const retryAt=job.remoteStopNextAt??runtime.stopRetryAt??0;
+    if(retryAt>Date.now()){
+      if(!runtime.stopRetryTimer)runtime.stopRetryTimer=setTimeout(()=>{runtime.stopRetryTimer=undefined;this.requestRemoteStop(job);},Math.min(300_000,retryAt-Date.now()));return;
+    }
+    job.remoteStopOperationId??=commandId(job.id,'stop');
+    const started=Date.now();
     const work=(async()=>{
       try{
-        if(job.hosted&&this.hosted)await boundedStopOperation(this.hosted.stop(job));
-        else if(job.threadId&&job.connection)await interruptStoppedResponse(()=>this.access(job.connection!),job.requestId,job.threadId,job.turnId,10_000,job.messageId,job.projectId,job.createdAt);
-        job.remoteStopPending=false;this.persist();
-      }catch(error){logFailure('response.stop.remote.failed',error,{jobId:job.id});new Notice('Response finished in this note. The remote stop could not be confirmed; it will retry while Obsidian is open.',10000);}
+        if(job.hosted&&this.hosted){const receipt=await this.hosted.stop(job);if(receipt){job.stopReceipt=receipt;job.stopRunTerminal=receipt.runTerminal;}}
+        else if(job.threadId&&job.connection)await interruptStoppedResponse(()=>this.access(job.connection!),job.requestId,job.threadId,job.turnId,10_000,job.messageId,job.projectId,job.createdAt,job.stopRunTerminal);
+        job.remoteStopPending=false;job.remoteStopFailures=0;delete job.remoteStopNextAt;this.persist();
+      }catch(error){
+        if(job.stopReceipt?.hostRecorded){job.remoteStopPending=false;this.persist();return;}
+        job.remoteStopFailures=(job.remoteStopFailures??0)+1;job.remoteStopNextAt=Date.now()+Math.min(300_000,30_000*2**Math.min(job.remoteStopFailures-1,4));this.persist();
+        logFailure('response.stop.remote.failed',error,{jobId:job.id,operationId:job.remoteStopOperationId,elapsedMs:Math.max(0,Date.now()-started),attempt:job.remoteStopFailures,nextRetryAt:job.remoteStopNextAt});
+        if(job.remoteStopFailures===1)new Notice('The response is frozen in this note. Host Stop confirmation is pending; it will retry automatically.',10000);
+      }
     })();
-    runtime.stopWork=work;void work.finally(()=>{runtime.stopWork=undefined;if(!this.stopped&&job.remoteStopPending)runtime.stopRetryTimer=setTimeout(()=>{runtime.stopRetryTimer=undefined;this.requestRemoteStop(job);},30_000);});
+    // Keep the original hosted operation single-flight. A UI wait deadline
+    // must not detach its mutation and start a second large payload upload.
+    runtime.stopWork=work;void work.finally(()=>{runtime.stopWork=undefined;if(!this.stopped&&job.remoteStopPending)this.requestRemoteStop(job);});
   }
   async stop(job:InlineJob){
     if(job.phase!=='cancelled'){
+      job.stopRunTerminal=['complete','interrupted'].includes(job.phase);job.remoteStopOperationId??=commandId(job.id,'stop');
       job.phase='cancelled';job.remoteStopPending=Boolean(job.hosted&&this.hosted||job.threadId&&job.connection);this.persist();
     }
     const runtime=this.runtime(job);runtime.monitor?.stop();if(runtime.timer){clearTimeout(runtime.timer);runtime.timer=undefined;}
-    try{this.finishStopped(job);}finally{this.requestRemoteStop(job);}
+    try{await this.finishStopped(job);}finally{this.requestRemoteStop(job);}
   }
 }
 function validJob(value:any):value is InlineJob{return value&&typeof value.id==='string'&&typeof value.path==='string'&&typeof value.requestId==='string'&&typeof value.bodyHash==='string'&&typeof value.phase==='string'&&typeof value.createdAt==='string';}

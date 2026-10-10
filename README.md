@@ -6,6 +6,25 @@ The plugin requires T3 Orchestrator v2 on each destination computer. Update T3 b
 
 ## Incoming messages and senders
 
+Large tool groups use small summaries in Live Preview. Open a group to load its complete output. The saved note, sends, selection context, and recovery records keep the full output. Source mode shows the full saved Markdown. The editor rejects changes that would save a summary without its original output.
+
+Thread selection reads current control state without downloading tool output. The selected-thread check has a five-second limit, supports Retry, and stops when the dialog closes. New thread and Existing thread remain available during that check. Sending still checks the current project, turn, approval, and input state.
+
+Stop has separate states for the local display, host acknowledgement, completed T3 turn, and final note save. A completed turn does not remain active because its final note save is pending. Stop uses a stable command ID and a small host receipt. Failed confirmations retry with increasing delays. A Stop for an old turn cannot interrupt a newer turn.
+
+Final saves retain their writer grant and exact output through a reload. Automatic recovery can replace an old save attempt only when the journal proves that it made no write. An uncertain old attempt needs review of the current saved note hash. Saves keep the native editor, multi-pane, rename, and Sync checks. Automated reload waits for ordinary edits, response recovery records, and final save operations.
+
+For a legacy save conflict, inspect the candidate on the device that owns the writer grant, then retry with the returned `currentHash`:
+
+```sh
+python3 scripts/obsidian-command.py --vault /path/to/vault \
+  response-recovery-info --binding-id RESPONSE_BINDING_UUID
+python3 scripts/obsidian-command.py --vault /path/to/vault \
+  retry-response-save --binding-id RESPONSE_BINDING_UUID --hash REVIEWED_CURRENT_HASH
+```
+
+These commands return IDs, paths, hashes, and save status. They do not return response bodies or writer credentials. A missing or changed response anchor prevents automatic insertion. Keep the request UUID and exact arguments when retrying a command after a timeout.
+
 Steer callouts come from T3-confirmed incoming messages, including messages sent through fleet or T3's own composer. Local Obsidian sends retain their **You** label and only remove the unchanged originating selection after that exact message ID is confirmed. External inputs never remove editor text. Canonical display records and local selection receipts are separate, and message IDs deduplicate snapshots, live events, reloads and recovery.
 
 The VPS fleet adapter attaches a `fleet-sender` context record after verifying the caller's local Codex session against its T3 thread. Valid records display **Agent · source title**; unattributed messages display **User**, including question answers without author evidence. T3's user role and message prose do not identify an author. This metadata is a trusted-client display convention, not a signed identity. Native T3 author headings remain a platform limitation. The laptop adapter has not been updated or verified for this change.

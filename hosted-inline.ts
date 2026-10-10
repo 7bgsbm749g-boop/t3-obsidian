@@ -548,11 +548,12 @@ export class HostedInlineWriter {
   }
   private async finishStopped(request:HostedInlineRequest,state:HostedInlineState,save:()=>Promise<void>){
     this.stopPriority.delete(request.id);
+    const knownTerminal=!!state.finishedAt&&['complete','interrupted'].includes(state.finalPhase??'')||['complete','interrupted'].includes(state.status);
     state.userStopped=true;state.status='running';await save();
     // Remote interruption never participates in the note transaction.
     if(!this.interrupts.has(request.id)){
       this.interrupts.add(request.id);
-      void interruptStoppedResponse(()=>this.io.access(request.threadEnvironmentId),request.id,request.threadId,state.turnId,10_000,state.messageId??request.messageId,request.projectId,request.createdAt)
+      void interruptStoppedResponse(()=>this.io.access(request.threadEnvironmentId),request.id,request.threadId,state.turnId,10_000,state.messageId??request.messageId,request.projectId,request.createdAt,knownTerminal)
         .catch(error=>logFailure('response.stop.interrupt.failed',error,{jobId:request.id,threadId:request.threadId}));
     }
     if(this.io.commitFinal){

@@ -9,6 +9,8 @@ import {nativeCommitPath,readNativeCommitProof,type NativeCommitProof} from './n
 import {validateFinalResponseBody} from './generated-note-coordinator';
 import {responseAnchor,responseRegion} from './native-response-projection';
 import {stoppedResponseBody} from './response-stop';
+import {responseStopReceipt,stoppedBodyPath,validStoppedBodyReference,validResponseStopReceipt,type ResponseStopReceipt,type StoppedBodyReference} from './response-stop-receipt';
+import type {FinalAttemptAbort} from './completion-attempt';
 
 export const LEASE_MS=15_000;
 export const HEARTBEAT_MS=3000;
@@ -17,12 +19,23 @@ export type LeaseIdentity={vaultId:string;environmentId:string;workspaceRoot:str
 export const COORDINATED_OWNER="00000000-0000-5000-8000-000000000001";
 export interface FinalResponseIntent {checkpoint?:InlineBindingCheckpoint;turnIds?:string[];messageId:string;turnId:string|null;sequence:number;body:string;phase:'complete'|'interrupted'}
 export interface FinalResponseGrant extends FinalResponseIntent {actor:string;token:string}
-export interface LeaseRecord {preparedFinal?:{commitId:string;hash:string;proofHash:string};presenceUntil?:number;finalWriter?:FinalResponseGrant;relocations?:Array<{before:string;after:string}>;coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;responseRemovedAt?:number;stopRequestedAt?:number;discardResponse?:boolean;stoppedBody?:string;state?:HostedInlineState}
-export interface LeaseCommand {compactReply?:1;original?:string;final?:FinalResponseIntent;token?:string;proof?:NativeCommitProof;stoppedBody?:string;discardResponse?:boolean;id:string;jobId:string;actor:string;kind:'prepare-final'|'presence'|'reserve-final'|'commit-final'|'relocate'|'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';previousNotePath?:string;observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
-export interface LeaseReply {id:string;ok:boolean;error?:string;record?:LeaseRecord;recordRef?:{id:string;epoch:number;revision:number};ttlMs:number;answeredAt?:number;retryAfterMs?:number}
+export interface LeaseRecord {preparedFinal?:{commitId:string;hash:string;proofHash:string};preparedFinalTombstones?:FinalAttemptAbort[];presenceUntil?:number;finalWriter?:FinalResponseGrant;relocations?:Array<{before:string;after:string}>;coordinated?:boolean;migrating?:boolean;legacyFenceUntil?:number;request:HostedInlineRequest;owner:string;epoch:number;expiresAt:number;revision:number;responseRemovedAt?:number;stopRequestedAt?:number;discardResponse?:boolean;stoppedBody?:string;stoppedBodyRef?:StoppedBodyReference;state?:HostedInlineState}
+export interface LeaseCommand {receiptOnly?:1;stoppedBodyRef?:StoppedBodyReference;abort?:FinalAttemptAbort;compactReply?:1;original?:string;final?:FinalResponseIntent;token?:string;proof?:NativeCommitProof;stoppedBody?:string;discardResponse?:boolean;id:string;jobId:string;actor:string;kind:'abort-final'|'prepare-final'|'presence'|'reserve-final'|'commit-final'|'relocate'|'register'|'claim'|'heartbeat'|'checkpoint'|'follow'|'steer'|'delivery'|'stop'|'observe';previousNotePath?:string;observed?:{commitId:string;hash:string};delivery?:InlineStartRequest;epoch?:number;revision?:number;request?:HostedInlineRequest;state?:HostedInlineState;fallback?:boolean;previousMessageId?:string;messageId?:string;notePath?:string;steering?:SteeringInput}
+export interface LeaseReply {stopReceipt?:ResponseStopReceipt;id:string;ok:boolean;error?:string;record?:LeaseRecord;recordRef?:{id:string;epoch:number;revision:number};ttlMs:number;answeredAt?:number;retryAfterMs?:number}
+/** Discovery only. This small record never proves current writer ownership or
+ * permits a mutation; dispatch still reads and validates the durable lease. */
+export interface LeaseRoute {version:1;id:string;vaultId:string;host:HostedInlineRequest['host'];notePath:string;threadId:string;projectId:string;threadEnvironmentId:string;messageId:string;turnId?:string|null;turnIds:string[];epoch:number;revision:number;status:HostedInlineState['status'];finalPhase?:'complete'|'interrupted'}
 export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;listBatch?(directory:string,limit:number):Promise<string[]>;close?():Promise<void>;remove(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-export const leasePaths=(directory:string,id:string)=>({record:`${directory}/leases/${id}.json`,command:`${directory}/mailbox/${id}.json`,reply:`${directory}/replies/${id}.json`,catalog:`${directory}/lease-catalog.json`});
+export const leasePaths=(directory:string,id:string)=>({record:`${directory}/leases/${id}.json`,route:`${directory}/routes/${id}.json`,command:`${directory}/mailbox/${id}.json`,reply:`${directory}/replies/${id}.json`,catalog:`${directory}/lease-catalog.json`});
+export function leaseRoute(record:LeaseRecord):LeaseRoute {
+  const {request,state,finalWriter}=record,messageId=state?.pendingMessageId??state?.messageId??request.messageId;
+  const turnId=finalWriter?finalWriter.turnId:state?.bindingCheckpoint?.bindings?.[messageId]?.turnId??state?.turnId??request.importTurn?.turnId;
+  const host={environmentId:request.host.environmentId,workspaceRoot:request.host.workspaceRoot,directory:request.host.directory};
+  const turnIds=[...new Set([...(turnId?[turnId]:[]),...(finalWriter?.turnIds??[]),...(state?.turnIds??[])])];
+  const finalPhase=finalWriter?.phase??state?.finalPhase??(state?.status==='complete'||state?.status==='interrupted'?state.status:undefined);
+  return {version:1,id:request.id,vaultId:request.vaultId,host,notePath:state?.notePath??request.notePath,threadId:request.threadId,projectId:request.projectId,threadEnvironmentId:request.threadEnvironmentId,messageId,...(turnId!==undefined?{turnId}:{}),turnIds,epoch:record.epoch,revision:record.revision,status:state?.status??'waiting',...(finalPhase?{finalPhase}:{})};
+}
 export const deviceOriginalPath=(directory:string,id:string)=>{if(!uuid.test(id))throw Error('Invalid completion original identity.');return `${directory}/originals/${id}.md`;};
 export const deviceStagedPath=(directory:string,id:string,hash:string)=>{if(!uuid.test(id)||! /^[0-9a-f]{64}$/.test(hash))throw Error('Invalid staged completion identity.');return `${directory}/staged-results/${id}/${hash}.md`;};
 export const terminalLease=(record:LeaseRecord)=>record.responseRemovedAt!==undefined||!!record.state&&['complete','interrupted','conflict'].includes(record.state.status)&&!legacyQuestionReply(record.state)&&!pendingCompletionCleanup(record.request,record.state);
@@ -36,6 +49,8 @@ export class InlineLeaseAuthority {
   private recovered=false;
   private explorerResponses:ExplorerResponse[]=[];
   private records=new Map<string,LeaseRecord>();
+  private routes=new Map<string,string>();
+  private pendingRoutes=new Set<string>();
   private catalog=new Map<string,HostedInlineRequest>();
   responsesFor(path:string){return [...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===path);}
   private explorerDirty=false;private catalogDirty=false;
@@ -66,7 +81,7 @@ export class InlineLeaseAuthority {
       // delays the first interactive registration after a cold start.
       for(const path of await this.files.list(`${directory}/leases`)){
         if(this.stopped)return;
-        const raw=await this.files.read(path);if(raw)this.indexRecord(JSON.parse(raw));
+        const raw=await this.files.read(path);if(raw){const record:LeaseRecord=JSON.parse(raw);this.pendingRoutes.add(record.request.id);this.indexRecord(record);}
       }
       await this.flushIndexes();
       this.recovered=true;
@@ -101,11 +116,20 @@ export class InlineLeaseAuthority {
         if(trace)logEvent('ownership.coordinator.received',fields);
         const reply=await this.apply(command);
         if(this.stopped)return;
-        const compact=command.compactReply===1&&reply.record?{...reply,record:undefined,recordRef:{id:reply.record.request.id,epoch:reply.record.epoch,revision:reply.record.revision}}:reply;
+        const compact=command.kind==='stop'&&command.receiptOnly===1&&reply.record?{...reply,record:undefined,recordRef:undefined,stopReceipt:responseStopReceipt(reply.record,command.id)}:command.compactReply===1&&reply.record?{...reply,record:undefined,recordRef:{id:reply.record.request.id,epoch:reply.record.epoch,revision:reply.record.revision},...(!reply.ok?{stopReceipt:responseStopReceipt(reply.record,command.id)}:{})}:reply;
         await this.files.write(replyPath,JSON.stringify(compact));
         if(trace||command.kind==='claim'&&reply.ok)logEvent('ownership.coordinator.replied',{...fields,ok:reply.ok,error:reply.error,durationMs:this.now()-started,epoch:reply.record?.epoch,revision:reply.record?.revision,owner:reply.record?.owner},reply.ok?'info':'warning');
       }
       await this.files.remove(path);
+    }
+    // Historical route migration is bounded maintenance. A cold host must
+    // answer interactive work before hundreds of sidecar reads and writes.
+    // Use the latest indexed record under this same authority transaction.
+    for(const id of [...this.pendingRoutes].slice(0,8)){
+      if(this.stopped)return;
+      const record=this.records.get(id);
+      if(record)await this.publishRoute(record);
+      this.pendingRoutes.delete(id);
     }
     // Receipt cleanup is maintenance, never a prerequisite for answering a
     // send. Rotate a bounded slice so retained replies cannot stall the lock.
@@ -250,9 +274,20 @@ export class InlineLeaseAuthority {
             record.state={...record.state??{requestHash:hostedRequestHash(record.request),accepted:true,status:'running',hashes:[record.request.initialHash],notePath:record.request.notePath,updatedAt:new Date(this.now()).toISOString()},turnIds,bindingCheckpoint:{...previous,...checkpoint,bindings:{...previous?.bindings,...checkpoint.bindings},starts:{...previous?.starts,...checkpoint.starts},turns:{...previous?.turns,...checkpoint.turns}},steering:record.state?.steering?.map(input=>({...input,confirmed:input.confirmed||turnIds!.includes(checkpoint.bindings?.[input.messageId]?.turnId??'')}))};
           }
           record={...record,finalWriter:{...final,actor:command.actor,token:crypto.randomUUID()},revision:record.revision+1};
+        }else if(command.kind==='abort-final'){
+          const grant=record.finalWriter,abort=command.abort;
+          if(!grant||grant.actor!==command.actor||grant.token!==command.token||!abort||abort.version!==1||!uuid.test(abort.commitId)||! /^[a-f0-9]{64}$/.test(abort.hash)||! /^[a-f0-9]{64}$/.test(abort.proofHash)||!Number.isSafeInteger(abort.journalRevision)||abort.journalRevision<1||!['no-write','reviewed-conflict'].includes(abort.writeState)||abort.writeState==='reviewed-conflict'&&! /^[a-f0-9]{64}$/.test(abort.reviewedCurrentHash))throw Error('The final-save abort lacks checked writer evidence.');
+          if(record.state?.delivery||record.state?.finalSaved)throw Error('A saved final response cannot be superseded.');
+          const old=record.preparedFinalTombstones?.find(item=>item.commitId===abort.commitId);
+          if(old){if(old.hash!==abort.hash||old.proofHash!==abort.proofHash)throw Error('The superseded final-save identity changed.');return respond(true);}
+          if(record.preparedFinal&&(record.preparedFinal.commitId!==abort.commitId||record.preparedFinal.hash!==abort.hash||record.preparedFinal.proofHash!==abort.proofHash))throw Error('Another immutable final-save attempt is prepared.');
+          const proof=await this.files.read(nativeCommitPath(directory,record.request.id,abort.commitId));
+          if(proof!==undefined&&contentHash(proof)!==abort.proofHash)throw Error('The retained final-save proof changed.');
+          record={...record,preparedFinal:undefined,preparedFinalTombstones:[...record.preparedFinalTombstones??[],abort],revision:record.revision+1};
         }else if(command.kind==='prepare-final'||command.kind==='commit-final'){
           const grant=record.finalWriter,proof=command.proof;
           if(!grant||grant.actor!==command.actor||grant.token!==command.token||!proof)throw Error('The final write was not authorized for this device.');
+          if(record.preparedFinalTombstones?.some(item=>item.commitId===proof.commitId))throw Error('This final-save attempt was superseded; its proof remains retained.');
           if(record.state?.delivery){if(record.state.delivery.commitId===proof.commitId&&record.state.delivery.hash===proof.hash)return respond(true);throw Error('The final completion receipt changed.');}
           if(record.responseRemovedAt!==undefined)throw Error('The response was removed.');
           const bytes=JSON.stringify(proof),delivery={commitId:proof.commitId,hash:proof.hash,proofHash:contentHash(bytes),verifiedOnHost:false,observedBy:[command.actor]};
@@ -277,7 +312,7 @@ export class InlineLeaseAuthority {
           record={...record,revision:record.revision+1,state:{...record.state,delivery:{...record.state.delivery,observedBy:[...new Set([...record.state.delivery.observedBy,command.actor])]}}};
           await this.files.write(paths.record,JSON.stringify(record));return respond(true);
         }
-        if(['presence','reserve-final','prepare-final','commit-final'].includes(command.kind)){
+        if(['presence','reserve-final','prepare-final','commit-final','abort-final'].includes(command.kind)){
           await this.files.write(paths.record,JSON.stringify(record));await this.publishCatalog(record);return respond(true);
         }
         if(command.kind==='follow'&&record.state?.messageId===command.messageId&&command.previousMessageId!==command.messageId)return respond(true);
@@ -299,7 +334,16 @@ export class InlineLeaseAuthority {
         }else if(command.kind==='stop'){
           if(command.stoppedBody!==undefined&&typeof command.stoppedBody!=='string')throw Error('Invalid stopped response body.');
           if(record.responseRemovedAt!==undefined)return respond(true);
+          let adoptReference=false;
+          if(command.stoppedBodyRef!==undefined){
+            if(!validStoppedBodyReference(command.stoppedBodyRef))throw Error('Invalid frozen response reference.');
+            // The first frozen body stays canonical across old/new clients.
+            // A later clicked pane can contain different bytes; its reference
+            // must not claim that it points to the retained legacy transcript.
+            if(record.stoppedBody===undefined||record.stoppedBodyRef===undefined&&record.stoppedBody.length===command.stoppedBodyRef.length&&contentHash(record.stoppedBody)===command.stoppedBodyRef.hash){const body=await this.files.read(stoppedBodyPath(directory,record.request.id,command.stoppedBodyRef));if(body===undefined||body.length!==command.stoppedBodyRef.length||contentHash(body)!==command.stoppedBodyRef.hash)throw Error('The immutable frozen response is unavailable.');adoptReference=true;if(record.stoppedBody===undefined)command={...command,stoppedBody:body};}
+          }
           if(!record.stopRequestedAt||command.discardResponse&&!record.discardResponse||command.stoppedBody!==undefined&&record.stoppedBody===undefined)record={...record,stopRequestedAt:record.stopRequestedAt??this.now(),...(command.discardResponse?{discardResponse:true}:{}),...(command.stoppedBody!==undefined&&record.stoppedBody===undefined?{stoppedBody:command.stoppedBody}:{}),revision:record.revision+1};
+          if(adoptReference&&command.stoppedBodyRef&&record.stoppedBodyRef===undefined)record={...record,stoppedBodyRef:command.stoppedBodyRef};
         }else if(command.kind==='steer'){
           if(record.responseRemovedAt!==undefined)throw Error('The response was removed from its note.');
           if(record.stopRequestedAt)throw Error('The response was stopped.');
@@ -382,7 +426,8 @@ export class InlineLeaseAuthority {
         }
       }
       if(this.stopped)throw Error('Ownership coordinator stopped.');
-      await this.files.write(paths.record,JSON.stringify(record));
+      const bytes=JSON.stringify(record);
+      if(bytes!==raw)await this.files.write(paths.record,bytes);
       await this.publishCatalog(record);
       return respond(true);
     }catch(error){return respond(false,error instanceof Error?error.message:'Ownership command failed.');}
@@ -395,7 +440,14 @@ export class InlineLeaseAuthority {
     }
   }
   private async publishCatalog(record:LeaseRecord){
-    this.indexRecord(record);await this.flushIndexes();
+    await this.publishRoute(record);this.indexRecord(record);await this.flushIndexes();
+  }
+  private async publishRoute(record:LeaseRecord){
+    const id=record.request.id,bytes=JSON.stringify(leaseRoute(record));
+    if(this.routes.get(id)===bytes)return;
+    const path=leasePaths(this.identity.directory,id).route;
+    if(await this.files.read(path)!==bytes)await this.files.write(path,bytes);
+    this.routes.set(id,bytes);this.pendingRoutes.delete(id);
   }
   private indexRecord(record:LeaseRecord){
     this.records.set(record.request.id,record);
@@ -423,31 +475,56 @@ export class InlineLeaseAuthority {
 export class InlineLeaseClient {
   private stopped=false;
   private grants=new Map<string,{epoch:number;wall:number;monotonic:number}>();
+  private commands=new Map<string,Promise<LeaseReply>>();
   constructor(readonly actor:string,readonly files:InlineFiles,readonly directory:string,private now=()=>Date.now(),private monotonic=()=>performance.now(),private pause=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms))){}
   dispose(){this.stopped=true;this.grants.clear();} // Never release ownership.
   valid(id:string,epoch:number){const grant=this.grants.get(id);return !this.stopped&&grant?.epoch===epoch&&this.now()<grant.wall&&this.monotonic()<grant.monotonic;}
-  async command(input:Omit<LeaseCommand,'id'|'actor'>,identity?:{id:string;actor:string}){
+  command(input:Omit<LeaseCommand,'id'|'actor'>,identity?:{id:string;actor:string}):Promise<LeaseReply>{
+    const selected=identity??{id:crypto.randomUUID(),actor:this.actor},key=selected.actor+':'+selected.id,old=this.commands.get(key);
+    if(old)return old;
+    const work=this.performCommand(input,selected,!!identity);this.commands.set(key,work);
+    void work.finally(()=>{if(this.commands.get(key)===work)this.commands.delete(key);}).catch(()=>{});return work;
+  }
+  private async performCommand(input:Omit<LeaseCommand,'id'|'actor'>,identity:{id:string;actor:string},replay:boolean){
     if(this.stopped)throw Error('Response writer stopped.');
     const command:LeaseCommand={...input,compactReply:1,id:identity?.id??crypto.randomUUID(),actor:identity?.actor??this.actor},paths=leasePaths(this.directory,command.id),wall=this.now(),monotonic=this.monotonic();
     const fields={jobId:input.jobId,commandId:command.id,actor:this.actor,directory:this.directory,kind:input.kind,epoch:input.epoch,revision:input.revision,messageId:input.steering?.messageId??input.request?.messageId,notePath:input.notePath??input.request?.notePath,threadId:input.request?.threadId,environmentId:input.request?.host.environmentId};
     const trace=input.kind!=='heartbeat'&&input.kind!=='claim';
+    const timeoutMs=30_000,deadline=monotonic+timeoutMs;
+    const read=async(path:string)=>{
+      const remaining=deadline-this.monotonic();if(remaining<=0)throw Error('Response command confirmation timed out; its saved operation can be checked again.');
+      let timer:ReturnType<typeof setTimeout>|undefined;
+      try{return await Promise.race([this.files.read(path),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('Response command read timed out; its saved operation can be checked again.')),remaining);})]);}finally{if(timer)clearTimeout(timer);}
+    };
     let phase='writing-command',attempts=0,writeMs=0,readMs=0,maxReadMs=0;
     const timing=()=>({phase,attempts,elapsedMs:Math.max(0,this.monotonic()-monotonic),writeMs,readMs,maxReadMs,stopped:this.stopped});
     if(trace)logEvent('ownership.command.started',fields);
     try{
-    await this.files.write(paths.command,JSON.stringify(command));
+    // A replay checks its durable receipt first. It never creates a second
+    // mutation while the same operation's acknowledgement is already saved.
+    let retained=replay?await read(paths.reply):undefined;
+    if(!retained)await this.files.write(paths.command,JSON.stringify(command));
     writeMs=Math.max(0,this.monotonic()-monotonic);phase='waiting-for-reply';
     if(trace)logEvent('ownership.command.sent',{...fields,writeMs});
-    for(let attempt=0;attempt<50&&!this.stopped;attempt++){
+    for(let attempt=0;attempt<(input.kind==='stop'?300:50)&&!this.stopped&&this.monotonic()<deadline;attempt++){
       attempts++;const reading=this.monotonic();
       let raw:string|undefined;
-      try{raw=await this.files.read(paths.reply);}finally{const duration=Math.max(0,this.monotonic()-reading);readMs+=duration;maxReadMs=Math.max(maxReadMs,duration);}
+      try{raw=retained??await read(paths.reply);retained=undefined;}finally{const duration=Math.max(0,this.monotonic()-reading);readMs+=duration;maxReadMs=Math.max(maxReadMs,duration);}
       if(raw){
         const reply:LeaseReply=JSON.parse(raw);
         if(reply.id!==command.id)throw Error('Invalid ownership acknowledgement.');
+        // A rejected command grants no writer authority. Reading a large or
+        // temporarily unavailable record cannot turn its known error into an
+        // apparent coordinator timeout.
+        if(!reply.ok&&reply.recordRef){if(trace)logEvent('ownership.command.completed',{...fields,...timing(),ok:false,error:reply.error});return reply;}
+        if(input.kind==='stop'&&input.receiptOnly===1&&reply.stopReceipt){
+          if(!validResponseStopReceipt(reply.stopReceipt,input.jobId,command.id))throw Error('Invalid response stop acknowledgement.');
+          if(trace)logEvent('ownership.command.completed',{...fields,...timing(),ok:reply.ok,error:reply.error,hostRecorded:reply.stopReceipt.hostRecorded,runTerminal:reply.stopReceipt.runTerminal,finalSaved:reply.stopReceipt.finalSaved});
+          return reply;
+        }
         if(reply.recordRef){
           const reference=reply.recordRef;if(reference.id!==input.jobId||!Number.isSafeInteger(reference.epoch)||!Number.isSafeInteger(reference.revision))throw Error('Invalid ownership record reference.');
-          const raw=await this.files.read(leasePaths(this.directory,reference.id).record);if(!raw){await this.pause(100);continue;}
+          phase='reading-response-record';const raw=await read(leasePaths(this.directory,reference.id).record);if(!raw){await this.pause(100);continue;}
           const current:LeaseRecord=JSON.parse(raw);if(current.request.id!==reference.id||current.epoch<reference.epoch||current.epoch===reference.epoch&&current.revision<reference.revision){await this.pause(100);continue;}
           reply.record=current;reply.ttlMs=Math.max(0,Math.min(reply.ttlMs,current.expiresAt-this.now()));
         }

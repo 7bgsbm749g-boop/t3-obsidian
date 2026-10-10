@@ -45,7 +45,12 @@ export default class DeviceCompletionSyncLab extends Plugin {
       const authority=new InlineLeaseAuthority(identity,hostFiles),storage=deviceCompletionStore(c.actor,request.vaultId);
       const files={...hostFiles,read:async(p:string)=>{if(p.includes('/replies/'))await authority.tick();return hostFiles.read(p);}};
       const completion=new DeviceResponseCompletion(c.actor,storage.store,deviceFinalNoteIO(app,()=>!this.stopped),(p,proof)=>native.deviceCommitted(p,proof));
-      this.manager=new DeviceInlineManager(request.initialOwner,request.vaultId,{completionActor:c.actor,isOpen:p=>p===note,readNote:async()=>view.getViewData(),readSaved:async()=>app.vault.read(file),updateNote:async()=>{throw Error('A legacy writer must not run');},access:async()=>{throw Error('The fixture has no T3 connection');},receiveCoordinated:(r,proof)=>native.receive(r,proof),completeResponse:(r,original,staged,prepare)=>completion.complete(r,original,staged,prepare),completionFailed:error=>this.write('ERROR',{error:String(error),stack:(error as Error).stack})},async()=>({files,close:()=>{}}),()=>Date.now(),()=>performance.now(),async()=>{await authority.tick();});
+      for(const record of await storage.restore())completion.restore(record);
+      for(const record of await storage.restoreReceipts())completion.restoreReceipt(record);
+      const pending=[];let offset=0;
+      do{const restored=await storage.restorePending(offset);for(const record of restored.records){completion.restorePending(record);pending.push(record.request);}offset=restored.next;}while(offset&&!this.stopped);
+      this.manager=new DeviceInlineManager(request.initialOwner,request.vaultId,{completionActor:c.actor,isOpen:p=>p===note,readNote:async()=>view.getViewData(),readSaved:async()=>app.vault.read(file),updateNote:async()=>{throw Error('A legacy writer must not run');},access:async()=>{throw Error('The fixture has no T3 connection');},receiveCoordinated:(r,proof)=>native.receive(r,proof),completeResponse:(r,original,staged,prepare,abort)=>completion.complete(r,original,staged,prepare,abort),completionFailed:error=>this.write('ERROR',{error:String(error),stack:(error as Error).stack})},async()=>({files,close:()=>{}}),()=>Date.now(),()=>performance.now(),async()=>{await authority.tick();});
+      for(const restored of pending)await this.manager.register(restored);
       await this.manager.register(request);initial=await authority.migrated(request.id);
       fs.writeFileSync(path.join(c.evidence,'initial.json'),JSON.stringify(initial));
       await native.receive(initial);native.stream({request:initial.request,messageId:request.messageId,sequence:1,body:'> Synthetic live reply.\n',phase:'running'});

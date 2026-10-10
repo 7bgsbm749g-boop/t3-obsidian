@@ -7,6 +7,7 @@ import {responseAnchor,responseRegion} from './native-response-projection';
 import type {NativeCommitProof} from './native-response-commit';
 import {nativeCommitMatches} from './native-response-commit';
 import {streamBlock,removeStreamBlock} from './stream-block';
+import {MAX_SUPERSEDED_FINAL_ATTEMPTS,type FinalWriteOutcome,type FinalWriteState} from './completion-attempt';
 
 export function validateFinalResponseBody(body:string){if(/<!-- t3-(?:inline|response):/.test(body))throw Error('A finished response cannot introduce tracking boundaries.');}
 
@@ -16,7 +17,8 @@ export interface NoteGeneration {
   journalRevision?:number;
   request:HostedInlineRequest;notePath:string;original:string;originalHash:string;
   checkpoint?:HostedInlineState;sequence?:number;stagedDraft?:string;staged?:string;finalBody?:string;
-  attempt?:{id:string;before:string;expected:string;hash:string;kind:'commit'|'repair'};
+  attempt?:{id:string;before:string;expected:string;hash:string;kind:'commit'|'repair';writeState?:FinalWriteState;superseding?:boolean;reviewedCurrentHash?:string};
+  supersededAttempts?:Array<{id:string;hash:string;beforeHash:string;proofHash:string;writeState:'no-write'|'reviewed-conflict'}>;
   verified?:{commitId:string;hash:string;document:string;responseAnchor?:{length:number;hash:string}};
   status:'accepted'|'streaming'|'result-ready'|'commit-pending'|'verified'|'conflict'|'removed';
   conflicts:Array<{original:string;latest:string;proposed?:string;reason:string}>;
@@ -45,6 +47,8 @@ export interface GeneratedNoteIO {
   /** Atomic compare-and-set, including unsaved native buffers, note identity
    * and host-lock validity. Returns false if any of those changed. */
   compareAndSet(path:string,before:string,after:string):Promise<boolean>;
+  /** Only this result can prove that an attempt did not mutate disk. */
+  compareAndSetAttempt?(path:string,before:string,after:string,attemptId:string):Promise<FinalWriteOutcome>;
 }
 
 /** Serial checked commits for supported staged edits and generated replies. */
@@ -164,11 +168,49 @@ export class GeneratedNoteCoordinator {
       record.status='result-ready';await this.journal.append(id,record,'separated-conflict-rechecked');return record;
     });
   }
+  recoveryCandidate(record:NoteGeneration,latest:string){
+    if(!record.attempt||record.attempt.kind!=='commit'||record.staged===undefined||record.finalBody===undefined||record.status==='verified'||record.status==='removed')return;
+    const region=responseRegion(latest,record.request.id);
+    if(!region||latest.slice(region.from,region.to)!==responseAnchor(record.request.id))return;
+    const merged=mergeSavedEdits(record.original,latest,this.edits(record));if(!merged.ok)return;
+    const proof=this.materialization({...record,status:'verified',verified:{commitId:record.attempt.id,hash:record.attempt.hash,document:record.attempt.expected}});
+    return {currentHash:contentHash(latest),proofHash:contentHash(JSON.stringify(proof)),proposedHash:contentHash(merged.text),proposedCharacters:merged.text.length};
+  }
+  /** Fence an old immutable intent before creating another one. Automatic
+   * retries require durable no-write evidence. Legacy ambiguous writes need
+   * an explicit review of the current note hash and unchanged anchor. */
+  async supersedeAttempt(id:string,abort:(record:NoteGeneration)=>Promise<void>,reviewedCurrentHash?:string,reviewRead?:(path:string)=>Promise<string|undefined>){
+    const initial=await this.require(id);
+    return this.serial(initial.notePath,async()=>{
+      const record=await this.require(id),attempt=record.attempt;if(!attempt||['verified','removed'].includes(record.status))return record;
+      const latest=await (reviewRead??this.notes.read.bind(this.notes))(record.notePath);if(latest===undefined)return record;
+      if(latest===attempt.expected)return this.verify(record,latest);
+      const candidate=this.recoveryCandidate(record,latest);if(!candidate)return record;
+      const reviewed=reviewedCurrentHash??attempt.reviewedCurrentHash;
+      if(reviewed!==undefined&&reviewed!==candidate.currentHash)throw Error('The reviewed note changed before completion recovery.');
+      if(!reviewed&&!['not-started','no-write'].includes(attempt.writeState??'unknown'))return record;
+      if(!attempt.superseding&&latest===attempt.before&&!reviewed)return record;
+      if((record.supersededAttempts?.length??0)>=MAX_SUPERSEDED_FINAL_ATTEMPTS)throw Error('This response changed too many times during final save. Save the note before retrying.');
+      if(!attempt.superseding){attempt.superseding=true;if(reviewed)attempt.reviewedCurrentHash=reviewed;await this.journal.append(id,record,'attempt-superseding');}
+      else if(reviewedCurrentHash&&attempt.reviewedCurrentHash!==reviewedCurrentHash){attempt.reviewedCurrentHash=reviewedCurrentHash;await this.journal.append(id,record,'attempt-review-updated');}
+      await abort(record);
+      record.supersededAttempts??=[];record.supersededAttempts.push({id:attempt.id,hash:attempt.hash,beforeHash:contentHash(attempt.before),proofHash:candidate.proofHash,writeState:reviewed?'reviewed-conflict':'no-write'});
+      record.attempt=undefined;record.status='result-ready';await this.journal.append(id,record,'attempt-superseded');return record;
+    });
+  }
+  private async writeAttempt(record:NoteGeneration,before:string,after:string){
+    const attempt=record.attempt!;attempt.writeState='writing';await this.journal.append(record.request.id,record,'attempt-write-started');
+    let outcome:FinalWriteOutcome;
+    try{outcome=this.notes.compareAndSetAttempt?await this.notes.compareAndSetAttempt(record.notePath,before,after,attempt.id):{status:await this.notes.compareAndSet(record.notePath,before,after)?'written-unverified':'unknown'};}
+    catch(error){attempt.writeState='unknown';await this.journal.append(record.request.id,record,'attempt-write-unknown');throw error;}
+    attempt.writeState=outcome.status;await this.journal.append(record.request.id,record,'attempt-write-'+outcome.status);return outcome;
+  }
   async commit(id:string){
     const initial=await this.require(id);
     return this.serial(initial.notePath,async()=>{
       const record=await this.require(id);
       if(['verified','removed','conflict'].includes(record.status))return record;
+      if(record.attempt?.superseding)return record;
       const latest=await this.notes.read(record.notePath);
       if(latest===undefined)return record;
       // Restart after the vault write but before the verified journal append.
@@ -177,10 +219,10 @@ export class GeneratedNoteCoordinator {
       const merged=mergeSavedEdits(record.original,latest,this.edits(record));
       if(!merged.ok)return this.conflict(record,latest,merged.reason);
       if(!record.attempt){
-        record.attempt={id:this.id(),before:latest,expected:merged.text,hash:contentHash(merged.text),kind:'commit'};record.status='commit-pending';
+        record.attempt={id:this.id(),before:latest,expected:merged.text,hash:contentHash(merged.text),kind:'commit',writeState:'not-started'};record.status='commit-pending';
         await this.journal.append(id,record,'commit-pending');
       }else if(record.attempt.expected!==merged.text)throw Error('The pending commit intent changed.');
-      if(!await this.notes.compareAndSet(record.notePath,latest,merged.text))return record;
+      const outcome=await this.writeAttempt(record,latest,merged.text);if(outcome.status==='no-write'||outcome.status==='unknown')return record;
       const readback=await this.notes.read(record.notePath);
       if(readback!==merged.text)return this.conflict(record,readback??'',readback===undefined?'Note disappeared during readback.':'Saved result did not survive readback.');
       return this.verify(record,readback);
@@ -192,6 +234,7 @@ export class GeneratedNoteCoordinator {
     if(!merged.ok)throw Error('Verified placement cannot be proven.');
     const final=merged.edits.at(-1)!,offset=final.from+1+merged.edits.filter(edit=>edit.from<final.from).reduce((delta,edit)=>delta+edit.text.length-(edit.to-edit.from),0);
     record.verified={commitId:record.attempt.id,hash:record.attempt.hash,document,responseAnchor:{length:offset,hash:contentHash(document.slice(0,offset))}};record.status='verified';
+    record.attempt.writeState='verified';
     await this.journal.append(record.request.id,record,record.attempt.kind==='repair'?'repair-verified':'saved-and-verified');return record;
   }
   /** Device acknowledgements must originate from an authenticated device read

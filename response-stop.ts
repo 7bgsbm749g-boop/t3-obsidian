@@ -64,7 +64,8 @@ export async function boundedStopOperation<T>(work:Promise<T>,timeoutMs=10_000):
 }
 
 /** A deadline bounds access creation and dispatch; late access cannot dispatch. */
-export async function interruptStoppedResponse(accessFor:()=>Promise<ThreadAccess>,requestId:string,threadId:string,turnId?:string,timeoutMs=10_000,messageId?:string,projectId?:string,createdAt=new Date().toISOString()){
+export async function interruptStoppedResponse(accessFor:()=>Promise<ThreadAccess>,requestId:string,threadId:string,turnId?:string,timeoutMs=10_000,messageId?:string,projectId?:string,createdAt=new Date().toISOString(),knownTerminal=false){
+  if(knownTerminal)return;
   let expired=false,access:ThreadAccess|undefined,timer:ReturnType<typeof setTimeout>|undefined;
   let closed=false;
   const close=(reason:'stop-complete'|'stop-timeout')=>{if(!access||closed)return;closed=true;try{void Promise.resolve(access.close?.(reason)).catch(()=>{});}catch{/* Cleanup must not change the stop result. */}};
@@ -72,12 +73,14 @@ export async function interruptStoppedResponse(accessFor:()=>Promise<ThreadAcces
     access=await accessFor();
     if(expired){close('stop-timeout');return;}
     try{
-      if(!turnId){
-        if(!messageId)throw Error('The stopped response has no bound T3 turn.');
-        const snapshot=await readInlineSnapshot(access,threadId,projectId,{messageIds:[messageId],turnIds:[]});
-        turnId=turnForMessage(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state,messageId);
-        if(!turnId)throw Error('T3 has not identified the stopped response turn.');
-      }
+      if(!turnId&&!messageId)throw Error('The stopped response has no bound T3 turn.');
+      const snapshot=await readInlineSnapshot(access,threadId,projectId,{messageIds:messageId?[messageId]:[],turnIds:turnId?[turnId]:[]});
+      const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+      turnId??=turnForMessage(state,messageId!);
+      if(!turnId)throw Error('T3 has not identified the stopped response turn.');
+      const turn=state.turns?.[turnId]??(state.latestTurn?.turnId===turnId?state.latestTurn:undefined);
+      if(turn&&['completed','interrupted','cancelled','error'].includes(turn.state)||state.checkpoints?.some(checkpoint=>checkpoint.turnId===turnId&&checkpoint.status==='ready'&&!!checkpoint.completedAt))return;
+      if(state.session?.activeTurnId&&state.session.activeTurnId!==turnId)throw Error('The response turn is no longer active; its final state is waiting for confirmation.');
       if(expired)return;
       await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(requestId,'interrupt'),threadId,turnId,createdAt});
     }finally{close('stop-complete');}

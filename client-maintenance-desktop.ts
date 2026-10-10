@@ -9,8 +9,10 @@ import {validateClientCommand,type ClientCommand,type ClientCommandResult} from 
 export class DesktopClientMaintenance {
   readonly client:{instanceId:string;loadedVersion:string};
   private initiated=false;
-  constructor(private app:App,private root:string,private configDir:string,loadedVersion:string,private codeViewTypes:()=>readonly string[]=()=>[]){this.client={instanceId:randomUUID(),loadedVersion};}
+  constructor(private app:App,private root:string,private configDir:string,loadedVersion:string,private codeViewTypes:()=>readonly string[]=()=>[],private beforeReload?:()=>Promise<void>){this.client={instanceId:randomUUID(),loadedVersion};}
   private async ready(command:ClientCommand){
+    await this.beforeReload?.();
+    await nativeResponses(this.app).prepareReload();
     const directory=join(this.root,this.configDir,'plugins','send-to-t3-code');
     for(const name of ['main.js','manifest.json','styles.css'] as const){
       const bytes=await fs.readFile(join(directory,name));

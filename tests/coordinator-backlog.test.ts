@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {InlineLeaseAuthority,InlineLeaseClient,leasePaths,COORDINATED_OWNER,type LeaseFiles,type LeaseRecord} from '../inline-lease';
+import {InlineLeaseAuthority,InlineLeaseClient,leasePaths,leaseRoute,COORDINATED_OWNER,type LeaseFiles,type LeaseRecord} from '../inline-lease';
 import {initialRegion} from '../inline-thread';
 import {hostedRequestHash,type HostedInlineRequest} from '../hosted-inline';
 
@@ -28,11 +28,23 @@ test('a first native send is acknowledged within the existing deadline on cold s
   await h.authority.tick();
   const reply=JSON.parse(h.data.get(leasePaths(h.directory,id).reply)!);
   assert.equal(reply.ok,true);assert.equal(reply.record.owner,COORDINATED_OWNER);
+  assert.deepEqual(JSON.parse(h.data.get(leasePaths(h.directory,h.request.id).route)!),leaseRoute(reply.record),'fresh routing is durable before acknowledgement');
   assert.ok(reply.answeredAt-started<5000,`first acknowledgement took ${reply.answeredAt-started}ms of storage latency`);
   assert.ok(h.now()-started<5000,'a batch must release the authority before the send deadline');
   assert.equal([...h.data.keys()].filter(path=>path.includes('/mailbox/')).length,392,'background work yields after eight claims');
   assert.ok(h.leaseReads()<440,'claims and native registration do not rescan historical lease files');
   assert.ok((h.writes.get(leasePaths(h.directory,'').catalog)??0)<=3,'cold recovery publishes the catalog in bulk');
+  assert.ok([...h.data.keys()].filter(path=>path.includes('/routes/')).length<=17,'historical route migration is bounded after the native send and eight claims');
+});
+
+test('cold route migration yields in eight-record batches and reuses recovered metadata without reading lease bodies again',async()=>{
+  const h=backlog();for(const path of [...h.data.keys()])if(path.includes('/mailbox/'))h.data.delete(path);
+  try{
+    await h.authority.tick();assert.equal([...h.data.keys()].filter(path=>path.includes('/routes/')).length,8);const reads=h.leaseReads();
+    for(let remaining=409;remaining>0;remaining-=8){const started=h.now(),before=[...h.data.keys()].filter(path=>path.includes('/routes/')).length;await h.authority.tick();assert.ok(h.now()-started<100,'a route migration batch releases the host promptly');assert.equal([...h.data.keys()].filter(path=>path.includes('/routes/')).length-before,Math.min(8,remaining));}
+    assert.equal(h.leaseReads(),reads);assert.equal(reads,417);
+    for(const [path,bytes] of h.data)if(path.includes('/leases/')){const record=JSON.parse(bytes) as LeaseRecord;assert.deepEqual(JSON.parse(h.data.get(leasePaths(h.directory,record.request.id).route)!),leaseRoute(record));}
+  }finally{h.authority.stop();}
 });
 
 test('new registrations and an exact-ID replay stay responsive while an old claim backlog remains',async()=>{

@@ -1,9 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {displayToSaved,savedToDisplay,responseAnchor,responseRegion,projectResponses,savedProjection,editableDisplayRange} from '../native-response-projection';
-import {renderInlineTurn} from '../inline-thread';
+import {renderInlineTurn,selectionAnchor,insertionOffset} from '../inline-thread';
 import {NativeResponseView} from '../native-response-view';
 import {EditorState} from '@codemirror/state';
+import {renderResponseToolGroup,type ResponseToolGroup} from '../response-tools';
+import {presentToolGroups} from '../response-tool-presentation';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 const saved=`Before\n\n${responseAnchor(id)}\n\nBetween\n\n${responseAnchor(other)}\n\nAfter`;
@@ -39,9 +41,95 @@ function fakeView(document:string,normalizeIncoming?:(text:string)=>string){
   let value=document,saves=0;const conflicts:any[]=[];
   let disk=document;
   const view:any={getViewData:()=>value,setViewData:(data:string)=>{value=data;},getMode:()=> 'preview',requestSave:()=>{saves++;},save:async()=>{disk=view.getViewData();}};
+  const originalGet=view.getViewData,originalSet=view.setViewData;
   const adapter=new NativeResponseView(view,document,record=>conflicts.push(record),async()=>disk,normalizeIncoming);
-  return {view,adapter,conflicts,read:()=>value,edit:(data:string)=>{value=data;},saves:()=>saves};
+  return {view,adapter,conflicts,originalGet,originalSet,read:()=>value,edit:(data:string)=>{value=data;},saves:()=>saves};
 }
+
+function largeTools(){return renderResponseToolGroup({id:'synthetic',turnId:'turn',tools:[{id:'tool',turnId:'turn',key:'tool',status:'completed',label:'Read output',activeLabel:'Read output',icon:'file-text',action:'read',sequence:1,output:'retained output '.repeat(1000)}]} satisfies ResponseToolGroup);}
+test('native tool summaries preserve completed and active canonical output through typing and final adoption',()=>{
+  const tools=largeTools(),document='Before\n\n'+tools+'\n\n'+responseAnchor(id)+'\n\nAfter',h=fakeView(document);
+  h.adapter.setResponses([{id,body:'> Reply\n\n'+tools}]);assert.ok(h.read().length<2000);assert.equal(h.adapter.saved(),document);assert.equal(h.adapter.responseBody(id),'> Reply\n\n'+tools);
+  let state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});h.view.editor={cm:{state}};
+  state=state.update({changes:{from:0,insert:'Typed '}}).state;h.view.editor.cm.state=state;h.edit(state.doc.toString());
+  assert.equal(h.adapter.saved(),'Typed '+document);const after=h.read().indexOf('After');assert.deepEqual(h.adapter.mapSelection(after,after+5).from,{kind:'saved',offset:('Typed '+document).indexOf('After')});
+  const final=('Typed '+document).replace(responseAnchor(id),'Final\n\n'+tools);h.adapter.prepareMaterialization('Typed '+document,final,[id]);assert.equal(h.adapter.acceptCommitted(final,[id]),true);assert.ok(h.read().length<2000);assert.equal(h.adapter.saved(),final);
+  const summary=h.read().indexOf('Open to view tool details.');state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});h.view.editor.cm.state=state;
+  assert.equal(state.update({changes:{from:summary,to:summary+4,insert:'Lost'}}).state.doc.toString(),state.doc.toString());
+  h.adapter.dispose();assert.equal(h.read(),final);assert.equal(final.split('retained output').length,h.read().split('retained output').length);
+});
+test('completed tool notes compact on first attachment and raw source exposes exact editable canonical bytes',()=>{
+  const tools=largeTools(),document='Before\n\n'+tools+'\n\nAfter',h=fakeView(document);h.adapter.setResponses([]);assert.ok(h.read().length<1000);assert.equal(h.adapter.saved(),document);
+  h.view.getState=()=>({source:true});h.adapter.setResponses([]);assert.equal(h.read(),document);assert.equal(h.adapter.saved(),document);h.adapter.dispose();
+});
+test('canonical prompt reads retain full saved tools and the current live response without changing save bytes',()=>{
+  const tools=largeTools(),document='Before\n\n'+tools+'\n\n'+responseAnchor(id)+'\n\nAfter',h=fakeView(document),first='> Live reply\n\n'+tools;
+  h.adapter.setResponses([{id,body:first}]);assert.equal(h.adapter.canonicalDisplayed(),projectResponses(document,[{id,body:first}]).display);assert.equal(h.adapter.saved(),document);assert.doesNotMatch(h.adapter.canonicalDisplayed(),/data-t3-tool-ref=/);
+  h.edit(h.read().replace('After','Typed ordinary text'));const edited=document.replace('After','Typed ordinary text');
+  h.adapter.setResponses([{id,body:first+'\n\nNew live prose'}]);assert.equal(h.adapter.canonicalDisplayed(),projectResponses(edited,[{id,body:first+'\n\nNew live prose'}]).display);assert.equal(h.adapter.saved(),edited);
+});
+test('canonical selection after completed tools keeps a separate valid native insertion anchor',()=>{
+  const tools=largeTools(),document='Before\n\n'+tools+'\n\nSelected ordinary text\n\nTail',h=fakeView(document);h.adapter.setResponses([]);
+  const display=h.read(),text='Selected ordinary text',from=display.indexOf(text),anchor=selectionAnchor(display,text,from,from+text.length),selected=h.adapter.canonicalSelection(anchor.start,anchor.end);
+  assert.equal(selected.document,document);assert.equal(selected.text,text);assert.equal(selected.start,document.indexOf(text));assert.equal(selected.reference,false);
+  const insertion=insertionOffset(display,anchor);let state=EditorState.create({doc:display,extensions:[h.adapter.extension()]});h.view.editor={cm:{state}};
+  state=state.update({changes:{from:insertion,insert:'Inserted reply anchor\n'}}).state;h.view.editor.cm.state=state;h.edit(state.doc.toString());assert.equal(h.adapter.saved(),document.replace(text+'\n',text+'\nInserted reply anchor\n'));assert.ok(h.read().length<1000);
+});
+test('partial compact summaries select exact retained output as context and never an editable placeholder',()=>{
+  const tools=largeTools(),document='Before\n\n'+tools+'\n\n'+responseAnchor(id)+'\n\nAfter',h=fakeView(document);h.adapter.setResponses([{id,body:'> Reply\n\n'+tools}]);
+  for(const at of [h.read().indexOf('Open to view tool details.'),h.read().lastIndexOf('Open to view tool details.')]){const selected=h.adapter.canonicalSelection(at,at+4);assert.equal(selected.text,tools);assert.equal(selected.reference,true);assert.doesNotMatch(selected.text,/data-t3-tool-ref=/);assert.equal(selected.document.slice(selected.start,selected.end),tools);}
+  assert.throws(()=>h.adapter.canonicalSelection(-1,2),/range/);assert.throws(()=>h.adapter.canonicalSelection(0,h.read().length+1),/range/);
+});
+test('completed tool-only native pane echoes never become saved placeholders',async()=>{
+  const tools=largeTools(),document='Before\n\n'+tools+'\n\nAfter',h=fakeView(document);h.adapter.setResponses([]);
+  const compact=h.read();h.view.setViewData(compact,false);assert.equal(h.adapter.saved(),document);
+  h.view.setViewData(compact.replace('After','Edited after'),false);const edited=document.replace('After','Edited after');
+  assert.equal(h.adapter.saved(),edited);assert.ok(h.read().length<1000);await h.view.save();assert.equal(h.adapter.saved(),edited);
+  assert.equal(h.adapter.conflictRecord(),undefined);h.adapter.dispose();assert.equal(h.read(),edited);assert.doesNotMatch(h.read(),/data-t3-tool-ref=/);
+});
+test('a failed response rebuild retains exact completed tool output and the prior live response',()=>{
+  const tools=largeTools(),document='Before\n\n'+tools+'\n\n'+responseAnchor(id)+'\n\nAfter',h=fakeView(document);
+  h.adapter.setResponses([{id,body:'> Original reply\n\n'+tools}]);const compact=h.read(),projection=h.adapter.currentProjection();
+  assert.throws(()=>h.adapter.setResponses([{id,body:'> Changed reply\n\n'+tools},{id:other,body:'> Missing anchor'}]),/missing/);
+  assert.equal(h.read(),compact);assert.equal(h.adapter.currentProjection(),projection);assert.equal(h.adapter.saved(),document);assert.equal(h.adapter.responseBody(id),'> Original reply\n\n'+tools);
+  h.edit(compact.replace('After','Edited after'));assert.equal(h.adapter.saved(),document.replace('After','Edited after'));
+  h.adapter.dispose();assert.equal(h.read(),document.replace('After','Edited after'));
+});
+test('a damaged compact pane echo remains a conflict and cannot reach an unwrapped native save',()=>{
+  const tools=largeTools(),document='Before\n\n'+tools+'\n\nAfter',h=fakeView(document);h.adapter.setResponses([]);
+  const attempted=h.read().replace('Open to view tool details.','Changed summary.').replace('Before','Incoming before').replace('After','Incoming after');h.view.setViewData(attempted,false);
+  assert.ok(h.adapter.conflictRecord());assert.throws(()=>h.adapter.saved());
+  assert.equal(h.adapter.conflictRecord()!.attemptedIncoming,attempted);assert.equal(h.adapter.conflictRecord()!.unsafeIncoming,false);
+  h.adapter.dispose();assert.equal(h.read(),document.replace('Before','Incoming before').replace('After','Incoming after'));assert.doesNotMatch(h.read(),/data-t3-tool-ref=/);assert.ok(h.read().includes(tools));
+});
+test('pasting a live tool placeholder into ordinary text cannot escape the saved projection',()=>{
+  const tools=largeTools(),document='Before\n\n'+responseAnchor(id)+'\n\nAfter',h=fakeView(document);h.adapter.setResponses([{id,body:tools}]);
+  let state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});h.view.editor={cm:{state}};
+  state=state.update({changes:{from:state.doc.length,insert:'\n\n'+presentToolGroups(tools).display}}).state;h.view.editor.cm.state=state;h.edit(state.doc.toString());
+  assert.doesNotMatch(h.adapter.saved(),/data-t3-tool-ref=/);assert.equal(h.adapter.responseBody(id),tools);
+});
+test('unknown or tampered compact identities retain the save guard until a clean file switch',async()=>{
+  for(const replacement of ['', 'f'.repeat(64),'unknown']){
+    const tools=largeTools(),document='Before\n\n'+tools+'\n\nAfter',h=fakeView(document),{originalGet,originalSet}=h;h.adapter.setResponses([]);
+    const ref=presentToolGroups(tools).groups[0].ref,attempted=h.read().replace(ref,replacement).replace('After','Incoming ordinary edit');h.view.setViewData(attempted,false);
+    assert.equal(h.adapter.conflictRecord()!.attemptedIncoming,attempted);assert.equal(h.adapter.conflictRecord()!.unsafeIncoming,true);assert.ok(h.adapter.conflictRecord()!.local.includes(tools));
+    h.adapter.dispose();assert.equal(h.adapter.isDisposed(),false);assert.notEqual(h.view.getViewData,originalGet);assert.throws(()=>h.view.getViewData());
+    const saves=h.saves();h.view.requestSave();await h.view.save();assert.equal(h.saves(),saves);assert.ok(h.read().includes(ref));
+    h.view.file={path:'Different.md'};h.view.setViewData('Different note',false);assert.equal(h.adapter.isDisposed(),true);assert.equal(h.view.getViewData,originalGet);assert.equal(h.view.setViewData,originalSet);assert.equal(h.view.getViewData(),'Different note');
+  }
+});
+test('structurally damaged generated summaries cannot be adopted or unwrapped without canonical proof',()=>{
+  const tools=largeTools(),document='Before\n\n'+tools+'\n\nAfter',h=fakeView(document);h.adapter.setResponses([]);
+  const attempted=h.read().replace('</div></details>','');h.view.setViewData(attempted,false);assert.equal(h.adapter.conflictRecord()!.attemptedIncoming,attempted);assert.equal(h.adapter.conflictRecord()!.unsafeIncoming,true);
+  h.adapter.dispose();assert.equal(h.adapter.isDisposed(),false);assert.throws(()=>h.view.getViewData());h.view.file={path:'Next.md'};h.view.setViewData('Next note',false);assert.equal(h.view.getViewData(),'Next note');
+});
+test('literal compact examples remain editable and do not confuse retained tool offset mapping',()=>{
+  const tools=largeTools(),document='Before\n\n'+tools+'\n\nAfter',h=fakeView(document);h.adapter.setResponses([]);
+  const literal='```html\n'+presentToolGroups(tools).display+'\n```\n\n';let state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});h.view.editor={cm:{state}};
+  state=state.update({changes:{from:0,insert:literal}}).state;h.view.editor.cm.state=state;h.edit(state.doc.toString());assert.equal(h.adapter.saved(),literal+document);
+  const after=h.read().indexOf('After');assert.deepEqual(h.adapter.mapSelection(after,after+5).from,{kind:'saved',offset:(literal+document).indexOf('After')});
+  h.adapter.dispose();assert.equal(h.read(),literal+document);
+});
 
 test('verified readback resolves a transient projection conflict but retains competing ordinary edits',()=>{
   const before=`Before\n\n${responseAnchor(id)}\n\nAfter`,final=before.replace(responseAnchor(id),'\n> Finished');

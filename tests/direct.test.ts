@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {pair, pairingInput,sendDirect,readDirect,commandId} from '../direct';
+import {pair, pairingInput,sendDirect,readDirect,commandId,jsonHttp} from '../direct';
 import type {Request} from '../bridge';
 import {modelConfig,settingsSocket} from './rpc-fixture';
 import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../environment-permissions';
@@ -69,6 +69,32 @@ test('direct credentials are bound to origin/environment and expired sessions re
  await assert.rejects(readDirect(c,['projects'],session,wrong as any),/different T3 environment/);assert.equal(calls,1);
  await assert.rejects(readDirect(c,['projects'],{...session,expiresAt:1},wrong as any),/expired/);assert.equal(calls,1);
  await assert.rejects(readDirect({...c,url:'https://other.example'},['projects'],session,wrong as any),/Pair this connection/);assert.equal(calls,1);
+});
+
+test('control reads reuse verified credential access but fetch fresh state and fence changed credentials',async()=>{
+ const c={transport:'direct' as const,url,environmentId:eid,host:'direct',executable:''};let descriptors=0,snapshots=0;
+ const fetcher=async(u:any,o:any)=>{if(u.endsWith('/environment')){descriptors++;return response(descriptor);}assert.ok(u.endsWith('/bounded?compactTurnItems=1'));snapshots++;return response({thread:{id:'thread',projectId:'p',title:'Revision '+snapshots}});};
+ const first=await readDirect(c,['read','thread'],session,fetcher as any,{control:true});
+ const second=await readDirect(c,['read','thread'],session,fetcher as any,{control:true});
+ assert.equal(descriptors,1);assert.equal(snapshots,2);assert.notEqual(first.title,second.title);
+ await readDirect(c,['read','thread'],{...session,token:'renewed-token'},fetcher as any,{control:true});assert.equal(descriptors,2);
+ await readDirect(c,['read','thread'],{...session,accountId:'different-account'},fetcher as any,{control:true});assert.equal(descriptors,3);
+});
+
+test('direct HTTP cancellation rejects even when a fetch implementation ignores AbortSignal',async()=>{
+ const controller=new AbortController();let signal:AbortSignal|undefined;
+ const fetcher:any=async(_url:any,options:any)=>{signal=options.signal;return new Promise(()=>{});};
+ const work=jsonHttp(url,{signal:controller.signal},fetcher);controller.abort(Error('obsolete chooser'));
+ await assert.rejects(work,/obsolete chooser/);assert.equal(signal?.aborted,true);
+});
+
+test('cancelling one shared descriptor waiter does not cancel another reader',async()=>{
+ const c={transport:'direct' as const,url,environmentId:eid,host:'direct',executable:''};let release!:()=>void,descriptorSignal:AbortSignal|undefined,descriptors=0;
+ const fetcher:any=async(u:any,options:any)=>{if(u.endsWith('/environment')){descriptors++;descriptorSignal=options.signal;await new Promise<void>(resolve=>{release=resolve;});return response(descriptor);}return response({thread:{id:'thread',projectId:'p'}});};
+ const a=new AbortController(),b=new AbortController();
+ const first=readDirect(c,['read','thread'],session,fetcher,{control:true,signal:a.signal});
+ const second=readDirect(c,['read','thread'],session,fetcher,{control:true,signal:b.signal});
+ a.abort(Error('first closed'));await assert.rejects(first,/first closed/);assert.equal(descriptorSignal?.aborted,false);release();assert.equal((await second).id,'thread');assert.equal(descriptors,1);
 });
 
 test('existing-thread sends preserve conversation settings and retry one immutable message without creating a thread',async(t)=>{

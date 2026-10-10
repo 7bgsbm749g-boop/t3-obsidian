@@ -9,6 +9,9 @@ import {InlineLeaseAuthority,InlineLeaseClient,COORDINATED_OWNER,deviceStagedPat
 import {responseAnchor} from '../native-response-projection';
 import {contentHash} from '../completion';
 import {nativeCommitPath} from '../native-response-commit';
+import type {FinalAttemptAbort,FinalWriteOutcome} from '../completion-attempt';
+import {deviceState} from '../device-state';
+import {ResponseNoteLocator} from '../response-location';
 
 async function fixture(actorOverride?:string){
   let time=100_000,writes=0,allowed=true;
@@ -45,6 +48,213 @@ test('a reloaded sending manager finishes a closed note through canonical host e
     for(let n=0;n<100&&!h.record().state?.cleanupComplete;n++)await new Promise(resolve=>setImmediate(resolve));
     assert.deepEqual(errors,[]);assert.equal(h.record().state?.cleanupComplete,true);assert.equal(h.record().finalWriter?.actor,h.actor);assert.equal(h.writes(),1);assert.match(h.document(),/Finished response/);
   }finally{manager.dispose();}
+});
+
+async function renamedCompletionFixture(documents?:(original:string,path:string)=>Map<string,string>,loseRenameReply=false){
+  const h=await fixture(),path='Jobs/Settled/Note.md';
+  await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+  const grant=structuredClone(h.record().finalWriter!),docs=documents?.(h.original,path)??new Map([[path,h.original+'Ordinary text after a rename.\n'],['Unrelated.md','Keep this note exactly.\n']]);
+  const locator=new ResponseNoteLocator(()=>[...docs.keys()],async path=>docs.get(path));
+  const writes:string[]=[],errors:unknown[]=[],relocations:string[]=[],completions:LeaseRecord[]=[];
+  const notes={read:async(path:string)=>docs.get(path),compareAndSet:async(path:string,before:string,after:string)=>{
+    if(docs.get(path)!==before)return false;
+    assert.equal(h.record().state?.notePath,path,'the host rename must be acknowledged before the final write');
+    assert.ok(h.record().preparedFinal,'the immutable intent must be retained before the final write');
+    assert.deepEqual(h.record().finalWriter,grant);docs.set(path,after);writes.push(path);return true;
+  }};
+  let lost=loseRenameReply;
+  const files={read:async(file:string)=>{
+    if(file.includes('/replies/'))await h.authority.tick();
+    if(lost&&relocations.some(id=>file===leasePaths(h.request.host.directory,id).reply)){lost=false;throw Error('Lost rename acknowledgement');}
+    return h.data.get(file);
+  },write:async(file:string,text:string)=>{if(file.includes('/mailbox/')){const command=JSON.parse(text);if(command.kind==='relocate')relocations.push(command.id);}h.data.set(file,text);}};
+  const manager=()=>{
+    const completion=new DeviceResponseCompletion(h.actor,h.store,notes,()=>{});
+    return new DeviceInlineManager(randomUUID(),h.request.vaultId,{completionActor:h.actor,isOpen:()=>false,readNote:notes.read,locateNote:(id,path)=>locator.locate(id,path),updateNote:async()=>{throw Error('Legacy writer must not run');},access:async()=>{throw Error('No T3 access needed');},completeResponse:(record,original,staged,prepare,abort)=>{completions.push(structuredClone(record));return completion.complete(record,original,staged,prepare,abort);},completionFailed:error=>errors.push(error)},async()=>({files,close:()=>{}}),()=>100_000,()=>100_000,async()=>{await h.authority.tick();});
+  };
+  return {h,path,grant,docs,writes,errors,relocations,completions,manager};
+}
+async function waitForCompletion(condition:()=>boolean){for(let n=0;n<200&&!condition();n++)await new Promise(resolve=>setImmediate(resolve));assert.ok(condition(),'the bounded completion did not settle');}
+
+test('palette Stop excludes a completed permanent grant while its checkpoint and final save are pending',async()=>{
+  const h=await fixture();await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+  const files={read:async(path:string)=>{if(path.includes('/replies/'))await h.authority.tick();return h.data.get(path);},write:async(path:string,text:string)=>{h.data.set(path,text);}};
+  const manager=new DeviceInlineManager(randomUUID(),h.request.vaultId,{completionActor:h.actor,isOpen:()=>false,readNote:async()=>h.original,updateNote:async()=>{throw Error('No legacy write');},access:async()=>{throw Error('No provider access');},completeResponse:async()=>undefined},async()=>({files,close:()=>{}}),()=>100_000,()=>100_000,async()=>{await h.authority.tick();});
+  try{
+    await manager.register(h.request);
+    assert.equal(manager.responseStatus(h.id)?.runTerminal,true);
+    assert.equal(manager.responseStatus(h.id)?.finalWriterPending,true);
+    assert.deepEqual(manager.stoppableResponses(h.request.notePath),[]);
+  }finally{manager.dispose();}
+});
+
+test('a permanent final grant locates a renamed note after reload with no local journal',async()=>{
+  const r=await renamedCompletionFixture(),manager=r.manager();assert.equal(r.h.local.size,0);
+  try{
+    await manager.register(r.h.request);await waitForCompletion(()=>r.h.record().state?.cleanupComplete===true);
+    assert.deepEqual(r.errors,[]);assert.deepEqual(r.writes,[r.path]);assert.equal(r.relocations.length,1);
+    assert.equal(r.h.record().state?.notePath,r.path);assert.equal(r.h.local.get(r.h.id)?.notePath,r.path);
+    assert.equal(r.h.record().request.notePath,'Note.md');assert.deepEqual(r.h.record().finalWriter,r.grant);
+    assert.ok(r.docs.get(r.path)?.endsWith('Ordinary text after a rename.\n'));assert.ok(r.docs.get(r.path)?.includes(r.h.final.body));
+    assert.equal(r.docs.get('Unrelated.md'),'Keep this note exactly.\n');assert.equal(r.docs.has('Note.md'),false);
+    const verified=structuredClone(r.h.local.get(r.h.id)!);r.docs.delete(r.path);
+    const reloaded=new DeviceResponseCompletion(r.h.actor,r.h.store,{read:async(path:string)=>r.docs.get(path),compareAndSet:async()=>{throw Error('Verified replay must never write');}},()=>{});
+    assert.equal((await reloaded.complete(r.h.record()))?.hash,verified.verified?.hash);
+  }finally{manager.dispose();}
+});
+
+test('missing and duplicate renamed anchors cannot start a final write',async()=>{
+  for(const duplicate of [false,true]){
+    const r=await renamedCompletionFixture((original,path)=>duplicate?new Map([[path,original],['Copied.md',original]]):new Map()),manager=r.manager();
+    try{
+      await manager.register(r.h.request);
+      if(duplicate)await waitForCompletion(()=>r.errors.length>0);else for(let n=0;n<20;n++)await new Promise(resolve=>setImmediate(resolve));
+      assert.equal(r.completions.length,0);assert.equal(r.writes.length,0);assert.equal(r.h.local.size,0);
+      assert.equal(r.h.record().preparedFinal,undefined);assert.deepEqual(r.h.record().finalWriter,r.grant);
+      if(duplicate)assert.match(String(r.errors[0]),/multiple notes/);else assert.deepEqual(r.errors,[]);
+    }finally{manager.dispose();}
+  }
+});
+
+test('an existing note with a removed anchor remains protected by the completion conflict guard',async()=>{
+  const r=await renamedCompletionFixture(()=>new Map([['Note.md','User removed the response anchor.\n']])),manager=r.manager();
+  try{
+    await manager.register(r.h.request);await waitForCompletion(()=>r.h.local.get(r.h.id)?.status==='conflict');
+    assert.equal(r.docs.get('Note.md'),'User removed the response anchor.\n');assert.equal(r.writes.length,0);
+    assert.equal(r.h.record().preparedFinal,undefined);assert.deepEqual(r.h.record().finalWriter,r.grant);
+  }finally{manager.dispose();}
+});
+
+test('a lost rename acknowledgement does not write and a reload uses its retained host path',async()=>{
+  const r=await renamedCompletionFixture(undefined,true),manager=r.manager();
+  try{
+    await manager.register(r.h.request);await waitForCompletion(()=>r.errors.length>0);
+    assert.match(String(r.errors[0]),/Lost rename acknowledgement/);assert.equal(r.writes.length,0);assert.equal(r.completions.length,0);assert.equal(r.h.local.size,0);
+    assert.equal(r.h.record().state?.notePath,r.path);assert.equal(r.h.record().preparedFinal,undefined);assert.deepEqual(r.h.record().finalWriter,r.grant);
+  }finally{manager.dispose();}
+  const reloaded=r.manager();try{
+    await reloaded.register(r.h.request);await waitForCompletion(()=>r.h.record().state?.cleanupComplete===true);
+    assert.deepEqual(r.writes,[r.path]);assert.equal(r.relocations.length,1);assert.deepEqual(r.h.record().finalWriter,r.grant);
+  }finally{reloaded.dispose();}
+});
+
+test('prepared verified receipts replay after edited or deleted notes without an anchor lookup',async()=>{
+  for(const deleted of [false,true]){
+    const h=await fixture();await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+    const proof=await h.completion().complete(h.record(),h.original);assert.ok(proof);assert.ok(h.record().preparedFinal);assert.equal(h.record().state?.finalSaved,undefined);
+    const document=deleted?undefined:'User replaced the saved response.\n',completion=new DeviceResponseCompletion(h.actor,h.store,{read:async()=>document,compareAndSet:async()=>{throw Error('Prepared verified replay must not write');}},()=>{}),errors:unknown[]=[];
+    const files={read:async(path:string)=>{if(path.includes('/replies/'))await h.authority.tick();return h.data.get(path);},write:async(path:string,text:string)=>{h.data.set(path,text);}};
+    const manager=new DeviceInlineManager(randomUUID(),h.request.vaultId,{completionActor:h.actor,isOpen:()=>false,readNote:async()=>document,locateNote:async()=>{throw Error('A saved receipt must not require its old anchor');},updateNote:async()=>{throw Error('Legacy writer must not run');},access:async()=>{throw Error('No T3 access needed');},completeResponse:(record,original,staged,prepare,abort)=>completion.complete(record,original,staged,prepare,abort),completionFailed:error=>errors.push(error)},async()=>({files,close:()=>{}}),()=>100_000,()=>100_000,async()=>{await h.authority.tick();});
+    try{
+      await manager.register(h.request);await waitForCompletion(()=>h.record().state?.cleanupComplete===true);
+      assert.deepEqual(errors,[]);assert.equal(h.record().state?.delivery?.hash,proof.hash);assert.equal(h.writes(),1);
+    }finally{manager.dispose();}
+  }
+});
+
+function startupDiscoveryFixture(h:Awaited<ReturnType<typeof fixture>>,document:string|undefined,actor=h.actor){
+  const counts={recordReads:0,locations:0,noteReads:0,writeAttempts:0,completions:0,settled:0},commands:Array<{kind:string;actor:string}>=[],errors:unknown[]=[];
+  const notes={read:async()=>document,compareAndSet:async()=>{counts.writeAttempts++;throw Error('Startup receipt recovery must not write a changed or missing note');}};
+  const completion=new DeviceResponseCompletion(actor,h.store,notes,()=>{});
+  const files={read:async(path:string)=>{
+    // Completed bindings can leave the active catalog. Startup must recover
+    // their exact durable records through the restored response IDs as well.
+    if(path===leasePaths(h.request.host.directory,'').catalog)return '[]';
+    if(path===leasePaths(h.request.host.directory,h.id).record)counts.recordReads++;
+    if(path.includes('/replies/'))await h.authority.tick();
+    return h.data.get(path);
+  },write:async(path:string,text:string)=>{
+    if(path.includes('/mailbox/')){const command=JSON.parse(text);commands.push({kind:command.kind,actor:command.actor});}
+    h.data.set(path,text);
+  }};
+  const manager=new DeviceInlineManager(randomUUID(),h.request.vaultId,{
+    completionActor:actor,isOpen:()=>false,
+    readNote:async()=>{counts.noteReads++;return document;},
+    locateNote:async()=>{counts.locations++;return undefined;},
+    updateNote:async()=>{throw Error('Legacy writer must not run');},
+    access:async()=>{throw Error('No T3 access needed for a retained completion');},
+    completeResponse:async(record,original,staged,prepare,abort)=>{
+      counts.completions++;try{return await completion.complete(record,original,staged,prepare,abort);}finally{counts.settled++;}
+    },completionFailed:error=>errors.push(error),
+  },async()=>({files,close:()=>{}}),()=>100_000,()=>100_000,async()=>{await h.authority.tick();});
+  return {manager,counts,commands,errors,start:()=>manager.discover([h.request.host],[h.id])};
+}
+
+test('startup discovery replays verified prepared receipts after the note was deleted or its anchor was removed',async()=>{
+  for(const document of [undefined,'User replaced the saved response and removed its anchor.\n']){
+    const h=await fixture();await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+    const proof=await h.completion().complete(h.record(),h.original);assert.ok(proof);
+    const grant=structuredClone(h.record().finalWriter),prepared=structuredClone(h.record().preparedFinal);
+    assert.equal(h.local.get(h.id)?.status,'verified');assert.equal(h.record().state?.finalSaved,undefined);
+    const r=startupDiscoveryFixture(h,document);
+    try{
+      r.start();await waitForCompletion(()=>h.record().state?.cleanupComplete===true);
+      assert.ok(r.counts.recordReads>0);assert.equal(r.counts.locations,0);assert.equal(r.counts.noteReads,0);
+      assert.equal(r.counts.completions,1);assert.equal(r.counts.writeAttempts,0);assert.deepEqual(r.errors,[]);
+      assert.deepEqual(r.commands.filter(command=>command.kind==='commit-final'),[{kind:'commit-final',actor:h.actor}]);
+      assert.equal(h.record().state?.delivery?.hash,proof.hash);assert.equal(h.record().state?.delivery?.commitId,proof.commitId);
+      assert.deepEqual(h.record().finalWriter,grant);assert.deepEqual(h.record().preparedFinal,prepared);assert.equal(h.writes(),1);
+    }finally{r.manager.dispose();}
+  }
+});
+
+test('startup discovery cannot acknowledge a prepared host intent without a locally verified save',async()=>{
+  for(const document of [undefined,'User text with no response anchor.\n']){
+    const h=await fixture();await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+    assert.ok(await h.completion().complete(h.record(),h.original));
+    const grant=structuredClone(h.record().finalWriter),prepared=structuredClone(h.record().preparedFinal);
+    h.local.clear(); // A retained host intent does not prove the local note write.
+    const r=startupDiscoveryFixture(h,document);
+    try{
+      r.start();await waitForCompletion(()=>r.counts.settled>0);
+      assert.equal(r.counts.locations,0);assert.equal(r.counts.noteReads,0);assert.equal(r.counts.writeAttempts,0);
+      assert.equal(r.commands.some(command=>command.kind==='commit-final'),false);assert.deepEqual(r.errors,[]);
+      assert.equal(h.record().state?.finalSaved,undefined);assert.equal(h.record().state?.cleanupComplete,undefined);
+      assert.equal(h.record().state?.delivery,undefined);assert.notEqual(h.local.get(h.id)?.status,'verified');
+      assert.deepEqual(h.record().finalWriter,grant);assert.deepEqual(h.record().preparedFinal,prepared);assert.equal(h.writes(),1);
+    }finally{r.manager.dispose();}
+  }
+});
+
+test('startup discovery requires both prepared-grant and request device actors to match this device',async()=>{
+  for(const mismatch of ['grant','request'] as const){
+    const h=await fixture();await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+    assert.ok(await h.completion().complete(h.record(),h.original));
+    const record=h.record(),other=randomUUID();
+    if(mismatch==='grant')record.finalWriter!.actor=other;
+    else record.request.deviceCompletion!.actor=other;
+    h.data.set(leasePaths(h.request.host.directory,h.id).record,JSON.stringify(record));
+    const r=startupDiscoveryFixture(h,undefined);
+    try{
+      r.start();await waitForCompletion(()=>r.counts.locations>0);
+      assert.ok(r.counts.recordReads>0);assert.equal(r.counts.noteReads,0);assert.equal(r.counts.completions,0);
+      assert.equal(r.counts.writeAttempts,0);assert.equal(r.commands.some(command=>command.kind==='commit-final'),false);
+      assert.equal(h.record().state?.finalSaved,undefined);assert.deepEqual(h.record(),record);assert.deepEqual(r.errors,[]);
+    }finally{r.manager.dispose();}
+  }
+});
+
+test('startup discovery still requires a current note location for an unprepared permanent grant',async()=>{
+  const h=await fixture();await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+  const record=structuredClone(h.record()),r=startupDiscoveryFixture(h,undefined);
+  assert.ok(record.finalWriter);assert.equal(record.preparedFinal,undefined);
+  try{
+    r.start();await waitForCompletion(()=>r.counts.locations>0);
+    assert.equal(r.counts.noteReads,0);assert.equal(r.counts.completions,0);assert.equal(r.counts.writeAttempts,0);
+    assert.equal(r.commands.some(command=>command.kind==='commit-final'),false);assert.deepEqual(h.record(),record);
+    assert.equal(h.local.size,0);assert.equal(h.writes(),0);assert.deepEqual(r.errors,[]);
+  }finally{r.manager.dispose();}
+});
+
+test('reload uses the durable local renamed path when the host still reports a missing old path',async()=>{
+  const h=await fixture(),path='Jobs/Settled/Note.md',docs=new Map([[path,h.original]]),adopted:string[]=[];
+  await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+  const notes={read:async(path:string)=>docs.get(path),compareAndSet:async(path:string,before:string,after:string)=>{if(docs.get(path)!==before)return false;docs.set(path,after);return true;}};
+  const completion=new DeviceResponseCompletion(h.actor,h.store,notes,()=>{}),lease=h.record();lease.state={...lease.state!,notePath:path};
+  const proof=await completion.complete(lease,h.original,undefined,async proof=>{assert.equal((await h.client().command({kind:'prepare-final',jobId:h.id,token:h.record().finalWriter!.token,proof})).ok,true);});assert.ok(proof);
+  assert.equal(h.record().state?.notePath??h.record().request.notePath,'Note.md');assert.equal(h.local.get(h.id)?.notePath,path);
+  const reloaded=new DeviceResponseCompletion(h.actor,h.store,{...notes,compareAndSet:async()=>{throw Error('Verified replay must not write');}},path=>adopted.push(path));
+  assert.deepEqual(await reloaded.complete(h.record()),proof);assert.deepEqual(adopted,[path]);
 });
 
 test('acknowledged device completion retires its full journal atomically and duplicate completion never writes',async()=>{
@@ -157,4 +367,85 @@ test('completion storage failure happens before note mutation and malformed or s
   await assert.rejects(completion.complete(h.record(),h.original),/Device disk full/);assert.equal(h.writes(),0);
   const stopped=await fixture();await stopped.client(stopped.instance).command({kind:'stop',jobId:stopped.id});
   assert.equal((await stopped.client().command({kind:'reserve-final',jobId:stopped.id,final:stopped.final})).ok,false);
+});
+
+test('an EOF edit during preparation is retried only after durable no-write evidence and host fencing',async()=>{
+  const h=await fixture(),addition='Ordinary text added during a save!';assert.equal(addition.length,34);
+  await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});let prepareCalls=0,abortCalls=0;
+  const notes={...h.notes,compareAndSetAttempt:async(path:string,before:string,after:string):Promise<FinalWriteOutcome>=>{
+    assert.equal(h.local.get(h.id)!.attempt!.writeState,'writing','write intent must be durable before CAS');
+    return {status:await h.notes.compareAndSet(path,before,after)?'verified':'no-write'};
+  }};
+  const prepare=async(proof:any)=>{assert.equal((await h.client().command({kind:'prepare-final',jobId:h.id,token:h.record().finalWriter!.token,proof})).ok,true);if(++prepareCalls===1)h.edit(h.document()+addition);};
+  const abort=async(_proof:any,evidence:FinalAttemptAbort)=>{abortCalls++;assert.equal(h.local.get(h.id)!.attempt!.superseding,true);assert.equal(evidence.writeState,'no-write');assert.equal((await h.client().command({kind:'abort-final',jobId:h.id,token:h.record().finalWriter!.token,abort:evidence})).ok,true);};
+  const first=new DeviceResponseCompletion(h.actor,h.store,notes,()=>{});
+  assert.equal(await first.complete(h.record(),h.original,undefined,prepare,abort),undefined);
+  const pending=structuredClone(h.local.get(h.id)!);assert.equal(pending.attempt!.writeState,'no-write');assert.equal(h.writes(),0);
+  const oldProofPath=nativeCommitPath(h.request.host.directory,h.id,pending.attempt!.id),oldProofBytes=h.data.get(oldProofPath)!;assert.ok(oldProofBytes);
+  const reloaded=new DeviceResponseCompletion(h.actor,h.store,notes,()=>{});reloaded.restorePending(pending);
+  const proof=await reloaded.complete(h.record(),undefined,undefined,prepare,abort);assert.ok(proof);assert.equal(abortCalls,1);assert.equal(h.writes(),1);
+  assert.ok(h.document().endsWith(addition));assert.ok(h.document().includes(h.final.body));assert.equal(h.record().finalWriter!.actor,h.actor);
+  assert.equal(h.local.get(h.id)!.supersededAttempts!.length,1);
+  assert.equal(h.data.get(oldProofPath),oldProofBytes,'supersession retains the exact old proof');const oldProof=JSON.parse(oldProofBytes);
+  assert.equal((await h.client().command({kind:'prepare-final',jobId:h.id,token:h.record().finalWriter!.token,proof:oldProof})).ok,false);
+});
+
+test('a lost abort acknowledgement preserves the old attempt across repeated reloads',async()=>{
+  const h=await fixture();await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});let prepared=false,lost=true;
+  const notes={...h.notes,compareAndSetAttempt:async(path:string,before:string,after:string):Promise<FinalWriteOutcome>=>({status:await h.notes.compareAndSet(path,before,after)?'verified':'no-write'})};
+  const prepare=async(proof:any)=>{assert.equal((await h.client().command({kind:'prepare-final',jobId:h.id,token:h.record().finalWriter!.token,proof})).ok,true);if(!prepared){prepared=true;h.edit(h.document()+'Outside edit');}};
+  const abort=async(_proof:any,evidence:FinalAttemptAbort)=>{assert.equal((await h.client().command({kind:'abort-final',jobId:h.id,token:h.record().finalWriter!.token,abort:evidence})).ok,true);if(lost){lost=false;throw Error('Lost abort acknowledgement');}};
+  let completion=new DeviceResponseCompletion(h.actor,h.store,notes,()=>{});await completion.complete(h.record(),h.original,undefined,prepare,abort);
+  const old=structuredClone(h.local.get(h.id)!.attempt!);completion=new DeviceResponseCompletion(h.actor,h.store,notes,()=>{});
+  await assert.rejects(completion.complete(h.record(),undefined,undefined,prepare,abort),/Lost abort/);
+  assert.equal(h.local.get(h.id)!.attempt!.id,old.id);assert.equal(h.local.get(h.id)!.attempt!.hash,old.hash);assert.equal(h.writes(),0);
+  completion=new DeviceResponseCompletion(h.actor,h.store,notes,()=>{});assert.ok(await completion.complete(h.record(),undefined,undefined,prepare,abort));
+  assert.equal(h.writes(),1);assert.ok(h.document().includes('Outside edit'));
+});
+
+test('ambiguous legacy attempts require an explicit current-note review and retain old proof identity',async()=>{
+  const h=await fixture();await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});h.allow(false);
+  const prepare=async(proof:any)=>{assert.equal((await h.client().command({kind:'prepare-final',jobId:h.id,token:h.record().finalWriter!.token,proof})).ok,true);};
+  let aborts=0;const abort=async(_proof:any,evidence:FinalAttemptAbort)=>{aborts++;assert.equal(evidence.writeState,'reviewed-conflict');assert.equal((await h.client().command({kind:'abort-final',jobId:h.id,token:h.record().finalWriter!.token,abort:evidence})).ok,true);};
+  const completion=new DeviceResponseCompletion(h.actor,h.store,h.notes,()=>{});await completion.complete(h.record(),h.original,undefined,prepare);
+  const old=h.local.get(h.id)!.attempt!;delete old.writeState;h.allow(true);h.edit(h.document()+'Later ordinary edit');
+  assert.equal(await completion.complete(h.record(),undefined,undefined,prepare,abort),undefined);assert.equal(aborts,0);assert.equal(h.local.get(h.id)!.status,'conflict');
+  const candidate=await completion.recoveryCandidate(h.id);assert.ok(candidate);
+  await assert.rejects(completion.reviewRecovery(h.id,'0'.repeat(64),abort),/reviewed note changed/);assert.equal(aborts,0);
+  await completion.reviewRecovery(h.id,candidate.currentHash,abort);assert.equal(aborts,1);
+  const proof=await completion.complete(h.record(),undefined,undefined,prepare,abort);assert.ok(proof);assert.equal(h.writes(),1);assert.ok(h.document().includes('Later ordinary edit'));assert.ok(h.document().includes(h.final.body));
+  assert.equal(h.local.get(h.id)!.supersededAttempts![0].id,old.id);assert.equal(h.local.get(h.id)!.supersededAttempts![0].writeState,'reviewed-conflict');
+});
+
+test('unfinished journals remain discoverable after reload without being adopted as verified saves',async()=>{
+  const h=await fixture(),storage=deviceCompletionStore(h.actor,h.request.vaultId);await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});h.allow(false);
+  const completion=new DeviceResponseCompletion(h.actor,storage.store,h.notes,()=>{throw Error('Unverified completion must not be adopted');});
+  assert.equal(await completion.complete(h.record(),h.original),undefined);assert.deepEqual(await storage.restore(),[]);
+  let restored=await storage.restorePending();assert.equal(restored.records.length,1);completion.restorePending(restored.records[0]);assert.equal(restored.records[0].status,'commit-pending');
+  h.edit(h.document()+'Outside edit');assert.equal(await completion.complete(h.record()),undefined);
+  restored=await storage.restorePending();assert.equal(restored.records[0].status,'conflict');assert.equal((await storage.candidates(0)).records[0].id,h.id);
+  assert.deepEqual((await storage.restorePending(1)).records,[]);assert.equal(h.writes(),0);
+});
+
+test('no-write recovery does not recreate a deleted or damaged response anchor',async()=>{
+  const h=await fixture();await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+  const notes={...h.notes,compareAndSetAttempt:async():Promise<FinalWriteOutcome>=>({status:'no-write'})};
+  const completion=new DeviceResponseCompletion(h.actor,h.store,notes,()=>{});await completion.complete(h.record(),h.original);
+  const body=h.local.get(h.id)!.finalBody;h.edit(h.original.replace(responseAnchor(h.id),'User deleted the response'));let aborts=0;
+  assert.equal(await completion.complete(h.record(),undefined,undefined,undefined,async()=>{aborts++;}),undefined);
+  assert.equal(aborts,0);assert.equal(h.writes(),0);assert.equal(h.local.get(h.id)!.finalBody,body);assert.equal(await completion.previewRecovery(h.id),undefined);
+});
+
+test('completion polling uses atomic body-free phase metadata and migrates a legacy journal once',async()=>{
+  let now=Date.UTC(2026,9,9,23,59);const h=await fixture(),storage=deviceCompletionStore(h.actor,h.request.vaultId,()=>now);await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});h.allow(false);
+  const completion=new DeviceResponseCompletion(h.actor,storage.store,h.notes,()=>{});await completion.complete(h.record(),h.original);
+  const key=`response-completion:${h.actor}:${h.request.vaultId}:`,get=IDBObjectStore.prototype.get;let bodyReads=0;
+  IDBObjectStore.prototype.get=function(query){if(query===key+h.id)bodyReads++;return get.call(this,query);};
+  try{
+    const metadata=(await storage.candidates(0)).records[0];assert.equal(metadata.status,'commit-pending');assert.equal(metadata.attemptPhase,'unknown');assert.equal('finalBody' in metadata,false);assert.equal('original' in metadata,false);assert.equal('token' in metadata,false);await storage.candidates(0);assert.equal(bodyReads,0);
+    now+=2*24*60*60*1000;await storage.pruneProofs();assert.equal((await storage.candidates(0)).records[0].id,h.id,'unfinished work survives midnight and completed-proof pruning');assert.equal(bodyReads,0);
+    await deviceState(key+'phase-index',{});await storage.candidates(0);assert.ok(bodyReads>0);const migrated=bodyReads;
+    await storage.candidates(0);assert.equal(bodyReads,migrated,'later polls read metadata only');
+    assert.equal((await storage.restorePending()).records[0].finalBody,h.final.body);
+  }finally{IDBObjectStore.prototype.get=get;}
 });

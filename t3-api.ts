@@ -1,10 +1,27 @@
 import {connectT3Rpc,type T3Api,type SocketFactory} from './t3-rpc';
 import {normalizeV2Snapshot,v2Command} from './orchestration-v2';
 
+export interface T3RequestOptions {signal?:AbortSignal}
+export type AbortableT3Api=(path:string,payload?:any,options?:T3RequestOptions)=>Promise<any>;
+
+export function cancelledRequest(message='Request cancelled.'):Error{return typeof DOMException==='function'?new DOMException(message,'AbortError'):Object.assign(Error(message),{name:'AbortError'});}
+export function requestAborted(signal?:AbortSignal){if(signal?.aborted)throw signal.reason??cancelledRequest();}
+/** Cancellation of a read never authorizes another mutation. */
+export function abortableRead<T>(work:Promise<T>,signal?:AbortSignal):Promise<T>{
+  if(!signal)return work;
+  return new Promise((resolve,reject)=>{
+    const cancel=()=>{cleanup();reject(signal.reason??cancelledRequest());};
+    const cleanup=()=>signal.removeEventListener('abort',cancel);
+    work.then(value=>{cleanup();signal.aborted?cancel():resolve(value);},error=>{cleanup();reject(error);});
+    if(signal.aborted)cancel();else signal.addEventListener('abort',cancel,{once:true});
+  });
+}
+
 /** All wire mutations use v2 RPC (projects have their own HTTP API). The old
  * path is an internal routing key for durable plugin commands, never sent. */
-export function t3Api(raw:T3Api,origin:string,makeSocket?:SocketFactory):T3Api {
+export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory):AbortableT3Api {
   const outputs=new Map<string,any>();
+  const outputSizes=new Map<string,number>();let outputCharacters=0;
   const senderTitles=new Map<string,string|undefined>();let senderRefresh=-Infinity;
   const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
   async function senderMessages(snapshot:any){
@@ -33,21 +50,26 @@ export function t3Api(raw:T3Api,origin:string,makeSocket?:SocketFactory):T3Api {
     if(!snapshot?.projection)return snapshot;
     const messages=await senderMessages(snapshot);
     const items=snapshot.projection.turnItems??[],needed=items.filter((i:any)=>i.outputOmitted===true).slice(-40);
-    let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
+    const hydrated=new Map<string,any>();let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
     try{
       for(const item of needed){
         const key=JSON.stringify([snapshot.projection.thread.id,item.id,item.updatedAt]);
-        if(outputs.has(key))continue;
+        if(outputs.has(key)){hydrated.set(key,outputs.get(key));continue;}
         rpc??=await connectT3Rpc(raw,origin,makeSocket);
         const result=await rpc.call('orchestration.getTurnItem',{threadId:snapshot.projection.thread.id,itemId:item.id,revision:item.updatedAt});
-        if(result?.item?.id===item.id&&result.item.updatedAt===item.updatedAt)outputs.set(key,result.item);
+        if(result?.item?.id===item.id&&result.item.updatedAt===item.updatedAt){
+          hydrated.set(key,result.item);const characters=JSON.stringify(result.item).length;
+          if(characters<=2_000_000){outputCharacters+=characters-(outputSizes.get(key)??0);outputs.set(key,result.item);outputSizes.set(key,characters);}
+        }
       }
     }catch{/* A missing tool detail must not block canonical reply recovery. */}
     finally{rpc?.close();}
-    while(outputs.size>256)outputs.delete(outputs.keys().next().value!);
-    return {...snapshot,projection:{...snapshot.projection,messages,turnItems:items.map((i:any)=>outputs.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??i)}};
+    while(outputs.size>256||outputCharacters>2_000_000){const key=outputs.keys().next().value!;outputs.delete(key);outputCharacters-=outputSizes.get(key)??0;outputSizes.delete(key);}
+    return {...snapshot,projection:{...snapshot.projection,messages,turnItems:items.map((i:any)=>hydrated.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??outputs.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??i)}};
   }
-  return async(path,payload)=>{
+  return async(path,payload,options)=>{
+    requestAborted(options?.signal);
+    const request:T3Api=(target,body)=>raw(target,body,options);
     if(path==='/api/orchestration/dispatch'){
       const {__legacyV1,...saved}=payload;
       let command=v2Command(saved);
@@ -96,7 +118,17 @@ export function t3Api(raw:T3Api,origin:string,makeSocket?:SocketFactory):T3Api {
     // turnLimit/reasoningMessages were v1 query options. V2 full reads are
     // authoritative; bounded/history endpoints use opaque v2 paging cursors.
     if(/^\/api\/orchestration\/threads\/[^/?]+(?:\?|$)/.test(path)){
-      const root=path.split('?')[0],query=new URLSearchParams(path.split('?')[1]),importOnly=query.get('importRuns')==='true',importRunId=query.get('importRunId'),snapshot=await raw(root+'/bounded'+(importOnly||importRunId?'?compactTurnItems=1':''),payload);
+      const root=path.split('?')[0],query=new URLSearchParams(path.split('?')[1]),controlOnly=query.get('controlOnly')==='true',importOnly=query.get('importRuns')==='true',importRunId=query.get('importRunId'),snapshot=await request(root+'/bounded'+(controlOnly||importOnly||importRunId?'?compactTurnItems=1':''),payload);
+      requestAborted(options?.signal);
+      if(controlOnly){
+        if(!snapshot?.projection)return normalizeV2Snapshot(snapshot);
+        const p=snapshot.projection,controls=[...new Map([...p.turnItems??[],...p.visibleTurnItems?.filter((row:any)=>row.sourceThreadId===p.thread.id).map((row:any)=>row.item)??[]].filter((item:any)=>['approval_request','user_input_request'].includes(item.type)).map((item:any)=>[item.id,item])).values()];
+        const normalized=normalizeV2Snapshot({...snapshot,projection:{...p,messages:[],turnItems:controls}});
+        const pending=(p.runtimeRequests??[]).filter((item:any)=>item.status==='pending'&&item.responseCapability?.type!=='not_resumable');
+        normalized.thread.hasPendingUserInput||=pending.some((item:any)=>['user_input','user-input'].includes(item.kind));
+        normalized.thread.hasPendingApprovals||=pending.some((item:any)=>!['user_input','user-input'].includes(item.kind));
+        return normalized;
+      }
       if(!snapshot?.projection||path.includes('turnLimit=')&&!importRunId)return normalizeV2Snapshot(importOnly?snapshot:await hydrate(snapshot));
       // Full recovery follows opaque cursors rather than asking for one
       // unbounded HTTP body. Keep the initial control-plane watermark so live
@@ -119,6 +151,6 @@ export function t3Api(raw:T3Api,origin:string,makeSocket?:SocketFactory):T3Api {
       const recovered={...snapshot,hasMoreHistory:false,projection:{...p,turnItems:[...items.values()].sort((a,b)=>a.ordinal-b.ordinal),messages:[...messages.values()].sort((a,b)=>(a.createdAt??'').localeCompare(b.createdAt??''))}};
       return normalizeV2Snapshot(importOnly?recovered:await hydrate(recovered));
     }
-    return normalizeV2Snapshot(await raw(path,payload));
+    return normalizeV2Snapshot(await request(path,payload));
   };
 }

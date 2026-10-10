@@ -7,6 +7,7 @@ import type {App,Editor,MarkdownView} from 'obsidian';
 import {replaceInlineEditorText} from './inline-editor';
 import {ResponseNoteLocator} from './response-location';
 import {responseAnchor,responseRegion} from './native-response-projection';
+import type {FinalWriteOutcome} from './completion-attempt';
 
 const locators=new WeakMap<App,ResponseNoteLocator>();
 const missingNote=(error:unknown)=>!!error&&typeof error==='object'&&('code' in error&&error.code==='ENOENT'||'message' in error&&typeof error.message==='string'&&error.message.startsWith('ENOENT:'));
@@ -97,32 +98,65 @@ export function deviceFinalNoteIO(app:App,allowed:()=>boolean){
   const io=deviceNoteIO(app),manager=nativeResponses(app);
   const observed=new Map<string,{file:unknown;disk:string;current:string}>();
   const recovered=new Map<string,{file:unknown;expected:string}>();
+  const acquire=async(path:string,review=false)=>manager.beginFinalSave(path,review);
+  const compareAndSetAttempt=async(path:string,before:string,after:string,_attemptId:string):Promise<FinalWriteOutcome>=>{
+    let release:(()=>void)|undefined,prepared=false,written=false,ioStarted=false;
+    const changed=Error('The local note changed before final save.');
+    try{
+      release=await acquire(path);
+      const file=app.vault.getFileByPath(path);if(!file||!allowed())return {status:'no-write'};
+      const same=()=>allowed()&&file.path===path&&app.vault.getFileByPath(path)===file&&manager.finalSaveReady(path)&&manager.savedViews(path).every(view=>view.saved()===before);
+      const snapshot=observed.get(path);
+      if(!snapshot||snapshot.file!==file||snapshot.current!==before||!same()||await app.vault.read(file)!==snapshot.disk||!same())return {status:'no-write'};
+      const ids=[...before.matchAll(/<!-- t3-(?:inline|response):start:([0-9a-f-]{36}) -->/g)].map(match=>match[1]).filter(id=>responseRegion(before,id)&&!responseRegion(after,id));
+      // Preparing several panes can fail after an earlier pane installed its
+      // intent. Cancel every pane even when that operation does not return.
+      prepared=true;manager.prepare(path,before,after,ids);
+      ioStarted=true;await app.vault.process(file,current=>{if(!same()||current!==snapshot.disk)throw changed;return after;});written=true;
+      const disk=await app.vault.read(file);
+      if(!allowed()||file.path!==path||app.vault.getFileByPath(path)!==file||disk!==after||!manager.finalSaveReady(path))return {status:'written-unverified'};
+      manager.committed(path,disk,ids);return {status:'verified'};
+    }catch(error){
+      if(error===changed)return {status:'no-write'};
+      logFailure('response.device-completion.final-save',error,{notePath:path});
+      return {status:written?'written-unverified':ioStarted?'unknown':'no-write'};
+    }finally{if(prepared)manager.cancel(path);release?.();}
+  };
   return {
+    reviewRead:async(path:string)=>{
+      const release=await acquire(path,true);try{
+        const file=app.vault.getFileByPath(path);if(!file||!allowed())return;
+        const disk=await app.vault.read(file);if(!allowed()||file.path!==path||app.vault.getFileByPath(path)!==file||!manager.finalSaveReady(path))return;
+        return manager.reviewSaved(path,disk);
+      }finally{release();}
+    },
+    resumeReviewed:async(path:string,currentHash:string)=>{
+      const release=await acquire(path,true);try{
+        const file=app.vault.getFileByPath(path);if(!file||!allowed())throw Error('The reviewed note is unavailable.');
+        const disk=await app.vault.read(file),current=manager.reviewSaved(path,disk);
+        if(!allowed()||file.path!==path||app.vault.getFileByPath(path)!==file||!manager.finalSaveReady(path)||current===undefined||contentHash(current)!==currentHash)throw Error('The reviewed note changed before completion recovery.');
+        manager.resumeReviewed(path,disk,current);
+      }finally{release();}
+    },
     recover:async(path:string,expected:string,ids:string[])=>{
+      const release=await acquire(path,true);try{
       const file=app.vault.getFileByPath(path);if(!file||!allowed())return;
-      if(await app.vault.read(file)!==expected||!allowed()||file.path!==path||app.vault.getFileByPath(path)!==file)return;
+      if(await app.vault.read(file)!==expected||!allowed()||file.path!==path||app.vault.getFileByPath(path)!==file||!manager.finalSaveReady(path))return;
       recovered.set(path,{file,expected});
       try{manager.committed(path,expected,ids);}catch(error){logFailure('response.device-completion.pane-recovery',error,{notePath:path});}
+      }finally{release();}
     },
     read:async(path:string)=>{
+      observed.delete(path);const release=await acquire(path);
+      try{
       const file=app.vault.getFileByPath(path);if(!file||!allowed())return;
-      const disk=await app.vault.read(file);if(!allowed()||file.path!==path||app.vault.getFileByPath(path)!==file)return;
+      const disk=await app.vault.read(file);if(!allowed()||file.path!==path||app.vault.getFileByPath(path)!==file||!manager.finalSaveReady(path))return;
       const own=recovered.get(path);if(own?.file===file&&own.expected===disk)return disk;
       for(const {view} of manager.savedViews(path))manager.view(view)?.reconcileDisk(disk);
-      const current=await io.readNote(path);if(current!==undefined)observed.set(path,{file,disk,current});return current;
+      const current=await io.readNote(path);if(!manager.finalSaveReady(path))return;if(current!==undefined)observed.set(path,{file,disk,current});return current;
+      }finally{release();}
     },
-    compareAndSet:async(path:string,before:string,after:string)=>{
-      const file=app.vault.getFileByPath(path);if(!file||!allowed())return false;
-      const same=()=>allowed()&&file.path===path&&app.vault.getFileByPath(path)===file&&manager.savedViews(path).every(view=>view.saved()===before);
-      const snapshot=observed.get(path);
-      if(!snapshot||snapshot.file!==file||snapshot.current!==before||!same()||await app.vault.read(file)!==snapshot.disk||!same())return false;
-      const ids=[...before.matchAll(/<!-- t3-(?:inline|response):start:([0-9a-f-]{36}) -->/g)].map(match=>match[1]).filter(id=>responseRegion(before,id)&&!responseRegion(after,id));
-      manager.prepare(path,before,after,ids);
-      try{
-        await app.vault.process(file,current=>{if(!same()||current!==snapshot.disk)throw Error('The local note changed before final save.');return after;});
-        const disk=await app.vault.read(file);if(!allowed()||disk!==after)return false;
-        manager.committed(path,disk,ids);return true;
-      }finally{manager.cancel(path);}
-    },
+    compareAndSetAttempt,
+    compareAndSet:async(path:string,before:string,after:string)=>(await compareAndSetAttempt(path,before,after,'legacy')).status==='verified',
   };
 }

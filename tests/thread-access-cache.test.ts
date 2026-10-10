@@ -49,19 +49,36 @@ test('a late rejection from the old credential cannot revoke the replacement',as
 });
 
 for(const timeout of [false,true])test(`stopping a borrowed response ${timeout?'at its deadline':'successfully'} keeps every other reader authorized`,async()=>{
-  let closes=0,creates=0;const commands:any[]=[],releases:string[]=[];
+  let closes=0,creates=0,canonicalReads=0;const commands:any[]=[],releases:string[]=[];
   const cache=new ThreadAccessCache(async()=>{
     creates++;return {origin:'https://test',api:async(_path,payload)=>{
       if(payload){commands.push(payload);if(timeout)return new Promise(()=>{});return {};}
-      assert.equal(closes,0,'the shared session is still valid');return {progress:'Other response still streams'};
+      assert.equal(closes,0,'the shared session is still valid');
+      if(_path.startsWith('/api/orchestration/threads/stopped-thread?')){canonicalReads++;return {thread:{id:'stopped-thread',messages:[],activities:[],latestTurn:{turnId:'turn',state:'running'},session:{status:'running',activeTurnId:'turn'}}};}
+      return {progress:'Other response still streams'};
     },close:()=>{closes++;},trace:(event,reason)=>{if(event==='borrow-released')releases.push(reason!);}};
   });
   try{
     const work=interruptStoppedResponse(()=>cache.get('env'),randomUUID(),'stopped-thread','turn',5);
     if(timeout)await assert.rejects(work,/did not acknowledge/);else await work;
-    assert.equal(commands.length,1);assert.equal(commands[0].type,'thread.turn.interrupt');
+    assert.equal(canonicalReads,1);assert.equal(commands.length,1);assert.equal(commands[0].type,'thread.turn.interrupt');assert.equal(commands[0].turnId,'turn');
     assert.deepEqual(await (await cache.get('env')).api(path),{progress:'Other response still streams'});
     assert.equal(creates,1);assert.equal(closes,0);assert.deepEqual(releases,[timeout?'stop-timeout':'stop-complete']);
+  }finally{await cache.dispose();assert.equal(closes,1);}
+});
+
+test('a borrowed Stop checks the completed original turn without interrupting a newer run or closing shared access',async()=>{
+  let closes=0,canonicalReads=0;const commands:any[]=[],releases:string[]=[];
+  const cache=new ThreadAccessCache(async()=>({origin:'https://test',api:async(readPath,payload)=>{
+    if(payload){commands.push(payload);return {};}
+    assert.equal(closes,0);
+    if(readPath.startsWith('/api/orchestration/threads/stopped-thread?')){canonicalReads++;return {thread:{id:'stopped-thread',messages:[],activities:[],latestTurn:{turnId:'newer-turn',state:'running'},session:{status:'running',activeTurnId:'newer-turn'},checkpoints:[{turnId:'completed-turn',status:'ready',checkpointRef:'refs/t3/checkpoints/stopped-thread/turn/1',completedAt:'2026-10-10T00:00:00Z'}]}};}
+    return {progress:'Other response still streams'};
+  },close:()=>{closes++;},trace:(event,reason)=>{if(event==='borrow-released')releases.push(reason!);}}));
+  try{
+    await interruptStoppedResponse(()=>cache.get('env'),randomUUID(),'stopped-thread','completed-turn',1000);
+    assert.equal(canonicalReads,1);assert.equal(commands.length,0);assert.equal(closes,0);assert.deepEqual(releases,['stop-complete']);
+    assert.deepEqual(await (await cache.get('env')).api(path),{progress:'Other response still streams'});
   }finally{await cache.dispose();assert.equal(closes,1);}
 });
 

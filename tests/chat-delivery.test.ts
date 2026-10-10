@@ -13,6 +13,8 @@ import {contentHash} from '../completion';
 import {responseAnchor} from '../native-response-projection';
 import {compactImportRecord} from '../run-import';
 import {readImportRecordsPage} from '../import-records';
+import {renderResponseToolGroup} from '../response-tools';
+import {responseStopReceipt} from '../response-stop-receipt';
 
 const project={id:'chat-project',title:'Personal notes',workspaceRoot:'/projects/notes',connectionId:'chat-connection',connectionName:'Laptop'};
 
@@ -177,7 +179,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     module,exports:module.exports,
     require:(name:string)=>{assert.equal(name,'obsidian','Mobile chat must never import Node APIs');return api;},
     window:{localStorage:{get length(){return localStorage.size;},key:(i:number)=>[...localStorage.keys()][i]??null},setInterval,clearInterval,setTimeout,clearTimeout},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
-    fetch:fetcher,WebSocket:Socket,Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,performance,setTimeout,clearTimeout,console,
+    fetch:fetcher,WebSocket:Socket,Headers,Response,AbortController,DOMException,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,performance,setTimeout,clearTimeout,console,
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();const timer=setInterval(()=>plugin.deviceInline?.tick(),20);const unload=plugin.onunload.bind(plugin);plugin.onunload=()=>{clearInterval(timer);unload();};return plugin;};
   const plugin=await start();
@@ -847,6 +849,7 @@ test('stopping a local editor response removes both tracking tags and the Stop m
     const changed=replaceRegion(region.text,id,region.bodyHash,'**T3 · Working**\n\n> Partial answer')!;
     const opened=h.attachEditor(path,'Before'+region.text.slice(0,changed.from)+changed.text+region.text.slice(changed.to)+'After');
     const job={id,path,requestId:id,bodyHash:region.bodyHash,phase:'running',createdAt:new Date().toISOString(),threadId:'old-thread',turnId:'old-turn',messageId:webcrypto.randomUUID(),projectId:project.id,connection:{transport:'direct',host:'direct',url:'https://chat.example',connectionId:'chat-connection',environmentId:'chat-env',executable:''}};
+    h.setThreads([{id:job.threadId,projectId:project.id,title:'Running response',session:{status:'running',activeTurnId:job.turnId},latestTurn:{turnId:job.turnId,state:'running',requestedAt:job.createdAt,messageId:job.messageId},messages:[{id:job.messageId,role:'user',turnId:job.turnId,text:'Original question',streaming:false,createdAt:job.createdAt},{id:'partial',role:'assistant',turnId:job.turnId,text:'Partial answer',streaming:true}],activities:[]}]);
     const manager=(h.plugin as any).inlineChat;
     manager.jobs.push(job);
     const runtime=manager.runtime(job);runtime.sequence=1;
@@ -862,6 +865,20 @@ test('stopping a local editor response removes both tracking tags and the Stop m
     for(let n=0;n<20&&!h.commands.some(command=>command.type==='run.interrupt');n++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.equal(h.commands.filter(command=>command.type==='run.interrupt').length,1);
     assert.equal(h.commands.find(command=>command.type==='run.interrupt').holdQueue,true);
+  }finally{h.plugin.onunload();}
+});
+
+test('a terminal response awaiting final save has no Stop action even when the cursor is inside stale Working text',async()=>{
+  const h=await chatHarness(),id=webcrypto.randomUUID(),path='Notes/Final pending.md',region=initialRegion(id);
+  try{
+    const opened=h.attachEditor(path,'Before'+region.text+'After'),messageId=webcrypto.randomUUID();
+    (h.plugin as any).inlineChat.jobs.push({id,path,requestId:id,bodyHash:region.bodyHash,phase:'running',hosted:true,createdAt:new Date().toISOString()});
+    const record:any={request:{id,messageId},epoch:1,revision:4,state:{status:'running',finalSaved:false},finalWriter:{actor:'device',token:'retained',messageId,turnId:'finished-turn',sequence:8,body:'Full final answer',phase:'complete'}};
+    (h.plugin as any).deviceInline.statuses.set(id,responseStopReceipt(record));
+    assert.equal((h.plugin as any).inlineChat.activeFor(path).length,0);
+    assert.ok(!h.menuFor(opened.view).items.some(item=>item.title.startsWith('Stop T3 response')));
+    opened.editor.getCursor=()=>opened.editor.offsetToPos(opened.value.indexOf('Working'));
+    assert.ok(!h.menuFor(opened.view).items.some(item=>item.title.startsWith('Stop T3 response')));assert.equal(h.commands.length,0);
   }finally{h.plugin.onunload();}
 });
 
@@ -2089,4 +2106,29 @@ test('a real completed writer retains marker-free positional provenance usable b
 test('the real remote vault wrapper exposes transport health to the shared manager',async()=>{
  const h=await chatHarness();
  try{const target=await h.plugin.inlineHostTarget(),opened=await h.plugin.inlineHostFiles(target);try{assert.equal(opened.closed,false);await opened.files.write(`${target.directory}/health-test.json`,'healthy');assert.equal(await opened.files.read(`${target.directory}/health-test.json`),'healthy');}finally{opened.close();}assert.equal(opened.closed,true);}finally{h.plugin.onunload();}
+});
+
+function compactNativeSource(h:Awaited<ReturnType<typeof chatHarness>>,count=1){
+ const tools=renderResponseToolGroup({id:'source-tools',turnId:'source-run',tools:Array.from({length:count},(_,index)=>({id:'source-'+index,turnId:'source-run',key:'source-'+index,status:'completed',label:'Read source output',activeLabel:'Read source output',icon:'file-text',action:'read',sequence:index,output:('Full retained source output '+index+'\n').repeat(900)}))});
+ const canonical='# Source note\n\n'+tools+'\n\nSelected ordinary text\n\nTail',note=h.attachEditor('Notes/Send.md',canonical),view=note.view as any;
+ (note.file as any).stat={ctime:1};Object.assign(view,{getViewData:()=>note.value,setViewData:(text:string)=>note.editor.replaceRange(text,note.editor.offsetToPos(0),note.editor.offsetToPos(note.value.length)),getMode:()=> 'preview',requestSave:()=>{},save:async()=>{}});
+ h.plugin.app.vault.read=async()=>canonical;const manager=h.plugin.nativeConflictRecovery.manager;manager.refresh();assert.ok(note.value.length<1000);assert.ok(manager.view(view));return {...note,view,tools,canonical,manager};
+}
+test('canonical whole-note packaging sends complete tool output rather than editor summaries',async()=>{
+ const h=await chatHarness();try{const note=compactNativeSource(h);h.plugin.settings.inlineStreaming.enabled=false;await h.plugin.sendNote(note.file);
+  const input=h.commands.find(command=>command.type==='thread.turn.start');assert.ok(input);assert.ok(input.message.text.includes(note.tools));assert.ok(input.message.text.startsWith(note.canonical));assert.doesNotMatch(input.message.text,/data-t3-tool-ref=/);
+ }finally{h.plugin.onunload();}
+});
+test('canonical whole-note size limit rejects large compact notes before any dispatch',async()=>{
+ const h=await chatHarness();try{const note=compactNativeSource(h,10);h.plugin.settings.inlineStreaming.enabled=false;assert.ok(note.canonical.length>120000);assert.ok(note.value.length<1000);
+  await assert.rejects(h.plugin.sendNote(note.file),/120,000-character limit/);assert.equal(h.commands.length,0);assert.equal(note.view.getViewData(),note.canonical);
+ }finally{h.plugin.onunload();}
+});
+test('canonical selection context after saved tools retains its display anchor for native insertion',async()=>{
+ const h=await chatHarness();try{const note=compactNativeSource(h),text='Selected ordinary text',from=note.value.indexOf(text);note.editor.getSelection=()=>text;note.editor.getCursor=(side:string)=>note.editor.offsetToPos(side==='from'?from:from+text.length);
+  const context=h.plugin.canonicalChatContext({view:note.view,editor:note.editor,anchor:{text,start:from,end:from+text.length,before:note.value.slice(from-24,from),after:note.value.slice(from+text.length,from+text.length+24)}});
+  assert.equal(context.snapshot,note.canonical);assert.equal(context.anchor.start,from);assert.equal(context.canonicalAnchor.start,note.canonical.indexOf(text));assert.equal(context.canonicalAnchor.text,text);assert.equal(context.referenceSelection,false);
+  const phrase='Open to view tool details.',at=note.value.indexOf(phrase),partial=phrase.slice(0,4),toolContext=h.plugin.canonicalChatContext({view:note.view,editor:note.editor,anchor:{text:partial,start:at,end:at+4,before:note.value.slice(at-24,at),after:note.value.slice(at+4,at+28)}});
+  assert.equal(toolContext.canonicalAnchor.text,note.tools);assert.equal(toolContext.referenceSelection,true);assert.equal(toolContext.anchor.text,partial);assert.doesNotMatch(toolContext.snapshot,/data-t3-tool-ref=/);
+ }finally{h.plugin.onunload();}
 });

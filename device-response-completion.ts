@@ -6,6 +6,7 @@ import {deviceState} from './device-state';
 import {openStateDatabase} from './local-state';
 import {completedSelectionDraft} from './inline-steering';
 import {hostedRequestHash} from './hosted-inline';
+import type {FinalAttemptAbort} from './completion-attempt';
 
 export interface DeviceGeneration extends NoteGeneration {deviceGrant:FinalResponseGrant}
 export interface DeviceCompletionStore {
@@ -16,15 +17,21 @@ export interface DeviceCompletionStore {
   renameRetired?(before:string,after:string):Promise<void>;
 }
 export interface DeviceCompletionReceipt {version:1;id:string;actor:string;vaultId:string;notePath:string;commitId:string;hash:string;token:string;requestHash:string;at:number}
+export interface DeviceCompletionPhase {id:string;host:DeviceGeneration['request']['host'];notePath:string;status:DeviceGeneration['status'];journalRevision:number;attemptPhase?:string;hash?:string;at:number}
 export const COMPLETED_DEVICE_PROOFS=32;
 export const COMPLETED_DEVICE_PROOF_CHARACTERS=8_000_000;
 export const COMPLETED_DEVICE_PROOF_AGE_MS=30*24*60*60*1000;
-export interface DeviceCompletionNoteIO extends GeneratedNoteIO {recover?(path:string,expected:string,ids:string[]):Promise<void>}
+export interface DeviceCompletionNoteIO extends GeneratedNoteIO {
+  recover?(path:string,expected:string,ids:string[]):Promise<void>;
+  reviewRead?(path:string):Promise<string|undefined>;
+  resumeReviewed?(path:string,currentHash:string):Promise<void>;
+}
 
 /** Full private journals use IndexedDB, not Sync or localStorage's small quota.
  * Record and discovery index are committed in the same local transaction. */
 export function deviceCompletionStore(actor:string,vaultId:string,now=()=>Date.now()){
-  const prefix=`response-completion:${actor}:${vaultId}:`,indexKey=prefix+'index';
+  const prefix=`response-completion:${actor}:${vaultId}:`,indexKey=prefix+'index',phaseKey=prefix+'phase-index';
+  const phase=(record:DeviceGeneration):DeviceCompletionPhase=>({id:record.request.id,host:record.request.host,notePath:record.notePath,status:record.status,journalRevision:record.journalRevision??0,attemptPhase:record.attempt?.superseding?'superseding':record.attempt?.writeState??(record.attempt?'unknown':undefined),hash:record.attempt?.hash??record.verified?.hash,at:now()});
   const valid=(record:DeviceGeneration|undefined,id:string)=>{
     if(record&&(record.request.id!==id||record.request.vaultId!==vaultId||record.deviceGrant?.actor!==actor||record.request.deviceCompletion?.actor!==actor))throw Error('Invalid local completion identity.');
     return record;
@@ -37,10 +44,10 @@ export function deviceCompletionStore(actor:string,vaultId:string,now=()=>Date.n
     write:async(id,record)=>{
       valid(record,id);const db=await openStateDatabase();
       try{await new Promise<void>((resolve,reject)=>{
-        const transaction=db.transaction('devices','readwrite'),objects=transaction.objectStore('devices'),previous=objects.get(prefix+id),retired=objects.get(prefix+'retired:'+id),index=objects.get(indexKey);
+        const transaction=db.transaction('devices','readwrite'),objects=transaction.objectStore('devices'),previous=objects.get(prefix+id),retired=objects.get(prefix+'retired:'+id),phases=objects.get(phaseKey),index=objects.get(indexKey);
         index.onsuccess=()=>{
           if(retired.result||(previous.result?.journalRevision??0)!==(record.journalRevision??0)-1){transaction.abort();return;}
-          const ids=new Set<string>(Array.isArray(index.result)?index.result:[]);ids.add(id);objects.put([...ids],indexKey);objects.put(record,prefix+id);
+          const ids=new Set<string>(Array.isArray(index.result)?index.result:[]);ids.add(id);objects.put([...ids],indexKey);objects.put(record,prefix+id);objects.put({...phases.result??{},[id]:phase(record)},phaseKey);
         };
         transaction.oncomplete=()=>resolve();transaction.onabort=transaction.onerror=()=>reject(Error('Cannot save the local response completion.'));
       });}finally{db.close();}
@@ -52,11 +59,12 @@ export function deviceCompletionStore(actor:string,vaultId:string,now=()=>Date.n
       const coordinator=new GeneratedNoteCoordinator({read:async()=>undefined,append:async()=>{throw Error('Read-only materialization');}},{read:async()=>undefined,compareAndSet:async()=>false});
       const proof=coordinator.materialization(record),receipt:DeviceCompletionReceipt={version:1,id,actor,vaultId,notePath:lease.state.notePath,commitId:proof.commitId,hash:proof.hash,token:record.deviceGrant.token,requestHash:hostedRequestHash(record.request),at:now()},characters=JSON.stringify(proof).length;
       const db=await openStateDatabase();try{await new Promise<void>((resolve,reject)=>{
-        const transaction=db.transaction('devices','readwrite'),objects=transaction.objectStore('devices'),previous=objects.get(prefix+id),existing=objects.get(prefix+'retired:'+id),proofIndex=objects.get(prefix+'proof-index'),index=objects.get(indexKey),receipts=objects.get(prefix+'retired-index');
+        const transaction=db.transaction('devices','readwrite'),objects=transaction.objectStore('devices'),previous=objects.get(prefix+id),existing=objects.get(prefix+'retired:'+id),proofIndex=objects.get(prefix+'proof-index'),phases=objects.get(phaseKey),index=objects.get(indexKey),receipts=objects.get(prefix+'retired-index');
         receipts.onsuccess=()=>{
           if(!previous.result&&existing.result?.commitId===receipt.commitId&&existing.result?.hash===receipt.hash&&existing.result?.token===receipt.token)return;
           if(previous.result?.journalRevision!==record.journalRevision){transaction.abort();return;}
           const ids=Array.isArray(index.result)?index.result:[];objects.put(ids.filter((value:string)=>value!==id),indexKey);
+          const nextPhases={...phases.result??{}};delete nextPhases[id];objects.put(nextPhases,phaseKey);
           const retiredIds=new Set<string>(Array.isArray(receipts.result)?receipts.result:[]);retiredIds.add(id);objects.put([...retiredIds],prefix+'retired-index');objects.put(receipt,prefix+'retired:'+id);objects.delete(prefix+id);
           const entries:Array<{id:string;characters:number;at:number}>=Array.isArray(proofIndex.result)?proofIndex.result.filter((entry:any)=>entry.id!==id):[];entries.push({id,characters,at:receipt.at});objects.put(proof,prefix+'proof:'+id);
           let count=entries.reduce((n,entry)=>n+entry.characters,0);
@@ -73,9 +81,21 @@ export function deviceCompletionStore(actor:string,vaultId:string,now=()=>Date.n
     },
   };
   return {store,pruneProofs,candidates:async(offset:number,limit=16)=>{
-    const ids=await deviceState(indexKey) as string[]|undefined,selected=(Array.isArray(ids)?ids:[]).slice(offset,offset+limit),records=[];
-    for(const id of selected){const record=valid(await deviceState(prefix+id),id);if(record?.status==='verified')records.push({id,host:record.request.host});}
+    const ids=await deviceState(indexKey) as string[]|undefined,selected=(Array.isArray(ids)?ids:[]).slice(offset,offset+limit),phases=await deviceState(phaseKey) as Record<string,DeviceCompletionPhase>|undefined,records:DeviceCompletionPhase[]=[],legacy:DeviceGeneration[]=[];
+    for(const id of selected){let metadata=phases?.[id];if(!metadata){const record=valid(await deviceState(prefix+id),id);if(record){metadata=phase(record);legacy.push(record);}}if(metadata&&metadata.status!=='removed')records.push(metadata);}
+    if(legacy.length){const db=await openStateDatabase();try{await new Promise<void>((resolve,reject)=>{
+      const transaction=db.transaction('devices','readwrite'),objects=transaction.objectStore('devices'),current=objects.get(phaseKey),requests=legacy.map(record=>({record,request:objects.get(prefix+record.request.id)}));
+      requests.at(-1)!.request.onsuccess=()=>{const next={...current.result??{}};for(const {record,request} of requests)if(request.result?.journalRevision===record.journalRevision)next[record.request.id]=phase(record);objects.put(next,phaseKey);};
+      transaction.oncomplete=()=>resolve();transaction.onabort=transaction.onerror=()=>reject(Error('Cannot migrate completion phase metadata.'));
+    });}finally{db.close();}}
     return {records,next:offset+limit>=(ids?.length??0)?0:offset+limit};
+  },restorePending:async(offset=0,limit=16)=>{
+    const ids=await deviceState(indexKey) as string[]|undefined,selected=(Array.isArray(ids)?ids:[]).slice(offset,offset+limit),records:DeviceGeneration[]=[];let consumed=0,characters=0;
+    for(const id of selected){const record=valid(await deviceState(prefix+id),id);if(record&&!['verified','removed'].includes(record.status)){
+      const size=JSON.stringify(record).length;if(records.length&&characters+size>COMPLETED_DEVICE_PROOF_CHARACTERS)break;
+      records.push(record);characters+=size;
+    }consumed++;}
+    return {records,next:offset+consumed>=(ids?.length??0)?0:offset+consumed};
   },restoreReceipts:async()=>{
     await pruneProofs();
     const ids=await deviceState(prefix+'retired-index') as string[]|undefined,records=[];
@@ -105,18 +125,23 @@ export class DeviceResponseCompletion {
   constructor(private actor:string,private store:DeviceCompletionStore,private notes:DeviceCompletionNoteIO,private committed:(path:string,proof:NativeCommitProof)=>void,private conflict?:(record:NoteGeneration)=>void,private retired?:(receipt:DeviceCompletionReceipt)=>void){
     const journal:GenerationJournal={
       read:async id=>{const record=await store.read(id);if(record&&(record.deviceGrant.actor!==actor||contentHash(record.original)!==record.request.deviceCompletion?.originalHash))throw Error('A local completion belongs to another device or original.');return record;},
-      append:async(id,record)=>{
+      append:async(id,record,event)=>{
         const previous=await store.read(id),grant=this.grants.get(id)??previous?.deviceGrant;
         if(!grant||grant.actor!==actor||previous&&JSON.stringify(previous.deviceGrant)!==JSON.stringify(grant))throw Error('The local final-write grant changed.');
         if(previous&&(previous.journalRevision??0)!==(record.journalRevision??0))throw Error('The local completion revision changed.');
         record.journalRevision=(previous?.journalRevision??0)+1;
         await store.write(id,{...structuredClone(record),deviceGrant:structuredClone(grant)});
-        if(record.status==='commit-pending'&&record.attempt)await this.preparations.get(id)?.(this.intentProof(record));
+        if(event==='commit-pending'&&record.attempt)await this.preparations.get(id)?.(this.intentProof(record));
       },
     };
     this.coordinator=new GeneratedNoteCoordinator(journal,notes);
   }
   restore(record:DeviceGeneration){this.paths.set(record.request.id,record.notePath);this.committed(record.notePath,this.coordinator.materialization(record));}
+  restorePending(record:DeviceGeneration){
+    if(record.deviceGrant.actor!==this.actor||record.request.deviceCompletion?.actor!==this.actor||contentHash(record.original)!==record.request.deviceCompletion.originalHash)throw Error('A pending completion belongs to another device or original.');
+    if(['verified','removed'].includes(record.status))throw Error('Only unfinished local completions can be resumed.');
+    this.paths.set(record.request.id,record.notePath);this.grants.set(record.request.id,record.deviceGrant);
+  }
   restoreReceipt(record:{receipt:DeviceCompletionReceipt;proof?:NativeCommitProof}){this.paths.set(record.receipt.id,record.receipt.notePath);if(record.proof)this.committed(record.receipt.notePath,record.proof);else this.retired?.(record.receipt);}
   acknowledged(lease:LeaseRecord){return this.store.retire?.(lease)??Promise.resolve();}
   async renamed(before:string,after:string){
@@ -132,7 +157,28 @@ export class DeviceResponseCompletion {
     const attempt=record.attempt!;
     return this.coordinator.materialization({...record,status:'verified',verified:{commitId:attempt.id,hash:attempt.hash,document:attempt.expected}});
   }
-  async complete(lease:LeaseRecord,original?:string,stagedDocument?:string,prepare?:(proof:NativeCommitProof)=>Promise<void>){
+  private abortEvidence(record:NoteGeneration):FinalAttemptAbort{
+    const proof=this.intentProof(record),base={version:1 as const,commitId:proof.commitId,hash:proof.hash,proofHash:contentHash(JSON.stringify(proof)),journalRevision:record.journalRevision!};
+    return record.attempt?.reviewedCurrentHash?{...base,writeState:'reviewed-conflict',reviewedCurrentHash:record.attempt.reviewedCurrentHash}:{...base,writeState:'no-write'};
+  }
+  private async abortAttempt(record:NoteGeneration,abort:(proof:NativeCommitProof,evidence:FinalAttemptAbort)=>Promise<void>){
+    const evidence=this.abortEvidence(record);await abort(this.intentProof(record),evidence);
+    if(evidence.writeState==='reviewed-conflict')await this.notes.resumeReviewed?.(record.notePath,evidence.reviewedCurrentHash);
+  }
+  async recoveryCandidate(id:string){
+    const record=await this.store.read(id);if(!record||record.deviceGrant.actor!==this.actor)return;
+    if(record.request.deviceCompletion?.actor!==this.actor||contentHash(record.original)!==record.request.deviceCompletion.originalHash)throw Error('The completion original changed.');
+    const latest=await (this.notes.reviewRead??this.notes.read.bind(this.notes))(record.notePath);if(latest===undefined)return;
+    const candidate=this.coordinator.recoveryCandidate(record,latest);return candidate&&{id,notePath:record.notePath,...candidate};
+  }
+  previewRecovery(id:string){return this.recoveryCandidate(id);}
+  async reviewRecovery(id:string,currentHash:string,abort:(proof:NativeCommitProof,evidence:FinalAttemptAbort)=>Promise<void>){
+    if(!/^[0-9a-f]{64}$/.test(currentHash))throw Error('Invalid reviewed note hash.');
+    const record=await this.store.read(id);if(!record||record.deviceGrant.actor!==this.actor)throw Error('This device does not own the pending final save.');
+    this.restorePending(record);
+    return this.coordinator.supersedeAttempt(id,record=>this.abortAttempt(record,abort),currentHash,this.notes.reviewRead);
+  }
+  async complete(lease:LeaseRecord,original?:string,stagedDocument?:string,prepare?:(proof:NativeCommitProof)=>Promise<void>,abort?:(proof:NativeCommitProof,evidence:FinalAttemptAbort)=>Promise<void>){
     const request=lease.request,grant=lease.finalWriter;
     if(!request.deviceCompletion||!grant||grant.actor!==this.actor||request.deviceCompletion.actor!==this.actor)throw Error('This device does not own the final response write.');
     const retired=await this.store.retired?.(request.id);
@@ -142,7 +188,7 @@ export class DeviceResponseCompletion {
     let record=await this.store.read(request.id);
     if(record&&JSON.stringify(record.deviceGrant)!==JSON.stringify(grant))throw Error('The saved final-write grant changed.');
     if(!record){if(original===undefined||contentHash(original)!==request.deviceCompletion.originalHash)throw Error('The private completion original changed.');record=await this.coordinator.accept(request,original) as DeviceGeneration;}
-    const reportedPath=lease.state?.notePath??request.notePath,knownPath=this.paths.get(request.id);
+    const reportedPath=lease.state?.notePath??request.notePath,knownPath=this.paths.get(request.id)??record.notePath;
     const path=knownPath&&knownPath!==reportedPath&&await this.notes.read(reportedPath)===undefined?knownPath:reportedPath;
     this.paths.set(request.id,path);
     if(record.notePath!==path)record=await this.coordinator.renamed(request.id,record.notePath,path) as DeviceGeneration;
@@ -153,7 +199,8 @@ export class DeviceResponseCompletion {
       const draft=completedSelectionDraft(staged?stagedDocument!:record.original,request.id,lease.state?.steering);
       await this.coordinator.result(request.id,draft,grant.body);
     }
-    const pending=await this.store.read(request.id);
+    let pending=await this.store.read(request.id);
+    if(pending?.attempt&&abort){await this.coordinator.supersedeAttempt(request.id,record=>this.abortAttempt(record,abort),undefined,pending.attempt.reviewedCurrentHash?this.notes.reviewRead:undefined);pending=await this.store.read(request.id);}
     if(pending?.status==='commit-pending'&&pending.attempt){await prepare?.(this.intentProof(pending));await this.notes.recover?.(path,pending.attempt.expected,[request.id]);}
     if(pending?.status==='conflict')await this.coordinator.recheckSeparatedConflict(request.id);
     const result=await this.coordinator.commit(request.id);

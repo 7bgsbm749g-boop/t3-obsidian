@@ -27,7 +27,7 @@ def main():
     parser.add_argument('--timeout', type=float, default=90)
     parser.add_argument('--retry', action='store_true', help='Retry a failed result with the original prepared send')
     parser.add_argument('--ssh-host', help='Private Windows SSH alias, for read-only send-failure-log from the VPS')
-    parser.add_argument('kind', choices=['client-status', 'send-failure-log', 'reload-client', 'resolve-response-location', 'response-status', 'response-import-info', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response', 'send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination', 'subscribe-job', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
+    parser.add_argument('kind', choices=['client-status', 'send-failure-log', 'reload-client', 'response-recovery-info', 'retry-response-save', 'resolve-response-location', 'response-status', 'response-import-info', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response', 'send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination', 'subscribe-job', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
     parser.add_argument('--since', help='Read failure log entries at or after this UTC timestamp')
     parser.add_argument('--release-version', help='Exact immutable release for reload-client')
     parser.add_argument('--runtime-hashes', help='JSON object of exact release runtime SHA-256 hashes')
@@ -114,7 +114,7 @@ def main():
                 parser.error('--runtime-hashes must be valid JSON.')
         elif args.release_version or args.runtime_hashes:
             parser.error('Read-only client commands do not reload the client.')
-    elif args.kind in ['resolve-response-location', 'response-status', 'response-import-info', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response']:
+    elif args.kind in ['response-recovery-info', 'retry-response-save', 'resolve-response-location', 'response-status', 'response-import-info', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response']:
         if not args.binding_id or args.note or args.destination:
             parser.error('Response commands require --binding-id and do not take note destinations.')
         command = dict(version=1, id=command_id, kind=args.kind, bindingId=args.binding_id)

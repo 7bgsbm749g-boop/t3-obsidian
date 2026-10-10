@@ -1,7 +1,8 @@
 import type {ResolvedJobOptions} from './job-options';
 import type {NoteCommand} from './note-command';
 import {logEvent,logFailure} from './diagnostics';
-import {readDirect,sendDirect,type PairedSession,type DirectPlan} from './direct';
+import {readDirect,sendDirect,type PairedSession,type DirectPlan,type DirectReadOptions} from './direct';
+import {abortableRead,requestAborted} from './t3-api';
 import type { ImageAttachment, ImageContext } from './images';
 import type { NoteCompletion } from './completion';
 import type { NoteThread } from './note-threads';
@@ -35,14 +36,18 @@ export async function withTimeout<T>(promise:Promise<T>, milliseconds:number):Pr
   try{return await Promise.race([promise,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Request timed out. Retry the saved request with its original ID.')),milliseconds);})]);}
   finally{clearTimeout(timer);}
 }
-export async function runBridge(connection:Connection,args:string[],input=''):Promise<any> {
-  const operation=args[0];logEvent('transport.operation.started',{operation,transport:connection.transport??'desktop',environmentId:connection.environmentId});
+export async function runBridge(connection:Connection,args:string[],input='',options:DirectReadOptions={}):Promise<any> {
+  const operation=args[0],started=Date.now();logEvent('transport.operation.started',{operation,control:options.control,transport:connection.transport??'desktop',environmentId:connection.environmentId});
   try{
-  if(connection.transport==='direct')return await readDirect(connection,args,await runtime?.pairedSession?.(connection.connectionId??''));
+  requestAborted(options.signal);let result:any;
+  if(connection.transport==='direct')result=await readDirect(connection,args,await abortableRead(Promise.resolve(runtime?.pairedSession?.(connection.connectionId??'')),options.signal),undefined,options);
+  else{
   if(retiredConnection(connection))throw new Error(RETIRED_MESSAGE);
   if(runtime?.mobile)throw new Error('This saved request uses the local T3 connection. Retry it on the desktop where it was sent. On mobile, create new sends using Direct T3 pairing.');
-  return await (await import('./desktop')).runDesktop(connection,args,input);
-  }catch(error){logFailure('transport.operation.failed',error,{operation,transport:connection.transport??'desktop',environmentId:connection.environmentId});throw error;}
+  result=await (await import('./desktop')).runDesktop(connection,args,input,options);
+  }
+  logEvent('transport.operation.completed',{operation,control:options.control,elapsedMs:Date.now()-started,transport:connection.transport??'desktop',environmentId:connection.environmentId});return result;
+  }catch(error){logFailure('transport.operation.failed',error,{operation,control:options.control,cancelled:options.signal?.aborted,elapsedMs:Date.now()-started,transport:connection.transport??'desktop',environmentId:connection.environmentId});throw error;}
 }
 export async function sendRequest(request: Request) {
   if(request.connection.transport==='direct'){if(!runtime?.saveRequest)throw Error('Direct request storage is unavailable.');return sendDirect(request,await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request));}

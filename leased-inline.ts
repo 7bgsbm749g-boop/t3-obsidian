@@ -7,11 +7,14 @@ import {readInlineEvents,readInlineSnapshot,watchThread,type ThreadAccess,type T
 import {ThreadAccessCache} from './thread-access-cache';
 import type {ReplyReference} from './reply-assets';
 import type {SteeringInput} from './inline-steering';
-import {logFailure} from './diagnostics';
+import {logEvent,logFailure} from './diagnostics';
 import {nativeCommitPath,readNativeCommitProof,type NativeCommitProof} from './native-response-commit';
 import {rewriteReplyReferences} from './reply-assets';
 import {ThreadTitleFeed} from './thread-title-feed';
 import {DirectInlinePreview,type DirectInlineUpdate} from './direct-inline-preview';
+import {commandId} from './direct';
+import {responseStopReceipt,stoppedBodyPath,stoppedBodyReference,validResponseStopReceipt,type ResponseStopReceipt} from './response-stop-receipt';
+import type {FinalAttemptAbort} from './completion-attempt';
 
 export const INLINE_SNAPSHOT_INTERVAL_MS=10_000;
 export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
@@ -19,7 +22,7 @@ export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
 export interface PendingResponseRename {id:string;actor:string;bindingId:string;host:InlineHostTarget;before:string;after:string}
 export interface DeviceInlineIO {
   completionActor?:string;
-  completeResponse?(record:LeaseRecord,original:string,staged:string|undefined,prepare:(proof:NativeCommitProof)=>Promise<void>):Promise<NativeCommitProof|undefined>;
+  completeResponse?(record:LeaseRecord,original:string,staged:string|undefined,prepare:(proof:NativeCommitProof)=>Promise<void>,abort?:(proof:NativeCommitProof,evidence:FinalAttemptAbort)=>Promise<void>):Promise<NativeCommitProof|undefined>;
   completionFailed?(error:unknown,id:string):void;
   completionAcknowledged?(record:LeaseRecord):void|Promise<void>;
   loadStops?():string[];
@@ -43,7 +46,7 @@ export interface DeviceInlineIO {
 }
 type SnapshotRefresh={epoch:number;startedAt:number;work:Promise<InlineThreadState|undefined>;cancel(error:Error):void};
 type Runtime={original?:string;finalUpdate?:DirectInlineUpdate;finalWork?:Promise<void>;nextFinal?:number;nextPresence?:number;finalFailure?:string;record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;maintenanceFailures?:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void};proof?:{hash:string;bytes:string};observedBytes?:string;observedRecord?:LeaseRecord};
-type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;close():void;discovery?:Promise<void>;lastDiscovery:number;priorityDiscovery?:Promise<void>;priorityKey?:string;lastPriorityDiscovery?:number;responses:ExplorerResponse[]};
+type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;stopReceipts?:Promise<boolean>;close():void;discovery?:Promise<void>;lastDiscovery:number;priorityDiscovery?:Promise<void>;priorityKey?:string;lastPriorityDiscovery?:number;responses:ExplorerResponse[]};
 const hostKey=(target:InlineHostTarget)=>JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);
 const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...state,updatedAt:''}):'';
 
@@ -52,6 +55,9 @@ const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...s
 export class DeviceInlineManager {
   private stopped=false;
   private localStops=new Set<string>();
+  private stops=new Map<string,Promise<ResponseStopReceipt>>();
+  private frozenBodies=new Map<string,string>();
+  private statuses=new Map<string,ResponseStopReceipt>();
   private renames:PendingResponseRename[];
   private renameWork?:Promise<void>;
   private nextRenameRetry=0;
@@ -120,12 +126,43 @@ export class DeviceInlineManager {
     if(!reply.ok)throw Error(reply.error??'Could not confirm failed response cleanup.');
     this.tick();
   }
-  async stopResponse(target:InlineHostTarget,id:string,stoppedBody?:string){
+  stopResponse(target:InlineHostTarget,id:string,stoppedBody?:string,operationId=commandId(id,'stop')):Promise<ResponseStopReceipt>{
+    const key=hostKey(target)+':'+id,previous=this.stops.get(key);if(previous)return previous;
+    const started=this.monotonic();
+    const work=this.recordStop(target,id,stoppedBody,operationId).then(receipt=>{
+      logEvent('response.stop.receipt',{bindingId:id,operationId,elapsedMs:Math.max(0,this.monotonic()-started),hostRecorded:receipt.hostRecorded,runTerminal:receipt.runTerminal,finalSaved:receipt.finalSaved,finalWriterPending:receipt.finalWriterPending,...(stoppedBody!==undefined?{bodyCharacters:stoppedBody.length}:{})});return receipt;
+    });this.stops.set(key,work);
+    void work.finally(()=>{if(this.stops.get(key)===work)this.stops.delete(key);}).catch(()=>{});return work;
+  }
+  private async recordStop(target:InlineHostTarget,id:string,stoppedBody:string|undefined,operationId:string){
     this.stopLocally(id);
     this.renames=this.renames.filter(item=>item.bindingId!==id);this.io.saveRenames?.(this.renames);
-    const host=this.host(target),reply=await host.client.command({kind:'stop',jobId:id,...(stoppedBody!==undefined?{stoppedBody}:{})});
-    if(!reply.ok||!reply.record)throw Error(reply.error??'Could not record the response stop.');
-    this.receiveRecord(host,reply.record);this.tick();
+    const host=this.host(target),retained=await host.files.read(leasePaths(target.directory,operationId).reply);
+    if(retained){const reply:LeaseReply=JSON.parse(retained);if(reply.id===operationId&&reply.ok&&validResponseStopReceipt(reply.stopReceipt,id,operationId)&&reply.stopReceipt.hostRecorded)return reply.stopReceipt;}
+    const modern=await (host.stopReceipts??=host.files.read(`${target.directory}/coordinated-capabilities.json`).then(raw=>{try{return !!raw&&JSON.parse(raw).stopReceipts===1;}catch{return false;}})),reference=modern&&stoppedBody!==undefined?stoppedBodyReference(stoppedBody):undefined;
+    if(reference){
+      const path=stoppedBodyPath(target.directory,id,reference);
+      if(this.frozenBodies.get(path)!==reference.hash){const existing=await host.files.read(path);if(existing!==undefined&&existing!==stoppedBody)throw Error('The immutable frozen response changed.');if(existing===undefined)await host.files.write(path,stoppedBody!);this.frozenBodies.set(path,reference.hash);}
+    }
+    const reply=await host.client.command({kind:'stop',jobId:id,...(modern?{receiptOnly:1 as const}:{}),...(reference?{stoppedBodyRef:reference}:stoppedBody!==undefined?{stoppedBody}:{})},{id:operationId,actor:this.actor});
+    if(!reply.ok)throw Error(reply.error??'Could not record the response stop.');
+    if(reply.record)this.receiveRecord(host,reply.record);
+    const receipt=reply.stopReceipt??(reply.record?responseStopReceipt(reply.record,operationId):undefined);
+    if(!receipt?.hostRecorded)throw Error('The host has not recorded this response stop.');
+    // Discovery can adopt the full response later. Its large payload is never
+    // a prerequisite for accepting a checked, durable Stop acknowledgement.
+    this.tick();return receipt;
+  }
+  responseStatus(id:string){const record=this.jobs.get(id)?.record;return record?responseStopReceipt(record):this.statuses.get(id);}
+  cachedResponse(id:string){const runtime=this.jobs.get(id);return runtime?{record:runtime.record,host:runtime.host.target}:undefined;}
+  unsettledCount(){return [...this.jobs.values()].filter(({record})=>record.responseRemovedAt===undefined&&!record.state?.cleanupComplete).length;}
+  hasLiveResponses(){return this.unsettledCount()>0;}
+  async abortFinalAttempt(id:string,proof:NativeCommitProof,evidence:FinalAttemptAbort){
+    const runtime=this.jobs.get(id),actor=this.io.completionActor??this.actor,grant=runtime?.record.finalWriter;
+    if(!runtime||this.stopped||!grant||grant.actor!==actor||runtime.record.state?.finalSaved||proof.bindingId!==id||proof.commitId!==evidence.commitId||proof.hash!==evidence.hash||contentHash(JSON.stringify(proof))!==evidence.proofHash)throw Error('The final-save recovery no longer matches this device and response.');
+    const reply=await runtime.host.client.command({kind:'abort-final',jobId:id,token:grant.token,abort:evidence},{id:commandId(evidence.commitId,'abort-final'),actor});
+    if(reply.record)this.receiveRecord(runtime.host,reply.record);
+    if(!reply.ok)throw Error(reply.error??'The superseded final-save intent is waiting for host confirmation.');
   }
   async follow(target:InlineHostTarget,id:string,previousMessageId:string,messageId:string,notePath?:string){
     if(this.stopped)throw Error('The response writer is unavailable.');
@@ -157,6 +194,14 @@ export class DeviceInlineManager {
     const record:LeaseRecord=JSON.parse(bytes),request=validateHostedRequest(record.request);
     if(request.id!==id||![2,3,4].includes(request.version)||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(host.target))return;
     void Promise.resolve(this.io.completionAcknowledged?.(record)).catch(error=>logFailure('response.completion-cleanup.failed',error,{bindingId:id}));
+    // A prepared permanent grant may have an already verified local receipt.
+    // Discover that exact writer even if the note was later edited or deleted;
+    // completion verifies its retained proof before acknowledging the host.
+    // Unprepared grants still require a unique current note location.
+    const actor=this.io.completionActor??this.actor;
+    if(record.preparedFinal&&record.finalWriter?.actor===actor&&request.deviceCompletion?.actor===actor){
+      this.receiveRecord(host,record);this.tick();return;
+    }
     // A validated host record can update an exact open native anchor before
     // local disk/location checks finish. This does not adopt a writer job.
     if(record.coordinated&&this.io.isOpen(record.state?.notePath??request.notePath)){
@@ -206,7 +251,7 @@ export class DeviceInlineManager {
     }
   }
   explorerResponses():ExplorerResponse[]{return [...this.hosts.values()].flatMap(host=>host.responses).filter(response=>!this.localStops.has(response.id));}
-  stoppableResponses(path:string){return [...this.jobs.values()].filter(({record})=>(record.state?.notePath??record.request.notePath)===path&&!this.localStops.has(record.request.id)&&!record.stopRequestedAt&&!record.state?.userStopped&&!terminalLease(record)).map(({record,host})=>({id:record.request.id,hostTarget:host.target}));}
+  stoppableResponses(path:string){return [...this.jobs.values()].filter(({record})=>(record.state?.notePath??record.request.notePath)===path&&!this.localStops.has(record.request.id)&&!record.stopRequestedAt&&!record.state?.userStopped&&!terminalLease(record)&&!responseStopReceipt(record).runTerminal).map(({record,host})=>({id:record.request.id,hostTarget:host.target}));}
   private receivePreview(record:LeaseRecord){
     if(!record.coordinated||!this.io.receiveDirect||this.localStops.has(record.request.id))return;
     let preview=this.previews.get(record.request.id);
@@ -218,6 +263,10 @@ export class DeviceInlineManager {
     if(this.bindings.get(record.request.id)?.removed&&record.responseRemovedAt===undefined)return;
     const current=this.jobs.get(record.request.id)?.record;
     if(current&&(current.epoch>record.epoch||current.epoch===record.epoch&&current.revision>record.revision))return;
+    const previousStatus=this.statuses.get(record.request.id);
+    if(previousStatus&&(previousStatus.epoch>record.epoch||previousStatus.epoch===record.epoch&&previousStatus.revision>record.revision))return;
+    this.statuses.delete(record.request.id);this.statuses.set(record.request.id,responseStopReceipt(record));
+    if(this.statuses.size>1024){for(const [id,status] of this.statuses){if(status.finalSaved&&!this.jobs.has(id)){this.statuses.delete(id);if(this.statuses.size<=1024)break;}}}
     void Promise.resolve(this.io.completionAcknowledged?.(record)).catch(error=>logFailure('response.completion-cleanup.failed',error,{bindingId:record.request.id}));
     this.bindings.set(record.request.id,{host,notePath:record.state?.notePath??record.request.notePath,coordinated:record.coordinated===true,removed:record.responseRemovedAt!==undefined,stopped:record.responseRemovedAt!==undefined||!!record.stopRequestedAt});
     if(record.responseRemovedAt!==undefined){
@@ -338,7 +387,7 @@ export class DeviceInlineManager {
     const rename=this.renames[0],host=this.host(rename.host);
     const work=(async()=>{
       const reply=await host.client.command({kind:'relocate',jobId:rename.bindingId,previousNotePath:rename.before,notePath:rename.after},{id:rename.id,actor:rename.actor});
-      if(!reply.ok&&reply.record?.stopRequestedAt){this.renames=this.renames.filter(item=>item.bindingId!==rename.bindingId);this.io.saveRenames?.(this.renames);return;}
+      if(!reply.ok&&(reply.record?.stopRequestedAt||reply.stopReceipt?.hostRecorded)){this.renames=this.renames.filter(item=>item.bindingId!==rename.bindingId);this.io.saveRenames?.(this.renames);return;}
       if(!reply.ok)throw Error(reply.error??'The rename was not acknowledged.');
       if(this.stopped)return;
       if(reply.record)this.receiveRecord(host,reply.record);
@@ -413,6 +462,23 @@ export class DeviceInlineManager {
         if(!reply.ok||!reply.record)throw Error(reply.error??'Could not authorize the local final save.');
         lease=reply.record;
       }
+      // An unprepared grant has not crossed the final-write boundary. A reload
+      // can miss the note's rename event, so locate its exact saved anchor and
+      // acknowledge that path before preparing any local mutation. Prepared
+      // attempts retain their path/proof: their receipt must remain replayable
+      // after the user edits or deletes the completed note.
+      if(!lease.preparedFinal&&!lease.state?.finalSaved){
+        const before=lease.state?.notePath??lease.request.notePath,path=await this.location(lease);
+        if(path===undefined||this.stopped)return;
+        if(path!==before){
+          const grant=lease.finalWriter!,identity=commandId(lease.request.id,`final-location:${grant.token}:${contentHash(JSON.stringify([before,path]))}`);
+          const reply=await runtime.host.client.command({kind:'relocate',jobId:lease.request.id,previousNotePath:before,notePath:path},{id:identity,actor});
+          if(reply.record)this.receiveRecord(runtime.host,reply.record);
+          if(!reply.ok||!reply.record)throw Error(reply.error??'The final response destination is waiting for acknowledgement.');
+          if(reply.record.finalWriter?.token!==grant.token||reply.record.finalWriter.actor!==actor)throw Error('The permanent final-write grant changed during the rename.');
+          lease=reply.record;
+        }
+      }
       const directory=runtime.host.target.directory,staged=lease.state?.deviceStaged;
       const [original,draft]=await Promise.all([runtime.original!==undefined?Promise.resolve(runtime.original):runtime.host.files.read(deviceOriginalPath(directory,lease.request.id)),staged?runtime.host.files.read(deviceStagedPath(directory,lease.request.id,staged.hash)):Promise.resolve(undefined)]);
       if(original===undefined)throw Error('The private completion original is unavailable.');runtime.original=original;
@@ -420,7 +486,7 @@ export class DeviceInlineManager {
         const reply=await runtime.host.client.command({kind:'prepare-final',jobId:lease.request.id,token:lease.finalWriter!.token,proof},{id:crypto.randomUUID(),actor});
         if(reply.record)this.receiveRecord(runtime.host,reply.record);
         if(!reply.ok)throw Error(reply.error??'The host did not retain the immutable final-save intent.');
-      });if(!proof)return;
+      },(proof,evidence)=>this.abortFinalAttempt(lease.request.id,proof,evidence));if(!proof)return;
       if(this.stopped)return;
       const reply=await runtime.host.client.command({kind:'commit-final',jobId:lease.request.id,token:lease.finalWriter!.token,proof},{id:crypto.randomUUID(),actor});
       if(reply.record)this.receiveRecord(runtime.host,reply.record);
@@ -527,6 +593,6 @@ export class DeviceInlineManager {
     for(const runtime of this.jobs.values()){runtime.refresh?.cancel(Error('Response writer stopped.'));runtime.monitor?.stop();runtime.writer.stop();}
     for(const host of this.hosts.values())host.close();
     void this.accessCache.dispose();
-    this.jobs.clear();this.bindings.clear();this.hosts.clear();
+    this.jobs.clear();this.bindings.clear();this.hosts.clear();this.statuses.clear();
   }
 }

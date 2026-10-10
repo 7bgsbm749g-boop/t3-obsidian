@@ -43,6 +43,19 @@ test('hosted stop cleans immediately while the host request is stalled',async()=
   finally{h.manager.dispose();}
 });
 
+test('stop all ignores stale working markers for a completed turn whose final save is pending',async()=>{
+  for(const orphan of [false,true]){
+    const h=await harness(true),before=h.value;let stops=0;
+    h.manager.hosted.stop=async()=>{stops++;};
+    h.manager.hosted.status=({id}:any)=>id===h.id?{version:1,bindingId:id,commandId:'',epoch:1,revision:1,hostRecorded:false,runTerminal:true,finalSaved:false,finalWriterPending:true}:undefined;
+    if(orphan)h.manager.jobs=[];
+    try{
+      assert.equal(await h.manager.stopAllAt(h.editor,h.info,[{id:h.id,hostTarget:{environmentId:'host',workspaceRoot:'/vault',directory:'private/inline'}}]),0);
+      assert.equal(stops,0);assert.equal(h.value,before,'pending final text must not be frozen or removed');
+    }finally{h.manager.dispose();}
+  }
+});
+
 test('orphan stop uses the clicked editor, and saved stop intent cleans a restored block on reload',async()=>{
   const h=await harness(true),original=h.value;h.manager.jobs=[];
   try{

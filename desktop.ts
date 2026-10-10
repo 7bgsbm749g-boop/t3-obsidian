@@ -14,16 +14,20 @@ import {readNewThreadDefaults,type NewThreadDefaults} from './model-defaults';
 import {workspaceChildPath} from './workspace-picker';
 import {T3HttpError} from './thread-access-cache';
 import {recordDesktopAuth} from './desktop-auth-audit';
-import {t3Api} from './t3-api';
+import {t3Api,requestAborted,cancelledRequest,type T3RequestOptions} from './t3-api';
+import type {DirectReadOptions} from './direct';
 import {T3_PROTOCOL_HEADER,T3_PROTOCOL_VERSION} from './orchestration-v2';
 
 export function desktopDefaults():Connection {return {executable:'',host:'local',native:true,baseDir:join(homedir(),'.t3')};}
-export function cli(command:string[],args:string[]):Promise<string> {
+export function cli(command:string[],args:string[],signal?:AbortSignal):Promise<string> {
  return new Promise((resolve,reject)=>{
+  try{requestAborted(signal);}catch(error){reject(error);return;}
   const child=spawn(command[0],[...command.slice(1),...args],{shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});
   let output='';let size=0;let settled=false;
-  const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve(output);};
+  const cancel=()=>{child.kill();finish(signal?.reason??cancelledRequest());};
+  const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',cancel);error?reject(error):resolve(output);};
   const timer=setTimeout(()=>{child.kill();finish(new Error('T3 CLI timed out.'));},45_000);
+  signal?.addEventListener('abort',cancel,{once:true});
   child.on('error',()=>finish(new Error('Cannot run the official T3 CLI. Set its executable path in plugin settings.')));
   child.stderr.on('data',()=>{});
   child.stdout.setEncoding('utf8');child.stdout.on('data',(s:string)=>{size+=Buffer.byteLength(s);if(size>4_000_000){child.kill();finish(new Error('T3 response too large.'));}else output+=s;});
@@ -77,7 +81,8 @@ export function parseOperation(args:string[],input:string):any {
  if(typeof req.prompt!=='string' || !req.prompt.trim() || req.prompt.length>120000 || !req.title.trim() || req.title.length>160)throw new Error('Invalid prompt or title.');
  return req;
 }
-function rawRequestJson(origin:string,token:string,path:string,payload?:any):Promise<any> {
+function rawRequestJson(origin:string,token:string,path:string,payload?:any,options:T3RequestOptions={}):Promise<any> {
+ requestAborted(options.signal);
  const url=new URL(origin);if(url.protocol!=='http:' || !['localhost','127.0.0.1','[::1]'].includes(url.hostname) || url.username || url.password || url.pathname!=='/' || url.search || url.hash)throw new Error('T3 runtime must use a loopback HTTP origin.');
  const apiPath=path.startsWith('/api/')||path==='/.well-known/t3/environment'?path:'/api/orchestration/'+path;
  if(apiPath.includes('..')||apiPath.includes('\\')||apiPath.includes('#'))throw new Error('Invalid T3 API path.');
@@ -87,12 +92,14 @@ function rawRequestJson(origin:string,token:string,path:string,payload?:any):Pro
    let out='';let bytes=0;res.setEncoding('utf8');res.on('data',(s:string)=>{bytes+=Buffer.byteLength(s);if(bytes>4_000_000)r.destroy(new Error('T3 response too large.'));else out+=s;});
    res.on('error',reject);res.on('end',()=>{if(res.statusCode!==200){reject(new T3HttpError(res.statusCode??0,`T3 API returned HTTP ${res.statusCode}.`));return;}try{resolve(JSON.parse(out));}catch{reject(new Error('Invalid T3 API response.'));}});
   });
+  const cancel=()=>r.destroy(options.signal?.reason??cancelledRequest());
+  options.signal?.addEventListener('abort',cancel,{once:true});r.on('close',()=>options.signal?.removeEventListener('abort',cancel));
   r.setTimeout(20_000,()=>r.destroy(new Error('T3 API timed out. Retry the saved request.')));r.on('error',reject);r.end(data);
  });
 }
 function desktopApi(origin:string,token:string){
   const url=new URL(origin);if(url.protocol!=='http:' || !['localhost','127.0.0.1','[::1]'].includes(url.hostname) || url.username || url.password || url.pathname!=='/' || url.search || url.hash)throw new Error('T3 runtime must use a loopback HTTP origin.');
-  return t3Api((target,body)=>rawRequestJson(origin,token,target,body),origin);
+  return t3Api((target,body,options)=>rawRequestJson(origin,token,target,body,options),origin);
 }
 export function requestJson(origin:string,token:string,path:string,payload?:any):Promise<any> {
   const apiPath=path.startsWith('/api/')||path==='/.well-known/t3/environment'?path:'/api/orchestration/'+path;
@@ -112,7 +119,7 @@ export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any
   try{ledger=JSON.parse(await fs.readFile(path,'utf8'));if(ledger.requestHash!==hash)throw new Error('Request ID already belongs to different parameters.');}catch(e:any){if(e.code!=='ENOENT')throw e;}
   if(!ledger){
    if(req.threadId){
-    const thread=(await api('threads/'+encodeURIComponent(req.threadId)+'?turnLimit=1')).thread;
+    const thread=(await api('threads/'+encodeURIComponent(req.threadId)+'?controlOnly=true')).thread;
     const turn=existingThreadTurn(thread,{threadId:req.threadId,projectId:req.project},uuid5(id,'turn'),{messageId:uuid5(id,'message'),role:'user',text:req.prompt,attachments:req.attachments??[],...(req.context?{context:req.context}:{})});
     ledger={protocolVersion:2,requestHash:hash,requestId:id,threadId:req.threadId,project:{id:req.project},phase:'created',create:null,turn};
     await save(path,ledger);
@@ -136,23 +143,29 @@ export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any
   }finally{await release();}
  })();locks.set(path,work);try{return await work;}finally{locks.delete(path);}
 }
-export async function runDesktop(connection:Connection,args:string[],input=''):Promise<any> {
+export async function runDesktop(connection:Connection,args:string[],input='',options:DirectReadOptions={}):Promise<any> {
+ requestAborted(options.signal);
  if(connection.host!=='local')throw new Error('Use Direct T3 pairing for remote destinations. Local T3 connects only to this computer.');
  const req=parseOperation(args,input);
  if(req.action==='capabilities')return {imagePayloadVersion:1,imageContextVersion:1,native:true};
  const base=connection.baseDir||join(homedir(),'.t3');const runtime=JSON.parse(await fs.readFile(join(base,'userdata','server-runtime.json'),'utf8'));
  const command=findCli(connection);let session:any;
  try{
-  const issued=await cli(command,['auth','session','issue','--base-dir',base,'--ttl','5m','--label','send-to-t3-code','--json']);
+  const issued=await cli(command,['auth','session','issue','--base-dir',base,'--ttl','5m','--label','send-to-t3-code','--json'],options.signal);
   try{session=JSON.parse(issued);}catch{throw new Error('Invalid T3 session response; credential output withheld.');}
   if(!session.token || !session.sessionId)throw new Error('Unexpected T3 session response.');
   const transport=desktopApi(runtime.origin,session.token);
-  const api=(path:string,payload?:any)=>transport(path.startsWith('/api/')?path:'/api/orchestration/'+path,payload);
+  const api=(path:string,payload?:any)=>transport(path.startsWith('/api/')?path:'/api/orchestration/'+path,payload,options);
   if(req.action==='start')return await start(api,req,connection.stateDir||join(base,'send-to-t3-code','desktop'),project=>readNewThreadDefaults(api,runtime.origin,project));
-  if(req.action==='read')return (await api('threads/'+encodeURIComponent(req.threadId)+'?turnLimit=10')).thread;
+  if(req.action==='read')return (await api('threads/'+encodeURIComponent(req.threadId)+(options.control?'?controlOnly=true':'?turnLimit=10'))).thread;
   const shell=await api('shell');if(req.action==='projects')return {projects:shell.projects};
   return {threads:shell.threads.filter((t:any)=>t.projectId===req.project)};
- } finally {if(session?.sessionId)try{await cli(command,['auth','session','revoke','--base-dir',base,session.sessionId]);}catch{/* Five-minute expiry bounds failed revocation. */}}
+ } finally {if(session?.sessionId){
+  // A closed chooser must not wait for CLI cleanup. Revocation still runs,
+  // with its own deadline; the issued credential expires after five minutes.
+  const cleanup=async()=>{const controller=new AbortController(),timer=setTimeout(()=>controller.abort(Error('T3 session cleanup timed out.')),5000);try{await cli(command,['auth','session','revoke','--base-dir',base,session.sessionId],options.signal?.aborted?controller.signal:undefined);}catch{/* Five-minute expiry bounds failed revocation. */}finally{clearTimeout(timer);}};
+  if(options.signal?.aborted)void cleanup();else await cleanup();
+ }}
 }
 
 /** A short-lived local session dedicated to one live thread subscription. */

@@ -7,7 +7,7 @@ import type {InlineStartRequest} from './inline-thread';
 import {existingThreadTurn} from './thread-target';
 import {readNewThreadDefaults} from './model-defaults';
 import {T3HttpError} from './thread-access-cache';
-import {t3Api} from './t3-api';
+import {t3Api,abortableRead,requestAborted,type AbortableT3Api,type T3RequestOptions} from './t3-api';
 import {T3_PROTOCOL_VERSION,T3_PROTOCOL_HEADER} from './orchestration-v2';
 import type {SocketFactory} from './t3-rpc';
 import {PLUGIN_SCOPE,hasPluginPermissions} from './environment-permissions';
@@ -32,23 +32,25 @@ export function pairingInput(address:string,code=''):{url:string;code:string}{
  u.hash='';u.pathname='/';return {url:endpoint(u.href),code:token};
 }
 export async function jsonHttp(url:string,options:RequestInit={},fetcher:Fetcher=fetch):Promise<any>{
- const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),30000);
+ const controller=new AbortController(),cancel=()=>controller.abort(options.signal?.reason);const timer=setTimeout(()=>controller.abort(),30000);
+ if(options.signal?.aborted)cancel();else options.signal?.addEventListener('abort',cancel,{once:true});
  try{
-  const r=await fetcher(url,{...options,credentials:'omit',redirect:'error',cache:'no-store',signal:controller.signal});
+  requestAborted(controller.signal);
+  const r=await abortableRead(fetcher(url,{...options,credentials:'omit',redirect:'error',cache:'no-store',signal:controller.signal}),controller.signal);
   if(!r.ok){if(r.status===401||r.status===403)throw new T3HttpError(r.status,'T3 access denied or expired. Create a fresh pairing link in T3 and pair this device again.');throw new T3HttpError(r.status,`T3 returned HTTP ${r.status}.`);}
   if(Number(r.headers.get('content-length')||0)>4_000_000)throw Error('T3 response exceeds 4 MB.');
   let body='';
-  if(r.body?.getReader){const reader=r.body.getReader();const parts:Uint8Array[]=[];let size=0;try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>4_000_000){await reader.cancel();throw Error('T3 response exceeds 4 MB.');}parts.push(value);}}finally{reader.releaseLock();}
+  if(r.body?.getReader){const reader=r.body.getReader();const parts:Uint8Array[]=[];let size=0;try{for(;;){const {done,value}=await abortableRead(reader.read(),controller.signal);if(done)break;size+=value.byteLength;if(size>4_000_000){await reader.cancel();throw Error('T3 response exceeds 4 MB.');}parts.push(value);}}finally{if(controller.signal.aborted)void reader.cancel().catch(()=>{});reader.releaseLock();}
    // The platform decoder avoids the browser Buffer polyfill's large temporary
    // code-point arrays. Preserve BOM handling and the existing byte limit.
    body=new TextDecoder('utf-8',{ignoreBOM:true}).decode(Buffer.concat(parts));}
-  else {body=await r.text();if(Buffer.byteLength(body)>4_000_000)throw Error('T3 response exceeds 4 MB.');}
+  else {body=await abortableRead(r.text(),controller.signal);if(Buffer.byteLength(body)>4_000_000)throw Error('T3 response exceeds 4 MB.');}
   try{return JSON.parse(body);}catch{throw Error('T3 returned an invalid response; response contents withheld.');}
- }catch(e){if(e instanceof Error && (e.message.startsWith('T3 ')||e.message.startsWith('Use ')))throw e;throw Object.assign(Error('Cannot reach T3 directly. Check its public address, network access, and that T3 is running. Nothing is queued.'),{cause:e});}
- finally{clearTimeout(timer);}
+ }catch(e){requestAborted(options.signal??undefined);if(e instanceof Error && (e.message.startsWith('T3 ')||e.message.startsWith('Use ')))throw e;throw Object.assign(Error('Cannot reach T3 directly. Check its public address, network access, and that T3 is running. Nothing is queued.'),{cause:e});}
+ finally{clearTimeout(timer);options.signal?.removeEventListener('abort',cancel);}
 }
-export async function descriptor(url:string,fetcher?:Fetcher){
- const d=await jsonHttp(endpoint(url)+'/.well-known/t3/environment',{},fetcher);
+export async function descriptor(url:string,fetcher?:Fetcher,signal?:AbortSignal){
+ const d=await jsonHttp(endpoint(url)+'/.well-known/t3/environment',{signal},fetcher);
  if(typeof d?.environmentId!=='string'||typeof d?.label!=='string')throw Error('This address is not a compatible T3 environment. Use its T3 pairing link.');
  if(d.orchestrationProtocolVersion!==T3_PROTOCOL_VERSION)throw Error('Update this T3 machine to Orchestrator v2 before connecting.');
  return d;
@@ -63,21 +65,43 @@ export async function pair(address:string,code:string,fetcher?:Fetcher,expectedE
  if(!hasPluginPermissions({permissions}))throw Error('This pairing link does not permit thread and note access. Create a new T3 pairing link with filesystem read and write access, then reconnect this machine.');
  return {descriptor:d,session:{token:token.access_token,expiresAt:Date.now()+token.expires_in*1000,environmentId:d.environmentId,url:input.url,permissions}};
 }
-export async function environmentApi(c:Connection,s:PairedSession|undefined,fetcher?:Fetcher,makeSocket?:SocketFactory){
+export async function environmentApi(c:Connection,s:PairedSession|undefined,fetcher?:Fetcher,makeSocket?:SocketFactory,signal?:AbortSignal){
  const url=endpoint(c.url||'');
  if(!s||!s.token||s.url!==url||s.environmentId!==c.environmentId)throw Error('Pair this connection on this device first. Session credentials do not sync.');
  if(s.expiresAt<=Date.now()+5000)throw Error('T3 pairing session expired. Pair this device again using a fresh T3 link.');
- const d=await descriptor(url,fetcher);if(d.environmentId!==c.environmentId)throw Error('The address now points to a different T3 environment. Nothing was sent; add it as a new connection.');
+ const d=await descriptor(url,fetcher,signal);if(d.environmentId!==c.environmentId)throw Error('The address now points to a different T3 environment. Nothing was sent; add it as a new connection.');
  const key=s.dpopKeyId?await proofKey(s.dpopKeyId,false):undefined;
- return t3Api(async(path:string,payload?:any)=>{if(!path.startsWith('/api/')||path.includes('..')||path.includes('\\'))throw Error('Invalid T3 API path.');const target=url+path;const method=payload===undefined?'GET':'POST';return jsonHttp(target,{method,headers:{Authorization:(key?'DPoP ':'Bearer ')+s.token,'Content-Type':'application/json',[T3_PROTOCOL_HEADER]:String(T3_PROTOCOL_VERSION),...(key?{DPoP:await proof(key,method,target,s.token)}:{})},...(payload===undefined?{}:{body:JSON.stringify(payload)})},fetcher);},url,makeSocket);
+ return t3Api(async(path:string,payload?:any,options?:T3RequestOptions)=>{requestAborted(options?.signal);if(!path.startsWith('/api/')||path.includes('..')||path.includes('\\'))throw Error('Invalid T3 API path.');const target=url+path;const method=payload===undefined?'GET':'POST';return jsonHttp(target,{method,signal:options?.signal,headers:{Authorization:(key?'DPoP ':'Bearer ')+s.token,'Content-Type':'application/json',[T3_PROTOCOL_HEADER]:String(T3_PROTOCOL_VERSION),...(key?{DPoP:await proof(key,method,target,s.token)}:{})},...(payload===undefined?{}:{body:JSON.stringify(payload)})},fetcher);},url,makeSocket);
 }
-async function apiFor(c:Connection,s:PairedSession|undefined,fetcher?:Fetcher){const api=await environmentApi(c,s,fetcher);return (path:string,payload?:any)=>api('/api/orchestration/'+path,payload);}
-export async function readDirect(c:Connection,args:string[],s?:PairedSession,fetcher?:Fetcher){
- const api=await apiFor(c,s,fetcher);
+interface CachedReadApi {work:Promise<AbortableT3Api>;controller:AbortController;users:number;settled:boolean;expires:number}
+const readApis=new WeakMap<Fetcher,Map<string,CachedReadApi>>();
+/** Only connection/detail caches are reused. Thread control state is always fetched. */
+async function readApi(c:Connection,s:PairedSession|undefined,fetcher:Fetcher,signal?:AbortSignal){
+ requestAborted(signal);const url=endpoint(c.url||'');
+ if(!s||!s.token||s.url!==url||s.environmentId!==c.environmentId)throw Error('Pair this connection on this device first. Session credentials do not sync.');
+ if(s.expiresAt<=Date.now()+5000)throw Error('T3 pairing session expired. Pair this device again using a fresh T3 link.');
+ let cache=readApis.get(fetcher);if(!cache){cache=new Map();readApis.set(fetcher,cache);}
+ const identity=JSON.stringify([url,c.environmentId,c.connectionId,s.token,s.expiresAt,s.dpopKeyId,s.accountId,s.permissions]);
+ let entry=cache.get(identity);
+ if(entry&&entry.expires<=Date.now()){cache.delete(identity);entry=undefined;}
+ if(!entry){
+  const controller=new AbortController();entry={controller,users:0,settled:false,expires:Math.min(Date.now()+30_000,s.expiresAt-5000),work:Promise.resolve(undefined as any)};
+  const selected=entry;entry.work=environmentApi(c,{...s},fetcher,undefined,controller.signal).then(api=>{selected.settled=true;return api;},error=>{selected.settled=true;if(cache!.get(identity)===selected)cache!.delete(identity);throw error;});cache.set(identity,entry);
+  while(cache.size>16)cache.delete(cache.keys().next().value!);
+ }
+ entry.users++;
+ try{const api=await abortableRead(entry.work,signal);requestAborted(signal);return {api,invalidate:()=>{if(cache!.get(identity)===entry)cache!.delete(identity);}};}
+ finally{if(--entry.users===0&&!entry.settled){entry.controller.abort();if(cache.get(identity)===entry)cache.delete(identity);}}
+}
+export interface DirectReadOptions extends T3RequestOptions {control?:boolean}
+export async function readDirect(c:Connection,args:string[],s?:PairedSession,fetcher:Fetcher=fetch,options:DirectReadOptions={}){
+ const access=await readApi(c,s,fetcher,options.signal),api=(path:string)=>access.api('/api/orchestration/'+path,undefined,options);
+ try{
  if(args[0]==='projects'&&args.length===1)return {projects:(await api('shell')).projects};
  if(args[0]==='threads'&&args[1]==='--project'&&args.length===3)return {threads:(await api('shell')).threads.filter((t:any)=>t.projectId===args[2])};
- if(args[0]==='read'&&args.length===2)return (await api('threads/'+encodeURIComponent(args[1])+'?turnLimit=10')).thread;
+ if(args[0]==='read'&&args.length===2)return (await api('threads/'+encodeURIComponent(args[1])+(options.control?'?controlOnly=true':'?turnLimit=10'))).thread;
  throw Error('Unsupported direct T3 operation.');
+ }catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403))access.invalidate();throw error;}
 }
 export function commandId(id:string,name:string){
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))throw Error('Invalid request ID.');
@@ -90,7 +114,7 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
  if(r.directPlan&&(r.directPlan.hash!==hash||r.directPlan.environmentId!==r.connection.environmentId))throw Error('Saved request no longer matches its original content or environment.');
  if(!r.directPlan){
   if(r.threadId){
-   const thread=(await api('threads/'+encodeURIComponent(r.threadId)+'?turnLimit=1')).thread;
+   const thread=(await api('threads/'+encodeURIComponent(r.threadId)+'?controlOnly=true')).thread;
    const turn=existingThreadTurn(thread,{threadId:r.threadId,projectId:r.project.id},commandId(r.id,'turn'),{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})});
    r.directPlan={protocolVersion:2,hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{

@@ -191,6 +191,37 @@ test('omitted tool output is fetched by exact revision and cached without changi
   assert.equal(first.thread.activities[0].payload.data.output,'test');assert.equal(reads,1);assert.equal(first.snapshotSequence,10);
 });
 
+test('tool detail cache evicts by retained text size without losing the current reply',async()=>{
+ const items=Array.from({length:3},(_,i)=>({id:'large-'+i,type:'command_execution',runId:run.id,ordinal:i,status:'completed',outputOmitted:true,updatedAt:at}));let reads=0;
+ const output='x'.repeat(800_000),Socket=settingsSocket(undefined,undefined,(tag,payload)=>{assert.equal(tag,'orchestration.getTurnItem');reads++;return {item:{...items.find(item=>item.id===payload.itemId),output,outputOmitted:false}};});
+ const api=t3Api(async path=>path.endsWith('/bounded')?snapshot({turnItems:items}):{ticket:'ticket'},'https://t3.example',url=>new Socket(url) as any);
+ const first=await api('/api/orchestration/threads/thread?turnLimit=20');assert.equal(reads,3);assert.deepEqual(first.thread.activities.map((a:any)=>a.payload.data.output.length),[800_000,800_000,800_000]);
+ const next=await api('/api/orchestration/threads/thread?turnLimit=20');assert.equal(reads,4,'The oldest detail is fetched again after exceeding the 2M character budget');assert.deepEqual(next.thread.activities.map((a:any)=>a.payload.data.output.length),[800_000,800_000,800_000]);
+});
+
+test('one detail larger than the cache budget remains available but is not retained between reads',async()=>{
+ const item={id:'oversize',type:'command_execution',runId:run.id,ordinal:1,status:'completed',outputOmitted:true,updatedAt:at};let reads=0;const output='x'.repeat(2_000_001);
+ const Socket=settingsSocket(undefined,undefined,()=>{reads++;return {item:{...item,output,outputOmitted:false}};});
+ const api=t3Api(async path=>path.endsWith('/bounded')?snapshot({turnItems:[item]}):{ticket:'ticket'},'https://t3.example',url=>new Socket(url) as any);
+ for(let i=0;i<2;i++){const state=await api('/api/orchestration/threads/thread?turnLimit=20');assert.equal(state.thread.activities[0].payload.data.output,output);}assert.equal(reads,2);
+});
+
+test('control reads skip forty omitted tools, sender metadata and history but keep exact run and pending controls',async()=>{
+ const calls:string[]=[],tools=Array.from({length:40},(_,i)=>({id:'tool-'+i,type:'command_execution',runId:run.id,ordinal:i,status:'completed',outputOmitted:true,updatedAt:at}));
+ const control={id:'approval',type:'approval_request',runId:run.id,ordinal:41,status:'waiting',requestId:'request',updatedAt:at};
+ const wire=snapshot({turnItems:undefined,visibleTurnItems:[...tools,control].map(item=>({sourceThreadId:'thread',item})),messages:[{...message,createdBy:'agent',senderThreadId:'2c9cb7b6-a4c9-5746-b9b7-bc463c5024fa'}],runtimeRequests:[{id:'request',status:'pending',responseCapability:{type:'message'}}]});
+ const api=t3Api(async path=>{calls.push(path);assert.equal(path,'/api/orchestration/threads/thread/bounded?compactTurnItems=1');return {...wire,hasMoreHistory:true,historyCursor:'older'};},'https://t3.example',()=>{throw Error('Control lookup must not open a tool socket');});
+ const result=await api('/api/orchestration/threads/thread?controlOnly=true');
+ assert.deepEqual(calls,['/api/orchestration/threads/thread/bounded?compactTurnItems=1']);assert.equal(result.thread.session.activeTurnId,run.id);assert.equal(result.thread.hasPendingApprovals,true);assert.equal(result.thread.messages.length,0);assert.equal(result.thread.activities.length,1);
+});
+
+test('control read forwards cancellation and refuses a late snapshot after abort',async()=>{
+ const controller=new AbortController();let release!:(value:any)=>void,observed:AbortSignal|undefined;
+ const api=t3Api(async(_path,_payload,options)=>{observed=options?.signal;return new Promise(resolve=>{release=resolve;});},'https://t3.example');
+ const work=api('/api/orchestration/threads/thread?controlOnly=true',undefined,{signal:controller.signal});
+ controller.abort(Error('obsolete lookup'));release(snapshot());await assert.rejects(work,/obsolete lookup/);assert.equal(observed,controller.signal);
+});
+
 test('v2 direct access sends the protocol HTTP header and refuses a v1 machine before authorization',async()=>{
   const connection:any={url:'https://t3.example',environmentId:'environment'},session:any={...connection,token:'test',expiresAt:Date.now()+600000};let authorized=0;
   const fetcher:any=async(url:string,options:any)=>{if(url.endsWith('/environment'))return new Response(JSON.stringify({environmentId:'environment',label:'Test',orchestrationProtocolVersion:2}));authorized++;assert.equal(options.headers['x-t3-orchestration-protocol'],'2');assert.ok(url.endsWith('/thread/bounded'));return new Response(JSON.stringify(snapshot()));};

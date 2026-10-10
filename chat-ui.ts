@@ -3,6 +3,9 @@ import {logEvent,logFailure} from './diagnostics';
 import {App, FuzzySuggestModal, Modal, Notice, Setting} from 'obsidian';
 import {RequestDeliveryError} from './bridge';
 import {ProjectCreationCancelled} from './project-create-ui';
+import {abortableRead,cancelledRequest} from './t3-api';
+
+export const DESTINATION_CHECK_TIMEOUT_MS=5000;
 
 export interface ChatDestination {
   threadId?:string;
@@ -23,7 +26,9 @@ export interface ChatHost {
   onProjectChange?(listener:()=>void):()=>void;
   getProjectChoices():{key:string;label:string}[];
   getDefaultThread(projectKey?:string):string|undefined;
-  getDefaultDestination?(projectKey?:string):Promise<ChatDestination>;
+  getDefaultDestination?(projectKey?:string,signal?:AbortSignal):Promise<ChatDestination>;
+  /** Captured routing metadata, not an active-turn authorization. */
+  getAlternativeProjectKey?(projectKey?:string):string|undefined;
   sendChat(prompt:string,projectKey?:string,resolve?:()=>ResolvedJobOptions,returnToDraft?:()=>void,destination?:ChatDestination):Promise<void>;
   sendToNew(prompt:string,projectKey?:string,resolve?:()=>ResolvedJobOptions,returnToDraft?:()=>void):Promise<void>;
   sendToExisting(prompt:string,projectKey?:string,resolve?:()=>ResolvedJobOptions,returnToDraft?:()=>void):Promise<void>;
@@ -75,7 +80,18 @@ class SendDestinationModal extends Modal {
   private field?:HTMLTextAreaElement;
   private projectKey?:string;
   private composing:boolean;
+  private check?:{key?:string;controller:AbortController;work:Promise<ChatDestination>;started:number};
   constructor(app:App,private host:ChatHost,private prompt?:string){super(app);this.composing=prompt===undefined;this.projectKey=host.getDefaultProjectKey?.();}
+  private cancelCheck(){this.check?.controller.abort(cancelledRequest('Conversation check cancelled.'));this.check=undefined;}
+  private checkDestination(key?:string){
+    if(this.check&&this.check.key===key&&!this.check.controller.signal.aborted&&Date.now()-this.check.started<DESTINATION_CHECK_TIMEOUT_MS)return this.check.work;
+    this.cancelCheck();const controller=new AbortController(),started=Date.now();
+    const timer=setTimeout(()=>controller.abort(Error('The conversation check took too long. Retry or choose another thread.')),DESTINATION_CHECK_TIMEOUT_MS);
+    const work=abortableRead(Promise.resolve().then(()=>{if(controller.signal.aborted)throw controller.signal.reason;return this.host.getDefaultDestination!(key,controller.signal);}),controller.signal)
+      .catch(error=>({label:'Thread unavailable',unavailable:true,detail:controller.signal.aborted&&!this.opened?'Conversation check cancelled.':error instanceof Error?error.message:'Cannot check this conversation. Reconnect T3 or choose another thread.'} as ChatDestination))
+      .finally(()=>clearTimeout(timer));
+    this.check={key,controller,work,started};return work;
+  }
   onOpen(){
     this.opened=true;const revision=++this.revision;
     logEvent('ui.destination.opened',{notePath:this.host.getNotePath(),steering:this.host.steering,composing:this.composing,projectKey:this.projectKey});
@@ -113,9 +129,14 @@ class SendDestinationModal extends Modal {
       if(this.host.getDefaultDestination){
         this.checkingDefault=true;
         this.defaultDisabled=true;button.setDisabled(true);detail.setText('Checking the selected T3 conversation…');
-        this.ready=this.host.getDefaultDestination(this.projectKey).catch(()=>({label:'Thread unavailable',unavailable:true,detail:'Cannot check this conversation. Reconnect T3 or choose another thread.'})).then(destination=>{
-          if(this.opened&&revision===this.revision&&this.projectKey===undefined&&'projectKey' in destination&&destination.projectKey){this.projectKey=destination.projectKey;projectButton.setText(this.host.getProjectName(this.projectKey));}
-          if(this.opened&&revision===this.revision){this.defaultDisabled=Boolean(destination.unavailable);button.setButtonText(destination.label).setDisabled(Boolean(this.host.busy||this.defaultDisabled));detail.setText(destination.detail??'');}
+        const started=Date.now();
+        this.ready=this.checkDestination(this.projectKey).then(destination=>{
+          if(this.opened&&revision===this.revision&&this.projectKey===undefined&&destination.projectKey){this.projectKey=destination.projectKey;if(this.check)this.check.key=destination.projectKey;projectButton.setText(this.host.getProjectName(this.projectKey));}
+          if(this.opened&&revision===this.revision){
+            this.defaultDisabled=Boolean(destination.unavailable);button.setButtonText(destination.label).setDisabled(Boolean(this.host.busy||this.defaultDisabled));detail.setText(destination.detail??'');
+            logEvent('ui.destination.checked',{notePath:this.host.getNotePath(),elapsedMs:Date.now()-started,unavailable:destination.unavailable,threadId:destination.threadId});
+            if(destination.unavailable){const retry=detail.createEl('button',{text:'Retry'});retry.addEventListener('click',()=>{if(this.field)this.prompt=this.field.value;this.cancelCheck();this.onOpen();});}
+          }
           return destination;
         });
       }
@@ -132,7 +153,7 @@ class SendDestinationModal extends Modal {
     if(this.field)this.field.focus();
     else setTimeout(()=>{if(defaultButton?.isConnected)defaultButton.focus();},0);
   }
-  onClose(){this.opened=false;logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
+  onClose(){this.opened=false;this.cancelCheck();logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
   private async choose(target:Destination|boolean='default'){
     if(this.choosing||this.host.busy)return;
     target=target===false?'default':target===true?'existing':target;
@@ -143,7 +164,11 @@ class SendDestinationModal extends Modal {
     const resolve=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
     const returnToDraft=()=>this.open();
     try{
-      const checked=this.checkingDefault&&(target==='default'||this.projectKey===undefined)?await this.ready:undefined;
+      if(target!=='default'&&this.projectKey===undefined&&this.host.steering){
+        this.projectKey=this.host.getAlternativeProjectKey?.(this.projectKey);
+        if(this.projectKey===undefined)throw new RequestDeliveryError('Choose a project before selecting another conversation. Your message is still ready.',false);
+      }
+      const checked=this.checkingDefault&&target==='default'?await this.ready:undefined;
       const destination=target==='default'?checked:undefined;
       if(!this.opened||revision!==this.revision)return;
       if(destination?.unavailable)throw new RequestDeliveryError(destination.detail??'This conversation is unavailable. Choose another thread.',false);
@@ -156,7 +181,7 @@ class SendDestinationModal extends Modal {
       logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});
       new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
       if(!this.opened&&!(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)))this.open();
-    }finally{this.choosing=false;this.actions.setDisabled(Boolean(this.host.busy));if(this.defaultButton)this.defaultButton.disabled=Boolean(this.host.busy||this.defaultDisabled);}
+    }finally{this.choosing=false;if(revision===this.revision){this.actions.setDisabled(Boolean(this.host.busy));if(this.defaultButton)this.defaultButton.disabled=Boolean(this.host.busy||this.defaultDisabled);}}
   }
 }
 
