@@ -34,3 +34,20 @@ and QLO2 release evidence is retained outside the vault under
 Native Linux editor checks and Headless Sync delivery do not establish desktop
 core Sync-engine or native iPhone/Android behavior. No native mobile client is
 available on this host.
+
+QLO2 release **2.36.12** passed native installed-plugin smoke testing after a
+guarded client reload. Live Preview stayed at scroll position 0 before a trusted
+response click, then followed to 1,061. After manual scrolling, further response
+growth left the position at 461. Reading stayed at 409 before a click, followed
+to 1,765 after it, and stayed there after an outside click. Source stayed at 512
+before a response click and followed to 3,186 after it, without moving the
+selection. Synthetic fold clicks did not enable following. All response updates
+preserved the saved empty-anchor bytes. The synthetic note was removed and the
+original note was restored with its original hash.
+
+The immutable completed smoke receipt is
+`/home/ubuntu/backups/send-to-t3-code/releases/2.36.12/smoke-vps-qlo2-click-scroll.json`.
+It points to retained native screenshots, exact client instances, runtime
+hashes and each measured update. Release installation preserved `data.json`
+bytes. Subsequent unrelated thread-selection timestamps were retained; no
+synthetic fixture settings were saved. Windows behavior was not smoke-tested.
