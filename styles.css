@@ -120,11 +120,15 @@
 }
 .callout[data-callout="t3-progress"] > .callout-title {
   font-size: var(--h6-size);
+  font-weight: var(--h6-weight, 600);
   font-family: var(--h6-font);
   color: var(--h6-color, var(--text-muted));
   gap: 0.4em;
   cursor: pointer;
 }
+/* Keep the inner title and Markdown bold at the same intermediate weight. */
+.callout[data-callout="t3-progress"] > .callout-title > .callout-title-inner,
+.callout[data-callout="t3-progress"] > .callout-title strong { font-weight: inherit; }
 .callout[data-callout="t3-progress"] > .callout-title > .callout-icon { display: none; }
 /* Align the native editor action with the header, including wrapped titles. */
 .markdown-source-view.mod-cm6 .embed-actions.send-to-t3-progress-actions {
