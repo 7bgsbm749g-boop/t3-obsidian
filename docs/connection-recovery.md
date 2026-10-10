@@ -197,3 +197,20 @@ snapshot cannot reset that cursor and replace a newer title. Tests cover stale
 snapshots/events, project/environment isolation, fresh reconnects, stream
 acknowledgements, absence of title history polls, and history/payload getters
 that fail if title normalization touches transcript data.
+
+The final 2.37.7 VPS native smoke completed one prompt and one T3 run, saved
+the exact expected reply and displayed it in the editor. The original note was
+restored, its saved hash and the active import's saved hash stayed unchanged,
+and the synthetic test note was removed. Both VPS and Windows clients confirmed
+2.37.7 in new instances. Windows resource use and native mobile behavior were
+not measured.
+
+Two final 20-second renderer samples averaged 1.45 GiB RSS, versus 1.76 GiB in
+the fresh 2.37.5 baseline (about 18% less). CPU ranged from 74.66% to 97.80% of
+one core; earlier warm 2.37.6 samples also varied. These short natural-GC samples
+include core Obsidian and other plugins and do not establish a repeatable total
+CPU reduction or a long-run retained-memory bound. The synthetic normalization
+benchmark confirms that title processing skips transcript work, but excludes
+network, JSON decoding and the rest of the renderer. Raw samples, benchmark,
+screenshots and exact delivery proof are retained in
+`performance-20261010-even-more/title-only-2377` outside the vault.
