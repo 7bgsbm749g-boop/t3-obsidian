@@ -466,7 +466,7 @@ for(const version of [1,2,3] as const)test(`initial question survives hosted v${
   if(version!==1){h.request.initialOwner=randomUUID();h.io.accepts=request=>request.version===version;}
   if(version===3)h.request.finalAnswerFormat='raw-markdown';
   h.files.set(h.paths.request,JSON.stringify(h.request));
-  assert.match(h.document,/> Keep it brief\.[\s\S]*T3 · Working/);
+  assert.match(h.document,/T3 · Working[\s\S]*> Keep it brief\./);
   h.dispatch();let writer=h.create();await writer.tick();writer.stop();
   assert.match(h.document,/> Keep it brief\.[\s\S]*stream-tail">Progress A/);
   writer=h.create();h.answer('Final answer.',true);await writer.tick();writer.stop();

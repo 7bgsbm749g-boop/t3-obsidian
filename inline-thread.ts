@@ -85,7 +85,8 @@ export function renderInlineInput(text:string,label='You',position?:'live'|'reco
 
 export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming):{text:string;bodyHash:string} {
   const status=`${mode==='collapse'?'> [!t3-progress]+ ':''}**${inlineThreadLabel(threadTitle)} · Working**${timing?' '+runTimer(timing):''} <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
-  const body=(initialInput?`${renderInlineInput(initialInput.text,initialInput.label)}\n\n${status}`:status)+(mode==='collapse'?'\n>\n> ':'\n\n')+responseActivityRow();
+  const contents=[...(initialInput?[renderInlineInput(initialInput.text,initialInput.label)]:[]),responseActivityRow()].join('\n\n');
+  const body=status+(mode==='collapse'?'\n>\n'+contents.split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'\n\n'+contents);
   // The final blank line also closes the quote in Obsidian Live Preview when
   // this response is the last block in the note.
   return {text:`\n${startMarker(id)}\n${body}\n${endMarker(id)}\n\n`,bodyHash:contentHash(body)};
@@ -556,7 +557,9 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     // message still belong before their steering input inside the history.
     const finalId=finalReady?inlineTurnMessages({...state,messages:all},turnId).at(-1)?.id:undefined;
     const finalIndex=finalId?pieces.reduce((last,piece,index)=>piece.role==='assistant'&&piece.messageId===finalId?index:last,-1):-1;
-    const history:string[]=[];let final='';
+    // Initial questions and continuation prompts share steering's history
+    // placement. Keep their exact input record separate from turn bindings.
+    const history:string[]=initialInput?[renderInlineInput(initialInput.text,initialInput.label)]:[];let final='';
     let toolIndex=0;
     const toolsBefore=(at=Infinity)=>{while(toolIndex<historyRows.length&&(Date.parse(historyRows[toolIndex].createdAt??'')||0)<=at)history.push(historyRows[toolIndex++].body);};
     for(const [index,piece] of pieces.entries()){
@@ -571,13 +574,14 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const key=encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active');
     const fold=`> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
     const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):approvals;
-    return input+fold+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
+    return fold+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }
   const toolHistory=(retain?historyRows:phase!=='complete'?emissions.filter(item=>item!==currentEmission):[]).map(item=>item.body).join('\n\n');
   if(phase==='complete')return input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
   const status=phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):approvals?'\n\n'+approvals:'';
-  const body=prose?`\n\n${prose}\n`:'';
-  return `${input}${followupIndex<0?heading+timer+spinner:''}${status}${body}${toolHistory?'\n\n'+toolHistory:''}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
+  const contents=[input.trimEnd(),prose].filter(Boolean).join('\n\n');
+  const body=contents?`\n\n${contents}\n`:'';
+  return `${followupIndex<0?heading+timer+spinner:''}${status}${body}${toolHistory?'\n\n'+toolHistory:''}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
 }
 
 export function turnPhase(state:InlineThreadState,turnId:string):'running'|'complete'|'interrupted'|'error' {

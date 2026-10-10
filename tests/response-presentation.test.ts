@@ -78,6 +78,61 @@ function foldsOf(text:string){
 }
 function foldKeys(text:string){return [...text.matchAll(/data-t3-fold="([^"]+)"/g)].map(match=>match[1]);}
 
+test('initial and continuation prompts belong inside the shared history from submission through completion',()=>{
+  const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  for(const prompt of ['continue','Why?\n\n## Input heading\n\n```md\n> [!t3-progress]- Literal example']){
+    const input={messageId:'question',text:prompt};
+    const submitted=initialRegion(id,input,state.title,'collapse',{startedAt:timing.startedAt});
+    const initialFold=foldsOf(submitted.text);
+    assert.equal(initialFold.length,1);assert.match(initialFold[0],/> > \[!t3-steering\] You/);
+    assert.deepEqual(activeInlineIds(submitted.text),[id]);
+    assert.ok(submitted.text.indexOf('Bounded history · Working')<submitted.text.indexOf('[!t3-steering] You'));
+    for(const phase of ['sending','running','reconnecting','error','interrupted','cancelled','complete'] as const){
+      for(const format of ['formatted','raw-markdown'] as const){
+        const text=renderInlineTurn(state,'turn','thread',phase,'collapse','environment',undefined,input,undefined,timing,format);
+        const folds=foldsOf(text);assert.equal(folds.length,1);
+        assert.match(text,/^> \[!t3-progress\][+-]/);
+        assert.match(folds[0],/> > \[!t3-steering\] You/);
+        assert.equal(text.split('[!t3-steering] You').length-1,1);
+        if(phase==='complete'){
+          assert.doesNotMatch(folds[0],/Final visible answer/);
+          assert.equal(text.split('Final visible answer.').length-1,1);
+        }
+      }
+    }
+  }
+});
+
+test('initial input precedes later steering in one fold, including before final prose arrives',()=>{
+  const input={messageId:'question',text:'continue'};
+  const progress={...state.messages[0],text:'Progress after continuation.',streaming:true};
+  const steer={messageId:'steer',text:'Keep it brief.',confirmed:true,before:[progress]};
+  const conversation={messages:[progress],steering:[steer]};
+  const live={...state,messages:[progress],latestTurn:{turnId:'turn',state:'running'}};
+  for(const phase of ['running','complete'] as const){
+    const text=renderInlineTurn(live,'turn','thread',phase,'collapse',undefined,conversation,input);
+    const folds=foldsOf(text);assert.equal(folds.length,1);
+    assert.match(folds[0],/continue[\s\S]*Progress after continuation\.[\s\S]*Keep it brief\./);
+    assert.equal(folds[0].split('[!t3-steering] You').length-1,2);
+    assert.match(text,/^> \[!t3-progress\]\+ .*Working/);
+  }
+});
+
+test('Keep and Remove put the initial quote below the active header and retain it at completion',()=>{
+  const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',input={messageId:'question',text:'continue'};
+  for(const mode of ['keep','remove'] as const){
+    const submitted=initialRegion(id,input,state.title,mode);
+    assert.ok(submitted.text.indexOf('Bounded history · Working')<submitted.text.indexOf('[!t3-steering] You'));
+    for(const phase of ['sending','running','reconnecting','error','interrupted','cancelled'] as const){
+      const text=renderInlineTurn(state,'turn','thread',phase,mode,undefined,undefined,input);
+      assert.match(text,/^\*\*Bounded history · /);
+      assert.match(text,/\n\n> \[!t3-steering\] You\n> continue/);
+    }
+    const complete=renderInlineTurn(state,'turn','thread','complete',mode,undefined,undefined,input);
+    assert.match(complete,/^> \[!t3-steering\] You\n> continue/);assert.match(complete,/Final visible answer/);
+  }
+});
+
 for(const inputKind of ['question answer','steering','repeated mixed inputs'] as const)test(`${inputKind} within a run keeps one status while progress and inputs retain chronological boundaries`,()=>{
   const progress={id:'progress',role:'assistant',turnId:'turn',text:'Before input.',streaming:false,createdAt:'2026-10-02T10:00:01Z'};
   const after={...progress,id:'after',text:'After first input.',createdAt:'2026-10-02T10:00:03Z'};
