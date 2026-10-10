@@ -9,7 +9,7 @@ import {regionBody,initialRegion,startMarker,endMarker,renameInlineHeader} from 
 import {logFailure} from './diagnostics';
 import {nativeCommitMatches,readNativeCommitProof,type NativeCommitProof} from './native-response-commit';
 import type {DirectInlineUpdate} from './direct-inline-preview';
-import {loadNativePreviews,previewMatches,previewMessageId,MAX_NATIVE_PREVIEWS,MAX_NATIVE_PREVIEW_CHARACTERS,type NativePreviewEntry,type NativePreviewSnapshot} from './native-preview-cache';
+import {loadNativePreviews,checkedNativePreview,sameNativePreview,previewMatches,previewMessageId,MAX_NATIVE_PREVIEWS,MAX_NATIVE_PREVIEW_CHARACTERS,type NativePreviewEntry,type NativePreviewSnapshot} from './native-preview-cache';
 import type {DeviceCompletionReceipt} from './device-response-completion';
 import type {NativeStoppedResponse,NativeStoppedStore} from './native-stop-store';
 
@@ -140,8 +140,8 @@ export class NativeResponseManager {
     if(this.localStops.has(record.request.id))return;
     const request=record.request,stream=this.streams.get(request.id);
     const entry:NativePreviewEntry={id:request.id,vaultId:request.vaultId,notePath:record.state?.notePath??request.notePath,threadId:request.threadId,projectId:request.projectId,threadEnvironmentId:request.threadEnvironmentId,messageId:previewMessageId(record),epoch:record.epoch,revision:record.revision,sequence:stream?.sequence??-1,body};
-    const old=this.cached.get(entry.id);if(old&&JSON.stringify(old)===JSON.stringify(entry))return;
-    if(!loadNativePreviews({version:1,vaultId:this.previewVault,entries:[entry]},this.previewVault).length)return;
+    const old=this.cached.get(entry.id);if(old&&sameNativePreview(old,entry))return;
+    if(!checkedNativePreview(entry,this.previewVault,old))return;
     this.cached.delete(entry.id);this.cached.set(entry.id,entry);
     let characters=[...this.cached.values()].reduce((n,item)=>n+item.body.length,0);
     while(this.cached.size>MAX_NATIVE_PREVIEWS||characters>MAX_NATIVE_PREVIEW_CHARACTERS){const oldest=this.cached.values().next().value!;characters-=oldest.body.length;this.cached.delete(oldest.id);this.reconnecting.delete(oldest.id);}

@@ -85,10 +85,26 @@ replacements, removed files, and symlinks retain fresh-read behavior. The
 metadata index has a 4,096-entry limit and clears on host shutdown. Changed
 leases still bypass historical maintenance limits immediately.
 
+The real QLO2 2.37.4 client reduced lease discovery parses from about 129 per
+second in the first old-client interval to 1.4 per second after warm-up. Total
+CPU and memory remained high; this does not prove all renderer costs were
+removed. A second native allocation sample attributed 14.31% of sampled
+allocations, including child calls, to preview checkpoint construction and
+validation. Preview equality serialized two complete copies of each body,
+and metadata-only revisions could repeat Markdown validation after cache
+eviction. Preview updates now compare fields directly and reuse boundary
+validation only for the same binding and exact body already checked in this
+process. New text and persisted snapshots still receive full validation.
+Metadata and cache size limits remain checked on every update. Native V8
+diagnostics found five contexts and zero detached contexts; these measurements
+do not establish that a full retained-object leak has been ruled out.
+
 Regression tests include history that exceeds the text-cache budget, changed
 terminal revisions, deletion, a replacement during discovery, and real file
 identity checks. This reduces repeated history allocations without enlarging
-the body cache or delaying reloads.
+the body cache or delaying reloads. Preview regressions cover cache eviction,
+metadata-only revisions, changed identity fields, unsafe paths, nested response
+boundaries, and untrusted persisted snapshots.
 
 Regression tests cover silent sockets, real health responses, slow healthy
 requests, shared probes, concurrent reads, uncertain writes, recovery cancellation,

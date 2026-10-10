@@ -116,6 +116,7 @@ On desktop, failures on two distinct connections to the same response host withi
 The destination must remain online. There is no offline queue or automatic resend. A failed send ends immediately: its response stream and activity indicators disappear, and the plugin does not resend it. Device-local command IDs identify the attempt and its failure; they do not create a Retry queue. Completion monitoring uses the same connection while Obsidian is active.
 
 Desktop response discovery verifies file identities and reuses unchanged records. Historical reply bodies no longer need to be read and parsed again at each live scan.
+Native preview checkpoints compare fields without serializing large reply bodies. Metadata-only updates reuse the same body's checked boundaries; new reply text and saved previews are fully validated.
 
 New threads use the selected machine's T3 model and access defaults: an explicit project override takes precedence over the environment default. Configured model options, including reasoning effort, are preserved; previous threads do not supply model, reasoning, or access settings. If T3 is set to automatic model selection, the plugin uses an enabled provider's advertised default model. When an older T3 configuration omits the access setting, new threads use T3's Full Access default. Existing-thread sends retain that conversation's model and permissions. Each send captures its model, access mode, and commands before dispatch.
 
