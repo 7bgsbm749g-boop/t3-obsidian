@@ -409,7 +409,15 @@ export default class SendToT3 extends Plugin {
     });
     this.app.workspace.onLayoutReady(()=>{
       let nextNativeRefresh=0,queued=false;
-      const refreshNative=()=>{if(this.stopped)return;nativeResponses(this.app).refresh();nextNativeRefresh=performance.now()+1000;};
+      const refreshNative=()=>{
+        if(this.stopped)return;
+        const manager=nativeResponses(this.app);manager.refresh();
+        // Recovery discovery reads every open native document. The host
+        // catalog already polls at three seconds; compute current anchor IDs
+        // with the one-second view pass, and immediately on workspace events.
+        this.deviceInline?.discover(this.inlineTargets,manager.reconnectingResponseIds());
+        nextNativeRefresh=performance.now()+1000;
+      };
       // Stream/lease changes already refresh their native projection directly.
       // Keep the 150 ms device/legacy writer cadence, but avoid rebuilding every
       // unchanged native view at that rate. Workspace changes remain immediate.
@@ -426,7 +434,7 @@ export default class SendToT3 extends Plugin {
       if(typeof window.addEventListener==='function'){this.registerDomEvent(window,'focus',resume);this.registerDomEvent(window,'online',resume);}
       const tick=()=>{
         const now=Date.now();if(now-lastTick>2000)resume();lastTick=now;
-        if(performance.now()>=nextNativeRefresh)refreshNative();this.deviceInline?.tick();this.deviceInline?.discover(this.inlineTargets,nativeResponses(this.app).reconnectingResponseIds());
+        if(performance.now()>=nextNativeRefresh)refreshNative();this.deviceInline?.tick();
       };
       tick();this.registerInlineInterval(tick,150);
       const remember=()=>{if(this.settings.folderLinks.some(link=>link.folderPath==='/'))void this.inlineHostTarget().then(target=>this.rememberInlineTarget(target)).catch(()=>{});};

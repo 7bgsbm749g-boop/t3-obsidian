@@ -51,6 +51,32 @@ test('public mutable reads cannot change the private hydrated snapshot or reques
   }finally{await h.close();}
 });
 
+test('inspection shares frozen recovery text without mutable copies and observes new publications',async t=>{
+  const h=await fixture(),id=randomUUID();try{
+    const state=initial(id);state.conflicts=[{original:state.original,latest:'Local edit',reason:'Unresolved'}];await h.journal.append(id,state,'accepted');
+    const first=(await h.journal.inspect(id))!;let copies=0;const clone=structuredClone;
+    t.mock.method(globalThis,'structuredClone',(value:any)=>{copies++;return clone(value);});
+    const before=h.journal.status();
+    for(let n=0;n<40;n++)assert.equal(await h.journal.inspect(id),first);
+    const after=h.journal.status();assert.equal(copies,0);assert.equal(after.mutableCopies,before.mutableCopies);assert.equal(after.inspections-before.inspections,40);assert.equal(after.headChecks-before.headChecks,40);
+    assert.throws(()=>{first.request.id=randomUUID();},TypeError);assert.throws(()=>{first.conflicts[0].latest='Changed';},TypeError);
+    const edited=(await h.journal.read(id))!;edited.notePath='Moved.md';await h.journal.append(id,edited,'renamed');
+    const current=(await h.journal.inspect(id))!;assert.notEqual(current,first);assert.equal(current.notePath,'Moved.md');assert.equal(first.notePath,'Note.md');assert.equal(current.original,state.original);
+  }finally{await h.close();}
+});
+
+test('warm inspection still rejects replaced heads and damaged recovery objects',async()=>{
+  for(const kind of ['head','object']){
+    const h=await fixture(),id=randomUUID();try{
+      const state=initial(id);await h.journal.append(id,state,'accepted');await h.journal.inspect(id);
+      const path=kind==='head'?h.path(id):join(h.privateRoot,id,'current','objects',state.originalHash+'.blob');
+      const raw=await fs.readFile(path,'utf8'),stat=await fs.stat(path);
+      await fs.writeFile(path,kind==='head'?raw.replace('Note.md','Edit.md'):raw.replace('Recovery','Tampered'));await fs.utimes(path,stat.atime,stat.mtime);
+      await assert.rejects(h.journal.inspect(id),/integrity/);assert.equal(h.journal.status().mutableCopies,0);
+    }finally{await h.close();}
+  }
+});
+
 test('changed checksum objects fail maintenance before obsolete evidence is collected',async()=>{
   const h=await fixture(),id=randomUUID();try{
     const state=initial(id);await h.journal.append(id,state,'accepted');const directory=join(h.privateRoot,id),old=join(directory,'0000000000.json');await fs.writeFile(old,'Preserve evidence');

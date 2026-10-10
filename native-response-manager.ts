@@ -219,7 +219,7 @@ export class NativeResponseManager {
       this.reconnecting.delete(update.request.id);
     }
     const path=record?.state?.notePath??update.request.notePath;
-    this.streams.set(update.request.id,{...update,request:{...update.request,notePath:path}});this.refresh();
+    this.streams.set(update.request.id,{...update,request:{...update.request,notePath:path}});this.refresh(new Set([path,previous?.request.notePath??path]));
   }
   title(id:string,title:string){if(!title.trim()||this.titles.get(id)===title)return;this.titles.set(id,title);this.refresh();}
   private titled(id:string,body:string){const title=this.titles.get(id);return title?renameInlineHeader(body,title):body;}
@@ -252,7 +252,14 @@ export class NativeResponseManager {
     if(record.state?.status==='conflict')for(const [view,adapter] of this.views)if(view.file?.path===path&&adapter.responseIds().includes(record.request.id))adapter.confirmPendingConflict(record.state.detail??'The response could not verify its saved note. Both versions are preserved.');
     if(record.stopRequestedAt!==undefined&&!record.state?.cleanupComplete&&(!this.localStops.has(record.request.id)||record.discardResponse&&!this.localStops.get(record.request.id)?.hidden))await this.stop(record.request.id,path,record.discardResponse===true);
     if(record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete)this.streams.delete(record.request.id);
-    this.refresh();
+    // Metadata and presence updates belong to this binding. Preserve immediate
+    // delivery without reading/rendering every unrelated open native note.
+    // Both locations and every duplicate-destination warning remain current.
+    const affected=new Set([path,record.state?.notePath??record.request.notePath]);
+    if(old)affected.add(old.state?.notePath??old.request.notePath);
+    if(cached)affected.add(cached.notePath);
+    for(const path of [...old?.state?.locationConflict??[],...record.state?.locationConflict??[]])affected.add(path);
+    this.refresh(affected);
     if(record.state?.delivery&&record.state.cleanupComplete)await this.changed(record.state.notePath);
     if(cached&&!this.cached.has(record.request.id))await this.flushPreviewCache();
   }
@@ -314,13 +321,13 @@ export class NativeResponseManager {
     const fence=this.activeFinalSaves.get(file.path);if(fence)this.joinFinalSave(fence,adapter);
     return adapter;
   }
-  refresh(){
+  refresh(paths?:ReadonlySet<string>){
     const opened=new Set<string>();
     const live=new Set(this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView));
     for(const [view,warnings] of this.warnings)if(!live.has(view)){for(const element of warnings.values())element.remove();this.warnings.delete(view);}
     for(const [view,adapter] of this.views)if(!live.has(view)||adapter.isDisposed()){if(!adapter.isDisposed())adapter.dispose();this.views.delete(view);}
     for(const view of live){
-      if(!view.file||typeof view.getViewData!=='function')continue;
+      if(!view.file||typeof view.getViewData!=='function'||paths&&!paths.has(view.file.path))continue;
       const blocked=[...this.records.values()].filter(record=>!record.stopRequestedAt&&!record.state?.cleanupComplete&&record.state?.locationConflict?.includes(view.file!.path));
       let warnings=this.warnings.get(view);if(!warnings){warnings=new Map();this.warnings.set(view,warnings);}
       for(const [id,element] of warnings)if(!element.isConnected||!blocked.some(record=>record.request.id===id)){element.remove();warnings.delete(id);}

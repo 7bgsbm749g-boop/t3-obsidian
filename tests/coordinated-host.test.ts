@@ -234,10 +234,10 @@ test('a structurally rejected final cannot consume a private history audit or al
  const h=await setup();try{
   await h.writer.tick();
   const before=h.notes.get('Note.md'),state=JSON.parse((await h.files.read(leasePaths(h.identity.directory,h.id).record))!).state;
-  let reads=0;const read=h.host.journal.read.bind(h.host.journal);h.host.journal.read=async id=>{reads++;return read(id);};
+  const headChecks=h.host.journal.status().headChecks;
   await assert.rejects(h.host.io(h.base).commitFinal!(h.request,state,'Unsafe <!-- t3-inline:start:other -->'),/tracking boundaries/);
   assert.equal(state.status,'conflict');
-  assert.equal(reads,0);assert.equal(h.notes.get('Note.md'),before);assert.equal(h.writes(),0);
+  assert.equal(h.host.journal.status().headChecks,headChecks);assert.equal(h.notes.get('Note.md'),before);assert.equal(h.writes(),0);
  }finally{await h.close();}
 });
 test('a structurally rejected finished reply stops automatic retries and resumes only after an explicit command',async()=>{
@@ -463,6 +463,16 @@ test('supported repair verifies a reviewed pending commit without treating it as
  }finally{await h.close();}
 });
 
+test('unchanged active host scans authenticate recovery without copying the note',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const snapshot=await h.host.journal.inspect(h.id),before=h.host.journal.status(),note=h.notes.get('Note.md'),writes=h.writes();
+  for(let n=0;n<20;n++)await h.host.scan();
+  const after=h.host.journal.status();assert.ok(after.inspections-before.inspections>=40);assert.ok(after.headChecks>before.headChecks);assert.equal(after.mutableCopies,before.mutableCopies);
+  assert.equal(await h.host.journal.inspect(h.id),snapshot);assert.equal(h.notes.get('Note.md'),note);assert.equal(h.writes(),writes);
+  h.complete();await h.writer.tick();assert.equal((await h.host.journal.inspect(h.id))!.status,'verified');assert.match(h.notes.get('Note.md')!,/Added \*\*25kg\*\*/);
+ }finally{await h.close();}
+});
+
 test('active delivery proceeds while completed journal observation rotates through bounded history batches',async t=>{
  const h=await setup();try{
   let clock=Date.now();t.mock.method(Date,'now',()=>clock);
@@ -472,7 +482,7 @@ test('active delivery proceeds while completed journal observation rotates throu
    h.storage.set(leasePaths(h.identity.directory,id).record,JSON.stringify({request,coordinated:true,owner:COORDINATED_OWNER,epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,state:{requestHash:hostedRequestHash(request),accepted:true,status:'complete',finalSaved:true,cleanupComplete:true,finalPhase:'complete',finalBody:'Saved old answer',notePath:request.notePath,hashes:[],updatedAt:''}}));
   }
   let activeReads=0;
-  const read=h.host.journal.read.bind(h.host.journal),observed=new Set<string>();h.host.journal.read=async id=>{if(historical.has(id)){observed.add(id);return undefined;}activeReads++;return read(id);};
+  const read=h.host.journal.read.bind(h.host.journal),inspect=h.host.journal.inspect.bind(h.host.journal),observed=new Set<string>();h.host.journal.inspect=async id=>{if(historical.has(id)){observed.add(id);return undefined;}activeReads++;return inspect(id);};
   (h.host as any).terminalDiscoveryComplete=false;
   await h.host.scan(true);assert.equal(observed.size,1,'background history audit takes one slot');
   const before=activeReads;

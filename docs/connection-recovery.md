@@ -141,3 +141,38 @@ editor adoption. It does not establish the desktop core Sync engine or native
 Android/iPhone behavior. Windows receives the immutable release through the
 existing Sync and native laptop reload path; the two-client fault test runs on
 Linux desktop clients.
+
+### Further recovery allocation reductions (2.37.6)
+
+The next live-client sample still used about one CPU core. The running journal
+had made more than 100,000 mutable recovery copies. Its active catalog included
+large originals, so copying a verified state just to check a path or status
+allocated large strings again. Increasing the cache budget would retain more
+memory, and an LRU over the whole active set could make every scan miss.
+
+`CurrentGenerationJournal.inspect` instead performs the same fresh head,
+publication-anchor and object checks, then returns its existing deeply frozen
+hydrated state. Host discovery, event-content inspection and the device draft
+read use this method. Journal mutation and coordinator operations still obtain
+independent mutable copies. Cache entry and character budgets are unchanged.
+Regression tests verify reuse without copies, nested immutability, changed
+publications, same-size replacement and object tampering, and successful final
+completion after repeated host inspection.
+
+Native recovery-anchor discovery previously ran on every 150 ms writer tick,
+even though host catalog discovery was already paced at three seconds. It now
+runs with the existing one-second native view refresh, and immediately on
+workspace/file and resume events. Stream projection changes and the writer's
+150 ms cadence are unchanged. Saved anchors still recover imports independently
+of preview persistence. No edit, save or active-work guard was added to reload.
+
+Incoming reply and lease updates now refresh only panes for the affected
+binding's old/current destinations and duplicate-location warnings. They no
+longer read every unrelated native note. Full workspace/periodic refreshes still
+discover changes, and all panes showing the affected note update immediately.
+Tests cover unrelated-note reads, full refresh, and delayed leases after rename.
+
+Live before/after resource samples and the release smoke evidence are retained
+outside QLO2 under `performance-20261010-even-more` in the backup root. Resource
+samples describe the entire Obsidian renderer and include core application work
+and other plugins; they do not by themselves establish a retained-memory leak.

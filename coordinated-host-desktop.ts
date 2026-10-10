@@ -94,7 +94,7 @@ export class CoordinatedHost {
   }
   async eventContent(path:string,content:string){
     const leases=this.authority.responsesFor(path);
-    const records=await Promise.all(leases.map(record=>this.journal.read(record.request.id)));
+    const records=await Promise.all(leases.map(record=>this.journal.inspect(record.request.id)));
     const prepared=await Promise.all(leases.filter(record=>record.preparedFinal&&record.finalWriter).map(async record=>{
       const delivery={...record.preparedFinal!,verifiedOnHost:false,observedBy:[]},bytes=await this.files.read(nativeCommitPath(this.identity.directory,record.request.id,delivery.commitId));
       if(!bytes)throw Error('A prepared device completion proof is unavailable.');
@@ -165,7 +165,7 @@ export class CoordinatedHost {
       const id=record.request.id,notePath=record.state?.notePath??record.request.notePath;
       if(record.responseRemovedAt!==undefined){this.records.set(id,record);await nativeResponses(this.app).receive(record);return;}
       if(record.request.deviceCompletion){
-        if(!await this.journal.read(id)){
+        if(!await this.journal.inspect(id)){
           const original=await this.files.read(deviceOriginalPath(this.identity.directory,id));
           if(original===undefined||contentHash(original)!==record.request.deviceCompletion.originalHash)throw Error('The private completion original changed.');
           await this.coordinator.accept(record.request,original);
@@ -173,12 +173,12 @@ export class CoordinatedHost {
         if(record.migrating)record=await this.authority.migrated(id);
         this.records.set(id,record);
         if(record.finalWriter&&record.finalWriter.actor!==record.owner){
-          const journal=(await this.journal.read(id))!;
+          const journal=(await this.journal.inspect(id))!;
           if(journal.staged===undefined)await this.coordinator.result(id,completedSelectionDraft(journal.stagedDraft??journal.original,id,record.state?.steering),record.finalWriter.body);
           const delivery=record.state?.delivery;
           if(delivery&&!journal.deviceProof){const bytes=await this.files.read(nativeCommitPath(this.identity.directory,id,delivery.commitId));if(bytes)await this.coordinator.adoptDeviceCommit(id,readNativeCommitProof(bytes,id,delivery));}
           if(delivery&&record.state?.cleanupComplete){
-            const completed=await this.journal.read(id);
+            const completed=await this.journal.inspect(id);
             if(completed?.status==='verified'&&completed.verified?.commitId===delivery.commitId&&completed.verified.hash===delivery.hash){
               for(const actor of delivery.observedBy)await this.coordinator.acknowledge(id,actor,delivery.commitId,completed.verified.document);
               await this.journal.settle(id,delivery.commitId,delivery.hash);
@@ -192,7 +192,7 @@ export class CoordinatedHost {
         }
       }
       if(record.relocations?.length){
-        const original=await this.journal.read(id);
+        const original=await this.journal.inspect(id);
         for(const move of record.relocations){
           deviceNoteIO(this.app).noteRelocated(id,move.before,move.after,original?.originalHash);
           if(!original||move.before===notePath)continue;
@@ -220,7 +220,7 @@ export class CoordinatedHost {
       // exact durable intent. Recover by disk readback before marker location,
       // projection, or network work; those anchors have legitimately gone.
       if(record.coordinated&&!record.migrating&&!record.state?.cleanupComplete){
-        const pending=await this.journal.read(id);
+        const pending=await this.journal.inspect(id);
         // Recover a crash after intentional journal removal without resuming
         // delivery. Reuse this existing fresh audit; no additional history scan.
         if(pending?.status==='removed'){
@@ -245,7 +245,7 @@ export class CoordinatedHost {
       }
       if(terminalLease(record)||record.state?.finalSaved){
         if(record.coordinated){
-          let journal=await this.journal.read(id);
+          let journal=await this.journal.inspect(id);
           if(journal?.status==='removed'){
             const removed=await this.authority.removeResponse(id);this.records.set(id,removed);
             await nativeResponses(this.app).receive(removed);return;
@@ -306,11 +306,11 @@ export class CoordinatedHost {
         // create makes a crash/retry preserve the first competing version.
         const evidence=join(this.journal.root,id);await fs.mkdir(evidence,{recursive:true,mode:0o700});
         await fs.writeFile(join(evidence,'migration-original.md'),saved,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
-        const old=await this.journal.read(id);if(!old)await this.coordinator.accept(record.request,anchored);
+        const old=await this.journal.inspect(id);if(!old)await this.coordinator.accept(record.request,anchored);
         if(anchored!==saved&&!await this.checkedSave(notePath,saved,anchored))return;
         record=await this.authority.migrated(id);this.records.set(id,record);
       }
-      const journal=await this.journal.read(id);
+      const journal=await this.journal.inspect(id);
       if(journal&&journal.notePath!==notePath)await this.coordinator.renamed(id,journal.notePath,notePath);
       await nativeResponses(this.app).receive(record);
       }catch(error){const detail=error instanceof Error?error.message:String(error);this.failures.set(identity,detail);logFailure('response.coordinator.scan-conflict',error,{bindingId:identity});}
@@ -347,7 +347,7 @@ export class CoordinatedHost {
       updateNote:async(path,change,bindingId)=>{
         const local=bindingId?this.records.get(bindingId):undefined;
         if(local?.request.deviceCompletion&&!local.state?.cleanupComplete){
-          const journal=(await this.journal.read(local.request.id))!,document=journal.stagedDraft??journal.original;
+          const journal=(await this.journal.inspect(local.request.id))!,document=journal.stagedDraft??journal.original;
           const region=responseRegion(document,local.request.id)!;
           const displayed=document.slice(0,region.from)+startMarker(local.request.id)+'\n'+(local.state?.body??regionBody(initialRegion(local.request.id).text,local.request.id)!.body)+'\n'+endMarker(local.request.id)+document.slice(region.to);
           // The host keeps display/checkpoint work private. Ordinary staged
@@ -375,7 +375,7 @@ export class CoordinatedHost {
           reads.set(request.id,{epoch:record.epoch,revision:record.revision});
           if(record.finalWriter?.actor!==record.owner)return false;
         }
-        const journal=await this.journal.read(request.id);if(!journal)throw Error('Missing durable generation original.');
+        const journal=await this.journal.inspect(request.id);if(!journal)throw Error('Missing durable generation original.');
         if(journal.status==='conflict'){state.status='conflict';state.detail=journal.conflicts.at(-1)?.reason;return false;}
         if(journal.staged===undefined)await this.coordinator.result(request.id,request.deviceCompletion?completedSelectionDraft(journal.stagedDraft??journal.original,request.id,state.steering):journal.stagedDraft??journal.original,body);
         const result=await this.coordinator.commit(request.id);

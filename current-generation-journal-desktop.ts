@@ -34,7 +34,7 @@ export class CurrentGenerationJournal implements GenerationJournal {
   private nextDiscovery=0;
   private stopped=false;
   private closing?:Promise<void>;
-  private counters={headChecks:0,headParses:0,objectChecks:0,objectHashes:0,hydrations:0,mutableCopies:0,collections:0,maintenanceRecords:0,maintenanceFailures:0};
+  private counters={headChecks:0,headParses:0,objectChecks:0,objectHashes:0,hydrations:0,mutableCopies:0,inspections:0,collections:0,maintenanceRecords:0,maintenanceFailures:0};
   private constructor(readonly root:string,private legacy:DesktopGenerationJournal,private key:Buffer,private options:JournalOptions){}
   static async open(root:string,vaultRoots:readonly string[],options:JournalOptions={}){
     const legacy=await DesktopGenerationJournal.open(root,vaultRoots);
@@ -221,6 +221,10 @@ export class CurrentGenerationJournal implements GenerationJournal {
     const migration=join(directory,'migration-original.md');try{await this.file(migration);await fs.unlink(migration);}catch(error:any){if(error.code!=='ENOENT')throw error;}
   }
   read(id:string){return this.serial(id,async()=>{const current=await this.audit(id);return current?.state;});}
+  /** Freshly authenticate storage as for a mutable read, but share the deeply
+   * frozen hydrated snapshot with inspection-only callers. Mutation paths
+   * still receive independent copies through read/audit. */
+  inspect(id:string):Promise<Readonly<NoteGeneration>|undefined>{return this.serial(id,async()=>{const current=await this.verifyHead(id);if(!current)return;const state=await this.hydrate(id,current);this.counters.inspections++;return state;});}
   append(id:string,state:NoteGeneration,event:string){return this.serial(id,async()=>{
     const previous=await this.verifyHead(id),prior=previous?await this.hydrate(id,previous):undefined;
     if(prior&&(prior.original!==state.original||JSON.stringify(prior.request)!==JSON.stringify(state.request)))throw Error('The original request and note snapshot are immutable.');

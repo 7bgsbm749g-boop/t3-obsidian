@@ -278,3 +278,20 @@ for(const hidden of [false,true])test(`local native ${hidden?'failure':'stop'} s
   assert.doesNotMatch(restarted.visible(),/Working|spinner|After restart/);
   assert.equal(restarted.visible().includes('Latest partial reply'),!hidden);assert.equal(restarted.views[0].getViewData(),before);restarted.manager.dispose();
 });
+
+test('reply and presence updates leave unrelated native notes unread while a full refresh adopts their edits',async()=>{
+ const h=fixture();let unrelated='Other ordinary text',reads=0;
+ const otherView:any={file:{path:'Other.md'},getViewData:()=>{reads++;return unrelated;},setViewData:(text:string)=>{unrelated=text;},getMode:()=> 'preview'};
+ h.open(otherView);await start(h);reads=0;
+ h.manager.stream({request:record().request,messageId:id,sequence:12,body:'> New paragraph'});
+ await h.manager.receive(record(id,2));assert.match(h.visible(),/New paragraph/);assert.equal(reads,0);
+ unrelated='Other ordinary edit';h.manager.refresh();assert.ok(reads>0);assert.equal(unrelated,'Other ordinary edit');h.manager.dispose();
+});
+
+test('scoped stale lease updates still reach a renamed native pane and its second view',async()=>{
+ const h=fixture(2);await start(h);h.file.path='Moved.md';h.manager.renamed('Note.md','Moved.md');
+ const update=record(id,2);update.state!.body='> New host paragraph after rename';await h.manager.receive(update);
+ assert.ok(h.views.every((_,i)=>h.visible(i).includes('New host paragraph after rename')));
+ h.manager.stream({request:update.request,messageId:id,sequence:13,body:'> New direct paragraph after rename'});
+ assert.ok(h.views.every((_,i)=>h.visible(i).includes('New direct paragraph after rename')));h.manager.dispose();
+});
