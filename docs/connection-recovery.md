@@ -37,13 +37,31 @@ identities remain in use.
 
 The desktop fallback requires confirmed failures on two distinct connections
 to the same host within 60 seconds. Multiple requests failing on one connection
-count as one incident. It uses the normal guarded native **Reload app without
-saving** command and waits for saved Markdown/code editors, final-save recovery,
-no active send or modal, and the exact running runtime files. A successful host
-read cancels the pending fallback. The reload decision is saved before dispatch;
-one reload is allowed per outage, with a five-minute minimum between reloads
-once the host recovers. State stays device-local and is not written to synced
-plugin settings. Mobile gets transport recovery without an app reload.
+count as one incident. It invokes the native **Reload app without saving** command
+immediately. Unsaved Markdown or code edits, active sends, dialogs, final-save
+recovery, and changed runtime files never block this reload. A successful host
+read cancels a pending fallback. One reload is allowed per outage, with a
+five-minute minimum after recovery to prevent an endless reload loop. State is
+device-local; mobile gets transport recovery without an app reload.
+
+## Imported stream recovery after a missed rename
+
+The affected note `Fix Laptop Send Timeout and Recovery.md` retained the exact
+empty response markers, while its host retained 379,815 characters of running
+response text under the original `Untitled.md` destination. The editor had kept
+its rename mapping in memory. After reload, native discovery found the renamed
+note but adopted the unchanged host path. Native observers never take the legacy
+writer lease that would otherwise correct that path. The resulting projection
+had no matching open destination, so the stream appeared empty.
+
+Open saved response anchors now supply discovery IDs independently of the local
+preview cache. This also handles reload before an asynchronous cache write has
+finished and completed bindings outside the active catalog. Discovery uses the
+existing unique-marker locator, then asks the authority to relocate the binding
+to the verified note before restoring the native display and direct feed.
+Missing or duplicate markers cannot authorize relocation. The original request,
+message, and turn identities stay unchanged; recovery dispatches no prompt and
+never delays the native reload command.
 
 ## Verification
 
@@ -62,13 +80,23 @@ The synthetic real-Sync lab uses the actual plugin in two independent Obsidian
 desktops. Its test-only observer can leave one or every file socket OPEN while
 dropping its outgoing frames. A single silent connection recovered and delivered
 one bounded prompt without restarting the app. Repeated silent connections
-caused a guarded native reload; the new client then recovered. The exact reply
+caused a native reload; the new client then recovered. The exact reply
 reached both saved notes and both visible editors through official Headless Sync.
 Private records and screenshots are retained outside the vault under
 `/home/ubuntu/backups/send-to-t3-code/connection-recovery-20261010`.
 
+The rename regression used two real imported runs. For the active run, the lab
+missed the rename handoff, erased the local preview checkpoint, then invoked the
+native reload during generation. The new client restored the unique anchor,
+corrected the host path, and retained the original message identity. All 750
+final response lines reached both saved notes; both desktop editors visibly
+showed the final line. The lab runtime files were restored with exact hashes,
+temporary notes removed, and its temporary authenticated session revoked.
+Evidence is retained under
+`/home/ubuntu/backups/send-to-t3-code/reload-stream-20261010/live-smoke.json`.
+
 This proves real relay RPC, desktop recovery, file propagation, and visible
 editor adoption. It does not establish the desktop core Sync engine or native
 Android/iPhone behavior. Windows receives the immutable release through the
-existing Sync and guarded laptop reload path; the two-client fault test runs on
+existing Sync and native laptop reload path; the two-client fault test runs on
 Linux desktop clients.

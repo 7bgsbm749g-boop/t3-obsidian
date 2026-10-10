@@ -7,7 +7,7 @@ const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 function fixture(){
   let now=0,state:ConnectionReloadState={},reloads=0,blocked=false,hold:Promise<void>|undefined;const errors:unknown[]=[];
   const io={load:()=>state,save:(value:ConnectionReloadState)=>{state=value;},now:()=>now,failure:(e:unknown)=>errors.push(e),reload:async(commit:()=>boolean)=>{
-    if(blocked)throw Error('Unsaved edits');if(hold)await hold;
+    if(blocked)throw Error('Native command failed');if(hold)await hold;
     if(!commit())return false;assert.equal(state.awaitingRecovery,'host');reloads++;return true;
   }};
   return {io,create:()=>new ConnectionRecovery(io),advance:(ms:number)=>{now+=ms;},state:()=>state,reloads:()=>reloads,errors,block:(value:boolean)=>{blocked=value;},hold:(value:Promise<void>)=>{hold=value;}};
@@ -17,11 +17,17 @@ test('only failures on two distinct silent connections trigger a persisted autom
   h.advance(1000);r.tick();await flush();assert.equal(h.reloads(),0);
   r.failed('host',timeout('b'));h.advance(1000);r.tick();r.tick();await flush();assert.equal(h.reloads(),1);assert.equal(h.state().awaitingRecovery,'host');
 });
-test('unsaved edits defer reload, and recovery cancels a reload while its guard is still running',async()=>{
+test('a failed native command can retry, and recovery cancels a pending command',async()=>{
   const h=fixture(),r=h.create();h.block(true);r.failed('host',timeout('a'));r.failed('host',timeout('b'));h.advance(1000);r.tick();await flush();
   assert.equal(h.reloads(),0);assert.equal(h.state().awaitingRecovery,undefined);assert.equal(r.status().pending,true);
   h.block(false);let release!:()=>void;h.hold(new Promise<void>(yes=>release=yes));h.advance(3000);r.tick();await flush();r.recovered('host');release();await flush();
   assert.equal(h.reloads(),0);assert.equal(r.status().pending,false);
+});
+test('failed device-local persistence cannot block a confirmed outage reload',async()=>{
+  const errors:unknown[]=[];let reloads=0,now=0;
+  const r=new ConnectionRecovery({load:()=>({}),save:()=>{throw Error('Storage unavailable');},now:()=>now,failure:error=>errors.push(error),reload:async commit=>{if(!commit())return false;reloads++;return true;}});
+  r.failed('host',timeout('a'));r.failed('host',timeout('b'));now=1000;r.tick();await flush();
+  assert.equal(reloads,1);assert.equal(errors.length,1);assert.equal(r.status().pending,false);r.dispose();
 });
 test('an offline client cannot reload repeatedly across app instances and a cooldown remains after recovery',async()=>{
   const h=fixture(),first=h.create();first.failed('host',timeout('a'));first.failed('host',timeout('b'));h.advance(1000);first.tick();await flush();first.dispose();

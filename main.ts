@@ -228,7 +228,7 @@ export default class SendToT3 extends Plugin {
         load:()=>{const value=this.app.loadLocalStorage(key);return value&&typeof value==='object'?value as ConnectionReloadState:{};},
         save:value=>this.app.saveLocalStorage(key,value),
         reload:beforeDispatch=>this.reloadForConnection(beforeDispatch),
-        failure:()=>{/* Readiness checks retry quietly while user edits are unsaved. */},
+        failure:()=>{/* Retry only if Obsidian itself could not invoke the reload. */},
       });
       this.app.workspace.onLayoutReady(()=>this.registerInlineInterval(()=>this.connectionRecovery?.tick(),1000));
     }
@@ -1394,20 +1394,19 @@ export default class SendToT3 extends Plugin {
       if(!root)return;
       const {NoteCommandServer}=await import('./note-command-desktop');
       const configDir=this.app.vault.configDir||'.obsidian';
-      this.clientMaintenance??=new (await import('./client-maintenance-desktop')).DesktopClientMaintenance(this.app,root,configDir,pluginManifest.version,()=>this.codebase?.languageViews.types()??[],async()=>{if(this.busy)throw Error('Waiting for the current send before reloading.');});
-      const server=await NoteCommandServer.open(root,configDir,command=>this.executeAgentCommand(command),()=>!this.stopped&&!this.busy,undefined,async(command,result)=>isClientCommand(command)?this.clientMaintenance!.acknowledged(command,result):false);
+      this.clientMaintenance??=new (await import('./client-maintenance-desktop')).DesktopClientMaintenance(this.app,root,configDir,pluginManifest.version);
+      const server=await NoteCommandServer.open(root,configDir,command=>this.executeAgentCommand(command),()=>!this.stopped,undefined,async(command,result)=>isClientCommand(command)?this.clientMaintenance!.acknowledged(command,result):false);
       if(this.stopped){await server.dispose();return;}this.noteCommandServer=server;
     })();
     this.noteCommandOpening=work;try{await work;}finally{if(this.noteCommandOpening===work)this.noteCommandOpening=undefined;}
   }
   private async reloadForConnection(beforeDispatch:()=>boolean){
-    if(this.stopped||Platform.isMobile||this.busy||document.querySelector?.('.modal-container'))throw Error('Waiting for the current editor or dialog before automatic reload.');
-    await this.refreshNoteCommandHost();
-    if(!this.clientMaintenance)throw Error('Desktop client maintenance is unavailable.');
-    return this.clientMaintenance.reloadCurrent(()=>{
-      if(this.stopped||this.busy||document.querySelector?.('.modal-container')||!beforeDispatch())return false;
-      new Notice('T3 Code: The connection stopped responding. Reloading Obsidian after checking saved edits.',10000);return true;
-    });
+    if(this.stopped||Platform.isMobile)return false;
+    const dispatch=()=>{if(!beforeDispatch())return false;new Notice('T3 Code: The connection stopped responding. Reloading Obsidian.',10000);return true;};
+    if(this.clientMaintenance)return this.clientMaintenance.reloadCurrent(dispatch);
+    if(!dispatch())return false;
+    if(!(this.app as any).commands.executeCommandById('app:reload'))throw Error('Obsidian refused the native reload command.');
+    return true;
   }
   private async refreshInlineHost():Promise<void>{
     if(Platform.isMobile||this.stopped)return;

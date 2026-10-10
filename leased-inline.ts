@@ -200,7 +200,7 @@ export class DeviceInlineManager {
   private async discoverResponse(host:Host,id:string){
     if(this.stopped||this.jobs.has(id))return;
     const bytes=await host.files.read(leasePaths(host.target.directory,id).record);if(!bytes||this.stopped)return;
-    const record:LeaseRecord=JSON.parse(bytes),request=validateHostedRequest(record.request);
+    let record:LeaseRecord=JSON.parse(bytes);const request=validateHostedRequest(record.request);
     if(request.id!==id||![2,3,4].includes(request.version)||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(host.target))return;
     void Promise.resolve(this.io.completionAcknowledged?.(record)).catch(error=>logFailure('response.completion-cleanup.failed',error,{bindingId:id}));
     // A prepared permanent grant may have an already verified local receipt.
@@ -221,6 +221,16 @@ export class DeviceInlineManager {
     const path=await this.location(record);if(path===undefined)return;
     const document=await this.io.readNote(path);
     if(this.stopped||document===undefined||!this.available(record,document))return;
+    // Native observers do not take the legacy writer lease that repairs a
+    // missed rename. Restore the unique saved anchor's path through the host
+    // before adopting its display or direct feed. Never dispatch a prompt.
+    const before=record.state?.notePath??request.notePath;
+    if(record.coordinated&&path!==before&&hasResponseMarkers(document,id)&&!record.stopRequestedAt&&record.responseRemovedAt===undefined){
+      const reply=await host.client.command({kind:'relocate',jobId:id,previousNotePath:before,notePath:path},{id:commandId(this.actor,`restore-location:${id}:${record.epoch}:${record.revision}:${before}:${path}`),actor:this.actor});
+      if(!reply.ok||!reply.record)throw Error(reply.error??'The restored stream destination was not acknowledged.');
+      record=reply.record;
+      if(this.stopped||(record.state?.notePath??record.request.notePath)!==path)return;
+    }
     this.receiveRecord(host,record);this.tick();
   }
   discover(targets:InlineHostTarget[],priorityIds:readonly string[]=[]){

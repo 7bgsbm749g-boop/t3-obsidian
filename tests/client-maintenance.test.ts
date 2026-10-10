@@ -42,44 +42,39 @@ test('failure log command validates its timestamp and performs no reload or docu
   for(const value of [{...command,since:'yesterday'},{...command,kind:'client-status'},{...command,releaseVersion:'3.4.5'}])assert.throws(()=>validateClientCommand(value));
  }finally{await h.close();}
 });
-test('reload waits for exact Sync bytes and ordinary saved edits, and rechecks both after acknowledgement',async()=>{
+test('mailbox reload accepts unsaved edits and newly synced runtime bytes',async()=>{
   const h=await fixture();try{
-    h.view.getViewData=()=> 'unsaved user edit';await assert.rejects(h.maintenance.execute(h.command),/unsaved edits/);assert.equal(h.reloads(),0);
-    h.view.getViewData=()=> 'saved note';const result=await h.maintenance.execute(h.command);
-    await writeFile(join(h.directory,'styles.css'),'another release');await assert.rejects(h.maintenance.acknowledged(h.command,result),/exact release files/);assert.equal(h.reloads(),0);
+    h.view.getViewData=()=> 'unsaved user edit';const result=await h.maintenance.execute(h.command);
+    await writeFile(join(h.directory,'styles.css'),'another release');
+    assert.equal(await h.maintenance.acknowledged(h.command,result),true);assert.equal(h.reloads(),1);
   }finally{await h.close();}
 });
 test('native client commands require a complete immutable release and cannot request arbitrary app actions',()=>{
   const id=randomUUID();
   for(const value of [{version:1,id,kind:'reload-client'},{version:1,id,kind:'client-status',releaseVersion:'3.4.5'},{version:1,id,kind:'app:save'}])assert.throws(()=>validateClientCommand(value));
 });
-test('automatic recovery uses the running release and persists its decision before native reload',async()=>{
+test('automatic recovery persists its decision and reloads with unsaved edits',async()=>{
  const h=await fixture();try{
   const current=new DesktopClientMaintenance(h.app,h.root,'.obsidian','3.4.5');let recorded=false;
   const execute=h.app.commands.executeCommandById;h.app.commands.executeCommandById=(id:string)=>{assert.equal(recorded,true);return execute(id);};
-  h.view.getViewData=()=> 'unsaved edit';await assert.rejects(current.reloadCurrent(()=>{recorded=true;return true;}),/unsaved edits/);assert.equal(recorded,false);
-  h.view.getViewData=()=> 'saved note';assert.equal(await current.reloadCurrent(()=>false),false);assert.equal(h.reloads(),0);
+  h.view.getViewData=()=> 'unsaved edit';
+  assert.equal(await current.reloadCurrent(()=>false),false);assert.equal(h.reloads(),0);
   assert.equal(await current.reloadCurrent(()=>{recorded=true;return true;}),true);assert.equal(h.reloads(),1);
  }finally{await h.close();}
 });
-test('automatic recovery cannot load newly synced bytes under the old running version',async()=>{
+test('automatic recovery loads newly synced bytes and does not need runtime files',async()=>{
  const h=await fixture();try{
   const current=new DesktopClientMaintenance(h.app,h.root,'.obsidian','3.4.5');
-  await (current as any).runtime;
-  await writeFile(join(h.directory,'main.js'),'another release');
-  await assert.rejects(current.reloadCurrent(()=>true),/exact release/);assert.equal(h.reloads(),0);
+  await rm(h.directory,{recursive:true});
+  assert.equal(await current.reloadCurrent(()=>true),true);assert.equal(h.reloads(),1);
  }finally{await h.close();}
 });
-test('checked reload includes owned code views and rechecks a code edit after acknowledgement',async()=>{
+test('reload does not inspect editors or wait for response recovery',async()=>{
   const h=await fixture();try{
-    const code={file:{path:'Code.ts'},getMode:()=> 'source',getViewData:()=> 'const saved = 1;'};
-    h.app.workspace.getLeavesOfType=(type:string)=>type==='typescript'?[{view:code}]:[];
-    h.app.vault.read=async()=> 'const saved = 1;';
-    const maintenance=new DesktopClientMaintenance(h.app,h.root,'.obsidian','3.4.4',()=>['typescript']);
+    const unexpected=()=>{throw Error('Reload must not check editor or recovery state.');};
+    h.app.workspace.getLeavesOfType=unexpected;h.app.vault.read=unexpected;
+    const maintenance=new DesktopClientMaintenance(h.app,h.root,'.obsidian','3.4.4',unexpected,async()=>unexpected());
     const result=await maintenance.execute(h.command);
-    code.getViewData=()=> 'const unsaved = 2;';
-    await assert.rejects(maintenance.acknowledged(h.command,result),/unsaved edits/);assert.equal(h.reloads(),0);
-    await assert.rejects(maintenance.execute(h.command),/unsaved edits/);assert.equal(h.reloads(),0);
-    code.getViewData=()=> 'const saved = 1;';assert.equal(await maintenance.acknowledged(h.command,result),true);assert.equal(h.reloads(),1);
+    assert.equal(await maintenance.acknowledged(h.command,result),true);assert.equal(h.reloads(),1);
   }finally{await h.close();}
 });

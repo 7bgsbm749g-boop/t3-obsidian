@@ -75,6 +75,12 @@ test('reload restores several local previews before host discovery without savin
   assert.equal(h.views[0].getViewData(),before.replace('Before','Ordinary edit'));assert.ok(!h.views[0].getViewData().includes('Latest device paragraph'));
   await h.manager.flushPreviewCache();assert.equal(latest,undefined);h.manager.dispose();
 });
+test('reload discovers saved native anchors without a cache and after an offline rename',()=>{
+  const h=fixture();h.file.path='Renamed.md';h.manager.configurePreviewCache('vault',undefined,async()=>{});
+  assert.deepEqual(h.manager.reconnectingResponseIds().sort(),[id,other].sort());
+  h.edit(before.replace(responseAnchor(id),'Ordinary saved text'));
+  assert.deepEqual(h.manager.reconnectingResponseIds(),[other]);h.manager.dispose();
+});
 test('reloaded preview cannot regress to delayed host prose or earlier direct events',async()=>{
   const h=fixture();h.manager.configurePreviewCache('vault',await previewCheckpoint(),async()=>{});h.manager.refresh();
   await h.manager.receive({...record(id,2),state:{...record().state!,body:'> Delayed host',bindingCheckpoint:{sequence:200}}});

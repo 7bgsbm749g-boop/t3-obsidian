@@ -151,6 +151,16 @@ export class NativeResponseManager {
   reconnectingResponseIds(){
     const opened=new Set([...this.views.keys()].map(view=>view.file?.path));
     const ids=[...this.cached.values()].filter(entry=>this.reconnecting.has(entry.id)&&opened.has(entry.notePath)).map(entry=>entry.id);
+    // Recover saved identities even if reload interrupted the asynchronous
+    // preview checkpoint, or Sync delivered a rename while the app was closed.
+    for(const leaf of this.app.workspace.getLeavesOfType('markdown')){
+      const view=leaf.view as MarkdownView;if(!view.file||typeof view.getViewData!=='function')continue;
+      const saved=this.view(view)?.saved()??view.getViewData();
+      for(const match of saved.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/g)){
+        const region=responseRegion(saved,match[1]);
+        if(region&&saved.slice(region.from,region.to)===responseAnchor(match[1]))ids.push(match[1]);
+      }
+    }
     for(const receipt of this.completionIdentities.values())if(!this.deviceCommits.has(receipt.id)&&[...this.views].some(([view,adapter])=>view.file?.path===receipt.path&&!!responseRegion(adapter.saved(),receipt.id)))ids.push(receipt.id);
     return [...new Set(ids)];
   }

@@ -36,11 +36,12 @@ export class ConnectionRecovery {
     const work=(async()=>{
       let recorded=false;
       try{
-        // The caller performs the normal saved-editor and exact-runtime checks
-        // immediately before invoking the native reload command.
+        // Persist the outage marker immediately before the native reload.
         await this.io.reload(()=>{
           if(this.stopped||this.pending!==target)return false;
-          this.io.save({lastReloadAt:this.now(),awaitingRecovery:target});recorded=true;this.pending=undefined;return true;
+          try{this.io.save({lastReloadAt:this.now(),awaitingRecovery:target});recorded=true;}
+          catch(error){this.io.failure(error);}
+          this.pending=undefined;return true;
         });
       }catch(error){
         if(recorded&&this.io.load().awaitingRecovery===target){this.io.save(saved);if(!this.stopped)this.pending=target;}

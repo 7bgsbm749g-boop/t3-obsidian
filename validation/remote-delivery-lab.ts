@@ -2,6 +2,7 @@
 import {Plugin,MarkdownView} from 'obsidian';
 import {readFileSync,writeFileSync,existsSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
+import {deviceState} from '../device-state';
 
 export default class RemoteDeliveryLab extends Plugin {
   async onload(){
@@ -34,15 +35,33 @@ export default class RemoteDeliveryLab extends Plugin {
     })().catch(error=>write('error',{error:error.message})));
     this.registerInterval(window.setInterval(()=>{
       const command=join(config.evidence,`${config.role}-observe.json`);if(!existsSync(command))return;
-      const {id,networkFault}=JSON.parse(readFileSync(command,'utf8'));unlinkSync(command);
+      const {id,networkFault,importRun,renameNote,missRenameHandoff,erasePreviewCheckpoint,reloadClient}=JSON.parse(readFileSync(command,'utf8'));unlinkSync(command);
       if(['none','once','persistent'].includes(networkFault)){fault=networkFault;silenced=0;}
       void (async()=>{
         const plugin=(this.app as any).plugins.plugins['send-to-t3-code'];
+        if(missRenameHandoff){
+          // Reproduce an event missed during disconnection/restart, without
+          // mutating the host's durable response records or the product code.
+          if(plugin?.deviceInline)plugin.deviceInline.renamed=()=>{};
+          if(plugin?.inlineHostService)plugin.inlineHostService.renamed=()=>{};
+        }
+        if(importRun){
+          const project=plugin.projects().find((value:any)=>value.id===importRun.projectId);
+          if(!project)throw Error('Synthetic import project unavailable.');
+          await plugin.importRun(config.note,project,importRun.threadId,importRun.messageId,false);
+        }
+        if(renameNote){
+          const original=this.app.vault.getFileByPath(config.note);if(!original)throw Error('Synthetic source note missing.');
+          await this.app.vault.rename(original,renameNote);config.note=renameNote;
+          writeFileSync(join(root,'.obsidian/plugins/remote-delivery-lab/config.json'),JSON.stringify(config));
+        }
+        if(erasePreviewCheckpoint)await deviceState(`native-preview:${plugin.deviceId}:${plugin.settings.vaultId}`,{version:1,vaultId:plugin.settings.vaultId,entries:[]});
         const file=this.app.vault.getFileByPath(config.note),view=this.app.workspace.getActiveViewOfType(MarkdownView);
         write(id,{root,version:plugin?.manifest.version,instanceId:plugin?.clientMaintenance?.client.instanceId,recovery:plugin?.connectionRecovery?.status(),networkFault:{fault,silenced},vaultId:plugin?.settings?.vaultId,settingsBytes:(await this.app.vault.adapter.read('.obsidian/plugins/send-to-t3-code/data.json')).length,
           note:file?await this.app.vault.read(file):null,editorPath:view?.file?.path,editor:view?.getViewData(),
           visible:typeof document==='undefined'?null:document.querySelector('.workspace-leaf.mod-active .view-content')?.textContent,
           failures:this.app.loadLocalStorage(`t3-send-failures-v1:${plugin?.settings?.vaultId}`)});
+        if(reloadClient)await plugin.clientMaintenance.reloadCurrent(()=>true);
       })().catch(error=>write(id,{error:error.message}));
     },500));
   }

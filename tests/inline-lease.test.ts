@@ -780,3 +780,39 @@ test('local stop clears shared explorer activity before the host can acknowledge
   manager.stopLocally(h.request.id);assert.deepEqual(manager.explorerResponses(),[]);manager.dispose();
   const restarted=create(),next=(restarted as any).host(h.request.host);next.responses=host.responses;assert.deepEqual(restarted.explorerResponses(),[]);restarted.dispose();h.authority().stop();
 });
+
+for(const phase of ['running','complete'] as const)test(`a reloaded native observer restores a renamed ${phase} import by its saved anchor without redispatch`,async()=>{
+  const h=harness(),request={...h.request,nativeProjection:true},client=h.client();
+  await client.command({kind:'register',jobId:request.id,request});await h.authority().migrated(request.id);
+  const state={...h.state,requestHash:hostedRequestHash(request),status:phase,body:'Retained imported stream',...(phase==='complete'?{finalSaved:true,cleanupComplete:true,finalPhase:'complete' as const,finalBody:'Retained imported stream'}:{})};
+  await h.authority().checkpoint(request.id,state);
+  if(phase==='complete')h.data.set(leasePaths(request.host.directory,'').catalog,'[]');
+  const document=responseAnchor(request.id),notes=new Map([['Moved.md',document],['Note.md','New unrelated note']]);
+  const locator=new ResponseNoteLocator(()=>[...notes.keys()],async path=>notes.get(path),h.now),received:LeaseRecord[]=[];
+  const manager=new DeviceInlineManager(randomUUID(),request.vaultId,{
+    receiveCoordinated:record=>{received.push(record);},locateNote:(id,path)=>locator.locate(id,path),readNote:async path=>notes.get(path),isOpen:path=>path==='Moved.md',
+    access:async()=>{throw Error('Stream recovery must not redispatch or acquire a legacy T3 writer.');},updateNote:async()=>{throw Error('Stream recovery must not change note bytes.');},
+  },async()=>({files:h.remote,close:()=>{}}),h.now,h.now,async()=>{await new Promise(resolve=>setImmediate(resolve));});
+  try{
+    manager.discover([request.host],[request.id]);for(let n=0;n<100;n++){manager.tick();await new Promise(resolve=>setImmediate(resolve));}
+    assert.equal(h.record().state!.notePath,'Moved.md');assert.equal(h.record().request.notePath,'Note.md');
+    assert.ok(received.some(record=>record.state?.notePath==='Moved.md'&&record.state.body==='Retained imported stream'));
+    assert.equal(h.record().request.messageId,request.messageId);assert.equal(notes.get('Moved.md'),document);
+    if(phase==='running'){
+      const current=h.record();await h.authority().checkpoint(request.id,{...current.state!,body:'Continued after reload'},{epoch:current.epoch,revision:current.revision});
+      h.advance(1000);for(let n=0;n<32;n++){manager.tick();await new Promise(resolve=>setImmediate(resolve));}
+      assert.ok(received.some(record=>record.state?.body==='Continued after reload'&&record.state.notePath==='Moved.md'));
+    }
+  }finally{manager.dispose();client.dispose();h.authority().stop();}
+});
+
+test('reload cannot relocate a native stream when its markers exist in two notes',async()=>{
+  const h=harness(),request={...h.request,nativeProjection:true},client=h.client();
+  await client.command({kind:'register',jobId:request.id,request});await h.authority().migrated(request.id);
+  await h.authority().checkpoint(request.id,{...h.state,requestHash:hostedRequestHash(request),body:'Retained stream'});
+  const notes=new Map([['First.md',responseAnchor(request.id)],['Second.md',responseAnchor(request.id)]]),locator=new ResponseNoteLocator(()=>[...notes.keys()],async path=>notes.get(path),h.now);let received=0;
+  const manager=new DeviceInlineManager(randomUUID(),request.vaultId,{receiveCoordinated:()=>{received++;},locateNote:(id,path)=>locator.locate(id,path),readNote:async path=>notes.get(path),isOpen:path=>notes.has(path),access:async()=>{throw Error('No T3 input');},updateNote:async()=>{throw Error('No note mutation');}},async()=>({files:h.remote,close:()=>{}}),h.now,h.now);
+  try{manager.discover([request.host],[request.id]);for(let n=0;n<64;n++)await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(h.record().state!.notePath,'Note.md');assert.equal(received,0);assert.equal(h.record().relocations,undefined);
+  }finally{manager.dispose();client.dispose();h.authority().stop();}
+});
