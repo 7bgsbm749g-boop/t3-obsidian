@@ -3,6 +3,14 @@ import {promises as fs,type BigIntStats} from 'node:fs';
 type Entry={identity:BigIntStats;value:string};
 const sameIdentity=(a:BigIntStats,b:BigIntStats)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs&&a.mode===b.mode;
 
+/** A fresh regular-file identity can verify an already decoded snapshot
+ * without allocating its full text again. Symlinks cannot authenticate the
+ * target bytes; they always retain ordinary fresh-read behavior. */
+export async function inlineFileVersion(path:string):Promise<string|undefined>{
+  try{const stat=await fs.lstat(path,{bigint:true});return stat.isFile()?[stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs,stat.mode].join(':'):undefined;}
+  catch(error:any){if(error.code==='ENOENT')return;throw error;}
+}
+
 /** Only reuse bytes after a fresh nanosecond file-identity check. This cache
  * is private to this plugin process, bounded, and never persisted to a vault. */
 export class DesktopInlineReadCache {

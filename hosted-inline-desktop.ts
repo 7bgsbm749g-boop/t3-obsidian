@@ -15,7 +15,7 @@ import {deviceNoteIO} from './inline-note-io';
 import {HostedInlineWriter,type HostedInlineRequest,type InlineFiles} from './hosted-inline';
 import {readInlineEvents,type ThreadAccess,type ThreadAccessCloseReason} from './thread-stream';
 import {ThreadAccessCache} from './thread-access-cache';
-import {DesktopInlineReadCache} from './inline-file-cache-desktop';
+import {DesktopInlineReadCache,inlineFileVersion} from './inline-file-cache-desktop';
 import {markdownCodeCacheStatus} from './reply-html';
 import {ensurePrivateStorage,existingPrivateStorage} from './private-storage-desktop';
 
@@ -32,6 +32,7 @@ export function localInlineFiles(root:string,directory:string,storageRoot?:strin
   };
   return {
     async read(path){return inlineReadCache.read(await full(path));},
+    async version(path){return inlineFileVersion(await full(path));},
     async write(path,contents){const target=await full(path);inlineReadCache.invalidate(target);await fs.mkdir(dirname(target),{recursive:true});const temporary=target+'.'+require('node:crypto').randomUUID()+'.tmp';try{await fs.writeFile(temporary,contents,{mode:0o600});await fs.rename(temporary,target);}finally{inlineReadCache.invalidate(target);await fs.rm(temporary,{force:true});}},
     async remove(path){const target=await full(path);inlineReadCache.invalidate(target);try{await fs.rm(target,{force:true});}finally{inlineReadCache.invalidate(target);}},
     async list(directoryPath){try{return (await fs.readdir(await full(directoryPath))).filter(p=>p.endsWith('.json')).map(p=>`${directoryPath}/${p}`);}catch(error:any){if(error.code==='ENOENT')return [];throw error;}},

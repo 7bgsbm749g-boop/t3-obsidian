@@ -14,6 +14,7 @@ import {responseAnchor} from '../native-response-projection';
 import {contentHash} from '../completion';
 import {streamBlock,streamBlocks} from '../stream-block';
 import {DeviceResponseCompletion,type DeviceGeneration} from '../device-response-completion';
+import {LeaseRecordCache} from '../lease-record-cache';
 
 async function setup(native=true,liveLease=false,collapse=false,device=false){
   const root=await mkdtemp(join(tmpdir(),'coordinated-production-')),vault=join(root,'vault');await import('node:fs/promises').then(fs=>fs.mkdir(vault));
@@ -486,6 +487,39 @@ test('active delivery proceeds while completed journal observation rotates throu
   const changed=[...historical][0],path=leasePaths(h.identity.directory,changed).record,record=JSON.parse(h.storage.get(path)!);
   record.revision++;h.storage.set(path,JSON.stringify(record));observed.clear();
   await h.host.scan(true);assert.ok(observed.has(changed),'a changed completed lease bypasses the cold-history budget, including native rename and delivery acknowledgements');
+ }finally{await h.close();}
+});
+
+test('unchanged oversized history uses fresh file versions without rereading or parsing bodies',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const historical:string[]=[];
+  for(let n=0;n<24;n++){
+   const id=randomUUID(),request={...h.request,id,notePath:`Historical-${n}.md`};historical.push(id);
+   h.storage.set(leasePaths(h.identity.directory,id).record,JSON.stringify({request,coordinated:true,owner:COORDINATED_OWNER,epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,state:{requestHash:hostedRequestHash(request),accepted:true,status:'complete',body:'Retained history'.repeat(200),finalSaved:true,cleanupComplete:true,finalPhase:'complete',notePath:request.notePath,hashes:[],updatedAt:''}}));
+  }
+  // All historical snapshots exceed the decoded-text cache budget. Their
+  // existing host records must still avoid reparsing on every live tick.
+  (h.host as any).leaseCache=new LeaseRecordCache(100,1);
+  h.files.version=async path=>{const raw=h.storage.get(path);return raw===undefined?undefined:contentHash(raw);};
+  const read=h.files.read;let reads:string[]=[];h.files.read=async path=>{if(path.includes('/leases/'))reads.push(path);return read(path);};
+  await h.host.scan(true);assert.ok(reads.length>=24);const parsed=h.host.leaseCacheStatus().parses;
+  reads=[];for(let n=0;n<5;n++)await h.host.scan(true);
+  assert.equal(reads.length,0);assert.equal(h.host.leaseCacheStatus().parses,parsed);assert.ok(h.host.leaseCacheStatus().versionHits>=125);
+  const changed=historical[0],path=leasePaths(h.identity.directory,changed).record,record=JSON.parse(h.storage.get(path)!);record.revision++;record.state.body='New completed revision';h.storage.set(path,JSON.stringify(record));
+  await h.host.scan(true);assert.ok(reads.includes(path));assert.ok(reads.every(value=>value===path));
+  assert.equal((h.host as any).records.get(changed).state.body,'New completed revision');
+  h.storage.delete(path);await h.host.scan(true);assert.equal((h.host as any).leaseVersions.has(path),false);
+ }finally{await h.close();}
+});
+
+test('a lease replacement during discovery cannot authenticate the older decoded version',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const id=randomUUID(),path=leasePaths(h.identity.directory,id).record,request={...h.request,id,notePath:'Historical.md'};
+  const record={request,coordinated:true,owner:COORDINATED_OWNER,epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,state:{requestHash:hostedRequestHash(request),accepted:true,status:'complete',body:'Before replacement',finalSaved:true,cleanupComplete:true,finalPhase:'complete',notePath:request.notePath,hashes:[],updatedAt:''}};
+  h.storage.set(path,JSON.stringify(record));h.files.version=async value=>{const raw=h.storage.get(value);return raw===undefined?undefined:contentHash(raw);};
+  const read=h.files.read;let replace=true;h.files.read=async value=>{const bytes=await read(value);if(value===path&&replace){replace=false;record.revision++;record.state.body='After replacement';h.storage.set(path,JSON.stringify(record));}return bytes;};
+  await h.host.scan(true);assert.equal((h.host as any).leaseVersions.has(path),false);
+  await h.host.scan(true);assert.equal((h.host as any).records.get(id).state.body,'After replacement');assert.equal((h.host as any).leaseVersions.has(path),true);
  }finally{await h.close();}
 });
 

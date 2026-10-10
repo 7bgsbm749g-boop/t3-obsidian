@@ -65,6 +65,31 @@ never delays the native reload command.
 
 ## Verification
 
+### Renderer allocation pressure
+
+The QLO2 renderer reached about 4.4 GB before Linux stopped it for lack of
+memory. After restart, native diagnostics showed 486,212 source file reads,
+152,508 lease parses, and 1.17 GiB of used JavaScript heap. A short native
+allocation sample attributed 49.75% of sampled allocations to
+`LeaseRecordCache.read`, called from `CoordinatedHost.scanRecords`, and 12.51%
+to `DeviceInlineManager.observeCoordinated`. These are allocation measurements,
+not a complete retained-object analysis. Private evidence is in
+`connection-recovery-20261010/renderer.heapprofile` under the backup root.
+
+Discovery reread every historical lease on each live scan. History exceeded
+the 16-million-character cache budget, so many unchanged bodies were repeatedly
+read and decoded. The desktop host now checks a fresh regular-file identity
+before reusing its existing decoded snapshot. It checks the identity again
+after a new read before admitting that snapshot. Same-size or same-mtime edits,
+replacements, removed files, and symlinks retain fresh-read behavior. The
+metadata index has a 4,096-entry limit and clears on host shutdown. Changed
+leases still bypass historical maintenance limits immediately.
+
+Regression tests include history that exceeds the text-cache budget, changed
+terminal revisions, deletion, a replacement during discovery, and real file
+identity checks. This reduces repeated history allocations without enlarging
+the body cache or delaying reloads.
+
 Regression tests cover silent sockets, real health responses, slow healthy
 requests, shared probes, concurrent reads, uncertain writes, recovery cancellation,
 unsaved edits, changed runtime files, and reload limits across app instances.

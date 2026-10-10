@@ -29,7 +29,10 @@ import type {ImportRecordsCommand} from './response-command';
  * outside the vault and are never transported through Markdown or Sync. */
 export class CoordinatedHost {
   private leaseCache=new LeaseRecordCache();
-  leaseCacheStatus(){return this.leaseCache.status();}
+  private leaseVersions=new Map<string,{version:string;record:LeaseRecord}>();
+  private versionHits=0;
+  private maxVersionEntries=4096;
+  leaseCacheStatus(){return {...this.leaseCache.status(),versionEntries:this.leaseVersions.size,maxVersionEntries:this.maxVersionEntries,versionHits:this.versionHits};}
   private projections=new ResponseProjectionCache();
   projectionStatus(){return this.projections.status();}
   private records=new Map<string,LeaseRecord>();
@@ -117,12 +120,24 @@ export class CoordinatedHost {
       return work.finally(()=>{if(this.work.get(record.request.id)===work)this.work.delete(record.request.id);});
     }));
   }
+  private async readLease(path:string){
+    const version=await this.files.version?.(path),previous=this.leaseVersions.get(path);
+    if(version!==undefined&&previous?.version===version){this.versionHits++;return previous.record;}
+    this.leaseVersions.delete(path);
+    const raw=await this.files.read(path);if(!raw){this.leaseCache.remove(path);return;}
+    const record=this.leaseCache.read(path,raw);
+    // Authenticate the decoded bytes against both sides of the read. A
+    // concurrent replacement remains visible on the next discovery pass.
+    if(version!==undefined&&this.leaseVersions.size<this.maxVersionEntries&&await this.files.version?.(path)===version)this.leaseVersions.set(path,{version,record});
+    return record;
+  }
   private async scanRecords(background=false){
     const active:LeaseRecord[]=[],terminal:LeaseRecord[]=[],changedTerminal:LeaseRecord[]=[];
     const paths=await this.files.list(`${this.identity.directory}/leases`);
-    this.leaseCache.retain(new Set(paths));
+    const retained=new Set(paths);this.leaseCache.retain(retained);
+    for(const path of this.leaseVersions.keys())if(!retained.has(path))this.leaseVersions.delete(path);
     for(const path of paths){
-      try{const raw=await this.files.read(path);if(!raw){this.leaseCache.remove(path);continue;}const record=this.leaseCache.read(path,raw);if(!this.work.has(record.request.id))this.records.set(record.request.id,record);
+      try{const record=await this.readLease(path);if(!record)continue;if(!this.work.has(record.request.id))this.records.set(record.request.id,record);
         if(terminalLease(record)||record.state?.finalSaved){
           const previous=this.terminalRevisions.get(record.request.id);
           if(background&&this.terminalDiscoveryComplete&&(!previous||previous.epoch!==record.epoch||previous.revision!==record.revision))changedTerminal.push(record);
@@ -502,5 +517,5 @@ export class CoordinatedHost {
     throw Error('Unsupported response command.');
   }
   async renamed(before:string,after:string){await this.authority.renameNative(before,after);await this.scan();}
-  stop(){this.stopped=true;this.backgroundChecks.clear();this.terminalRevisions.clear();this.projections.clear();this.leaseCache.clear();return this.journal.stop();}
+  stop(){this.stopped=true;this.backgroundChecks.clear();this.terminalRevisions.clear();this.projections.clear();this.leaseCache.clear();this.leaseVersions.clear();return this.journal.stop();}
 }

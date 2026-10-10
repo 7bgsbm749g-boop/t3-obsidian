@@ -3,7 +3,18 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,readFile,rename,rm,lstat,utimes,symlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {DesktopInlineReadCache} from '../inline-file-cache-desktop';
+import {DesktopInlineReadCache,inlineFileVersion} from '../inline-file-cache-desktop';
+
+test('fresh file versions detect same-size rewrites, replacements, deletion and symlink targets',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'inline-file-version-')),path=join(root,'record.json'),other=join(root,'other.json'),date=new Date('2026-01-01T00:00:00Z');
+ try{
+  await writeFile(path,'old!');await utimes(path,date,date);const first=await inlineFileVersion(path);assert.ok(first);assert.equal(await inlineFileVersion(path),first);
+  await writeFile(path,'new!');await utimes(path,date,date);const changed=await inlineFileVersion(path);assert.notEqual(changed,first);
+  await writeFile(other,'new!');await utimes(other,date,date);await rename(other,path);assert.notEqual(await inlineFileVersion(path),changed);
+  await rm(path);assert.equal(await inlineFileVersion(path),undefined);
+  await writeFile(other,'link');await symlink(other,path);assert.equal(await inlineFileVersion(path),undefined);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
 
 test('unchanged reads reuse bytes while same-size, same-mtime edits, replacements and deletion remain fresh',async()=>{
  const root=await mkdtemp(join(tmpdir(),'inline-byte-cache-')),path=join(root,'record.json'),date=new Date('2026-01-01T00:00:00Z'),cache=new DesktopInlineReadCache();

@@ -25,7 +25,7 @@ export interface LeaseReply {stopReceipt?:ResponseStopReceipt;id:string;ok:boole
 /** Discovery only. This small record never proves current writer ownership or
  * permits a mutation; dispatch still reads and validates the durable lease. */
 export interface LeaseRoute {version:1;id:string;vaultId:string;host:HostedInlineRequest['host'];notePath:string;threadId:string;projectId:string;threadEnvironmentId:string;messageId:string;turnId?:string|null;turnIds:string[];epoch:number;revision:number;status:HostedInlineState['status'];finalPhase?:'complete'|'interrupted'}
-export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;listBatch?(directory:string,limit:number):Promise<string[]>;close?():Promise<void>;remove(path:string):Promise<void>}
+export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;listBatch?(directory:string,limit:number):Promise<string[]>;close?():Promise<void>;remove(path:string):Promise<void>;version?(path:string):Promise<string|undefined>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export const leasePaths=(directory:string,id:string)=>({record:`${directory}/leases/${id}.json`,route:`${directory}/routes/${id}.json`,command:`${directory}/mailbox/${id}.json`,reply:`${directory}/replies/${id}.json`,catalog:`${directory}/lease-catalog.json`});
 export function leaseRoute(record:LeaseRecord):LeaseRoute {
