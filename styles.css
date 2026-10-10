@@ -120,15 +120,11 @@
 }
 .callout[data-callout="t3-progress"] > .callout-title {
   font-size: var(--h6-size);
-  font-weight: normal;
   font-family: var(--h6-font);
   color: var(--h6-color, var(--text-muted));
   gap: 0.4em;
   cursor: pointer;
 }
-/* Obsidian gives the inner title its own weight, separate from the header. */
-.callout[data-callout="t3-progress"] > .callout-title > .callout-title-inner,
-.callout[data-callout="t3-progress"] > .callout-title strong { font-weight: inherit; }
 .callout[data-callout="t3-progress"] > .callout-title > .callout-icon { display: none; }
 /* Align the native editor action with the header, including wrapped titles. */
 .markdown-source-view.mod-cm6 .embed-actions.send-to-t3-progress-actions {
