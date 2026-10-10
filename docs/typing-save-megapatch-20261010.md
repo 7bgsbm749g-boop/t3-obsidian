@@ -119,3 +119,51 @@ was unavailable. No Windows keys were sent. Prepared synthetic artifacts remain
 outside the production vault. See `WINDOWS-NATIVE-RESULT.json` in the same
 implementation evidence directory. No alternate GUI backend or permission
 change was used.
+
+## Release 2.37.0 and live recovery
+
+Reviewed source commit `ddb9554b9025888b545343b23dc4e732a160a71b` passed
+`npm run build`, all 1,286 TypeScript tests, and all 13 Python tests. The supported
+QLO2 release command created immutable version 2.37.0 from that clean commit,
+installed the development and QLO2 runtime files, preserved each installation's
+`data.json` byte-for-byte, and confirmed a fresh fully synced scan.
+
+The real QLO2 VPS client loaded 2.37.0 in Obsidian 1.14.4. A bounded reply in an
+existing synthetic T3 thread survived a restart after registration, appeared
+as running after startup, and saved and acknowledged its complete result.
+A second native **Reload app without saving** occurred after the host had
+already verified that final save. The reply stayed complete. This live test
+does not claim to force a reload during an uncertain disk write.
+
+In the installed client, one native key and autosave retained every original
+character in a 463,275-character synthetic note. Undo restored its exact
+original hash. The full output was visible after opening an individual tool
+entry. The existing-thread chooser showed an enabled Continue button; the
+modal was canceled before dispatch. The original active note and vault sidebar
+were restored, and all three temporary notes were removed. These observations
+are distinct from the earlier controlled native timing measurements.
+
+The owning Windows laptop also loaded 2.37.0. Its current old conflicting
+completion was present, but its journal path had reverted to the note's former
+`more patches` folder. The final body, grant, attempt, and uncertain proof were
+unchanged. Recovery returned no candidate because that path no longer existed.
+The supported VPS `response-status` command found exactly one current anchor
+in `Jobs/Settled`. A checked `resolve-response-location` corrected the host
+path without changing the writer grant or the prepared proof. The laptop then
+produced the same recovery hashes as the independent read-only calculation.
+A checked `retry-response-save` fenced the old attempt and completed a new save.
+The host acknowledged completion. Both clients' actual saved note files matched
+the reviewed 33,356-character candidate with SHA-256
+`d577edc9269bdb3cccb693e5065bc7f929aa50f3e4054bd83280f0baa5f7af1e`.
+The complete old reply and ordinary edits survived, the old response anchor
+was removed, and the current response anchor stayed intact. Official QLO2 Sync
+downloaded and accepted the saved note on the VPS at 02:12:58 UTC.
+
+Another old response has no saved anchor. Its complete permanent grant remains
+preserved outside Sync. This release does not guess where to insert it.
+
+The immutable live smoke receipt is
+`/home/ubuntu/backups/send-to-t3-code/releases/2.37.0/smoke-vps-qlo2.json`.
+The evidence summary and retained screenshots are in the implementation evidence
+directory's `qlo2-smoke` folder. Laptop loaded-version, final-save, and disk-hash
+checks do not establish native Windows GUI timing or mobile coverage.
