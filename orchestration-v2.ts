@@ -96,6 +96,22 @@ export function normalizeV2StreamItem(item:any):any {
   return {kind:'event',event};
 }
 
+/** A title listener needs identity, title and cursor only. Do not normalize or
+ * retain its duplicate transcript, tool output, runs or request controls. */
+export function normalizeV2TitleItem(item:any):any {
+  if(item?.kind==='snapshot'){
+    const snapshot=item.projection?item:item.snapshot,thread=snapshot?.projection?.thread??snapshot?.thread;
+    if(!thread?.id||!thread.projectId)throw Error('T3 returned an invalid title snapshot.');
+    return {kind:'snapshot',snapshot:{snapshotSequence:snapshot.snapshotSequence,thread:{id:thread.id,projectId:thread.projectId,title:thread.title,protocolVersion:snapshot.projection?2:thread.protocolVersion,messages:[]}}};
+  }
+  if(item?.kind==='event'||item?.kind==='unknown-event'){
+    const event=item.event,sequence=item.sequence??event?.sequence;
+    const title=event?.type==='thread.updated'||event?.type==='thread.metadata-updated';
+    return {kind:'event',event:{sequence,type:title?'thread.metadata-updated':'v2.unknown',payload:title?{title:event.payload?.title}:{}}};
+  }
+  return item;
+}
+
 /** Updates requiring both a turn item and its runtime capability are joined by
  * app IDs. Either event may arrive first; closed requests stay closed. */
 export function applyV2ControlEvent(state:InlineThreadState,event:any):InlineThreadState {

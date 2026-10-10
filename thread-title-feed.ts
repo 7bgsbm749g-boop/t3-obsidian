@@ -24,11 +24,13 @@ export class ThreadTitleFeed {
         if(this.feeds.get(key)!==feed)return;
         if(item.kind==='snapshot'&&(item.snapshot?.thread?.id!==target.threadId||item.snapshot.thread.projectId!==target.projectId))return;
         const next=applyThreadItem(feed.state,item).state;
-        feed.state={messages:[],activities:[],title:next.title,sequence:next.sequence};
+        feed.state={messages:[],activities:[],title:next.title,sequence:next.sequence,protocolVersion:next.protocolVersion};
         if(feed.state.title?.trim())for(const destination of feed.destinations)this.title(destination.id,feed.state.title);
       };
-      // The stream owns its session; reconnecting cannot revoke writer access.
-      feed.monitor=this.watch(target.threadId,()=>this.access(target.threadEnvironmentId),{item,reconnecting:()=>{}});
+      // Every connection gets a fresh initial snapshot, followed by metadata
+      // events. Reply recovery owns canonical history polling; titles do not
+      // need another copy of that transcript or its own polling loop.
+      feed.monitor=this.watch(target.threadId,()=>this.access(target.threadEnvironmentId),{item,reconnecting:()=>{}},undefined,undefined,{afterSequence:()=>undefined,pollSnapshots:false,titleOnly:true});
     }
   }
   dispose(){for(const feed of this.feeds.values())feed.monitor?.stop();this.feeds.clear();}

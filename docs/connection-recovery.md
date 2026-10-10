@@ -176,3 +176,24 @@ Live before/after resource samples and the release smoke evidence are retained
 outside QLO2 under `performance-20261010-even-more` in the backup root. Resource
 samples describe the entire Obsidian renderer and include core application work
 and other plugins; they do not by themselves establish a retained-memory leak.
+
+### Title listeners without duplicate history polling (2.37.7)
+
+The 2.37.6 live sample reduced mean renderer RSS from about 1.76 GiB to
+1.30 GiB over matching 20-second windows, but total CPU remained about one
+core. This is a short natural-GC sample, not evidence that retained memory
+stays bounded indefinitely.
+
+Each open thread also had a separate title listener. It polled and normalized
+canonical history independently of reply recovery, then discarded all messages
+and activities. Title listeners now use the stream's initial snapshot and title
+events, with no second history poll. Every reconnect requests a fresh snapshot
+rather than replaying a title cursor. Their normalization reads only thread
+identity, title and sequence; it does not inspect or retain duplicate messages,
+tool output, runs or request controls. Reply and recovery polling is unchanged.
+
+The title feed retains its protocol version with its cursor, so a delayed v2
+snapshot cannot reset that cursor and replace a newer title. Tests cover stale
+snapshots/events, project/environment isolation, fresh reconnects, stream
+acknowledgements, absence of title history polls, and history/payload getters
+that fail if title normalization touches transcript data.

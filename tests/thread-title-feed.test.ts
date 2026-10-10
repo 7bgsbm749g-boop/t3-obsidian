@@ -6,7 +6,8 @@ import type {ThreadStreamCallbacks} from '../thread-stream';
 const destination:TitleDestination={id:'one',threadId:'thread',projectId:'project',threadEnvironmentId:'host'};
 function fixture(){
   const streams:Array<{thread:string;callbacks:ThreadStreamCallbacks;stopped:boolean}>=[],titles:Array<[string,string]>=[];
-  const feed=new ThreadTitleFeed(async()=>({origin:'https://fixture',api:async()=>{}}),(id,title)=>titles.push([id,title]),(thread,_access,callbacks)=>{
+  const feed=new ThreadTitleFeed(async()=>({origin:'https://fixture',api:async()=>{}}),(id,title)=>titles.push([id,title]),(thread,_access,callbacks,_socket,_targets,replay)=>{
+    assert.equal(replay?.pollSnapshots,false);assert.equal(replay?.titleOnly,true);assert.equal(replay?.afterSequence(),undefined);
     const stream={thread,callbacks,stopped:false};streams.push(stream);return {stop:()=>{stream.stopped=true;}};
   });
   return {feed,streams,titles};
@@ -21,6 +22,19 @@ test('title metadata reaches every destination without messages or a bound turn,
   callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:1,thread:{id:'thread',projectId:'project',title:'New thread',messages:[]}}});
   assert.equal(h.titles.at(-1)?.[1],'Generated title');
   h.feed.sync([{...destination,id:'three'}]);assert.equal(h.streams.length,1);assert.deepEqual(h.titles.at(-1),['three','Generated title']);
+ }finally{h.feed.dispose();}
+});
+test('v2 title snapshots keep their cursor after newer metadata and unknown events',()=>{
+ const h=fixture();try{
+  h.feed.sync([destination]);const {callbacks}=h.streams[0];
+  const snapshot=(sequence:number,title:string)=>callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:sequence,thread:{id:'thread',projectId:'project',protocolVersion:2,title,messages:[]}}});
+  snapshot(10,'Initial');
+  callbacks.item({kind:'event',event:{sequence:11,type:'thread.metadata-updated',payload:{title:'Changed'}}});
+  snapshot(10,'Stale');assert.equal(h.titles.at(-1)?.[1],'Changed');
+  callbacks.item({kind:'event',event:{sequence:12,type:'v2.unknown',payload:{}}});
+  callbacks.item({kind:'event',event:{sequence:11,type:'thread.metadata-updated',payload:{title:'Stale event'}}});
+  snapshot(11,'Stale snapshot');assert.equal(h.titles.at(-1)?.[1],'Changed');
+  snapshot(12,'Fresh');assert.equal(h.titles.at(-1)?.[1],'Fresh');
  }finally{h.feed.dispose();}
 });
 test('title feeds isolate environments, reject another project, and fence late events after closure',()=>{

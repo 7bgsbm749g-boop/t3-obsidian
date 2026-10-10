@@ -2,7 +2,7 @@ import {logEvent,logFailure} from './diagnostics';
 import {Buffer} from 'buffer';
 import {contentHash} from './completion';
 import {applyThreadItem,turnForMessage,type InlineThreadState} from './inline-thread';
-import {T3_PROTOCOL_VERSION,normalizeV2StreamItem,normalizeV2Snapshot} from './orchestration-v2';
+import {T3_PROTOCOL_VERSION,normalizeV2StreamItem,normalizeV2Snapshot,normalizeV2TitleItem} from './orchestration-v2';
 
 export type ThreadAccessCloseReason='cache-expired'|'auth-rejected'|'host-disposed'|'stop-complete'|'stop-timeout'|'stream-reconnect'|'stream-stopped'|'late-access'|'caller-closed';
 export interface ThreadAccess {origin:string;api:(path:string,payload?:any)=>Promise<any>;expiresAt?:number;close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
@@ -64,7 +64,7 @@ export async function readInlineEvents(access:ThreadAccess,threadId:string,after
 
 /** The Effect RPC stream stays open until stopped. Every reconnect asks for a
  * fresh snapshot, so lost deltas cannot duplicate text or leave a gap. */
-export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets,replay?:{afterSequence:()=>number|undefined;pollSnapshots?:boolean;pollImmediately?:boolean}) {
+export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets,replay?:{afterSequence:()=>number|undefined;pollSnapshots?:boolean;pollImmediately?:boolean;titleOnly?:boolean}) {
   let stopped=false,socket:WebSocket|undefined,timer:ReturnType<typeof setTimeout>|undefined,rotation:ReturnType<typeof setTimeout>|undefined,pollTimer:ReturnType<typeof setTimeout>|undefined,attempt=0;
   let access:ThreadAccess|undefined;
   const closeAccess=(reason:ThreadAccessCloseReason)=>{if(pollTimer)clearTimeout(pollTimer);pollTimer=undefined;const old=access;access=undefined;if(old?.close)void Promise.resolve(old.close(reason)).catch(()=>{});};
@@ -143,7 +143,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
                 if(value.kind==='event'||value.kind==='snapshot'){
                   activityVersion++;pollDelay=1200;lastSnapshotHash=undefined;schedulePoll(1200);
                 }
-                callbacks.item(normalizeV2StreamItem(value));
+                callbacks.item(replay?.titleOnly?normalizeV2TitleItem(value):normalizeV2StreamItem(value));
               }
               openedSocket.send(JSON.stringify({_tag:'Ack',requestId:'1'}));
             }else if(frame._tag==='Exit'){

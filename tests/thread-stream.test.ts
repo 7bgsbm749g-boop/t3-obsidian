@@ -75,6 +75,27 @@ test('a host with its own canonical poll keeps live/replay streaming without a s
   }finally{watcher.stop();}
 });
 
+test('title-only streams get fresh titles after reconnect without duplicate history polling',async()=>{
+ const sockets:Socket[]=[],paths:string[]=[],items:any[]=[],sent:any[]=[];
+ class Socket {
+  onopen?:()=>void;onclose?:()=>void;onmessage?:(event:{data:string})=>void;onerror?:()=>void;
+  constructor(){sockets.push(this);queueMicrotask(()=>this.onopen?.());}
+  send(raw:string){const frame=JSON.parse(raw);sent.push(frame);if(frame.tag==='orchestration.subscribeThread')queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[{kind:'snapshot',snapshotSequence:sockets.length,projection:{thread:{id:'thread',projectId:'project',title:`Title ${sockets.length}`},messages:[{text:'Large duplicate history'}],runs:[],turnItems:[{type:'command',output:'Unused output'}]}},{kind:'event',sequence:10+sockets.length,event:{type:'message.updated',payload:{text:'Unused message'}}},{kind:'event',sequence:20+sockets.length,event:{type:'thread.updated',payload:{title:`Renamed ${sockets.length}`}}}]})}));}
+  close(){this.onclose?.();}
+ }
+ const watcher=watchThread('thread',async()=>({origin:'https://t3.example',api:async path=>{paths.push(path);if(path!=='/api/auth/websocket-ticket')throw Error('Duplicate title history poll');return {ticket:'ticket'};}}),{item:item=>items.push(item),reconnecting:()=>{}},()=>new Socket() as unknown as WebSocket,undefined,{afterSequence:()=>undefined,pollSnapshots:false,titleOnly:true});
+ try{
+  await new Promise(resolve=>setTimeout(resolve,1400));
+  assert.deepEqual(paths,['/api/auth/websocket-ticket']);assert.deepEqual(items[0].snapshot.thread.messages,[]);
+  assert.equal(items[1].event.sequence,11);assert.deepEqual(items[1].event.payload,{});
+  assert.equal(items[2].event.payload.title,'Renamed 1');assert.equal(sent[1]._tag,'Ack');
+  sockets[0].onclose?.();await new Promise(resolve=>setTimeout(resolve,1150));
+  assert.equal(items[3].snapshot.thread.title,'Title 2');assert.equal(items[5].event.payload.title,'Renamed 2');
+  assert.equal(sent.filter(frame=>frame.tag==='orchestration.subscribeThread').every(frame=>!Object.hasOwn(frame.payload,'afterSequence')),true);
+  assert.deepEqual(paths,['/api/auth/websocket-ticket','/api/auth/websocket-ticket']);
+ }finally{watcher.stop();}
+});
+
 test('one-shot binding replay stops at synchronization and cancels a stranded socket without renderer timers',async()=>{
   for(const cancel of [false,true]){
     const abort=new AbortController(),sent:any[]=[];let closed=0;

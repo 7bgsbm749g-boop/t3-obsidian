@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeV2Snapshot,normalizeV2StreamItem,v2Command} from '../orchestration-v2';
+import {normalizeV2Snapshot,normalizeV2StreamItem,normalizeV2TitleItem,v2Command} from '../orchestration-v2';
 import {applyThreadItem,restoreInlineBindings,inlineBindingCheckpoint,turnForMessage,turnPhase} from '../inline-thread';
 import {pendingQuestions} from '../questions';
 import {pendingApprovals} from '../approvals';
@@ -15,6 +15,18 @@ const message={id:'prompt',role:'user',runId:run.id,text:'Hello',streaming:false
 function snapshot(overrides:any={}){return {snapshotSequence:10,hasMoreHistory:false,projection:{thread:{id:'thread',projectId:'project',title:'Test',runtimeMode:'approval-required'},messages:[message],runs:[run],turnItems:[],runtimeRequests:[],...overrides}};}
 const initial=()=>applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:normalizeV2Snapshot(snapshot())}).state;
 const event=(state:any,sequence:number,type:string,payload:any)=>applyThreadItem(state,normalizeV2StreamItem({kind:'event',sequence,event:{type,payload}})).state;
+
+test('title normalization does not inspect duplicate history or unrelated event payloads',()=>{
+ const forbidden=()=>{throw Error('Title listener read transcript data');};
+ const projection={thread:{id:'thread',projectId:'project',title:'Only title'},get messages(){return forbidden();},get runs(){return forbidden();},get turnItems(){return forbidden();},get runtimeRequests(){return forbidden();}};
+ const item=normalizeV2TitleItem({kind:'snapshot',snapshotSequence:17,projection});
+ assert.deepEqual(item,{kind:'snapshot',snapshot:{snapshotSequence:17,thread:{id:'thread',projectId:'project',title:'Only title',protocolVersion:2,messages:[]}}});
+ const unrelated=normalizeV2TitleItem({kind:'event',sequence:18,event:{type:'turn-item.updated',get payload(){return forbidden();}}});
+ assert.deepEqual(unrelated,{kind:'event',event:{sequence:18,type:'v2.unknown',payload:{}}});
+ assert.equal(normalizeV2TitleItem({kind:'unknown-event',sequence:19}).event.sequence,19);
+ assert.deepEqual(normalizeV2TitleItem({kind:'event',sequence:20,event:{type:'thread.updated',payload:{title:'Changed',output:'unused'}}}).event,{sequence:20,type:'thread.metadata-updated',payload:{title:'Changed'}});
+ assert.throws(()=>normalizeV2TitleItem({kind:'snapshot',projection:{thread:{id:'thread'}}}),/invalid title snapshot/);
+});
 
 test('native v2 sender identity survives snapshots and live absolute message replacements',()=>{
  const senderThreadId='2c9cb7b6-a4c9-5746-b9b7-bc463c5024fa';
