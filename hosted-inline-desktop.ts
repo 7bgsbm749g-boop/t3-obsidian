@@ -34,7 +34,9 @@ export function localInlineFiles(root:string,directory:string,storageRoot?:strin
     const localRoot=await storage(),base=resolve(localRoot,directory),result=resolve(localRoot,path);if(!result.startsWith(base+require('node:path').sep))throw Error('Invalid hosted response storage path.');return result;
   };
   return {
-    async read(path){return inlineReadCache.read(await full(path),!path.startsWith(directory+'/leases/'));},
+    // Body-bearing evidence stays durable but does not leave a second full
+    // copy in the raw cache after its parsed working record is released.
+    async read(path){return inlineReadCache.read(await full(path),!['leases','materializations','originals','staged-results','stopped-bodies'].some(folder=>path.startsWith(`${directory}/${folder}/`)));},
     async version(path){return inlineFileVersion(await full(path));},
     async forget(path){inlineReadCache.invalidate(await full(path));},
     async write(path,contents){const target=await full(path);inlineReadCache.invalidate(target);await fs.mkdir(dirname(target),{recursive:true});const temporary=target+'.'+require('node:crypto').randomUUID()+'.tmp';try{await fs.writeFile(temporary,contents,{mode:0o600});await fs.rename(temporary,target);}finally{inlineReadCache.invalidate(target);await fs.rm(temporary,{force:true});}},
