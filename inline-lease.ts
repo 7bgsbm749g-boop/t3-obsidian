@@ -11,6 +11,7 @@ import {responseAnchor,responseRegion} from './native-response-projection';
 import {stoppedResponseBody} from './response-stop';
 import {responseStopReceipt,stoppedBodyPath,validStoppedBodyReference,validResponseStopReceipt,type ResponseStopReceipt,type StoppedBodyReference} from './response-stop-receipt';
 import type {FinalAttemptAbort} from './completion-attempt';
+import {retainedLease,isCompletedLeaseIndex} from './completed-lease-index';
 
 export const LEASE_MS=15_000;
 export const HEARTBEAT_MS=3000;
@@ -25,7 +26,7 @@ export interface LeaseReply {stopReceipt?:ResponseStopReceipt;id:string;ok:boole
 /** Discovery only. This small record never proves current writer ownership or
  * permits a mutation; dispatch still reads and validates the durable lease. */
 export interface LeaseRoute {version:1;id:string;vaultId:string;host:HostedInlineRequest['host'];notePath:string;threadId:string;projectId:string;threadEnvironmentId:string;messageId:string;turnId?:string|null;turnIds:string[];epoch:number;revision:number;status:HostedInlineState['status'];finalPhase?:'complete'|'interrupted'}
-export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;listBatch?(directory:string,limit:number):Promise<string[]>;close?():Promise<void>;remove(path:string):Promise<void>;version?(path:string):Promise<string|undefined>}
+export interface LeaseFiles extends InlineFiles {list(directory:string):Promise<string[]>;listBatch?(directory:string,limit:number):Promise<string[]>;close?():Promise<void>;remove(path:string):Promise<void>;version?(path:string):Promise<string|undefined>;forget?(path:string):Promise<void>}
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export const leasePaths=(directory:string,id:string)=>({record:`${directory}/leases/${id}.json`,route:`${directory}/routes/${id}.json`,command:`${directory}/mailbox/${id}.json`,reply:`${directory}/replies/${id}.json`,catalog:`${directory}/lease-catalog.json`});
 export function leaseRoute(record:LeaseRecord):LeaseRoute {
@@ -52,7 +53,16 @@ export class InlineLeaseAuthority {
   private routes=new Map<string,string>();
   private pendingRoutes=new Set<string>();
   private catalog=new Map<string,HostedInlineRequest>();
-  responsesFor(path:string){return [...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===path);}
+  async responsesFor(path:string){
+    const matches=[...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===path);
+    const records=await Promise.all(matches.map(async record=>{
+      if(!isCompletedLeaseIndex(record))return record;
+      const storage=leasePaths(this.identity.directory,record.request.id).record;
+      try{const raw=await this.files.read(storage);return raw?JSON.parse(raw) as LeaseRecord:undefined;}
+      finally{await this.files.forget?.(storage);}
+    }));
+    return records.filter((record):record is LeaseRecord=>!!record&&(record.state?.notePath??record.request.notePath)===path);
+  }
   private explorerDirty=false;private catalogDirty=false;
   private relocations:Array<{before:string;after?:string}>=[];
   renamed(before:string,after:string){this.relocations.push({before,after});}
@@ -60,7 +70,7 @@ export class InlineLeaseAuthority {
   private lastCleanup=0;private cleanupCursor=0;
   private scanFailed=false;private lastScanFailure=0;
   constructor(private identity:LeaseIdentity,private files:LeaseFiles,private now=()=>Date.now()){}
-  status(){return {busy:!!this.work,stopped:this.stopped,recovered:this.recovered};}
+  status(){return {busy:!!this.work,stopped:this.stopped,recovered:this.recovered,records:this.records.size,completedIndexes:[...this.records.values()].filter(isCompletedLeaseIndex).length};}
   stop(){this.stopped=true;}
   tick(){
     if(this.work)return this.work;if(this.stopped)return Promise.resolve();
@@ -81,7 +91,7 @@ export class InlineLeaseAuthority {
       // delays the first interactive registration after a cold start.
       for(const path of await this.files.list(`${directory}/leases`)){
         if(this.stopped)return;
-        const raw=await this.files.read(path);if(raw){const record:LeaseRecord=JSON.parse(raw);this.pendingRoutes.add(record.request.id);this.indexRecord(record);}
+        const raw=await this.files.read(path);if(raw){const record:LeaseRecord=JSON.parse(raw);this.pendingRoutes.add(record.request.id);this.indexRecord(record);if(isCompletedLeaseIndex(this.records.get(record.request.id)!))await this.files.forget?.(path);}
       }
       await this.flushIndexes();
       this.recovered=true;
@@ -450,7 +460,7 @@ export class InlineLeaseAuthority {
     this.routes.set(id,bytes);this.pendingRoutes.delete(id);
   }
   private indexRecord(record:LeaseRecord){
-    this.records.set(record.request.id,record);
+    this.records.set(record.request.id,retainedLease(record));
     const projected=leaseExplorerResponse(record),previous=this.explorerResponses.find(r=>r.id===projected.id);
     // Keep vault rename/delete observations across recovery until a newer
     // writer checkpoint supplies its canonical destination location.

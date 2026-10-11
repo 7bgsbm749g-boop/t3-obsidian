@@ -51,6 +51,19 @@ test('public mutable reads cannot change the private hydrated snapshot or reques
   }finally{await h.close();}
 });
 
+test('completed journal reads keep only authenticated metadata and reload exact recovery bytes',async()=>{
+ const h=await fixture(),id=randomUUID();try{
+  const state=initial(id);await h.journal.append(id,state,'accepted');await h.journal.inspect(id);assert.equal(h.journal.status().states,1);
+  state.status='verified';state.finalBody='Finished answer\n'.repeat(10000);await h.journal.append(id,state,'verified');
+  const head=await fs.readFile(h.path(id)),first=(await h.journal.read(id))!;
+  assert.equal(first.original,state.original);assert.equal(first.finalBody,state.finalBody);assert.equal(h.journal.status().states,0);assert.equal(h.journal.status().stateCharacters,0);
+  first.original='Caller edit';first.finalBody='Caller edit';const second=(await h.journal.read(id))!;
+  assert.equal(second.original,state.original);assert.equal(second.finalBody,state.finalBody);assert.equal(h.journal.status().states,0);assert.deepEqual(await fs.readFile(h.path(id)),head);
+  const reopened=await CurrentGenerationJournal.open(h.privateRoot,[h.vault]);try{assert.deepEqual(await reopened.read(id),second);assert.equal(reopened.status().states,0);}finally{await reopened.stop();}
+  const object=join(h.privateRoot,id,'current','objects',state.originalHash+'.blob');await fs.writeFile(object,'Damaged recovery');await assert.rejects(h.journal.read(id),/integrity/);
+ }finally{await h.close();}
+});
+
 test('inspection shares frozen recovery text without mutable copies and observes new publications',async t=>{
   const h=await fixture(),id=randomUUID();try{
     const state=initial(id);state.conflicts=[{original:state.original,latest:'Local edit',reason:'Unresolved'}];await h.journal.append(id,state,'accepted');

@@ -517,7 +517,7 @@ test('unchanged oversized history uses fresh file versions without rereading or 
   assert.equal(reads.length,0);assert.equal(h.host.leaseCacheStatus().parses,parsed);assert.ok(h.host.leaseCacheStatus().versionHits>=125);
   const changed=historical[0],path=leasePaths(h.identity.directory,changed).record,record=JSON.parse(h.storage.get(path)!);record.revision++;record.state.body='New completed revision';h.storage.set(path,JSON.stringify(record));
   await h.host.scan(true);assert.ok(reads.includes(path));assert.ok(reads.every(value=>value===path));
-  assert.equal((h.host as any).records.get(changed).state.body,'New completed revision');
+  assert.equal((h.host as any).records.get(changed).state.body,undefined);assert.equal((await (h.host as any).fullLease((h.host as any).records.get(changed))).state.body,'New completed revision');
   h.storage.delete(path);await h.host.scan(true);assert.equal((h.host as any).leaseVersions.has(path),false);
  }finally{await h.close();}
 });
@@ -529,7 +529,17 @@ test('a lease replacement during discovery cannot authenticate the older decoded
   h.storage.set(path,JSON.stringify(record));h.files.version=async value=>{const raw=h.storage.get(value);return raw===undefined?undefined:contentHash(raw);};
   const read=h.files.read;let replace=true;h.files.read=async value=>{const bytes=await read(value);if(value===path&&replace){replace=false;record.revision++;record.state.body='After replacement';h.storage.set(path,JSON.stringify(record));}return bytes;};
   await h.host.scan(true);assert.equal((h.host as any).leaseVersions.has(path),false);
-  await h.host.scan(true);assert.equal((h.host as any).records.get(id).state.body,'After replacement');assert.equal((h.host as any).leaseVersions.has(path),true);
+  await h.host.scan(true);assert.equal((h.host as any).records.get(id).state.body,undefined);assert.equal((await (h.host as any).fullLease((h.host as any).records.get(id))).state.body,'After replacement');assert.equal((h.host as any).leaseVersions.has(path),true);
+ }finally{await h.close();}
+});
+
+test('a completed record damaged during its lazy read does not block another response',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const id=randomUUID(),path=leasePaths(h.identity.directory,id).record,request={...h.request,id,notePath:'History.md'};
+  h.storage.set(path,JSON.stringify({request,coordinated:true,owner:COORDINATED_OWNER,epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,state:{requestHash:hostedRequestHash(request),accepted:true,status:'complete',body:'Retained completed reply',finalSaved:true,cleanupComplete:true,notePath:request.notePath,hashes:[],updatedAt:''}}));
+  const read=h.files.read;let reads=0;h.files.read=async value=>{if(value===path&&++reads===2)h.storage.set(path,'{');return read(value);};
+  await h.host.scan(true);assert.equal(reads,2);assert.ok((h.host as any).failures.has(id));
+  h.complete();await h.writer.tick();assert.equal((await h.host.journal.read(h.id))!.status,'verified');assert.ok(h.notes.get('Note.md')!.includes('Added **25kg**.'));assert.equal(h.storage.get(path),'{');
  }finally{await h.close();}
 });
 

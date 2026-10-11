@@ -141,7 +141,7 @@ export class CurrentGenerationJournal implements GenerationJournal {
     }
     if(state.request?.id!==id||state.journalRevision!==head.index||state.originalHash!==contentHash(state.original))throw Error('Current recovery identity check failed.');
     const size=characters(state);freeze(state);
-    if(!this.stopped&&this.states.size<(this.options.maxStates??32)&&this.stateCharacters+size<=(this.options.maxStateCharacters??8_000_000)){this.states.set(id,{hash:head.hash,state,characters:size});this.stateCharacters+=size;}
+    if(!this.stopped&&!['verified','removed'].includes(state.status)&&this.states.size<(this.options.maxStates??32)&&this.stateCharacters+size<=(this.options.maxStateCharacters??8_000_000)){this.states.set(id,{hash:head.hash,state,characters:size});this.stateCharacters+=size;}
     return state;
   }
   private async audit(id:string):Promise<{state:NoteGeneration;head:Head}|undefined>{

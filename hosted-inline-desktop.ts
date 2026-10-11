@@ -20,6 +20,7 @@ import {markdownCodeCacheStatus} from './reply-html';
 import {ensurePrivateStorage,existingPrivateStorage} from './private-storage-desktop';
 import {sameWorkspacePath} from './folder-link';
 import {InlineResponseFeeds} from './inline-response-feed';
+import {nativeResponses} from './native-response-manager';
 
 const inlineReadCache=new DesktopInlineReadCache();
 
@@ -33,8 +34,9 @@ export function localInlineFiles(root:string,directory:string,storageRoot?:strin
     const localRoot=await storage(),base=resolve(localRoot,directory),result=resolve(localRoot,path);if(!result.startsWith(base+require('node:path').sep))throw Error('Invalid hosted response storage path.');return result;
   };
   return {
-    async read(path){return inlineReadCache.read(await full(path));},
+    async read(path){return inlineReadCache.read(await full(path),!path.startsWith(directory+'/leases/'));},
     async version(path){return inlineFileVersion(await full(path));},
+    async forget(path){inlineReadCache.invalidate(await full(path));},
     async write(path,contents){const target=await full(path);inlineReadCache.invalidate(target);await fs.mkdir(dirname(target),{recursive:true});const temporary=target+'.'+require('node:crypto').randomUUID()+'.tmp';try{await fs.writeFile(temporary,contents,{mode:0o600});await fs.rename(temporary,target);}finally{inlineReadCache.invalidate(target);await fs.rm(temporary,{force:true});}},
     async remove(path){const target=await full(path);inlineReadCache.invalidate(target);try{await fs.rm(target,{force:true});}finally{inlineReadCache.invalidate(target);}},
     async list(directoryPath){try{return (await fs.readdir(await full(directoryPath))).filter(p=>p.endsWith('.json')).map(p=>`${directoryPath}/${p}`);}catch(error:any){if(error.code==='ENOENT')return [];throw error;}},
@@ -53,7 +55,7 @@ export class DesktopInlineHost {
   private authority:InlineLeaseAuthority;
   private stopAuthorityReads:()=>void;
   private authorityStorage:ReturnType<typeof interruptibleAuthorityFiles>;
-  status(){return {active:this.active,authority:this.authority.status(),storage:this.authorityStorage.status(),readCache:inlineReadCache.status(),codeRangeCache:markdownCodeCacheStatus(),projectionCache:this.coordinated?.projectionStatus(),leaseCache:this.coordinated?.leaseCacheStatus(),journal:this.coordinated?.journalStatus()};}
+  status(){return {active:this.active,authority:this.authority.status(),storage:this.authorityStorage.status(),readCache:inlineReadCache.status(),codeRangeCache:markdownCodeCacheStatus(),projectionCache:this.coordinated?.projectionStatus(),leaseCache:this.coordinated?.leaseCacheStatus(),nativeResponseCache:nativeResponses(this.app).retentionStatus(),journal:this.coordinated?.journalStatus()};}
   private stopAuthorityTimer:()=>void;
   private stopMaintenanceTimer:()=>void=()=>{};
   private work=new Set<Promise<void>>();
@@ -63,7 +65,7 @@ export class DesktopInlineHost {
   private accessCache:ThreadAccessCache;
   private responseFeeds:InlineResponseFeeds;
   private closeStorage:()=>Promise<void>;
-  private constructor(private release:()=>Promise<void>,app:App,private identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},files:ReturnType<typeof localInlineFiles>,access:(environmentId:string,reason?:ThreadAccessCloseReason)=>Promise<ThreadAccess>){
+  private constructor(private release:()=>Promise<void>,private app:App,private identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},files:ReturnType<typeof localInlineFiles>,access:(environmentId:string,reason?:ThreadAccessCloseReason)=>Promise<ThreadAccess>){
     this.accessCache=new ThreadAccessCache(access);
     this.responseFeeds=new InlineResponseFeeds(environmentId=>this.accessCache.get(environmentId));
     this.closeStorage=()=>files.close?.()??Promise.resolve();

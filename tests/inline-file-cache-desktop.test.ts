@@ -62,3 +62,13 @@ test('source text and entry limits bound retained bytes, including oversized and
   const reads=cache.status().sourceReads;await cache.read(paths[0]);assert.equal(cache.status().sourceReads,reads+1,'an evicted value requires a fresh source read');
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('uncached recovery reads release previously retained bytes and always use the current file',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'inline-byte-transient-')),path=join(root,'record.json'),cache=new DesktopInlineReadCache();
+ try{
+  const body='Completed reply '.repeat(10000);await writeFile(path,body);assert.equal(await cache.read(path),body);assert.equal(cache.status().entries,1);
+  assert.equal(await cache.read(path,false),body);assert.equal(cache.status().entries,0);assert.equal(cache.status().characters,0);
+  await writeFile(path,'Changed completed reply');assert.equal(await cache.read(path,false),'Changed completed reply');assert.equal(cache.status().entries,0);assert.equal(cache.status().sourceReads,3);
+  await rm(path);assert.equal(await cache.read(path,false),undefined);assert.equal(cache.status().characters,0);
+ }finally{await rm(root,{recursive:true,force:true});}
+});

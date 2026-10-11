@@ -13,6 +13,7 @@ import type {DirectInlineUpdate} from './direct-inline-preview';
 import {loadNativePreviews,checkedNativePreview,sameNativePreview,previewMatches,previewMessageId,MAX_NATIVE_PREVIEWS,MAX_NATIVE_PREVIEW_CHARACTERS,type NativePreviewEntry,type NativePreviewSnapshot} from './native-preview-cache';
 import type {DeviceCompletionReceipt} from './device-response-completion';
 import type {NativeStoppedResponse,NativeStoppedStore} from './native-stop-store';
+import {retainedLease,isCompletedLeaseIndex,canCompactLease} from './completed-lease-index';
 
 const managers=new WeakMap<App,NativeResponseManager>();
 export function nativeResponses(app:App){let manager=managers.get(app);if(!manager){manager=new NativeResponseManager(app);managers.set(app,manager);}return manager;}
@@ -37,6 +38,7 @@ export class NativeResponseManager {
   private provisional=new Map<string,{path:string;body:string}>();
   private streams=new Map<string,DirectInlineUpdate>();
   private records=new Map<string,LeaseRecord>();
+  retentionStatus(){return {records:this.records.size,completedIndexes:[...this.records.values()].filter(isCompletedLeaseIndex).length,proofs:this.proofs.size,proofCharacters:[...this.proofs.values()].reduce((total,proof)=>total+proof.document.length,0),deviceProofs:this.deviceCommits.size,deviceProofCharacters:[...this.deviceCommits.values()].reduce((total,item)=>total+item.proof.document.length,0)};}
   private titles=new Map<string,string>();
   private proofs=new Map<string,NativeCommitProof>();
   private deviceCommits=new Map<string,{path:string;proof:NativeCommitProof}>();
@@ -148,6 +150,7 @@ export class NativeResponseManager {
     while(this.cached.size>MAX_NATIVE_PREVIEWS||characters>MAX_NATIVE_PREVIEW_CHARACTERS){const oldest=this.cached.values().next().value!;characters-=oldest.body.length;this.cached.delete(oldest.id);this.reconnecting.delete(oldest.id);}
     this.dirtyPreview();
   }
+  private reconnectDocument(view:MarkdownView){const adapter=this.view(view);return adapter?.conflictRecord()?.incoming??adapter?.saved()??view.getViewData();}
   reconnectingResponseIds(){
     const opened=new Set([...this.views.keys()].map(view=>view.file?.path));
     const ids=[...this.cached.values()].filter(entry=>this.reconnecting.has(entry.id)&&opened.has(entry.notePath)).map(entry=>entry.id);
@@ -155,13 +158,13 @@ export class NativeResponseManager {
     // preview checkpoint, or Sync delivered a rename while the app was closed.
     for(const leaf of this.app.workspace.getLeavesOfType('markdown')){
       const view=leaf.view as MarkdownView;if(!view.file||typeof view.getViewData!=='function')continue;
-      const saved=this.view(view)?.saved()??view.getViewData();
+      const saved=this.reconnectDocument(view);
       for(const match of saved.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/g)){
         const region=responseRegion(saved,match[1]);
         if(region&&saved.slice(region.from,region.to)===responseAnchor(match[1]))ids.push(match[1]);
       }
     }
-    for(const receipt of this.completionIdentities.values())if(!this.deviceCommits.has(receipt.id)&&[...this.views].some(([view,adapter])=>view.file?.path===receipt.path&&!!responseRegion(adapter.saved(),receipt.id)))ids.push(receipt.id);
+    for(const receipt of this.completionIdentities.values())if(!this.deviceCommits.has(receipt.id)&&[...this.views].some(([view])=>view.file?.path===receipt.path&&!!responseRegion(this.reconnectDocument(view),receipt.id)))ids.push(receipt.id);
     return [...new Set(ids)];
   }
   deleted(path:string){for(const entry of [...this.cached.values()])if(entry.notePath===path||entry.notePath.startsWith(path+'/'))this.forgetPreview(entry.id);void this.flushPreviewCache();}
@@ -261,7 +264,24 @@ export class NativeResponseManager {
     for(const path of [...old?.state?.locationConflict??[],...record.state?.locationConflict??[]])affected.add(path);
     this.refresh(affected);
     if(record.state?.delivery&&record.state.cleanupComplete)await this.changed(record.state.notePath);
+    const current=this.records.get(record.request.id);
+    if(current&&canCompactLease(current)&&!isCompletedLeaseIndex(current)){
+      const currentPath=current.state?.notePath??current.request.notePath,file=this.app.vault.getFileByPath(currentPath),disk=file?await this.app.vault.read(file):'';
+      this.releaseCompleted(currentPath,disk);
+    }
     if(cached&&!this.cached.has(record.request.id))await this.flushPreviewCache();
+  }
+  private releaseCompleted(path:string,document:string){
+    for(const [id,record] of this.records){
+      if(isCompletedLeaseIndex(record)||!canCompactLease(record)||(record.state?.notePath??record.request.notePath)!==path)continue;
+      // A pending or divergent native pane keeps the complete reply and proof.
+      // A later stale anchor uses the retained completion identity and recovery
+      // evidence, rather than rebuilding a reply from a compact routing record.
+      if(record.responseRemovedAt===undefined&&(responseRegion(document,id)||[...this.views].some(([view,adapter])=>view.file?.path===path&&(adapter.responseIds().includes(id)||adapter.conflictRecord()))))continue;
+      const delivery=record.state?.delivery;
+      if(delivery&&record.responseRemovedAt===undefined)this.completionIdentities.set(id,{id,path,hash:delivery.hash,commitId:delivery.commitId});
+      this.records.set(id,retainedLease(record));this.proofs.delete(id);this.deviceCommits.delete(id);this.streams.delete(id);this.provisional.delete(id);
+    }
   }
   private completed(path:string,document:string,pending:ReadonlySet<string>){
     if(!pending.size)return [];
@@ -298,6 +318,7 @@ export class NativeResponseManager {
           if(unmatched)adapter.confirmPendingConflict('The saved note differs from the verified completed response. Both versions are preserved.');
         }
         this.refresh();
+        this.releaseCompleted(path,disk);
       }while(this.changedDuringRead.has(path));
     })();
     this.reads.set(path,work);void work.finally(()=>{if(this.reads.get(path)===work)this.reads.delete(path);}).catch(()=>{});return work;
@@ -355,7 +376,7 @@ export class NativeResponseManager {
           if(!this.records.has(entry.id)&&!responses.some(response=>response.id===entry.id))responses.push({id:entry.id,body:this.titled(entry.id,entry.body)});
         }
         for(const record of this.records.values()){
-          if(record.responseRemovedAt!==undefined||(record.state?.notePath??record.request.notePath)!==view.file.path)continue;
+          if(isCompletedLeaseIndex(record)||record.responseRemovedAt!==undefined||(record.state?.notePath??record.request.notePath)!==view.file.path)continue;
           const id=record.request.id;
           if(this.deviceCommits.has(id))continue;
           if(!saved.includes(startMarker(id))&&!saved.includes(endMarker(id)))continue;

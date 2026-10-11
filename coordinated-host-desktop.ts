@@ -25,6 +25,7 @@ import {readImportRecordsPage} from './import-records';
 import type {ImportRecordsCommand} from './response-command';
 import {readResponseBindings} from './response-bindings';
 import type {EventTarget} from './event-subscriptions';
+import {retainedLease,isCompletedLeaseIndex} from './completed-lease-index';
 
 /** Host lock is owned by DesktopInlineHost. Mailbox mutations, migration fences
  * and checkpoints share that authority's serialization. Journal bytes live
@@ -35,7 +36,7 @@ export class CoordinatedHost {
   private versionHits=0;
   private bindingQueries=0;
   private maxVersionEntries=4096;
-  leaseCacheStatus(){return {...this.leaseCache.status(),versionEntries:this.leaseVersions.size,maxVersionEntries:this.maxVersionEntries,versionHits:this.versionHits,bindingQueries:this.bindingQueries};}
+  leaseCacheStatus(){return {...this.leaseCache.status(),versionEntries:this.leaseVersions.size,maxVersionEntries:this.maxVersionEntries,versionHits:this.versionHits,bindingQueries:this.bindingQueries,records:this.records.size,completedIndexes:[...this.records.values()].filter(isCompletedLeaseIndex).length};}
   private projections=new ResponseProjectionCache();
   projectionStatus(){return this.projections.status();}
   private records=new Map<string,LeaseRecord>();
@@ -64,7 +65,7 @@ export class CoordinatedHost {
     const finalBody=removeStreamBlock(result.finalBody!,result.historyRemoval.key,result.historyRemoval.blockHash).text;
     const state={...record.state,body:finalBody,finalBody,finalDocumentHash:proof.hash,delivery:{commitId:proof.commitId,hash:proof.hash,proofHash:published.hash,verifiedOnHost:true,observedBy:[]}};
     const updated=await this.authority.checkpoint(record.request.id,state,{epoch:record.epoch,revision:record.revision});
-    this.records.set(record.request.id,updated);await nativeResponses(this.app).receive(updated,published.bytes);return updated;
+    this.records.set(record.request.id,retainedLease(updated));await nativeResponses(this.app).receive(updated,published.bytes);return updated;
   }
   private constructor(private app:App,private identity:LeaseIdentity,private files:LeaseFiles,private authority:InlineLeaseAuthority,readonly journal:CurrentGenerationJournal,readonly coordinator:GeneratedNoteCoordinator){}
   static async open(app:App,identity:LeaseIdentity,files:LeaseFiles,authority:InlineLeaseAuthority,options?:{journalRoot?:string}){
@@ -96,7 +97,7 @@ export class CoordinatedHost {
     }finally{manager.cancel(path);}
   }
   async eventContent(path:string,content:string){
-    const leases=this.authority.responsesFor(path);
+    const leases=await this.authority.responsesFor(path);
     const records=await Promise.all(leases.map(record=>this.journal.inspect(record.request.id)));
     const prepared=await Promise.all(leases.filter(record=>record.preparedFinal&&record.finalWriter).map(async record=>{
       const delivery={...record.preparedFinal!,verifiedOnHost:false,observedBy:[]},bytes=await this.files.read(nativeCommitPath(this.identity.directory,record.request.id,delivery.commitId));
@@ -129,10 +130,17 @@ export class CoordinatedHost {
     this.leaseVersions.delete(path);
     const raw=await this.files.read(path);if(!raw){this.leaseCache.remove(path);return;}
     const record=this.leaseCache.read(path,raw);
+    if(isCompletedLeaseIndex(record))await this.files.forget?.(path);
     // Authenticate the decoded bytes against both sides of the read. A
     // concurrent replacement remains visible on the next discovery pass.
     if(version!==undefined&&this.leaseVersions.size<this.maxVersionEntries&&await this.files.version?.(path)===version)this.leaseVersions.set(path,{version,record});
     return record;
+  }
+  private async fullLease(record:LeaseRecord){
+    if(!isCompletedLeaseIndex(record))return record;
+    const path=leasePaths(this.identity.directory,record.request.id).record;
+    try{const raw=await this.files.read(path);return raw?JSON.parse(raw) as LeaseRecord:undefined;}
+    finally{await this.files.forget?.(path);}
   }
   async responseBindings(target:EventTarget){
     this.bindingQueries++;
@@ -146,8 +154,9 @@ export class CoordinatedHost {
     const paths=await this.files.list(`${this.identity.directory}/leases`);
     const retained=new Set(paths);this.leaseCache.retain(retained);
     for(const path of this.leaseVersions.keys())if(!retained.has(path))this.leaseVersions.delete(path);
+    for(const id of this.records.keys())if(!retained.has(leasePaths(this.identity.directory,id).record)&&!this.work.has(id))this.records.delete(id);
     for(const path of paths){
-      try{const record=await this.readLease(path);if(!record)continue;if(!this.work.has(record.request.id))this.records.set(record.request.id,record);
+      try{const record=await this.readLease(path);if(!record)continue;if(!this.work.has(record.request.id))this.records.set(record.request.id,retainedLease(record));
         if(terminalLease(record)||record.state?.finalSaved){
           const previous=this.terminalRevisions.get(record.request.id);
           if(background&&this.terminalDiscoveryComplete&&(!previous||previous.epoch!==record.epoch||previous.revision!==record.revision))changedTerminal.push(record);
@@ -166,14 +175,17 @@ export class CoordinatedHost {
     // Changed leases above and explicit recovery scans still run immediately.
     if(historical.length){this.terminalCursor+=historical.length;this.nextTerminalScan=now+30_000;}
     const urgent=new Set(changedTerminal.map(record=>record.request.id));
-    return active.concat(changedTerminal,historical.filter(record=>!urgent.has(record.request.id)));
+    const selected=active.concat(changedTerminal,historical.filter(record=>!urgent.has(record.request.id)));
+    return (await Promise.all(selected.map(async record=>{
+      try{return await this.fullLease(record);}catch(error){this.failures.set(record.request.id,error instanceof Error?error.message:String(error));}
+    }))).filter((record):record is LeaseRecord=>!!record);
   }
   private async scanRecord(record:LeaseRecord){
       if(this.stopped)return;
       const identity=record.request.id;this.failures.delete(identity);
       try{
       const id=record.request.id,notePath=record.state?.notePath??record.request.notePath;
-      if(record.responseRemovedAt!==undefined){this.records.set(id,record);await nativeResponses(this.app).receive(record);return;}
+      if(record.responseRemovedAt!==undefined){this.records.set(id,retainedLease(record));await nativeResponses(this.app).receive(record);return;}
       if(record.request.deviceCompletion){
         if(!await this.journal.inspect(id)){
           const original=await this.files.read(deviceOriginalPath(this.identity.directory,id));
@@ -181,7 +193,7 @@ export class CoordinatedHost {
           await this.coordinator.accept(record.request,original);
         }
         if(record.migrating)record=await this.authority.migrated(id);
-        this.records.set(id,record);
+        this.records.set(id,retainedLease(record));
         if(record.finalWriter&&record.finalWriter.actor!==record.owner){
           const journal=(await this.journal.inspect(id))!;
           if(journal.staged===undefined)await this.coordinator.result(id,completedSelectionDraft(journal.stagedDraft??journal.original,id,record.state?.steering),record.finalWriter.body);
@@ -225,7 +237,7 @@ export class CoordinatedHost {
           deviceNoteIO(this.app).noteChanged(move.before);
         }
       }
-      this.records.set(id,record);
+      this.records.set(id,retainedLease(record));
       // A native file notification can fail AFTER vault.process wrote the
       // exact durable intent. Recover by disk readback before marker location,
       // projection, or network work; those anchors have legitimately gone.
@@ -234,7 +246,7 @@ export class CoordinatedHost {
         // Recover a crash after intentional journal removal without resuming
         // delivery. Reuse this existing fresh audit; no additional history scan.
         if(pending?.status==='removed'){
-          const removed=await this.authority.removeResponse(id);this.records.set(id,removed);
+          const removed=await this.authority.removeResponse(id);this.records.set(id,retainedLease(removed));
           await nativeResponses(this.app).receive(removed);return;
         }
         if(pending?.attempt&&['commit-pending','verified'].includes(pending.status)){
@@ -248,7 +260,7 @@ export class CoordinatedHost {
                 finalDocumentHash:verified.verified.hash,responseAnchor:verified.verified.responseAnchor,
                 delivery:{commitId:verified.verified.commitId,hash:verified.verified.hash,verifiedOnHost:true,proofHash:proof.hash,observedBy:record.state.delivery?.commitId===verified.verified.commitId?record.state.delivery.observedBy:[]}};
               delete state.detail;
-              record=await this.authority.checkpoint(id,state,{epoch:record.epoch,revision:record.revision});this.records.set(id,record);
+              record=await this.authority.checkpoint(id,state,{epoch:record.epoch,revision:record.revision});this.records.set(id,retainedLease(record));
             }
           }
         }
@@ -257,7 +269,7 @@ export class CoordinatedHost {
         if(record.coordinated){
           let journal=await this.journal.inspect(id);
           if(journal?.status==='removed'){
-            const removed=await this.authority.removeResponse(id);this.records.set(id,removed);
+            const removed=await this.authority.removeResponse(id);this.records.set(id,retainedLease(removed));
             await nativeResponses(this.app).receive(removed);return;
           }
           // A proven completed rename can still carry the original empty
@@ -269,7 +281,7 @@ export class CoordinatedHost {
           }
           if(journal?.status==='verified'&&record.state?.delivery&&!record.state.delivery.proofHash){
             const proof=await this.materialization(journal);
-            record=await this.authority.checkpoint(id,{...record.state,delivery:{...record.state.delivery,proofHash:proof.hash}},{epoch:record.epoch,revision:record.revision});this.records.set(id,record);
+            record=await this.authority.checkpoint(id,{...record.state,delivery:{...record.state.delivery,proofHash:proof.hash}},{epoch:record.epoch,revision:record.revision});this.records.set(id,retainedLease(record));
           }
           await nativeResponses(this.app).receive(record);
           if(journal){
@@ -307,7 +319,7 @@ export class CoordinatedHost {
         if(!already&&plan?.kind!=='planned')return;
         // No raw move: disagreeing or dirty native views delay migration.
         if(!nativeResponses(this.app).savedViews(notePath).every(view=>view.saved()===saved))return;
-        record=(await this.authority.fence(id))!;this.records.set(id,record);
+        record=(await this.authority.fence(id))!;this.records.set(id,retainedLease(record));
         // Existing clients may still hold a cached, previously granted TTL.
         // Reject renewals now and wait out that grant before stripping bytes.
         if((record.legacyFenceUntil??0)>Date.now())return;
@@ -318,7 +330,7 @@ export class CoordinatedHost {
         await fs.writeFile(join(evidence,'migration-original.md'),saved,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
         const old=await this.journal.inspect(id);if(!old)await this.coordinator.accept(record.request,anchored);
         if(anchored!==saved&&!await this.checkedSave(notePath,saved,anchored))return;
-        record=await this.authority.migrated(id);this.records.set(id,record);
+        record=await this.authority.migrated(id);this.records.set(id,retainedLease(record));
       }
       const journal=await this.journal.inspect(id);
       if(journal&&journal.notePath!==notePath)await this.coordinator.renamed(id,journal.notePath,notePath);
@@ -351,7 +363,7 @@ export class CoordinatedHost {
       },
       write:async(path,value)=>{
         const id=/\/([^/]+)\.json$/.exec(path)?.[1];if(!id||path!==hostedPaths(this.identity.directory,id).state)return base.write(path,value);
-        const state:HostedInlineState=JSON.parse(value),record=await this.authority.checkpoint(id,state,reads.get(id));reads.set(id,{epoch:record.epoch,revision:record.revision});this.records.set(id,record);
+        const state:HostedInlineState=JSON.parse(value),record=await this.authority.checkpoint(id,state,reads.get(id));reads.set(id,{epoch:record.epoch,revision:record.revision});this.records.set(id,retainedLease(record));
         await this.coordinator.checkpoint(id,record.revision,record.state!);await nativeResponses(this.app).receive(record);
       },
       updateNote:async(path,change,bindingId)=>{
@@ -381,7 +393,7 @@ export class CoordinatedHost {
         if(request.deviceCompletion){
           const record=await this.authority.reserveHostFinal(request.id,{messageId:state.messageId??request.messageId,turnId:state.turnId??null,sequence:state.bindingCheckpoint?.sequence??0,body,phase:state.finalPhase??'interrupted'});
           if(!record){state.detail='Waiting for the sending device to save the finished response.';return false;}
-          this.records.set(request.id,record);
+          this.records.set(request.id,retainedLease(record));
           reads.set(request.id,{epoch:record.epoch,revision:record.revision});
           if(record.finalWriter?.actor!==record.owner)return false;
         }
@@ -438,7 +450,8 @@ export class CoordinatedHost {
     }
     if(kind==='close-stream-block'){
       if(!notePath||!hash)throw Error('Choose the exact streaming block and note.');
-      const matches=[...this.records.values()].filter(record=>record.coordinated&&(record.state?.notePath??record.request.notePath)===notePath&&record.state?.status==='complete'&&record.state.cleanupComplete&&record.state.finalSaved&&record.state.finalBody&&streamBlock(record.state.finalBody,id));
+      const candidates=(await Promise.all([...this.records.values()].filter(record=>record.coordinated&&(record.state?.notePath??record.request.notePath)===notePath&&record.state?.status==='complete'&&record.state.cleanupComplete&&record.state.finalSaved).map(record=>this.fullLease(record)))).filter((record):record is LeaseRecord=>!!record);
+      const matches=candidates.filter(record=>record.state?.finalBody&&streamBlock(record.state.finalBody,id));
       // A repeated command can arrive after the lease has already adopted the
       // shortened body. The journal retains the immutable original fold.
       if(!matches.length)for(const record of this.records.values()){
@@ -471,7 +484,7 @@ export class CoordinatedHost {
       if(plan?.kind==='planned')await this.recoverySave(chosen.path,chosen.document,plan.after,id,false);
       let relocated=await this.authority.relocate(id,lease.state?.notePath??lease.request.notePath,chosen.path);
       if(relocated.state?.locationConflict||['paused','conflict'].includes(relocated.state?.status??''))relocated=await this.authority.resume(id);
-      this.records.set(id,relocated);await this.scan();return {resumed:true,bindingId:id,notePath:chosen.path,evidence};
+      this.records.set(id,retainedLease(relocated));await this.scan();return {resumed:true,bindingId:id,notePath:chosen.path,evidence};
     }
     if(kind==='resume-response'){
       const raw=await this.files.read(leasePaths(this.identity.directory,id).record);if(!raw)throw Error('Unknown response binding.');
@@ -512,7 +525,7 @@ export class CoordinatedHost {
         if(finished){const generation=await this.coordinator.restore(id,contentHash(after));await this.scan();return {restored:generation.status==='verified',notePath:path,evidence,generation};}
         let restored=await this.authority.relocate(id,path,path);
         if(['paused','conflict'].includes(restored.state?.status??''))restored=await this.authority.resume(id);
-        this.records.set(id,restored);await this.scan();return {restored:true,notePath:path,evidence};
+        this.records.set(id,retainedLease(restored));await this.scan();return {restored:true,notePath:path,evidence};
       }
       // Pending readback recovery is not an explicit conflict restoration.
       // The caller's reviewed hash and the immutable expected bytes must agree.
@@ -523,7 +536,7 @@ export class CoordinatedHost {
       }
       const repaired=await this.coordinator.restore(id,hash!);await this.scan();return {generation:repaired};
     }
-    if(kind==='remove-response'){await this.coordinator.remove(id);const removed=await this.authority.removeResponse(id);this.records.set(id,removed);await nativeResponses(this.app).receive(removed);return {removed:true};}
+    if(kind==='remove-response'){await this.coordinator.remove(id);const removed=await this.authority.removeResponse(id);this.records.set(id,retainedLease(removed));await nativeResponses(this.app).receive(removed);return {removed:true};}
     throw Error('Unsupported response command.');
   }
   async renamed(before:string,after:string){await this.authority.renameNative(before,after);await this.scan();}

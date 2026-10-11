@@ -21,7 +21,8 @@ export class DesktopInlineReadCache {
   constructor(private maxCharacters=16_000_000,private maxEntries=4096,private readFile=(path:string)=>fs.readFile(path,'utf8')){}
   status(){return {entries:this.entries.size,characters:this.characters,maxCharacters:this.maxCharacters,maxEntries:this.maxEntries,hits:this.hits,sourceReads:this.sourceReads};}
   invalidate(path:string){const old=this.entries.get(path);if(old){this.characters-=old.value.length;this.entries.delete(path);}}
-  async read(path:string):Promise<string|undefined>{
+  async read(path:string,retain=true):Promise<string|undefined>{
+    if(!retain)this.invalidate(path);
     let before:BigIntStats;
     try{before=await fs.lstat(path,{bigint:true});}catch(error:any){this.invalidate(path);if(error.code==='ENOENT')return;throw error;}
     const cached=this.entries.get(path);
@@ -31,7 +32,7 @@ export class DesktopInlineReadCache {
     this.invalidate(path);
     let value:string;
     try{this.sourceReads++;value=await this.readFile(path);}catch(error:any){if(error.code==='ENOENT')return;throw error;}
-    if(before.isFile()&&value.length<=this.maxCharacters&&this.maxEntries>0){
+    if(retain&&before.isFile()&&value.length<=this.maxCharacters&&this.maxEntries>0){
       // A concurrent replacement or write cannot authenticate the bytes just
       // read for later reuse. Preserve ordinary read semantics, but do not cache.
       try{
