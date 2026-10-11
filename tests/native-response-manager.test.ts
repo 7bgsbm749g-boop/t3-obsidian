@@ -8,6 +8,7 @@ import {readNativeCommitProof,type NativeCommitProof} from '../native-response-c
 import type {LeaseRecord} from '../inline-lease';
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
+import {RESPONSE_SIZE_FAILURE} from '../t3-response-limits';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',commitId='cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee';
 const body='> Final answer',otherBody='> Independent response';
@@ -30,6 +31,12 @@ function fixture(panes=1,local=new Map<string,unknown>()){
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
 async function start(h:ReturnType<typeof fixture>){await h.manager.receive(record());await h.manager.receive(record(other));for(const frames of h.frames)frames.length=0;}
 function neverBlank(h:ReturnType<typeof fixture>){for(const frames of h.frames)assert.ok(frames.every(frame=>frame.includes(body)),JSON.stringify(frames));}
+
+test('the size failure is visible only on its response and retained text survives until recovery',async()=>{
+ const h=fixture();await start(h);const failed=record(id,2);failed.state!.streamFailure={kind:'response-too-large',operation:'snapshot'};failed.state!.status='error';await h.manager.receive(failed);
+ assert.match(h.visible(),/Reply not saved: T3 data exceeds the 8 MB limit/);assert.ok(h.visible().includes(body));assert.ok(h.visible().includes(otherBody));assert.equal(h.visible().split(RESPONSE_SIZE_FAILURE).length-1,1);assert.ok(h.visible().startsWith('Before\n'));assert.ok(h.visible().endsWith('After\n'));
+ h.manager.stream({request:failed.request,messageId:failed.request.messageId,sequence:10,body,phase:'complete',completionVerified:true});assert.equal(h.visible().includes(RESPONSE_SIZE_FAILURE),false);assert.ok(h.visible().includes(body));h.manager.dispose();
+});
 
 test('resolved native conflicts delete full copies only after the chosen text reaches disk',async()=>{
   const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));const incoming=before.replace('Before','Remote edit');h.disk(incoming);h.views[0].setViewData(incoming);const conflict=h.manager.view(h.views[0] as any)!.conflictRecord()!;assert.ok(conflict);

@@ -1,5 +1,5 @@
 import {connectT3Rpc,type T3Api,type SocketFactory} from './t3-rpc';
-import {normalizeV2Snapshot,v2Command} from './orchestration-v2';
+import {normalizeV2Snapshot,restoreCompactSnapshot,v2Command} from './orchestration-v2';
 
 export interface T3RequestOptions {signal?:AbortSignal}
 export type AbortableT3Api=(path:string,payload?:any,options?:T3RequestOptions)=>Promise<any>;
@@ -70,6 +70,11 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
   return async(path,payload,options)=>{
     requestAborted(options?.signal);
     const request:T3Api=(target,body)=>raw(target,body,options);
+    // Internal adapter route: the server provides this read over RPC only.
+    if(path==='/api/orchestration/turn-item'){
+      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      try{return await rpc.call('orchestration.getTurnItem',payload);}finally{rpc.close();}
+    }
     if(path==='/api/orchestration/dispatch'){
       const {__legacyV1,...saved}=payload;
       let command=v2Command(saved);
@@ -78,7 +83,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       // their preserved exact IDs before a saved V1 request can dispatch again.
       if(__legacyV1&&(command.type==='thread.create'||command.type==='message.dispatch')){
         let snapshot:any;
-        try{snapshot=await raw(`/api/orchestration/threads/${encodeURIComponent(command.threadId)}/bounded`);}
+        try{snapshot=restoreCompactSnapshot(await raw(`/api/orchestration/threads/${encodeURIComponent(command.threadId)}/bounded?compactTurnItems=1`));}
         catch(error:any){if(error?.status!==404)throw error;}
         if(snapshot?.projection){
           const p=snapshot.projection;
@@ -118,7 +123,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     // turnLimit/reasoningMessages were v1 query options. V2 full reads are
     // authoritative; bounded/history endpoints use opaque v2 paging cursors.
     if(/^\/api\/orchestration\/threads\/[^/?]+(?:\?|$)/.test(path)){
-      const root=path.split('?')[0],query=new URLSearchParams(path.split('?')[1]),controlOnly=query.get('controlOnly')==='true',importOnly=query.get('importRuns')==='true',importRunId=query.get('importRunId'),snapshot=await request(root+'/bounded'+(controlOnly||importOnly||importRunId?'?compactTurnItems=1':''),payload);
+      const root=path.split('?')[0],query=new URLSearchParams(path.split('?')[1]),controlOnly=query.get('controlOnly')==='true',importOnly=query.get('importRuns')==='true',importRunId=query.get('importRunId'),snapshot=restoreCompactSnapshot(await request(root+'/bounded?compactTurnItems=1',payload));
       requestAborted(options?.signal);
       if(controlOnly){
         if(!snapshot?.projection)return normalizeV2Snapshot(snapshot);

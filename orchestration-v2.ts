@@ -3,6 +3,14 @@ import type {InlineActivity,InlineMessage,InlineThreadState,InlineTurn} from './
 export const T3_PROTOCOL_VERSION=2;
 export const T3_PROTOCOL_HEADER='x-t3-orchestration-protocol';
 const array=(value:any):any[]=>Array.isArray(value)?value:[];
+/** Compact snapshots omit duplicate local entries, not their contents. Restore
+ * the same item references before hydration, reducers or display consume them. */
+export function restoreCompactSnapshot(snapshot:any):any {
+  if(snapshot?.turnItemsOmitLocalVisible!==true||!snapshot.projection)return snapshot;
+  const p=snapshot.projection,local=array(p.visibleTurnItems).filter(row=>row.visibility==='local'||row.sourceThreadId===p.thread?.id).map(row=>row.item);
+  const items=[...new Map([...local,...array(p.turnItems)].map(item=>[item.id,item])).values()];
+  return {...snapshot,turnItemsOmitLocalVisible:undefined,projection:{...p,turnItems:items}};
+}
 const active=(status:string)=>['preparing','starting','running','waiting'].includes(status);
 const terminal=(status:string)=>['completed','failed','interrupted','cancelled','rolled_back','expired'].includes(status);
 const runState=(status:string)=>status==='failed'?'error':['cancelled','rolled_back'].includes(status)?'interrupted':active(status)?'running':status;
@@ -60,9 +68,10 @@ export function normalizeV2Snapshot(snapshot:any){
   if(!snapshot?.projection){
     return Array.isArray(snapshot?.threads)?{...snapshot,threads:snapshot.threads.map(normalizeV2ShellThread)}:snapshot;
   }
-  const p=snapshot.projection;
+  const p=restoreCompactSnapshot(snapshot).projection;
   if(!p.thread?.id||!Array.isArray(p.messages)||!Array.isArray(p.runs))throw Error('T3 returned an invalid v2 thread projection.');
-  const messages:InlineMessage[]=p.messages.map((m:any)=>({...m,turnId:m.runId??null}));
+  const messageItems=new Map<string,any>(array(p.turnItems).filter(item=>item.type==='assistant_message').map(item=>[item.messageId,item]));
+  const messages:InlineMessage[]=p.messages.map((m:any)=>{const item=messageItems.get(m.id);return {...m,turnId:m.runId??null,...(item?{itemId:item.id,updatedAt:item.updatedAt}:{})};});
   for(const item of array(p.turnItems))if(item.type==='reasoning')messages.push({id:`reasoning:${item.id}`,role:'reasoning',turnId:item.runId??null,text:item.text,streaming:item.streaming,createdAt:item.startedAt??item.updatedAt});
   const runs=[...p.runs].sort((a,b)=>a.ordinal-b.ordinal),current=runs.filter(r=>r.status!=='queued').at(-1)??runs.at(-1);
   const running=runs.filter(r=>active(r.status)).at(-1);
@@ -92,6 +101,7 @@ export function normalizeV2StreamItem(item:any):any {
   if(event.type==='thread.updated')return {kind:'event',event:{...event,type:'thread.metadata-updated'}};
   if(event.type==='message.updated')return {kind:'event',event:{...event,type:'thread.message-sent',payload:{...p,messageId:p.id,turnId:p.runId??null,replace:true}}};
   if(event.type==='run.created'||event.type==='run.updated')return {kind:'event',event:{...event,type:'thread.run-updated'}};
+  if(event.type==='turn-item.updated'&&p?.type==='assistant_message')return {kind:'event',event:{...event,type:'thread.message-sent',payload:{...p,id:p.messageId,messageId:p.messageId,itemId:p.id,role:'assistant',turnId:p.runId??null,createdAt:p.startedAt??p.updatedAt,replace:true}}};
   if(event.type==='turn-item.updated'||event.type==='runtime-request.updated')return {kind:'event',event:{...event,type:`v2.${event.type}`}};
   return {kind:'event',event};
 }

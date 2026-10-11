@@ -1,3 +1,4 @@
+import {T3_RESPONSE_MAX_BYTES,T3ResponseTooLargeError} from './t3-response-limits';
 import {Buffer} from 'buffer';
 import {T3_PROTOCOL_VERSION} from './orchestration-v2';
 
@@ -58,7 +59,8 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
   socket.onclose=()=>{time.clear(openTimer);const error=Error('The connection to the selected machine closed. Try again.');if(!opened)rejectOpen(error);fail(error);};
   socket.onmessage=event=>{
     try{
-      if(typeof event.data!=='string'||Buffer.byteLength(event.data)>4_000_000)throw Error('T3 returned an oversized response.');
+      if(typeof event.data!=='string')throw Error('T3 returned an incompatible response.');
+      if(Buffer.byteLength(event.data)>T3_RESPONSE_MAX_BYTES)throw new T3ResponseTooLargeError();
       const decoded=JSON.parse(event.data);const frames=Array.isArray(decoded)?decoded:[decoded];
       for(const frame of frames){
         if(closed)return;
@@ -70,7 +72,7 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
         if(frame.exit?._tag==='Success')task.resolve(frame.exit.value);
         else {const causes=frame.exit?.cause;const failure=Array.isArray(causes)?causes.find((x:any)=>x._tag==='Fail')?.error:undefined;const permission=['filesystem:read','filesystem:write','orchestration:read','orchestration:operate'].includes(failure?.requiredPermission)?failure.requiredPermission:undefined;task.reject(new T3RpcError(failure?._tag??'RpcError',permission,task.method));}
       }
-    }catch{fail(Error('T3 returned an incompatible response.'));}
+    }catch(error){fail(error instanceof T3ResponseTooLargeError?error:Error('T3 returned an incompatible response.'));}
   };
   try{await ready;}catch(error){fail(error instanceof Error?error:Error(String(error)));throw error;}
   const rpc=async(tag:string,payload:any)=>{

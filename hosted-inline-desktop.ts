@@ -18,6 +18,7 @@ import {ThreadAccessCache} from './thread-access-cache';
 import {DesktopInlineReadCache,inlineFileVersion} from './inline-file-cache-desktop';
 import {markdownCodeCacheStatus} from './reply-html';
 import {ensurePrivateStorage,existingPrivateStorage} from './private-storage-desktop';
+import {InlineResponseFeeds} from './inline-response-feed';
 
 const inlineReadCache=new DesktopInlineReadCache();
 
@@ -59,9 +60,11 @@ export class DesktopInlineHost {
   private closing?:Promise<void>;
   get active(){return !this.stopped;}
   private accessCache:ThreadAccessCache;
+  private responseFeeds:InlineResponseFeeds;
   private closeStorage:()=>Promise<void>;
   private constructor(private release:()=>Promise<void>,app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},files:ReturnType<typeof localInlineFiles>,access:(environmentId:string,reason?:ThreadAccessCloseReason)=>Promise<ThreadAccess>){
     this.accessCache=new ThreadAccessCache(access);
+    this.responseFeeds=new InlineResponseFeeds(environmentId=>this.accessCache.get(environmentId));
     this.closeStorage=()=>files.close?.()??Promise.resolve();
     const storage=this.authorityStorage=interruptibleAuthorityFiles(files);
     this.stopAuthorityReads=()=>storage.stop();
@@ -76,6 +79,9 @@ export class DesktopInlineHost {
       locateNote:deviceNoteIO(app).locateNote,
       replayBindings:(request,access,signal,afterSequence)=>readInlineEvents(access,request.threadId,afterSequence,signal),
       access:environmentId=>this.accessCache.get(environmentId),
+      threadState:(request,access,refresh,failure)=>this.responseFeeds.state(request,access,refresh,failure),
+      readFailure:request=>this.responseFeeds.failure(request),
+      adoptFinalResponse:(request,state,turnId,key)=>this.responseFeeds.adopt(request,state,turnId,key),
       resolveReplyReference:(reference,request,threadAccess)=>resolveReplyReference(app,reference,request,threadAccess),
       updateNote:async(path,change)=>{
         const file=app.vault.getFileByPath(path);if(!file)return undefined;
@@ -110,6 +116,7 @@ export class DesktopInlineHost {
   }
   tick(){
     if(this.stopped)return Promise.resolve();
+    this.responseFeeds.prune();
     // Discovery and each response already coalesce their own work. Holding
     // the entire scan here would prevent later ticks from serving healthy
     // responses or expiring network requests while one note is stalled.
@@ -120,7 +127,7 @@ export class DesktopInlineHost {
   deleted(path:string){this.authority.deleted(path);}
   dispose(){
     if(this.closing)return this.closing;
-    this.stopped=true;this.stopAuthorityTimer();this.stopMaintenanceTimer();const journals=this.coordinated?.stop();this.authority.stop();this.stopAuthorityReads();this.writer.stop();this.nativeWriter?.stop();
+    this.stopped=true;this.responseFeeds.stop();this.stopAuthorityTimer();this.stopMaintenanceTimer();const journals=this.coordinated?.stop();this.authority.stop();this.stopAuthorityReads();this.writer.stop();this.nativeWriter?.stop();
     this.closing=(async()=>{
       try{
         await Promise.allSettled([...this.work,journals,this.authority.tick(),this.authority.cleanupReplies()]);

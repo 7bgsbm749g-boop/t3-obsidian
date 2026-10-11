@@ -1,3 +1,4 @@
+import {T3_RESPONSE_MAX_BYTES,T3ResponseTooLargeError} from './t3-response-limits';
 import {Buffer} from 'buffer';
 import {sha1} from '@noble/hashes/sha1';
 import {sha256} from '@noble/hashes/sha256';
@@ -38,13 +39,13 @@ export async function jsonHttp(url:string,options:RequestInit={},fetcher:Fetcher
   requestAborted(controller.signal);
   const r=await abortableRead(fetcher(url,{...options,credentials:'omit',redirect:'error',cache:'no-store',signal:controller.signal}),controller.signal);
   if(!r.ok){if(r.status===401||r.status===403)throw new T3HttpError(r.status,'T3 access denied or expired. Create a fresh pairing link in T3 and pair this device again.');throw new T3HttpError(r.status,`T3 returned HTTP ${r.status}.`);}
-  if(Number(r.headers.get('content-length')||0)>4_000_000)throw Error('T3 response exceeds 4 MB.');
+  if(Number(r.headers.get('content-length')||0)>T3_RESPONSE_MAX_BYTES){controller.abort();throw new T3ResponseTooLargeError();}
   let body='';
-  if(r.body?.getReader){const reader=r.body.getReader();const parts:Uint8Array[]=[];let size=0;try{for(;;){const {done,value}=await abortableRead(reader.read(),controller.signal);if(done)break;size+=value.byteLength;if(size>4_000_000){await reader.cancel();throw Error('T3 response exceeds 4 MB.');}parts.push(value);}}finally{if(controller.signal.aborted)void reader.cancel().catch(()=>{});reader.releaseLock();}
+  if(r.body?.getReader){const reader=r.body.getReader();const parts:Uint8Array[]=[];let size=0;try{for(;;){const {done,value}=await abortableRead(reader.read(),controller.signal);if(done)break;size+=value.byteLength;if(size>T3_RESPONSE_MAX_BYTES){await reader.cancel();throw new T3ResponseTooLargeError();}parts.push(value);}}finally{if(controller.signal.aborted)void reader.cancel().catch(()=>{});reader.releaseLock();}
    // The platform decoder avoids the browser Buffer polyfill's large temporary
    // code-point arrays. Preserve BOM handling and the existing byte limit.
    body=new TextDecoder('utf-8',{ignoreBOM:true}).decode(Buffer.concat(parts));}
-  else {body=await abortableRead(r.text(),controller.signal);if(Buffer.byteLength(body)>4_000_000)throw Error('T3 response exceeds 4 MB.');}
+  else {body=await abortableRead(r.text(),controller.signal);if(Buffer.byteLength(body)>T3_RESPONSE_MAX_BYTES)throw new T3ResponseTooLargeError();}
   try{return JSON.parse(body);}catch{throw Error('T3 returned an invalid response; response contents withheld.');}
  }catch(e){requestAborted(options.signal??undefined);if(e instanceof Error && (e.message.startsWith('T3 ')||e.message.startsWith('Use ')))throw e;throw Object.assign(Error('Cannot reach T3 directly. Check its public address, network access, and that T3 is running. Nothing is queued.'),{cause:e});}
  finally{clearTimeout(timer);options.signal?.removeEventListener('abort',cancel);}

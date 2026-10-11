@@ -3,12 +3,13 @@ import {Buffer} from 'buffer';
 import {contentHash} from './completion';
 import {applyThreadItem,turnForMessage,type InlineThreadState} from './inline-thread';
 import {T3_PROTOCOL_VERSION,normalizeV2StreamItem,normalizeV2Snapshot,normalizeV2TitleItem} from './orchestration-v2';
+import {responseTooLarge} from './t3-response-limits';
 
 export type ThreadAccessCloseReason='cache-expired'|'auth-rejected'|'host-disposed'|'stop-complete'|'stop-timeout'|'stream-reconnect'|'stream-stopped'|'late-access'|'caller-closed';
 export interface ThreadAccess {origin:string;api:(path:string,payload?:any)=>Promise<any>;expiresAt?:number;close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
 export type ThreadAccessFactory=()=>Promise<ThreadAccess>;
 export type ThreadStreamItem={kind:'snapshot';snapshot:any}|{kind:'event';event:any}|{kind:'synchronized'};
-export interface ThreadStreamCallbacks {item:(item:ThreadStreamItem)=>void;reconnecting:(error:Error)=>void}
+export interface ThreadStreamCallbacks {item:(item:ThreadStreamItem)=>void;reconnecting:(error:Error)=>void;failure?:(error:Error)=>void}
 export interface InlineHistoryTargets {messageIds:string[];turnIds:string[]}
 
 export function needsInlineHistory(state:InlineThreadState,targets:InlineHistoryTargets):boolean {
@@ -42,7 +43,7 @@ export async function readInlineEvents(access:ThreadAccess,threadId:string,after
     const abort=()=>finish(Error('T3 binding recovery canceled.'));
     const finish=(error?:Error)=>{if(finished)return;finished=true;signal.removeEventListener('abort',abort);try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{}socket.close();error?reject(error):resolve(items);};
     signal.addEventListener('abort',abort,{once:true});
-    socket.onopen=()=>{if(signal.aborted){abort();return;}socket.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,afterSequence,requestCompletionMarker:true},headers:[]}));};
+    socket.onopen=()=>{if(signal.aborted){abort();return;}socket.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,afterSequence,requestCompletionMarker:true,acceptBoundedSnapshot:true,acceptCompactTurnItems:true},headers:[]}));};
     socket.onmessage=message=>{try{
       if(typeof message.data!=='string'||Buffer.byteLength(message.data)>16_000_000)throw Error('T3 stream frame is too large.');
       const decoded=JSON.parse(message.data);
@@ -64,9 +65,11 @@ export async function readInlineEvents(access:ThreadAccess,threadId:string,after
 
 /** The Effect RPC stream stays open until stopped. Every reconnect asks for a
  * fresh snapshot, so lost deltas cannot duplicate text or leave a gap. */
-export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets,replay?:{afterSequence:()=>number|undefined;pollSnapshots?:boolean;pollImmediately?:boolean;titleOnly?:boolean}) {
+export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets,replay?:{afterSequence:()=>number|undefined;pollSnapshots?:boolean|(()=>boolean);pollImmediately?:boolean;titleOnly?:boolean}) {
   let stopped=false,socket:WebSocket|undefined,timer:ReturnType<typeof setTimeout>|undefined,rotation:ReturnType<typeof setTimeout>|undefined,pollTimer:ReturnType<typeof setTimeout>|undefined,attempt=0;
   let access:ThreadAccess|undefined;
+  let snapshotBlocked=false;
+  const pollEnabled=()=>!snapshotBlocked&&(typeof replay?.pollSnapshots==='function'?replay.pollSnapshots():replay?.pollSnapshots!==false);
   const closeAccess=(reason:ThreadAccessCloseReason)=>{if(pollTimer)clearTimeout(pollTimer);pollTimer=undefined;const old=access;access=undefined;if(old?.close)void Promise.resolve(old.close(reason)).catch(()=>{});};
   const retry=(error:Error)=>{
     if(stopped)return;
@@ -86,7 +89,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       let ws:WebSocket|undefined,ended=false,polling=false,pollDue=0,pollDelay=1200,activityVersion=0,lastSnapshotHash:string|undefined;
       const fail=(error:Error)=>{if(ended||stopped)return;ended=true;ws?.close();retry(error);};
       const schedulePoll=(delay:number)=>{
-        if(stopped||ended||access!==ready||replay?.pollSnapshots===false)return;
+        if(stopped||ended||access!==ready||!pollEnabled())return;
         const due=Date.now()+delay;
         // Frequent live deltas must never postpone an already due canonical read.
         if(pollTimer&&pollDue<=due)return;
@@ -94,7 +97,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         pollDue=due;pollTimer=setTimeout(()=>{pollTimer=undefined;void poll();},delay);
       };
       const poll=async()=>{
-        if(stopped||ended||access!==ready||polling)return;
+        if(stopped||ended||access!==ready||polling||!pollEnabled())return;
         polling=true;const beforeActivity=activityVersion;
         try{
           const snapshot=historyTargets?await readInlineSnapshot(ready,threadId,undefined,historyTargets()):normalizeV2Snapshot(await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true&turnLimit=20`));
@@ -106,12 +109,12 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
             pollDelay=beforeActivity===activityVersion&&hash===lastSnapshotHash?Math.min(5000,pollDelay*2):1200;
             lastSnapshotHash=hash;callbacks.item({kind:'snapshot',snapshot});
           }else pollDelay=1200;
-        }catch(error){pollDelay=1200;logFailure('stream.poll.failed',error,{threadId});}
+        }catch(error){pollDelay=1200;logFailure('stream.poll.failed',error,{threadId});if(!stopped&&!ended&&access===ready&&responseTooLarge(error)){snapshotBlocked=true;callbacks.failure?.(error as Error);}}
         finally{polling=false;schedulePoll(pollDelay);}
       };
       // A browser timer can delay even a zero-delay read after app suspension.
       // Current text does not depend on a socket ticket or socket opening.
-      if(replay?.pollImmediately&&replay.pollSnapshots!==false)void poll();
+      if(replay?.pollImmediately&&pollEnabled())void poll();
       const issued=await ready.api('/api/auth/websocket-ticket',{});
       if(stopped||access!==ready)return;
       if(typeof issued?.ticket!=='string'||!issued.ticket)throw Error('T3 did not issue a stream ticket.');
@@ -123,10 +126,10 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         clearTimeout(opening);if(stopped){openedSocket.close();return;}
         logEvent('stream.connected',{threadId});attempt=0;
         rotation=setTimeout(()=>fail(Error('Refreshing the T3 stream session.')),4*60_000);
-        openedSocket.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,...(replay?{afterSequence:replay.afterSequence(),requestCompletionMarker:true}:{})},headers:[]}));
+        openedSocket.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,acceptBoundedSnapshot:true,acceptCompactTurnItems:true,...(replay?{afterSequence:replay.afterSequence(),requestCompletionMarker:true}:{})},headers:[]}));
         // Subscription hosts already own a full canonical polling loop. A second
         // recent-history poll would repeatedly replace it with partial history.
-        if(replay?.pollImmediately&&replay.pollSnapshots!==false)void poll();else schedulePoll(1200);
+        if(replay?.pollImmediately&&pollEnabled())void poll();else schedulePoll(1200);
       };
       openedSocket.onmessage=message=>{
         try{

@@ -1,5 +1,6 @@
 import {contentHash} from './completion';
 import {stoppedResponseBody} from './response-stop';
+import {failedStreamBody} from './t3-response-limits';
 import type {App,MarkdownView} from 'obsidian';
 import type {Transaction} from '@codemirror/state';
 import {NativeResponseView} from './native-response-view';
@@ -364,9 +365,11 @@ export class NativeResponseManager {
           if(record.state?.cleanupComplete&&adapter?.hasMaterialized(id))continue;
           const body=(record.state?.cleanupComplete?record.state.finalBody:undefined)??record.finalWriter?.body??this.streams.get(id)?.body??record.state?.body??regionBody(initialRegion(id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,id)!.body;
           const cached=this.cached.get(id),restoring=!record.finalWriter&&cached&&this.reconnecting.has(id)&&previewMatches(cached,record);
-          const displayed=record.state?.cleanupComplete||record.finalWriter?body:this.titled(id,body);
+          const stream=this.streams.get(id),failure=stream?.completionVerified?undefined:stream?.failure??record.state?.streamFailure;
+          const failureBody=restoring?cached.body:body;
+          const displayed=record.state?.cleanupComplete||record.finalWriter?body:failure?failedStreamBody(this.titled(id,failureBody)):this.titled(id,body);
           if(!restoring)this.rememberPreview(record,displayed);
-          responses.push({id,body:restoring?this.reconnectingBody(cached):displayed});
+          responses.push({id,body:restoring&&!failure?this.reconnectingBody(cached):displayed});
         }
         for(const stop of this.localStops.values()){
           if(stop.path!==view.file.path||!responseRegion(saved,stop.id)||adapter?.hasMaterialized(stop.id))continue;

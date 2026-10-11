@@ -38,7 +38,7 @@ for(const isMobile of [false,true])test(`${isMobile?'mobile':'desktop with local
   assert.equal(snapshot.thread.messages[0].text,'Remote reply');
   assert.equal(h.localChecks(),0);
   assert.deepEqual(h.sessions,['vps-connection']);
-  assert.deepEqual(h.requests,['https://vps.example/.well-known/t3/environment','https://vps.example/api/orchestration/threads/thread/bounded']);
+  assert.deepEqual(h.requests,['https://vps.example/.well-known/t3/environment','https://vps.example/api/orchestration/threads/thread/bounded?compactTurnItems=1']);
 });
 
 test('a missing remote session fails without falling back to a local server',async()=>{

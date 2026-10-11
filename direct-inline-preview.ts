@@ -6,8 +6,10 @@ import {mergeProse,observeIncoming} from './inline-steering';
 import {completionTime,finalAnswerFormat,intermediateMode} from './response-presentation';
 import {watchThread,readInlineSnapshot,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import {logFailure} from './diagnostics';
+import {checkFinalResponse,finalResponseKey} from './final-response';
+import {responseTooLarge,type StreamReadFailure} from './t3-response-limits';
 
-export interface DirectInlineUpdate {request:HostedInlineRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>}
+export interface DirectInlineUpdate {request:HostedInlineRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>}
 type Watch=typeof watchThread;
 export interface PreviewClock {now():number;later(callback:()=>void,ms:number):unknown;cancel(handle:unknown):void}
 const displayClock:PreviewClock={now:()=>performance.now(),later:(callback,ms)=>setTimeout(callback,ms),cancel:handle=>clearTimeout(handle as ReturnType<typeof setTimeout>)};
@@ -30,6 +32,9 @@ export class DirectInlinePreview {
   private pending?:unknown;
   private lastRender=-Infinity;
   private verifiedSequence=-1;
+  private verifiedKey?:string;
+  private completionTurnId?:string;
+  private failure?:StreamReadFailure;
   private verification?:Promise<void>;
   private nextVerification=0;
   private terminal=false;
@@ -37,6 +42,7 @@ export class DirectInlinePreview {
   update(record:LeaseRecord){
     if(record.epoch<this.record.epoch||record.epoch===this.record.epoch&&record.revision<this.record.revision)return;
     this.record=record;
+    this.failure??=record.state?.streamFailure;
     if(record.responseRemovedAt!==undefined){this.dispose();return;}
     if(record.state?.status==='conflict')this.suspend();
     // A durable host cursor must not skip lifecycle events the device has not
@@ -58,12 +64,13 @@ export class DirectInlinePreview {
     if(this.stopped)return;
     const record=this.record;
     if(!open||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.state?.status==='conflict'){this.suspend();return;}
-    if(this.monitor){if(this.terminal&&record.request.deviceCompletion&&this.verifiedSequence<(this.state.sequence??0))this.verifyCompletion();return;}
+    if(this.monitor){if(this.terminal&&record.request.deviceCompletion)this.verifyCompletion();return;}
     const generation=++this.generation;
     this.monitor=this.watch(record.request.threadId,this.access,{
       item:item=>{if(!this.stopped&&this.generation===generation)this.item(item);},
       reconnecting:error=>{if(!this.stopped&&this.generation===generation)logFailure('stream.direct.reconnecting',error,{bindingId:record.request.id});},
-    },undefined,()=>({messageIds:[this.messageId(),...this.record.state?.steering?.map(input=>input.messageId)??[]],turnIds:this.turnIds}),{afterSequence:()=>this.state.sequence??0,pollImmediately:true});
+      failure:error=>{if(!this.stopped&&this.generation===generation&&responseTooLarge(error)){this.failure??={kind:'response-too-large',operation:'snapshot'};if(!this.render())this.receive({request:this.record.request,messageId:this.messageId(),sequence:this.state.sequence??0,body:this.record.state?.body??'> **T3 · Working**',failure:this.failure,completionVerified:false});}},
+    },undefined,()=>({messageIds:[this.messageId(),...this.record.state?.steering?.map(input=>input.messageId)??[]],turnIds:this.turnIds}),{afterSequence:()=>this.state.sequence??0,pollImmediately:true,pollSnapshots:this.failure?.operation!=='snapshot'});
   }
   private messageId(){return this.record.state?.pendingMessageId??this.record.state?.messageId??this.record.request.messageId;}
   private item(item:ThreadStreamItem){
@@ -106,25 +113,41 @@ export class DirectInlinePreview {
     const current={...this.state,messages:mergeProse(this.prose,this.state.messages,this.turnIds),turns:{...this.record.state?.presentationTurns,...this.state.turns}};
     if(request.finalAnswerFormat==='raw-markdown')current.turns=rememberInlineTurns(current,this.turnIds,current.turns);
     const body=renderInlineTurn(current,turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,this.state.title??request.threadTitle,{startedAt:request.createdAt,finishedAt:phase==='complete'||phase==='interrupted'?completionTime(this.state,turnId):undefined},finalAnswerFormat(request.finalAnswerFormat));
-    const terminal=phase==='complete'||phase==='interrupted',completionVerified=terminal&&this.verifiedSequence>=(this.state.sequence??0);
+    this.completionTurnId=turnId;
+    const key=finalResponseKey(this.state,turnId);
+    const exactStopped=this.state.protocolVersion===2&&phase==='interrupted'&&this.state.turns?.[turnId]?.state==='interrupted';
+    const terminal=phase==='complete'||phase==='interrupted',completionVerified=terminal&&(exactStopped||(this.state.protocolVersion===2?!!key&&key===this.verifiedKey:this.verifiedSequence>=(this.state.sequence??0)));
     this.terminal=terminal;
-    this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,turnId,turnIds:this.turnIds.slice(),phase,completionVerified,checkpoint:inlineBindingCheckpoint(this.state)});
+    this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,turnId,turnIds:this.turnIds.slice(),phase:this.failure&&!completionVerified?'error':phase,completionVerified,failure:completionVerified?undefined:this.failure,checkpoint:inlineBindingCheckpoint(this.state)});
     if(request.deviceCompletion&&terminal&&!completionVerified)this.verifyCompletion();
     return true;
   }
   private verifyCompletion(){
     if(this.verification||this.clock.now()<this.nextVerification||this.stopped)return;
     const generation=this.generation,request=this.record.request,sequence=this.state.sequence??0;
+    const turnId=this.completionTurnId!,key=finalResponseKey(this.state,turnId),state=this.state;
+    if(state.protocolVersion===2&&(!key||key===this.verifiedKey||this.failure?.operation==='final-reply'&&this.failure.key===key))return;
+    if(state.protocolVersion!==2&&this.failure)return;
     let timeout:unknown;
     const work=Promise.race([
-      this.access().then(access=>readInlineSnapshot(access,request.threadId,request.projectId,{messageIds:[this.messageId()],turnIds:this.turnIds})),
+      this.access().then(async access=>state.protocolVersion===2?checkFinalResponse(access,request.threadId,state,turnId):readInlineSnapshot(access,request.threadId,request.projectId,{messageIds:[this.messageId()],turnIds:this.turnIds})),
       new Promise<never>((_resolve,reject)=>{timeout=this.clock.later(()=>reject(Error('T3 completion verification timed out.')),10_000);}),
-    ]).then(snapshot=>{
-      if(this.stopped||generation!==this.generation||snapshot.snapshotSequence<sequence)return;
-      this.state=applyThreadItem(this.state,{kind:'snapshot',snapshot}).state;
-      this.verifiedSequence=snapshot.snapshotSequence;
+    ]).then(result=>{
+      if(this.stopped||generation!==this.generation)return;
+      if(state.protocolVersion===2){
+        if(finalResponseKey(this.state,turnId)!==key)return;
+        const checked=result as Awaited<ReturnType<typeof checkFinalResponse>>;
+        const final=inlineTurnMessages(checked.state,turnId).at(-1)!;
+        this.state={...this.state,messages:this.state.messages.map(m=>m.id===final.id?final:m)};
+        this.verifiedKey=checked.verified?finalResponseKey(this.state,turnId):undefined;
+        if(checked.verified)this.failure=undefined;
+      }else{
+        if(result.snapshotSequence<sequence)return;
+        this.state=applyThreadItem(this.state,{kind:'snapshot',snapshot:result}).state;
+        this.verifiedSequence=result.snapshotSequence;
+      }
       this.schedule(true);
-    }).catch(error=>{if(!this.stopped&&generation===this.generation)logFailure('stream.direct.completion-verification',error,{bindingId:request.id});}).finally(()=>{this.clock.cancel(timeout);if(this.verification===work){this.verification=undefined;this.nextVerification=this.clock.now()+1000;}});
+    }).catch(error=>{if(!this.stopped&&generation===this.generation){logFailure('stream.direct.completion-verification',error,{bindingId:request.id});if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:state.protocolVersion===2?'final-reply':'snapshot',key};this.schedule(true);}}}).finally(()=>{this.clock.cancel(timeout);if(this.verification===work){this.verification=undefined;this.nextVerification=this.clock.now()+1000;}});
     this.verification=work;
   }
   reconnect(open:boolean){if(this.stopped)return;this.suspend();this.tick(open);}

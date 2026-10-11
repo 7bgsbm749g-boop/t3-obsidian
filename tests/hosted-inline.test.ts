@@ -8,6 +8,7 @@ import {contentHash} from '../completion';
 import {commandId} from '../direct';
 import {QuestionController} from '../question-controller';
 import type {InlineThreadState} from '../inline-thread';
+import {T3ResponseTooLargeError,RESPONSE_SIZE_FAILURE} from '../t3-response-limits';
 
 function harness(input?:string){
   const id=randomUUID(),initialInput=input?{messageId:commandId(id,'message'),text:input}:undefined,initial=initialRegion(id,initialInput),host={environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'};
@@ -24,6 +25,30 @@ function harness(input?:string){
   return {request,paths,files,io,create,calls,get document(){return document!;},set document(value:string){document=value;},get state():HostedInlineState{return JSON.parse(files.get(paths.state)!);},
     dispatch:()=>{dispatched=true;},answer:(text:string,complete=false)=>{answer=text;phase=complete?'completed':'running';},missing:()=>{document=undefined;},unsaved:(value:boolean)=>{unsaved=value;},access:(value:boolean)=>{accessible=value;},crash:(value:boolean)=>{crashAfterEdit=value;if(!value)failState=false;}};
 }
+
+function completedV2(h:ReturnType<typeof harness>):InlineThreadState {
+ const turn={turnId:'turn',messageId:h.request.messageId,state:'completed',assistantMessageId:'answer',completedAt:'2026-10-11T12:01:00.000Z'};
+ return {protocolVersion:2,sequence:10,turns:{turn},latestTurn:turn,session:{status:'ready',activeTurnId:null},activities:[],messages:[{id:h.request.messageId,role:'user',turnId:'turn',text:'Question',streaming:false},{id:'answer',itemId:'opaque-item',role:'assistant',turnId:'turn',text:'Streamed reply',streaming:false,updatedAt:'2026-10-11T12:00:59.000Z'}]};
+}
+function hostFinalItem(h:ReturnType<typeof harness>,text='Streamed reply'){return {id:'opaque-item',threadId:h.request.threadId,runId:'turn',messageId:'answer',type:'assistant_message',text,streaming:false,status:'completed',updatedAt:'2026-10-11T12:00:59.000Z'};}
+test('v2 host completion reads only the final item and saves a matching reply',async()=>{
+ const h=harness(),current=completedV2(h),paths:string[]=[];h.io.threadState=async(_request,_access,refresh)=>{assert.ok(!refresh,'Completion must not request another thread snapshot');return current;};
+ h.io.access=async()=>({origin:'',api:async path=>{paths.push(path);assert.equal(path,'/api/orchestration/turn-item');return hostFinalItem(h);}});
+ const writer=h.create();await writer.tick();assert.equal(h.state.status,'complete');assert.match(h.document,/Streamed reply/);assert.deepEqual(paths,['/api/orchestration/turn-item']);writer.stop();
+});
+test('v2 host mismatch corrects the stream but needs a second matching check before final save',async()=>{
+ const h=harness();let current=completedV2(h),calls=0;h.io.threadState=async()=>current;h.io.adoptFinalResponse=(_request,state)=>{current=state;return true;};h.io.access=async()=>({origin:'',api:async()=>{calls++;return hostFinalItem(h,'Canonical reply');}});
+ const writer=h.create();await writer.tick();assert.equal(h.state.status,'running');assert.match(h.document,/Canonical reply/);await writer.tick();assert.equal(h.state.status,'complete');assert.equal(calls,2);writer.stop();
+});
+test('an oversized final item has a durable visible failure and is not downloaded again',async()=>{
+ const h=harness();let calls=0;h.io.threadState=async()=>completedV2(h);h.io.readFailure=()=>({kind:'response-too-large',operation:'snapshot'});h.io.access=async()=>({origin:'',api:async()=>{calls++;throw new T3ResponseTooLargeError();}});
+ let writer=h.create();await writer.tick();assert.equal(h.state.streamFailure?.operation,'final-reply');assert.equal(h.state.status,'error');assert.ok(h.document.includes(RESPONSE_SIZE_FAILURE));assert.match(h.document,/User introduction/);assert.match(h.document,/User tail/);
+ for(let n=0;n<5;n++)await writer.tick();writer.stop();writer=h.create();await writer.tick();assert.equal(calls,1);assert.equal(h.state.status,'error');assert.ok(h.document.includes(RESPONSE_SIZE_FAILURE));assert.match(h.document,/Streamed reply/);writer.stop();
+});
+test('an oversized snapshot remains blocked after writer restart',async()=>{
+ const h=harness();let calls=0;h.io.access=async()=>({origin:'',api:async()=>{calls++;throw new T3ResponseTooLargeError();}});
+ let writer=h.create();await writer.tick();assert.equal(h.state.streamFailure?.operation,'snapshot');assert.ok(h.document.includes(RESPONSE_SIZE_FAILURE));for(let n=0;n<3;n++)await writer.tick();writer.stop();writer=h.create();await writer.tick();assert.equal(calls,1);writer.stop();
+});
 
 test('an explicit Stop bypasses the paused-boundary retry wait',async()=>{
  const h=harness();let clock=0,reads=0;

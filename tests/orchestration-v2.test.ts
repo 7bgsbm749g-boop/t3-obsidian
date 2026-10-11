@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeV2Snapshot,normalizeV2StreamItem,normalizeV2TitleItem,v2Command} from '../orchestration-v2';
+import {restoreCompactSnapshot,normalizeV2Snapshot,normalizeV2StreamItem,normalizeV2TitleItem,v2Command} from '../orchestration-v2';
 import {applyThreadItem,restoreInlineBindings,inlineBindingCheckpoint,turnForMessage,turnPhase} from '../inline-thread';
 import {pendingQuestions} from '../questions';
 import {pendingApprovals} from '../approvals';
@@ -15,6 +15,27 @@ const message={id:'prompt',role:'user',runId:run.id,text:'Hello',streaming:false
 function snapshot(overrides:any={}){return {snapshotSequence:10,hasMoreHistory:false,projection:{thread:{id:'thread',projectId:'project',title:'Test',runtimeMode:'approval-required'},messages:[message],runs:[run],turnItems:[],runtimeRequests:[],...overrides}};}
 const initial=()=>applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:normalizeV2Snapshot(snapshot())}).state;
 const event=(state:any,sequence:number,type:string,payload:any)=>applyThreadItem(state,normalizeV2StreamItem({kind:'event',sequence,event:{type,payload}})).state;
+
+test('normal compact reads restore local reasoning, tools, controls and final identity without inherited duplicates',async()=>{
+ const assistant={id:'item-answer',type:'assistant_message',messageId:'answer',threadId:'thread',runId:run.id,text:'Reply',streaming:false,status:'completed',updatedAt:at};
+ const reasoning={id:'reason',type:'reasoning',runId:run.id,text:'Thinking',streaming:false,updatedAt:at};
+ const tool={id:'tool',type:'command_execution',runId:run.id,input:'pwd',output:'/vault',status:'completed',updatedAt:at};
+ const control={id:'control',type:'user_input_request',runId:run.id,requestId:'question',questions:[],status:'running',updatedAt:at};
+ const local=[assistant,reasoning,tool,control],wire={...snapshot({messages:[message,{id:'answer',role:'assistant',runId:run.id,text:'Reply',streaming:false}],turnItems:[],visibleTurnItems:[...local.map(item=>({visibility:'local',sourceThreadId:'thread',item})),{visibility:'inherited',sourceThreadId:'parent',item:{...tool,id:'inherited'}}],runtimeRequests:[{id:'question',status:'pending',kind:'user_input',responseCapability:{type:'message'}}]}),turnItemsOmitLocalVisible:true};
+ const restored=restoreCompactSnapshot(wire);assert.deepEqual(restored.projection.turnItems,local);assert.equal(wire.projection.turnItems.length,0);assert.equal(restored.projection.turnItems[0],assistant);
+ const paths:string[]=[],api=t3Api(async path=>{paths.push(path);return wire;},'https://fixture');const normalized=await api('/api/orchestration/threads/thread?turnLimit=20');
+ assert.deepEqual(paths,['/api/orchestration/threads/thread/bounded?compactTurnItems=1']);assert.equal(normalized.thread.messages.find((m:any)=>m.id==='answer').itemId,'item-answer');assert.ok(normalized.thread.messages.some((m:any)=>m.role==='reasoning'&&m.text==='Thinking'));assert.equal(normalized.thread.activities.filter((a:any)=>a.kind==='tool.completed').length,1);assert.equal(normalized.thread.hasPendingUserInput,true);
+});
+test('assistant item events carry their exact item identity without duplicating message text',()=>{
+ let current=event(initial(),11,'message.updated',{id:'answer',role:'assistant',runId:run.id,text:'Reply',streaming:false,createdAt:at,updatedAt:at});
+ current=event(current,12,'turn-item.updated',{id:'opaque-item',type:'assistant_message',messageId:'answer',runId:run.id,text:'Reply',streaming:false,status:'completed',updatedAt:at});
+ assert.equal(current.messages.filter((m:any)=>m.role==='assistant').length,1);assert.equal(current.messages.at(-1)!.text,'Reply');assert.equal(current.messages.at(-1)!.itemId,'opaque-item');
+});
+test('final-item adapter uses the existing authenticated unary RPC',async()=>{
+ const calls:any[]=[],raw:string[]=[],Socket=settingsSocket(undefined,undefined,(tag,payload)=>{calls.push({tag,payload});return {id:'opaque-item',text:'Reply'};});
+ const api=t3Api(async path=>{raw.push(path);assert.equal(path,'/api/auth/websocket-ticket');return {ticket:'ticket'};},'https://fixture',url=>new Socket(url) as any);
+ assert.equal((await api('/api/orchestration/turn-item',{threadId:'thread',itemId:'opaque-item'})).text,'Reply');assert.deepEqual(calls,[{tag:'orchestration.getTurnItem',payload:{threadId:'thread',itemId:'opaque-item'}}]);assert.equal(raw.length,1);
+});
 
 test('title normalization does not inspect duplicate history or unrelated event payloads',()=>{
  const forbidden=()=>{throw Error('Title listener read transcript data');};
@@ -44,7 +65,7 @@ test('native v2 sender identity survives snapshots and live absolute message rep
 test('sender titles use only exact same-environment shell IDs and survive paged history',async()=>{
  const senderThreadId='2c9cb7b6-a4c9-5746-b9b7-bc463c5024fa',calls:string[]=[];
  const older={id:'older',type:'user_message',messageId:'older-input',text:'Coordination',runId:run.id,createdBy:'agent',senderThreadId,startedAt:at,ordinal:1};
- const api=t3Api(async path=>{calls.push(path);if(path.endsWith('/bounded'))return {...snapshot(),hasMoreHistory:true,historyCursor:'older'};if(path.includes('/history?'))return {items:[{sourceThreadId:'thread',item:older}],hasMoreHistory:false};if(path==='/api/orchestration/shell')return {threads:[{id:'wrong-id',title:'Wrong source'}],archivedThreads:[{id:senderThreadId,title:'Source thread'}]};throw Error('Unexpected source body read');},'https://t3.example');
+ const api=t3Api(async path=>{calls.push(path);if(path.endsWith('/bounded?compactTurnItems=1'))return {...snapshot(),hasMoreHistory:true,historyCursor:'older'};if(path.includes('/history?'))return {items:[{sourceThreadId:'thread',item:older}],hasMoreHistory:false};if(path==='/api/orchestration/shell')return {threads:[{id:'wrong-id',title:'Wrong source'}],archivedThreads:[{id:senderThreadId,title:'Source thread'}]};throw Error('Unexpected source body read');},'https://t3.example');
  const result=await api('/api/orchestration/threads/thread');
  assert.equal(incomingLabel(result.thread.messages.find((m:any)=>m.id==='older-input')),'Agent · Source thread');
  await api('/api/orchestration/threads/thread');assert.equal(calls.filter(path=>path==='/api/orchestration/shell').length,1);
@@ -156,7 +177,7 @@ test('v2 attachment uploads remap context asset IDs and retain the saved request
 
 test('full recovery follows opaque history cursors without advancing past concurrent live events',async()=>{
   const paths:string[]=[],older={id:'old-item',type:'user_message',messageId:'old-prompt',runId:'old-run',text:'Older',ordinal:0,startedAt:at};
-  const api=t3Api(async path=>{paths.push(path);return path.endsWith('/bounded')?{...snapshot(),hasMoreHistory:true,historyCursor:'opaque / cursor'}:{snapshotSequence:50,items:[{sourceThreadId:'thread',item:older}],nextCursor:null,hasMoreHistory:false};},'https://t3.example');
+  const api=t3Api(async path=>{paths.push(path);return path.endsWith('/bounded?compactTurnItems=1')?{...snapshot(),hasMoreHistory:true,historyCursor:'opaque / cursor'}:{snapshotSequence:50,items:[{sourceThreadId:'thread',item:older}],nextCursor:null,hasMoreHistory:false};},'https://t3.example');
   const bounded=await api('/api/orchestration/threads/thread?turnLimit=20');assert.equal(bounded.page.hasMore,true);assert.equal(paths.length,1);
   const full=await api('/api/orchestration/threads/thread');assert.equal(full.page.hasMore,false);assert.equal(full.snapshotSequence,10);
   assert.equal(full.thread.messages[0].id,'old-prompt');assert.ok(paths.at(-1)?.endsWith('cursor=opaque%20%2F%20cursor'));
@@ -190,7 +211,7 @@ test('a saved v1 request with a lost receipt checks migrated history before any 
   const command={type:'thread.turn.start',commandId:'command',threadId:'thread',__legacyV1:true,message:{messageId:'old',text:'Original',attachments:[]}};
   let dispatches=0;
   const Socket=settingsSocket(undefined,undefined,()=>{dispatches++;return {};});
-  const api=t3Api(async path=>path.endsWith('/bounded')?{...snapshot({messages:[]}),historyCursor:'older',hasMoreHistory:true}:path.includes('/history?')?{items:[{item:{type:'user_message',messageId:'old',text:'Original'}}],hasMoreHistory:false}:{ticket:'ticket'},'https://t3.example',url=>new Socket(url) as any);
+  const api=t3Api(async path=>path.endsWith('/bounded?compactTurnItems=1')?{...snapshot({messages:[]}),historyCursor:'older',hasMoreHistory:true}:path.includes('/history?')?{items:[{item:{type:'user_message',messageId:'old',text:'Original'}}],hasMoreHistory:false}:{ticket:'ticket'},'https://t3.example',url=>new Socket(url) as any);
   await api('/api/orchestration/dispatch',command);assert.equal(dispatches,0);
   await assert.rejects(api('/api/orchestration/dispatch',{...command,message:{...command.message,text:'Changed'}}),/different content/);assert.equal(dispatches,0);
 });
@@ -198,7 +219,7 @@ test('a saved v1 request with a lost receipt checks migrated history before any 
 test('omitted tool output is fetched by exact revision and cached without changing reply state',async()=>{
   const item={id:'tool',type:'command_execution',runId:run.id,ordinal:2,status:'completed',input:'echo test',outputOmitted:true,updatedAt:at};let reads=0;
   const Socket=settingsSocket(undefined,undefined,(tag,payload)=>{assert.equal(tag,'orchestration.getTurnItem');assert.deepEqual(payload,{threadId:'thread',itemId:'tool',revision:at});reads++;return {item:{...item,output:'test',outputOmitted:false}};});
-  const api=t3Api(async path=>path.endsWith('/bounded')?snapshot({turnItems:[item]}):{ticket:'ticket'},'https://t3.example',url=>new Socket(url) as any);
+  const api=t3Api(async path=>path.endsWith('/bounded?compactTurnItems=1')?snapshot({turnItems:[item]}):{ticket:'ticket'},'https://t3.example',url=>new Socket(url) as any);
   const first=await api('/api/orchestration/threads/thread?turnLimit=20');await api('/api/orchestration/threads/thread?turnLimit=20');
   assert.equal(first.thread.activities[0].payload.data.output,'test');assert.equal(reads,1);assert.equal(first.snapshotSequence,10);
 });
@@ -206,7 +227,7 @@ test('omitted tool output is fetched by exact revision and cached without changi
 test('tool detail cache evicts by retained text size without losing the current reply',async()=>{
  const items=Array.from({length:3},(_,i)=>({id:'large-'+i,type:'command_execution',runId:run.id,ordinal:i,status:'completed',outputOmitted:true,updatedAt:at}));let reads=0;
  const output='x'.repeat(800_000),Socket=settingsSocket(undefined,undefined,(tag,payload)=>{assert.equal(tag,'orchestration.getTurnItem');reads++;return {item:{...items.find(item=>item.id===payload.itemId),output,outputOmitted:false}};});
- const api=t3Api(async path=>path.endsWith('/bounded')?snapshot({turnItems:items}):{ticket:'ticket'},'https://t3.example',url=>new Socket(url) as any);
+ const api=t3Api(async path=>path.endsWith('/bounded?compactTurnItems=1')?snapshot({turnItems:items}):{ticket:'ticket'},'https://t3.example',url=>new Socket(url) as any);
  const first=await api('/api/orchestration/threads/thread?turnLimit=20');assert.equal(reads,3);assert.deepEqual(first.thread.activities.map((a:any)=>a.payload.data.output.length),[800_000,800_000,800_000]);
  const next=await api('/api/orchestration/threads/thread?turnLimit=20');assert.equal(reads,4,'The oldest detail is fetched again after exceeding the 2M character budget');assert.deepEqual(next.thread.activities.map((a:any)=>a.payload.data.output.length),[800_000,800_000,800_000]);
 });
@@ -214,7 +235,7 @@ test('tool detail cache evicts by retained text size without losing the current 
 test('one detail larger than the cache budget remains available but is not retained between reads',async()=>{
  const item={id:'oversize',type:'command_execution',runId:run.id,ordinal:1,status:'completed',outputOmitted:true,updatedAt:at};let reads=0;const output='x'.repeat(2_000_001);
  const Socket=settingsSocket(undefined,undefined,()=>{reads++;return {item:{...item,output,outputOmitted:false}};});
- const api=t3Api(async path=>path.endsWith('/bounded')?snapshot({turnItems:[item]}):{ticket:'ticket'},'https://t3.example',url=>new Socket(url) as any);
+ const api=t3Api(async path=>path.endsWith('/bounded?compactTurnItems=1')?snapshot({turnItems:[item]}):{ticket:'ticket'},'https://t3.example',url=>new Socket(url) as any);
  for(let i=0;i<2;i++){const state=await api('/api/orchestration/threads/thread?turnLimit=20');assert.equal(state.thread.activities[0].payload.data.output,output);}assert.equal(reads,2);
 });
 
@@ -236,7 +257,7 @@ test('control read forwards cancellation and refuses a late snapshot after abort
 
 test('v2 direct access sends the protocol HTTP header and refuses a v1 machine before authorization',async()=>{
   const connection:any={url:'https://t3.example',environmentId:'environment'},session:any={...connection,token:'test',expiresAt:Date.now()+600000};let authorized=0;
-  const fetcher:any=async(url:string,options:any)=>{if(url.endsWith('/environment'))return new Response(JSON.stringify({environmentId:'environment',label:'Test',orchestrationProtocolVersion:2}));authorized++;assert.equal(options.headers['x-t3-orchestration-protocol'],'2');assert.ok(url.endsWith('/thread/bounded'));return new Response(JSON.stringify(snapshot()));};
+  const fetcher:any=async(url:string,options:any)=>{if(url.endsWith('/environment'))return new Response(JSON.stringify({environmentId:'environment',label:'Test',orchestrationProtocolVersion:2}));authorized++;assert.equal(options.headers['x-t3-orchestration-protocol'],'2');assert.ok(url.endsWith('/thread/bounded?compactTurnItems=1'));return new Response(JSON.stringify(snapshot()));};
   const api=await environmentApi(connection,session,fetcher);await api('/api/orchestration/threads/thread?turnLimit=20');assert.equal(authorized,1);
   await assert.rejects(environmentApi(connection,session,(async()=>new Response(JSON.stringify({environmentId:'environment',label:'Old',orchestrationProtocolVersion:1}))) as any),/Orchestrator v2/);assert.equal(authorized,1);
 });

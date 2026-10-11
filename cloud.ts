@@ -1,3 +1,4 @@
+import {T3_RESPONSE_MAX_BYTES} from './t3-response-limits';
 import {Buffer} from 'buffer';
 import {endpoint,descriptor,type PairedSession,type Fetcher} from './direct';
 import {proofKey,proof,thumbprint} from './dpop';
@@ -12,8 +13,8 @@ async function request(url:string,options:RequestInit={},fetcher:Fetcher=fetch):
  const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),30000);
  try{
   const r=await fetcher(url,{...options,credentials:'omit',redirect:'error',cache:'no-store',signal:ctrl.signal});
-  if(Number(r.headers.get('content-length')||0)>4_000_000)throw new CloudError('response_too_large');
-  const text=await r.text();if(Buffer.byteLength(text)>4_000_000)throw new CloudError('response_too_large');
+  if(Number(r.headers.get('content-length')||0)>T3_RESPONSE_MAX_BYTES)throw new CloudError('response_too_large');
+  const text=await r.text();if(Buffer.byteLength(text)>T3_RESPONSE_MAX_BYTES)throw new CloudError('response_too_large');
   let body:any;try{body=JSON.parse(text);}catch{throw new CloudError('invalid_response',r.status);}
   if(!r.ok){const code=typeof body.error==='string'&&/^[a-z_]{1,60}$/.test(body.error)?body.error:'http_'+r.status;throw new CloudError(code,r.status);}
   return body;

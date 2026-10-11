@@ -6,6 +6,7 @@ import type {LeaseRecord} from '../inline-lease';
 import type {ThreadStreamCallbacks,ThreadStreamItem,watchThread} from '../thread-stream';
 import {DeviceInlineManager} from '../leased-inline';
 import {InlineLeaseAuthority,leasePaths,type LeaseFiles} from '../inline-lease';
+import {T3ResponseTooLargeError} from '../t3-response-limits';
 
 class TestClock implements PreviewClock {
   time=0;next=0;pending=new Map<number,{at:number;callback:()=>void}>();
@@ -14,7 +15,7 @@ class TestClock implements PreviewClock {
   cancel=(id:unknown)=>{this.pending.delete(id as number);};
   advance(ms:number){const end=this.time+ms;for(;;){const entry=[...this.pending].sort((a,b)=>a[1].at-b[1].at)[0];if(!entry||entry[1].at>end)break;this.time=entry[1].at;this.pending.delete(entry[0]);entry[1].callback();}this.time=end;}
 }
-function fixture(paced=true,verify?:()=>Promise<any>){
+function fixture(paced=true,verify?:(path:string,payload?:any)=>Promise<any>){
   const request={version:4 as const,nativeProjection:true,id:randomUUID(),vaultId:randomUUID(),host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/inline'},initialOwner:randomUUID(),notePath:'Note.md',threadId:'thread',messageId:'prompt',projectId:'project',threadEnvironmentId:'host',initialHash:'hash',createdAt:'2026-10-06T03:00:00Z',intermediateMode:'keep' as const};
   const record:LeaseRecord={request,coordinated:true,migrating:true,owner:'host',epoch:1,revision:0,expiresAt:Number.MAX_SAFE_INTEGER};
   const streams:Array<{callbacks:ThreadStreamCallbacks;cursor:()=>number|undefined;stopped:boolean}>=[],updates:DirectInlineUpdate[]=[];
@@ -25,6 +26,36 @@ function fixture(paced=true,verify?:()=>Promise<any>){
   const item=(item:ThreadStreamItem,index=streams.length-1)=>{if(paced)clock.advance(80);streams[index].callbacks.item(item);};
   return {preview,record,streams,updates,clock,item,snapshot,event:(sequence:number,text:string,aggregateId='thread')=>item({kind:'event',event:{sequence,aggregateId,type:'thread.message-sent',payload:{messageId:'answer',role:'assistant',text,turnId:'turn',streaming:true}}})};
 }
+
+const completeV2=(h:ReturnType<typeof fixture>,sequence=2,text='Final reply')=>{
+ const value=h.snapshot(sequence,text) as any,thread=value.snapshot.thread;
+ thread.protocolVersion=2;Object.assign(thread.messages[1],{streaming:false,itemId:'opaque-item',updatedAt:'2026-10-06T03:01:00.000Z'});
+ thread.latestTurn={turnId:'turn',state:'completed',messageId:'prompt',assistantMessageId:'answer',completedAt:'2026-10-06T03:02:00.000Z'};thread.turns={turn:thread.latestTurn};thread.session={status:'ready',activeTurnId:null};return value;
+};
+const finalItem=(text='Final reply')=>({id:'opaque-item',threadId:'thread',runId:'turn',messageId:'answer',type:'assistant_message',text,streaming:false,status:'completed',updatedAt:'2026-10-06T03:01:00.000Z'});
+const settle=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
+test('v2 saves from a matching final item without a thread download and unrelated events retain verification',async()=>{
+ const calls:any[]=[],h=fixture(false,async(path,payload)=>{calls.push({path,payload});return finalItem();});h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};
+ h.preview.tick(true);h.item(completeV2(h));await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.deepEqual(calls.map(c=>c.path),['/api/orchestration/turn-item']);
+ h.item({kind:'event',event:{sequence:3,aggregateId:'thread',type:'v2.unknown',payload:{}}});h.clock.advance(1000);h.preview.tick(true);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(calls.length,1);h.preview.dispose();
+});
+test('a mismatched v2 final reply is corrected and checked again before save',async()=>{
+ let calls=0;const h=fixture(false,async()=>{calls++;return finalItem('Actual final reply');});h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};
+ h.preview.tick(true);h.item(completeV2(h));await settle();assert.match(h.updates.at(-1)!.body,/Actual final reply/);assert.equal(h.updates.at(-1)!.completionVerified,false);
+ h.clock.advance(1000);h.preview.tick(true);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(calls,2);h.preview.dispose();
+});
+test('oversized final reads show failure and stop repeat downloads while text remains visible',async()=>{
+ let calls=0;const h=fixture(false,async()=>{calls++;throw new T3ResponseTooLargeError();});h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};
+ h.preview.tick(true);h.item(completeV2(h));await settle();assert.equal(h.updates.at(-1)!.failure?.operation,'final-reply');assert.match(h.updates.at(-1)!.body,/Final reply/);assert.equal(h.updates.at(-1)!.completionVerified,false);
+ for(let n=0;n<5;n++){h.clock.advance(5000);h.preview.tick(true);await settle();}assert.equal(calls,1);assert.equal(h.updates.at(-1)!.phase,'error');h.preview.dispose();
+});
+test('an oversized snapshot does not prevent completion through the small final-item read',async()=>{
+ const h=fixture(false,async()=>finalItem());h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};h.preview.tick(true);h.item(h.snapshot());h.streams[0].callbacks.failure?.(new T3ResponseTooLargeError());assert.equal(h.updates.at(-1)!.failure?.operation,'snapshot');
+ h.item(completeV2(h,3));h.clock.advance(80);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.updates.at(-1)!.failure,undefined);h.preview.dispose();
+});
+test('a v2 item verification arriving after suspension cannot finish the response',async()=>{
+ let release!:(value:any)=>void;const h=fixture(false,()=>new Promise(resolve=>{release=resolve;}));h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};h.preview.tick(true);h.item(completeV2(h));await settle();const count=h.updates.length;h.preview.tick(false);release(finalItem());await settle();assert.equal(h.updates.length,count);h.preview.dispose();
+});
 
 test('direct completion verifies canonical final prose instead of sealing a session-ready commentary message',async()=>{
  let release!:(value:any)=>void;const pending=new Promise(resolve=>{release=resolve;}),h=fixture(false,()=>pending);

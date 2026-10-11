@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {connectT3Rpc,T3ConnectionTimeoutError,T3RequestTimeoutError,type RpcClock} from '../t3-rpc';
+import {T3ResponseTooLargeError} from '../t3-response-limits';
 
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 function fixture(){
@@ -23,6 +24,11 @@ test('a socket that appears open but drops every frame is confirmed dead before 
   const rejected=assert.rejects(pending,(e:any)=>e instanceof T3ConnectionTimeoutError&&e.rpcMethod==='projects.readFile'&&e.confirmed&&e.elapsedMs===8000&&e.pendingCount===1);
   await flush();await h.advance(8000);await rejected;
   assert.equal(rpc.closed,true);assert.equal(h.closes(),1);assert.equal(h.timers.size,0);
+});
+
+test('unary final replies above the former limit work and oversized errors retain their size identity',async()=>{
+ const h=fixture(),rpc=await h.open();const accepted=rpc.call('orchestration.getTurnItem',{threadId:'thread',itemId:'item'});h.reply('1',{text:'x'.repeat(4_100_000)});assert.equal((await accepted).text.length,4_100_000);
+ const blocked=rpc.call('orchestration.getTurnItem',{threadId:'thread',itemId:'large'}),rejected=assert.rejects(blocked,T3ResponseTooLargeError);h.reply('2',{text:'x'.repeat(8_000_001)});await rejected;assert.equal(rpc.closed,true);assert.equal(h.timers.size,0);
 });
 
 test('slow file requests do not close a responding shared socket or cancel unrelated requests',async()=>{

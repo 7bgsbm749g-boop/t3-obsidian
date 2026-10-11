@@ -14,6 +14,8 @@ import {observeIncoming,mergeProse,selectionRange,type InlineSteering} from './i
 import type {InitialInlineInput,InlineMessage,InlineTurn,InlineBindingCheckpoint} from './inline-thread';
 import {interruptStoppedResponse,stoppedResponseBody} from './response-stop';
 import {DuplicateResponseLocation} from './response-location';
+import {checkFinalResponse,finalResponseKey} from './final-response';
+import {responseTooLarge,RESPONSE_SIZE_FAILURE,failedStreamBody,type StreamReadFailure} from './t3-response-limits';
 class StopStreamRequested extends Error {}
 
 // A snapshot's global stream watermark can advance without any change to this
@@ -53,6 +55,7 @@ export interface HostedInlineState {
   requestHash:string;accepted:boolean;notePath:string;turnId?:string;messageId?:string;pendingMessageId?:string;
   status:'waiting'|'running'|'complete'|'interrupted'|'error'|'conflict'|'paused';
   hashes:string[];body?:string;detail?:string;updatedAt:string;
+  streamFailure?:StreamReadFailure;
   locationConflict?:string[];
   bindingCheckpoint?:InlineBindingCheckpoint;
   /** Keep the last applied cursor while exact async-answer evidence is missing.
@@ -139,7 +142,9 @@ export interface HostedWriterIO extends InlineFiles {
   // callback must execute against the latest content in an atomic vault edit.
   updateNote(path:string,change:(current:string)=>string,bindingId?:string):Promise<string|undefined>;
   locateNote?(id:string,path:string):Promise<string|undefined>;
-  threadState?(request:HostedInlineRequest,access:ThreadAccess,refresh?:boolean):Promise<import('./inline-thread').InlineThreadState|undefined>;
+  threadState?(request:HostedInlineRequest,access:ThreadAccess,refresh?:boolean,knownFailure?:StreamReadFailure):Promise<import('./inline-thread').InlineThreadState|undefined>;
+  readFailure?(request:HostedInlineRequest):StreamReadFailure|undefined;
+  adoptFinalResponse?(request:HostedInlineRequest,state:import('./inline-thread').InlineThreadState,turnId:string,expectedKey:string):boolean;
   replayBindings?(request:HostedInlineRequest,access:ThreadAccess,signal:AbortSignal,afterSequence:number):Promise<ThreadStreamItem[]>;
   monotonic?():number;
   /** Coordinated desktop writers can defer unchanged canonical work for at
@@ -155,6 +160,7 @@ export interface HostedWriterIO extends InlineFiles {
  * no sender socket, editor tab, or synced credentials participate in writing. */
 export class HostedInlineWriter {
   private stopped=false;
+  private finalChecks=new Map<string,string>();
   private stopIntents=new Set<string>();
   private stopPriority=new Set<string>();
   private networkCancels=new Map<string,(error?:Error)=>void>();
@@ -242,6 +248,7 @@ export class HostedInlineWriter {
       if(!needsHostedProcessing(request,state))return;
       let savedIdentity=stored?durableResponseIdentity(state):undefined;
       let canonicalRead=false;
+      let readOperation:StreamReadFailure['operation']='snapshot',readKey:string|undefined;
       if(request.importTurn&&!state.bindingCheckpoint?.bindings?.[request.messageId]){const turn=request.importTurn,checkpoint=state.bindingCheckpoint;state.bindingCheckpoint={...checkpoint,bindings:{...checkpoint?.bindings,[request.messageId]:{turnId:turn.turnId,kind:'explicit'}},turns:{[turn.turnId]:turn,...checkpoint?.turns}};}
       const save=async()=>{
         const identity=durableResponseIdentity(state);
@@ -310,8 +317,10 @@ export class HostedInlineWriter {
         }
         // Upgrade old paused bindings from canonical history before replacing
         // their intact response block, even when Sync changed its contents.
-        let current=restored?undefined:await this.network(path,()=>Promise.resolve(this.io.threadState?.(request,access)));
+        let current=restored?undefined:await this.network(path,()=>Promise.resolve(this.io.threadState?.(request,access,false,state.streamFailure)));
+        if(state.streamFailure?.operation!=='final-reply'&&this.io.readFailure?.(request))state.streamFailure=this.io.readFailure(request);
         if(!current){
+          if(state.streamFailure?.operation==='snapshot')return;
           const snapshot=await this.network(path,()=>readInlineSnapshot(access,request.threadId,request.projectId,undefined,!!request.importTurn,false,request.importTurn?.turnId));
           if(this.stopped)return;
           if(snapshot?.thread?.id!==request.threadId||snapshot.thread.projectId!==request.projectId)throw Error('Waiting for the requested T3 thread.');
@@ -329,7 +338,7 @@ export class HostedInlineWriter {
         // projects that message and its turn, retain the failed block intact.
         const messageId=state.pendingMessageId??state.messageId??request.messageId;
         const targets={messageIds:[messageId,...(state.steering??[]).filter(input=>!input.confirmed).map(input=>input.messageId)],turnIds:[...new Set([...(state.turnIds??(state.turnId?[state.turnId]:[])),...([messageId,...(state.steering??[]).map(input=>input.messageId)].map(id=>turnForMessage(current!,id)).filter((id):id is string=>!!id))])]};
-        if(needsInlineHistory(current,targets)){
+        if(needsInlineHistory(current,targets)&&state.streamFailure?.operation!=='snapshot'){
           const key=JSON.stringify(targets),cached=this.history.get(path);
           if(cached?.key===key&&cached.expires>Date.now()&&(cached.state.sequence??-1)>=(current.sequence??-1))current=restoreInlineBindings(cached.state,inlineBindingCheckpoint(current));
           else{
@@ -417,9 +426,21 @@ export class HostedInlineWriter {
         let phase=inlineQuestionPhase(current,state.turnId,state.questionFollows);
         const checkCompletion=phase==='complete';
         if(state.steering?.some(input=>!input.confirmed||!turnForMessage(current!,input.messageId)))phase='running';
-        // Session-ready events can precede the final message in the stream.
-        // Resolve completion from a fresh canonical snapshot before sealing it.
-        if(checkCompletion&&this.io.threadState){
+        // V2 completion checks read only the final item for this exact run.
+        // A changed stream must be checked again before the save can start.
+        if(checkCompletion&&current.protocolVersion===2){
+          const key=finalResponseKey(current,state.turnId);
+          if(!key||state.streamFailure?.operation==='final-reply'&&state.streamFailure.key===key)phase='running';
+          else if(this.finalChecks.get(path)!==key){
+            readOperation='final-reply';readKey=key;
+            const checked=await this.network(path,()=>checkFinalResponse(access,request.threadId,current!,state.turnId!));
+            const adopted=this.io.adoptFinalResponse?.(request,checked.state,state.turnId,key)??true;
+            if(!adopted)return;
+            current=checked.state;state.prose=mergeProse(state.prose,current.messages,state.turnIds);
+            if(!checked.verified||!adopted)phase='running';
+            else {this.finalChecks.set(path,finalResponseKey(current,state.turnId)!);delete state.streamFailure;delete state.detail;}
+          }else {delete state.streamFailure;delete state.detail;}
+        }else if(checkCompletion&&this.io.threadState){
           const refreshed=await this.network(path,()=>this.io.threadState!(request,access,true));
           if(refreshed)current=restoreInlineBindings(refreshed,inlineBindingCheckpoint(current));
           questions=followInlineQuestions(current,state.turnIds,state.questionFollows,state.prose);
@@ -463,6 +484,7 @@ export class HostedInlineWriter {
         }
         if(phase==='complete'||phase==='interrupted')state.finishedAt??=completionTime(current,state.turnId);else delete state.finishedAt;
         let next=renderInlineTurn(current,state.turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,request.threadTitle,{startedAt:request.createdAt,finishedAt:state.finishedAt},finalAnswerFormat(request.finalAnswerFormat));
+        if(state.streamFailure&&!request.nativeProjection)next=failedStreamBody(next);
         if(phase==='complete'&&conversation&&this.io.resolveReplyReference)next=await this.network(path,()=>rewriteReplyReferences(next,resolveReference));
         if(state.assetFailures?.length)next+='\n\n> Some project file links are unavailable. Their original links are preserved. Check the project connection and file path.';
         if(state.bindingRecoveryIssue)next+='\n\n> Reply recovery is waiting for exact T3 answer history. The current T3 replay did not provide the required historical turn bindings. The saved response is retained; no prompt was resent.';
@@ -524,7 +546,7 @@ export class HostedInlineWriter {
           },request.id);
         }
         if(conflict){if(!['paused','conflict'].includes(state.status))logFailure('note.write.conflict',new Error('Response markers were removed or malformed.'),{jobId:request.id,notePath:state.notePath,knownHashes:state.hashes.slice(-5)});state.status=this.io.canResume?.(state.notePath)?'paused':'conflict';state.detail='Response markers removed or malformed. Restore the response boundaries to resume streaming.';}
-        else if(applied){state.status=state.bindingRecoveryIssue||phase==='complete'&&questions.waiting?'waiting':phase;delete state.detail;}
+        else if(applied){state.status=state.streamFailure?'error':state.bindingRecoveryIssue||phase==='complete'&&questions.waiting?'waiting':phase;if(state.streamFailure)state.detail=RESPONSE_SIZE_FAILURE;else delete state.detail;}
         else state.detail='Waiting for the note to become available and saved on the host.';
         if(applied)for(const input of selectionsApplied)input.selectionApplied=true;
         if(applied&&terminal&&request.independent){
@@ -535,7 +557,15 @@ export class HostedInlineWriter {
       }catch(error){
         this.canonicalPolls.delete(path);
         if(error instanceof StopStreamRequested)return;
-        logFailure('response.writer.retry',error,{jobId:request.id,notePath:state.notePath,threadId:request.threadId});
+        if(responseTooLarge(error)&&state.streamFailure?.operation===readOperation&&state.streamFailure.key===readKey)return;
+        logFailure(responseTooLarge(error)?'response.writer.size-blocked':'response.writer.retry',error,{jobId:request.id,notePath:state.notePath,threadId:request.threadId});
+        if(responseTooLarge(error)){
+          state.streamFailure={kind:'response-too-large',operation:readOperation,key:readKey};state.status='error';state.detail=RESPONSE_SIZE_FAILURE;
+          // Legacy note projections also need a visible, response-local fault.
+          // This only changes the owned block and retains its received text.
+          if(!request.nativeProjection)await this.io.updateNote(state.notePath,document=>{const region=regionBody(document,request.id);if(!region)return document;const body=region.body.includes(RESPONSE_SIZE_FAILURE)?region.body:failedStreamBody(region.body),change=replaceRegion(document,request.id,contentHash(region.body),body);if(!change)return document;state.body=body;state.hashes.push(contentHash(body));return document.slice(0,change.from)+change.text+document.slice(change.to);},request.id);
+          await save();return;
+        }
         if(state.finalSaved)state.status='running';
         const detail=error instanceof Error?error.message:'The streaming host will retry.';
         if(state.detail===detail&&durableResponseIdentity(state)===savedIdentity)this.networkRetryAt.set(path,this.monotonic()+5000);

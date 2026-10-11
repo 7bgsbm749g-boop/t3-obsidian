@@ -14,6 +14,12 @@ Stop has separate states for the local display, host acknowledgement, completed 
 
 Final saves retain their writer grant and exact output through a reload. Automatic recovery can replace an old save attempt only when the journal proves that it made no write. An uncertain old attempt needs review of the current saved note hash. Saves keep the native editor, multi-pane, rename, and Sync checks. Automated reload waits for ordinary edits, response recovery records, and final save operations.
 
+Thread snapshots always request T3's compact format. This removes duplicate timeline objects from the download; messages, reasoning, tool output and questions remain available. The plugin restores local timeline entries before it reads or displays them. The desktop host shares a live transcript for each thread instead of repeatedly downloading it while a reply runs. A cold connection and recovery can still read a compact snapshot.
+
+For T3 protocol 2, a completed run and its final assistant item identify the reply to save. The plugin reads that one item, checks its exact thread/run/message IDs, and compares its text with the stream. Different text updates the stream and needs a second matching check before saving. A ready connection or a replay-end marker does not prove completion. The existing checked note-save process still applies.
+
+HTTP, CLI and unary RPC responses have an 8 MB byte limit. If a read exceeds it, that response block shows **Reply not saved: T3 data exceeds the 8 MB limit.** It retains received text and stops repeating the oversized download. A blocked snapshot does not stop the live feed or a separate small final-item check. A blocked final item remains unsaved. The plugin does not resend the prompt. Other response blocks continue independently.
+
 For a legacy save conflict, inspect the candidate on the device that owns the writer grant, then retry with the returned `currentHash`:
 
 ```sh

@@ -1,6 +1,18 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {watchThread,readInlineEvents} from '../thread-stream';
+import {T3ResponseTooLargeError} from '../t3-response-limits';
+
+test('an oversized snapshot stops polling across reconnects while live text still arrives',async t=>{
+ t.mock.timers.enable({apis:['setTimeout','Date']});let reads=0;const sockets:any[]=[],items:any[]=[],failures:any[]=[];
+ class Socket {onopen?:()=>void;onclose?:()=>void;onmessage?:(event:any)=>void;onerror?:()=>void;send(_raw:string){}close(){this.onclose?.();}}
+ const watcher=watchThread('thread',async()=>({origin:'https://fixture',api:async path=>{if(path==='/api/auth/websocket-ticket')return {ticket:'ticket'};reads++;throw new T3ResponseTooLargeError();}}),{item:item=>items.push(item),reconnecting:()=>{},failure:error=>failures.push(error)},()=>{const socket=new Socket();sockets.push(socket);return socket as any;},undefined,{afterSequence:()=>0,pollImmediately:true});
+ const settle=async()=>{for(let n=0;n<12;n++)await Promise.resolve();};
+ try{await settle();sockets[0].onopen?.();t.mock.timers.tick(5000);await settle();assert.equal(reads,1);assert.equal(failures.length,1);
+ sockets[0].onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[{kind:'event',sequence:1,event:{type:'message.updated',payload:{id:'answer',role:'assistant',runId:'run',text:'Live reply',streaming:true}}}]})});assert.equal(items.at(-1).event.payload.text,'Live reply');
+ sockets[0].onerror?.();t.mock.timers.tick(1000);await settle();sockets[1].onopen?.();t.mock.timers.tick(5000);await settle();assert.equal(reads,1);
+ }finally{watcher.stop();t.mock.timers.reset();}
+});
 
 test('thread subscription authenticates, acknowledges chunks, and interrupts on stop',async()=>{
   const sent:any[]=[],items:any[]=[],urls:string[]=[];let issueCount=0,closed=0;
@@ -17,7 +29,7 @@ test('thread subscription authenticates, acknowledges chunks, and interrupts on 
   await new Promise(resolve=>setTimeout(resolve,30));
   assert.equal(issueCount,1);assert.match(urls[0],/^wss:\/\/t3\.example\/ws\?/);
   assert.equal(new URL(urls[0]).searchParams.get('orchestrationProtocol'),'2');
-  assert.deepEqual(sent[0],{_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId:'thread-1'},headers:[]});
+  assert.deepEqual(sent[0],{_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId:'thread-1',acceptBoundedSnapshot:true,acceptCompactTurnItems:true},headers:[]});
   assert.equal(items.length,2);assert.deepEqual(sent[1],{_tag:'Ack',requestId:'1'});
   watcher.stop();assert.deepEqual(sent[2],{_tag:'Interrupt',requestId:'1'});assert.equal(closed,1);
 });

@@ -2,7 +2,7 @@ import {explorerResponsePath,leaseExplorerResponse,loadExplorerResponses,relocat
 import {contentHash} from './completion';
 import {HostedInlineWriter,hostedPaths,validateHostedRequest,pendingCompletionCleanup,type HostedInlineRequest,type HostedInlineState,type InlineFiles,type InlineHostTarget} from './hosted-inline';
 import {InlineLeaseClient,HEARTBEAT_MS,deviceOriginalPath,deviceStagedPath,leasePaths,terminalLease,type LeaseRecord,type LeaseReply} from './inline-lease';
-import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,turnForMessage,hasCompletionProof,hasResponseMarkers,regionBody,type InlineThreadState,type InlineStartRequest} from './inline-thread';
+import {applyThreadItem,inlineTurnMessages,inlineBindingCheckpoint,restoreInlineBindings,turnForMessage,hasCompletionProof,hasResponseMarkers,regionBody,type InlineThreadState,type InlineStartRequest} from './inline-thread';
 import {readInlineEvents,readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem,type ThreadAccessCloseReason} from './thread-stream';
 import {ThreadAccessCache} from './thread-access-cache';
 import type {ReplyReference} from './reply-assets';
@@ -16,6 +16,8 @@ import {commandId} from './direct';
 import {responseStopReceipt,stoppedBodyPath,stoppedBodyReference,validResponseStopReceipt,type ResponseStopReceipt} from './response-stop-receipt';
 import type {FinalAttemptAbort} from './completion-attempt';
 import {T3ConnectionTimeoutError} from './t3-rpc';
+import {finalResponseKey} from './final-response';
+import {responseTooLarge,T3ResponseTooLargeError} from './t3-response-limits';
 
 export const INLINE_SNAPSHOT_INTERVAL_MS=10_000;
 export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
@@ -48,7 +50,7 @@ export interface DeviceInlineIO {
   resolveReplyReference?(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess):Promise<string|undefined>;
 }
 type SnapshotRefresh={epoch:number;startedAt:number;work:Promise<InlineThreadState|undefined>;cancel(error:Error):void};
-type Runtime={original?:string;finalUpdate?:DirectInlineUpdate;finalWork?:Promise<void>;nextFinal?:number;nextPresence?:number;finalFailure?:string;record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;maintenanceFailures?:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void};proof?:{hash:string;bytes:string};observedBytes?:string;observedRecord?:LeaseRecord};
+type Runtime={snapshotBlocked?:boolean;original?:string;finalUpdate?:DirectInlineUpdate;finalWork?:Promise<void>;nextFinal?:number;nextPresence?:number;finalFailure?:string;record:LeaseRecord;host:Host;writer:HostedInlineWriter;work?:Promise<void>;heartbeat?:Promise<void>;lastHeartbeat:number;maintenanceFailures?:number;nextTick:number;nextSnapshot:number;snapshotFailures:number;refresh?:SnapshotRefresh;writeEpoch?:number;state?:InlineThreadState;awaitingNote?:boolean;sequence:number;monitor?:{stop():void};proof?:{hash:string;bytes:string};observedBytes?:string;observedRecord?:LeaseRecord};
 type Host={target:InlineHostTarget;files:InlineFiles;client:InlineLeaseClient;stopReceipts?:Promise<boolean>;close():void;discovery?:Promise<void>;lastDiscovery:number;priorityDiscovery?:Promise<void>;priorityKey?:string;lastPriorityDiscovery?:number;responses:ExplorerResponse[]};
 const hostKey=(target:InlineHostTarget)=>JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);
 const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...state,updatedAt:''}):'';
@@ -340,6 +342,14 @@ export class DeviceInlineManager {
         if(!refresh&&runtime.state)return restoreInlineBindings(runtime.state,runtime.record.state?.bindingCheckpoint);
         return this.refreshSnapshot(runtime,access);
       },
+      readFailure:()=>runtime.snapshotBlocked?{kind:'response-too-large',operation:'snapshot'}:undefined,
+      adoptFinalResponse:(_request,state,turnId,key)=>{
+        if(!allowed()||!runtime.state||finalResponseKey(runtime.state,turnId)!==key)return false;
+        const replacement=inlineTurnMessages(state,turnId).at(-1);
+        if(!replacement)return false;
+        runtime.state={...runtime.state,messages:runtime.state.messages.map(m=>m.id===replacement.id?replacement:m)};
+        return true;
+      },
       updateNote:async(path,change)=>{
         if(this.io.locateNote&&await this.io.locateNote(record.request.id,path)!==path)throw Error('The response note moved during the update; retrying.');
         return this.io.updateNote(path,change,allowed);
@@ -363,6 +373,7 @@ export class DeviceInlineManager {
    * The tick also bounds a hung read; late results cannot cross ownership epochs. */
   private refreshSnapshot(runtime:Runtime,access?:ThreadAccess):Promise<InlineThreadState|undefined>{
     if(!this.owns(runtime))return Promise.resolve(undefined);
+    if(runtime.snapshotBlocked||runtime.record.state?.streamFailure?.operation==='snapshot')return Promise.reject(new T3ResponseTooLargeError());
     if(runtime.refresh?.epoch===runtime.record.epoch)return runtime.refresh.work;
     if(runtime.snapshotFailures&&this.monotonic()<runtime.nextSnapshot)return Promise.reject(Error('Waiting to retry the T3 response freshness check.'));
     runtime.refresh?.cancel(Error('Response ownership changed.'));
@@ -374,6 +385,7 @@ export class DeviceInlineManager {
       abort.abort();
       runtime.refresh=undefined;
       runtime.nextSnapshot=this.monotonic()+Math.min(30_000,5000*2**Math.min(runtime.snapshotFailures++,3));
+      if(responseTooLarge(error)){runtime.snapshotBlocked=true;runtime.nextSnapshot=Infinity;}
       reject(error);
     }};
     runtime.refresh=refresh;runtime.nextSnapshot=this.monotonic()+INLINE_SNAPSHOT_INTERVAL_MS;
@@ -445,7 +457,7 @@ export class DeviceInlineManager {
       if(!owns){runtime.refresh?.cancel(Error('Response ownership changed.'));runtime.monitor?.stop();runtime.monitor=undefined;runtime.state=undefined;runtime.sequence=-1;runtime.nextSnapshot=0;continue;}
       if(record.stopRequestedAt){runtime.refresh?.cancel(Error('Response stopped.'));runtime.monitor?.stop();runtime.monitor=undefined;runtime.writer.requestStop(id);}
       if(runtime.refresh&&this.monotonic()-runtime.refresh.startedAt>=INLINE_SNAPSHOT_TIMEOUT_MS)runtime.refresh.cancel(Error('T3 response freshness check timed out.'));
-      if(!record.stopRequestedAt&&!runtime.refresh&&this.monotonic()>=runtime.nextSnapshot){
+      if(!record.stopRequestedAt&&!runtime.refresh&&!runtime.snapshotBlocked&&record.state?.streamFailure?.operation!=='snapshot'&&this.monotonic()>=runtime.nextSnapshot){
         void this.refreshSnapshot(runtime).catch(error=>{if(this.owns(runtime))logFailure('stream.freshness.failed',error,{jobId:id,threadId:record.request.threadId});});
       }
       if(!record.stopRequestedAt&&!runtime.monitor){
@@ -454,7 +466,7 @@ export class DeviceInlineManager {
         // A stream owns its own access lifetime. Its reconnect must not revoke
         // the independently cached access used for note checkpoints/assets.
         return this.io.access(record.request.threadEnvironmentId);
-      },{item:item=>{if(runtime.record.epoch===monitorEpoch)this.item(runtime,item);},reconnecting:()=>{/* Retain exact start/turn evidence across feed reconnects. */}});
+      },{item:item=>{if(runtime.record.epoch===monitorEpoch)this.item(runtime,item);},reconnecting:()=>{/* Retain exact start/turn evidence across feed reconnects. */}},undefined,undefined,{afterSequence:()=>runtime.sequence<0?undefined:runtime.sequence,pollSnapshots:()=>runtime.state?.protocolVersion!==2&&!runtime.snapshotBlocked});
       }
       if(runtime.work&&this.now()>=runtime.nextTick){runtime.nextTick=this.now()+150;void runtime.writer.tick().catch(()=>{});}
       if(!runtime.work&&this.now()>=runtime.nextTick){

@@ -1,3 +1,4 @@
+import {T3_RESPONSE_MAX_BYTES,T3ResponseTooLargeError} from './t3-response-limits';
 // Loaded only on desktop. T3's official CLI issues short-lived credentials;
 // all project/thread traffic goes directly to its authenticated loopback API.
 import {spawn} from 'node:child_process';
@@ -30,7 +31,7 @@ export function cli(command:string[],args:string[],signal?:AbortSignal):Promise<
   signal?.addEventListener('abort',cancel,{once:true});
   child.on('error',()=>finish(new Error('Cannot run the official T3 CLI. Set its executable path in plugin settings.')));
   child.stderr.on('data',()=>{});
-  child.stdout.setEncoding('utf8');child.stdout.on('data',(s:string)=>{size+=Buffer.byteLength(s);if(size>4_000_000){child.kill();finish(new Error('T3 response too large.'));}else output+=s;});
+  child.stdout.setEncoding('utf8');child.stdout.on('data',(s:string)=>{size+=Buffer.byteLength(s);if(size>T3_RESPONSE_MAX_BYTES){child.kill();finish(new T3ResponseTooLargeError());}else output+=s;});
   child.on('close',code=>finish(code===0?undefined:new Error('T3 CLI failed. Check that the official CLI matches your T3 installation.')));
  });
 }
@@ -89,7 +90,7 @@ function rawRequestJson(origin:string,token:string,path:string,payload?:any,opti
  return new Promise((resolve,reject)=>{
   const data=payload===undefined?undefined:JSON.stringify(payload);
   const r=http.request(new URL(apiPath,origin),{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',[T3_PROTOCOL_HEADER]:String(T3_PROTOCOL_VERSION),...(data?{'Content-Length':Buffer.byteLength(data)}:{})}},res=>{
-   let out='';let bytes=0;res.setEncoding('utf8');res.on('data',(s:string)=>{bytes+=Buffer.byteLength(s);if(bytes>4_000_000)r.destroy(new Error('T3 response too large.'));else out+=s;});
+   let out='';let bytes=0;res.setEncoding('utf8');res.on('data',(s:string)=>{bytes+=Buffer.byteLength(s);if(bytes>T3_RESPONSE_MAX_BYTES)r.destroy(new T3ResponseTooLargeError());else out+=s;});
    res.on('error',reject);res.on('end',()=>{if(res.statusCode!==200){reject(new T3HttpError(res.statusCode??0,`T3 API returned HTTP ${res.statusCode}.`));return;}try{resolve(JSON.parse(out));}catch{reject(new Error('Invalid T3 API response.'));}});
   });
   const cancel=()=>r.destroy(options.signal?.reason??cancelledRequest());
