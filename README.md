@@ -6,6 +6,8 @@ The plugin requires T3 Orchestrator v2 on each destination computer. Update T3 b
 
 ## Incoming messages and senders
 
+Connection retries keep the normal live response display and the latest received text. Restored replies do not show a reconnect banner. Automatic recovery continues in the background.
+
 Large tool groups use small summaries in Live Preview. Open a group to load its complete output. The saved note, sends, selection context, and recovery records keep the full output. Source mode shows the full saved Markdown. The editor rejects changes that would save a summary without its original output.
 
 Thread selection reads current control state without downloading tool output. The selected-thread check has a five-second limit, supports Retry, and stops when the dialog closes. New thread and Existing thread remain available during that check. Sending still checks the current project, turn, approval, and input state.

@@ -73,10 +73,12 @@ test('one bottom row inside the collapse fold, outside prose and controls in oth
     assert.match(initial,mode==='collapse'?/^> <span class="send-to-t3-response-activity"/m:/^<span class="send-to-t3-response-activity"/m);
     assert.doesNotMatch(stoppedResponseBody(initial),/response-activity|spinner/);
     const fallback=renderInlineTurn(state(),'turn','thread','reconnecting',mode);
+    assert.match(fallback,/\*\*T3 · Working\*\*/);assert.doesNotMatch(fallback,/Reconnecting/);
     assert.match(fallback,/<span data-t3-tool-icon="brain" aria-hidden="true"><\/span><span>Thinking<\/span>/);
     assert.doesNotMatch(stoppedResponseBody(fallback),/response-activity|spinner/);
+    assert.equal(renderInlineTurn(live,'turn','thread','reconnecting',mode),text);
   }
-  assert.match(renderInlineTurn(live,'turn','thread','reconnecting'),/<span>Thinking<\/span>/);
+  assert.match(renderInlineTurn(live,'turn','thread','reconnecting'),/<span>Reading file<\/span>/);
 });
 
 test('labels cannot inject HTML; Stop preserves examples and neighboring content',()=>{

@@ -148,7 +148,6 @@ export class NativeResponseManager {
     while(this.cached.size>MAX_NATIVE_PREVIEWS||characters>MAX_NATIVE_PREVIEW_CHARACTERS){const oldest=this.cached.values().next().value!;characters-=oldest.body.length;this.cached.delete(oldest.id);this.reconnecting.delete(oldest.id);}
     this.dirtyPreview();
   }
-  private reconnectingBody(entry:NativePreviewEntry){return `> **T3 · Reconnecting…**\n\n${this.titled(entry.id,entry.body)}`;}
   reconnectingResponseIds(){
     const opened=new Set([...this.views.keys()].map(view=>view.file?.path));
     const ids=[...this.cached.values()].filter(entry=>this.reconnecting.has(entry.id)&&opened.has(entry.notePath)).map(entry=>entry.id);
@@ -353,7 +352,7 @@ export class NativeResponseManager {
           if(!this.reconnecting.has(entry.id)||entry.notePath!==view.file.path)continue;
           const region=responseRegion(saved,entry.id);
           if(!region||saved.slice(region.from,region.to)!==responseAnchor(entry.id)){this.forgetPreview(entry.id);continue;}
-          if(!this.records.has(entry.id)&&!responses.some(response=>response.id===entry.id))responses.push({id:entry.id,body:this.reconnectingBody(entry)});
+          if(!this.records.has(entry.id)&&!responses.some(response=>response.id===entry.id))responses.push({id:entry.id,body:this.titled(entry.id,entry.body)});
         }
         for(const record of this.records.values()){
           if(record.responseRemovedAt!==undefined||(record.state?.notePath??record.request.notePath)!==view.file.path)continue;
@@ -369,7 +368,7 @@ export class NativeResponseManager {
           const failureBody=restoring?cached.body:body;
           const displayed=record.state?.cleanupComplete||record.finalWriter?body:failure?failedStreamBody(this.titled(id,failureBody)):this.titled(id,body);
           if(!restoring)this.rememberPreview(record,displayed);
-          responses.push({id,body:restoring&&!failure?this.reconnectingBody(cached):displayed});
+          responses.push({id,body:restoring&&!failure?this.titled(id,cached.body):displayed});
         }
         for(const stop of this.localStops.values()){
           if(stop.path!==view.file.path||!responseRegion(saved,stop.id)||adapter?.hasMaterialized(stop.id))continue;

@@ -483,6 +483,8 @@ export function rememberInlineTurns(state:InlineThreadState,turnIds:string[],sav
 }
 
 export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate:boolean|IntermediateMode=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[];preserveHistory?:boolean},initialInput?:InitialInlineInput,threadTitle?:string,timing?:RunTiming,format:FinalAnswerFormat='formatted'):string {
+  // Transport retries keep the normal live display and its last known activity.
+  if(phase==='reconnecting')phase='running';
   const mode=intermediateMode(keepIntermediate),retain=mode!=='remove';
   // Completion and final-message delivery can arrive separately. Keep terminal
   // controls terminal, but close history only after the final text is present.
@@ -514,9 +516,9 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   }
   flushProgress();
   const label=inlineThreadLabel(state.title??threadTitle);
-  const heading=`**${label} · ${phase==='running'||phase==='sending'?'Working':phase==='reconnecting'?'Reconnecting':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
+  const heading=`**${label} · ${phase==='running'||phase==='sending'?'Working':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const timer=timing?' '+runTimer(timing):'';
-  const spinner=['running','sending','reconnecting'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
+  const spinner=['running','sending'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const displayedTurns=[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])];
   const toolGroups=responseToolGroups(state,displayedTurns);
   const emissions=responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim())));

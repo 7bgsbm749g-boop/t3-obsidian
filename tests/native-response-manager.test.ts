@@ -87,7 +87,9 @@ async function previewCheckpoint(){
 test('reload restores several local previews before host discovery without saving generated text',async()=>{
   const saved=await previewCheckpoint(),h=fixture(2);let latest:unknown;
   h.manager.configurePreviewCache('vault',saved,async value=>{latest=value;});h.manager.refresh();
-  assert.ok(h.views.every((_,i)=>h.visible(i).includes('Latest device paragraph')&&h.visible(i).includes(otherBody)&&h.visible(i).includes('Reconnecting…')));
+  assert.ok(h.views.every((_,i)=>h.visible(i).includes('Latest device paragraph')&&h.visible(i).includes(otherBody)));
+  h.views.forEach((_,i)=>assert.doesNotMatch(h.visible(i),/Reconnecting/));
+  assert.deepEqual(h.manager.reconnectingResponseIds().sort(),[id,other].sort());
   assert.equal(h.reads(),0);assert.ok(h.views.every(view=>view.getViewData()===before));
   h.edit(h.visible().replace('Before','Ordinary edit'));await h.views[0].save();
   assert.equal(h.views[0].getViewData(),before.replace('Before','Ordinary edit'));assert.ok(!h.views[0].getViewData().includes('Latest device paragraph'));
@@ -103,7 +105,8 @@ test('reloaded preview cannot regress to delayed host prose or earlier direct ev
   const h=fixture();h.manager.configurePreviewCache('vault',await previewCheckpoint(),async()=>{});h.manager.refresh();
   await h.manager.receive({...record(id,2),state:{...record().state!,body:'> Delayed host',bindingCheckpoint:{sequence:200}}});
   h.manager.stream({request:record().request,messageId:id,sequence:11,body:'> Earlier direct'});
-  assert.ok(h.visible().includes('Latest device paragraph'));assert.ok(h.visible().includes('Reconnecting…'));
+  assert.ok(h.visible().includes('Latest device paragraph'));assert.doesNotMatch(h.visible(),/Reconnecting/);
+  assert.deepEqual(h.manager.reconnectingResponseIds().sort(),[id,other].sort());
   h.manager.stream({request:record().request,messageId:id,sequence:13,body:'> Fresh direct'});
   assert.ok(h.visible().includes('Fresh direct'));assert.ok(!h.visible().includes('Latest device paragraph'));assert.equal(h.views[0].getViewData(),before);h.manager.dispose();
 });
@@ -145,10 +148,11 @@ test('deleting a note removes its preview even when the host is unavailable',asy
 test('failed cache storage does not prevent fresh display or final saves',async()=>{
   const h=fixture();h.manager.configurePreviewCache('vault',undefined,async()=>{throw Error('Device disk full');});await start(h);await h.manager.flushPreviewCache();assert.ok(h.visible().includes(body));h.disk(final);await h.manager.receive(completed());assert.equal(h.views[0].getViewData(),final);h.manager.dispose();
 });
-test('the reconnect label does not absorb the cached reply into its Markdown block',async()=>{
+test('restored replies retain separate Markdown blocks without a reconnect banner',async()=>{
   const h=fixture();h.manager.configurePreviewCache('vault',await previewCheckpoint(),async()=>{});h.manager.refresh();
   const blocks=unified().use(remarkParse).parse(h.visible()).children.filter(node=>node.type==='blockquote');
-  assert.equal(blocks.length,4,'Two independent replies each retain a separate reconnect banner and reply block');h.manager.dispose();
+  assert.equal(blocks.length,2,'Two independent replies each retain their own reply block');
+  assert.doesNotMatch(h.visible(),/Reconnecting/);h.manager.dispose();
 });
 
 test('live title metadata updates provisional and migrating headers without changing saved notes or waiting for host output',async()=>{
