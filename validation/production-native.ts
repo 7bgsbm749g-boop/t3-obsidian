@@ -17,7 +17,7 @@ export async function productionNative(app:App,root:string){
   const leaves=app.workspace.getLeavesOfType('markdown');await leaves[0].openFile(file);await leaves[1].openFile(file);
   for(const leaf of leaves.slice(0,2))await leaf.setViewState({type:'markdown',state:{file:file.path,mode:'source',source:false}});
   const views=leaves.slice(0,2).map(leaf=>leaf.view as MarkdownView);
-  const source:HostedInlineRequest={version:2,nativeProjection:true,destinationSection:'CURRENT',independent:true,id,initialOwner:actor,vaultId:identity.vaultId,host:identity,notePath:file.path,threadId:'fixture-thread',messageId:crypto.randomUUID(),projectId:'fixture-project',threadEnvironmentId:'fixture',initialHash:initialRegion(id).bodyHash,createdAt:new Date().toISOString()};
+  const source:HostedInlineRequest={version:2,nativeProjection:true,responseContainer:true,destinationSection:'CURRENT',independent:true,id,initialOwner:actor,vaultId:identity.vaultId,host:identity,notePath:file.path,threadId:'fixture-thread',messageId:crypto.randomUUID(),projectId:'fixture-project',threadEnvironmentId:'fixture',initialHash:initialRegion(id).bodyHash,createdAt:new Date().toISOString()};
   const binding=await editorStream(source,file.path,deviceNoteIO(app),()=>true);
   await views[0].save();await pause(200);
   const bytes=new Map<string,string>(),files:LeaseFiles={read:async key=>bytes.get(key),write:async(key,value)=>{bytes.set(key,value);},remove:async key=>{bytes.delete(key);},list:async dir=>[...bytes.keys()].filter(key=>key.startsWith(dir+'/'))};
@@ -32,13 +32,13 @@ export async function productionNative(app:App,root:string){
   try{
     await writer.tick();await pause(200);const disk=await app.vault.read(file);
     const trace:unknown[]=[];views.forEach((view,index)=>traceNativeView(manager.view(view)!,trace,'production-'+index));
-    rows.push({name:'production-two-native-views-local-stream',pass:views.every(view=>view.editor.getValue().includes('Checking **native** streaming.'))&&!disk.includes('Checking')&&disk.indexOf('t3-inline:start')<disk.indexOf('## NEXT')});
+    rows.push({name:'production-two-native-views-local-stream',pass:views.every(view=>view.editor.getValue().includes('Checking **native** streaming.'))&&!disk.includes('Checking')&&disk.indexOf('data-t3-response=')<disk.indexOf('## NEXT')});
     const secondSource={...source,id:crypto.randomUUID(),threadId:'second-thread',messageId:crypto.randomUUID()};
     const second=await editorStream(secondSource,file.path,deviceNoteIO(app),()=>true);await views[0].save();await pause(200);
     await client.command({kind:'register',jobId:second.id,request:second});await host.scan();
     const secondRecord=await authority.checkpoint(second.id,{requestHash:hostedRequestHash(second),accepted:true,notePath:file.path,status:'running',hashes:[second.initialHash],body:'> Independent second response.',updatedAt:new Date().toISOString()});await manager.receive(secondRecord);await pause(200);
     rows.push({name:'production-independent-responses-in-two-views',pass:views.every(view=>view.editor.getValue().includes('Checking **native** streaming.')&&view.editor.getValue().includes('Independent second response.'))&&!(await app.vault.read(file)).includes('Independent second response.')});
-    const historical=crypto.randomUUID(),historicalRequest={...source,id:historical,nativeProjection:false};await client.command({kind:'register',jobId:historical,request:historicalRequest});
+    const historical=crypto.randomUUID(),historicalRequest={...source,id:historical,nativeProjection:false,responseContainer:false};await client.command({kind:'register',jobId:historical,request:historicalRequest});
     const historicalPath=leasePaths(directory,historical).record,historicalRecord=JSON.parse(bytes.get(historicalPath)!);historicalRecord.state={requestHash:hostedRequestHash(historicalRequest),accepted:true,notePath:file.path,status:'paused',hashes:[],updatedAt:''};bytes.set(historicalPath,JSON.stringify(historicalRecord));
     views[0].editor.replaceRange('\n<!-- t3-inline:end:'+historical+' -->\n',views[0].editor.offsetToPos(views[0].editor.getValue().length));await views[0].save();await pause(200);await host.scan();
     views[0].editor.replaceRange('Prefix edit\n',views[0].editor.offsetToPos(0));await views[0].save();await pause(300);
@@ -53,7 +53,10 @@ export async function productionNative(app:App,root:string){
     const stage:any=await host.command('stage-note-edit',binding.id);const staged=(await fs.readFile(stage.stagingPath,'utf8')).replace('| Exercise | 20kg |','| Exercise | 20kg | 25kg |').replace('| --- | ---: |','| --- | ---: | ---: |').replace('| Barb | 20 |','| Barb | 20 | |');await fs.writeFile(stage.stagingPath,staged);await host.command('submit-note-edit',binding.id,stage.originalHash);
     complete=true;await writer.tick();rows.push({name:'production-dirty-pane-delays-final-save',pass:(await host.journal.read(binding.id))!.status==='commit-pending'&&!(await app.vault.read(file)).includes('Added **25kg**.')});
     const dirtyBeforeSave=views.map(view=>({saved:view.getViewData(),display:view.editor.getValue()}));
-    views.forEach((view,index)=>{view.save=saves[index];});await views[1].save();await pause(300);
+    views.forEach((view,index)=>{view.save=saves[index];});await views[1].save();
+    // The failed checked save schedules a five-second retry. Let the ordinary
+    // writer cadence reach that retry after the dirty pane has saved.
+    await pause(5200);
     const dirtyAfterSave={disk:await app.vault.read(file),views:views.map(view=>({saved:view.getViewData(),display:view.editor.getValue()}))};await writer.tick();
     await fs.writeFile(path.join(root,'production-trace.json'),JSON.stringify(trace,null,2));
     // Pending compare failure must rebase compatible ordinary changes, retaining

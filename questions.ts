@@ -1,3 +1,4 @@
+import {insideResponse} from './response-container';
 import type {InlineActivity} from './inline-thread';
 import {markdownCodeRanges} from './reply-html';
 
@@ -68,11 +69,9 @@ export function questionSections(document:string):{from:number;to:number;target:
 }
 /** Saved cleanup stays outside live responses, whose hashes belong to a writer. */
 export function removeDismissedQuestions(document:string,dismissed:(target:QuestionTarget)=>boolean):string {
-  const code=markdownCodeRanges(document);
   for(const section of questionSections(document).reverse()){
     if(!dismissed(section.target))continue;
-    const boundaries=[...document.slice(0,section.from).matchAll(/^<!-- t3-(?:inline|response):(start|end):[0-9a-fA-F-]{36} -->$/gm)].filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to));
-    if(boundaries.at(-1)?.[1]==='start')continue;
+    if(insideResponse(document,section.from))continue;
     document=document.slice(0,section.from)+document.slice(section.to);
   }
   return document;
@@ -82,8 +81,7 @@ export function clearResolvedQuestion(document:string,target:QuestionTarget):str
   const token=questionToken(target),start=`<!-- t3-question:start:${token} -->`,end=`<!-- t3-question:end:${token} -->`;
   const from=document.indexOf(start),endAt=document.indexOf(end,from+start.length);
   if(from<0||endAt<0||document.indexOf(start,from+start.length)>=0||document.indexOf(end,endAt+end.length)>=0)return document;
-  const lastStart=document.lastIndexOf('<!-- t3-inline:start:',from),lastEnd=document.lastIndexOf('<!-- t3-inline:end:',from);
-  if(lastStart>lastEnd)return document;
+  if(insideResponse(document,from))return document;
   const section=document.slice(from+start.length,endAt).replace(/^> \[Answer\]\(t3-question:[^\s)]+\)\n?/gm,'').replace(/^> \*\*T3 · (?:Question pending|Answer needed)\*\*$/m,'> **T3 · Question answered**');
   return document.slice(0,from)+section.trim()+document.slice(endAt+end.length);
 }

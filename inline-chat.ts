@@ -10,7 +10,7 @@ import {Notice} from 'obsidian';
 import type {Connection,Request} from './bridge';
 import {commandId,endpoint,environmentApi,type PairedSession} from './direct';
 import {contentHash} from './completion';
-import {activeInlineIds,failedInlineIds,applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,endInsertionOffset,endMarker,finalizeRegion,hasResponseMarkers,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type InlineTurn,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,failedInlineIds,applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,endInsertionOffset,endMarker,finalizeRegion,hasResponseMarkers,initialRegion,insertionOffset,inlineResponseRange,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type InlineTurn,type SelectionAnchor} from './inline-thread';
 import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {InlineHostTarget} from './hosted-inline';
 import {replaceInlineEditorText} from './inline-editor';
@@ -118,7 +118,7 @@ export class InlineChatManager {
       if(request.inlineHost?.nativeProjection&&source&&typeof view.getViewData==='function'){
         const document=source.editor.getValue(),region=regionBody(document,job.id);
         if(region){const start=document.indexOf(startMarker(job.id)),end=document.indexOf(endMarker(job.id),region.to)+endMarker(job.id).length;
-          replaceChangedText(source.editor,document,document.slice(0,start)+responseAnchor(job.id)+document.slice(end));await view.save();nativeResponses(this.app).preview(view,job.id,region.body);}
+          replaceChangedText(source.editor,document,document.slice(0,start)+responseAnchor(job.id,request.inlineHost.responseContainer?undefined:document)+document.slice(end));await view.save();nativeResponses(this.app).preview(view,job.id,region.body);}
       }
     }
   }
@@ -249,14 +249,14 @@ export class InlineChatManager {
     const original=editor.getValue();let document=original;
     const current=regionBody(document,job.id);
     const terminal=job.phase==='complete'&&!questions.waiting||['interrupted','cancelled'].includes(job.phase);
-    const outside=current?{from:current.from-startMarker(job.id).length-1,to:current.to+endMarker(job.id).length+1}:undefined;
+    const outside=current?inlineResponseRange(document,job.id):undefined;
     if(!terminal&&current&&current.body===next&&!job.steering?.some(input=>input.confirmed&&input.selection&&(!input.selectionApplied||selectionRange(document,input.selection,outside))))return;
     const selectionsApplied:InlineSteering[]=[];
     if(current)for(const input of job.steering??[]){
       if(!input.confirmed||!input.selection)continue;
       const region=regionBody(document,job.id)!;
-      const range=selectionRange(document,input.selection,{from:region.from-startMarker(job.id).length-1,to:region.to+endMarker(job.id).length+1});
-      if(range&&(range.to<=region.from-startMarker(job.id).length-1||range.from>=region.to+endMarker(job.id).length+1))document=document.slice(0,range.from)+document.slice(range.to);
+      const range=selectionRange(document,input.selection,inlineResponseRange(document,job.id));
+      if(range&&(range.to<=inlineResponseRange(document,job.id)!.from||range.from>=inlineResponseRange(document,job.id)!.to))document=document.slice(0,range.from)+document.slice(range.to);
       selectionsApplied.push(input);
     }
     const expectedHash=current?contentHash(current.body):job.bodyHash;

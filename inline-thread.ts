@@ -9,6 +9,7 @@ import {visibleInlineInput} from './input-presentation';
 import {responseToolGroups,currentResponseToolGroup,renderResponseToolGroup} from './response-tools';
 import {applyV2ControlEvent,responseRun} from './orchestration-v2';
 import {responseEmissions} from './response-emissions';
+import {containerStart,responseFrame,responseIds,responseBoundaries} from './response-container';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;itemId?:string;updatedAt?:string;createdAt?:string;context?:unknown;createdBy?:string;senderThreadId?:string|null;senderThreadTitle?:string}
@@ -70,10 +71,10 @@ function safeInsertionOffset(document:string,initialOffset:number):number {
 export function startMarker(id:string){return `<!-- t3-inline:start:${id} -->`;}
 export function endMarker(id:string){return `<!-- t3-inline:end:${id} -->`;}
 export function activeInlineIds(document:string):string[]{
-  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Sending…|Working|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
+  return responseIds(document).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Sending…|Working|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
 }
 export function failedInlineIds(document:string):string[]{
-  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].map(match=>match[1]).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · Error\*\*/m.test(regionBody(document,id)?.body??''));
+  return responseIds(document).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · Error\*\*/m.test(regionBody(document,id)?.body??''));
 }
 export interface InitialInlineInput {messageId:string;text:string;label?:string}
 
@@ -98,7 +99,13 @@ export function renameInlineHeader(body:string,title:string):string {
 }
 
 export function regionBody(document:string,id:string):{from:number;to:number;body:string}|null {
+  if(document.includes(containerStart(id))){try{const frame=responseFrame(document,id);return frame?{from:frame.bodyFrom,to:frame.bodyTo,body:frame.body}:null;}catch{return null;}}
   return trackedRegion(document,id,'t3-inline');
+}
+/** Full replacement range, independent of the saved boundary syntax. */
+export function inlineResponseRange(document:string,id:string):{from:number;to:number}|undefined{
+  if(document.includes(containerStart(id))){try{const frame=responseFrame(document,id);return frame?{from:frame.from,to:frame.to}:undefined;}catch{return;}}
+  const region=regionBody(document,id);return region?{from:region.from-startMarker(id).length-1,to:region.to+endMarker(id).length+1}:undefined;
 }
 
 function markerLines(document:string,prefix:'t3-inline'|'t3-response') {
@@ -126,6 +133,9 @@ export function replaceRegion(document:string,id:string,expectedHash:string,next
 
 /** Remove a completed reply's tracking lines with the final body in one edit. */
 export function finalizeRegion(document:string,id:string,expectedHash:string,finalBody:string):{from:number;to:number;text:string}|null {
+  if(document.includes(containerStart(id))){
+    try{const frame=responseFrame(document,id);if(!frame||contentHash(frame.body)!==expectedHash)return null;return {from:frame.from,to:frame.to,text:`\n${finalBody.replace(/\n+$/,'')}`};}catch{return null;}
+  }
   const found=regionBody(document,id);
   if(!found||contentHash(found.body)!==expectedHash||markerLines(found.body,'t3-inline').length)return null;
   const start=startMarker(id),end=endMarker(id);
@@ -624,6 +634,7 @@ export function turnPhase(state:InlineThreadState,turnId:string):'running'|'comp
 
 /** Generated selections are context, including selections crossing markers. */
 export function selectionOverlapsInlineResponse(document:string,range:{start:number;end:number}):boolean {
+  if(responseBoundaries(document).some(boundary=>boundary.format==='container'&&boundary.kind==='start'&&(()=>{try{const frame=responseFrame(document,boundary.id);return !!frame&&range.end>frame.from&&range.start<frame.to;}catch{return false;}})()))return true;
   return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)].some(match=>{
     const region=regionBody(document,match[1]);
     return !!region&&range.end>match.index!&&range.start<region.to+1+endMarker(match[1]).length;
@@ -632,8 +643,7 @@ export function selectionOverlapsInlineResponse(document:string,range:{start:num
 
 /** Find the response containing the cursor/selection. */
 export function inlineTargetAt(document:string,offset:number):string|undefined {
-  return [...document.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/gi)]
-    .map(match=>match[1]).find(id=>{const region=regionBody(document,id);return region&&offset>=region.from&&offset<=region.to;});
+  return responseIds(document).find(id=>{const region=regionBody(document,id);return region&&offset>=region.from&&offset<=region.to;});
 }
 
 /** Preserve ordinary follow-up steering when the note has one running reply.
@@ -646,7 +656,7 @@ export function inlineSteeringTarget(document:string,offset:number,responseId?:s
 }
 export function completionProof(id:string,body:string){return `<!-- t3-response:start:${id} -->\n${body}\n<!-- t3-response:end:${id} -->`;}
 export function hasCompletionProof(document:string,id:string,body:string){return trackedRegion(document,id,'t3-response')?.body===body;}
-export function hasResponseMarkers(document:string,id:string){return ['t3-inline','t3-response'].some(prefix=>markerLines(document,prefix as 't3-inline'|'t3-response').some(match=>match[2]===id));}
+export function hasResponseMarkers(document:string,id:string){return responseBoundaries(document).some(boundary=>boundary.id===id);}
 /** Remove only our completed boundary lines, preserving even edited prose. */
 export function removeCompletionProof(document:string,id:string):string|null {
   const region=trackedRegion(document,id,'t3-response');

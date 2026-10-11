@@ -6,7 +6,7 @@ import {advanceProjection,projectResponses,savedProjection,savedToDisplay,respon
 import {ResponseScroll} from './response-scroll';
 import {presentToolGroups,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,canonicalToolGroup,type ToolPresentation} from './response-tool-presentation';
 import {toolDisplayOffset} from './response-tool-presentation';
-import {startMarker} from './inline-thread';
+import {responseFrame} from './response-container';
 
 export interface NativeViewConflict {base:string;local:string;incoming:string;reason:string;awaitingCompletion?:boolean;attemptedIncoming?:string;unsafeIncoming?:boolean}
 /** Native rendering with a separate saved projection. */
@@ -166,7 +166,7 @@ export class NativeResponseView {
       let delta=0;
       for(const range of projection.ranges){
         if(offset<=range.displayFrom)break;
-        if(offset<range.displayTo){const local=offset-range.displayFrom,prefix=startMarker(range.id).length+1,presentation=this.responseTools.get(range.id);if(!presentation||local<prefix||local>prefix+presentation.display.length)return {kind:'response' as const,id:range.id,offset:local};const mapped=toolDisplayOffset(presentation,local-prefix);return {kind:'response' as const,id:range.id,offset:prefix+(mapped.kind==='canonical'?mapped.offset:end?mapped.to:mapped.from)};}
+        if(offset<range.displayTo){const local=offset-range.displayFrom,prefix=responseFrame(this.projection.display,range.id)!.bodyFrom-range.displayFrom,presentation=this.responseTools.get(range.id);if(!presentation||local<prefix||local>prefix+presentation.display.length)return {kind:'response' as const,id:range.id,offset:local};const mapped=toolDisplayOffset(presentation,local-prefix);return {kind:'response' as const,id:range.id,offset:prefix+(mapped.kind==='canonical'?mapped.offset:end?mapped.to:mapped.from)};}
         delta+=range.displayTo-range.displayFrom-range.anchor.length;
       }
       const smallSaved=savedProjection(projection.display,projection);return {kind:'saved' as const,offset:this.canonicalOffset(smallSaved,offset-delta)};

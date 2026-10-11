@@ -8,8 +8,10 @@ import type {NativeCommitProof} from './native-response-commit';
 import {nativeCommitMatches} from './native-response-commit';
 import {streamBlock,removeStreamBlock} from './stream-block';
 import {MAX_SUPERSEDED_FINAL_ATTEMPTS,type FinalWriteOutcome,type FinalWriteState} from './completion-attempt';
+import {responseBoundaries} from './response-container';
 
-export function validateFinalResponseBody(body:string){if(/<!-- t3-(?:inline|response):/.test(body))throw Error('A finished response cannot introduce tracking boundaries.');}
+const boundaryText=(text:string)=>/<!-- t3-(?:inline|response):|data-t3-response\s*=/.test(text);
+export function validateFinalResponseBody(body:string){if(boundaryText(body))throw Error('A finished response cannot introduce tracking boundaries.');}
 
 export interface NoteGeneration {
   retiredOriginalHash?:string;
@@ -66,7 +68,7 @@ export class GeneratedNoteCoordinator {
       const old=await this.journal.read(request.id);
       if(old){if(hostedRequestHash(old.request)!==hostedRequestHash(request)||old.original!==original)throw Error('Response identity already belongs to another request or original.');return old;}
       const region=responseRegion(original,request.id);
-      if(!region||original.slice(region.from,region.to)!==responseAnchor(request.id))throw Error('A unique durable response anchor is required.');
+      if(!region||original.slice(region.from,region.to)!==responseAnchor(request.id,original))throw Error('A unique durable response anchor is required.');
       const record:NoteGeneration={request,notePath:request.notePath,original,originalHash:contentHash(original),status:'accepted',conflicts:[],acknowledgements:[]};
       await this.journal.append(request.id,record,'accepted');return record;
     });
@@ -95,7 +97,8 @@ export class GeneratedNoteCoordinator {
     return this.serial(initial.notePath,async()=>{
       const record=await this.require(id);if(record.originalHash!==originalHash||!['accepted','streaming'].includes(record.status))throw Error('The staged original or result state changed.');
       const region=responseRegion(staged,id),edits=changedEdits(record.original,staged);
-      if(!region||staged.slice(region.from,region.to)!==responseAnchor(id)||edits.some(edit=>/<!-- t3-(?:inline|response):/.test(record.original.slice(edit.from,edit.to)+edit.text)))throw Error('Staging changed response boundaries.');
+      if(!region||staged.slice(region.from,region.to)!==responseAnchor(id,record.original)||edits.some(edit=>boundaryText(record.original.slice(edit.from,edit.to)+edit.text)))throw Error('Staging changed response boundaries.');
+      if(JSON.stringify(responseBoundaries(staged).map(({id,kind,format,text})=>({id,kind,format,text})))!==JSON.stringify(responseBoundaries(record.original).map(({id,kind,format,text})=>({id,kind,format,text}))))throw Error('Staging changed response boundaries.');
       record.stagedDraft=staged;await this.journal.append(id,record,'staged-edit');return record;
     });
   }
@@ -106,12 +109,14 @@ export class GeneratedNoteCoordinator {
       if(record.staged!==undefined){if(record.staged!==staged||record.finalBody!==finalBody)throw Error('Finished results are immutable.');return record;}
       if(!['accepted','streaming'].includes(record.status))throw Error('This response is no longer accepting a result.');
       const originalRegion=responseRegion(record.original,id),stagedRegion=responseRegion(staged,id);
-      if(!originalRegion||!stagedRegion||staged.slice(stagedRegion.from,stagedRegion.to)!==responseAnchor(id))throw Error('Staging changed the response anchor.');
+      if(!originalRegion||!stagedRegion||staged.slice(stagedRegion.from,stagedRegion.to)!==responseAnchor(id,record.original))throw Error('Staging changed the response anchor.');
       const edits=changedEdits(record.original,staged);
       // The execution boundary will stage ordinary note changes only. No
       // staging edit may cross any active response registration's boundaries.
-      if(edits.some(edit=>/<!-- t3-(?:inline|response):/.test(record.original.slice(edit.from,edit.to))))throw Error('Staged edits overlap response registrations.');
-      if(edits.some(edit=>/<!-- t3-(?:inline|response):/.test(edit.text)))throw Error('Staged edits cannot introduce response registrations.');
+      if(edits.some(edit=>boundaryText(record.original.slice(edit.from,edit.to))))throw Error('Staged edits overlap response registrations.');
+      if(edits.some(edit=>boundaryText(edit.text)))throw Error('Staged edits cannot introduce response registrations.');
+      if(responseBoundaries(record.original).some(boundary=>edits.some(edit=>edit.from<boundary.to&&edit.to>boundary.from)))throw Error('Staged edits overlap response registrations.');
+      if(JSON.stringify(responseBoundaries(staged).map(({id,kind,format,text})=>({id,kind,format,text})))!==JSON.stringify(responseBoundaries(record.original).map(({id,kind,format,text})=>({id,kind,format,text}))))throw Error('Staged edits changed response registrations.');
       if(edits.some(edit=>!(edit.to<originalRegion.from||edit.from>originalRegion.to)))throw Error('Staged edits touch the response anchor.');
       validateFinalResponseBody(finalBody);
       record.staged=staged;record.finalBody=finalBody;record.status='result-ready';
@@ -171,7 +176,7 @@ export class GeneratedNoteCoordinator {
   recoveryCandidate(record:NoteGeneration,latest:string){
     if(!record.attempt||record.attempt.kind!=='commit'||record.staged===undefined||record.finalBody===undefined||record.status==='verified'||record.status==='removed')return;
     const region=responseRegion(latest,record.request.id);
-    if(!region||latest.slice(region.from,region.to)!==responseAnchor(record.request.id))return;
+    if(!region||latest.slice(region.from,region.to)!==responseAnchor(record.request.id,latest))return;
     const merged=mergeSavedEdits(record.original,latest,this.edits(record));if(!merged.ok)return;
     const proof=this.materialization({...record,status:'verified',verified:{commitId:record.attempt.id,hash:record.attempt.hash,document:record.attempt.expected}});
     return {currentHash:contentHash(latest),proofHash:contentHash(JSON.stringify(proof)),proposedHash:contentHash(merged.text),proposedCharacters:merged.text.length};

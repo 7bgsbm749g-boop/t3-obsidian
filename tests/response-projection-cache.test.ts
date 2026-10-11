@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {ResponseProjectionCache} from '../response-projection-cache';
 import {responseAnchor,savedProjection} from '../native-response-projection';
 import {markdownCodeCacheStatus} from '../reply-html';
+import {containerEnd} from '../response-container';
 
 const id='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222';
 const saved='Ordinary before\n'+responseAnchor(id)+'\nBetween\n'+responseAnchor(other)+'\nOrdinary after';
@@ -16,7 +17,7 @@ test('exact repeated host projections avoid parsing and never share mutable rang
 });
 test('changed or damaged boundaries and nested output cannot reuse a valid host snapshot',()=>{
  const cache=new ResponseProjectionCache(),responses=[{id,body:'> Reply'}];cache.project('note',saved,responses);
- assert.throws(()=>cache.project('note',saved.replace(`<!-- t3-inline:end:${id} -->`,''),responses),/boundaries/);
+ assert.throws(()=>cache.project('note',saved.replace(containerEnd,''),responses),/boundaries/);
  assert.throws(()=>cache.project('note',saved,[{id,body:responseAnchor(other)}]),/Nested/);
  const changed=saved.replace('Ordinary after','New suffix');assert.equal(cache.project('note',changed,responses).saved,changed);
 });
@@ -25,6 +26,7 @@ test('host projection entry and character budgets discard old snapshots and clea
  cache.project('one',document,responses);cache.project('two',document,responses);cache.project('three',document,responses);assert.equal(cache.status().entries,2);assert.ok(cache.status().characters<=1000);
  const before=cache.status().projections;cache.project('one',document,responses);assert.equal(cache.status().projections,before+1);
  cache.project('huge',document+'x'.repeat(1000),responses);assert.ok(cache.status().characters<=1000);assert.ok(cache.status().entries<=2);
- const byteBound=new ResponseProjectionCache(500,8);byteBound.project('one',document,responses);byteBound.project('two',document,responses);assert.equal(byteBound.status().entries,1);assert.ok(byteBound.status().characters<=500);
+ const oneSize=2*document.length+responses[0].body.length+responses[0].body.length;
+ const byteBound=new ResponseProjectionCache(oneSize+10,8);byteBound.project('one',document,responses);byteBound.project('two',document,responses);assert.equal(byteBound.status().entries,1);assert.ok(byteBound.status().characters<=oneSize+10);
  cache.clear();assert.equal(cache.status().entries,0);assert.equal(cache.status().characters,0);
 });

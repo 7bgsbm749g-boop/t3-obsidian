@@ -74,7 +74,7 @@ import {InlineChatManager,captureEditorSelection,type InlineJob} from './inline-
 import {handoffInline,hostedPaths,type HostedInlineRequest,type InlineHostTarget,type InlineFiles} from './hosted-inline';
 import {leasePaths,type LeaseRecord} from './inline-lease';
 import {installMobileSelectionAction} from './mobile-selection-action';
-import {hiddenInlineMarkerExtension} from './inline-markers';
+import {hiddenInlineMarkerExtension,hideResponseContainerBoundaries} from './inline-markers';
 import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,selectionOverlapsInlineResponse,selectionAnchor,initialRegion,endInsertionOffset,endMarker,failedInlineIds,regionBody,finalizeRegion,startMarker,type SelectionAnchor} from './inline-thread';
 import {QuestionController} from './question-controller';
 import {QuestionModal,questionButton,questionEditorExtension} from './question-ui';
@@ -326,6 +326,7 @@ export default class SendToT3 extends Plugin {
     this.questions.subscribe(()=>{void this.cleanDismissedQuestions();});
     if(typeof this.registerEditorExtension==='function'){this.registerEditorExtension(hiddenInlineMarkerExtension());this.registerEditorExtension(questionEditorExtension(this.questions,target=>this.openQuestion(target)));this.registerEditorExtension(approvalEditorExtension(this.approvals));}
     if(typeof this.registerMarkdownPostProcessor==='function')this.registerMarkdownPostProcessor((element,ctx)=>{
+      hideResponseContainerBoundaries(element,ctx);
       for(const link of Array.from(element.querySelectorAll<HTMLAnchorElement>('a[href^="t3-question:"]'))){
         const target=parseQuestionToken((link.getAttribute('href')??'').slice('t3-question:'.length));if(!target)continue;
         const control=questionButton(this.questions!,target,value=>this.openQuestion(value));link.replaceWith(control.button);
@@ -673,7 +674,7 @@ export default class SendToT3 extends Plugin {
         responseBindings:target=>this.displayResponseBindings(target),
         prepareDisplay:async(display,destination,input)=>{
           const host=await this.inlineHostTarget(),id=commandId(display.id,`response:${input.id}:${destination.id}`);
-          return {nativeProjection:await this.coordinatedHostAvailable(host),destinationSection:destination.section,version:4,finalAnswerFormat:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat),independent:true,id,initialInput:{messageId:input.id,text:input.text,label:incomingLabel(input)},initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id,{messageId:input.id,text:input.text,label:incomingLabel(input)},undefined,'collapse',{startedAt:input.createdAt??display.createdAt}).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:true,intermediateMode:'collapse'};
+          return {...await this.coordinatedHostFormat(host),destinationSection:destination.section,version:4,finalAnswerFormat:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat),independent:true,id,initialInput:{messageId:input.id,text:input.text,label:incomingLabel(input)},initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id,{messageId:input.id,text:input.text,label:incomingLabel(input)},undefined,'collapse',{startedAt:input.createdAt??display.createdAt}).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:true,intermediateMode:'collapse'};
         },
         attachDisplay:async(request,path)=>{
           if(this.stopped||!this.eventHostCurrent(server.identity)||!this.deviceInline)throw Error('Streaming host ownership changed.');
@@ -1062,7 +1063,7 @@ export default class SendToT3 extends Plugin {
         }else{
           const prepared=await opened.files.read(`${host.directory}/requests/${id}.json`);
           const policy=resolveJobOptions(this.settings.inlineStreaming).inline;
-          const request:HostedInlineRequest=prepared?JSON.parse(prepared):{version:4,id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath,threadId,messageId,projectId:project.id,threadEnvironmentId:history.source.environmentId,createdAt:run.createdAt,threadTitle:history.title,independent:true,importTurn:run.turn,nativeProjection:await this.coordinatedHostAvailable(host),initialInput:/^[0-9a-f-]{36}$/i.test(messageId)?{messageId,text:history.state.messages.find(message=>message.id===messageId)!.text,label:incomingLabel(history.state.messages.find(message=>message.id===messageId)!)}:undefined,initialHash:initialRegion(id).bodyHash,keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode,finalAnswerFormat:policy.finalAnswerFormat};
+          const request:HostedInlineRequest=prepared?JSON.parse(prepared):{version:4,id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath,threadId,messageId,projectId:project.id,threadEnvironmentId:history.source.environmentId,createdAt:run.createdAt,threadTitle:history.title,independent:true,importTurn:run.turn,...await this.coordinatedHostFormat(host),initialInput:/^[0-9a-f-]{36}$/i.test(messageId)?{messageId,text:history.state.messages.find(message=>message.id===messageId)!.text,label:incomingLabel(history.state.messages.find(message=>message.id===messageId)!)}:undefined,initialHash:initialRegion(id).bodyHash,keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode,finalAnswerFormat:policy.finalAnswerFormat};
           this.rememberInlineTarget(host);
           const binding=await editorStream(request,notePath,deviceNoteIO(this.app),()=>!this.stopped,id);
           await this.deviceInline.register(binding);
@@ -1454,12 +1455,12 @@ export default class SendToT3 extends Plugin {
     const host=await this.inlineHostTarget();
     const threadEnvironmentId=request.connection.environmentId??await this.localInlineEnvironment();
     job.hostTarget=host;this.rememberInlineTarget(host);
-    request.inlineHost={nativeProjection:await this.coordinatedHostAvailable(host),version:4,finalAnswerFormat:finalAnswerFormat(job.finalAnswerFormat),independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
+    request.inlineHost={...await this.coordinatedHostFormat(host),version:4,finalAnswerFormat:finalAnswerFormat(job.finalAnswerFormat),independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
     request.prompt+=stagedNoteInstruction([request.inlineHost]);if(request.prompt.length>120_000)throw Error('The note and staged-edit context exceed T3’s prompt limit.');
   }
-  private async coordinatedHostAvailable(target:InlineHostTarget){
+  private async coordinatedHostFormat(target:InlineHostTarget){
     const opened=await this.inlineHostFiles(target);
-    try{const raw=await opened.files.read(`${target.directory}/coordinated-capabilities.json`);return !!raw&&JSON.parse(raw).nativeProjection===true;}catch{return false;}finally{opened.close();}
+    try{const raw=await opened.files.read(`${target.directory}/coordinated-capabilities.json`),capabilities=raw?JSON.parse(raw):{};return {nativeProjection:capabilities.nativeProjection===true,responseContainer:capabilities.nativeProjection===true&&capabilities.responseContainers===1};}catch{return {nativeProjection:false,responseContainer:false};}finally{opened.close();}
   }
   private async inlineHostFiles(target:InlineHostTarget,waitForHost=true):Promise<{files:InlineFiles;readonly closed:boolean;close():void}>{
     const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
@@ -2136,7 +2137,7 @@ export default class SendToT3 extends Plugin {
     const policy=request.jobOptions?.inline??resolveJobOptions(this.settings.inlineStreaming).inline;
     const io=deviceNoteIO(this.app),host=await this.inlineHostTarget();
     for(const path of destinations){const document=await io.readNote(path);if(document===undefined)throw Error(`Destination note unavailable: ${path}`);endInsertionOffset(document);}
-    const source:HostedInlineRequest={destinationSection,nativeProjection:await this.coordinatedHostAvailable(host),version:4,finalAnswerFormat:policy.finalAnswerFormat,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode};
+    const source:HostedInlineRequest={destinationSection,...await this.coordinatedHostFormat(host),version:4,finalAnswerFormat:policy.finalAnswerFormat,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode};
     request.inlineBindings=[];this.rememberInlineTarget(host);
     const opened=await this.inlineHostFiles(host);
     try{

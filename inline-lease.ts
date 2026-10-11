@@ -249,7 +249,7 @@ export class InlineLeaseAuthority {
         if(request.deviceCompletion){
           const path=deviceOriginalPath(directory,request.id),previous=await this.files.read(path),original=command.original??previous;
           if(typeof original!=='string'||original.length>2_000_000||contentHash(original)!==request.deviceCompletion.originalHash||previous!==undefined&&previous!==original)throw Error('The immutable device completion original changed.');
-          const region=responseRegion(original,request.id);if(!region||original.slice(region.from,region.to)!==responseAnchor(request.id))throw Error('Device completion requires its unique saved response anchor.');
+          const region=responseRegion(original,request.id);if(!region||original.slice(region.from,region.to)!==responseAnchor(request.id,original))throw Error('Device completion requires its unique saved response anchor.');
           if(previous===undefined)await this.files.write(path,original);
         }
         const writer=request.nativeProjection?undefined:this.noteWriter(request.notePath,request.id);

@@ -155,6 +155,8 @@
 }
 .send-to-t3-run-timer { font-variant-numeric: tabular-nums; color: var(--text-muted); font-weight: normal; }
 .send-to-t3-fold-key { display: none; }
+/* Container syntax has no visible paragraph in Reading view. */
+.send-to-t3-response-boundary { display: none !important; }
 .send-to-t3-response-activity {
   color: var(--text-muted);
   overflow-wrap: anywhere;

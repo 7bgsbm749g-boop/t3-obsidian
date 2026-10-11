@@ -1,5 +1,5 @@
 import {startMarker,endMarker} from './inline-thread';
-import {markdownCodeRanges} from './reply-html';
+import {containerBody,containerStart,containerEnd,containsResponseBoundary,responseFrame,responseBoundaries} from './response-container';
 import type {Transaction} from '@codemirror/state';
 
 export interface LocalResponse {id:string;body:string}
@@ -7,28 +7,19 @@ export interface ProjectionRange {id:string;savedFrom:number;savedTo:number;disp
 export interface ResponseProjection {saved:string;display:string;ranges:ProjectionRange[]}
 export class ProjectionConflict extends Error {}
 
-/** An unchanged, empty marker pair supplies identity and placement. Existing
- * marker syntax keeps selection, steering, Stop/Continue and Answer targeting
- * compatible; native Obsidian renders the unmodified response Markdown. */
-export const responseAnchor=(id:string)=>`${startMarker(id)}\n\n${endMarker(id)}`;
+/** New responses use one complete container. Existing journaled comment
+ * anchors keep their original bytes until their checked final save. */
+const usesLegacyAnchor=(id:string,document?:string)=>document!==undefined&&responseBoundaries(document).some(boundary=>boundary.id===id&&boundary.format==='inline'&&boundary.kind==='start');
+export const responseAnchor=(id:string,document?:string)=>usesLegacyAnchor(id,document)?`${startMarker(id)}\n\n${endMarker(id)}`:containerBody(id,'');
+export const renderResponse=(id:string,body:string,document?:string)=>usesLegacyAnchor(id,document)?`${startMarker(id)}\n${body}\n${endMarker(id)}`:containerBody(id,body);
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export function responseRegion(text:string,id:string):{from:number;to:number;body:string}|undefined {
   if(!uuid.test(id))throw new ProjectionConflict('Invalid response identity.');
-  const start=startMarker(id),end=endMarker(id);
   // A single present boundary must still pass the normal malformed-boundary
   // check. Only a completely absent identity can skip Markdown parsing.
-  if(!text.includes(start)&&!text.includes(end))return;
-  const code=markdownCodeRanges(text);
-  // Ordinary text may touch either OUTER edge of a hidden comment. Matching
-  // the whole line made that legal edit invalidate every later edit and save.
-  const markers=[...text.matchAll(/<!-- t3-(?:inline|response):(start|end):([0-9a-fA-F-]{36}) -->/g)].filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to));
-  const own=markers.filter(match=>match[0]===start||match[0]===end);
-  if(!own.length)return;
-  if(own.length!==2||own[0][0]!==start||own[1][0]!==end)throw new ProjectionConflict('Missing, duplicate or reversed response boundaries.');
-  const from=own[0].index!,last=own[1].index!;
-  const body=text.slice(from+start.length,last);
-  if(markers.some(match=>match.index!>from&&match.index!<last))throw new ProjectionConflict('Nested response boundaries.');
-  return {from,to:last+end.length,body};
+  if(!containsResponseBoundary(text,id))return;
+  try{const frame=responseFrame(text,id);if(frame)return {from:frame.from,to:frame.to,body:text.slice(frame.from+(frame.format==='container'?containerStart(id).length:startMarker(id).length),frame.to-(frame.format==='container'?containerEnd.length:endMarker(id).length))};}
+  catch(error){throw new ProjectionConflict((error as Error).message);}
 }
 
 export function projectResponses(saved:string,responses:readonly LocalResponse[]):ResponseProjection {
@@ -38,9 +29,9 @@ export function projectResponses(saved:string,responses:readonly LocalResponse[]
   for(const {response,region} of located){
     if(region.from<cursor)throw new ProjectionConflict('Overlapping response anchors.');
     const anchor=saved.slice(region.from,region.to);
-    if(anchor!==responseAnchor(response.id))throw new ProjectionConflict('Legacy response must be journaled and migrated before local projection.');
+    if(anchor!==responseAnchor(response.id,saved))throw new ProjectionConflict('Legacy response must be journaled and migrated before local projection.');
     // Validate output as well, so generated text cannot create a save escape.
-    const rendered=`${startMarker(response.id)}\n${response.body}\n${endMarker(response.id)}`;
+    const rendered=renderResponse(response.id,response.body,saved);
     responseRegion(rendered,response.id);
     display+=saved.slice(cursor,region.from);
     const displayFrom=display.length;display+=rendered;

@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {displayToSaved,savedToDisplay,responseAnchor,responseRegion,projectResponses,savedProjection,editableDisplayRange} from '../native-response-projection';
+import {containerBody,containerEnd} from '../response-container';
 import {renderInlineTurn,selectionAnchor,insertionOffset} from '../inline-thread';
 import {NativeResponseView} from '../native-response-view';
 import {EditorState} from '@codemirror/state';
@@ -23,9 +24,9 @@ test('many independent native response projections preserve ordinary edits and m
 test('save projection refuses lost, duplicated, nested and legacy boundaries',()=>{
   const projection=projectResponses(saved,[{id,body:'> Stream'}]);
   assert.throws(()=>savedProjection(projection.display.replace(responseAnchor(other),responseAnchor(id)),projection),/duplicate/i);
-  assert.throws(()=>savedProjection(projection.display.replace(/<!-- t3-inline:end:aaaaaaaa[^\n]+ -->/,''),projection),/boundaries/);
+  assert.throws(()=>savedProjection(projection.display.replace(containerEnd,''),projection),/boundaries/);
   assert.throws(()=>projectResponses(saved,[{id,body:responseAnchor(other)}]),/Nested/);
-  assert.throws(()=>projectResponses(saved.replace(responseAnchor(id),responseAnchor(id).replace('\n\n','\nlegacy\n')),[{id,body:'> Stream'}]),/Legacy/);
+  assert.throws(()=>projectResponses(saved.replace(responseAnchor(id),responseAnchor(id).replace('\n\n','\nlegacy\n')),[{id,body:'> Stream'}]),/Legacy|spacing/);
   assert.throws(()=>projectResponses(saved,[{id,body:'one'},{id,body:'two'}]),/Duplicate/);
 });
 test('all existing progress/final choices retain exact formatter output in the native document',()=>{
@@ -33,7 +34,7 @@ test('all existing progress/final choices retain exact formatter output in the n
     const state:any={messages:[{id:'message',role:'assistant',turnId:'turn',text:'## Heading\n\n**Answer**\n\n| Weight |\n| --- |\n| 25kg |',streaming:phase==='running'}],activities:[],latestTurn:{turnId:'turn',state:phase==='running'?'running':'completed',assistantMessageId:'message'}};
     const body=renderInlineTurn(state,'turn','thread',phase,mode,undefined,undefined,undefined,'Thread',{startedAt:'2026-10-02T20:00:00Z'},format);
     const projection=projectResponses(responseAnchor(id),[{id,body}]);
-    assert.equal(projection.display,`<!-- t3-inline:start:${id} -->\n${body}\n<!-- t3-inline:end:${id} -->`);
+    assert.equal(projection.display,containerBody(id,body));
     assert.equal(savedProjection(projection.display,projection),responseAnchor(id));
   }
 });
@@ -152,7 +153,7 @@ test('unchanged native response reads retain a validated projection, while ordin
  const edited=h.adapter.currentProjection();assert.notEqual(edited,projection);assert.equal(edited.saved,saved.replace('Between','New ordinary text between'));
  h.adapter.setResponses([{id,body:'> Changed reply'},{id:other,body:'> Independent reply'}]);
  assert.ok(h.read().includes('Changed reply'));assert.ok(!h.read().includes('Retained large reply'));assert.equal(h.view.getViewData(),edited.saved);
- const validDisplay=h.read();h.edit(validDisplay.replace(`<!-- t3-inline:end:${id} -->`,''));
+ const validDisplay=h.read();h.edit(validDisplay.replace(containerEnd,''));
  assert.throws(()=>h.adapter.saved(),/boundaries/);assert.throws(()=>h.adapter.currentProjection(),/boundaries/);assert.throws(()=>h.adapter.setResponses([{id,body:'> Changed reply'},{id:other,body:'> Independent reply'}]),/boundaries/);
  h.edit(validDisplay);h.adapter.dispose();
 });

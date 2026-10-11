@@ -1,6 +1,6 @@
-import {markdownCodeRanges} from './reply-html';
 import {safeNotePath} from './hosted-inline';
 import {contentHash} from './completion';
+import {responseIds} from './response-container';
 
 export class DuplicateResponseLocation extends Error {
   constructor(readonly paths:string[]){super(`This response block appears in multiple notes: ${paths.join('; ')}. Review the response destination to resume streaming.`);}
@@ -22,9 +22,7 @@ export class ResponseNoteLocator {
     this.dirty.delete(path);
     if(document===undefined){this.notes.delete(path);this.hashes.delete(path);return;}
     this.hashes.set(path,contentHash(document));
-    const matches=[...document.matchAll(/<!-- (?:t3-inline|t3-response):start:([0-9a-f-]{36}) -->/g)];
-    const code=matches.length?markdownCodeRanges(document):[];
-    const ids=new Set(matches.filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to)).map(match=>match[1]));
+    const ids=new Set(responseIds(document));
     if(ids.size)this.notes.set(path,ids);else this.notes.delete(path);
   }
   changed(path:string){if(safeNotePath(path))this.dirty.add(path);}

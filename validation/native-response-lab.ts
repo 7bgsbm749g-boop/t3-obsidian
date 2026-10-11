@@ -5,8 +5,8 @@ import {nativeResponses} from '../native-response-manager';
 import {Plugin,MarkdownView,MarkdownRenderChild} from 'obsidian';
 import {NativeResponseView} from '../native-response-view';
 import {responseAnchor} from '../native-response-projection';
-import {renderInlineTurn} from '../inline-thread';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
+import {renderInlineTurn,regionBody} from '../inline-thread';
+import {hiddenInlineMarkerExtension,hideResponseContainerBoundaries} from '../inline-markers';
 import {installResponsePresentation} from '../response-presentation';
 import {questionEditorExtension,questionButton} from '../question-ui';
 import {parseQuestionToken} from '../questions';
@@ -34,10 +34,13 @@ export default class NativeResponseLab extends Plugin {
   async onload(){
     this.root=path.dirname((this.app.vault.adapter as any).getFullPath(''));
     if(!fs.existsSync(path.join(this.root,'ISOLATED-NATIVE-LAB')))throw Error('An explicitly isolated, unsynced fixture vault is required.');
+    this.registerDomEvent(window,'error',event=>this.write('window-error.json',{message:event.message,stack:event.error?.stack}));
+    const originalError=console.error,errors:string[]=[];console.error=(...values:unknown[])=>{errors.push(values.map(value=>value instanceof Error?value.stack:String(value)).join(' '));this.write('console-errors.json',errors);originalError(...values);};this.register(()=>{console.error=originalError;});
     this.registerEditorExtension(hiddenInlineMarkerExtension());this.register(installResponsePresentation(document));
+    this.registerMarkdownPostProcessor(hideResponseContainerBoundaries);
     const {EditorState}=require('@codemirror/state');
     this.registerEditorExtension(EditorState.transactionFilter.of((transaction:any)=>(()=>{const result=this.adapter?.filterTransaction(transaction)??transaction;return Array.isArray(result)?result:nativeResponses(this.app).filter(result);})()));
-    const controller:any={subscribe:()=>()=>{},view:()=>({status:'pending'})};
+    const controller:any={subscribe:()=>()=>{},view:()=>({status:'pending'}),hasDismissals:()=>false,isDismissed:()=>false};
     this.registerEditorExtension(questionEditorExtension(controller,()=>this.answerClicks++));
     this.registerMarkdownPostProcessor((element,ctx)=>{for(const link of Array.from(element.querySelectorAll<HTMLAnchorElement>('a[href^="t3-question:"]'))){const target=parseQuestionToken((link.getAttribute('href')??'').slice(12));if(!target)continue;const control=questionButton(controller,target,()=>this.answerClicks++);link.replaceWith(control.button);const child=new MarkdownRenderChild(control.button);child.register(control.unsubscribe);ctx.addChild(child);}});
     this.app.workspace.onLayoutReady(()=>void this.run().catch((error:Error)=>this.write('error.json',{message:error.message,stack:error.stack})));
@@ -47,8 +50,12 @@ export default class NativeResponseLab extends Plugin {
   async run(){
     await pause(1000);const app=this.app;
     const reference=app.workspace.getLeaf(false);await reference.openFile(app.vault.getFileByPath('Reference.md')!);
+    await reference.setViewState({type:'markdown',state:{file:'Reference.md',mode:'source',source:false}});
     for(const leaf of app.workspace.getLeavesOfType('markdown'))if(leaf!==reference)leaf.detach();
     const virtual=app.workspace.createLeafBySplit(reference,'vertical');await virtual.openFile(app.vault.getFileByPath('Virtual.md')!);
+    await virtual.setViewState({type:'markdown',state:{file:'Virtual.md',mode:'source',source:false}});
+    await reference.loadIfDeferred();await virtual.loadIfDeferred();
+    this.write('setup.json',{files:app.vault.getMarkdownFiles().map(file=>file.path),leaves:[reference,virtual].map(leaf=>({state:leaf.getViewState(),type:leaf.view.getViewType(),file:(leaf.view as MarkdownView).file?.path}))});
     const ref=reference.view as MarkdownView,view=virtual.view as MarkdownView;
     await app.vault.modify(view.file!,saved);view.setViewData(saved,false);
     const conflicts:any[]=[];this.adapter=new NativeResponseView(view,saved,record=>conflicts.push(record),()=>app.vault.read(view.file!));
@@ -65,7 +72,7 @@ export default class NativeResponseLab extends Plugin {
         for(const v of [ref,view]){v.editor.scrollTo(0,0);if(progress==='collapse')for(const el of Array.from(v.contentEl.querySelectorAll<HTMLElement>('.callout.is-collapsed .callout-title')))el.click();}
         await pause(120);const selector=mode==='reading'?'.markdown-preview-sizer':'.cm-content';
         const actual=inspect(view.contentEl.querySelector<HTMLElement>(selector)!),expected=inspect(ref.contentEl.querySelector<HTMLElement>(selector)!);
-        const name=[width,mode,phase,progress,format].join('-');matrix.push({name,actual,expected,layoutEqual:JSON.stringify(actual)===JSON.stringify(expected),displayEqual:view.editor.getValue()===ref.editor.getValue(),savedClean:await app.vault.adapter.read('Virtual.md')===saved});this.write('matrix.json',matrix);
+        const name=[width,mode,phase,progress,format].join('-');matrix.push({name,actual,expected,layoutEqual:JSON.stringify(actual)===JSON.stringify(expected),displayEqual:view.editor.getValue()===ref.editor.getValue(),bodyEqual:regionBody(view.editor.getValue(),id)?.body===regionBody(ref.editor.getValue(),id)?.body,savedClean:await app.vault.adapter.read('Virtual.md')===saved});this.write('matrix.json',matrix);
         if(phase==='complete'&&progress==='keep'&&format==='formatted')await this.capture(name);
       }
       style.remove();
@@ -83,7 +90,7 @@ export default class NativeResponseLab extends Plugin {
       const actual=inspect(view.contentEl.querySelector<HTMLElement>(selector)!),expected=inspect(ref.contentEl.querySelector<HTMLElement>(selector)!);
       const buttons=[ref,view].map(v=>Array.from(v.contentEl.querySelectorAll<HTMLButtonElement>('button.send-to-t3-question-answer')).filter(button=>button.getBoundingClientRect().width).map(button=>({text:button.textContent,disabled:button.disabled,width:button.getBoundingClientRect().width,height:button.getBoundingClientRect().height})));
       const clicks=this.answerClicks;for(const v of [ref,view])v.contentEl.querySelector<HTMLButtonElement>('button.send-to-t3-question-answer')?.click();
-      rich.push({width,mode,layoutEqual:JSON.stringify(actual)===JSON.stringify(expected),displayEqual:view.editor.getValue()===ref.editor.getValue(),buttonsEqual:JSON.stringify(buttons[0])===JSON.stringify(buttons[1]),buttons,answerClicks:this.answerClicks-clicks,savedClean:await app.vault.adapter.read('Virtual.md')===saved});
+      rich.push({width,mode,layoutEqual:JSON.stringify(actual)===JSON.stringify(expected),displayEqual:view.editor.getValue()===ref.editor.getValue(),bodyEqual:regionBody(view.editor.getValue(),id)?.body===regionBody(ref.editor.getValue(),id)?.body,buttonsEqual:JSON.stringify(buttons[0])===JSON.stringify(buttons[1]),buttons,answerClicks:this.answerClicks-clicks,savedClean:await app.vault.adapter.read('Virtual.md')===saved});
       style.remove();
     }
     this.write('rich.json',rich);
@@ -134,6 +141,6 @@ export default class NativeResponseLab extends Plugin {
     this.adapter.dispose();this.adapter=undefined;
     const production=await productionNative(app,this.root);this.write('production.json',production);
     const handoff=await nativeResponseHandoff(app,this.root);this.write('handoff.json',handoff);
-    this.write('edges.json',edges);this.write('done.json',{cases:matrix.length,richCases:rich.length,allRichPassed:rich.every(test=>test.layoutEqual&&test.displayEqual&&test.buttonsEqual&&test.savedClean&&(test.mode==='source'||test.answerClicks===2)),allLayoutsEqual:matrix.every(test=>test.layoutEqual),allDisplayEqual:matrix.every(test=>test.displayEqual),allSavedClean:matrix.every(test=>test.savedClean),edges,conflicts,iphoneTested:false,liveSyncTested:false,productionFixturePassed:production.every(row=>row.pass),handoffFixturePassed:handoff.every(row=>row.pass),productionActivated:false});
+    this.write('edges.json',edges);this.write('done.json',{cases:matrix.length,richCases:rich.length,allRichPassed:rich.every(test=>test.layoutEqual&&test.bodyEqual&&test.buttonsEqual&&test.savedClean&&(test.mode==='source'||test.answerClicks===2)),allLayoutsEqual:matrix.every(test=>test.layoutEqual),allResponseBodiesEqual:matrix.every(test=>test.bodyEqual),allSavedClean:matrix.every(test=>test.savedClean),edges,conflicts,iphoneTested:false,liveSyncTested:false,productionFixturePassed:production.every(row=>row.pass),handoffFixturePassed:handoff.every(row=>row.pass),productionActivated:false});
   }
 }

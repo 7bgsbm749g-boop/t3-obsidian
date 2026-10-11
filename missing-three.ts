@@ -2,7 +2,7 @@ import {contentHash} from './completion';
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
 import type {Root} from 'mdast';
-import {regionBody,startMarker,endMarker} from './inline-thread';
+import {inlineResponseRange,regionBody} from './inline-thread';
 import type {SelectionAnchor} from './inline-thread';
 import {findImageEmbeds} from './images';
 import type {LeaseRecord} from './inline-lease';
@@ -52,7 +52,7 @@ export function detectMissingThree(input:MissingThreeInput):MissingThreeResult {
     if(evidence.active){
       const region=regionBody(document,evidence.id);
       if(!region||region.body!==evidence.body){ambiguous=true;continue;}
-      matches.push({evidence,from:region.from-startMarker(evidence.id).length-1,to:region.to+endMarker(evidence.id).length+1});
+      matches.push({evidence,...inlineResponseRange(document,evidence.id)!});
       continue;
     }
     if(!evidence.body.trim())continue;

@@ -10,7 +10,7 @@ import {CoordinatedHost} from '../coordinated-host-desktop';
 import {InlineLeaseAuthority,InlineLeaseClient,leasePaths,COORDINATED_OWNER,type LeaseFiles} from '../inline-lease';
 import {HostedInlineWriter,hostedRequestHash,hostedPaths,type HostedInlineRequest,type HostedWriterIO} from '../hosted-inline';
 import {initialRegion} from '../inline-thread';
-import {responseAnchor} from '../native-response-projection';
+import {responseAnchor,responseRegion} from '../native-response-projection';
 import {contentHash} from '../completion';
 import {streamBlock,streamBlocks} from '../stream-block';
 import {DeviceResponseCompletion,type DeviceGeneration} from '../device-response-completion';
@@ -358,7 +358,7 @@ test('active repair preserves text typed inside the saved anchor as ordinary not
   await h.writer.tick();const anchor=responseAnchor(h.id);
   h.notes.set('Note.md',h.notes.get('Note.md')!.replace(anchor,anchor.replace('\n\n','its \n\n')));
   const before=h.notes.get('Note.md')!,result:any=await h.host.command('repair-response',h.id,contentHash(before));
-  assert.equal(result.restored,true);assert.ok(h.notes.get('Note.md')!.includes('its \n\n'+anchor));
+  assert.equal(result.restored,true);assert.ok(h.notes.get('Note.md')!.includes(responseRegion(before,h.id)!.body+anchor));
   assert.equal(await readFile(join(result.evidence,'before.md'),'utf8'),before);
   h.complete();await h.writer.tick();assert.equal((await h.host.journal.read(h.id))!.status,'verified');
   assert.ok(h.notes.get('Note.md')!.includes('its '));assert.ok(h.notes.get('Note.md')!.includes('Added **25kg**.'));

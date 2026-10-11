@@ -11,8 +11,9 @@ import {nativeResponses} from './native-response-manager';
 import {deviceNoteIO} from './inline-note-io';
 import {planNativeMigration} from './coordinated-migration';
 import {restoreResponseAnchor} from './response-anchor-recovery';
-import {responseAnchor,responseRegion,savedProjection} from './native-response-projection';
+import {responseAnchor,responseRegion,renderResponse,savedProjection} from './native-response-projection';
 import {regionBody,initialRegion,startMarker,endMarker} from './inline-thread';
+import {containsResponseBoundary} from './response-container';
 import {logFailure} from './diagnostics';
 import {streamBlock,removeStreamBlock} from './stream-block';
 import {hostedPaths,needsHostedProcessing,type HostedInlineRequest,type HostedInlineState,type HostedWriterIO} from './hosted-inline';
@@ -224,7 +225,7 @@ export class CoordinatedHost {
           if(!destination)continue;
           const destinationSaved=await this.app.vault.read(destination);
           const destinationRegion=responseRegion(destinationSaved,id);
-          if(!destinationRegion||destinationSaved.slice(destinationRegion.from,destinationRegion.to)!==responseAnchor(id))continue;
+          if(!destinationRegion||destinationSaved.slice(destinationRegion.from,destinationRegion.to)!==responseAnchor(id,destinationSaved))continue;
           const file=this.app.vault.getFileByPath(move.before);if(!file)continue;
           const saved=await this.app.vault.read(file);
           // A known rename plus the exact former saved snapshot proves this
@@ -314,7 +315,7 @@ export class CoordinatedHost {
         const file=this.app.vault.getFileByPath(notePath);if(!file)return;
         const saved=await this.app.vault.read(file),region=responseRegion(saved,id);
         if(!region)return;
-        const already=saved.slice(region.from,region.to)===responseAnchor(id);
+        const already=saved.slice(region.from,region.to)===responseAnchor(id,saved);
         const plan=already?undefined:planNativeMigration(record,saved);
         if(!already&&plan?.kind!=='planned')return;
         // No raw move: disagreeing or dirty native views delay migration.
@@ -371,7 +372,7 @@ export class CoordinatedHost {
         if(local?.request.deviceCompletion&&!local.state?.cleanupComplete){
           const journal=(await this.journal.inspect(local.request.id))!,document=journal.stagedDraft??journal.original;
           const region=responseRegion(document,local.request.id)!;
-          const displayed=document.slice(0,region.from)+startMarker(local.request.id)+'\n'+(local.state?.body??regionBody(initialRegion(local.request.id).text,local.request.id)!.body)+'\n'+endMarker(local.request.id)+document.slice(region.to);
+          const displayed=document.slice(0,region.from)+renderResponse(local.request.id,local.state?.body??regionBody(initialRegion(local.request.id).text,local.request.id)!.body,document)+document.slice(region.to);
           // The host keeps display/checkpoint work private. Ordinary staged
           // changes and the response are applied together by the granted writer.
           return change(displayed);
@@ -380,7 +381,7 @@ export class CoordinatedHost {
         // Historical removed/conflicted bindings can outlive their anchors.
         // Only anchors present in this note participate in its projection;
         // malformed present boundaries still fail the normal validation.
-        const responses=[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&!record.state?.cleanupComplete&&(record.state?.notePath??record.request.notePath)===path&&(saved.includes(startMarker(record.request.id))||saved.includes(endMarker(record.request.id)))).map(record=>({id:record.request.id,body:record.state?.body??regionBody(initialRegion(record.request.id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,record.request.id)!.body}));
+        const responses=[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&!record.state?.cleanupComplete&&(record.state?.notePath??record.request.notePath)===path&&containsResponseBoundary(saved,record.request.id)).map(record=>({id:record.request.id,body:record.state?.body??regionBody(initialRegion(record.request.id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,record.request.id)!.body}));
         const projection=this.projections.project(path,saved,responses),next=change(projection.display);
         // Ordinary selection consumption follows the normal checked save path;
         // generated response body changes are only local/journaled.
@@ -469,7 +470,7 @@ export class CoordinatedHost {
       const lease:LeaseRecord=JSON.parse(raw);
       if(lease.state?.finalSaved||lease.stopRequestedAt)throw Error('This response is already saved or canceled.');
       const region=responseRegion(chosen.document,id)!;
-      const plan=chosen.document.slice(region.from,region.to)===responseAnchor(id)?undefined:planNativeMigration(lease,chosen.document,{reviewedLocationConflict:true});
+      const plan=chosen.document.slice(region.from,region.to)===responseAnchor(id,chosen.document)?undefined:planNativeMigration(lease,chosen.document,{reviewedLocationConflict:true});
       if(plan&&plan.kind!=='planned')throw Error(`The selected response cannot be normalized: ${plan.reason} Preserve and review it before recovery.`);
       const evidence=join(this.journal.root,id,`location-recovery-${review.locationHash}`);await fs.mkdir(evidence,{recursive:true,mode:0o700});
       for(const candidate of review.locations)await fs.writeFile(join(evidence,contentHash(candidate.path)+'.md'),candidate.document,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});

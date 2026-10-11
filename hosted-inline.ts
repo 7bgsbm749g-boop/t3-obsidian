@@ -5,7 +5,7 @@ import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs,typ
 import {logEvent,logFailure} from './diagnostics';
 import {contentHash} from './completion';
 import {commandId} from './direct';
-import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,completionProof,hasCompletionProof,hasResponseMarkers,removeCompletionProof,endMarker,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,renameInlineHeader,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
+import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,completionProof,hasCompletionProof,hasResponseMarkers,removeCompletionProof,endMarker,inlineResponseRange,finalizeRegion,regionBody,inlineTurnMessages,renderInlineTurn,renameInlineHeader,replaceRegion,startMarker,turnForMessage,turnPhase} from './inline-thread';
 import {needsInlineHistory,readInlineSnapshot,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import {sameWorkspacePath} from './folder-link';
 import {rewriteReplyReferences,type ReplyReference} from './reply-assets';
@@ -40,6 +40,7 @@ export interface HostedInlineRequest {
   initialInput?:InitialInlineInput;
   independent?:boolean;
   nativeProjection?:boolean;
+  responseContainer?:boolean;
   /** Negotiated once, before dispatch. Its immutable original travels in a
    * private sidecar, keeping full notes out of frequently polled metadata. */
   deviceCompletion?:{version:1;actor:string;originalHash:string};
@@ -97,6 +98,7 @@ export function validateHostedRequest(value:any):HostedInlineRequest {
   if(value?.importTurn!==undefined){const turn=value.importTurn;if(value.version!==4||turn.messageId!==value.messageId||typeof turn.turnId!=='string'||!turn.turnId||turn.turnId.length>200||!['running','completed','interrupted','error','cancelled'].includes(turn.state)||!Number.isFinite(Date.parse(turn.requestedAt)))throw Error('Invalid imported run evidence.');}
   if(value?.replyFolders!==undefined)validateReplyFolders(value.replyFolders);
   if(value?.nativeProjection!==undefined&&typeof value.nativeProjection!=='boolean')throw Error('Invalid native projection preference.');
+  if(value?.responseContainer!==undefined&&(typeof value.responseContainer!=='boolean'||value.responseContainer&&!value.nativeProjection))throw Error('Invalid response container preference.');
   if(value?.deviceCompletion!==undefined&&(value.version!==4||value.nativeProjection!==true||value.deviceCompletion?.version!==1||!uuid.test(value.deviceCompletion.actor??'')||! /^[0-9a-f]{64}$/.test(value.deviceCompletion.originalHash??'')))throw Error('Invalid device completion registration.');
   validateDestinationSection(value?.destinationSection);
   if(value?.initialInput!==undefined&&(!uuid.test(value.initialInput?.messageId??'')||value.initialInput.messageId!==value.messageId||typeof value.initialInput.text!=='string'||!value.initialInput.text.trim()||value.initialInput.text.length>120_000||value.initialInput.label!==undefined&&(typeof value.initialInput.label!=='string'||value.initialInput.label.length>200)))throw Error('Invalid initial response input.');
@@ -518,9 +520,9 @@ export class HostedInlineWriter {
           if(!region){conflict=true;return document;}
           for(const input of state.steering??[]){
             if(!input.confirmed||!input.selection)continue;
-            const range=selectionRange(document,input.selection,{from:region.from-startMarker(request.id).length-1,to:region.to+endMarker(request.id).length+1});
+            const range=selectionRange(document,input.selection,inlineResponseRange(document,request.id));
             // A changed selection is preserved; never remove matching text elsewhere.
-            if(range&&(range.to<=region.from-startMarker(request.id).length-1||range.from>=region.to+endMarker(request.id).length+1)){
+            if(range&&(range.to<=inlineResponseRange(document,request.id)!.from||range.from>=inlineResponseRange(document,request.id)!.to)){
               document=document.slice(0,range.from)+document.slice(range.to);
               region=regionBody(document,request.id)!;
             }

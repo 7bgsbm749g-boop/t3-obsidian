@@ -1,3 +1,4 @@
+import {insideResponse} from './response-container';
 import type {InlineActivity} from './inline-thread';
 import {parseQuestionToken,questionKey,questionToken,type QuestionTarget} from './questions';
 import {markdownCodeRanges} from './reply-html';
@@ -54,7 +55,7 @@ export function clearApprovalControls(document:string,target?:ApprovalTarget):st
   const code=markdownCodeRanges(document);
   for(const match of [...document.matchAll(/^<!-- t3-approval:start:([^\n]+) -->\n([\s\S]*?)\n<!-- t3-approval:end:\1 -->$/gm)].reverse()){
     const parsed=parseQuestionToken(match[1]);if(!parsed||target&&approvalKey(parsed)!==approvalKey(target)||code.some(([from,to])=>match.index!>=from&&match.index!<to))continue;
-    if(target&&document.lastIndexOf('<!-- t3-inline:start:',match.index)>document.lastIndexOf('<!-- t3-inline:end:',match.index))continue;
+    if(target&&insideResponse(document,match.index!))continue;
     const body=match[2].replace(/^Action needed: Command approval requested \[Approve\]\(t3-approval:[^\s)]+\) \[Deny\]\(t3-approval:[^\s)]+\)$/m,'Command approval request');
     document=document.slice(0,match.index)+body+document.slice(match.index!+match[0].length);
   }

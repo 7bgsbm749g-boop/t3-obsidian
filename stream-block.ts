@@ -1,7 +1,7 @@
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
 import {contentHash} from './completion';
-import {markdownCodeRanges} from './reply-html';
+import {responseBoundaries} from './response-container';
 
 export interface StreamBlock {key:string;from:number;to:number;text:string;complete:boolean;tracked:boolean}
 const parser=unified().use(remarkParse);
@@ -13,7 +13,7 @@ const maxCachedCharacters=2_000_000;
 export function streamBlocks(document:string):StreamBlock[] {
   const cached=cache.get(document);if(cached)return cached;
   const blocks:StreamBlock[]=[];
-  const codeRanges=markdownCodeRanges(document);
+  const boundaries=responseBoundaries(document);
   for(const node of parser.parse(document).children){
     if(node.type!=='blockquote')continue;
     const from=node.position?.start.offset,to=node.position?.end.offset;if(from===undefined||to===undefined)continue;
@@ -22,8 +22,7 @@ export function streamBlocks(document:string):StreamBlock[] {
     const key=/<span class="send-to-t3-fold-key" data-t3-fold="([^"]+)"><\/span>/.exec(header)?.[1];if(!key)continue;
     // Tracking lines disappear only after the saved result is adopted. A
     // terminal-looking direct preview must never offer a destructive action.
-    const markers=[...document.slice(0,from).matchAll(/^<!-- t3-(?:inline|response):(start|end):([0-9a-f-]{36}) -->$/gm)];
-    const open=new Set<string>();for(const marker of markers){if(codeRanges.some(([start,end])=>marker.index!>=start&&marker.index!<end))continue;if(marker[1]==='start')open.add(marker[2]);else open.delete(marker[2]);}
+    const open=new Set<string>();for(const boundary of boundaries){if(boundary.from>=from)break;if(boundary.kind==='start')open.add(boundary.id);else open.delete(boundary.id);}
     blocks.push({key,from,to,text,complete:key.endsWith(':complete'),tracked:open.size>0});
   }
   if(document.length<=maxCachedCharacters){

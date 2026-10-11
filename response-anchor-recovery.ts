@@ -4,7 +4,7 @@ import {responseAnchor,responseRegion} from './native-response-projection';
  * Missing anchors require the exact journaled deletion preimage. Text found
  * inside intact boundaries moves outside them without losing any bytes. */
 export function restoreResponseAnchor(id:string,original:string,saved:string):string {
-  const current=responseRegion(saved,id),anchor=responseAnchor(id);
+  const current=responseRegion(saved,id),anchor=responseAnchor(id,original);
   if(current){
     if(saved.slice(current.from,current.to)===anchor)return saved;
     return saved.slice(0,current.from)+current.body+anchor+saved.slice(current.to);

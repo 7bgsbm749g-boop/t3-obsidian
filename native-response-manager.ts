@@ -1,4 +1,5 @@
 import {contentHash} from './completion';
+import {responseIds,containsResponseBoundary} from './response-container';
 import {stoppedResponseBody} from './response-stop';
 import {failedStreamBody} from './t3-response-limits';
 import type {App,MarkdownView} from 'obsidian';
@@ -159,9 +160,9 @@ export class NativeResponseManager {
     for(const leaf of this.app.workspace.getLeavesOfType('markdown')){
       const view=leaf.view as MarkdownView;if(!view.file||typeof view.getViewData!=='function')continue;
       const saved=this.reconnectDocument(view);
-      for(const match of saved.matchAll(/<!-- t3-inline:start:([0-9a-f-]{36}) -->/g)){
-        const region=responseRegion(saved,match[1]);
-        if(region&&saved.slice(region.from,region.to)===responseAnchor(match[1]))ids.push(match[1]);
+      for(const id of responseIds(saved)){
+        const region=responseRegion(saved,id);
+        if(region&&saved.slice(region.from,region.to)===responseAnchor(id,saved))ids.push(id);
       }
     }
     for(const receipt of this.completionIdentities.values())if(!this.deviceCommits.has(receipt.id)&&[...this.views].some(([view])=>view.file?.path===receipt.path&&!!responseRegion(this.reconnectDocument(view),receipt.id)))ids.push(receipt.id);
@@ -289,7 +290,7 @@ export class NativeResponseManager {
     for(const record of this.records.values()){
       const delivery=record.state?.delivery,id=record.request.id,proof=this.proofs.get(id);
       if(!pending.has(id)||record.state?.notePath!==path||!record.state.cleanupComplete||!delivery)continue;
-      if((document.includes(startMarker(id))||document.includes(endMarker(id)))&&responseRegion(document,id))continue;
+      if(containsResponseBoundary(document,id)&&responseRegion(document,id))continue;
       if(hash===delivery.hash||proof?.commitId===delivery.commitId&&proof.hash===delivery.hash&&nativeCommitMatches(proof,document))ids.push(id);
     }
     // A single incoming file can finish several responses. Do not retire one
@@ -326,7 +327,7 @@ export class NativeResponseManager {
   private normalize(path:string,document:string){
     const ids=[...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===path).map(record=>record.request.id);
     ids.push(...[...this.provisional].filter(([,item])=>item.path===path).map(([id])=>id));
-    for(const id of new Set(ids)){if(this.deviceCommits.has(id)||!document.includes(startMarker(id))&&!document.includes(endMarker(id)))continue;const region=responseRegion(document,id);if(region)document=document.slice(0,region.from)+responseAnchor(id)+document.slice(region.to);}
+    for(const id of new Set(ids)){if(this.deviceCommits.has(id)||!containsResponseBoundary(document,id))continue;const region=responseRegion(document,id);if(region)document=document.slice(0,region.from)+responseAnchor(id,document)+document.slice(region.to);}
     return document;
   }
   private wrap(view:MarkdownView,saved=view.getViewData()){
@@ -372,16 +373,16 @@ export class NativeResponseManager {
         for(const entry of [...this.cached.values()]){
           if(!this.reconnecting.has(entry.id)||entry.notePath!==view.file.path)continue;
           const region=responseRegion(saved,entry.id);
-          if(!region||saved.slice(region.from,region.to)!==responseAnchor(entry.id)){this.forgetPreview(entry.id);continue;}
+          if(!region||saved.slice(region.from,region.to)!==responseAnchor(entry.id,saved)){this.forgetPreview(entry.id);continue;}
           if(!this.records.has(entry.id)&&!responses.some(response=>response.id===entry.id))responses.push({id:entry.id,body:this.titled(entry.id,entry.body)});
         }
         for(const record of this.records.values()){
           if(isCompletedLeaseIndex(record)||record.responseRemovedAt!==undefined||(record.state?.notePath??record.request.notePath)!==view.file.path)continue;
           const id=record.request.id;
           if(this.deviceCommits.has(id))continue;
-          if(!saved.includes(startMarker(id))&&!saved.includes(endMarker(id)))continue;
+          if(!containsResponseBoundary(saved,id))continue;
           const region=responseRegion(saved,id);
-          if(!region||saved.slice(region.from,region.to)!==responseAnchor(id))continue;
+          if(!region||saved.slice(region.from,region.to)!==responseAnchor(id,saved))continue;
           if(record.state?.cleanupComplete&&adapter?.hasMaterialized(id))continue;
           const body=(record.state?.cleanupComplete?record.state.finalBody:undefined)??record.finalWriter?.body??this.streams.get(id)?.body??record.state?.body??regionBody(initialRegion(id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,id)!.body;
           const cached=this.cached.get(id),restoring=!record.finalWriter&&cached&&this.reconnecting.has(id)&&previewMatches(cached,record);

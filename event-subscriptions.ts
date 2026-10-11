@@ -1,3 +1,4 @@
+import {responseIds,containerStart,responseFrame} from './response-container';
 import {EventActionSkipped,validateEventAction,type EventAction,type ActionPlan} from './event-actions';
 import {jobEvents,validateJob,type JobWatch,type JobEvent,type JobObservation} from './job-lifecycle';
 import {STREAM_COMMANDS,validateDisplayCommand,displayCommand,tickDisplay,renameDisplays,type ThreadDisplayCommand,type ThreadDisplay,type DisplayHost} from './thread-display';
@@ -73,6 +74,10 @@ export function validateEventCommand(value:any):EventSubscriptionCommand {
   return value;
 }
 export function eventContent(content:string):string {
+  for(const id of responseIds(content)){
+    if(!content.includes(containerStart(id)))continue;
+    try{const frame=responseFrame(content,id);if(frame)content=content.slice(0,frame.from)+content.slice(frame.to+(content[frame.to]==='\n'?1:0));}catch{/* Ambiguous content remains observable. */}
+  }
   // Stream insertions and completed replies never become note-change events.
   const code=content.includes('<!-- t3-')?markdownCodeRanges(content):[];
   return content.replace(/<!-- t3-(inline|response):start:([^\s]+) -->[\s\S]*?<!-- t3-\1:end:\2 -->(?:\r?\n)?/g,(text,_kind,_id,offset:number)=>code.some(([from,to])=>offset>=from&&offset<to)?text:'').replace(/\n+$/,'');

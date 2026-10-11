@@ -1,5 +1,6 @@
 /** Conservative three-way text merge. Offsets always refer to the original
  * saved document, never to a native view containing transient output. */
+import {responseBoundaries} from './response-container';
 export interface SavedEdit {from:number;to:number;text:string;preserveBoundaryInsertions?:boolean}
 export type MergeResult={ok:true;text:string;edits:SavedEdit[]}|{ok:false;reason:string};
 
@@ -17,10 +18,19 @@ export function changedInterval(before:string,after:string):SavedEdit|undefined 
  * Reordered or repeated anchors fall back to one conservative interval. */
 export function changedEdits(before:string,after:string):SavedEdit[]{
   if(before===after)return [];
-  const lines=(text:string)=>{let offset=0;return (text.match(/[^\n]*\n|[^\n]+$/g)??[]).map(text=>{const line={text,from:offset};offset+=text.length;return line;});};
-  const left=lines(before),right=lines(after),count=(items:typeof left)=>{const counts=new Map<string,number>();for(const line of items)counts.set(line.text,(counts.get(line.text)??0)+1);return counts;};
-  const a=count(left),b=count(right),rightByText=new Map(right.map(line=>[line.text,line]));
-  const anchors=left.filter(line=>line.text.trim()&&a.get(line.text)===1&&b.get(line.text)===1).map(line=>({left:line,right:rightByText.get(line.text)!}));
+  const lines=(document:string)=>{
+    // A container's generic closing tag belongs to its exact opening ID.
+    // Matching it to another response's closer would invent an unchanged line
+    // across a final save plus an independent registration.
+    const closing=document.includes('data-t3-response=')?responseBoundaries(document).filter(boundary=>boundary.format==='container'&&boundary.kind==='end'):[];
+    let offset=0;return (document.match(/[^\n]*\n|[^\n]+$/g)??[]).map(text=>{
+      const boundary=closing.find(boundary=>boundary.from>=offset&&boundary.to<=offset+text.length),key=JSON.stringify([boundary?.id??null,text]);
+      const line={text,key,from:offset};offset+=text.length;return line;
+    });
+  };
+  const left=lines(before),right=lines(after),count=(items:typeof left)=>{const counts=new Map<string,number>();for(const line of items)counts.set(line.key,(counts.get(line.key)??0)+1);return counts;};
+  const a=count(left),b=count(right),rightByText=new Map(right.map(line=>[line.key,line]));
+  const anchors=left.filter(line=>line.text.trim()&&a.get(line.key)===1&&b.get(line.key)===1).map(line=>({left:line,right:rightByText.get(line.key)!}));
   if(anchors.some((anchor,index)=>index&&anchor.right.from<anchors[index-1].right.from))return [changedInterval(before,after)!];
   const edits:SavedEdit[]=[];let l=0,r=0;
   for(const anchor of [...anchors,{left:{from:before.length,text:''},right:{from:after.length,text:''}}]){
