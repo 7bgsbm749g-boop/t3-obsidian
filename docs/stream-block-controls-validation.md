@@ -6,13 +6,23 @@ inline style, and retains the existing header alignment. Active history has no
 edit or close action. A terminal preview is insufficient: the unique completed
 fold must exist in the saved document outside tracking markers.
 
-The close command checks the note path, fold key and exact history checksum.
-The host verifies its original committed result and every generated range,
-including staged note changes. It journals a removal intent before a checked
-save and publishes a new immutable delivery proof after readback. The original
-response and commit remain in the private journal. The final answer and other
-responses remain in the note. Recovery uses the shortened proof after a known
-completed rename; unrelated note edits remain permitted.
+After the final save, the history and final answer are ordinary Markdown.
+The close button checks the unique completed fold in the current saved and
+displayed editor documents, then deletes only its displayed Markdown range
+through Obsidian's normal editor transaction. Native autosave and Sync carry
+the change. Native Undo and Redo retain their normal behavior. No response host,
+connection, command, lease update, journal mutation or new delivery proof is
+required. The final answer, other responses and unsaved ordinary edits remain.
+
+Live Preview's compact tool summaries keep their rendering backing within the
+native view so Undo can restore the full Markdown tool output after deletion.
+Whole completed groups can be removed as ordinary text; partial compact-shell
+edits remain rejected to prevent saving a display reference without its output.
+Source mode exposes the complete editable Markdown. Existing completion replay
+identities prevent a delayed delivery from overwriting later user edits.
+
+The legacy host history-removal protocol remains readable for existing records
+and older clients. The current button does not call that protocol.
 
 Capture listeners stop Live Preview's mouse cursor handler over generated
 history without cancelling browser default selection. Ordinary callouts and

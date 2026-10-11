@@ -4,7 +4,7 @@ import type {Extension,Transaction as CMTransaction} from '@codemirror/state';
 import {changedEdits,changedInterval,mergeSavedEdits} from './coordinated-merge';
 import {advanceProjection,projectResponses,savedProjection,savedToDisplay,responseRegion,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
 import {ResponseScroll} from './response-scroll';
-import {presentToolGroups,restoreToolGroups,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,canonicalToolGroup,type ToolPresentation} from './response-tool-presentation';
+import {presentToolGroups,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,canonicalToolGroup,type ToolPresentation} from './response-tool-presentation';
 import {toolDisplayOffset} from './response-tool-presentation';
 import {startMarker} from './inline-thread';
 
@@ -26,6 +26,9 @@ export class NativeResponseView {
   private projection:ResponseProjection;
   private responses:LocalResponse[]=[];
   private savedTools:ToolPresentation={canonical:'',display:'',groups:[]};
+  // View-local rendering backing follows native undo history. Completed tool
+  // groups can be deleted and restored without any response-host operation.
+  private savedToolHistory=new Map<string,{canonical:string;placeholder:string;count:number}>();
   private responseTools=new Map<string,ToolPresentation>();
   private compactTools=true;
   private base:string;
@@ -82,28 +85,42 @@ export class NativeResponseView {
     view.getViewData=this.getWrapper;view.setViewData=this.setWrapper;view.save=this.saveWrapper;view.requestSave=this.requestSaveWrapper;
   }
   responseBody(id:string){return this.responses.find(response=>response.id===id)?.body??regionBody(this.displayed(),id)?.body;}
-  toolGroup(ref:string){return canonicalToolGroup(this.savedTools,ref)??[...this.responseTools.values()].map(presentation=>canonicalToolGroup(presentation,ref)).find(body=>body!==undefined);}
-  private canonicalOffset(display:string,offset:number,presentation=this.savedTools){
+  toolGroup(ref:string){return this.savedToolHistory.get(ref)?.canonical??[...this.responseTools.values()].map(presentation=>canonicalToolGroup(presentation,ref)).find(body=>body!==undefined);}
+  private canonicalOffset(display:string,offset:number){
     const compact=compactToolGroups(display);let shift=0;
-    if(compact.length!==presentation.groups.length)throw new ProjectionConflict('The retained tool summary is missing.');
-    for(let index=0;index<compact.length;index++){const actual=compact[index],group=presentation.groups[index];if(actual.text!==group.placeholder)throw new ProjectionConflict('The retained tool summary changed.');if(offset<=actual.from)break;if(offset<actual.to)throw new ProjectionConflict('The saved offset is inside a tool summary.');shift+=(group.canonicalTo-group.canonicalFrom)-(actual.to-actual.from);}
+    for(const actual of compact){const group=this.savedToolHistory.get(actual.ref);if(!group||actual.text!==group.placeholder)throw new ProjectionConflict('The retained tool summary changed.');if(offset<=actual.from)break;if(offset<actual.to)throw new ProjectionConflict('The saved offset is inside a tool summary.');shift+=group.canonical.length-(actual.to-actual.from);}
     return offset+shift;
   }
+  private restoreSavedTools(display:string,presentation=this.savedTools){
+    if(display===presentation.display)return presentation.canonical;
+    let cursor=0;const parts:string[]=[],counts=new Map<string,number>();
+    for(const actual of compactToolGroups(display)){
+      const group=this.savedToolHistory.get(actual.ref),count=(counts.get(actual.ref)??0)+1;counts.set(actual.ref,count);
+      if(!group||!actual.complete||actual.text!==group.placeholder||count>group.count)throw new ProjectionConflict('The retained tool summary changed or was copied.');
+      parts.push(display.slice(cursor,actual.from),group.canonical);cursor=actual.to;
+    }
+    parts.push(display.slice(cursor));return parts.join('');
+  }
   private canonicalProjection(projection:ResponseProjection,presentation=this.savedTools):ResponseProjection {
-    const saved=restoreToolGroups(projection.saved,presentation);
-    return {...projection,saved,ranges:projection.ranges.map(range=>({...range,savedFrom:this.canonicalOffset(projection.saved,range.savedFrom,presentation),savedTo:this.canonicalOffset(projection.saved,range.savedTo,presentation)}))};
+    const saved=this.restoreSavedTools(projection.saved,presentation);
+    return {...projection,saved,ranges:projection.ranges.map(range=>({...range,savedFrom:this.canonicalOffset(projection.saved,range.savedFrom),savedTo:this.canonicalOffset(projection.saved,range.savedTo)}))};
   }
   private buildProjection(saved:string,responses:readonly LocalResponse[]):ResponseProjection {
     assertCanonicalToolGroups(saved);for(const response of responses)assertCanonicalToolGroups(response.body);
     const compact=(this.view as any).getState?.().source!==true;
     const savedTools=compact?presentToolGroups(saved):{canonical:saved,display:saved,groups:[]},responseTools=new Map<string,ToolPresentation>();
+    const counts=new Map<string,number>();
+    for(const group of savedTools.groups){
+      const count=(counts.get(group.ref)??0)+1;counts.set(group.ref,count);
+      this.savedToolHistory.set(group.ref,{canonical:saved.slice(group.canonicalFrom,group.canonicalTo),placeholder:group.placeholder,count:Math.max(count,this.savedToolHistory.get(group.ref)?.count??0)});
+    }
     const displayed=responses.map(response=>{const presentation=compact?presentToolGroups(response.body):{canonical:response.body,display:response.body,groups:[]};responseTools.set(response.id,presentation);return {...response,body:presentation.display};});
     const projection=this.canonicalProjection(projectResponses(savedTools.display,displayed),savedTools);
     this.savedTools=savedTools;this.responseTools=responseTools;this.compactTools=compact;
     this.checkedDocuments=new WeakMap();
     return projection;
   }
-  private restoreSaved(display:string){return restoreToolGroups(savedProjection(display,this.projection),this.savedTools);}
+  private restoreSaved(display:string){return this.restoreSavedTools(savedProjection(display,this.projection));}
   private displayed(){return this.originalGet.call(this.view);}
   saved():string {
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
@@ -198,7 +215,7 @@ export class NativeResponseView {
     // pairs still take the preserved-conflict path below.
     if(this.projection.ranges.length){try{incoming=savedProjection(incoming,this.projection);}catch{/* Final materialization or damaged boundaries: retain exact incoming bytes. */}}
     if(compactToolGroups(incoming).length){
-      try{incoming=restoreToolGroups(incoming,this.savedTools);}catch(error){
+      try{incoming=this.restoreSavedTools(incoming);}catch(error){
         const local=this.saved();let canonical=local,unsafeIncoming=true;
         try{canonical=recoverToolGroups(incoming,this.savedTools);assertCanonicalToolGroups(canonical);projectResponses(canonical,this.responses);unsafeIncoming=false;}catch{/* Retain the save boundary until recovery or a file switch. */}
         this.block({base:this.base,local,incoming:canonical,attemptedIncoming,unsafeIncoming,reason:error instanceof Error?error.message:String(error)});return;
@@ -311,6 +328,7 @@ export class NativeResponseView {
     if(this.view.setViewData===this.setWrapper)this.view.setViewData=this.originalSet;
     if(this.view.save===this.saveWrapper)this.view.save=this.originalSave;
     if(this.view.requestSave===this.requestSaveWrapper)this.view.requestSave=this.originalRequestSave;
+    this.savedToolHistory.clear();
     this.disposed=true;
   }
   private block(record:NativeViewConflict){this.scroll.suspend();this.blocked=record;this.conflict(record);}
@@ -384,6 +402,10 @@ export class NativeResponseView {
     const cm=(this.view.editor as any)?.cm;
     if(!cm?.state||cm.state!==transaction.startState)return transaction;
     try{
+      // A compact shell is presentation, not editable output. Ordinary edits
+      // may remove its whole range; partial edits would lose retained bytes.
+      const groups=compactToolGroups(transaction.startState.doc.toString());
+      transaction.changes.iterChangedRanges((from,to)=>{if(groups.some(group=>from<group.to&&to>group.from&&!(from<=group.from&&to>=group.to)||from===to&&from>group.from&&from<group.to))throw new ProjectionConflict('The retained tool summary is only partly edited.');});
       let projection=this.checkedDocuments.get(transaction.startState.doc);
       if(!projection){const current=transaction.startState.doc.toString();projection=current===this.projection.display?this.projection:this.buildProjection(this.restoreSaved(current),this.responses);this.checkedDocuments.set(transaction.startState.doc,projection);}
       this.checkedDocuments.set(transaction.newDoc,this.canonicalProjection(advanceProjection(transaction,projection)));return transaction;

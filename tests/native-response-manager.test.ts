@@ -67,6 +67,17 @@ test('a reopened observer pane with a proven saved result also rejects late stal
  h.views[0].setViewData(before);assert.equal(h.conflicts.length,1);assert.equal(h.conflicts[0].local,final);assert.equal(h.conflicts[0].incoming,before);h.manager.dispose();
 });
 
+test('ordinary edits to an adopted completed response survive repeated delivery and late stream events',async()=>{
+ const h=fixture(),proof=evidence(),done=completed();done.state!.delivery!.proofHash=proof.proofHash;
+ h.edit(final);h.disk(final);await h.manager.receive(done,proof.bytes);
+ const edited=final.replace(body,'User edited the completed answer.');h.edit(edited);h.disk(edited);
+ await h.manager.receive(done,proof.bytes);
+ h.manager.stream({request:done.request,messageId:done.request.messageId,sequence:999,body:'Late response text',phase:'complete',completionVerified:true});
+ h.manager.refresh();await h.manager.changed('Note.md');
+ assert.equal(h.views[0].getViewData(),edited);assert.equal(h.visible(),edited);assert.equal(h.conflicts.length,0);h.manager.dispose();
+ h.manager.refresh();assert.equal(h.visible(),edited);
+});
+
 async function previewCheckpoint(){
   const h=fixture(2);let saved:unknown;
   h.manager.configurePreviewCache('vault',undefined,async value=>{saved=structuredClone(value);});

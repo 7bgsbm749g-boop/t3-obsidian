@@ -317,7 +317,7 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.openImportStreams(file).catch(error=>new Notice(`T3 streams: ${message(error)}`,10000));return true;
     }});
     if(typeof document.querySelectorAll==='function')this.register(installResponsePresentation(document,setIcon));
-    if(typeof document.querySelectorAll==='function')this.register(installStreamBlockControls(this.app,document,command=>this.executeAgentCommand(command),setIcon,error=>new Notice(`T3: ${message(error)}`,10000)));
+    if(typeof document.querySelectorAll==='function')this.register(installStreamBlockControls(this.app,document,setIcon,error=>new Notice(`T3: ${message(error)}`,10000)));
     const questionStorage=`${this.localKey}-questions-${this.settings.vaultId}`;
     this.questions=new QuestionController(environmentId=>this.inlineThreadAccess(environmentId),{load:()=>{const saved=this.app.loadLocalStorage(questionStorage);return Array.isArray(saved)?saved:[];},save:records=>this.app.saveLocalStorage(questionStorage,records)},randomId);
     const approvalStorage=`${this.localKey}-approvals-${this.settings.vaultId}`;

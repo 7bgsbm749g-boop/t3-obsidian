@@ -205,6 +205,8 @@ The open note receives reply text directly from T3 as soon as its response is re
 
 A receiving editor can get the final note before its completion receipt. It preserves the local and incoming versions and waits for verified completion instead of opening a conflict dialog for the expected marker removal. Matching verified bytes finish the response and close an obsolete recovery dialog. A changed generated range or an actual overlapping edit still requires recovery. Changes immediately outside an intact, uniquely identified response, including removal of adjacent blank lines, are merged without changing the response. A stored local conflict is reported once per distinct preserved version; a never-written result can resume when its current edits are proven separate.
 
+After the final response is saved and its tracking markers are removed, its text is ordinary Markdown. The completed history's **Remove streaming block** button deletes only that block through the local editor, keeping the final answer and other note text. It works without the response host or T3 connection, requires no tracking update, and supports normal Undo, Redo, autosave and Obsidian Sync.
+
 Manually sending a note with **Open in T3 Code** or palette **Send to T3 Code** appends a streamed reply at the end of that note. A typed palette question also appends its reply at the end. The plugin opens the note in a Markdown tab if needed. A full-note send captures its content before inserting the response and sends that content and its images to T3. A streamed note stays in place even if archive or delete is selected under **When task completes**. Changing the switch affects new sends; an already active response continues to completion or until stopped.
 
 ## Ask T3 inline
