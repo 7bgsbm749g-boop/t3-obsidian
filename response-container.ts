@@ -12,6 +12,9 @@ export interface ResponseFrame {from:number;to:number;bodyFrom:number;bodyTo:num
 export function responseBoundaries(document:string):ResponseBoundary[]{
   if(!document.includes('<!-- t3-')&&!document.includes('data-t3-response='))return [];
   const code=markdownCodeRanges(document),boundaries:ResponseBoundary[]=[],sections:Array<ResponseBoundary|undefined>=[];
+  // Native tool groups store escaped commands/output in HTML code elements.
+  // Their literal directive text must not close the enclosing live response.
+  for(const match of document.matchAll(/<(pre|code)\b[^>]*>[\s\S]*?<\/\1\s*>/gi))code.push([match.index!,match.index!+match[0].length]);
   const expression=/<!-- t3-(inline|response):(start|end):([a-z0-9-]+) -->|:::[A-Za-z][\w-]* data-t3-response="[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"|:::\/send-to-t3-response/g;
   for(const match of document.matchAll(expression)){
     const from=match.index!,to=from+match[0].length;

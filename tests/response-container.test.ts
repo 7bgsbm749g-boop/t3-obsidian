@@ -60,6 +60,14 @@ test('finished answers can describe container IDs and literal syntax without int
 test('a generated stray closer cannot truncate the validated projection frame',()=>{
   assert.throws(()=>projectResponses(responseAnchor(id),[{id,body:'Before\n\n'+containerEnd+'\n\nAfter'}]),/boundaries|container/i);
 });
+test('literal container syntax in native tool code is not a response boundary',()=>{
+  const body='<details><summary>Tool</summary><pre><code>'+containerBody(other,'Literal example')+'</code></pre></details>';
+  const projection=projectResponses(responseAnchor(id),[{id,body}]);
+  assert.equal(responseFrame(projection.display,id)?.body,body);
+  assert.deepEqual(responseIds(projection.display),[id]);
+  assert.equal(savedProjection(projection.display,projection),responseAnchor(id));
+  assert.doesNotThrow(()=>validateFinalResponseBody(body));
+});
 test('literal legacy markers do not change container format, and legacy repair retains its original anchor',()=>{
   const example='```html\n'+legacy(id)+'\n```\n\n',saved=example+responseAnchor(id);
   const projection=projectResponses(saved,[{id,body:'Reply'}]);
