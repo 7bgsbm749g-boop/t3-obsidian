@@ -45,17 +45,17 @@ export async function productionNative(app:App,root:string){
     views[1].editor.replaceRange('\nTail edit',views[1].editor.offsetToPos(views[1].editor.getValue().length));await views[1].save();await pause(300);
     rows.push({name:'production-concurrent-ordinary-views',pass:(await app.vault.read(file)).includes('Prefix edit')&&(await app.vault.read(file)).includes('Tail edit')&&views.every(view=>view.editor.getValue().includes('Prefix edit')&&view.editor.getValue().includes('Tail edit'))});
     const current=views[0].editor.getValue(),at=current.indexOf('Outside content');views[0].editor.replaceRange('User tail',views[0].editor.offsetToPos(at),views[0].editor.offsetToPos(at+15));await writer.tick();(views[0].editor as any).undo();const undone=!views[0].editor.getValue().includes('User tail');(views[0].editor as any).redo();const redone=views[0].editor.getValue().includes('User tail');await views[0].save();await pause(300);rows.push({name:'production-stream-update-undo-redo',pass:undone&&redone});
-    // Native unsaved pane disagreement cannot be converted to a host commit.
-    // Hold autosave during this bounded check so slow staging IO cannot make
-    // the deliberately dirty precondition disappear before the host compares.
-    const saves=views.map(view=>view.save);views.forEach(view=>{view.save=async()=>{};});
-    views[1].editor.replaceRange('\nUnsaved pane',views[1].editor.offsetToPos(views[1].editor.getValue().length));
     const stage:any=await host.command('stage-note-edit',binding.id);const staged=(await fs.readFile(stage.stagingPath,'utf8')).replace('| Exercise | 20kg |','| Exercise | 20kg | 25kg |').replace('| --- | ---: |','| --- | ---: | ---: |').replace('| Barb | 20 |','| Barb | 20 | |');await fs.writeFile(stage.stagingPath,staged);await host.command('submit-note-edit',binding.id,stage.originalHash);
-    complete=true;await writer.tick();rows.push({name:'production-dirty-pane-delays-final-save',pass:(await host.journal.read(binding.id))!.status==='commit-pending'&&!(await app.vault.read(file)).includes('Added **25kg**.')});
+    // Wait for the real quiet polling cadence before creating the unsaved
+    // edit. The final save may merge compatible edits; it must preserve them.
+    await pause(3100);
+    views[1].editor.replaceRange('\nUnsaved pane',views[1].editor.offsetToPos(views[1].editor.getValue().length));
+    const dirtyPrecondition={disk:await app.vault.read(file),views:views.map(view=>view.getViewData())};
+    complete=true;await writer.tick();const firstCompletionStatus=(await host.journal.read(binding.id))!.status;
     const dirtyBeforeSave=views.map(view=>({saved:view.getViewData(),display:view.editor.getValue()}));
-    views.forEach((view,index)=>{view.save=saves[index];});await views[1].save();
-    // The failed checked save schedules a five-second retry. Let the ordinary
-    // writer cadence reach that retry after the dirty pane has saved.
+    await views[1].save();
+    // Allow the ordinary five-second retry if pane changes deferred the first
+    // attempt, then check the exact final document and retained ordinary edit.
     await pause(5200);
     const dirtyAfterSave={disk:await app.vault.read(file),views:views.map(view=>({saved:view.getViewData(),display:view.editor.getValue()}))};await writer.tick();
     await fs.writeFile(path.join(root,'production-trace.json'),JSON.stringify(trace,null,2));
@@ -64,7 +64,8 @@ export async function productionNative(app:App,root:string){
     let result=await host.journal.read(binding.id);
     if(result?.status==='conflict')await host.command('repair-response',binding.id,contentHash(await app.vault.read(file)));
     await writer.tick();await pause(300);result=await host.journal.read(binding.id);
-    const saved=await app.vault.read(file);rows.push({name:'production-staged-table-plus-final-native-save',pass:result?.status==='verified'&&saved.includes('| Barb | 20 | |')&&saved.includes('Added **25kg**.')&&!saved.includes('Checking')&&!saved.includes(binding.id)&&saved.includes('Prefix edit')&&saved.includes('Tail edit')&&saved.includes('Unsaved pane'),commitId:result?.verified?.commitId,hash:result?.verified?.hash,saved,dirtyBeforeSave,dirtyAfterSave});
+    const saved=await app.vault.read(file);rows.push({name:'production-compatible-unsaved-pane-preserved-on-final-save',pass:!dirtyPrecondition.disk.includes('Unsaved pane')&&dirtyPrecondition.views.some(value=>value.includes('Unsaved pane'))&&result?.status==='verified'&&saved.includes('Unsaved pane')&&saved.includes('Added **25kg**.'),firstCompletionStatus,dirtyPrecondition});
+    rows.push({name:'production-staged-table-plus-final-native-save',pass:result?.status==='verified'&&saved.includes('| Barb | 20 | |')&&saved.includes('Added **25kg**.')&&!saved.includes('Checking')&&!saved.includes(binding.id)&&saved.includes('Prefix edit')&&saved.includes('Tail edit')&&saved.includes('Unsaved pane'),commitId:result?.verified?.commitId,hash:result?.verified?.hash,saved,dirtyBeforeSave,dirtyAfterSave});
     rows.push({name:'production-finished-two-views',pass:views.every(view=>view.getViewData()===saved&&view.editor.getValue().includes('Independent second response.')&&!view.editor.getValue().includes('Checking'))});
     rows.push({name:'production-malformed-historical-mirror-isolated',pass:result?.status==='verified'&&saved.includes('t3-inline:end:'+historical)});
     const record=JSON.parse(bytes.get(leasePaths(directory,binding.id).record)!);if(result?.verified)await client.command({kind:'observe',jobId:binding.id,observed:{commitId:result.verified.commitId,hash:contentHash(saved)}});await host.scan();rows.push({name:'production-acknowledged-saved-read',pass:(await host.journal.read(binding.id))!.acknowledgements.length===1,delivery:record.state?.delivery});

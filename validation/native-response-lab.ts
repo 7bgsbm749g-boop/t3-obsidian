@@ -72,7 +72,7 @@ export default class NativeResponseLab extends Plugin {
         for(const v of [ref,view]){v.editor.scrollTo(0,0);if(progress==='collapse')for(const el of Array.from(v.contentEl.querySelectorAll<HTMLElement>('.callout.is-collapsed .callout-title')))el.click();}
         await pause(120);const selector=mode==='reading'?'.markdown-preview-sizer':'.cm-content';
         const actual=inspect(view.contentEl.querySelector<HTMLElement>(selector)!),expected=inspect(ref.contentEl.querySelector<HTMLElement>(selector)!);
-        const name=[width,mode,phase,progress,format].join('-');matrix.push({name,actual,expected,layoutEqual:JSON.stringify(actual)===JSON.stringify(expected),displayEqual:view.editor.getValue()===ref.editor.getValue(),bodyEqual:regionBody(view.editor.getValue(),id)?.body===regionBody(ref.editor.getValue(),id)?.body,savedClean:await app.vault.adapter.read('Virtual.md')===saved});this.write('matrix.json',matrix);
+        const name=[width,mode,phase,progress,format].join('-');matrix.push({name,actual,expected,layoutEqual:JSON.stringify(actual)===JSON.stringify(expected),displayEqual:view.editor.getValue()===ref.editor.getValue(),displayBodyEqual:regionBody(view.editor.getValue(),id)?.body===regionBody(ref.editor.getValue(),id)?.body,bodyEqual:regionBody(this.adapter.canonicalDisplayed(),id)?.body===body&&regionBody(ref.getViewData(),id)?.body===body,savedClean:await app.vault.adapter.read('Virtual.md')===saved});this.write('matrix.json',matrix);
         if(phase==='complete'&&progress==='keep'&&format==='formatted')await this.capture(name);
       }
       style.remove();
@@ -90,7 +90,7 @@ export default class NativeResponseLab extends Plugin {
       const actual=inspect(view.contentEl.querySelector<HTMLElement>(selector)!),expected=inspect(ref.contentEl.querySelector<HTMLElement>(selector)!);
       const buttons=[ref,view].map(v=>Array.from(v.contentEl.querySelectorAll<HTMLButtonElement>('button.send-to-t3-question-answer')).filter(button=>button.getBoundingClientRect().width).map(button=>({text:button.textContent,disabled:button.disabled,width:button.getBoundingClientRect().width,height:button.getBoundingClientRect().height})));
       const clicks=this.answerClicks;for(const v of [ref,view])v.contentEl.querySelector<HTMLButtonElement>('button.send-to-t3-question-answer')?.click();
-      rich.push({width,mode,layoutEqual:JSON.stringify(actual)===JSON.stringify(expected),displayEqual:view.editor.getValue()===ref.editor.getValue(),bodyEqual:regionBody(view.editor.getValue(),id)?.body===regionBody(ref.editor.getValue(),id)?.body,buttonsEqual:JSON.stringify(buttons[0])===JSON.stringify(buttons[1]),buttons,answerClicks:this.answerClicks-clicks,savedClean:await app.vault.adapter.read('Virtual.md')===saved});
+      rich.push({width,mode,layoutEqual:JSON.stringify(actual)===JSON.stringify(expected),displayEqual:view.editor.getValue()===ref.editor.getValue(),displayBodyEqual:regionBody(view.editor.getValue(),id)?.body===regionBody(ref.editor.getValue(),id)?.body,bodyEqual:regionBody(this.adapter.canonicalDisplayed(),id)?.body===body&&regionBody(ref.getViewData(),id)?.body===body,buttonsEqual:JSON.stringify(buttons[0])===JSON.stringify(buttons[1]),buttons,answerClicks:this.answerClicks-clicks,savedClean:await app.vault.adapter.read('Virtual.md')===saved});
       style.remove();
     }
     this.write('rich.json',rich);
