@@ -32,7 +32,8 @@ export function projectResponses(saved:string,responses:readonly LocalResponse[]
     if(anchor!==responseAnchor(response.id,saved))throw new ProjectionConflict('Legacy response must be journaled and migrated before local projection.');
     // Validate output as well, so generated text cannot create a save escape.
     const rendered=renderResponse(response.id,response.body,saved);
-    responseRegion(rendered,response.id);
+    const output=responseRegion(rendered,response.id);
+    if(!output||output.from!==0||output.to!==rendered.length)throw new ProjectionConflict('Generated text changed the response container boundaries.');
     display+=saved.slice(cursor,region.from);
     const displayFrom=display.length;display+=rendered;
     ranges.push({id:response.id,savedFrom:region.from,savedTo:region.to,displayFrom,displayTo:display.length,anchor});cursor=region.to;

@@ -10,4 +10,6 @@ Native evidence is retained outside the vault at `/home/ubuntu/backups/send-to-t
 
 Before the final release check, the combined build passed, the full suite passed 1,370 TypeScript and 13 Python tests, and the focused container/coordinator/native set passed 121 tests. The release entry point repeats the build and full suite after all reviewed source commits, including the final evidence-cache memory follow-up.
 
+The first live candidate, 2.37.12, exposed an overly broad completion check for the attribute name in ordinary prose and escaped tool HTML. The follow-up parses actual container boundaries, permits literal code examples, and requires a rendered response's validated frame to cover every output byte. Two regression tests first reproduced these failures. The final delivery uses a newer immutable release; the earlier archive and receipt are retained.
+
 This isolated native lab has no Sync connection and does not establish iPhone or Android behavior. The QLO2 release receipt and real-client smoke evidence separately establish production installation, fresh Sync scanning, loaded version, active projection and completed delivery.

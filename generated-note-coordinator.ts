@@ -10,7 +10,9 @@ import {streamBlock,removeStreamBlock} from './stream-block';
 import {MAX_SUPERSEDED_FINAL_ATTEMPTS,type FinalWriteOutcome,type FinalWriteState} from './completion-attempt';
 import {responseBoundaries} from './response-container';
 
-const boundaryText=(text:string)=>/<!-- t3-(?:inline|response):|data-t3-response\s*=/.test(text);
+// Attribute names in prose, escaped tool HTML and literal code are not new
+// registrations. Parse actual container boundaries before rejecting them.
+const boundaryText=(text:string)=>/<!-- t3-(?:inline|response):/.test(text)||responseBoundaries(text).some(boundary=>boundary.format==='container');
 export function validateFinalResponseBody(body:string){if(boundaryText(body))throw Error('A finished response cannot introduce tracking boundaries.');}
 
 export interface NoteGeneration {
