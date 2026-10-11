@@ -73,6 +73,14 @@ export async function tickDisplay(display:ThreadDisplay,host:DisplayHost){
     for(const destination of display.destinations.filter(d=>!d.removed)){
       let binding=display.bindings.find(b=>b.messageId===message.id&&b.destinationId===destination.id);
       if(binding&&binding.status!=='planned')continue;
+      if(binding){
+        // A deleted destination cannot accept this retained plan. Check its
+        // availability before walking every historical lease again. Keep the
+        // same request ready for when the note returns; other destinations
+        // still progress independently.
+        try{await host.validateDestination(destination.path);}
+        catch(error){const detail=error instanceof Error?error.message:String(error);if(binding.error!==detail){binding.error=detail;await host.save();}continue;}
+      }
       existing??=await host.responseBindings(display);
       const attached=existing.find(b=>b.path===destination.path&&(b.messageIds.includes(message.id)||b.turnIds.includes(turnId)));
       const sibling=display.bindings.find(b=>b.destinationId===destination.id&&b.turnId===turnId&&b.messageId!==message.id);
@@ -82,7 +90,7 @@ export async function tickDisplay(display:ThreadDisplay,host:DisplayHost){
       }
       if(!binding){binding={messageId:message.id,turnId,destinationId:destination.id,status:'planned',request:await host.prepareDisplay(display,destination,message)};display.bindings.push(binding);await host.save();}
       try{await host.attachDisplay(binding.request!,destination.path);binding.bindingId=binding.request!.id;binding.status='attached';delete binding.error;await host.save();}
-      catch(error){binding.error=error instanceof Error?error.message:String(error);await host.save();}
+      catch(error){const detail=error instanceof Error?error.message:String(error);if(binding.error!==detail){binding.error=detail;await host.save();}}
     }
   }
 }

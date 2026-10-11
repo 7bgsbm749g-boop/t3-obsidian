@@ -23,6 +23,8 @@ import {completedSelectionDraft} from './inline-steering';
 import {compactImportRecord} from './run-import';
 import {readImportRecordsPage} from './import-records';
 import type {ImportRecordsCommand} from './response-command';
+import {readResponseBindings} from './response-bindings';
+import type {EventTarget} from './event-subscriptions';
 
 /** Host lock is owned by DesktopInlineHost. Mailbox mutations, migration fences
  * and checkpoints share that authority's serialization. Journal bytes live
@@ -31,8 +33,9 @@ export class CoordinatedHost {
   private leaseCache=new LeaseRecordCache();
   private leaseVersions=new Map<string,{version:string;record:LeaseRecord}>();
   private versionHits=0;
+  private bindingQueries=0;
   private maxVersionEntries=4096;
-  leaseCacheStatus(){return {...this.leaseCache.status(),versionEntries:this.leaseVersions.size,maxVersionEntries:this.maxVersionEntries,versionHits:this.versionHits};}
+  leaseCacheStatus(){return {...this.leaseCache.status(),versionEntries:this.leaseVersions.size,maxVersionEntries:this.maxVersionEntries,versionHits:this.versionHits,bindingQueries:this.bindingQueries};}
   private projections=new ResponseProjectionCache();
   projectionStatus(){return this.projections.status();}
   private records=new Map<string,LeaseRecord>();
@@ -130,6 +133,13 @@ export class CoordinatedHost {
     // concurrent replacement remains visible on the next discovery pass.
     if(version!==undefined&&this.leaseVersions.size<this.maxVersionEntries&&await this.files.version?.(path)===version)this.leaseVersions.set(path,{version,record});
     return record;
+  }
+  async responseBindings(target:EventTarget){
+    this.bindingQueries++;
+    // Every query checks current file identities through readLease. Reuse the
+    // already retained host records even when history exceeds the byte cache;
+    // do not allocate and decode all historical replies again for each stream.
+    return readResponseBindings(this.files,this.identity.directory,target,path=>this.readLease(path));
   }
   private async scanRecords(background=false){
     const active:LeaseRecord[]=[],terminal:LeaseRecord[]=[],changedTerminal:LeaseRecord[]=[];

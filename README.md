@@ -55,6 +55,10 @@ Changing the vault project machine stops the old watcher without automatically t
 
 The host retains its canonical thread histories and recovery records. One full-history polling loop supplies subscription recovery, sharing one read per thread within a cycle; subscription streams do not also fetch a partial recent history. Ordinary response streams retain their own polling. Unchanged observations and response-only note changes do not rewrite the history store. Rollback copies mutable subscription/delivery records and retains references to immutable thread records; polling that keeps its in-memory recovery state does not create an unused rollback copy. Canonical reads retain the observed stream watermark. Stream positions remain checkpointed together with their reduced state, and notification and reply-attachment checkpoints still precede external effects. Failed checkpoints remain dirty until a successful save.
 
+Thread-stream attachment lookup shares the matching local host's verified lease snapshots. Every lookup lists current records and checks their current file identities; changed records are decoded again even when their lease revision is unchanged. Completed replies, steering and question continuations remain eligible for duplicate detection. Subscription state receives only binding IDs, note paths, message IDs and turn IDs. Lookup does not retain a second history cache or read full reply bodies again when the host already verified the same files. A client without the matching host keeps fresh-read discovery.
+
+An attachment retry checks whether its destination exists before reading historical bindings. Missing notes keep their saved attachment plans and resume when available. Repeated identical attachment errors do not rewrite the subscription store. Other destinations continue through the same pass.
+
 Bounded HTTP bodies use the platform UTF-8 decoder. Private journal validation reuses verified paths and file identity records while freshly checking every revision's identity, including nanosecond change times; it still rejects tampering, missing revisions and symlink replacement.
 
 ### Register and manage subscriptions

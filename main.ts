@@ -1,6 +1,7 @@
 import {prepareEventAction,executeEventAction,type ActionIO,type ActionPlan} from './event-actions';
 import {isClientCommand} from './client-command';
 import {markdownCodeCacheStatus} from './reply-html';
+import {readResponseBindings} from './response-bindings';
 import pluginManifest from './manifest.json';
 import {appendSendFailure,sendFailureLog,type SendFailure} from './send-failures';
 import {ConnectionRecovery,type ConnectionReloadState} from './connection-recovery';
@@ -706,16 +707,11 @@ export default class SendToT3 extends Plugin {
     this.registerInlineInterval(()=>{if(this.eventSubscriptions===service&&this.eventHostCurrent(server.identity)&&service.active)void service.tick().catch(error=>new Notice(`T3 event delivery: ${message(error)}`,10000));},1000);
   }
   private async displayResponseBindings(target:EventTarget){
-    const host=await this.inlineHostTarget(),files=(await import('./hosted-inline-desktop')).localInlineFiles(host.workspaceRoot,host.directory);
-    const records:LeaseRecord[]=[];
-    for(const path of await files.list(`${host.directory}/leases`)){
-      const raw=await files.read(path);if(!raw)continue;const record:LeaseRecord=JSON.parse(raw);
-      if(record.request.threadId===target.threadId&&record.request.projectId===target.projectId&&record.request.threadEnvironmentId===target.environmentId)records.push(record);
-    }
-    return records.map(record=>({id:record.request.id,path:record.state?.notePath??record.request.notePath,
-      messageIds:[record.request.messageId,...[record.state?.messageId,record.state?.pendingMessageId].filter((v):v is string=>!!v),...record.state?.steering?.map(s=>s.messageId)??[],...record.state?.questionFollows?.flatMap(q=>[`async-answer:${q.requestId}`,...(q.input?[q.input.messageId]:[])])??[]],
-      turnIds:[...record.state?.turnIds??[],...(record.state?.turnId?[record.state.turnId]:[]),...record.state?.questionFollows?.flatMap(q=>q.replyTurnId?[q.replyTurnId]:[])??[]],
-    }));
+    const host=await this.inlineHostTarget();
+    await this.refreshInlineHost();
+    if(this.inlineHostService?.active&&this.inlineHostService.matchesTarget(host))return this.inlineHostService.responseBindings(target);
+    const files=(await import('./hosted-inline-desktop')).localInlineFiles(host.workspaceRoot,host.directory);
+    try{return await readResponseBindings(files,host.directory,target);}finally{await files.close?.();}
   }
   private async renameEventFolder(folder:TFolder,oldPath:string,service:EventSubscriptions){
     if(!service.interestedFolder(folder.path,oldPath))return;

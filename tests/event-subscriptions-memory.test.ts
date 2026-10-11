@@ -15,16 +15,52 @@ function historicalState():EventState {
   return {version:1,subscriptions:[],notifications:[],commands:{},feedback:[],threads:Object.fromEntries(Array.from({length:22},(_,i)=>['historical-'+i,{state:{historyComplete:true,messages:[{id:'old-'+i,role:'assistant',turnId:null,text:body,streaming:false}],activities:[]}}]))};
 }
 async function harness(initial=historicalState()){
-  let saved:EventState=JSON.parse(JSON.stringify(initial)),remote=thread(),reads=0,saves=0,attachments=0,failSave=false,failRead=false,failBindings=false;
+  let saved:EventState=JSON.parse(JSON.stringify(initial)),remote=thread(),reads=0,saves=0,attachments=0,bindingReads=0,failSave=false,failRead=false,failBindings=false,failAttach=false;
+  const missing=new Set<string>();
   const monitors=new Map<string,{item:(value:any)=>void;cursor:()=>number|undefined}>();
   const service=new EventSubscriptions({load:async()=>saved,save:async state=>{saves++;if(failSave)throw Error('disk unavailable');saved=JSON.parse(JSON.stringify(state));},
     notes:async()=>[note()],validateTarget:async()=>{},isBusy:async()=>true,prepare:async()=>({}),deliver:async()=> 'busy',recording:()=>{},now:()=>1000,id:randomUUID,
     readThread:async()=>{reads++;if(failRead)throw Error('offline');const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:structuredClone(remote)}}).state;return {...state,...(remote.sequence!==undefined?{sequence:remote.sequence}:{})};},
     watchThread:(target,item,cursor)=>{monitors.set(target.threadId,{item,cursor});return {stop(){monitors.delete(target.threadId);}};},
-    displayHost:{validateDestination:async()=>{},responseBindings:async()=>{if(failBindings)throw Error('disk unavailable');return [];},prepareDisplay:async()=>{throw Error('unexpected new reply');},attachDisplay:async()=>{attachments++;}},
+    displayHost:{validateDestination:async path=>{if(missing.has(path))throw Error('Destination note unavailable: '+path);},responseBindings:async()=>{bindingReads++;if(failBindings)throw Error('disk unavailable');return [];},prepareDisplay:async()=>{throw Error('unexpected new reply');},attachDisplay:async()=>{if(failAttach)throw Error('transport offline');attachments++;}},
   });await service.initialize();
-  return {service,monitors,setRemote:(state:InlineThreadState)=>{remote=state;},failSave:(value:boolean)=>{failSave=value;},failRead:(value:boolean)=>{failRead=value;},failBindings:(value:boolean)=>{failBindings=value;},get attachments(){return attachments;},get saves(){return saves;},get reads(){return reads;},get saved(){return saved;}};
+  return {service,monitors,setRemote:(state:InlineThreadState)=>{remote=state;},missing:(path:string,value:boolean)=>{if(value)missing.add(path);else missing.delete(path);},failAttach:(value:boolean)=>{failAttach=value;},failSave:(value:boolean)=>{failSave=value;},failRead:(value:boolean)=>{failRead=value;},failBindings:(value:boolean)=>{failBindings=value;},get attachments(){return attachments;},get saves(){return saves;},get reads(){return reads;},get bindingReads(){return bindingReads;},get saved(){return saved;}};
 }
+
+function pendingDisplay(paths=['A.md']):EventState {
+  const initial=historicalState(),destinations=paths.map(path=>({id:randomUUID(),path}));
+  initial.displays=[{...source,id:randomUUID(),scope:'thread',enabled:true,createdAt:'2026-10-11T00:00:00Z',boundary:[],destinations,bindings:destinations.map(destination=>({messageId:origin,turnId:turn,destinationId:destination.id,status:'planned',request:{id:randomUUID()} as any}))}];
+  return initial;
+}
+
+test('missing stream destinations skip history discovery and unchanged error writes while healthy destinations attach',async()=>{
+  const h=await harness(pendingDisplay(['A.md','B.md']));try{
+    h.missing('A.md',true);await h.service.tick();
+    assert.equal(h.attachments,1);assert.equal(h.bindingReads,1);assert.equal(h.saved.displays![0].bindings[0].error,'Destination note unavailable: A.md');
+    const saves=h.saves,history=h.saved.threads,request=h.saved.displays![0].bindings[0].request;
+    for(let n=0;n<20;n++)await h.service.tick();
+    assert.equal(h.saves,saves);assert.equal(h.bindingReads,1);assert.deepEqual(h.saved.threads,history);
+    h.missing('A.md',false);await h.service.tick();assert.equal(h.attachments,2);assert.equal(h.bindingReads,2);
+    assert.deepEqual(h.saved.displays![0].bindings[0].request,request);assert.equal(h.saved.displays![0].bindings[0].status,'attached');assert.equal(h.saved.displays![0].bindings[0].error,undefined);
+    const restarted=await harness(h.saved);try{await restarted.service.tick();assert.equal(restarted.attachments,0);assert.equal(restarted.bindingReads,0);}finally{restarted.service.stop();}
+  }finally{h.service.stop();}
+});
+
+test('unchanged attachment transport errors keep retrying without rewriting retained history',async()=>{
+  const h=await harness(pendingDisplay());try{
+    h.failAttach(true);await h.service.tick();assert.equal(h.saved.displays![0].bindings[0].error,'transport offline');const saves=h.saves;
+    for(let n=0;n<10;n++)await h.service.tick();assert.equal(h.saves,saves);assert.equal(h.bindingReads,11);
+    h.failAttach(false);await h.service.tick();assert.equal(h.attachments,1);assert.equal(h.saved.displays![0].bindings[0].status,'attached');assert.equal(h.saved.displays![0].bindings[0].error,undefined);
+  }finally{h.service.stop();}
+});
+
+test('an unchanged missing-destination error still flushes a failed checkpoint before restart',async()=>{
+  const h=await harness(pendingDisplay());try{
+    h.missing('A.md',true);h.failSave(true);await assert.rejects(h.service.tick(),/disk unavailable/);
+    assert.equal(h.saved.displays![0].bindings[0].error,undefined);assert.equal(h.service.snapshot.displays![0].bindings[0].error,'Destination note unavailable: A.md');
+    h.failSave(false);await h.service.tick();assert.equal(h.bindingReads,0);assert.equal(h.attachments,0);assert.equal(h.saved.displays![0].bindings[0].error,'Destination note unavailable: A.md');
+  }finally{h.service.stop();}
+});
 
 test('unchanged polling shares reads and performs zero writes while retaining all historical threads',async()=>{
   const h=await harness();await h.service.command(stream());await h.service.command(stream('B.md'));

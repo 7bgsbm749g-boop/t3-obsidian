@@ -18,6 +18,7 @@ import {ThreadAccessCache} from './thread-access-cache';
 import {DesktopInlineReadCache,inlineFileVersion} from './inline-file-cache-desktop';
 import {markdownCodeCacheStatus} from './reply-html';
 import {ensurePrivateStorage,existingPrivateStorage} from './private-storage-desktop';
+import {sameWorkspacePath} from './folder-link';
 import {InlineResponseFeeds} from './inline-response-feed';
 
 const inlineReadCache=new DesktopInlineReadCache();
@@ -62,7 +63,7 @@ export class DesktopInlineHost {
   private accessCache:ThreadAccessCache;
   private responseFeeds:InlineResponseFeeds;
   private closeStorage:()=>Promise<void>;
-  private constructor(private release:()=>Promise<void>,app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},files:ReturnType<typeof localInlineFiles>,access:(environmentId:string,reason?:ThreadAccessCloseReason)=>Promise<ThreadAccess>){
+  private constructor(private release:()=>Promise<void>,app:App,private identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},files:ReturnType<typeof localInlineFiles>,access:(environmentId:string,reason?:ThreadAccessCloseReason)=>Promise<ThreadAccess>){
     this.accessCache=new ThreadAccessCache(access);
     this.responseFeeds=new InlineResponseFeeds(environmentId=>this.accessCache.get(environmentId));
     this.closeStorage=()=>files.close?.()??Promise.resolve();
@@ -101,6 +102,8 @@ export class DesktopInlineHost {
   }
   async responseCommand(kind:string,id:string,hash?:string,notePath?:string,importPage?:import('./response-command').ImportRecordsCommand){return this.coordinated.command(kind,id,hash,notePath,importPage);}
   eventContent(path:string,content:string){return this.coordinated.eventContent(path,content);}
+  responseBindings(target:import('./event-subscriptions').EventTarget){return this.coordinated.responseBindings(target);}
+  matchesTarget(target:import('./hosted-inline').InlineHostTarget){return this.identity.environmentId===target.environmentId&&this.identity.directory===target.directory&&sameWorkspacePath(this.identity.workspaceRoot,target.workspaceRoot);}
   static async open(app:App,identity:{vaultId:string;environmentId:string;workspaceRoot:string;directory:string},access:(environmentId:string,reason?:ThreadAccessCloseReason)=>Promise<ThreadAccess>){
     logEvent('ownership.coordinator.opening',identity);
     try{

@@ -533,6 +533,47 @@ test('a lease replacement during discovery cannot authenticate the older decoded
  }finally{await h.close();}
 });
 
+test('stream binding discovery shares verified oversized history while checking fresh identities',async()=>{
+ const h=await setup();try{
+  await h.writer.tick();const target={threadId:h.request.threadId,projectId:h.request.projectId,environmentId:h.request.threadEnvironmentId};
+  const histories:Array<{id:string;path:string}>=[];
+  for(let n=0;n<24;n++){
+   const id=randomUUID(),request={...h.request,id,notePath:`History-${n}.md`,threadId:n%2?'other-thread':target.threadId};
+   const record={request,coordinated:true,owner:COORDINATED_OWNER,epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,state:{requestHash:hostedRequestHash(request),accepted:true,status:'complete',body:'Retained reply'.repeat(2000),finalSaved:true,cleanupComplete:true,notePath:request.notePath,messageId:`message-${n}`,pendingMessageId:`pending-${n}`,steering:[{messageId:`steer-${n}`}],turnIds:[`earlier-${n}`],turnId:`turn-${n}`,questionFollows:[{requestId:`question-${n}`,replyTurnId:`answer-turn-${n}`,input:{messageId:`answer-${n}`}}],hashes:[],updatedAt:''}};
+   const path=leasePaths(h.identity.directory,id).record;h.storage.set(path,JSON.stringify(record));histories.push({id,path});
+  }
+  (h.host as any).leaseCache=new LeaseRecordCache(100,1);
+  h.files.version=async path=>{const raw=h.storage.get(path);return raw===undefined?undefined:contentHash(raw);};
+  await h.host.scan(true);
+  const read=h.files.read;let reads=0;h.files.read=async path=>{if(path.includes('/leases/'))reads++;return read(path);};
+  const before=h.host.leaseCacheStatus(),note=h.notes.get('Note.md'),writes=h.writes();
+  for(let n=0;n<8;n++){
+   const result=await h.host.responseBindings(target);assert.equal(result.length,13);assert.ok(JSON.stringify(result).length<10_000);
+   const first=result.find(binding=>binding.id===histories[0].id)!;
+   assert.deepEqual(first.messageIds,[h.request.messageId,'message-0','pending-0','steer-0','async-answer:question-0','answer-0']);
+   assert.deepEqual(first.turnIds,['earlier-0','turn-0','answer-turn-0']);
+   first.messageIds.push('caller mutation');
+  }
+  assert.equal(reads,0);assert.equal(h.host.leaseCacheStatus().parses,before.parses);assert.equal(h.host.leaseCacheStatus().bindingQueries-before.bindingQueries,8);
+  const changed=histories[0],record=JSON.parse(h.storage.get(changed.path)!);record.state.notePath='History-X.md';record.state.messageId='changed-0';h.storage.set(changed.path,JSON.stringify(record));
+  const current=await h.host.responseBindings(target),binding=current.find(value=>value.id===changed.id)!;
+  assert.equal(binding.path,'History-X.md');assert.ok(binding.messageIds.includes('changed-0'));assert.equal(reads,1,'changed bytes bypass the cached epoch and revision');
+  h.storage.delete(changed.path);assert.ok(!(await h.host.responseBindings(target)).some(value=>value.id===changed.id));
+  assert.equal(h.notes.get('Note.md'),note);assert.equal(h.writes(),writes);
+ }finally{await h.close();}
+});
+
+test('stream binding discovery keeps fresh reads when storage cannot verify file identities',async()=>{
+ const h=await setup();try{
+  const target={threadId:h.request.threadId,projectId:h.request.projectId,environmentId:h.request.threadEnvironmentId},path=leasePaths(h.identity.directory,h.id).record;
+  assert.equal((await h.host.responseBindings(target))[0].path,'Note.md');
+  const record=JSON.parse(h.storage.get(path)!);record.request.notePath='Moved.md';h.storage.set(path,JSON.stringify(record));
+  assert.equal((await h.host.responseBindings(target))[0].path,'Moved.md');
+  assert.deepEqual(await h.host.responseBindings({...target,projectId:'another-project'}),[]);
+  assert.deepEqual(await h.host.responseBindings({...target,environmentId:'another-machine'}),[]);
+ }finally{await h.close();}
+});
+
 test('a stalled older response cannot gate newly registered responses or duplicate its worker',async()=>{
  const h=await setup();let release!:()=>void;let first:Promise<void>|undefined;
  try{
