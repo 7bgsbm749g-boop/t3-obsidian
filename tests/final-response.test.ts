@@ -2,6 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {checkFinalResponse,finalResponseKey} from '../final-response';
 import type {InlineThreadState} from '../inline-thread';
+import {t3Api} from '../t3-api';
+import {settingsSocket} from './rpc-fixture';
 
 const at='2026-10-11T12:00:00.000Z';
 function state():InlineThreadState{return {protocolVersion:2,sequence:5,activities:[],turns:{run:{turnId:'run',state:'completed',completedAt:at,assistantMessageId:'answer'}},messages:[{id:'answer',itemId:'opaque-item',role:'assistant',turnId:'run',streaming:false,text:'Final reply',updatedAt:at}]};}
@@ -22,4 +24,9 @@ test('different final text corrects only that message and requires a matching ch
  const access={origin:'',api:async()=>({...item(),text:'Canonical final reply'})};
  const changed=await checkFinalResponse(access,'thread',current,'run');assert.equal(changed.verified,false);assert.equal(changed.state.messages[0].text,'Canonical final reply');assert.equal(changed.state.messages[1].text,'Keep me');assert.equal(current.messages[0].text,'Final reply');
  assert.equal((await checkFinalResponse(access,'thread',changed.state,'run')).verified,true);
+});
+test('completion handles the real RPC item envelope from authentication through final comparison',async()=>{
+ const calls:any[]=[],Socket=settingsSocket(undefined,undefined,(tag,payload)=>{calls.push({tag,payload});return {item:item()};});
+ const api=t3Api(async path=>{assert.equal(path,'/api/auth/websocket-ticket');return {ticket:'ticket'};},'https://fixture',url=>new Socket(url) as any);
+ const checked=await checkFinalResponse({origin:'https://fixture',api},'thread',state(),'run');assert.equal(checked.verified,true);assert.equal(calls[0].tag,'orchestration.getTurnItem');assert.equal(calls[0].payload.itemId,'opaque-item');
 });

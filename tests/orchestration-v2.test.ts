@@ -32,7 +32,7 @@ test('assistant item events carry their exact item identity without duplicating 
  assert.equal(current.messages.filter((m:any)=>m.role==='assistant').length,1);assert.equal(current.messages.at(-1)!.text,'Reply');assert.equal(current.messages.at(-1)!.itemId,'opaque-item');
 });
 test('final-item adapter uses the existing authenticated unary RPC',async()=>{
- const calls:any[]=[],raw:string[]=[],Socket=settingsSocket(undefined,undefined,(tag,payload)=>{calls.push({tag,payload});return {id:'opaque-item',text:'Reply'};});
+ const calls:any[]=[],raw:string[]=[],Socket=settingsSocket(undefined,undefined,(tag,payload)=>{calls.push({tag,payload});return {item:{id:'opaque-item',text:'Reply'}};});
  const api=t3Api(async path=>{raw.push(path);assert.equal(path,'/api/auth/websocket-ticket');return {ticket:'ticket'};},'https://fixture',url=>new Socket(url) as any);
  assert.equal((await api('/api/orchestration/turn-item',{threadId:'thread',itemId:'opaque-item'})).text,'Reply');assert.deepEqual(calls,[{tag:'orchestration.getTurnItem',payload:{threadId:'thread',itemId:'opaque-item'}}]);assert.equal(raw.length,1);
 });

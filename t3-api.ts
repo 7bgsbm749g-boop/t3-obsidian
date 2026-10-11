@@ -73,7 +73,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     // Internal adapter route: the server provides this read over RPC only.
     if(path==='/api/orchestration/turn-item'){
       const rpc=await connectT3Rpc(raw,origin,makeSocket);
-      try{return await rpc.call('orchestration.getTurnItem',payload);}finally{rpc.close();}
+      try{return (await rpc.call('orchestration.getTurnItem',payload))?.item;}finally{rpc.close();}
     }
     if(path==='/api/orchestration/dispatch'){
       const {__legacyV1,...saved}=payload;
