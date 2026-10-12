@@ -17,6 +17,17 @@ SPEC.loader.exec_module(release)
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    def test_explicit_user_test_skip_preserves_build_and_audit_reason(self) -> None:
+        with patch.object(release, 'run') as command:
+            self.assertEqual(release.release_checks(), {'status': 'passed'})
+            self.assertEqual([call.args[0] for call in command.call_args_list], [['npm', 'run', 'build'], ['npm', 'test']])
+            command.reset_mock()
+            self.assertEqual(release.release_checks(' forget the full tests '), {'status': 'skipped', 'reason': 'forget the full tests'})
+            command.assert_called_once_with(['npm', 'run', 'build'])
+            command.reset_mock()
+            with self.assertRaises(SystemExit): release.release_checks(' ')
+            command.assert_not_called()
+
     def test_large_vault_sync_keeps_a_bounded_longer_timeout_and_requires_completion(self) -> None:
         with patch.object(release, 'run', return_value=subprocess.CompletedProcess([], 0, 'Fully synced\n')) as command:
             self.assertEqual(release.sync_release(), [])

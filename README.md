@@ -366,6 +366,8 @@ For a release, run `npm run release:qlo2 -- --bump patch` (or `minor`/`major`) o
 
 If an immutable archive was created but installation or Sync failed, resume those exact bytes with `npm run release:qlo2 -- --resume VERSION`. Never delete and recreate a versioned archive with different contents.
 
+Only when the user explicitly requests skipping the full test suite, add `--skip-tests-reason "EXACT USER INSTRUCTION"` to a new release command. The build still runs, and immutable provenance plus the deployment receipt record the skipped suite and reason. This option does not apply to resumes or smoke completion.
+
 The deployment receipt is intentionally marked `awaiting-live-smoke`. After a real QLO2 client receives Sync, reload the plugin and exercise the changed behavior. Capture durable evidence and complete the release with:
 
 ```sh

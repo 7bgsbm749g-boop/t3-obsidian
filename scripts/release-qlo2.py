@@ -340,6 +340,7 @@ def publish_release(
         'resumedImmutableArchive': resumed,
         'archive': str(archive),
         'archiveSha256': sha256_file(archive),
+        'testSuite': read_json(archive.with_suffix('.provenance.json')).get('testSuite', {'status': 'unknown'}) if archive.with_suffix('.provenance.json').is_file() else {'status': 'unknown'},
         'releaseFileSha256': archive_hashes,
         'developmentInstall': str(DEV_PLUGIN),
         'developmentRuntimeSha256': dev_hashes,
@@ -405,7 +406,17 @@ def complete_smoke(version: str, device: str, evidence: Path, notes: str) -> Non
     print(json.dumps(receipt, indent=2))
 
 
-def new_release(bump: str | None, allow_dirty: bool, requested_version: str | None = None, *, skip_laptop_reload: bool = False) -> None:
+def release_checks(skip_tests_reason: str | None = None) -> dict:
+    if skip_tests_reason is not None and not skip_tests_reason.strip():
+        raise SystemExit('--skip-tests-reason requires the explicit user instruction.')
+    run(['npm', 'run', 'build'])
+    if skip_tests_reason is not None:
+        return {'status': 'skipped', 'reason': skip_tests_reason.strip()}
+    run(['npm', 'test'])
+    return {'status': 'passed'}
+
+
+def new_release(bump: str | None, allow_dirty: bool, requested_version: str | None = None, *, skip_laptop_reload: bool = False, skip_tests_reason: str | None = None) -> None:
     canonical_root_required()
     commit, dirty = git_state()
     if dirty and not allow_dirty:
@@ -427,8 +438,7 @@ def new_release(bump: str | None, allow_dirty: bool, requested_version: str | No
     try:
         set_version(version)
         validate_version_alignment(version)
-        run(['npm', 'run', 'build'])
-        run(['npm', 'test'])
+        test_suite = release_checks(skip_tests_reason)
         archive = create_archive(version)
         provenance = {
             'version': version, 'gitCommit': commit,
@@ -436,6 +446,7 @@ def new_release(bump: str | None, allow_dirty: bool, requested_version: str | No
             'versionFileSha256': {str(path.relative_to(ROOT)): sha256_file(path) for path in originals},
             'originalVersionFileSha256': {str(path.relative_to(ROOT)): sha256_bytes(value) for path, value in originals.items()},
             'dirtySourceAuthorized': bool(dirty),
+            'testSuite': test_suite,
         }
         provenance_path = archive.with_suffix('.provenance.json')
         with provenance_path.open('xb') as stream:
@@ -489,6 +500,7 @@ def parser() -> argparse.ArgumentParser:
     action.add_argument('--complete-smoke', metavar='VERSION')
     result.add_argument('--allow-dirty', action='store_true')
     result.add_argument('--skip-laptop-reload', action='store_true', help='Publish on the VPS without contacting the laptop reload helper.')
+    result.add_argument('--skip-tests-reason', help='Skip the full suite only at explicit user request; record that instruction in immutable provenance and the deployment receipt.')
     result.add_argument('--device')
     result.add_argument('--evidence', type=Path)
     result.add_argument('--notes', default='')
@@ -497,6 +509,8 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = parser().parse_args()
+    if args.skip_tests_reason is not None and (args.complete_smoke or args.resume):
+        raise SystemExit('--skip-tests-reason is valid only when creating a new release.')
     if args.complete_smoke:
         if args.allow_dirty:
             raise SystemExit('--allow-dirty is valid only with --bump.')
@@ -509,7 +523,7 @@ def main() -> None:
     if args.resume:
         resume_release(args.resume, args.allow_dirty, skip_laptop_reload=args.skip_laptop_reload)
         return
-    new_release(args.bump, args.allow_dirty, args.version, skip_laptop_reload=args.skip_laptop_reload)
+    new_release(args.bump, args.allow_dirty, args.version, skip_laptop_reload=args.skip_laptop_reload, skip_tests_reason=args.skip_tests_reason)
 
 
 if __name__ == '__main__':
