@@ -1,7 +1,7 @@
 {
   "id": "send-to-t3-code",
   "name": "Send to T3 Code",
-  "version": "2.37.18",
+  "version": "2.37.19",
   "minAppVersion": "1.8.7",
   "description": "Chat with T3, send notes, link folders, and record durable automation events.",
   "author": "Send to T3 Code contributors",
