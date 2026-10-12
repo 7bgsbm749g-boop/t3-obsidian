@@ -7,7 +7,7 @@ import {projectResponses,responseAnchor} from '../native-response-projection';
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 const key='thread:active',otherKey='other:active';
 const body=(key:string,text='First paragraph')=>`> [!t3-progress]+ Working <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>\n>\n> ${text}`;
-function fixture(random=()=>0.25){
+function fixture(){
   let mode='source',selected=false,live=true,rendered=true,reduced=true,time=0,tail=1100;
   const handlers=new Map<string,Set<(event:any)=>void>>(),frames=new Map<number,(time:number)=>void>();let sequence=0;
   const add=(type:string,fn:any)=>{if(!handlers.has(type))handlers.set(type,new Set());handlers.get(type)!.add(fn);};
@@ -24,7 +24,7 @@ function fixture(random=()=>0.25){
   const document={defaultView:window,addEventListener:add,removeEventListener:remove,querySelectorAll:()=>[] as any[]};
   const contentEl={ownerDocument:document,isConnected:true,contains:(el:any)=>el?.kind!=='outside',querySelector:(selector:string)=>selector.includes('is-live-preview')?live?{}:null:scroller,querySelectorAll:()=>rendered?folds:[],getBoundingClientRect:()=>({bottom:800}),dispatchEvent:(event:any)=>{notifications.push(event);return true;}};
   const view:any={contentEl,editor:{cm},getMode:()=>mode};
-  const scroll=new ResponseScroll(view,()=>projection,random);
+  const scroll=new ResponseScroll(view,()=>projection);
   const event=(type:string,kind:Parameters<typeof target>[0]='response',extra:any={})=>{for(const fn of handlers.get(type)??[])fn({isTrusted:true,button:0,target:target(kind),...extra});};
   const update=(binding=id,text='New response tail')=>{responses=responses.map(response=>response.id===binding?{id:binding,body:body(binding===id?key:otherKey,text)}:response);projection=projectResponses(saved,responses);cm.state=EditorState.create({doc:projection.display});scroll.updated();};
   const flush=(at=time+=16)=>{const pending=[...frames.values()];frames.clear();for(const fn of pending)fn(at);};
@@ -42,8 +42,14 @@ test('large rendered widgets and layout-only growth keep their bottom aligned',(
 test('activation animates to the current target, including growth during the trip',()=>{
   const h=fixture();h.reduced(false);h.scroll.toggle(key);h.flush(0);assert.equal(h.scroller.scrollTop,200);h.flush(210);assert.ok(h.scroller.scrollTop>200&&h.scroller.scrollTop<608);h.grow(500);h.flush(420);assert.equal(h.scroller.scrollTop,1108);assert.equal(h.frames.size,0);h.scroll.dispose();
 });
-test('explicit off rolls each of the two positions and preserves the current viewport',()=>{
-  for(const [random,position] of [[0.49,'top'],[0.5,'bottom']] as const){const h=fixture(()=>random);h.scroll.toggle(key);h.flush();h.scroll.toggle(key);assert.deepEqual(h.scroll.control(key),{active:false,position,moving:false});h.grow(800);h.flush();assert.equal(h.scroller.scrollTop,608);h.scroll.dispose();}
+test('every explicit off returns to the top and preserves the current viewport through further growth',()=>{
+  const h=fixture();
+  for(let cycle=0;cycle<3;cycle++){
+    h.scroll.toggle(key);h.flush();assert.deepEqual(h.scroll.control(key),{active:true,position:'bottom',moving:false});
+    const top=h.scroller.scrollTop;h.scroll.toggle(key);assert.deepEqual(h.scroll.control(key),{active:false,position:'top',moving:false});
+    h.grow(800);h.flush();assert.equal(h.scroller.scrollTop,top);
+  }
+  h.scroll.dispose();
 });
 test('manual scroll, editing, selection and outside pointer cancel pending follow',()=>{
   for(const type of ['wheel','touchmove','keydown','selectionchange','pointerdown','click']){const h=fixture();h.scroll.toggle(key);if(type==='selectionchange')h.selected(true);h.event(type,type==='pointerdown'?'outside':'response',{key:'PageUp'});h.flush();assert.equal(h.scroller.scrollTop,200);assert.equal(h.scroll.control(key)?.active,false);h.event('scroll');h.grow(800);h.flush();assert.equal(h.scroller.scrollTop,200);h.scroll.dispose();}

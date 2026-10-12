@@ -15,7 +15,7 @@ export class ResponseScroll {
   private observer?:MutationObserver;
   private resize?:ResizeObserver;
   private watched=new Set<Element>();
-  constructor(private view:MarkdownView,private projection:()=>ResponseProjection,private random=Math.random){
+  constructor(private view:MarkdownView,private projection:()=>ResponseProjection){
     const window=view.contentEl?.ownerDocument.defaultView;if(!window)return;
     const inside=(event:Event)=>view.contentEl.contains(event.target as Node);
     const button=(event:Event)=>((event.target as Node)?.nodeType===1?event.target as Element:(event.target as Node)?.parentElement)?.closest('.send-to-t3-stream-follow');
@@ -50,7 +50,7 @@ export class ResponseScroll {
   /** Called only by the running block's explicit button, including keyboard
    * activation. Rendering, cursor placement and text clicks never enable it. */
   toggle(key:string){
-    if(this.following?.key===key){this.positions.set(key,this.random()<0.5?'top':'bottom');this.stop();return;}
+    if(this.following?.key===key){this.positions.set(key,'top');this.stop();return;}
     const range=this.range(key);if(!range)return;
     this.stop();this.positions.set(key,'bottom');
     while(this.positions.size>64)this.positions.delete(this.positions.keys().next().value!);

@@ -16,8 +16,7 @@ response bytes. Reading measures only its own rendered scroller; a retained,
 hidden Source widget cannot supply its target geometry. Reduced-motion clients
 align immediately and omit the button animation.
 
-The explicit off action samples Math.random once: values below 0.5 return the
-button to the top, and the other values leave it at the bottom. Off restores the
+The explicit off action always returns the button to the top. Off restores the
 normal icon color and leaves the viewport in place. Manual wheel/touch scroll,
 selection, editing, scrollbar interaction or another click cancel pending work
 and retain the current button position. Completion, removal, mode changes,
@@ -26,7 +25,7 @@ never written into the note or settings. Completed saved history keeps its
 existing close action and checked deletion behavior.
 
 Regression tests cover immediate activation, rendered geometry, layout-only
-growth, a changing target during the animation, both random off branches,
+growth, a changing target during the animation, repeated off actions returning to the top,
 manual cancellation, response identity, Reading's visible viewport,
 virtualized widget recovery and listener cleanup. The synthetic native fixture
 is prepared with:
@@ -41,7 +40,7 @@ projection; activation and cancellation require trusted native input. The
 fixture has no Sync connection or native mobile coverage. A QLO2 release still
 requires a supported reload and real-client smoke evidence.
 
-## Native verification on 2026-10-12
+## Historical native verification on 2026-10-12 (2.37.15)
 
 The reviewed synthetic client evidence is retained at
 `/home/ubuntu/backups/send-to-t3-code/scroll-follow-native-reviewed-20261012/verified.json`.
@@ -52,8 +51,8 @@ aligned its own rendered callout at 3,925 and then 4,725 after growth, leaving
 an 8 px gap to its scroller bottom. Screenshots show the purple active icon.
 Every observation retained the saved note bytes and editor selection. Separate
 native off evidence at `scroll-follow-native-final-20261012/scroll-follow.json`
-records the random return to the top with the normal icon color. Both random
-branches also have deterministic regression coverage.
+records the then-random return to the top with the normal icon color. Both random
+branches had deterministic regression coverage in that version.
 
 The final Source scroll-key handling and conflict guard are covered by focused
 regressions; the native fixture records its exact earlier runtime inputs in
