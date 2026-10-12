@@ -88,6 +88,28 @@ Its evidence records the exact installed runtime hashes, client instance,
 screenshots, saved-byte checks and cleanup. Native Windows editing and native
 mobile behavior were not verified by this scroll smoke test.
 
+## QLO2 release 2.37.16
+
+Explicit off now always returns the button to the upper-right corner and its
+normal icon color without moving the viewport. The build, 15 focused scroll
+tests and one release-tool regression passed. The full suite was stopped at the
+user's explicit request; immutable provenance and the deployment receipt record
+that instruction through the release tool's `--skip-tests-reason` option.
+
+The fresh Sync scan and supported reload loaded 2.37.16 in QLO2 instance
+`fcf1f250-9842-46e6-b73d-45095ebf4db9`. Two trusted native on/off cycles in Live
+Preview verified the purple lower-right active button and the normal upper-right
+button after each off click. Saved test-note bytes stayed unchanged. The existing
+native save guard refused the Reading switch with “A finished response cannot
+introduce tracking boundaries”; Reading was not smoke-verified in this release.
+Native Windows and mobile were not tested.
+
+Supported removal retired the owned temporary binding. The test note and tab
+were removed, all 46 original leaves and the original active leaf were retained,
+and the original note bytes and empty search query were restored. Both installed
+settings files retained their release-time bytes. The completed immutable receipt
+is `/home/ubuntu/backups/send-to-t3-code/releases/2.37.16/smoke-vps-qlo2-return-top.json`.
+
 ## Historical text-click follow implementation (2.36.12)
 
 
