@@ -135,9 +135,39 @@
   top: var(--send-to-t3-header-center);
   transform: translateY(-50%);
 }
-.send-to-t3-stream-actions .edit-block-button:not(.send-to-t3-stream-close),
-.send-to-t3-stream-close[hidden] { display: none !important; }
+.send-to-t3-stream-actions .edit-block-button:not(.send-to-t3-stream-close):not(.send-to-t3-stream-follow),
+.send-to-t3-stream-close[hidden], .send-to-t3-stream-follow[hidden] { display: none !important; }
 .send-to-t3-stream-close[aria-disabled="true"] { pointer-events: none; opacity: 0.5; }
+.markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions,
+.send-to-t3-reading-actions {
+  top: var(--send-to-t3-stream-top-center);
+  transform: translateY(-50%);
+  opacity: 1;
+  visibility: visible;
+}
+.markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions-moving,
+.send-to-t3-reading-actions.send-to-t3-stream-actions-moving { transition: top 420ms cubic-bezier(.33, 1, .68, 1); }
+.markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions-bottom,
+.send-to-t3-reading-actions.send-to-t3-stream-actions-bottom { top: var(--send-to-t3-stream-bottom-center); }
+.callout[data-callout="t3-progress"]:has(> .send-to-t3-reading-actions) { position: relative; }
+.send-to-t3-reading-actions { position: absolute; right: 4px; z-index: 2; }
+.send-to-t3-stream-follow { cursor: pointer; color: var(--text-muted); }
+.send-to-t3-stream-follow svg { width: 20px; height: 20px; }
+.send-to-t3-stream-follow[aria-pressed="true"],
+.markdown-source-view.mod-cm6 .edit-block-button.send-to-t3-stream-follow[aria-pressed="true"] {
+  color: var(--color-purple, #a882ff);
+  filter: drop-shadow(0 0 4px var(--color-purple, #a882ff));
+}
+.send-to-t3-stream-follow[aria-pressed="true"] svg { animation: send-to-t3-follow-pop 260ms 420ms both; }
+@keyframes send-to-t3-follow-pop {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.24); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions,
+  .send-to-t3-reading-actions { transition: none; }
+  .send-to-t3-stream-follow[aria-pressed="true"] svg { animation: none; }
+}
 .callout[data-callout="t3-progress"] > .callout-content {
   position: relative;
   padding-inline-start: 1em;

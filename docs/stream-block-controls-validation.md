@@ -2,8 +2,9 @@
 
 Live Preview replaces the native edit action only on generated `t3-progress`
 history callouts. The replacement copies the native element's tag, classes and
-inline style, and retains the existing header alignment. Active history has no
-edit or close action. A terminal preview is insufficient: the unique completed
+inline style, and retains the existing header alignment. Active history now offers the explicit **Follow response** button described in
+[click-response-scroll.md](click-response-scroll.md), while the edit and close
+actions stay hidden. A terminal preview is insufficient: the unique completed
 fold must exist in the saved document outside tracking markers.
 
 After the final save, the history and final answer are ordinary Markdown.

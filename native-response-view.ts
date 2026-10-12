@@ -85,6 +85,8 @@ export class NativeResponseView {
     view.getViewData=this.getWrapper;view.setViewData=this.setWrapper;view.save=this.saveWrapper;view.requestSave=this.requestSaveWrapper;
   }
   responseBody(id:string){return this.responses.find(response=>response.id===id)?.body??regionBody(this.displayed(),id)?.body;}
+  scrollControl(key:string){return !this.blocked&&!this.disposed?this.scroll.control(key):undefined;}
+  toggleScroll(key:string){if(!this.blocked&&!this.disposed)this.scroll.toggle(key);}
   toolGroup(ref:string){return this.savedToolHistory.get(ref)?.canonical??[...this.responseTools.values()].map(presentation=>canonicalToolGroup(presentation,ref)).find(body=>body!==undefined);}
   private canonicalOffset(display:string,offset:number){
     const compact=compactToolGroups(display);let shift=0;

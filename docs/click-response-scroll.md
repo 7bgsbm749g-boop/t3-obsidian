@@ -1,4 +1,67 @@
-# Click-controlled response scrolling
+# Explicit response follow control
+
+The running response block offers a double-down-arrow button in Live Preview
+and Reading. Each pane starts with follow off. A trusted click, Enter or Space
+on this button enables follow for its exact active fold identity. Text clicks,
+synthetic clicks, cursor proximity and arriving stream updates do not enable it.
+Source mode has no rendered block button; a mode change cancels follow.
+
+Activation immediately starts a 420 ms trip, using the rendered callout's
+bottom edge and the active pane's own scroller. The button moves to the lower
+right with the same edge distances as its initial header placement, then pops
+and glows Obsidian purple. Resize and DOM observations also realign later native
+layout changes, such as opened tools and loaded images, without waiting for new
+response bytes. Reading measures only its own rendered scroller; a retained,
+hidden Source widget cannot supply its target geometry. Reduced-motion clients
+align immediately and omit the button animation.
+
+The explicit off action samples Math.random once: values below 0.5 return the
+button to the top, and the other values leave it at the bottom. Off restores the
+normal icon color and leaves the viewport in place. Manual wheel/touch scroll,
+selection, editing, scrollbar interaction or another click cancel pending work
+and retain the current button position. Completion, removal, mode changes,
+conflicts and disposal also cancel it. State stays local to the pane and is
+never written into the note or settings. Completed saved history keeps its
+existing close action and checked deletion behavior.
+
+Regression tests cover immediate activation, rendered geometry, layout-only
+growth, a changing target during the animation, both random off branches,
+manual cancellation, response identity, Reading's visible viewport,
+virtualized widget recovery and listener cleanup. The synthetic native fixture
+is prepared with:
+
+```
+node scripts/build-native-response-lab.mjs /absolute/new/evidence --scroll-follow
+```
+
+Its control.json mailbox accepts snapshot, grow (with an optional lines count),
+and mode (source or preview). Setup and observations use the real native
+projection; activation and cancellation require trusted native input. The
+fixture has no Sync connection or native mobile coverage. A QLO2 release still
+requires a supported reload and real-client smoke evidence.
+
+## Native verification on 2026-10-12
+
+The reviewed synthetic client evidence is retained at
+`/home/ubuntu/backups/send-to-t3-code/scroll-follow-native-reviewed-20261012/verified.json`.
+Obsidian 1.13.7 Live Preview followed from 0 to 909 on activation and to 3,086
+as its callout grew to 3,648 px. A real manual wheel moved to 2,486, switched
+follow off and kept that position through another 800 px of growth. Reading
+aligned its own rendered callout at 3,925 and then 4,725 after growth, leaving
+an 8 px gap to its scroller bottom. Screenshots show the purple active icon.
+Every observation retained the saved note bytes and editor selection. Separate
+native off evidence at `scroll-follow-native-final-20261012/scroll-follow.json`
+records the random return to the top with the normal icon color. Both random
+branches also have deterministic regression coverage.
+
+The final Source scroll-key handling and conflict guard are covered by focused
+regressions; the native fixture records its exact earlier runtime inputs in
+BUILD-SOURCE.json. The canonical build and all 1,385 TypeScript plus 13 Python
+tests passed after those guards. Production installation and reload evidence
+must be recorded separately through the immutable release workflow.
+
+## Historical text-click follow implementation (2.36.12)
+
 
 Before this change, the native response projection dispatches streamed changes
 with `scrollIntoView: false` and maps the current selection. The older public
