@@ -24,6 +24,7 @@
     "@codemirror/lang-json": "6.0.2",
     "@codemirror/lang-python": "6.2.1",
     "@codemirror/legacy-modes": "6.5.4",
+    "@lezer/markdown": "1.4.3",
     "@noble/hashes": "^1.8.0",
     "buffer": "^6.0.3",
     "micromark": "4.0.2",

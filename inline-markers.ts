@@ -2,6 +2,9 @@ import type {Extension} from '@codemirror/state';
 import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
 import type {MarkdownPostProcessorContext} from 'obsidian';
 import {responseBoundaries,responseFrame} from './response-container';
+import {ContainerMarkerIndex} from './container-marker-index';
+
+export interface ContainerMarkerDecorations {index:ContainerMarkerIndex;decorations:DecorationSet}
 
 /** Match only complete plugin tracking comments, including beside user text. */
 export function inlineMarkerRegex():RegExp {
@@ -22,13 +25,21 @@ export function hiddenInlineMarkerExtension():Extension {
   // container separator newline too, retaining the old comment-line geometry in
   // both Live Preview and Source mode. Literal containers in code stay visible.
   const {StateField}=require('@codemirror/state') as typeof import('@codemirror/state');
-  const containers=(document:string)=>Decoration.set(responseBoundaries(document).filter(boundary=>boundary.format==='container').map(boundary=>{
-    const from=boundary.from-(boundary.kind==='end'&&document.slice(boundary.from-2,boundary.from)==='\n\n'?1:0);
-    const to=boundary.to+(boundary.kind==='start'&&document.slice(boundary.to,boundary.to+2)==='\n\n'?1:0);
+  const containers=(index:ContainerMarkerIndex,doc:import('@codemirror/state').Text)=>Decoration.set(index.boundaries.map(boundary=>{
+    const from=boundary.from-(boundary.kind==='end'&&doc.sliceString(Math.max(0,boundary.from-2),boundary.from)==='\n\n'?1:0);
+    const to=boundary.to+(boundary.kind==='start'&&doc.sliceString(boundary.to,boundary.to+2)==='\n\n'?1:0);
     return Decoration.replace({}).range(from,to);
   }),true);
-  const field=StateField.define<DecorationSet>({create:state=>containers(state.doc.toString()),update:(value,transaction)=>transaction.docChanged?containers(transaction.newDoc.toString()):value,provide:field=>EditorView.decorations.from(field)});
-  return [plugin,EditorView.atomicRanges.of(view=>view.plugin(plugin)?.decorations??Decoration.none),field,EditorView.atomicRanges.of(view=>view.state.field(field))];
+  const field=StateField.define<ContainerMarkerDecorations>({
+    create:state=>{const index=ContainerMarkerIndex.create(state.doc);return {index,decorations:containers(index,state.doc)};},
+    update:(value,transaction)=>{
+      if(!transaction.docChanged)return value;
+      const index=value.index.update(transaction.changes,transaction.newDoc);
+      return {index,decorations:containers(index,transaction.newDoc)};
+    },
+    provide:field=>EditorView.decorations.from(field,value=>value.decorations),
+  });
+  return [plugin,EditorView.atomicRanges.of(view=>view.plugin(plugin)?.decorations??Decoration.none),field,EditorView.atomicRanges.of(view=>view.state.field(field).decorations)];
 }
 
 /** Hide only structurally matched directive paragraphs in Reading view.
