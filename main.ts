@@ -726,6 +726,12 @@ export default class SendToT3 extends Plugin {
       await this.refreshNoteCommandHost();
       if(!this.clientMaintenance||this.stopped)throw Error('Desktop client maintenance is unavailable.');
       const result=await this.clientMaintenance.execute(input);
+      if(input.kind==='archive-reply-imports'){
+        if(Platform.isMobile||!this.codebase)throw Error('Move old reply imports from a desktop client.');
+        if(input.environmentId!==await this.localInlineEnvironment())throw Error('Choose a linked project on this desktop computer.');
+        const {archiveLegacyReplyImports}=await import('./legacy-reply-imports-desktop');
+        return {...result,replyImports:await this.codebase.archiveReplyImports(input.environmentId!,input.projectId!,input.archiveDirectory!,archiveLegacyReplyImports)};
+      }
       if(input.kind==='send-failure-log')return {...result,failureLog:sendFailureLog(this.app.loadLocalStorage(this.failureKey()),result.client!.loadedVersion,this.deviceId,input.since)};
       return input.kind==='client-status'?{...result,responseHostOpening:!!this.inlineHostRefresh,connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),...(this.inlineHostService?{responseHost:this.inlineHostService.status()}: {})}:result;
     }

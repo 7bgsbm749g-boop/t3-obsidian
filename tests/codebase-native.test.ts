@@ -5,6 +5,39 @@ import {runInNewContext} from 'node:vm';
 import {virtualPath,type CodebaseIO} from '../codebase-core';
 const editorExternals=['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight'];
 const scope={environmentId:'env',projectId:'project',root:'/outside',title:'Project'};
+test('archived reply links survive reload, prefer remaining physical files and fail closed after unlink',async()=>{
+ const built=await build({entryPoints:['codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:editorExternals});class Base{}class File{constructor(public vault:any,public path:string){}}
+ const module={exports:{} as any};runInNewContext(built.outputFiles[0].text,{module,exports:module.exports,require:()=>({EditorSuggest:Base,ItemView:Base,MarkdownView:Base,FuzzySuggestModal:Base,TFile:File,TFolder:File,Notice:Base}),window:{setInterval:()=>0},document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},TextEncoder,URL,setTimeout,clearTimeout,performance});
+ const alias='T3 Code Attachments/12345678-1234-1234-1234-123456789abc/0123456789abcdef-report.json',path='evidence/old-replies/'+alias,key=virtualPath(scope,path),physical={path:alias};let physicalPresent=false,delegated=0,saved:any;
+ const links=[{folderPath:'Linked',environmentId:'env',projectId:'project',workspaceRoot:'/outside',projectTitle:'Project'}],app:any={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},vault:{configDir:'.obsidian',adapter:{},getFileByPath:(p:string)=>physicalPresent&&p===alias?physical:null,getAbstractFileByPath:(p:string)=>physicalPresent&&p===alias?physical:null},metadataCache:{getFirstLinkpathDest:(p:string)=>physicalPresent&&p===alias?physical:null},workspace:{openLinkText:async()=>{delegated++;},on:()=>({}),onLayoutReady:()=>{},getLeavesOfType:()=>[],getLeaf:()=>({})}};
+ const plugin={registerView:()=>{},registerInterval:()=>{},registerEditorSuggest:()=>{},registerEvent:()=>{},addCommand:()=>{}};
+ const bridge=new module.exports.CodebaseBridge(app,plugin,{},()=>links,'aliases',{load:()=>({version:1,references:{[key]:{scope,path,note:'',name:'report.json'}},choices:{},vaultAliases:{[alias]:key}}),save:async(state:any)=>{saved=JSON.parse(JSON.stringify(state));}});await bridge.install();
+ let opened:any;bridge.open=async(item:any)=>{opened=item;};
+ assert.equal(app.vault.getFileByPath(alias).path,key);assert.equal(app.metadataCache.getFirstLinkpathDest(alias,'Any/Note.md').path,key);await app.workspace.openLinkText(alias+'#Heading','Any/Note.md');assert.equal(opened.path,path);assert.equal(delegated,0);
+ await bridge.persist();assert.equal(saved.vaultAliases[alias],key);
+ physicalPresent=true;assert.equal(app.vault.getFileByPath(alias),physical);assert.equal(app.metadataCache.getFirstLinkpathDest(alias,'Any/Note.md'),physical);await app.workspace.openLinkText(alias,'Any/Note.md');assert.equal(delegated,1);
+ physicalPresent=false;links.length=0;assert.equal(app.vault.getFileByPath(alias),null);assert.equal(app.metadataCache.getFirstLinkpathDest(alias,'Any/Note.md'),null);await app.workspace.openLinkText(alias,'Any/Note.md');assert.equal(delegated,1,'Unavailable archives cannot create blank vault notes');bridge.dispose();
+});
+test('reply files register project references without creating vault attachment folders, including legacy jobs',async()=>{
+ const built=await build({stdin:{contents:"export {CodebaseBridge} from './codebase-native';export {projectReplyReference} from './project-reference';",resolveDir:process.cwd()},bundle:true,write:false,platform:'browser',format:'cjs',external:editorExternals});class Base{}class File{constructor(public vault:any,public path:string){}}
+ const module={exports:{} as any};runInNewContext(built.outputFiles[0].text,{module,exports:module.exports,require:()=>({EditorSuggest:Base,ItemView:Base,MarkdownView:Base,FuzzySuggestModal:Base,TFile:File,TFolder:File,Notice:Base}),window:{setInterval:()=>0},document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},TextEncoder,URL,setTimeout,clearTimeout,performance});
+ const mutations:string[]=[];const forbidden=(name:string)=>async()=>{mutations.push(name);throw Error('Reply files must stay outside the vault');};
+ const app:any={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},vault:{configDir:'.obsidian',adapter:{read:async()=>{throw Error('missing');},mkdir:forbidden('adapter.mkdir'),write:forbidden('adapter.write'),writeBinary:forbidden('adapter.writeBinary')},createFolder:forbidden('vault.createFolder'),create:forbidden('vault.create'),createBinary:forbidden('vault.createBinary'),trigger:()=>mutations.push('vault event')},metadataCache:{getFirstLinkpathDest:()=>null},workspace:{openLinkText:async()=>{},on:()=>({}),onLayoutReady:()=>{},getLeavesOfType:()=>[]}};
+ const plugin={registerView:()=>{},registerInterval:()=>{},registerEditorSuggest:()=>{},registerEvent:()=>{},addCommand:()=>{}};
+ const bridge=new module.exports.CodebaseBridge(app,plugin,{},()=>[{folderPath:'Linked',...scope,workspaceRoot:scope.root,projectTitle:scope.title}],'reply-files',{load:()=>undefined,save:async()=>{}});await bridge.install();
+ const access={api:async(path:string)=>{assert.equal(path,'/api/orchestration/shell');return {projects:[{id:'project',title:'Project',workspaceRoot:'/outside'}],threads:[{id:'thread',worktreePath:'/worktree'}]};}};
+ try{
+  for(const version of [1,4])for(const path of ['docs/report.md','chart.png','manual.pdf','bundle.zip']){
+   const source='/worktree/'+path,reference={source,original:`[file](${source})`,label:'file',image:path.endsWith('.png'),offset:0},request={version,id:'old-job',projectId:'project',threadId:'thread',threadEnvironmentId:'env',notePath:'Linked/Note.md',replyFolders:{images:'T3 Code Attachments',files:'Old Reply Files'}};
+   assert.equal(await module.exports.projectReplyReference(app,reference,request,access),undefined);
+   assert.equal(reference.source,source);
+   assert.equal(app.metadataCache.getFirstLinkpathDest(source,request.notePath).path,virtualPath({...scope,root:'/worktree',threadId:'thread'},path));
+  }
+  assert.deepEqual(mutations,[]);
+ }finally{bridge.dispose();}
+ assert.equal(await module.exports.projectReplyReference(app,{source:'/outside/report.md'},{},access),undefined,'An unavailable bridge must not fall back to the retired vault importer');
+ assert.deepEqual(mutations,[]);
+});
 test('large candidate catalogs use one current link snapshot and immediately honor unlink and post-search revocation',async()=>{
  const built=await build({entryPoints:['codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:editorExternals});class Base{}class File{constructor(public vault:any,public path:string){}}
  const module={exports:{} as any};runInNewContext(built.outputFiles[0].text,{module,exports:module.exports,require:()=>({EditorSuggest:Base,ItemView:Base,FuzzySuggestModal:Base,TFile:File,TFolder:File}),document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},TextEncoder,URL,setTimeout,clearTimeout,performance});

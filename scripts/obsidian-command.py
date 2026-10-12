@@ -27,10 +27,11 @@ def main():
     parser.add_argument('--timeout', type=float, default=90)
     parser.add_argument('--retry', action='store_true', help='Retry a failed result with the original prepared send')
     parser.add_argument('--ssh-host', help='Private Windows SSH alias, for read-only send-failure-log from the VPS')
-    parser.add_argument('kind', choices=['client-status', 'send-failure-log', 'reload-client', 'response-recovery-info', 'retry-response-save', 'resolve-response-location', 'response-status', 'response-import-info', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response', 'send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination', 'subscribe-job', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
+    parser.add_argument('kind', choices=['client-status', 'send-failure-log', 'reload-client', 'archive-reply-imports', 'response-recovery-info', 'retry-response-save', 'resolve-response-location', 'response-status', 'response-import-info', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response', 'send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination', 'subscribe-job', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
     parser.add_argument('--since', help='Read failure log entries at or after this UTC timestamp')
     parser.add_argument('--release-version', help='Exact immutable release for reload-client')
     parser.add_argument('--runtime-hashes', help='JSON object of exact release runtime SHA-256 hashes')
+    parser.add_argument('--archive-directory', help='Directory inside a linked local project for old reply imports')
     parser.add_argument('note', nargs='?', help='Vault-relative note or folder path; / means vault root')
     parser.add_argument('--destination', action='append', default=[])
     parser.add_argument('--destination-section', help='Exact unique Markdown heading for response placement')
@@ -99,10 +100,16 @@ def main():
         command_id = str(uuid.UUID(args.request_id)) if args.request_id else str(uuid.uuid4())
     except ValueError:
         parser.error('--request-id must be a UUID.')
-    if args.kind in ['client-status', 'send-failure-log', 'reload-client']:
+    if args.archive_directory is not None and args.kind != 'archive-reply-imports':
+        parser.error('--archive-directory requires archive-reply-imports.')
+    if args.kind in ['client-status', 'send-failure-log', 'reload-client', 'archive-reply-imports']:
         if any([args.note, args.destination, args.thread_id, args.message_id, args.binding_id, args.scope, args.event]):
             parser.error('Client commands do not send notes, prompts, or subscriptions.')
         command = dict(version=1, id=command_id, kind=args.kind)
+        if args.kind == 'archive-reply-imports':
+            if not all([args.project_id, args.environment_id, args.archive_directory]):
+                parser.error('archive-reply-imports requires --project-id, --environment-id and --archive-directory.')
+            command.update(projectId=args.project_id, environmentId=args.environment_id, archiveDirectory=args.archive_directory)
         if args.since is not None:
             command['since'] = args.since
         if args.kind == 'reload-client':

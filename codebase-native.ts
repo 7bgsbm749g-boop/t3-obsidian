@@ -11,8 +11,9 @@ import {CODEBASE_VIEW as VIEW,CodebaseView} from './codebase-view';
 import {timingSummaries} from './codebase-performance';
 import {NativeLanguageViews} from './language-views';
 import {EmbedReferenceCache} from './embed-reference-cache';
+import {contentHash} from './completion';
 export {CodebaseView} from './codebase-view';
-export interface CodebaseState {version:1;references:Record<string,SavedReference>;choices:Record<string,string>;automaticChoices?:Record<string,string[]>}
+export interface CodebaseState {version:1;references:Record<string,SavedReference>;choices:Record<string,string>;automaticChoices?:Record<string,string[]>;vaultAliases?:Record<string,string>}
 export interface CodebaseStorage {load():CodebaseState|undefined;save(state:CodebaseState):Promise<void>;projectChanged?(scope:CodebaseScope,change:{title?:string;deleted?:boolean}):Promise<void>}
 const MEDIA=/\.(?:png|jpe?g|gif|webp|svg|bmp|avif|pdf|mp[34]|wav|m4a|3gp|flac|ogg|oga|opus|webm|ogv|mov|mkv)$/i;
 export interface RegisteredFile {scope:CodebaseScope;path:string;file:TFile;document:CodebaseDocument;resource?:{url:string;expiresAt:number};preparing?:Promise<void>;text?:string}
@@ -52,6 +53,8 @@ export class CodebaseBridge {
   private draftAliases:Record<string,string>;
   private chrome=new Map<any,MutationObserver>();
   private legacyPaths:Record<string,string>;
+  private vaultAliases:Record<string,string>={};
+  private physicalFileLookup?:(path:string)=>TFile|null;
   private recoveryNotices=new Set<string>();
   private projectReconciliation?:Promise<void>;
   private sourceOrigins=new Map<string,Map<string,{environmentId:string;projectId:string}>>();
@@ -74,11 +77,12 @@ export class CodebaseBridge {
     this.undo.push(registerProjectReferences(this.app,(reference,request,access)=>this.reply(reference,request,access)));
     try{const saved=this.storage?.load()??JSON.parse(await this.app.vault.adapter.read(this.metadataPath));this.adopt(saved);}catch{/* First use or unavailable metadata. */}
     const vault=this.app.vault,cache=this.app.metadataCache,workspace=this.app.workspace;
+    this.physicalFileLookup=vault.getFileByPath?.bind(vault);
     await this.reconcileProjectChanges().catch(error=>new Notice(`T3 project changed; folder link update pending: ${error.message}`,10000));
     this.nativeSwitcher();
     this.nativeFileOpen();
     this.nativePathLinks();
-    for(const method of ['getFileByPath','getAbstractFileByPath'])this.patch(vault,method,(original:any)=>(path:string)=>this.files.get(path)?.file??this.files.get(this.legacyPaths[path])?.file??this.folders.get(path)??original(path));
+    for(const method of ['getFileByPath','getAbstractFileByPath'])this.patch(vault,method,(original:any)=>(path:string)=>this.files.get(path)?.file??this.files.get(this.legacyPaths[path])?.file??this.folders.get(path)??original(path)??this.vaultAlias(path)?.file??null);
     for(const method of ['read','cachedRead'])this.patch(vault,method,(original:any)=>async(file:TFile)=>{
       const item=this.files.get(file.path);if(item){this.captureBases(item);await this.prepare(item);const before=item.document.base;item.text=await item.document.read();this.synchronizePeers(item,before,item.text);await this.prepareEmbeds(item.text,file.path);return item.text;}
       const text=await original(file);void this.prepareEmbeds(text,file.path).then(changed=>{if(!changed)return;for(const leaf of workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===file.path)view.previewMode?.rerender(true);}});return text;
@@ -149,6 +153,7 @@ export class CodebaseBridge {
     this.local('draft-aliases',this.draftAliases);
     this.local('legacy-paths',this.legacyPaths);
     for(const [key,path] of Object.entries(saved.choices??{})){let choice=key;try{const [source,name]=JSON.parse(key);choice=JSON.stringify([migrated[source]??this.legacyPaths[source]??source,name]);}catch{}this.choices[choice]=migrated[path]??this.legacyPaths[path]??path;}
+    for(const [source,path] of Object.entries(saved.vaultAliases??{}))if(/^T3 Code Attachments\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\/[0-9a-f]{16}-[^/]+$/i.test(source)&&this.records.has(migrated[path]??path))this.vaultAliases[source]=migrated[path]??path;
   }
 
   private patch(target:any,key:string,wrap:(original:any)=>any){if(typeof target[key]!=='function')return;const original=target[key],replacement=wrap(original.bind(target));target[key]=replacement;this.undo.push(()=>{if(target===this.app.vault.adapter)return;/* Keep a fail-closed prefix guard while old native leaves unload. */if(target[key]===replacement)target[key]=original;});}
@@ -233,7 +238,18 @@ export class CodebaseBridge {
   async suggestions(query:string,source:string){if(query.length>2)try{await this.search(query,source);}catch{}const links=this.links(),scopes=linkedCodebases(links),linked=links.filter(l=>source.startsWith(l.folderPath+'/')).sort((a,b)=>b.folderPath.length-a.folderPath.length)[0],lower=query.toLowerCase();return [...this.files.values()].filter(f=>this.allowed(f.scope,scopes)&&(!linked||f.scope.projectId===linked.projectId&&f.scope.environmentId===linked.environmentId)&&f.file.name.toLowerCase().includes(lower)).slice(0,100);}
   private resolve(name:string,source:string){const route=this.pathRoute(name,source);if(route.owned)return route.items.length===1?route.items[0]:undefined;const sourceItem=this.files.get(source);if(sourceItem){const clean=name.split('#')[0];if(!clean)return sourceItem;if(clean.includes('/')){const parts=sourceItem.path.split('/').slice(0,-1);for(const part of clean.split('/')){if(part==='.')continue;if(part==='..'){if(!parts.length)return undefined;parts.pop();}else parts.push(part);}const relative=this.files.get(virtualPath(sourceItem.scope,parts.join('/')));if(relative)return relative;}}const own=this.files.get(name.split('#')[0]);if(own&&this.allowed(own.scope))return own;const remembered=this.choices[JSON.stringify([source,projectLink(name)?.path??name]) ]??this.choices[JSON.stringify([source,name.split('#')[0]])];if(remembered&&this.files.has(remembered)&&this.allowed(this.files.get(remembered)!.scope))return this.files.get(remembered);const sourceFile=this.files.get(source);const candidates=this.candidates(name,source);if(sourceFile){const same=candidates.filter(f=>scopeKey(f.scope)===scopeKey(sourceFile.scope));if(same.length===1)return same[0];}return candidates.length===1?candidates[0]:undefined;}
   private choose(items:RegisteredFile[],name:string,source:string){return new Promise<RegisteredFile|undefined>(resolve=>{new FileChoice(this.app,items,item=>{if(item){const key=JSON.stringify([source,projectLink(name)?.path??name]);this.automaticChoices.delete(key);this.choices[key]=item.file.path;void this.persist();}resolve(item);},scope=>this.scopeTitle(scope)).open();});}
-  private persist(){this.persistence=this.persistence.catch(()=>{}).then(async()=>{const state:CodebaseState={version:1,references:Object.fromEntries(this.records),choices:this.choices,automaticChoices:Object.fromEntries([...this.automaticChoices].map(([key,paths])=>[key,[...paths]]))};if(this.storage){if(JSON.stringify(state)!==JSON.stringify(this.storage.load()))await this.storage.save(state);return;}const adapter=this.app.vault.adapter,dir=this.metadataPath.slice(0,this.metadataPath.lastIndexOf('/'));if(!await adapter.exists(dir))await adapter.mkdir(dir);await adapter.write(this.metadataPath,JSON.stringify(state));});return this.persistence;}
+  private persist(){this.persistence=this.persistence.catch(()=>{}).then(async()=>{const state:CodebaseState={version:1,references:Object.fromEntries(this.records),choices:this.choices,automaticChoices:Object.fromEntries([...this.automaticChoices].map(([key,paths])=>[key,[...paths]])),...(Object.keys(this.vaultAliases).length?{vaultAliases:this.vaultAliases}:{})};if(this.storage){if(JSON.stringify(state)!==JSON.stringify(this.storage.load()))await this.storage.save(state);return;}const adapter=this.app.vault.adapter,dir=this.metadataPath.slice(0,this.metadataPath.lastIndexOf('/'));if(!await adapter.exists(dir))await adapter.mkdir(dir);await adapter.write(this.metadataPath,JSON.stringify(state));});return this.persistence;}
+  private vaultAlias(path:string){const item=this.files.get(this.vaultAliases[path]);return item&&this.allowed(item.scope)?item:undefined;}
+  async archiveReplyImports(environmentId:string,projectId:string,directory:string,archive:typeof import('./legacy-reply-imports-desktop').archiveLegacyReplyImports){
+    const scope=this.scopes().find(scope=>scope.environmentId===environmentId&&scope.projectId===projectId);
+    if(!scope)throw Error('Choose a linked project outside the vault.');
+    await this.io.list(scope,''); // Check the authenticated project's current workspace.
+    return archive(this.app,scope,directory,async copies=>{
+      for(const copy of copies)if(/\.(?:md|txt|json|jsonl|log|[cm]?jsx?|tsx?|css|py|ya?ml|csv|xml|html?)$/i.test(copy.path)&&contentHash(await this.io.read(scope,copy.path))!==copy.sha256)throw Error('T3 could not verify the archived project file.');
+      for(const copy of copies){const item=this.register(scope,copy.path);this.pin(item);this.vaultAliases[copy.source]=item.file.path;}
+      await this.persist();
+    });
+  }
 
   async search(name:string,source:string){
     const key=JSON.stringify([name,source]);if(Date.now()-(this.searchAt.get(key)??0)<15000)return;
@@ -318,6 +334,10 @@ export class CodebaseBridge {
   private absoluteReference(name:string){const path=projectLink(name)?.path;if(!path)return false;return /^(?:\/|[a-z]:\/)/i.test(path)||this.scopes().some(scope=>scope.root.startsWith('/')&&path.startsWith(scope.root.split('/')[1]+'/'));}
   private routeScopes(linked=this.scopes()){const scopes=[...linked,...this.knownScopes.values(),...linked.flatMap(scope=>this.browse.workspaces(scope)),...[...this.workspaceScopes.values()].flatMap(r=>r.value)];return [...new Map(scopes.map(s=>[virtualPath(s,'identity'),s])).values()];}
   private pathRoute(name:string,source:string){
+    if(name.startsWith('T3 Code Attachments/')||name.startsWith('T3%20Code%20Attachments/')){
+      const alias=projectLink(name)?.path??name.split('#')[0];
+      if(this.vaultAliases[alias]&&!this.physicalFileLookup?.(alias)){const item=this.vaultAlias(alias);return {owned:true,items:item?[item]:[] as RegisteredFile[]};}
+    }
     if(!/[\\/]/.test(name)||/^(?!file:|sandbox:)[a-z][a-z0-9+.-]*:/i.test(name)&&! /^[a-z]:[\\/]/i.test(name))return {owned:false,items:[] as RegisteredFile[]};
     const parsed=projectLink(name);if(parsed&&!/^(?:\/|[a-z]:\/)/i.test(parsed.path)&&!this.links().some(link=>link.workspaceRoot?.startsWith('/')&&parsed.path.startsWith(link.workspaceRoot.split('/')[1]+'/'))&&![...this.knownScopes.values()].some(scope=>scope.root.startsWith('/')&&parsed.path.startsWith(scope.root.split('/')[1]+'/')))return {owned:false,items:[] as RegisteredFile[]};
     const linked=this.scopes(),scopes=this.routeScopes(linked),allowed=(scope:CodebaseScope)=>linked.some(s=>s.environmentId===scope.environmentId&&s.projectId===scope.projectId&&(!!scope.threadId||s.root===scope.root)),active=scopes.filter(allowed);
