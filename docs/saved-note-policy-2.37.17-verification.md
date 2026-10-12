@@ -46,6 +46,10 @@ Its evidence bundle records exact runtime hashes, native checks, screenshots,
 save and undo hashes, delivery acknowledgements and cleanup. Working evidence:
 `/home/ubuntu/backups/send-to-t3-code/investigations/saved-note-policy-20261012T213930Z`.
 
+The supported laptop reload helper also completed and reported loaded version
+2.37.17 in instance `be24fedd-5e3d-4b5a-a32e-8df29e27288a`. Its separate
+`laptop-reload-final.json` records loaded-version verification, not a GUI smoke.
+
 This establishes fresh Headless Sync publication and visible adoption in the
 VPS desktop client. It does not establish desktop core Sync-engine behavior,
 native Windows GUI behavior, or native iPhone/Android coverage.
