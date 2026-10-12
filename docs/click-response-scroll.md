@@ -61,6 +61,34 @@ BUILD-SOURCE.json. The canonical build and all 1,385 TypeScript plus 13 Python
 tests passed after those guards. Production installation and reload evidence
 must be recorded separately through the immutable release workflow.
 
+## QLO2 release 2.37.15
+
+The supported immutable release includes source commits `860144e` and `82aba4a`.
+The final build and all 1,386 TypeScript plus 13 Python tests passed. Installation
+preserved both plugin settings files, and a fresh Headless Sync scan published
+the runtime artifacts. The real QLO2 Obsidian 1.14.4 client reloaded through the
+supported command and reported 2.37.15 in instance
+`b47a6a96-e459-4b80-9f02-52a8a8adeb06`.
+
+A uniquely owned temporary note followed this existing T3 response. Trusted
+native clicks verified immediate following, the purple lower-right icon and
+alignment above Obsidian's overlaid status bar in Live Preview and Reading.
+Explicit off returned the native icon to the header in its normal color; manual
+wheel input cancelled Reading follow and retained older paragraphs through new
+stream output. Saved empty-container bytes remained unchanged throughout.
+The obsolete agent-authored coordination question was withdrawn without an
+answer. Supported removal retired only the temporary binding. Its retained empty
+placeholder was backed up before deleting the owned note and closing its tab.
+All 46 original leaves, the original active leaf, note bytes, empty search query
+and both plugin settings files were preserved. Native desktop screenshots and
+checked command results are retained outside the vault.
+
+The immutable completion receipt is
+`/home/ubuntu/backups/send-to-t3-code/releases/2.37.15/smoke-vps-qlo2-scroll-follow.json`.
+Its evidence records the exact installed runtime hashes, client instance,
+screenshots, saved-byte checks and cleanup. Native Windows editing and native
+mobile behavior were not verified by this scroll smoke test.
+
 ## Historical text-click follow implementation (2.36.12)
 
 
