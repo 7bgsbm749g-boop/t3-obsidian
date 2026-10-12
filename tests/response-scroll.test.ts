@@ -16,12 +16,12 @@ function fixture(random=()=>0.25){
   const saved=`Before\n\n${responseAnchor(id)}\n\nBetween\n\n${responseAnchor(other)}\n\nAfter`;
   let responses=[{id,body:body(key)},{id:other,body:body(otherKey)}],projection=projectResponses(saved,responses);
   const scroller={scrollTop:200,clientTop:0,clientHeight:600,getBoundingClientRect:()=>({top:100,bottom:700}),querySelectorAll:()=>rendered?folds:[]};
-  const fold=(key:string)=>({getBoundingClientRect:()=>({bottom:tail-(scroller.scrollTop-200)}),querySelector:()=>({dataset:{t3Fold:key}})});
+  const fold=(key:string)=>({getBoundingClientRect:()=>({bottom:tail-(scroller.scrollTop-200),left:100,right:700}),querySelector:()=>({dataset:{t3Fold:key}})});
   const folds=[fold(key),fold(otherKey)];
   const target=(kind:'response'|'outside'|'control'|'follow'='response')=>({nodeType:1,kind,closest:(selector:string)=>selector==='.send-to-t3-stream-follow'&&kind==='follow'?{}:null});
   const effects:any[]=[],notifications:any[]=[];
   const cm={scrollDOM:scroller,state:EditorState.create({doc:projection.display}),dispatch:(spec:any)=>effects.push(spec)};
-  const document={defaultView:window,addEventListener:add,removeEventListener:remove};
+  const document={defaultView:window,addEventListener:add,removeEventListener:remove,querySelectorAll:()=>[] as any[]};
   const contentEl={ownerDocument:document,isConnected:true,contains:(el:any)=>el?.kind!=='outside',querySelector:(selector:string)=>selector.includes('is-live-preview')?live?{}:null:scroller,querySelectorAll:()=>rendered?folds:[],getBoundingClientRect:()=>({bottom:800}),dispatchEvent:(event:any)=>{notifications.push(event);return true;}};
   const view:any={contentEl,editor:{cm},getMode:()=>mode};
   const scroll=new ResponseScroll(view,()=>projection,random);
@@ -62,6 +62,9 @@ test('Reading uses its pane scroller and visible viewport, and selection cancels
 });
 test('hidden widgets from another native mode cannot supply the scroll target',()=>{
   const h=fixture();h.mode('preview');h.view.contentEl.querySelectorAll=()=>[{getBoundingClientRect:()=>({bottom:0}),querySelector:()=>({dataset:{t3Fold:key}})}];h.scroll.toggle(key);h.flush();assert.equal(h.scroller.scrollTop,608);h.scroll.dispose();
+});
+test('an overlapping Obsidian status bar reduces the visible bottom; a bar beside the pane does not',()=>{
+  for(const [left,expected] of [[500,628],[800,608]]){const h=fixture();h.view.contentEl.ownerDocument.querySelectorAll=()=>[{getBoundingClientRect:()=>({top:680,bottom:700,left,right:left+200,width:200,height:20})}];h.scroll.toggle(key);h.flush();assert.equal(h.scroller.scrollTop,expected);h.scroll.dispose();}
 });
 test('a virtualized native block is revealed with a scroll effect before rendered geometry is used',()=>{
   const h=fixture();h.rendered(false);h.scroll.toggle(key);h.flush();assert.equal(h.effects.length,1);assert.deepEqual(Object.keys(h.effects[0]),['effects']);h.rendered(true);h.scroll.updated();h.flush();assert.equal(h.scroller.scrollTop,608);h.scroll.dispose();

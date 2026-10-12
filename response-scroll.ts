@@ -90,9 +90,15 @@ export class ResponseScroll {
       }
       for(const element of [fold,scroller])if(!this.watched.has(element)){this.resize?.observe(element);this.watched.add(element);}
       for(const element of this.watched)if(element!==fold&&element!==scroller){this.resize?.unobserve(element);this.watched.delete(element);}
-      const box=scroller.getBoundingClientRect(),pane=this.view.contentEl.getBoundingClientRect(),viewport=window.visualViewport;
-      const bottom=Math.min(box.top+scroller.clientTop+scroller.clientHeight,pane.bottom,viewport?viewport.offsetTop+viewport.height:Infinity)-inset;
-      const delta=fold.getBoundingClientRect().bottom-bottom;
+      const box=scroller.getBoundingClientRect(),pane=this.view.contentEl.getBoundingClientRect(),viewport=window.visualViewport,foldBox=fold.getBoundingClientRect();
+      let bottom=Math.min(box.top+scroller.clientTop+scroller.clientHeight,pane.bottom,viewport?viewport.offsetTop+viewport.height:Infinity);
+      // Obsidian can overlay the status bar on the scroll surface. Exclude
+      // only a visible bar which overlaps this block in this document/window.
+      for(const bar of Array.from(this.view.contentEl.ownerDocument.querySelectorAll<HTMLElement>('.status-bar'))){
+        const rect=bar.getBoundingClientRect();
+        if(rect.height>0&&rect.width>0&&rect.right>foldBox.left&&rect.left<foldBox.right&&rect.bottom>=bottom&&rect.top>box.top)bottom=Math.min(bottom,rect.top);
+      }
+      const delta=foldBox.bottom-(bottom-inset);
       if(following.started===undefined)following.started=time;
       const progress=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?1:Math.min(1,(time-following.started)/duration);
       // Re-measure the remaining distance every frame: streaming can change

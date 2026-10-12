@@ -7,7 +7,8 @@ synthetic clicks, cursor proximity and arriving stream updates do not enable it.
 Source mode has no rendered block button; a mode change cancels follow.
 
 Activation immediately starts a 420 ms trip, using the rendered callout's
-bottom edge and the active pane's own scroller. The button moves to the lower
+bottom edge and the active pane's own scroller. A visible status bar which
+overlaps that block is excluded from the available space. The button moves to the lower
 right with the same edge distances as its initial header placement, then pops
 and glows Obsidian purple. Resize and DOM observations also realign later native
 layout changes, such as opened tools and loaded images, without waiting for new
