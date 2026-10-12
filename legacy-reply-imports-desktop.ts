@@ -43,6 +43,9 @@ export async function archiveLegacyReplyImports(app:App,scope:CodebaseScope,dire
   if(hash(await fs.readFile(resolve(projectRoot,copy.path)))!==copy.sha256)throw Error('An archived attachment changed during the move.');
   await vault.delete(copy.file);removed++;
  }
- for(const old of folders.reverse())if(!old.children.length&&vault.getAbstractFileByPath(old.path)===old)await vault.delete(old);
+ // Vault.delete uses the file-removal API on some desktop clients. Use
+ // nonrecursive directory removal; stale watcher children cannot block it,
+ // and a newly created file makes rmdir fail instead of deleting that file.
+ for(const old of folders.reverse())if(vault.getAbstractFileByPath(old.path)===old)try{await fs.rmdir(join(vaultRoot,old.path));}catch(error:any){if(error.code!=='ENOENT')throw error;}
  return {files:copies.length,removed,directory,sha256:Object.fromEntries(copies.map(copy=>[copy.source,copy.sha256]))};
 }
