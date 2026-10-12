@@ -17,6 +17,8 @@ import {detectMissingThree,suppliedNoteBlocks,leaseResponseEvidence,mergeNoteDel
 import {ProjectDiscovery,type ProjectSource,type ProjectSnapshot} from './project-discovery';
 import {resolveJobOptions,type ResolvedJobOptions} from './job-options';
 import {intermediateMode,installResponsePresentation,finalAnswerFormat,type FinalAnswerFormat,type IntermediateMode} from './response-presentation';
+import {installActivityShine} from './activity-shine';
+import {decorateActivityTabs} from './activity-titles';
 import {applyThreadItem} from './inline-thread';
 import {readInlineSnapshot,watchThread,type ThreadAccess} from './thread-stream';
 import {isRecoveryCommand,validateRecoveryCommand} from './recovery-command';
@@ -312,6 +314,14 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.openImportStreams(file).catch(error=>new Notice(`T3 streams: ${message(error)}`,10000));return true;
     }});
     if(typeof document.querySelectorAll==='function')this.register(installResponsePresentation(document,setIcon));
+    const shineDocuments=new Map<Document,()=>void>();
+    const watchShine=(root:Document)=>{if(root.body&&!shineDocuments.has(root))shineDocuments.set(root,installActivityShine(root));};
+    if(typeof document.querySelectorAll==='function'){
+      watchShine(document);
+      this.register(()=>{for(const dispose of shineDocuments.values())dispose();shineDocuments.clear();});
+      this.registerEvent(this.app.workspace.on('window-open',(_win,window)=>watchShine(window.document)));
+      this.registerEvent(this.app.workspace.on('window-close',(_win,window)=>{shineDocuments.get(window.document)?.();shineDocuments.delete(window.document);}));
+    }
     if(typeof document.querySelectorAll==='function')this.register(installStreamBlockControls(this.app,document,setIcon,error=>new Notice(`T3: ${message(error)}`,10000)));
     const questionStorage=`${this.localKey}-questions-${this.settings.vaultId}`;
     this.questions=new QuestionController(environmentId=>this.inlineThreadAccess(environmentId),{load:()=>{const saved=this.app.loadLocalStorage(questionStorage);return Array.isArray(saved)?saved:[];},save:records=>this.app.saveLocalStorage(questionStorage,records)},randomId);
@@ -391,6 +401,15 @@ export default class SendToT3 extends Plugin {
           const plugin=(this.app as App&{plugins?:{plugins?:Record<string,{settings?:FolderNotesSettings}>}}).plugins?.plugins?.['folder-notes'];
           if(!plugin||!title.classList.contains('has-folder-note'))return;
           return folderNotePath(title.getAttribute('data-path')??'',plugin.settings,path=>this.app.vault.getAbstractFileByPath(path) instanceof TFile);
+        },notes=>{
+          const tabs:Parameters<typeof decorateActivityTabs>[0]=[];
+          this.app.workspace.iterateAllLeaves(leaf=>{
+            const view=leaf.view as MarkdownView;
+            const header=(leaf as typeof leaf&{tabHeaderEl?:HTMLElement}).tabHeaderEl;
+            if(header)watchShine(header.ownerDocument);
+            tabs.push({path:view.file?.path,title:header?.querySelector<HTMLElement>('.workspace-tab-header-inner-title')??null});
+          });
+          decorateActivityTabs(tabs,notes);
         });
         this.registerInterval(window.setInterval(()=>this.folderIndicators?.refresh(),1000));
         this.registerEvent(this.app.workspace.on('layout-change',()=>this.folderIndicators?.refresh()));

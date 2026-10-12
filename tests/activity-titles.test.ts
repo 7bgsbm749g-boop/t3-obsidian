@@ -1,0 +1,52 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {activeResponseFolders,decorateActivityTabs} from '../activity-titles';
+import {decorateNoteIndicators} from '../folder-indicator';
+import type {NoteIndicator} from '../explorer-responses';
+
+class Element {
+  className='';title='';children:Element[]=[];attrs=new Map<string,string>();
+  classList={contains:(name:string)=>this.className.split(' ').includes(name)};
+  ownerDocument={createElement:()=>new Element()};
+  parent?:Element;
+  getAttribute(name:string){return this.attrs.get(name)??null;}
+  hasAttribute(name:string){return this.attrs.has(name);}
+  setAttribute(name:string,value:string){this.attrs.set(name,value);}
+  removeAttribute(name:string){this.attrs.delete(name);}
+  appendChild(child:Element){child.parent=this;this.children.push(child);}
+  replaceChildren(...children:Element[]){this.children=[];children.forEach(child=>this.appendChild(child));}
+  querySelector(selector:string){return this.children.find(child=>child.className===selector.slice(1))??null;}
+  remove(){if(this.parent)this.parent.children=this.parent.children.filter(child=>child!==this);}
+}
+const note=(active:number,input=0):NoteIndicator=>({active,input,complete:active||input?0:1,total:1});
+const title=(path:string,folder=false)=>{
+  const row=new Element();row.className=folder?'nav-folder-title':'nav-file-title';row.setAttribute('data-path',path);
+  const label=new Element();label.className=row.className+'-content';row.appendChild(label);return {row,label};
+};
+
+test('active notes shine through ancestors without matching sibling folder prefixes or adding visible work badges',()=>{
+  const file=title('App/Nested/Note.md'),parent=title('App',true),nested=title('App/Nested',true),sibling=title('Application',true);
+  const root={querySelectorAll:()=>[file.row,parent.row,nested.row,sibling.row]};
+  const notes=new Map([['App/Nested/Note.md',note(1,1)],['Application/Other.md',note(0)]]);
+  assert.deepEqual([...activeResponseFolders(notes)],['App/Nested','App']);
+  decorateNoteIndicators(root as any,notes);
+  for(const item of [file,parent,nested])assert.equal(item.label.getAttribute('data-t3-active-title'),'true');
+  assert.equal(sibling.label.hasAttribute('data-t3-active-title'),false);
+  assert.equal(parent.row.children.length,1,'Ancestor activity uses only its original label');
+  const badge=file.row.children[1];assert.equal(badge.children.length,1);assert.equal(badge.children[0].className,'send-to-t3-note-input');
+  notes.set('App/Nested/Note.md',note(0));decorateNoteIndicators(root as any,notes);
+  for(const item of [file,parent,nested])assert.equal(item.label.hasAttribute('data-t3-active-title'),false);
+  assert.equal(file.row.children[1].children[0].className,'send-to-t3-note-complete');
+});
+
+test('tabs follow exact note paths across duplicate names, multiple panes, rename and completion',()=>{
+  const first=new Element(),mirror=new Element(),other=new Element(),nonFile=new Element();
+  const tabs=[{path:'App/Note.md',title:first},{path:'App/Note.md',title:mirror},{path:'Other/Note.md',title:other},{title:nonFile}];
+  const notes=new Map([['App/Note.md',note(2)],['Other/Note.md',note(0,1)]]);
+  decorateActivityTabs(tabs as any,notes);
+  for(const label of [first,mirror])assert.equal(label.getAttribute('data-t3-active-title'),'true');
+  for(const label of [other,nonFile])assert.equal(label.hasAttribute('data-t3-active-title'),false);
+  notes.delete('App/Note.md');notes.set('App/Renamed.md',note(1));tabs[0].path='App/Renamed.md';
+  decorateActivityTabs(tabs as any,notes);assert.equal(first.hasAttribute('data-t3-active-title'),true);assert.equal(mirror.hasAttribute('data-t3-active-title'),false);
+  notes.clear();decorateActivityTabs(tabs as any,notes);assert.equal(first.hasAttribute('data-t3-active-title'),false);
+});

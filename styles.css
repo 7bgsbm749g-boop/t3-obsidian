@@ -9,23 +9,19 @@
   color: var(--text-muted);
 }
 .send-to-t3-linked-folder-logo { display: block; height: 14px; width: 14px; }
-.send-to-t3-note-active {
-  width: 12px;
-  height: 12px;
-  box-sizing: border-box;
-  border: 1.5px solid var(--text-faint);
-  border-top-color: var(--text-normal);
-  border-radius: 50%;
-  animation: send-to-t3-explorer-spin 900ms linear infinite;
+/* Keep the active count accessible without adding a visible badge or spacing. */
+.send-to-t3-note-indicator[data-t3-state="active"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 .send-to-t3-note-input,
 .send-to-t3-note-complete { width: 7px; height: 7px; border-radius: 50%; }
 .send-to-t3-note-input { background: var(--color-blue, #448aff); }
 .send-to-t3-note-complete { background: var(--color-green, #4caf50); }
-@keyframes send-to-t3-explorer-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) {
-  .send-to-t3-note-active { animation: none; }
-}
 
 .send-to-t3-selection-action {
   position: fixed;
@@ -43,24 +39,28 @@
 }
 .send-to-t3-selection-action[hidden] { display: none; }
 
-.send-to-t3-inline-spinner {
-  display: inline-block;
-  width: 0.75em;
-  height: 0.75em;
-  margin-inline-start: 0.15em;
-  border: 0.12em solid var(--text-muted);
-  border-top-color: transparent;
-  border-radius: 50%;
-  vertical-align: -0.05em;
-  animation: send-to-t3-inline-spin 0.8s linear infinite;
-}
+.send-to-t3-inline-spinner { display: none; }
 
-@keyframes send-to-t3-inline-spin {
-  to { transform: rotate(360deg); }
+/* T3's text shine: a 4.5rem highlight crossing the existing label in 2.2s.
+   The shared observer pauses hidden labels; no note writes drive the animation. */
+@keyframes send-to-t3-text-shine {
+  from { background-position: -4.5rem 0, 0 0; }
+  to { background-position: calc(100% + 4.5rem) 0, 0 0; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .send-to-t3-inline-spinner { animation: none; }
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  [data-t3-shine="true"] {
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    background-image:
+      linear-gradient(to right, transparent, var(--text-normal), transparent),
+      linear-gradient(var(--text-muted), var(--text-muted));
+    background-size: 4.5rem 100%, 100% 100%;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    animation: send-to-t3-text-shine 2.2s steps(30) infinite;
+    animation-play-state: var(--send-to-t3-shine-state, paused);
+  }
 }
 
 .send-to-t3-question-answer { margin: 0.3em 0; color: var(--text-accent); }

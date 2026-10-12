@@ -1,5 +1,6 @@
 import {type FolderLink} from './folder-link';
 import {type NoteIndicator} from './explorer-responses';
+import {activeResponseFolders,setActiveTitle} from './activity-titles';
 
 export const LINKED_FOLDER_BADGE_CLASS='send-to-t3-linked-folder-badge';
 export const NOTE_INDICATOR_CLASS='send-to-t3-note-indicator';
@@ -28,10 +29,13 @@ export function decorateLinkedFolders(root:ParentNode,links:FolderLink[]):void{
   }
 }
 export function decorateNoteIndicators(root:ParentNode,notes:Map<string,NoteIndicator>,folderNote:(title:HTMLElement)=>string|undefined=()=>undefined):void {
+  const folders=activeResponseFolders(notes);
   for(const title of Array.from(root.querySelectorAll('.nav-file-title[data-path], .nav-folder-title[data-path]')) as HTMLElement[]){
-    const path=title.classList.contains('nav-folder-title')?folderNote(title):title.getAttribute('data-path')??'';
+    const folder=title.classList.contains('nav-folder-title');
+    const path=folder?folderNote(title):title.getAttribute('data-path')??'';
     const note=path?notes.get(path):undefined;
     const active=!!note?.active,input=!!note?.input,complete=!!note&&note.complete===note.total&&!active&&!input;
+    setActiveTitle(title.querySelector<HTMLElement>(folder?'.nav-folder-title-content':'.nav-file-title-content'),active||folder&&folders.has(title.getAttribute('data-path')??''));
     let indicator=title.querySelector('.'+NOTE_INDICATOR_CLASS) as HTMLElement|null;
     if(!active&&!input&&!complete){indicator?.remove();continue;}
     if(!indicator){indicator=title.ownerDocument.createElement('span');indicator.className=NOTE_INDICATOR_CLASS;indicator.setAttribute('role','img');title.appendChild(indicator);}
@@ -39,7 +43,7 @@ export function decorateNoteIndicators(root:ParentNode,notes:Map<string,NoteIndi
     if(indicator.getAttribute('data-t3-state')!==mode){
       indicator.setAttribute('data-t3-state',mode);
       const children:HTMLElement[]=[];
-      for(const state of mode.split(' ')){const dot=title.ownerDocument.createElement('span');dot.className=`send-to-t3-note-${state}`;dot.setAttribute('aria-hidden','true');children.push(dot);}
+      for(const state of mode.split(' ').filter(state=>state!=='active')){const dot=title.ownerDocument.createElement('span');dot.className=`send-to-t3-note-${state}`;dot.setAttribute('aria-hidden','true');children.push(dot);}
       indicator.replaceChildren(...children);
     }
     const label=[active?`${note!.active} active T3 ${note!.active===1?'response':'responses'}`:'',input?`${note!.input} T3 ${note!.input===1?'response needs':'responses need'} input`:complete?`${note!.complete} completed T3 ${note!.complete===1?'response':'responses'}`:''].filter(Boolean).join('; ');
@@ -48,13 +52,14 @@ export function decorateNoteIndicators(root:ParentNode,notes:Map<string,NoteIndi
   }
 }
 export interface FolderIndicatorController {refresh():void;dispose():void}
-export function installFolderIndicators(root:HTMLElement,getLinks:()=>FolderLink[],getNotes:()=>Map<string,NoteIndicator>=()=>new Map(),folderNote:(title:HTMLElement)=>string|undefined=()=>undefined):FolderIndicatorController{
+export function installFolderIndicators(root:HTMLElement,getLinks:()=>FolderLink[],getNotes:()=>Map<string,NoteIndicator>=()=>new Map(),folderNote:(title:HTMLElement)=>string|undefined=()=>undefined,decorateTabs:(notes:Map<string,NoteIndicator>)=>void=()=>{}):FolderIndicatorController{
   let stopped=false,scheduled=false;
   const observers=new Map<HTMLElement,MutationObserver>();
   const schedule=()=>{if(stopped||scheduled)return;scheduled=true;Promise.resolve().then(()=>{scheduled=false;refresh();});};
   const refresh=()=>{
     if(stopped)return;
     const explorers=new Set(Array.from(root.querySelectorAll('.nav-files-container')) as HTMLElement[]),notes=getNotes();
+    decorateTabs(notes);
     for(const [explorer,observer] of observers)if(!explorers.has(explorer)){observer.disconnect();observers.delete(explorer);}
     for(const explorer of explorers){
       if(!observers.has(explorer)){
@@ -64,5 +69,5 @@ export function installFolderIndicators(root:HTMLElement,getLinks:()=>FolderLink
     }
   };
   refresh();
-  return {refresh,dispose(){stopped=true;for(const observer of observers.values())observer.disconnect();observers.clear();for(const badge of Array.from(root.querySelectorAll('.'+LINKED_FOLDER_BADGE_CLASS+', .'+NOTE_INDICATOR_CLASS)))badge.remove();}};
+  return {refresh,dispose(){stopped=true;decorateTabs(new Map());for(const observer of observers.values())observer.disconnect();observers.clear();for(const title of Array.from(root.querySelectorAll<HTMLElement>('.nav-file-title-content[data-t3-active-title], .nav-folder-title-content[data-t3-active-title]')))setActiveTitle(title,false);for(const badge of Array.from(root.querySelectorAll('.'+LINKED_FOLDER_BADGE_CLASS+', .'+NOTE_INDICATOR_CLASS)))badge.remove();}};
 }
