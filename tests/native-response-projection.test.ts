@@ -169,7 +169,7 @@ test('incoming overlapping edits retain competing versions and block saves',()=>
   const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);fixture.edit(fixture.read().replace('Before','Local before'));
   fixture.view.setViewData(saved.replace('Before','External before'),false);
   assert.equal(fixture.conflicts.length,1);assert.ok(fixture.conflicts[0].local.includes('Local before'));assert.ok(fixture.conflicts[0].incoming.includes('External before'));
-  assert.throws(()=>fixture.view.getViewData(),/overlap/);fixture.adapter.dispose();assert.equal(fixture.read(),saved.replace('Before','External before'));assert.ok(fixture.conflicts[0].local.includes('Local before')); // unload preserves the incoming revision and journals local edits
+  assert.throws(()=>fixture.view.getViewData(),/overlap/);fixture.adapter.dispose();assert.equal(fixture.read(),saved.replace('Before','External before'));assert.ok(fixture.conflicts[0].local.includes('Local before')); // unload strips transient response text without saving the competing buffer
 });
 test('a mode switch or own-save echo adopts identical ordinary edits without a false conflict',()=>{
   const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);fixture.edit(fixture.read().replace('Before','Saved user edit'));
@@ -280,10 +280,10 @@ test('a switched file unwraps the old projection before loading another note',()
  assert.equal(fixture.view.getViewData(),'# Another note');assert.equal(fixture.adapter.isDisposed(),true);
 });
 
-test('explicit view resolution preserves the competing snapshot and resumes a saved projection',()=>{
+test('saved adoption discards competing ordinary text and resumes the active projection',()=>{
  const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);fixture.edit(fixture.read().replace('Before','Local before'));
  const incoming=saved.replace('Before','Remote before');fixture.view.setViewData(incoming,false);const conflict=fixture.adapter.conflictRecord()!;assert.ok(conflict.local.includes('Local before'));
- fixture.adapter.resolveConflict(incoming,'saved');assert.equal(fixture.view.getViewData(),incoming);assert.ok(fixture.read().includes('> Stream'));assert.ok(fixture.conflicts[0].local.includes('Local before'));
+ assert.equal(fixture.adapter.adoptSaved(incoming),true);assert.equal(fixture.view.getViewData(),incoming);assert.ok(fixture.read().includes('> Stream'));assert.ok(fixture.conflicts[0].local.includes('Local before'));
 });
 
 test('an exact verified native load can settle an old projection after its completed anchor has disappeared',()=>{

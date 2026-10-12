@@ -206,97 +206,51 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },localStorage,vaultAccesses:()=>vaultAccesses};
 }
 
-function nativeConflicts(h:Awaited<ReturnType<typeof chatHarness>>,panes=1){
-  const binding='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-  const original=`Before\n\n${responseAnchor(binding)}\n\nAfter\n`,disk=new Map<string,string>();
+async function nativeConflicts(h:Awaited<ReturnType<typeof chatHarness>>,panes=1){
+  const disk=new Map<string,string>();
   const notes=Array.from({length:panes},(_,i)=>{
+    const binding=`${i.toString().padStart(8,'0')}-bbbb-cccc-dddd-eeeeeeeeeeee`,original=`Before\n\n${responseAnchor(binding)}\n\nAfter\n`;
     const note=h.attachEditor(`Notes/Conflict ${i}.md`,original),view=note.view as any;
     const edit=(text:string)=>note.editor.replaceRange(text,note.editor.offsetToPos(0),note.editor.offsetToPos(note.value.length));
     Object.assign(view,{getViewData:()=>note.value,setViewData:edit,getMode:()=> 'preview',requestSave:()=>{},save:async()=>{disk.set(note.file.path,view.getViewData());}});
-    disk.set(note.file.path,original);return {...note,view,edit,visible:()=>note.value};
+    disk.set(note.file.path,original);return {...note,view,binding,original,edit,visible:()=>note.value};
   });
   h.plugin.app.workspace.getLeavesOfType=()=>notes.map(note=>({view:note.view}));
   h.plugin.app.vault.read=async(file:any)=>disk.get(file.path)!;
-  const manager=h.plugin.nativeConflictRecovery.manager;
-  for(const note of notes)manager.preview(note.view,binding,'> Synthetic local response');
-  const conflict=(pane=0)=>{const note=notes[pane],incoming=original.replace('Before','Saved before');note.edit(note.visible().replace('Before','Local before'));disk.set(note.file.path,incoming);note.view.setViewData(incoming,false);return manager.view(note.view).conflictRecord();};
-  return {notes,manager,disk,original,conflict,dialogs:()=>h.modals.filter(modal=>modal.titleEl.text==='Resolve response view conflict')};
+  for(const note of notes)await h.plugin.deviceInline.io.receiveCoordinated({coordinated:true,owner:'host',epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:3,id:note.binding,vaultId:h.plugin.settings.vaultId,host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:note.file.path,threadId:'synthetic',messageId:note.binding,projectId:project.id,threadEnvironmentId:'chat-env',initialHash:'initial',createdAt:'2026-10-12T12:00:00Z'},state:{requestHash:'request',accepted:true,notePath:note.file.path,status:'running',hashes:[],body:'> Synthetic local response',updatedAt:''}});
+  const conflict=(pane=0)=>{const note=notes[pane],incoming=note.original.replace('Before','Saved before');note.edit(note.visible().replace('Before','Local before'));disk.set(note.file.path,incoming);note.view.setViewData(incoming,false);};
+  return {notes,disk,conflict,dialogs:()=>h.modals.filter(modal=>modal.titleEl.text==='Resolve response view conflict')};
 }
 
-test('native conflicts automatically open recovery after preserving both versions, without stacking manual recovery',async()=>{
-  const h=await chatHarness(),n=nativeConflicts(h);
+test('native conflicts use saved text automatically without a dialog, command or recovery copy',async()=>{
+  const h=await chatHarness(),n=await nativeConflicts(h);
   try{
-    const conflict=n.conflict();assert.ok(conflict.local.includes('Local before'));assert.ok(conflict.incoming.includes('Saved before'));
-    assert.ok([...h.localStorage].some(([key,value])=>key.startsWith('t3-native-conflict:')&&value===conflict));
-    assert.equal(n.dialogs().length,0,'Native update completes before opening UI');
-    await waitForReply(()=>n.dialogs().length===1,'Recovery opens without running a command');
-    const command=h.registered.find(command=>command.id==='resolve-native-response-conflict');assert.equal(command.checkCallback(false),true);
-    n.manager.refresh();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(n.dialogs().length,1);
-    const button=h.settingsControls.flatMap(control=>control.buttons).find(button=>button.text==='Use preserved local edits');assert.ok(button);button.click();
-    await waitForReply(()=>n.dialogs()[0].closed,'Choosing local edits closes recovery');
-    assert.equal(n.notes[0].view.getViewData(),n.original.replace('Before','Local before'));
-    assert.equal(n.disk.get(n.notes[0].file.path),n.original.replace('Before','Local before'));
-    assert.equal(n.manager.view(n.notes[0].view).conflictRecord(),undefined);
-    assert.equal(h.commands.length,0,'Recovery does not send or retry T3 work');
+    n.conflict();const note=n.notes[0],saved=note.original.replace('Before','Saved before');
+    await waitForReply(()=>note.visible().startsWith('Saved before'),'Saved note is adopted automatically');
+    assert.equal(note.view.getViewData(),saved);assert.equal(n.disk.get(note.file.path),saved);assert.ok(note.visible().includes('Synthetic local response'));
+    assert.equal(n.dialogs().length,0);assert.equal(h.registered.some(command=>command.id==='resolve-native-response-conflict'),false);
+    assert.equal([...h.localStorage.keys()].some(key=>key.startsWith('t3-native-conflict:')||key.startsWith('t3-native-resolutions:')),false);
+    assert.equal(h.commands.length,0,'Automatic selection does not dispatch T3 work');
   }finally{h.plugin.onunload();}
 });
 
-test('dismissed conflicts stay preserved and can be reopened manually',async()=>{
-  const h=await chatHarness(),n=nativeConflicts(h);
+test('independent pane conflicts select their latest saved revisions without serial choice UI',async()=>{
+  const h=await chatHarness(),n=await nativeConflicts(h,2);
   try{
-    n.conflict();await waitForReply(()=>n.dialogs().length===1,'Automatic dialog opens');n.dialogs()[0].close();
-    for(let i=0;i<5;i++){h.plugin.nativeConflictRecovery.queue(n.notes[0].view);n.manager.refresh();}
-    await new Promise(resolve=>setTimeout(resolve,10));assert.equal(n.dialogs().length,1);assert.ok(n.manager.view(n.notes[0].view).conflictRecord());
-    h.registered.find(command=>command.id==='resolve-native-response-conflict').checkCallback(false);
-    await waitForReply(()=>n.dialogs().length===2,'Manual command reopens a dismissed conflict');
+    n.conflict(0);n.conflict(1);const note=n.notes[0];n.disk.set(note.file.path,note.original.replace('Before','Newer saved before'));
+    await waitForReply(()=>n.notes[0].visible().startsWith('Newer saved before')&&n.notes[1].visible().startsWith('Saved before'),'Both panes select the fresh saved file');
+    assert.equal(n.dialogs().length,0);assert.equal(h.notices.length,0);
   }finally{h.plugin.onunload();}
 });
 
-test('a new conflict in the same pane replaces an obsolete open recovery dialog',async()=>{
-  const h=await chatHarness(),n=nativeConflicts(h);
+test('repeated conflicts discard local text each time without creating recovery UI',async()=>{
+  const h=await chatHarness(),n=await nativeConflicts(h);
   try{
-    n.conflict();await waitForReply(()=>n.dialogs().length===1,'First conflict opens');
-    const saved=n.disk.get(n.notes[0].file.path)!;await n.manager.resolve(n.notes[0].view,saved,'saved');
-    n.notes[0].edit(n.notes[0].visible().replace('Saved before','Second local before'));
-    const incoming=n.original.replace('Before','Second saved before');n.disk.set(n.notes[0].file.path,incoming);n.notes[0].view.setViewData(incoming,false);
-    await waitForReply(()=>n.dialogs().length===2,'A new conflict opens automatically');
-    assert.equal(n.dialogs()[0].closed,true);assert.equal(n.dialogs().filter(modal=>!modal.closed).length,1);
+    n.conflict();const note=n.notes[0];await waitForReply(()=>note.visible().startsWith('Saved before'),'First saved selection');
+    note.edit(note.visible().replace('Saved before','Second local before'));
+    const saved=note.original.replace('Before','Second saved before');n.disk.set(note.file.path,saved);note.view.setViewData(saved,false);
+    await waitForReply(()=>note.visible().startsWith('Second saved before'),'Second saved selection');assert.equal(note.view.getViewData(),saved);assert.equal(n.dialogs().length,0);
   }finally{h.plugin.onunload();}
-});
-
-test('recovery serializes independent pane conflicts and rejects a changed saved revision',async()=>{
-  const h=await chatHarness(),n=nativeConflicts(h,2);
-  try{
-    n.conflict(0);n.conflict(1);await waitForReply(()=>n.dialogs().length===1,'First conflict opens');
-    n.disk.set(n.notes[0].file.path,n.original.replace('Before','Newer saved before'));
-    h.settingsControls.flatMap(control=>control.buttons).find(button=>button.text==='Use saved note').click();
-    await waitForReply(()=>h.notices.some(notice=>notice.includes('saved conflict version changed')),'Changed saved bytes require another review');
-    assert.equal(n.dialogs()[0].closed,false);assert.ok(n.manager.view(n.notes[0].view).conflictRecord());
-    n.dialogs()[0].close();await waitForReply(()=>n.dialogs().length===2,'Second pane opens after the first closes');
-    assert.equal(n.dialogs().filter(modal=>!modal.closed).length,1);
-  }finally{h.plugin.onunload();}
-});
-
-test('resolved, closed and switched panes do not open stale automatic recovery',async()=>{
-  for(const action of ['resolved','closed','switched'] as const){
-    const h=await chatHarness(),n=nativeConflicts(h);
-    try{
-      n.conflict();
-      if(action==='resolved'){const saved=n.disk.get(n.notes[0].file.path)!;await n.manager.resolve(n.notes[0].view,saved,'saved');}
-      if(action==='closed')h.plugin.app.workspace.getLeavesOfType=()=>[];
-      if(action==='switched')n.notes[0].view.file={path:'Notes/Another.md'};
-      await new Promise(resolve=>setTimeout(resolve,10));assert.equal(n.dialogs().length,0,action);
-    }finally{h.plugin.onunload();}
-  }
-});
-
-test('plugin unload cancels queued recovery and closes an open recovery dialog',async()=>{
-  for(const opened of [false,true]){
-    const h=await chatHarness(),n=nativeConflicts(h);n.conflict();
-    if(opened)await waitForReply(()=>n.dialogs().length===1,'Automatic dialog opens before unload');
-    h.plugin.onunload();await new Promise(resolve=>setTimeout(resolve,10));
-    assert.equal(n.dialogs().length,opened?1:0);assert.ok(n.dialogs().every(modal=>modal.closed));
-  }
 });
 
 for(const mode of ['untitled-only','always'])for(const name of ['Release plan','Untitled 1'])test(`Send and Ask share ${mode} naming for ${name}`,async()=>{
@@ -359,7 +313,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';
   try {
-    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','send-or-ask','stop-all-responses','resolve-native-response-conflict','send-note-to-multiple-notes','import-t3-run','manage-note-t3-streams','answer-t3-question'],'Manual send, stop, and multi-destination commands are available');
+    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','send-or-ask','stop-all-responses','send-note-to-multiple-notes','import-t3-run','manage-note-t3-streams','answer-t3-question'],'Manual send, stop, and multi-destination commands are available');
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands.length,2);
     assert.equal(h.commands[0].type,'thread.create');
@@ -822,7 +776,7 @@ test('editor selection menu streams a T3 reply into its original note for new an
     const newThreadText=h.commands[1].message.text;
     assert.ok(newThreadText.startsWith(selection));assert.match(newThreadText,/Answer in the T3 thread\. The Obsidian plugin will insert your reply\./);assert.doesNotMatch(newThreadText,/Do not edit the Obsidian note|Reply in the Obsidian note itself/);
     assert.match(newThreadText,/Destination note path: "\/projects\/notes\/Notes\/Original.md"/);assert.doesNotMatch(newThreadText,/Different.md/);
-    for(let attempt=0;attempt<80&&(first.value.includes('t3-inline:start:')||!first.value.includes('Inline reply from T3.'));attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    await waitForReply(()=>!first.value.includes('t3-inline:start:')&&first.value.includes('Inline reply from T3.'),'New-thread selection reply finishes in the note');
     assert.match(first.value,/Inline reply from T3\./);
     assert.doesNotMatch(first.value,/\*\*T3 answer\*\*/);
     h.setThreads([{id:h.commands[1].threadId,projectId:project.id,title:'Selection reply',updatedAt:new Date().toISOString()}]);
@@ -837,7 +791,7 @@ test('editor selection menu streams a T3 reply into its original note for new an
     const secondTurn=h.commands.filter(command=>command.type==='thread.turn.start').at(-1);
     assert.equal(secondTurn.type,'thread.turn.start');assert.equal(secondTurn.threadId,'old-thread');
     assert.ok(secondTurn.message.text.startsWith(followup));assert.doesNotMatch(secondTurn.message.text,/Reply in the Obsidian note itself/);
-    for(let attempt=0;attempt<80&&(second.value.includes('t3-inline:start:')||!second.value.includes('Inline reply from T3.'));attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    await waitForReply(()=>!second.value.includes('t3-inline:start:')&&second.value.includes('Inline reply from T3.'),'Existing-thread selection reply finishes in the note');
     assert.match(second.value,/Inline reply from T3\./);
     assert.equal(h.vaultAccesses(),0,'Selection chat sends the selection and note path without reading the note body');
   }finally{h.plugin.onunload();}
@@ -2112,7 +2066,7 @@ function compactNativeSource(h:Awaited<ReturnType<typeof chatHarness>>,count=1){
  const tools=renderResponseToolGroup({id:'source-tools',turnId:'source-run',tools:Array.from({length:count},(_,index)=>({id:'source-'+index,turnId:'source-run',key:'source-'+index,status:'completed',label:'Read source output',activeLabel:'Read source output',icon:'file-text',action:'read',sequence:index,output:('Full retained source output '+index+'\n').repeat(900)}))});
  const canonical='# Source note\n\n'+tools+'\n\nSelected ordinary text\n\nTail',note=h.attachEditor('Notes/Send.md',canonical),view=note.view as any;
  (note.file as any).stat={ctime:1};Object.assign(view,{getViewData:()=>note.value,setViewData:(text:string)=>note.editor.replaceRange(text,note.editor.offsetToPos(0),note.editor.offsetToPos(note.value.length)),getMode:()=> 'preview',requestSave:()=>{},save:async()=>{}});
- h.plugin.app.vault.read=async()=>canonical;const manager=h.plugin.nativeConflictRecovery.manager;manager.refresh();assert.ok(note.value.length<1000);assert.ok(manager.view(view));return {...note,view,tools,canonical,manager};
+ h.plugin.app.vault.read=async()=>canonical;h.plugin.deviceInline.io.receiveThreadTitle('synthetic-source','Source note');assert.ok(note.value.length<1000);return {...note,view,tools,canonical};
 }
 test('canonical whole-note packaging sends complete tool output rather than editor summaries',async()=>{
  const h=await chatHarness();try{const note=compactNativeSource(h);h.plugin.settings.inlineStreaming.enabled=false;await h.plugin.sendNote(note.file);

@@ -93,9 +93,7 @@ export async function productionNative(app:App,root:string){
   await manager.receive({request:{...binding,id:conflictId,notePath:conflictFile.path},coordinated:true,owner:actor,epoch:1,expiresAt:Number.MAX_SAFE_INTEGER,revision:1,state:{requestHash:'fixture',accepted:true,notePath:conflictFile.path,status:'running',hashes:[],body:'> Local progress',updatedAt:''}});
   conflictView.editor.replaceRange('Local before',conflictView.editor.offsetToPos(2),conflictView.editor.offsetToPos(8));
   const remote=conflictSaved.replace('Before','Remote before');await app.vault.modify(conflictFile,remote);await pause(200);
-  const preserved=manager.view(conflictView)?.conflictRecord();await leaves[1].openFile(conflictFile);
-  rows.push({name:'production-background-pane-conflict-discoverable-from-active-note',pass:manager.conflictedView(conflictFile.path)===conflictView});
-  await manager.resolve(conflictView,remote,'saved');
-  rows.push({name:'production-explicit-view-conflict-resolution',pass:!!preserved?.local.includes('Local before')&&conflictView.getViewData()===remote&&conflictView.editor.getValue().includes('Local progress')});manager.dispose();
+  await leaves[1].openFile(conflictFile);await pause(200);
+  rows.push({name:'production-automatic-saved-view-adoption',pass:!manager.view(conflictView)?.conflictRecord()&&conflictView.getViewData()===remote&&conflictView.editor.getValue().includes('Local progress')});manager.dispose();
   return rows;
 }

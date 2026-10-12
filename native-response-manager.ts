@@ -25,7 +25,7 @@ interface FinalSaveFence {
 }
 /** Each native view owns its projection, history and selection. Saved content
  * is compared independently across views; streaming never copies an editor
- * buffer over a competing view. Conflict snapshots are device-local. */
+ * buffer over a competing view. Conflicts adopt fresh saved text automatically. */
 export class NativeResponseManager {
   private localStops=new Map<string,NativeStoppedResponse>();
   private stopKey?:string;
@@ -57,23 +57,45 @@ export class NativeResponseManager {
   private previewTimer?:ReturnType<typeof setTimeout>;
   private previewWork?:Promise<void>;
   private previewSaveFailed=false;
-  private recoverConflict?:(view:MarkdownView)=>void;
-  private conflictKeys=new WeakMap<MarkdownView,string>();
-  private preserveViewConflict(view:MarkdownView,path:string,conflict:Parameters<NativeResponseView['preserveConflict']>[0]){
-    let key=this.conflictKeys.get(view);if(!key){key=`t3-native-conflict:${path}:${crypto.randomUUID()}`;this.conflictKeys.set(view,key);}
-    this.app.saveLocalStorage(key,conflict);
+  private savedAdoptions=new Map<MarkdownView,Promise<void>>();
+  constructor(private app:App){
+    // Retire the removed choice workflow's copies in this vault only. Obsidian
+    // prefixes localStorage keys; all changes go through its scoped API.
+    try{
+      const keys=Array.from({length:window.localStorage.length},(_,i)=>window.localStorage.key(i)??'');
+      for(const storedKey of keys){
+        const key=/(t3-native-conflict:.+:[0-9a-f-]{36}|t3-native-resolutions:[^:]+)$/i.exec(storedKey)?.[1];
+        if(key&&this.app.loadLocalStorage(key)!=null)this.app.saveLocalStorage(key,null);
+      }
+    }catch{/* No browser storage in headless fixtures; retry on next load. */}
   }
-  private async clearViewConflict(view:MarkdownView){
-    const adapter=this.view(view),file=view.file,key=this.conflictKeys.get(view);if(!adapter||!file||!key||adapter.conflictRecord())return;
-    // A pane transition can precede its native save. Keep recovery bytes until
-    // the selected ordinary text has actually reached the saved file.
-    if(await this.app.vault.read(file)!==adapter.saved()||this.view(view)!==adapter||adapter.conflictRecord()||this.conflictKeys.get(view)!==key)return;
-    this.app.saveLocalStorage(key,null);this.conflictKeys.delete(view);
-  }
-  constructor(private app:App){}
-  configureConflictRecovery(recover:(view:MarkdownView)=>void){
-    this.recoverConflict=recover;
-    for(const [view,adapter] of this.views)if(adapter.conflictRecord())recover(view);
+  private adoptSaved(view:MarkdownView){
+    const pending=this.savedAdoptions.get(view);if(pending)return pending;
+    const lifetime=this.lifetime;
+    // Defer until the native update has returned. A pane echo is not a saved
+    // revision. Never write a competing local buffer or retain a recovery copy.
+    const work=Promise.resolve().then(async()=>{
+      const initial=this.view(view),initialFile=view.file,initialPath=initialFile?.path;if(!initial?.conflictRecord())return;
+      const release=await initial.beginFinalSave(true);
+      try{
+        if(this.lifetime!==lifetime||this.view(view)!==initial||view.file!==initialFile||view.file?.path!==initialPath)return;
+        for(let attempt=0;attempt<3;attempt++){
+          const adapter=this.view(view),file=view.file,conflict=adapter?.conflictRecord();
+          if(!adapter||!file||!conflict||!this.app.workspace.getLeavesOfType('markdown').some(leaf=>leaf.view===view))return;
+          const path=file.path,disk=await this.app.vault.read(file);
+          const current=()=>this.lifetime===lifetime&&this.view(view)===adapter&&view.file===file&&file.path===path&&this.app.workspace.getLeavesOfType('markdown').some(leaf=>leaf.view===view);
+          if(!current())return;
+          const checked=await this.app.vault.read(file);if(!current())return;
+          if(disk!==checked||adapter.conflictRecord()!==conflict)continue;
+          if(adapter.adoptSaved(disk,this.completed(path,disk,new Set(adapter.responseIds())))){
+            const fence=this.activeFinalSaves.get(path);if(fence)fence.invalid=true;
+            this.refresh();this.releaseCompleted(path,disk);
+          }
+          return;
+        }
+      }finally{release();}
+    }).catch(error=>logFailure('note.saved-adoption.failed',error,{notePath:view.file?.path})).finally(()=>{if(this.savedAdoptions.get(view)===work)this.savedAdoptions.delete(view);});
+    this.savedAdoptions.set(view,work);return work;
   }
   configurePreviewCache(vaultId:string,saved:unknown,save:(snapshot:NativePreviewSnapshot)=>Promise<void>){
     this.stopKey=`t3-local-response-stops-v1:${vaultId}`;
@@ -122,6 +144,7 @@ export class NativeResponseManager {
   }
   async prepareReload(){
     if(this.finalSaveQueues.size)throw Error('Waiting for a final response save before reloading.');
+    await Promise.all([...this.views].filter(([,adapter])=>adapter.conflictRecord()).map(([view])=>this.adoptSaved(view)));
     await this.flushPreviewCache();
     if(this.stoppedRestore)await this.stoppedRestore.catch(()=>{});
     while(this.pendingStops.size)await Promise.allSettled([...this.pendingStops.values()]);
@@ -131,7 +154,7 @@ export class NativeResponseManager {
     if(this.finalSaveQueues.size)throw Error('Waiting for a final response save before reloading.');
     if(this.previewSaveFailed)throw Error('Waiting for durable response recovery before reloading.');
     for(const [view,adapter] of this.views){
-      if(adapter.conflictRecord())throw Error('Resolve the preserved note conflict before reloading.');
+      if(adapter.conflictRecord())throw Error('Waiting for the saved note or response completion evidence before reloading.');
       for(const id of adapter.responseIds()){
         if(this.localStops.has(id)||this.cached.has(id)||this.records.get(id)?.finalWriter||this.deviceCommits.has(id))continue;
         throw Error('Waiting for this response to retain its recovery state before reloading.');
@@ -193,7 +216,6 @@ export class NativeResponseManager {
   }
   view(view:MarkdownView){const adapter=this.views.get(view);return adapter&&!adapter.isDisposed()?adapter:undefined;}
   toolGroup(element:HTMLElement,ref:string){for(const [view,adapter] of this.views)if(view.contentEl?.contains(element))return adapter.toolGroup(ref);}
-  conflictedView(path:string){return [...this.views].find(([view,adapter])=>view.file?.path===path&&!adapter.isDisposed()&&adapter.conflictRecord())?.[0];}
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
   stoppedBody(id:string){return this.localStops.get(id)?.body;}
   stop(id:string,path?:string,hidden=false,sourceView?:MarkdownView):Promise<void>|void{
@@ -335,10 +357,9 @@ export class NativeResponseManager {
     const file=view.file;if(!file)throw Error('The native response note closed before final delivery.');
     let adapter!:NativeResponseView;
     adapter=new NativeResponseView(view,saved,conflict=>{
-      this.preserveViewConflict(view,file.path,conflict);
       logFailure('note.projection.conflict',Error(conflict.reason),{notePath:file.path});
-      this.recoverConflict?.(view);
-    },async()=>view.file===file?this.app.vault.read(file):undefined,incoming=>this.normalize(file.path,incoming),incoming=>this.completed(file.path,incoming,new Set(adapter.responseIds())),()=>{void this.clearViewConflict(view).catch(error=>logFailure('note.conflict-cleanup.failed',error));this.recoverConflict?.(view);});
+      void this.adoptSaved(view);
+    },async()=>view.file===file?this.app.vault.read(file):undefined,incoming=>this.normalize(file.path,incoming),incoming=>this.completed(file.path,incoming,new Set(adapter.responseIds())));
     this.views.set(view,adapter);this.uninitializedViews.add(adapter);
     const fence=this.activeFinalSaves.get(file.path);if(fence)this.joinFinalSave(fence,adapter);
     return adapter;
@@ -413,18 +434,9 @@ export class NativeResponseManager {
           adapter.setResponses(responses);
         }
       }catch(error){logFailure('note.projection.retry',error,{notePath:view.file.path});}
+      if(this.view(view)?.conflictRecord())void this.adoptSaved(view);
     }
     for(const path of opened)void this.changed(path).catch(error=>logFailure('note.projection.open',error,{notePath:path}));
-  }
-  async resolve(view:MarkdownView,reviewed:string,choice:'saved'|'local'){
-    const adapter=this.view(view),file=view.file,conflict=adapter?.conflictRecord();if(!adapter||!file||!conflict)throw Error('This view has no preserved conflict.');
-    if(await this.app.vault.read(file)!==reviewed)throw Error('The saved conflict version changed. Review it again.');
-    const chosen=choice==='local'?conflict.local:reviewed;
-    adapter.resolveConflict(reviewed,choice);
-    try{if(choice==='local')await view.save();if(await this.app.vault.read(file)!==chosen)throw Error('The chosen conflict version has not reached the saved file.');}
-    catch(error){adapter.preserveConflict(conflict);throw error;}
-    const key=`t3-native-resolutions:${this.previewVault??'local'}`,previous=this.app.loadLocalStorage?.(key),receipts=Array.isArray(previous)?previous:[];
-    this.app.saveLocalStorage(key,[...receipts,{path:file.path,choice,at:Date.now(),baseHash:contentHash(conflict.base),localHash:contentHash(conflict.local),incomingHash:contentHash(conflict.incoming),savedHash:contentHash(chosen)}].slice(-64));await this.clearViewConflict(view);this.refresh();
   }
   filter(transaction:Transaction){for(const adapter of this.views.values()){const result=adapter.filterTransaction(transaction);if(Array.isArray(result))return result;}return transaction;}
   savedViews(path:string){return this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===path&&(view.getMode?.()!=='preview'||!!this.view(view))).map(view=>({view,saved:()=>this.view(view)?.saved()??view.getViewData?.()??view.editor.getValue()}));}
@@ -492,5 +504,5 @@ export class NativeResponseManager {
   prepare(path:string,before:string,after:string,ids:string[]){if(this.activeFinalSaves.has(path)&&!this.finalSaveReady(path))throw Error('The native panes changed before final delivery.');for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.prepareMaterialization(before,after,ids);}
   cancel(path:string){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.cancelMaterialization();}
   committed(path:string,saved:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path){if(this.uninitializedViews.has(adapter)){adapter.initializeDiskBaseline(saved,true);this.uninitializedViews.delete(adapter);}if(!adapter.acceptCommitted(saved,ids))throw Error('A native pane did not adopt the saved result.');}}
-  dispose(){this.recoverConflict=undefined;void this.flushPreviewCache();this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.proofs.clear();this.deviceCommits.clear();this.completionIdentities.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
+  dispose(){this.savedAdoptions.clear();void this.flushPreviewCache();this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.proofs.clear();this.deviceCommits.clear();this.completionIdentities.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
 }

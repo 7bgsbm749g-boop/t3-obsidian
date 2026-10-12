@@ -41,7 +41,7 @@ export class NativeResponseView {
   private ownSave?:{text:string};
   private materialization?:{before:string;after:string;ids:string[]};
   private scroll:ResponseScroll;
-  constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[],private reconciled?:()=>void){
+  constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[]){
     this.file=view.file;this.base=saved;this.diskBase=saved;this.projection=this.buildProjection(saved,[]);
     this.scroll=new ResponseScroll(view,()=>this.currentProjection());
     this.originalGet=view.getViewData;this.originalSet=view.setViewData;
@@ -263,7 +263,6 @@ export class NativeResponseView {
     if(this.reviewSaved(disk)!==reviewed)throw Error('The reviewed native recovery changed.');
     const projection=this.buildProjection(reviewed,this.responses);
     this.base=disk;this.diskBase=disk;this.blocked=undefined;this.unloading=false;this.ownSave=undefined;this.projection=projection;this.render(projection.display,false);
-    // The conflict journal remains until the final verified disk save.
   }
   confirmPendingConflict(reason:string){if(this.blocked?.awaitingCompletion)this.block({...this.blocked,reason,awaitingCompletion:false});}
   reconcileDisk(document:string){if(document!==this.diskBase){this.incoming(document,false);if(!this.blocked)this.diskBase=document;}}
@@ -293,13 +292,19 @@ export class NativeResponseView {
   }
   markMaterialized(id:string){this.materialized.add(id);}
   preserveConflict(record:NativeViewConflict){if(!this.blocked)this.block(record);}
-  resolveConflict(saved:string,choice:'saved'|'local'){
-    if(!this.blocked)throw Error('This native view has no preserved conflict.');
-    const chosen=choice==='local'?this.blocked.local:saved;
-    const responses=this.responses.filter(response=>{try{return !!responseRegion(chosen,response.id);}catch{return false;}});
-    this.projection=this.buildProjection(chosen,responses);this.responses=responses;this.base=saved;this.blocked=undefined;this.unloading=false;this.render(this.projection.display,false);
-    this.reconciled?.();
-    if(chosen!==saved)this.view.requestSave();
+  /** Discard competing ordinary text. Only a fresh file read may enter here;
+   * lost or resurrected response anchors still require completion evidence. */
+  adoptSaved(saved:string,completed:readonly string[]=[]){
+    if(this.disposed||!this.blocked)return false;
+    let projection:ResponseProjection;
+    const responses=this.responses.filter(response=>!completed.includes(response.id));
+    try{
+      if([...this.materialized,...completed].some(id=>responseRegion(saved,id)))return false;
+      projection=this.buildProjection(saved,responses);
+    }catch{return false;}
+    this.responses=responses;this.base=saved;this.diskBase=saved;this.ownSave=undefined;this.blocked=undefined;this.unloading=false;this.projection=projection;
+    for(const id of completed)this.materialized.add(id);
+    this.render(projection.display,false);return true;
   }
   hasMaterialized(id:string){return this.materialized.has(id);}
   responseIds(){return this.responses.map(response=>response.id);}
@@ -320,7 +325,6 @@ export class NativeResponseView {
     this.blocked=undefined;this.unloading=false;this.base=saved;this.diskBase=saved;this.ownSave=undefined;this.responses=responses;this.projection=projection;
     for(const id of ids)this.materialized.add(id);
     this.render(projection.display,clear);
-    this.reconciled?.();
     if(merge.text!==saved)this.view.requestSave();return true;
   }
   isDisposed(){return this.disposed;}
@@ -414,12 +418,11 @@ export class NativeResponseView {
     }catch{return [];}
   }
   /** Remove local output before unwrapping the save boundary. A conflict must
-   * first be journaled/resolved; unwrapping a blocked view could save bad data. */
+   * first reach a safe saved projection; unwrapping a blocked view could save bad data. */
   dispose(){
     if(this.disposed)return;
     if(this.blocked?.unsafeIncoming){this.unloading=true;this.scroll.dispose();return;}
-    // The competing local version is already preserved by the conflict callback.
-    // Unload must not silently save it over the incoming version.
+    // Unload discards competing local text and must not save it over the incoming version.
     const saved=this.blocked?this.blocked.incoming:this.saved();
     try{assertCanonicalToolGroups(saved);}catch{this.unloading=true;this.scroll.dispose();return;}
     this.responses=[];this.projection=projectResponses(saved,[]);this.render(saved,false);

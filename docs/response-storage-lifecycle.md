@@ -79,10 +79,12 @@ of 32 records, eight million serialized characters and 30 days. Proof expiry
 does not expire replay identities. A resurrected old response anchor requires
 checked host evidence and cannot trigger a save from an expired local document.
 
-Native conflicts retain one full record per unresolved pane. Repeated updates
-replace that record. The record is removed only after the chosen ordinary text
-reaches disk; failed saves retain it. Resolution history keeps at most 64 small
-checksum receipts. Existing unresolved legacy copies remain preserved.
+Native editor conflicts automatically select a fresh, rechecked saved file and
+discard conflicting local text. They create no device-local recovery copies or
+choice receipts. Existing copies and receipts from the removed manual workflow
+are deleted through Obsidian's vault-scoped storage API on load. Temporary
+in-memory save boundaries still wait for missing completion proof or an unsafe
+saved document; they cannot write a stale response anchor over a completed reply.
 
 ## Verification
 

@@ -38,33 +38,85 @@ test('the size failure is visible only on its response and retained text survive
  h.manager.stream({request:failed.request,messageId:failed.request.messageId,sequence:10,body,phase:'complete',completionVerified:true});assert.equal(h.visible().includes(RESPONSE_SIZE_FAILURE),false);assert.ok(h.visible().includes(body));h.manager.dispose();
 });
 
-test('resolved native conflicts delete full copies only after the chosen text reaches disk',async()=>{
-  const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));const incoming=before.replace('Before','Remote edit');h.disk(incoming);h.views[0].setViewData(incoming);const conflict=h.manager.view(h.views[0] as any)!.conflictRecord()!;assert.ok(conflict);
-  const keys=[...h.local.keys()].filter(key=>key.startsWith('t3-native-conflict:'));assert.equal(keys.length,1);
-  await h.manager.resolve(h.views[0] as any,incoming,'local');assert.equal(h.local.get(keys[0]),null);assert.equal(h.views[0].getViewData(),conflict.local);const receipts=h.local.get('t3-native-resolutions:local') as any[];assert.equal(receipts.length,1);assert.equal('local' in receipts[0],false);h.manager.dispose();
+async function adopted(h:ReturnType<typeof fixture>,pane=0){
+  for(let i=0;i<50&&h.manager.view(h.views[pane] as any)?.conflictRecord();i++)await new Promise(resolve=>setTimeout(resolve,1));
+  assert.equal(h.manager.view(h.views[pane] as any)?.conflictRecord(),undefined);
+}
+
+test('a conflicting pane adopts fresh disk text without writing or storing recovery copies',async()=>{
+  const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));
+  const saved=before.replace('Before','Saved edit');h.disk(saved);
+  h.views[0].setViewData(before.replace('Before','Unsaved pane echo'));assert.ok(h.manager.view(h.views[0] as any)!.conflictRecord());
+  await adopted(h);assert.equal(h.views[0].getViewData(),saved);assert.ok(h.visible().includes(body));assert.ok(h.visible().includes(otherBody));assert.equal(h.local.size,0);
+  await h.views[0].save();assert.equal(h.views[0].getViewData(),saved);h.manager.dispose();
 });
-test('a failed native conflict save preserves the full conflict and requires another review',async()=>{
-  const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));const incoming=before.replace('Before','Remote edit');h.disk(incoming);h.views[0].setViewData(incoming);const adapter=h.manager.view(h.views[0] as any)!,conflict=adapter.conflictRecord()!;h.readWith(async()=>incoming);
-  await assert.rejects(h.manager.resolve(h.views[0] as any,incoming,'local'),/not reached/);assert.deepEqual(adapter.conflictRecord(),conflict);assert.ok([...h.local].some(([key,value])=>key.startsWith('t3-native-conflict:')&&value!==null));h.manager.dispose();
+
+test('automatic adoption repeats a read if the saved revision changes while reading',async()=>{
+  const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));
+  const older=before.replace('Before','Older saved edit'),newer=before.replace('Before','Newest saved edit');let reads=0;
+  h.readWith(async()=>++reads===2?older:newer);h.views[0].setViewData(older);
+  await adopted(h);assert.equal(h.views[0].getViewData(),newer);assert.equal(reads,5);assert.equal(h.local.size,0);h.manager.dispose();
+});
+
+test('automatic selection invalidates a held final-save snapshot before it can write',async()=>{
+  const h=fixture();await start(h);const release=await h.manager.beginFinalSave('Note.md');assert.equal(h.manager.finalSaveReady('Note.md'),true);
+  try{h.edit(h.visible().replace('Before','Local edit'));const saved=before.replace('Before','Saved edit');h.disk(saved);h.views[0].setViewData(saved);await adopted(h);assert.equal(h.views[0].getViewData(),saved);assert.equal(h.manager.finalSaveReady('Note.md'),false);}finally{release();h.manager.dispose();}
+});
+
+test('automatic selection waits for a native write already in progress before reading saved text',async()=>{
+  const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));(h.views[0] as any).saving=true;const saved=before.replace('Before','Saved edit');h.disk(saved);h.views[0].setViewData(saved);
+  await new Promise(resolve=>setTimeout(resolve,5));assert.ok(h.visible().startsWith('Local edit'));
+  const landed=before.replace('Before','Last captured write');h.disk(landed);(h.views[0] as any).saving=false;await adopted(h);assert.equal(h.views[0].getViewData(),landed);h.manager.dispose();
+});
+
+test('a failed read creates no recovery copy and a later refresh retries adoption',async()=>{
+  const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));const saved=before.replace('Before','Saved edit');
+  h.readWith(async()=>{throw Error('Temporary read failure');});h.views[0].setViewData(saved);await new Promise(resolve=>setTimeout(resolve,5));
+  assert.ok(h.manager.view(h.views[0] as any)!.conflictRecord());assert.equal(h.local.size,0);
+  h.readWith(async()=>saved);h.manager.refresh();await adopted(h);assert.equal(h.views[0].getViewData(),saved);h.manager.dispose();
+});
+
+test('an adoption cannot replace a switched or closed pane after a delayed read',async()=>{
+  for(const action of ['switched','closed','disposed'] as const){
+    const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));const saved=before.replace('Before','Saved edit'),gate=deferred<string>();h.readWith(()=>gate.promise);
+    h.views[0].setViewData(saved);await Promise.resolve();
+    if(action==='switched'){h.views[0].file={path:'Other.md'};h.edit('Other note text');}
+    if(action==='closed')h.close();if(action==='disposed')h.manager.dispose();
+    const visible=h.visible();gate.resolve(saved);await new Promise(resolve=>setTimeout(resolve,5));assert.equal(h.visible(),visible,action);assert.equal(h.local.size,0);h.manager.dispose();
+  }
+});
+
+test('verified completion selects saved ordinary text and retains an independent active response',async()=>{
+  const h=fixture(2);await start(h);h.edit(h.visible().replace('Before','Conflicting local edit'));
+  const saved=final.replace('Before','Saved edit'),proof=evidence(saved),done=completed(2,saved);done.state!.delivery!.proofHash=proof.proofHash;
+  h.disk(saved);h.views[0].setViewData(saved);await h.manager.receive(done,proof.bytes);await adopted(h);
+  assert.equal(h.views[0].getViewData(),saved);assert.ok(h.visible().includes(body));assert.ok(h.visible().includes(otherBody));assert.equal(h.visible().includes('Conflicting local edit'),false);assert.equal(h.manager.view(h.views[0] as any)!.hasMaterialized(id),true);assert.equal(h.local.size,0);h.manager.dispose();
+});
+
+test('legacy conflict copies and choice receipts are removed only through the current vault API',()=>{
+  const key='t3-native-conflict:Note.md:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',receipt='t3-native-resolutions:local',foreign='t3-native-conflict:Foreign.md:bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const local=new Map<string,unknown>([[key,{local:'Discarded local text'}],[receipt,[{choice:'local'}]],['unrelated',{value:'Keep'}]]),keys=['vault-a:'+key,'vault-a:'+receipt,'vault-b:'+foreign];
+  const previous=(globalThis as any).window;(globalThis as any).window={localStorage:{length:keys.length,key:(i:number)=>keys[i]}};
+  try{const h=fixture(1,local);assert.equal(local.get(key),null);assert.equal(local.get(receipt),null);assert.deepEqual(local.get('unrelated'),{value:'Keep'});assert.equal(local.has(foreign),false);h.manager.dispose();}finally{(globalThis as any).window=previous;}
 });
 
 test('device completion tombstones protect a reloaded native pane from a late old response anchor',async()=>{
  const h=fixture();h.edit(final);h.disk(final);const proof:NativeCommitProof={version:1,bindingId:id,commitId,hash:contentHash(final),document:final,ranges:[{from:final.indexOf(body),to:final.indexOf(body)+body.length}]};
  h.manager.deviceCommitted('Note.md',proof);assert.ok(h.manager.view(h.views[0] as any));
  h.edit(h.visible().replace('Before','New ordinary edit'));
- h.views[0].setViewData(before);assert.equal(h.conflicts.length,1);assert.match(h.conflicts[0].local,/New ordinary edit/);assert.equal(h.conflicts[0].incoming,before);
- await assert.rejects(h.views[0].save(),/resurrected/);h.manager.dispose();
+ h.views[0].setViewData(before);const conflict=h.manager.view(h.views[0] as any)!.conflictRecord()!;assert.match(conflict.local,/New ordinary edit/);assert.equal(conflict.incoming,before);assert.equal(h.local.size,0);
+ await h.views[0].save();await adopted(h);assert.equal(h.views[0].getViewData(),final);assert.equal(h.visible().includes('New ordinary edit'),false);assert.equal(h.manager.view(h.views[0] as any)!.hasMaterialized(id),true);h.manager.dispose();
 });
 
 test('a stale anchor already on disk at reload is preserved against the retained verified device result',()=>{
  const h=fixture();const proof:NativeCommitProof={version:1,bindingId:id,commitId,hash:contentHash(final),document:final,ranges:[{from:final.indexOf(body),to:final.indexOf(body)+body.length}]};
- h.manager.deviceCommitted('Note.md',proof);assert.equal(h.conflicts.length,1);assert.equal(h.conflicts[0].local,final);assert.equal(h.conflicts[0].incoming,before);h.manager.dispose();
+ h.manager.deviceCommitted('Note.md',proof);const conflict=h.manager.view(h.views[0] as any)!.conflictRecord()!;assert.equal(conflict.local,final);assert.equal(conflict.incoming,before);assert.equal(h.local.size,0);h.manager.dispose();
 });
 
 test('a reopened observer pane with a proven saved result also rejects late stale anchors',async()=>{
  const h=fixture();h.edit(final);h.disk(final);const proof=evidence(),done=completed();done.state!.delivery!.proofHash=proof.proofHash;
  await h.manager.receive(done,proof.bytes);assert.ok(h.manager.view(h.views[0] as any));
- h.views[0].setViewData(before);assert.equal(h.conflicts.length,1);assert.equal(h.conflicts[0].local,final);assert.equal(h.conflicts[0].incoming,before);h.manager.dispose();
+ h.views[0].setViewData(before);const conflict=h.manager.view(h.views[0] as any)!.conflictRecord()!;assert.equal(conflict.local,final);assert.equal(conflict.incoming,before);assert.equal(h.local.size,0);h.manager.dispose();
 });
 
 test('ordinary edits to an adopted completed response survive repeated delivery and late stream events',async()=>{

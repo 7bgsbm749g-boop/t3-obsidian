@@ -34,11 +34,12 @@ test('adopted device completion drops its full proof and keeps a stale-anchor re
  }finally{h.manager.dispose();}
 });
 
-test('a reopened stale anchor requests recovery without inventing a reply from a completed index',async()=>{
+test('a reopened stale pane adopts the saved result without retaining its full completion again',async()=>{
  const h=fixture(false);try{
   h.disk(h.final);await h.manager.receive(h.record,h.bytes);assert.equal(h.manager.retentionStatus().completedIndexes,1);
   h.open(true);h.manager.refresh();assert.ok(h.manager.view(h.view)!.conflictRecord());assert.doesNotMatch(h.visible(),/Thinking|Working|Ready/);
   assert.ok(h.manager.reconnectingResponseIds().includes(h.id));await h.manager.receive(h.record,h.bytes);
-  assert.equal((h.manager as any).records.get(h.id).state.finalBody,h.body,'a pending stale pane reloads the complete evidence');assert.equal(h.manager.retentionStatus().proofs,1);
+  for(let i=0;i<20&&h.manager.view(h.view)!.conflictRecord();i++)await new Promise(resolve=>setTimeout(resolve,1));
+  assert.equal(h.visible(),h.final);assert.equal(h.manager.view(h.view)!.conflictRecord(),undefined);assert.equal((h.manager as any).records.get(h.id).state.finalBody,undefined);assert.equal(h.manager.retentionStatus().completedIndexes,1);assert.equal(h.manager.retentionStatus().proofs,0);
  }finally{h.manager.dispose();}
 });

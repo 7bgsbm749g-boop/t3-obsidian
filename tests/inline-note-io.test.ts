@@ -74,14 +74,14 @@ test('exact pending local materialization can recover before a delayed native fi
  await h.io.recover('Note.md',after,[h.id]);assert.equal(await h.io.read('Note.md'),after);assert.equal(h.views[0].getViewData(),after);assert.equal(h.writes(),0);h.manager.dispose();
 });
 
-test('reviewing a blocked native view preserves disk and local ordinary edits until checked recovery',async()=>{
+test('completion recovery after a view conflict uses saved text and still rejects a changed reviewed revision',async()=>{
  const h=localFinalFixture(),adapter=h.manager.view(h.views[0] as any)!,local=h.before.replace('Before','Local ordinary heading'),incoming=h.before.replace('After','Incoming ordinary tail');
- const conflict={base:h.before,local,incoming,reason:'Synthetic preserved completion conflict'};adapter.preserveConflict(conflict);h.setDisk(incoming);
- const candidate=(await h.io.reviewRead('Note.md'))!;assert.ok(candidate.includes('Local ordinary heading'));assert.ok(candidate.includes('Incoming ordinary tail'));
- assert.equal(h.saves(),0);assert.equal(h.writes(),0);assert.deepEqual(adapter.conflictRecord(),conflict);assert.equal(h.disk(),incoming);
- h.setDisk(incoming+'New ordinary edit');await assert.rejects(h.io.resumeReviewed('Note.md',contentHash(candidate)),/reviewed note changed/);assert.deepEqual(adapter.conflictRecord(),conflict);assert.equal(h.writes(),0);
+ adapter.preserveConflict({base:h.before,local,incoming,reason:'Synthetic completion conflict'});h.setDisk(incoming);
+ for(let i=0;i<20&&adapter.conflictRecord();i++)await new Promise(resolve=>setTimeout(resolve,1));
+ const candidate=(await h.io.reviewRead('Note.md'))!;assert.equal(candidate,incoming);assert.equal(adapter.conflictRecord(),undefined);assert.equal(h.saves(),0);assert.equal(h.writes(),0);assert.equal(h.disk(),incoming);
+ h.setDisk(incoming+'New ordinary edit');await assert.rejects(h.io.resumeReviewed('Note.md',contentHash(candidate)),/reviewed note changed/);assert.equal(h.writes(),0);
  h.setDisk(incoming);await h.io.resumeReviewed('Note.md',contentHash(candidate));const before=(await h.io.read('Note.md'))!,after=before.replace(responseAnchor(h.id),'> Final response');
- assert.equal(await h.io.compareAndSet('Note.md',before,after),true);assert.equal(h.writes(),1);assert.ok(h.disk().includes('Local ordinary heading'));assert.ok(h.disk().includes('Incoming ordinary tail'));assert.ok(h.disk().includes('Final response'));assert.equal(h.saves(),0);h.manager.dispose();
+ assert.equal(await h.io.compareAndSet('Note.md',before,after),true);assert.equal(h.writes(),1);assert.equal(h.disk().includes('Local ordinary heading'),false);assert.ok(h.disk().includes('Incoming ordinary tail'));assert.ok(h.disk().includes('Final response'));assert.equal(h.saves(),0);h.manager.dispose();
 });
 
 test('completion checks distinguish saved proof from saved cleanup despite another stream changing the note',async()=>{
