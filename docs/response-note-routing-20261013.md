@@ -34,3 +34,37 @@ working header from which to infer a running target.
 Build and test logs, the initial live route observations, recovery command
 results, and live editor evidence are retained outside the synced vault under
 `/home/ubuntu/backups/send-to-t3-code/response-note-routing-20261013`.
+
+## Released verification
+
+The reviewed source commit is `334dd01ed852e53797036bc95ceab2b49ff6ba2e`.
+Release 2.38.2 passed the build, all 1,424 TypeScript tests and 14 Python tests,
+installation into both vaults, and the fresh QLO2 Sync scan. Tests ran with
+`taskset -c 0` after concurrent full-suite execution caused temporary resource
+pressure. The release preserved each installation's `data.json`.
+
+The real VPS QLO2 client loaded 2.38.2. A synthetic note was sent through the
+plugin command interface and renamed from `Untitled.md` to
+`T3 Routing Smoke Test Annotation.md`. Its follow-up message
+`47aa09c5-9b53-5ccd-85ee-ab8b2e9608ae` stayed in the original thread
+`f018340e-b2ce-52a5-9c0d-7dbd247160bd`. Both response bindings completed with
+their final replies saved and cleanup complete. The final follow-up reply was
+`ROUTING_SMOKE_FINAL_OK`. The initial bounded timer had expired while native
+GUI control was unavailable; the later follow-up completed as a second run in
+the same thread.
+
+The native editor displayed that final reply. Opening the destination chooser
+showed the original thread `f018340e` and an enabled **Continue thread** button.
+The chooser was cancelled without another dispatch. The user's original note
+and tab were restored, settings were preserved, and the synthetic note was
+backed up outside the vault before removal. Cold stale-route and duplicate
+response cases are covered by the bundled harness; the live test establishes
+normal rename delivery and the actual destination chooser.
+
+The immutable routing smoke receipt has status `complete`:
+`/home/ubuntu/backups/send-to-t3-code/releases/2.38.2/smoke-vps-qlo2-routing.json`.
+Its copied evidence contains hashes of the test logs, T3 message evidence,
+saved note backup, and native screenshots. The installed runtime hashes match
+the immutable 2.38.2 archive. This live evidence covers the VPS native client.
+Windows loaded-client confirmation remains pending, and no native mobile
+validation was performed.
