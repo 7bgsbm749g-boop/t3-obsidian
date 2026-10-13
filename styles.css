@@ -47,19 +47,64 @@
   from { background-position: -4.5rem 0, 0 0; }
   to { background-position: calc(100% + 4.5rem) 0, 0 0; }
 }
+/* Stationary segments fade out and return as the gap travels around the ring. */
+@keyframes send-to-t3-circle-gap {
+  0% { --send-to-t3-circle-angle: 0deg; }
+  8.333% { --send-to-t3-circle-angle: 30deg; }
+  16.667% { --send-to-t3-circle-angle: 60deg; }
+  25% { --send-to-t3-circle-angle: 90deg; }
+  33.333% { --send-to-t3-circle-angle: 120deg; }
+  41.667% { --send-to-t3-circle-angle: 150deg; }
+  50% { --send-to-t3-circle-angle: 180deg; }
+  58.333% { --send-to-t3-circle-angle: 210deg; }
+  66.667% { --send-to-t3-circle-angle: 240deg; }
+  75% { --send-to-t3-circle-angle: 270deg; }
+  83.333% { --send-to-t3-circle-angle: 300deg; }
+  91.667% { --send-to-t3-circle-angle: 330deg; }
+  100% { --send-to-t3-circle-angle: 360deg; }
+}
+[data-t3-circle="true"]::before {
+  content: "";
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-inline-end: 0.4em;
+  vertical-align: -0.05em;
+  background: currentColor;
+  --send-to-t3-circle-angle: 0deg;
+  --send-to-t3-circle-mask:
+    radial-gradient(farthest-side, transparent calc(100% - 1.3px), #000 calc(100% - 1.3px) calc(100% - 0.2px), transparent 100%),
+    repeating-conic-gradient(#000 0deg 19deg, transparent 19deg 30deg),
+    conic-gradient(from var(--send-to-t3-circle-angle), transparent 0deg 80deg, #000 110deg 360deg);
+  -webkit-mask-image: var(--send-to-t3-circle-mask);
+  mask-image: var(--send-to-t3-circle-mask);
+  -webkit-mask-composite: source-in, source-in, source-over;
+  mask-composite: intersect, intersect, add;
+  mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  forced-color-adjust: none;
+}
 @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-  [data-t3-shine="true"] {
-    color: transparent;
-    -webkit-text-fill-color: transparent;
+  [data-t3-shine="true"],
+  [data-t3-circle="true"]::before {
+    /* currentColor keeps each label's theme or custom colour. Fonts are inherited. */
     background-image:
-      linear-gradient(to right, transparent, var(--text-normal), transparent),
-      linear-gradient(var(--text-muted), var(--text-muted));
+      linear-gradient(to right, transparent, color-mix(in srgb, currentColor 40%, white), transparent),
+      linear-gradient(currentColor, currentColor);
     background-size: 4.5rem 100%, 100% 100%;
     background-repeat: no-repeat;
-    -webkit-background-clip: text;
-    background-clip: text;
     animation: send-to-t3-text-shine 2.2s steps(30) infinite;
     animation-play-state: var(--send-to-t3-shine-state, paused);
+  }
+  [data-t3-shine="true"] {
+    -webkit-text-fill-color: transparent;
+    -webkit-background-clip: text;
+    background-clip: text;
+  }
+  [data-t3-circle="true"]::before {
+    animation-name: send-to-t3-text-shine, send-to-t3-circle-gap;
+    animation-duration: 2.2s, 1.2s;
+    animation-timing-function: steps(30), step-end;
   }
 }
 

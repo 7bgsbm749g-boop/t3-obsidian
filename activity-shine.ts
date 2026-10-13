@@ -9,6 +9,12 @@ export function activityShineTargets(root:ParentNode):Set<HTMLElement> {
   return targets;
 }
 
+/** The circle accompanies titles and the top stream header, not activity rows. */
+export function activityCircleTarget(label:HTMLElement):boolean {
+  return label.getAttribute('data-t3-active-title')==='true'||
+    label.matches('strong')&&!label.closest('.send-to-t3-response-activity, .send-to-t3-context, .send-to-t3-tool, [data-t3-tool-group]');
+}
+
 export function installActivityShine(root:Document):()=>void {
   const watched=new Map<HTMLElement,boolean>();
   const window=root.defaultView;
@@ -22,7 +28,7 @@ export function installActivityShine(root:Document):()=>void {
       watched.set(entry.target as HTMLElement,entry.isIntersecting);update(entry.target as HTMLElement);
     }
   }):undefined;
-  const clear=(element:HTMLElement)=>{intersection?.unobserve(element);element.removeAttribute('data-t3-shine');element.style.removeProperty('--send-to-t3-shine-state');watched.delete(element);};
+  const clear=(element:HTMLElement)=>{intersection?.unobserve(element);element.removeAttribute('data-t3-shine');element.removeAttribute('data-t3-circle');element.style.removeProperty('--send-to-t3-shine-state');watched.delete(element);};
   const refresh=()=>{
     queued=false;if(disposed)return;
     const targets=activityShineTargets(root);
@@ -30,6 +36,9 @@ export function installActivityShine(root:Document):()=>void {
     for(const element of targets){
       if(!watched.has(element)){watched.set(element,!intersection);intersection?.observe(element);}
       if(element.getAttribute('data-t3-shine')!=='true')element.setAttribute('data-t3-shine','true');
+      if(activityCircleTarget(element)){
+        if(element.getAttribute('data-t3-circle')!=='true')element.setAttribute('data-t3-circle','true');
+      }else if(element.hasAttribute('data-t3-circle'))element.removeAttribute('data-t3-circle');
       update(element);
     }
   };
@@ -37,7 +46,7 @@ export function installActivityShine(root:Document):()=>void {
   const observer=new MutationObserver(records=>{
     if(records.some(record=>record.type==='attributes'||[...Array.from(record.addedNodes),...Array.from(record.removedNodes)].some(node=>node.nodeType===1)))schedule();
   });
-  observer.observe(root.body,{childList:true,subtree:true,attributes:true,attributeFilter:['data-t3-active-title','data-t3-shine']});
+  observer.observe(root.body,{childList:true,subtree:true,attributes:true,attributeFilter:['data-t3-active-title','data-t3-shine','data-t3-circle']});
   root.addEventListener('visibilitychange',visibility);motion?.addEventListener('change',visibility);refresh();
   return ()=>{disposed=true;observer.disconnect();intersection?.disconnect();root.removeEventListener('visibilitychange',visibility);motion?.removeEventListener('change',visibility);for(const element of watched.keys())clear(element);};
 }

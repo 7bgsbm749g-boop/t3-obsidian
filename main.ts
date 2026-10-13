@@ -18,7 +18,7 @@ import {ProjectDiscovery,type ProjectSource,type ProjectSnapshot} from './projec
 import {resolveJobOptions,type ResolvedJobOptions} from './job-options';
 import {intermediateMode,installResponsePresentation,finalAnswerFormat,type FinalAnswerFormat,type IntermediateMode} from './response-presentation';
 import {installActivityShine} from './activity-shine';
-import {decorateActivityTabs,decorateMobileActivityTabs} from './activity-titles';
+import {activityLeafPath,decorateActivityTabs,decorateMobileActivityTabs,type ActivityLeaf} from './activity-titles';
 import {applyThreadItem} from './inline-thread';
 import {readInlineSnapshot,watchThread,type ThreadAccess} from './thread-stream';
 import {isRecoveryCommand,validateRecoveryCommand} from './recovery-command';
@@ -404,19 +404,18 @@ export default class SendToT3 extends Plugin {
         },notes=>{
           const tabs:Parameters<typeof decorateActivityTabs>[0]=[];
           this.app.workspace.iterateAllLeaves(leaf=>{
-            const view=leaf.view as MarkdownView;
             const header=(leaf as typeof leaf&{tabHeaderEl?:HTMLElement}).tabHeaderEl;
             if(header)watchShine(header.ownerDocument);
-            tabs.push({path:view.file?.path,title:header?.querySelector<HTMLElement>('.workspace-tab-header-inner-title')??null});
+            tabs.push({path:activityLeafPath(leaf as typeof leaf&ActivityLeaf),title:header?.querySelector<HTMLElement>('.workspace-tab-header-inner-title')??null});
           });
           decorateActivityTabs(tabs,notes);
           const mobile=(this.app as App&{plugins?:{plugins?:Record<string,{
-            tabs?:()=>Array<{view:{file?:TFile}}>;
-            activeTab?:(tabs:Array<{view:{file?:TFile}}>)=>{view:{file?:TFile}}|null;
+            tabs?:()=>ActivityLeaf[];
+            activeTab?:(tabs:ActivityLeaf[])=>ActivityLeaf|null;
             settings?:{wrap?:boolean};
           }>}}).plugins?.plugins?.['mobile-tab-bar'];
           const mobileTabs=mobile?.tabs?.()??[];
-          decorateMobileActivityTabs(document,mobileTabs.map(leaf=>leaf.view.file?.path),mobileTabs.indexOf(mobile?.activeTab?.(mobileTabs) as typeof mobileTabs[number]),!!mobile?.settings?.wrap,notes);
+          decorateMobileActivityTabs(document,mobileTabs.map(activityLeafPath),mobileTabs.indexOf(mobile?.activeTab?.(mobileTabs) as typeof mobileTabs[number]),!!mobile?.settings?.wrap,notes);
         });
         this.registerInterval(window.setInterval(()=>this.folderIndicators?.refresh(),1000));
         this.registerEvent(this.app.workspace.on('layout-change',()=>this.folderIndicators?.refresh()));

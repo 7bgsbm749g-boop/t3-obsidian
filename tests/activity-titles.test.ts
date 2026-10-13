@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {activeResponseFolders,decorateActivityTabs,decorateMobileActivityTabs} from '../activity-titles';
+import {activeResponseFolders,activityLeafPath,decorateActivityTabs,decorateMobileActivityTabs} from '../activity-titles';
 import {decorateNoteIndicators} from '../folder-indicator';
 import type {NoteIndicator} from '../explorer-responses';
 
@@ -49,6 +49,14 @@ test('tabs follow exact note paths across duplicate names, multiple panes, renam
   notes.delete('App/Note.md');notes.set('App/Renamed.md',note(1));tabs[0].path='App/Renamed.md';
   decorateActivityTabs(tabs as any,notes);assert.equal(first.hasAttribute('data-t3-active-title'),true);assert.equal(mirror.hasAttribute('data-t3-active-title'),false);
   notes.clear();decorateActivityTabs(tabs as any,notes);assert.equal(first.hasAttribute('data-t3-active-title'),false);
+});
+
+test('restored deferred Markdown tabs use their saved path while loaded and renamed files take priority',()=>{
+  const saved={type:'markdown',state:{file:'App/Note.md'}};
+  assert.equal(activityLeafPath({view:{},getViewState:()=>saved}),'App/Note.md');
+  assert.equal(activityLeafPath({view:{file:{path:'App/Renamed.md'}},getViewState:()=>saved}),'App/Renamed.md');
+  for(const state of [{type:'canvas',state:{file:'App/Note.md'}},{type:'markdown',state:{file:42}},{type:'markdown',state:{file:''}},{type:'markdown'}])
+    assert.equal(activityLeafPath({view:{},getViewState:()=>state}),undefined);
 });
 
 test('Mobile Tab Bar shines the exact current and adjacent notes, respects wrapping and clears terminal activity',()=>{

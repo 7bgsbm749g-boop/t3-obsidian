@@ -15,6 +15,14 @@ export function setActiveTitle(element:HTMLElement|null,active:boolean):void {
   else if(element.hasAttribute('data-t3-active-title'))element.removeAttribute('data-t3-active-title');
 }
 export interface ActivityTab {path?:string;title:HTMLElement|null}
+export interface ActivityLeaf {view:{file?:{path:string}};getViewState?:()=>{type:string;state?:unknown}}
+/** Obsidian restores background Markdown tabs as deferred views after reload. */
+export function activityLeafPath(leaf:ActivityLeaf):string|undefined {
+  if(leaf.view.file?.path)return leaf.view.file.path;
+  const saved=leaf.getViewState?.();
+  const path=saved?.type==='markdown'&&saved.state&&typeof saved.state==='object'&&'file' in saved.state?saved.state.file:undefined;
+  return typeof path==='string'&&path.length?path:undefined;
+}
 /** Bind by the leaf's file path, never its possibly duplicate display title. */
 export function decorateActivityTabs(tabs:ActivityTab[],notes:Map<string,NoteIndicator>):void {
   for(const tab of tabs)setActiveTitle(tab.title,!!tab.path&&!!notes.get(tab.path)?.active);
