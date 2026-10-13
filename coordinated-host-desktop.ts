@@ -7,8 +7,6 @@ import {generatedEventContent} from './generated-event-content';
 import {GeneratedNoteCoordinator,validateFinalResponseBody,type NoteGeneration} from './generated-note-coordinator';
 import {nativeCommitPath,readNativeCommitProof} from './native-response-commit';
 import {CurrentGenerationJournal} from './current-generation-journal-desktop';
-import {nativeResponses} from './native-response-manager';
-import {deviceNoteIO} from './inline-note-io';
 import {planNativeMigration} from './coordinated-migration';
 import {restoreResponseAnchor} from './response-anchor-recovery';
 import {responseAnchor,responseRegion,renderResponse,savedProjection} from './native-response-projection';
@@ -27,6 +25,11 @@ import type {ImportRecordsCommand} from './response-command';
 import {readResponseBindings} from './response-bindings';
 import type {EventTarget} from './event-subscriptions';
 import {retainedLease,isCompletedLeaseIndex} from './completed-lease-index';
+
+export interface CoordinatedHostRuntime {
+  projection:Pick<ReturnType<typeof import('./native-response-manager').nativeResponses>,'receive'|'savedViews'|'prepare'|'committed'|'cancel'>;
+  notes:Pick<ReturnType<typeof import('./inline-note-io').deviceNoteIO>,'locateNote'|'noteRelocated'|'noteChanged'|'readNote'|'updateNote'>;
+}
 
 /** Host lock is owned by DesktopInlineHost. Mailbox mutations, migration fences
  * and checkpoints share that authority's serialization. Journal bytes live
@@ -66,10 +69,11 @@ export class CoordinatedHost {
     const finalBody=removeStreamBlock(result.finalBody!,result.historyRemoval.key,result.historyRemoval.blockHash).text;
     const state={...record.state,body:finalBody,finalBody,finalDocumentHash:proof.hash,delivery:{commitId:proof.commitId,hash:proof.hash,proofHash:published.hash,verifiedOnHost:true,observedBy:[]}};
     const updated=await this.authority.checkpoint(record.request.id,state,{epoch:record.epoch,revision:record.revision});
-    this.records.set(record.request.id,retainedLease(updated));await nativeResponses(this.app).receive(updated,published.bytes);return updated;
+    this.records.set(record.request.id,retainedLease(updated));await this.runtime.projection.receive(updated,published.bytes);return updated;
   }
-  private constructor(private app:App,private identity:LeaseIdentity,private files:LeaseFiles,private authority:InlineLeaseAuthority,readonly journal:CurrentGenerationJournal,readonly coordinator:GeneratedNoteCoordinator){}
-  static async open(app:App,identity:LeaseIdentity,files:LeaseFiles,authority:InlineLeaseAuthority,options?:{journalRoot?:string}){
+  private constructor(private app:App,private identity:LeaseIdentity,private files:LeaseFiles,private authority:InlineLeaseAuthority,readonly journal:CurrentGenerationJournal,readonly coordinator:GeneratedNoteCoordinator,private runtime:CoordinatedHostRuntime){}
+  static async open(app:App,identity:LeaseIdentity,files:LeaseFiles,authority:InlineLeaseAuthority,options?:{journalRoot?:string;runtime?:CoordinatedHostRuntime}){
+    const runtime=options?.runtime??{projection:(await import('./native-response-manager')).nativeResponses(app),notes:(await import('./inline-note-io')).deviceNoteIO(app)};
     const roots=[identity.workspaceRoot];
     try{const registry=JSON.parse(await fs.readFile(join(homedir(),'.config/obsidian/obsidian.json'),'utf8'));for(const vault of Object.values(registry.vaults??{}) as any[])if(vault.path)roots.push(vault.path);}catch{}
     const journal=await CurrentGenerationJournal.open(options?.journalRoot??join(homedir(),'backups/send-to-t3-code/coordinated-journals',contentHash(identity.workspaceRoot+identity.vaultId)),roots);
@@ -78,11 +82,11 @@ export class CoordinatedHost {
       read:async path=>{const file=app.vault.getFileByPath(path);return file?app.vault.read(file):undefined;},
       compareAndSet:async(path,before,after)=>host.checkedSave(path,before,after),
     });
-    host=new CoordinatedHost(app,identity,files,authority,journal,coordinator);return host;
+    host=new CoordinatedHost(app,identity,files,authority,journal,coordinator,runtime);return host;
   }
   private async checkedSave(path:string,before:string,after:string){
     const file=this.app.vault.getFileByPath(path);if(!file||this.stopped)return false;
-    const manager=nativeResponses(this.app);
+    const manager=this.runtime.projection;
     const same=()=>manager.savedViews(path).every(view=>view.saved()===before);
     if(!same()||await this.app.vault.read(file)!==before)return false;
     const ids=[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&!record.state?.cleanupComplete&&(record.state?.notePath??record.request.notePath)===path&&responseRegion(before,record.request.id)&&!responseRegion(after,record.request.id)).map(record=>record.request.id);
@@ -186,7 +190,7 @@ export class CoordinatedHost {
       const identity=record.request.id;this.failures.delete(identity);
       try{
       const id=record.request.id,notePath=record.state?.notePath??record.request.notePath;
-      if(record.responseRemovedAt!==undefined){this.records.set(id,retainedLease(record));await nativeResponses(this.app).receive(record);return;}
+      if(record.responseRemovedAt!==undefined){this.records.set(id,retainedLease(record));await this.runtime.projection.receive(record);return;}
       if(record.request.deviceCompletion){
         if(!await this.journal.inspect(id)){
           const original=await this.files.read(deviceOriginalPath(this.identity.directory,id));
@@ -211,13 +215,13 @@ export class CoordinatedHost {
               }
             }
           }
-          await nativeResponses(this.app).receive(record);return;
+          await this.runtime.projection.receive(record);return;
         }
       }
       if(record.relocations?.length){
         const original=await this.journal.inspect(id);
         for(const move of record.relocations){
-          deviceNoteIO(this.app).noteRelocated(id,move.before,move.after,original?.originalHash);
+          this.runtime.notes.noteRelocated(id,move.before,move.after,original?.originalHash);
           if(!original||move.before===notePath)continue;
           // A rename intent alone does not prove Sync has delivered the new
           // anchor. Keep the sole surviving registration until it has arrived.
@@ -235,7 +239,7 @@ export class CoordinatedHost {
           const directory=join(this.journal.root,id,'stale-rename-preimages');await fs.mkdir(directory,{recursive:true,mode:0o700});
           await fs.writeFile(join(directory,contentHash(move.before)+'.md'),saved,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
           await this.recoverySave(move.before,saved,saved.slice(0,part.from)+saved.slice(part.to),id,true);
-          deviceNoteIO(this.app).noteChanged(move.before);
+          this.runtime.notes.noteChanged(move.before);
         }
       }
       this.records.set(id,retainedLease(record));
@@ -248,7 +252,7 @@ export class CoordinatedHost {
         // delivery. Reuse this existing fresh audit; no additional history scan.
         if(pending?.status==='removed'){
           const removed=await this.authority.removeResponse(id);this.records.set(id,retainedLease(removed));
-          await nativeResponses(this.app).receive(removed);return;
+          await this.runtime.projection.receive(removed);return;
         }
         if(pending?.attempt&&['commit-pending','verified'].includes(pending.status)){
           const file=this.app.vault.getFileByPath(notePath);
@@ -271,7 +275,7 @@ export class CoordinatedHost {
           let journal=await this.journal.inspect(id);
           if(journal?.status==='removed'){
             const removed=await this.authority.removeResponse(id);this.records.set(id,retainedLease(removed));
-            await nativeResponses(this.app).receive(removed);return;
+            await this.runtime.projection.receive(removed);return;
           }
           // A proven completed rename can still carry the original empty
           // anchor. Settle its checked recovery before auditing shortened
@@ -284,7 +288,7 @@ export class CoordinatedHost {
             const proof=await this.materialization(journal);
             record=await this.authority.checkpoint(id,{...record.state,delivery:{...record.state.delivery,proofHash:proof.hash}},{epoch:record.epoch,revision:record.revision});this.records.set(id,retainedLease(record));
           }
-          await nativeResponses(this.app).receive(record);
+          await this.runtime.projection.receive(record);
           if(journal){
             let current=journal;
             if(current.notePath!==notePath)current=await this.coordinator.renamed(id,current.notePath,notePath);
@@ -319,7 +323,7 @@ export class CoordinatedHost {
         const plan=already?undefined:planNativeMigration(record,saved);
         if(!already&&plan?.kind!=='planned')return;
         // No raw move: disagreeing or dirty native views delay migration.
-        if(!nativeResponses(this.app).savedViews(notePath).every(view=>view.saved()===saved))return;
+        if(!this.runtime.projection.savedViews(notePath).every(view=>view.saved()===saved))return;
         record=(await this.authority.fence(id))!;this.records.set(id,retainedLease(record));
         // Existing clients may still hold a cached, previously granted TTL.
         // Reject renewals now and wait out that grant before stripping bytes.
@@ -335,7 +339,7 @@ export class CoordinatedHost {
       }
       const journal=await this.journal.inspect(id);
       if(journal&&journal.notePath!==notePath)await this.coordinator.renamed(id,journal.notePath,notePath);
-      await nativeResponses(this.app).receive(record);
+      await this.runtime.projection.receive(record);
       }catch(error){const detail=error instanceof Error?error.message:String(error);this.failures.set(identity,detail);logFailure('response.coordinator.scan-conflict',error,{bindingId:identity});}
   }
   maintain(){return this.stopped?Promise.resolve():this.journal.maintain();}
@@ -355,7 +359,7 @@ export class CoordinatedHost {
       requests:async()=>[...this.records.values()].filter(record=>record.coordinated&&!record.migrating&&record.responseRemovedAt===undefined&&(!record.finalWriter||record.finalWriter.actor===record.owner)&&needsHostedProcessing(record.request,record.state)).map(record=>hostedPaths(this.identity.directory,record.request.id).request),
       accepts:request=>!!this.records.get(request.id)?.coordinated&&!this.records.get(request.id)?.migrating&&this.records.get(request.id)?.responseRemovedAt===undefined&&!this.failures.has(request.id)&&!this.stopped,
       canResume:()=>true,
-      locateNote:(id,path)=>this.records.get(id)?.request.deviceCompletion?Promise.resolve(path):deviceNoteIO(this.app).locateNote(id,path),
+      locateNote:(id,path)=>this.records.get(id)?.request.deviceCompletion?Promise.resolve(path):this.runtime.notes.locateNote(id,path),
       read:async path=>{
         const id=/\/([^/]+)\.json$/.exec(path)?.[1],record=id?this.records.get(id):undefined;
         if(record&&path===hostedPaths(this.identity.directory,id!).state){reads.set(id!,{epoch:record.epoch,revision:record.revision});return record.state?JSON.stringify(record.state):undefined;}
@@ -365,7 +369,7 @@ export class CoordinatedHost {
       write:async(path,value)=>{
         const id=/\/([^/]+)\.json$/.exec(path)?.[1];if(!id||path!==hostedPaths(this.identity.directory,id).state)return base.write(path,value);
         const state:HostedInlineState=JSON.parse(value),record=await this.authority.checkpoint(id,state,reads.get(id));reads.set(id,{epoch:record.epoch,revision:record.revision});this.records.set(id,retainedLease(record));
-        await this.coordinator.checkpoint(id,record.revision,record.state!);await nativeResponses(this.app).receive(record);
+        await this.coordinator.checkpoint(id,record.revision,record.state!);await this.runtime.projection.receive(record);
       },
       updateNote:async(path,change,bindingId)=>{
         const local=bindingId?this.records.get(bindingId):undefined;
@@ -377,7 +381,7 @@ export class CoordinatedHost {
           // changes and the response are applied together by the granted writer.
           return change(displayed);
         }
-        const saved=await deviceNoteIO(this.app).readNote(path);if(saved===undefined)return;
+        const saved=await this.runtime.notes.readNote(path);if(saved===undefined)return;
         // Historical removed/conflicted bindings can outlive their anchors.
         // Only anchors present in this note participate in its projection;
         // malformed present boundaries still fail the normal validation.
@@ -386,7 +390,7 @@ export class CoordinatedHost {
         // Ordinary selection consumption follows the normal checked save path;
         // generated response body changes are only local/journaled.
         const ordinary=next===projection.display?saved:savedProjection(next,projection);
-        if(ordinary!==saved){await deviceNoteIO(this.app).updateNote(path,()=>ordinary,()=>!this.stopped);}
+        if(ordinary!==saved){await this.runtime.notes.updateNote(path,()=>ordinary,()=>!this.stopped);}
         return next;
       },
       commitFinal:async(request,state,body)=>{
@@ -422,7 +426,7 @@ export class CoordinatedHost {
   }
   private async recoverySave(path:string,before:string,after:string,id:string,detach:boolean){
     const file=this.app.vault.getFileByPath(path);if(!file)throw Error('A reviewed note disappeared.');
-    const manager=nativeResponses(this.app),same=()=>manager.savedViews(path).every(view=>view.saved()===before);
+    const manager=this.runtime.projection,same=()=>manager.savedViews(path).every(view=>view.saved()===before);
     if(!same())throw Error('Save the note before resolving its response destination.');
     if(detach)manager.prepare(path,before,after,[id]);
     try{
@@ -490,7 +494,7 @@ export class CoordinatedHost {
     if(kind==='resume-response'){
       const raw=await this.files.read(leasePaths(this.identity.directory,id).record);if(!raw)throw Error('Unknown response binding.');
       const lease:LeaseRecord=JSON.parse(raw),notePath=lease.state?.notePath??lease.request.notePath;
-      const saved=await deviceNoteIO(this.app).readNote(notePath);
+      const saved=await this.runtime.notes.readNote(notePath);
       if(saved===undefined||!responseRegion(saved,id))throw Error('Response boundaries or native views disagree. Restore the exact boundaries and save first.');
       const resumed=await this.authority.resume(id);this.records.set(id,resumed);await this.scan();return {resumed:true,bindingId:id};
     }
@@ -520,7 +524,7 @@ export class CoordinatedHost {
           const evidence=join(this.journal.root,id,`anchor-recovery-${hash}`);await fs.mkdir(evidence,{recursive:true,mode:0o700});
           for(const [name,bytes] of [['before.md',saved],['after.md',after]])await fs.writeFile(join(evidence,name),bytes,{flag:'wx',mode:0o600}).catch((error:any)=>{if(error.code!=='EEXIST')throw error;});
           if(after!==saved)await this.recoverySave(path,saved,after,id,false);
-          deviceNoteIO(this.app).noteChanged(path);
+          this.runtime.notes.noteChanged(path);
           return {path,evidence,after,finished:latest.status==='conflict'};
         });
         if(finished){const generation=await this.coordinator.restore(id,contentHash(after));await this.scan();return {restored:generation.status==='verified',notePath:path,evidence,generation};}
@@ -537,7 +541,7 @@ export class CoordinatedHost {
       }
       const repaired=await this.coordinator.restore(id,hash!);await this.scan();return {generation:repaired};
     }
-    if(kind==='remove-response'){await this.coordinator.remove(id);const removed=await this.authority.removeResponse(id);this.records.set(id,retainedLease(removed));await nativeResponses(this.app).receive(removed);return {removed:true};}
+    if(kind==='remove-response'){await this.coordinator.remove(id);const removed=await this.authority.removeResponse(id);this.records.set(id,retainedLease(removed));await this.runtime.projection.receive(removed);return {removed:true};}
     throw Error('Unsupported response command.');
   }
   async renamed(before:string,after:string){await this.authority.renameNative(before,after);await this.scan();}

@@ -6,6 +6,8 @@ from pathlib import Path
 import tempfile
 import unittest
 import subprocess
+import base64
+import gzip
 from unittest.mock import patch
 
 
@@ -17,6 +19,41 @@ SPEC.loader.exec_module(release)
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    def test_background_runtime_is_carried_by_exact_release_bytes(self) -> None:
+        runtime = b'console.log("standalone host");\n'
+        marker = b'// T3_RESPONSE_HOST_RUNTIME_V1:' + base64.b64encode(gzip.compress(runtime, mtime=0))
+        self.assertEqual(release.response_host_runtime(b'plugin;\n' + marker + b'\n'), runtime)
+        self.assertIsNone(release.response_host_runtime(b'old plugin;'))
+        with self.assertRaises(SystemExit):
+            release.response_host_runtime(marker + b'\n' + marker)
+        with self.assertRaises(SystemExit):
+            release.response_host_runtime(b'// T3_RESPONSE_HOST_RUNTIME_V1:AAAA\n')
+
+    def test_background_install_is_immutable_and_preserves_vault_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            vault = base / 'QLO2'
+            plugin = vault / '.obsidian/plugins/send-to-t3-code'
+            plugin.mkdir(parents=True)
+            settings = b'{"vaultId":"synthetic-vault","preserve":"exact bytes"}'
+            (plugin / 'data.json').write_bytes(settings)
+            private = base / 'private'
+            route = vault / '.obsidian/t3-code/storage-route.json'
+            route.parent.mkdir(parents=True)
+            route.write_text(json.dumps({'workspaceRoot':str(vault),'configDir':'.obsidian','storageRoot':str(private)}))
+            payload = b'console.log("background");\n'
+            bundle = b'// T3_RESPONSE_HOST_RUNTIME_V1:' + base64.b64encode(gzip.compress(payload,mtime=0)) + b'\n'
+            with patch.object(release,'QLO2_PLUGIN',plugin), patch.object(release,'HOST_RUNTIMES',base/'runtimes'), patch.object(release,'HOST_UNIT',base/'unit.service'), patch.object(release,'run') as command:
+                first = release.install_response_host('1.2.3',bundle)
+                self.assertEqual(Path(first['runtime']).read_bytes(),payload)
+                self.assertEqual((plugin/'data.json').read_bytes(),settings)
+                self.assertFalse(first['desktopClientRequired'])
+                self.assertEqual(len(command.call_args_list),3)
+                self.assertEqual(release.install_response_host('1.2.3',bundle),first)
+                changed = b'// T3_RESPONSE_HOST_RUNTIME_V1:' + base64.b64encode(gzip.compress(b'changed',mtime=0)) + b'\n'
+                with self.assertRaises(SystemExit): release.install_response_host('1.2.3',changed)
+                self.assertEqual(Path(first['runtime']).read_bytes(),payload)
+
     def test_explicit_user_test_skip_preserves_build_and_audit_reason(self) -> None:
         with patch.object(release, 'run') as command:
             self.assertEqual(release.release_checks(), {'status': 'passed'})

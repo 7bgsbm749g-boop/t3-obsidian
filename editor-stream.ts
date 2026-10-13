@@ -8,6 +8,7 @@ import {safeNotePath,type HostedInlineRequest} from './hosted-inline';
 export interface StreamNoteIO {
   updateNote(path:string,change:(document:string)=>string,allowed:()=>boolean):Promise<string|undefined>;
   completed?(id:string):Promise<boolean>;
+  beforeInsert?(request:HostedInlineRequest):Promise<void>;
 }
 /** Attach a single response to a note without dispatching another prompt.
  * Stable IDs make registration/recovery retries reuse the same block. */
@@ -16,6 +17,7 @@ export async function editorStream(source:HostedInlineRequest,notePath:string,io
   const id=bindingId??commandId(source.id,`binding:${notePath}`),region=initialRegion(id,source.initialInput,source.threadTitle,intermediateMode(source.intermediateMode,source.keepIntermediate),{startedAt:source.createdAt});
   const request:HostedInlineRequest={...source,id,notePath,initialHash:region.bodyHash,independent:true};
   if(await io.completed?.(id))return request;
+  await io.beforeInsert?.(request);
   const document=await io.updateNote(notePath,current=>{
     if(regionBody(current,id)||current.includes(`<!-- t3-response:start:${id} -->`))return current;
     const offset=destinationOffset(current,source.destinationSection);

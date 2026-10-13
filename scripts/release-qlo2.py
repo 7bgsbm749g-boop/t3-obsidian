@@ -20,6 +20,9 @@ import sys
 import tempfile
 from typing import Any
 import zipfile
+import base64
+import gzip
+import re
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -30,6 +33,8 @@ BACKUPS = Path('/home/ubuntu/backups/send-to-t3-code')
 RECEIPTS = BACKUPS / 'releases'
 SYNC_SERVICE = 'obsidian-qlo2-sync.service'
 OB = Path('/home/ubuntu/.local/bin/ob')
+HOST_RUNTIMES = Path('/home/ubuntu/.local/share/send-to-t3-code/response-host/releases')
+HOST_UNIT = Path('/home/ubuntu/.config/systemd/user/send-to-t3-code-response-host.service')
 
 RUNTIME_FILES = ('main.js', 'manifest.json', 'styles.css')
 RELEASE_FILES = ('main.js', 'manifest.json', 'versions.json', 'styles.css', 'README.md', 'LICENSE')
@@ -300,6 +305,58 @@ def release_receipt_dir(version: str) -> Path:
     return RECEIPTS / version
 
 
+def response_host_runtime(bundle: bytes) -> bytes | None:
+    matches = re.findall(rb'^// T3_RESPONSE_HOST_RUNTIME_V1:([A-Za-z0-9+/=]+)$', bundle, re.MULTILINE)
+    if not matches:
+        return None  # Older immutable releases do not contain this component.
+    if len(matches) != 1:
+        raise SystemExit('The release contains ambiguous background host bytes.')
+    try:
+        return gzip.decompress(base64.b64decode(matches[0], validate=True))
+    except (ValueError, OSError) as error:
+        raise SystemExit('The release contains invalid background host bytes.') from error
+
+
+def install_response_host(version: str, bundle: bytes) -> dict[str, Any] | None:
+    runtime = response_host_runtime(bundle)
+    if runtime is None:
+        return None
+    root = QLO2_PLUGIN.parents[2]
+    route = read_json(root / '.obsidian/t3-code/storage-route.json')
+    if route.get('workspaceRoot') != str(root) or route.get('configDir') != '.obsidian':
+        raise SystemExit('The background host private-storage route does not match QLO2.')
+    private = Path(route['storageRoot']) / '.obsidian/t3-code/inline/v1'
+    private.mkdir(parents=True, exist_ok=True)
+    settings = (QLO2_PLUGIN / 'data.json').read_bytes()
+    vault_id = json.loads(settings)['vaultId']
+    destination = HOST_RUNTIMES / version / 'response-host.cjs'
+    if destination.exists():
+        if destination.read_bytes() != runtime:
+            raise SystemExit('The immutable background host runtime already has different bytes.')
+    else:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open('xb') as stream:
+            stream.write(runtime)
+            stream.flush()
+            os.fsync(stream.fileno())
+        destination.chmod(0o600)
+    atomic_write(private / 'background-host-config.json', (json.dumps({'version': 1, 'vaultId': vault_id, 'workspaceRoot': str(root), 'releaseVersion': version, 'runtimeSha256': sha256_bytes(runtime)}) + '\n').encode())
+    unit = '\n'.join([
+        '[Unit]', 'Description=Send to T3 Code background response host', 'After=network-online.target',
+        '[Service]', 'Type=simple', f'ExecStart=/usr/bin/node {destination} --root {root}',
+        'Environment=PATH=/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin',
+        'Restart=always', 'RestartSec=2', 'TimeoutStopSec=45', 'UMask=0077',
+        '[Install]', 'WantedBy=default.target', '',
+    ])
+    atomic_write(HOST_UNIT, unit.encode())
+    run(['systemctl', '--user', 'daemon-reload'])
+    run(['systemctl', '--user', 'enable', 'send-to-t3-code-response-host.service'])
+    run(['systemctl', '--user', 'restart', 'send-to-t3-code-response-host.service'])
+    if (QLO2_PLUGIN / 'data.json').read_bytes() != settings:
+        raise SystemExit('Background host installation changed QLO2 data.json.')
+    return {'runtime': str(destination), 'runtimeSha256': sha256_bytes(runtime), 'unit': str(HOST_UNIT), 'service': 'send-to-t3-code-response-host.service', 'desktopClientRequired': False}
+
+
 def write_release_receipt(version: str, value: dict[str, Any]) -> Path:
     directory = release_receipt_dir(version)
     receipt = directory / 'deployment.json'
@@ -329,6 +386,7 @@ def publish_release(
         archive_hashes,
         allow_same_version=resumed,
     )
+    background_host = install_response_host(version, runtime['main.js'])
     receipt = {
         'version': version,
         'status': 'awaiting-live-smoke',
@@ -346,6 +404,7 @@ def publish_release(
         'developmentRuntimeSha256': dev_hashes,
         'qlo2Install': str(QLO2_PLUGIN),
         **deployment,
+        **({'backgroundResponseHost': background_host} if background_host else {}),
         'nextAction': (
             'Reload a real QLO2 Obsidian client, smoke-test the changed behavior, capture evidence, then run '
             f'npm run release:qlo2 -- --complete-smoke {version} --device <device> --evidence <path> --notes <text>'
@@ -377,6 +436,9 @@ def complete_smoke(version: str, device: str, evidence: Path, notes: str) -> Non
     if read_json(QLO2_PLUGIN / 'manifest.json')['version'] != version:
         raise SystemExit(f'QLO2 is not currently installed at {version}.')
     expected = deployment.get('releaseFileSha256', {})
+    background = deployment.get('backgroundResponseHost')
+    if background and sha256_file(Path(background['runtime'])) != background['runtimeSha256']:
+        raise SystemExit('The background response host does not match its immutable release.')
     for name in RELEASE_FILES:
         if name not in expected or not (QLO2_PLUGIN / name).is_file() or sha256_file(QLO2_PLUGIN / name) != expected[name]:
             raise SystemExit(f'QLO2 {name} does not match the immutable deployment; smoke completion refused.')

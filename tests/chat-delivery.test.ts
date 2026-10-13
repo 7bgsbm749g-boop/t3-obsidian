@@ -1882,13 +1882,15 @@ test('discarding an unconfirmed agent command compacts its payload and refuses r
   }finally{h.plugin.onunload();}
 });
 
-test('a failed agent send clears its stream and refuses the same command after reload',{timeout:10000},async()=>{
+test('a lost send acknowledgement retains its durable guard and cannot resend after reload',{timeout:10000},async()=>{
   const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')throw Error('lost acknowledgement');});let restarted:any;
   try{
     const note=h.attachEditor('Notes/AgentRetry.md','Keep this exact source.');Object.assign(note.file,{basename:'AgentRetry',stat:{ctime:123}});h.plugin.app.vault.getFileByPath=()=>note.file;
     const command={version:1,id:webcrypto.randomUUID(),kind:'send-note',notePath:note.file.path,destinations:[note.file.path],streamReply:true};
     await assert.rejects(h.plugin.executeNoteCommand(command));assert.equal(h.plugin.settings.pending.length,0);
-    assert.doesNotMatch(note.value,/Working|spinner|t3-inline:start:/);assert.match(note.value,/Keep this exact source/);
+    const guards=[...h.hostFiles].filter(([path]:any)=>path.includes('/send-guards/')).map(([,raw]:any)=>JSON.parse(raw));
+    assert.equal(guards.length,1);assert.equal(guards[0].status,'failed');assert.equal(guards[0].uncertain,true);
+    assert.match(note.value,/Keep this exact source/);
     const count=h.commands.length;h.plugin.onunload();restarted=await h.start();
     await assert.rejects(restarted.executeNoteCommand(command),/cannot be retried/);assert.equal(h.commands.length,count);
   }finally{restarted?.onunload();h.plugin.onunload();}

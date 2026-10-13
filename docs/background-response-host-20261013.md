@@ -1,0 +1,62 @@
+# Independent QLO2 reply host and failed-send cleanup
+
+The mobile plugin previously awaited a reply-owner registration before T3
+dispatch. That owner ran inside the VPS Obsidian client. Closing the client
+therefore blocked delivery even when T3 and its authenticated file API remained
+available. A separate stale busy snapshot could also keep an open send window
+disabled after an earlier request finished. Release 2.38.7 fixed the window,
+but did not satisfy the requirement for independent reply processing.
+
+The complete change moves QLO2 reply authority, response feeds, checked final
+saves, staged reply commands, and failed-send cleanup into a Node background
+service. It reuses InlineLeaseAuthority, CoordinatedHost, the existing private
+generation journal, and HostedInlineWriter. Its filesystem adapter has no
+Obsidian renderer or editor. It checks note identity and saved content before
+an atomic write, syncs the replacement to disk, and verifies readback. Native
+clients retain their existing projection and current-buffer merge behavior.
+
+The desktop plugin yields its writer lock when the installed background-host
+configuration identifies its vault. Desktop readers then use the private
+mailbox rather than requiring a local renderer to dispatch its commands.
+The service uses short-lived official local T3 sessions. Paired connection
+credentials are supplied in a private file, outside Sync, for replies whose
+T3 thread runs on another machine; managed connections can renew through the
+saved T3 account. Tokens and note bodies are excluded from service startup logs.
+
+The build compresses the standalone service into an identified payload in
+main.js. The six-file immutable release package is unchanged. The supported
+release command extracts those exact bytes into a versioned private runtime,
+records their SHA-256, installs a user systemd unit, and enables automatic
+startup and restart. The account already has systemd lingering enabled, so
+closing Obsidian or the graphical session does not stop this service. The
+official QLO2 Sync service remains responsible for file propagation.
+
+Before a response boundary is inserted, a send guard records its exact vault,
+note, response, thread, and message identities. Explicit failures retry checked
+tag removal from that durable record. Prepared sends whose device disappears
+are checked against T3 after the bounded dispatch period. An accepted message
+is retained. An absent message is cleaned without dispatching a replacement.
+Cleanup tombstones also remove stale or duplicated failed tags from later Sync
+copies. Ordinary text, other response identities, and partial reply prose are
+preserved. Missing confirmation is not treated as proof of failed delivery.
+
+The background note-command path uses the same durable command UUID, saved
+prompt, reply registration and T3 dispatch ledger. It requires the normal saved
+folder route. It does not edit shared settings directly: accepted note/thread
+links are published privately and adopted through the plugin's normal merged
+settings save. A running desktop retains its native command interface; a
+recent desktop presence record prevents simultaneous command handling.
+
+Regression coverage uses real temporary files with no Obsidian application.
+It checks final save, host restart, failed registration cleanup, stale Sync
+copies, lost acknowledgement, accepted-message preservation, pre-insertion
+guard failure, duplicate boundaries, and replay without a second send.
+The extracted standalone bundle also starts under ordinary Node without an
+Obsidian module. Release tests verify immutable extraction and installation
+without changing data.json.
+
+Production proof must retain a real T3 message and final save while the QLO2
+desktop client is closed. Synthetic completion fixtures do not establish
+native phone coverage; native iPhone/Android interaction remains a separate
+verification boundary. Folder/event subscriptions retain their existing
+desktop lifecycle and are outside this reply-host change.

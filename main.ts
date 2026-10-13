@@ -78,6 +78,7 @@ import {hiddenInlineMarkerExtension,hideResponseContainerBoundaries} from './inl
 import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,selectionOverlapsInlineResponse,selectionAnchor,initialRegion,endInsertionOffset,endMarker,failedInlineIds,regionBody,finalizeRegion,startMarker,type SelectionAnchor} from './inline-thread';
 import {QuestionController} from './question-controller';
 import {closeNoteTabPanel} from './note-tab-panel';
+import {prepareSendGuard,updateSendGuard} from './send-response-guard';
 import {QuestionModal,questionButton,questionEditorExtension} from './question-ui';
 import {questionTargets,parseQuestionToken,clearResolvedQuestion,removeDismissedQuestions,type QuestionTarget} from './questions';
 import {ApprovalController} from './approval-controller';
@@ -165,6 +166,8 @@ export default class SendToT3 extends Plugin {
   private inlineTargets:InlineHostTarget[]=[];
   private destinationRoutes=new Map<string,{record:LeaseRecord;host:InlineHostTarget;at:number}>();
   private inlineHostService?:import('./hosted-inline-desktop').DesktopInlineHost;
+  private backgroundCredentialsHash='';
+  private backgroundNoteLinks=new Set<string>();
   private inlineHostKey='';
   private inlineHostRefresh?:Promise<void>;
   private noteCommandOpening?:Promise<void>;
@@ -196,8 +199,12 @@ export default class SendToT3 extends Plugin {
     }
     if(request.agentCommand)this.app.saveLocalStorage(`${this.localKey}-note-command-${request.agentCommand.id}`,{command:request.agentCommand,discarded:true});
     const bindings=request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]);
+    for(const binding of bindings)try{await this.responseGuard(binding,'failed',stage==='dispatch'||stage==='startup-recovery');}catch(cleanupError){this.recordSendFailure(request,cleanupError,'durable-response-cleanup',startedAt);}
+    // Lost delivery acknowledgements need an exact server check. The durable
+    // background guard makes that check without dispatching another prompt.
+    if(bindings.length&&(stage==='dispatch'||stage==='startup-recovery')){try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'failure-save',startedAt);}return;}
     for(const binding of bindings){
-      if(binding.nativeProjection)await nativeResponses(this.app).stop(binding.id,binding.notePath,true);
+      if(binding.nativeProjection)try{await nativeResponses(this.app).stop(binding.id,binding.notePath,true);}catch(cleanupError){this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
       else try{await deviceNoteIO(this.app).updateNote(binding.notePath,document=>{const region=regionBody(document,binding.id);if(!region)return document;const change=finalizeRegion(document,binding.id,contentHash(region.body),'');return change?document.slice(0,change.from)+change.text+document.slice(change.to):document;},()=>!this.stopped);}catch(cleanupError){this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
       this.deviceInline?.stopLocally(binding.id);
       if(this.deviceInline&&[2,3,4].includes(binding.version))void this.deviceInline.failResponse(binding.host,binding.id).catch(cleanupError=>this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt));
@@ -1305,6 +1312,8 @@ export default class SendToT3 extends Plugin {
     try{
       await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{...options,jobOptions,requestId,sourceContext:context,onPrepared:async request=>{
         // Package images before mutating the note.
+        const host=await this.inlineHostTarget();
+        await this.responseGuard({version:4,id:requestId,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:note.path,threadId:request.threadId??commandId(requestId,'thread'),messageId:commandId(requestId,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:'0'.repeat(64),createdAt:new Date().toISOString()},'prepared');
         job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
         await manager.prepare(job,request);
       }});delivered=true;if(job)manager.start(job);
@@ -1507,6 +1516,19 @@ export default class SendToT3 extends Plugin {
       // environment and vault path. A new default host does not strand jobs
       // already handed to the old host.
       const key=localRoot?JSON.stringify([localRoot,this.settings.vaultId,this.app.vault.configDir]):'';
+      if(localRoot){
+        const directory=`${this.app.vault.configDir||'.obsidian'}/t3-code/inline/v1`,files=(await import('./inline-host-storage-desktop')).localInlineFiles(localRoot,directory);
+        const raw=await files.read(`${directory}/background-host-config.json`);
+        if(raw){const config=JSON.parse(raw);if(config.version===1&&config.vaultId===this.settings.vaultId&&sameWorkspacePath(config.workspaceRoot,localRoot)){
+          if(this.inlineHostService){const previous=this.inlineHostService;this.inlineHostService=undefined;this.inlineHostKey='';await previous.dispose();}
+          const credentials=JSON.stringify({paired:this.settings.paired,sessions:this.pairedSessions,nativeAccount:this.nativeAccount}),hash=contentHash(credentials);
+          if(hash!==this.backgroundCredentialsHash){await files.write(`${directory}/background-connections.json`,credentials);this.backgroundCredentialsHash=hash;}
+          await files.write(`${directory}/desktop-client.json`,JSON.stringify({version:1,updatedAt:new Date().toISOString(),pluginVersion:pluginManifest.version}));
+          const links=(await files.list(`${directory}/note-thread-links`)).filter(path=>!this.backgroundNoteLinks.has(path)).slice(0,32);
+          if(links.length){const incoming=loadNoteThreads((await Promise.all(links.map(async path=>{const raw=await files.read(path);return raw?JSON.parse(raw):undefined;}))).filter(Boolean)),merged=mergeNoteThreads(this.settings.noteThreads,incoming);if(JSON.stringify(merged)!==JSON.stringify(this.settings.noteThreads)){this.settings.noteThreads=merged;await this.save();}for(const path of links)this.backgroundNoteLinks.add(path);}
+          return;
+        }}
+      }
       if(this.inlineHostService&&(!this.inlineHostService.active||this.inlineHostKey!==key)){
         const previous=this.inlineHostService;this.inlineHostService=undefined;this.inlineHostKey='';
         await previous.dispose().catch(()=>{});
@@ -1540,6 +1562,7 @@ export default class SendToT3 extends Plugin {
     const threadEnvironmentId=request.connection.environmentId??await this.localInlineEnvironment();
     job.hostTarget=host;this.rememberInlineTarget(host);
     request.inlineHost={...await this.coordinatedHostFormat(host),version:4,finalAnswerFormat:finalAnswerFormat(job.finalAnswerFormat),independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
+    await this.responseGuard(request.inlineHost,'prepared');
     request.prompt+=stagedNoteInstruction([request.inlineHost]);if(request.prompt.length>120_000)throw Error('The note and staged-edit context exceed T3’s prompt limit.');
   }
   private async coordinatedHostFormat(target:InlineHostTarget){
@@ -1551,7 +1574,9 @@ export default class SendToT3 extends Plugin {
     if(!Platform.isMobile&&adapter.getFullPath&&sameWorkspacePath(adapter.getFullPath(''),target.workspaceRoot)&&await this.localInlineEnvironment()===target.environmentId){
       if(waitForHost)await this.refreshInlineHost();
       else void this.refreshInlineHost().catch(error=>logFailure('ownership.coordinator.reader-start',error));
-      const files=(await import('./hosted-inline-desktop')).localInlineFiles(target.workspaceRoot,target.directory);
+      const files=(await import('./inline-host-storage-desktop')).localInlineFiles(target.workspaceRoot,target.directory);
+      const background=await files.read(`${target.directory}/background-host-config.json`);
+      if(background){const config=JSON.parse(background);if(config.version===1&&config.vaultId===this.settings.vaultId&&sameWorkspacePath(config.workspaceRoot,target.workspaceRoot))return {closed:false,files,close:()=>{}};}
       // Existing records are readable while the writer starts or releases its
       // old lock. Mailbox writes retain the host-readiness requirement.
       return {closed:false,files:{read:files.read,write:async(path,contents)=>{await this.refreshInlineHost();await files.write(path,contents);},dispatch:async command=>{
@@ -2182,7 +2207,7 @@ export default class SendToT3 extends Plugin {
     request.inlineBindings=[];this.rememberInlineTarget(host);
     const opened=await this.inlineHostFiles(host);
     try{
-      const bindingIO={...io,completed:async(id:string)=>{
+      const bindingIO={...io,beforeInsert:(binding:HostedInlineRequest)=>this.responseGuard(binding,'prepared'),completed:async(id:string)=>{
         const raw=await opened.files.read(leasePaths(host.directory,id).record);
         if(!raw)return false;
         const record:LeaseRecord=JSON.parse(raw);
@@ -2191,6 +2216,10 @@ export default class SendToT3 extends Plugin {
       for(const path of destinations)request.inlineBindings.push(await editorStream(source,path,bindingIO,()=>!this.stopped));
     }finally{opened.close();}
     request.inlineHost=request.inlineBindings[0];request.prompt+=stagedNoteInstruction(request.inlineBindings);if(request.prompt.length>120_000)throw Error('The note and staged-edit context exceed T3’s prompt limit.');
+  }
+  private async responseGuard(binding:HostedInlineRequest,status:'prepared'|'accepted'|'failed',uncertain=false){
+    const opened=await this.inlineHostFiles(binding.host);
+    try{if(status==='prepared')await prepareSendGuard(opened.files,binding);else await updateSendGuard(opened.files,binding,status,uncertain);}finally{opened.close();}
   }
   private persistAgentCommand(request:Request,threadId?:string){
     const command=request.agentCommand;if(!command)return;
@@ -2294,6 +2323,7 @@ export default class SendToT3 extends Plugin {
     }
     if(!quiet)new Notice(`Working in ${projectLabel(request.project)}…`);
     stage='dispatch';const result=await sendRequest(request);
+    for(const binding of request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]))await this.responseGuard(binding,'accepted');
     stage='delivery-evidence';
     // Keep the acknowledged exact start even when the renderer/event feed
     // missed it. This is orchestration delivery, not a guessed provider turn.
