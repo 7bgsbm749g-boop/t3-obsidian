@@ -69,8 +69,9 @@ export class InlineLeaseAuthority {
   deleted(before:string){this.relocations.push({before});}
   private lastCleanup=0;private cleanupCursor=0;
   private scanFailed=false;private lastScanFailure=0;
+  private commandRemovals=new Map<string,Promise<void>>();
   constructor(private identity:LeaseIdentity,private files:LeaseFiles,private now=()=>Date.now()){}
-  status(){return {busy:!!this.work,stopped:this.stopped,recovered:this.recovered,records:this.records.size,completedIndexes:[...this.records.values()].filter(isCompletedLeaseIndex).length};}
+  status(){return {busy:!!this.work,stopped:this.stopped,recovered:this.recovered,records:this.records.size,completedIndexes:[...this.records.values()].filter(isCompletedLeaseIndex).length,pendingCommandRemovals:this.commandRemovals.size};}
   stop(){this.stopped=true;}
   tick(){
     if(this.work)return this.work;if(this.stopped)return Promise.resolve();
@@ -103,6 +104,10 @@ export class InlineLeaseAuthority {
       this.explorerResponses=next;this.relocations.shift();
     }
     const mailbox=await this.files.list(`${directory}/mailbox`);
+    const answered=new Set(await this.files.list(`${directory}/replies`));
+    // A delete can reach disk even if its completion callback is lost. The
+    // current directory proves absence without retaining an endless promise.
+    const present=new Set(mailbox);for(const path of this.commandRemovals.keys())if(!present.has(path))this.commandRemovals.delete(path);
     const commands:Array<{path:string;command:LeaseCommand}>=[];
     // Independent reads must not make the final save wait for one native IO
     // callback per historical command. Bound parallelism and keep list order.
@@ -112,6 +117,7 @@ export class InlineLeaseAuthority {
         let command:LeaseCommand;
         try{command=JSON.parse((await this.files.read(path))??'');}catch{return;}
         if(![command.id,command.jobId,command.actor].every(value=>uuid.test(value))||path!==leasePaths(directory,command.id).command)return;
+        if(answered.has(leasePaths(directory,command.id).reply)){this.removeAnsweredCommand(path);return;}
         return {path,command};
       }));
       for(const entry of batch)if(entry)commands.push(entry);
@@ -164,7 +170,14 @@ export class InlineLeaseAuthority {
         await this.files.write(replyPath,JSON.stringify(compact));
         if(trace||command.kind==='claim'&&reply.ok)logEvent('ownership.coordinator.replied',{...fields,ok:reply.ok,error:reply.error,durationMs:this.now()-started,epoch:reply.record?.epoch,revision:reply.record?.revision,owner:reply.record?.owner},reply.ok?'info':'warning');
       }
-      await this.files.remove(path);
+      this.removeAnsweredCommand(path);
+  }
+  private removeAnsweredCommand(path:string){
+    // The immutable receipt already exists. Housekeeping has no authority to
+    // change a lease and must never hold the grant/prepare/commit transaction.
+    if(this.stopped||this.commandRemovals.has(path)||this.commandRemovals.size>=8)return;
+    const work=Promise.resolve().then(()=>this.files.remove(path));this.commandRemovals.set(path,work);
+    void work.finally(()=>{if(this.commandRemovals.get(path)===work)this.commandRemovals.delete(path);}).catch(error=>logFailure('ownership.command-cleanup.failed',error,{path}));
   }
   /** Maintenance never holds the authority transaction. Keep at least one
    * minute for acknowledgements and preserve every pending command. A streaming

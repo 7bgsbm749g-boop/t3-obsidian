@@ -66,6 +66,39 @@ test('mailbox discovery overlaps independent reads with a bounded number of open
   await authority.tick();assert.equal(maximum,32);assert.equal(pending,0);
 });
 
+test('answered command cleanup cannot block new receipts or occupy the interactive batch',async()=>{
+  const h=harness(),directory=h.request.host.directory;let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;}),oldPaths=new Set<string>();
+  for(let i=0;i<32;i++){
+    const command={id:randomUUID(),actor:h.actor,jobId:randomUUID(),kind:'presence'};
+    const paths=leasePaths(directory,command.id);oldPaths.add(paths.command);
+    await h.files.write(paths.command,JSON.stringify(command));await h.files.write(paths.reply,JSON.stringify({id:command.id,ok:true,answeredAt:h.now()}));
+  }
+  const authority=new InlineLeaseAuthority({...h.request.host,vaultId:h.request.vaultId},{...h.files,remove:async path=>{if(oldPaths.has(path))await gate;await h.files.remove(path);}},h.now);
+  const client=new InlineLeaseClient(h.actor,{...h.files,read:async path=>{if(path.includes('/replies/'))await authority.tick();return h.files.read(path);}},directory,h.now,h.now,async()=>{await authority.tick();});
+  let done=false;const registering=client.command({kind:'register',jobId:h.request.id,request:h.request}).then(reply=>{done=true;return reply;});
+  try{
+    // Fake IO completes through microtasks. The stalled cleanup must not be
+    // needed to reach the next event-loop turn and deliver the new receipt.
+    await new Promise(resolve=>setImmediate(resolve));assert.equal(done,true);
+    assert.equal((await registering).ok,true);assert.equal(authority.status().busy,false);
+    assert.equal(authority.status().pendingCommandRemovals,8);
+    assert.equal((await h.files.list(directory+'/mailbox')).length,33,'required receipt evidence is retained while bounded housekeeping waits');
+  }finally{release();await registering;client.dispose();authority.stop();}
+});
+
+test('directory absence releases housekeeping slots when a delete callback never completes',async()=>{
+  const h=harness(),directory=h.request.host.directory;
+  for(let i=0;i<24;i++){
+    const command={id:randomUUID(),actor:h.actor,jobId:randomUUID(),kind:'presence'},paths=leasePaths(directory,command.id);
+    await h.files.write(paths.command,JSON.stringify(command));await h.files.write(paths.reply,JSON.stringify({id:command.id,ok:true,answeredAt:h.now()}));
+  }
+  const authority=new InlineLeaseAuthority({...h.request.host,vaultId:h.request.vaultId},{...h.files,remove:async path=>{await h.files.remove(path);await new Promise(()=>{});}},h.now);
+  for(let i=0;i<4;i++){await authority.tick();assert.ok(authority.status().pendingCommandRemovals<=8);}
+  assert.equal((await h.files.list(directory+'/mailbox')).length,0);
+  assert.equal(authority.status().pendingCommandRemovals,0);assert.equal(authority.status().busy,false);authority.stop();
+});
+
 test('coordinated checkpoints cannot move a response back to a stale writer path',async()=>{
  const h=harness(),request={...h.request,nativeProjection:true},state={...h.state,requestHash:hostedRequestHash({...h.request,nativeProjection:true})},client=h.client();
  await client.command({kind:'register',jobId:request.id,request});await h.authority().migrated(request.id);

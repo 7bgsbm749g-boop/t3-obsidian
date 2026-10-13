@@ -56,8 +56,8 @@ The fixture uses synthetic T3 completion evidence and real remote file Sync;
 native input, file propagation and editor adoption are distinct observations.
 Desktop core Sync and native iPhone/Android behavior are not verified by this lab.
 
-The production build passed. The final complete suite passed with 1,439 TypeScript
-tests and 14 Python tests, with CPU affinity limited to one core for the timing
+The production build passed. The final complete suite passed with 1,441 TypeScript
+tests and 14 Python tests, with CPU affinity limited to four cores for the timing
 fixtures. Immutable QLO2 deployment, a real delivery and a
 native client smoke receipt remain release requirements.
 
@@ -76,3 +76,14 @@ remote callers retain the authenticated mailbox transport. Mailbox discovery
 also reads independent entries in bounded batches of 32, and presence
 maintenance uses background capacity instead of occupying the interactive
 batch. This addresses the measured queue delay without removing commit proofs.
+
+A native runtime probe found another concrete blocker: the authority was
+awaiting removal of an already-answered command file for more than eleven
+minutes, with its receipt durable and its command file still present. That
+housekeeping promise held the authority transaction and stalled a later registration.
+Answered command removal now runs separately, with at most eight tracked
+deletions. Answered commands do not occupy the interactive command batch.
+Fresh directory discovery drops entries whose files are already
+absent even if their callback never arrived. File-only removal uses `unlink`.
+Durable lease, proof and receipt writes still complete under the authority
+transaction; no uncertain write is cancelled or treated as acknowledged.
