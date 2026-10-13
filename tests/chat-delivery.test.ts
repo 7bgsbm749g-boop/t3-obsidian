@@ -1272,6 +1272,67 @@ function seedResponse(h:any,path:string,threadId:string,status='running'){
   return {id,opened,recordPath,originalRecord:h.hostFiles.get(recordPath)};
 }
 
+for(const active of [false,true])for(const indexed of [false,true])test(`a renamed response with a stale ${indexed?'route index':'lease'} can ${active?'steer':'continue'} its original thread`,async()=>{
+  const h=await chatHarness(),path='Notes/Renamed response.md',previous='Notes/Untitled.md';
+  try{
+    const {id,recordPath}=seedResponse(h,path,'same-thread',active?'running':'complete');
+    const record=JSON.parse(h.hostFiles.get(recordPath)!);
+    record.request.notePath=previous;record.request.nativeProjection=true;record.coordinated=true;
+    record.state.notePath=previous;record.state.requestHash=hostedRequestHash(record.request);
+    const original=JSON.stringify(record);h.hostFiles.set(recordPath,original);
+    const routePath=`${record.request.host.directory}/routes/${id}.json`;
+    if(indexed)h.hostFiles.set(routePath,JSON.stringify({version:1,id,vaultId:record.request.vaultId,host:record.request.host,notePath:previous,threadId:'same-thread',projectId:project.id,threadEnvironmentId:'chat-env',messageId:record.request.messageId,turnId:record.state.turnId}));
+    h.plugin.settings.inlineStreaming.enabled=false;
+    h.setThreads([{id:'same-thread',projectId:project.id,title:'Original conversation',session:{status:active?'running':'ready',activeTurnId:active?'old-turn':null}}]);
+    await h.plugin.openPaletteAction('Follow this response.','');
+    const modal=h.modals.at(-1);assert.equal(h.settingsControls.at(-1).buttons[0].text,active?'Send to running thread':'Continue thread');
+    assert.equal(h.hostFiles.get(recordPath),original,'opening the chooser is read-only');assert.equal(h.commands.length,0);
+    await modal.choose('default');
+    assert.deepEqual(h.commands.map(c=>c.threadId),['same-thread']);
+    const saved=JSON.parse(h.hostFiles.get(recordPath)!);
+    if(active){assert.equal(saved.state.notePath,path);assert.equal(saved.state.steering[0].text,'Follow this response.');assert.equal(saved.request.notePath,previous,'the immutable request is preserved');}
+    else assert.equal(h.hostFiles.get(recordPath),original,'an idle follow-up does not retarget the old response');
+  }finally{h.plugin.onunload();}
+});
+
+test('a copied response at the old and current paths remains unavailable without dispatch or relocation',async()=>{
+  const h=await chatHarness(),path='Notes/Copy.md',previous='Notes/Original.md';
+  try{
+    const {id,opened,recordPath}=seedResponse(h,path,'same-thread');
+    h.attachEditor(previous,opened.value);h.attachEditor(path,opened.value);
+    const record=JSON.parse(h.hostFiles.get(recordPath)!);record.request.notePath=previous;record.state.notePath=previous;
+    const original=JSON.stringify(record);h.hostFiles.set(recordPath,original);
+    await h.plugin.openPaletteAction('Do not guess.','');const modal=h.modals.at(-1),destination=await modal.ready;
+    assert.equal(destination.unavailable,true);assert.match(destination.detail,/both the previous note and this note/);
+    await modal.choose('default');assert.equal(h.commands.length,0);assert.equal(h.hostFiles.get(recordPath),original);assert.ok(regionBody(opened.value,id));
+  }finally{h.plugin.onunload();}
+});
+
+test('a reused old note path without this response does not block a renamed response',async()=>{
+  const h=await chatHarness(),path='Notes/Renamed.md',previous='Notes/Untitled.md';
+  try{
+    const {opened,recordPath}=seedResponse(h,path,'same-thread');
+    h.attachEditor(previous,'A new unrelated note.');h.attachEditor(path,opened.value);
+    const record=JSON.parse(h.hostFiles.get(recordPath)!);record.request.notePath=previous;record.state.notePath=previous;h.hostFiles.set(recordPath,JSON.stringify(record));
+    h.setThreads([{id:'same-thread',projectId:project.id,title:'Original conversation',session:{status:'running',activeTurnId:'old-turn'}}]);
+    await h.plugin.openPaletteAction('Keep the original conversation.','');assert.equal(h.settingsControls.at(-1).buttons[0].text,'Send to running thread');
+    h.modals.at(-1).close();assert.equal(h.commands.length,0);
+  }finally{h.plugin.onunload();}
+});
+
+test('an empty saved native response container can steer after a rename with stale host metadata',async()=>{
+  const h=await chatHarness(),path='Notes/Native renamed.md',previous='Notes/Untitled.md';
+  try{
+    const {id,recordPath}=seedResponse(h,path,'same-thread');
+    const opened=h.attachEditor(path,`Question\n\n${responseAnchor(id)}\n\nFollow-up`);
+    const record=JSON.parse(h.hostFiles.get(recordPath)!);record.request.notePath=previous;record.request.nativeProjection=true;record.coordinated=true;record.state.notePath=previous;record.state.requestHash=hostedRequestHash(record.request);h.hostFiles.set(recordPath,JSON.stringify(record));
+    h.setThreads([{id:'same-thread',projectId:project.id,title:'Original conversation',session:{status:'running',activeTurnId:'old-turn'}}]);
+    await h.plugin.openChatWithNote({path},'Continue the native response.',{view:opened.view,editor:opened.editor,responseId:id},true);assert.equal(h.settingsControls.at(-1).buttons[0].text,'Send to running thread');
+    await h.modals.at(-1).choose('default');assert.deepEqual(h.commands.map(c=>c.threadId),['same-thread']);
+    const saved=JSON.parse(h.hostFiles.get(recordPath)!);assert.equal(saved.state.notePath,path);assert.equal(saved.state.steering[0].text,'Continue the native response.');
+  }finally{h.plugin.onunload();}
+});
+
 test('an accepted but undispatched response cannot advertise running or override an explicit existing thread',async()=>{
   const h=await chatHarness(),path='Notes/Orphan.md';
   try{

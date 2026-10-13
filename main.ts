@@ -1232,7 +1232,9 @@ export default class SendToT3 extends Plugin {
           const job=responseId?this.inlineChat?.find(responseId):undefined;
           const source=hosted?.record.request??job;
           if(responseId&&(!source||job?.hosted&&!hosted))throw Error('This response is unavailable. Reconnect its host or choose another thread.');
-          if(hosted&&(hosted.record.state?.notePath??hosted.record.request.notePath)!==note?.path||job&&!hosted&&job.path!==note?.path)throw Error('This response belongs to another note. Choose another thread.');
+          const responsePath=hosted?.record.state?.notePath??hosted?.record.request.notePath??job?.path;
+          if(hosted&&responsePath!==note?.path)await abortableRead(this.checkResponseNote(responseId!,responsePath!,note?.path),signal);
+          if(job&&!hosted&&job.path!==note?.path)throw Error('The local response is no longer attached to this editor. Reopen the note before sending.');
           const threadId=source?.threadId??remembered?.threadId;
           if(!threadId)throw Error('This response has not reached a T3 thread. Choose New thread or Existing thread…');
           const project=source?await abortableRead(this.recoveryProject(source.projectId!,hosted?.record.request.threadEnvironmentId??job?.connection?.environmentId),signal):this.projectForNoteThread(remembered!);
@@ -1327,12 +1329,13 @@ export default class SendToT3 extends Plugin {
   }
   private async sendInlineSteering(id:string,prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;expectedProjectKey?:string;projectOverrideKey?:string}){
     logEvent('steering.requested',{jobId:id,notePath:note.path,promptHash:contentHash(prompt),promptLength:prompt.length,selectionHash:context.anchor?contentHash(JSON.stringify(context.anchor)):undefined});
-    const job=this.inlineChat?.find(id),hosted=await this.steeringRecord(id);
+    const job=this.inlineChat?.find(id);let hosted=await this.steeringRecord(id);
     if(job?.hosted&&!hosted||!hosted&&!job)throw Error('The active response is unavailable. Reconnect its vault project machine.');
     const threadId=hosted?.record.request.threadId??job?.threadId,projectId=hosted?.record.request.projectId??job?.projectId,environmentId=hosted?.record.request.threadEnvironmentId??job?.connection?.environmentId;
     if(!threadId||!projectId)throw Error('Wait for the first message to reach T3 before steering.');
     if(options?.threadId&&options.threadId!==threadId)throw Error('This note has a running response in another thread. Finish or stop it first.');
-    if(hosted&&(hosted.record.state?.notePath??hosted.record.request.notePath)!==note.path)throw Error('The response note moved. Wait for the writer to catch up.');
+    const responsePath=hosted?.record.state?.notePath??hosted?.record.request.notePath;
+    if(hosted&&responsePath!==note.path)await this.checkResponseNote(id,responsePath!,note.path);
     await this.checkRecoveryBlock(id,note.path);
     let selection=context.referenceSelection?undefined:context.canonicalAnchor??context.anchor;
     if(selection){const document=this.notePromptDocument(context.view),range=selectionRange(document,selection);if(!range)throw Error('The selected text changed. Select it again.');if(selectionOverlapsInlineResponse(document,{start:range.from,end:range.to}))selection=undefined;}
@@ -1340,6 +1343,11 @@ export default class SendToT3 extends Plugin {
     if(options?.expectedProjectKey&&options.expectedProjectKey!==key||options?.projectOverrideKey&&options.projectOverrideKey!==key)throw Error('Steering must use the running thread’s project.');
     const current=await this.readChatThread(this.connection(project),project,threadId);
     if(!threadIsActive(current)||!responseOwnsActiveTurn(current,hosted?.record.state??job))throw Error('This response no longer owns the active turn. Reopen the chooser or explicitly choose a thread. No message was sent.');
+    if(hosted&&responsePath!==note.path){
+      if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');
+      hosted={...hosted,record:await this.deviceInline.relocateResponse(hosted.host,hosted.record,note.path)};
+      this.destinationRoutes.delete(id);
+    }
     const policy=hosted?.record.request??job!;
     const jobOptions=resolveJobOptions({enabled:true,intermediateMode:policy.intermediateMode,keepIntermediate:policy.keepIntermediate,finalAnswerFormat:policy.finalAnswerFormat});
     await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{threadId,projectOverrideKey:key,jobOptions,sourceContext:context,onPrepared:request=>{
@@ -1375,6 +1383,16 @@ export default class SendToT3 extends Plugin {
     const document=leaf?(leaf.view as MarkdownView).editor.getValue():await this.app.vault.read(file);
     const block=regionBody(document,id);
     if(!block)throw Error('The response markers were removed or malformed. Restore them or continue in the T3 thread.');
+  }
+  /** A host path can lag a rename received on another device. The exact local
+   * response anchor, rather than that routing hint, establishes the note. */
+  private async checkResponseNote(id:string,previous:string,path?:string){
+    if(!path)throw Error('Open the response note before sending.');
+    await this.checkRecoveryBlock(id,path);
+    const io=deviceNoteIO(this.app),original=await io.readNote(previous);
+    if(original&&regionBody(original,id))throw Error('This response appears in both the previous note and this note. Remove the duplicate response before sending.');
+    if(await io.locateNote(id,path)!==path)throw Error('The response note changed. Reopen the chooser before sending.');
+    await this.checkRecoveryBlock(id,path);
   }
   private async recoveryProject(projectId:string,environmentId?:string){
     for(const project of [...this.settings.directProjects,...this.settings.projects]){

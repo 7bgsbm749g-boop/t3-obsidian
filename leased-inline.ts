@@ -166,6 +166,18 @@ export class DeviceInlineManager {
   }
   responseStatus(id:string){const record=this.jobs.get(id)?.record;return record?responseStopReceipt(record):this.statuses.get(id);}
   cachedResponse(id:string){const runtime=this.jobs.get(id);return runtime?{record:runtime.record,host:runtime.host.target}:undefined;}
+  /** Repair a verified local destination before reserving a steering input.
+   * The host compares the old path and retains an idempotent acknowledgement. */
+  async relocateResponse(target:InlineHostTarget,record:LeaseRecord,path:string){
+    const {request}=record,before=record.state?.notePath??request.notePath;
+    if(this.stopped||!record.coordinated||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(target))throw Error('The response destination is unavailable.');
+    const [document,original]=await Promise.all([this.io.readNote(path),this.io.readNote(before)]);
+    if(before!==path&&original!==undefined&&hasResponseMarkers(original,request.id))throw Error('This response appears in both the previous note and this note. Remove the duplicate response before sending.');
+    if(document===undefined||!hasResponseMarkers(document,request.id)||this.io.locateNote&&await this.io.locateNote(request.id,path)!==path)throw Error('The response note changed before sending.');
+    const host=this.host(target),reply=await host.client.command({kind:'relocate',jobId:request.id,previousNotePath:before,notePath:path},{id:commandId(this.actor,`steering-location:${request.id}:${record.epoch}:${record.revision}:${before}:${path}`),actor:this.actor});
+    if(!reply.ok||!reply.record||(reply.record.state?.notePath??reply.record.request.notePath)!==path)throw Error(reply.error??'The response destination was not acknowledged.');
+    this.receiveRecord(host,reply.record);this.tick();return reply.record;
+  }
   unsettledCount(){return [...this.jobs.values()].filter(({record})=>record.responseRemovedAt===undefined&&!record.state?.cleanupComplete).length;}
   hasLiveResponses(){return this.unsettledCount()>0;}
   async abortFinalAttempt(id:string,proof:NativeCommitProof,evidence:FinalAttemptAbort){
