@@ -47,6 +47,15 @@ test('local dispatch rejects changed durable input before it can mutate a lease'
   assert.equal(await h.files.read(leasePaths(h.request.host.directory,h.request.id).record),undefined);
 });
 
+test('local maintenance keeps the bounded mailbox path while user commands dispatch directly',async()=>{
+  const h=harness(),authority=new InlineLeaseAuthority({...h.request.host,vaultId:h.request.vaultId},h.files,h.now),dispatched:string[]=[];
+  const client=new InlineLeaseClient(h.actor,{...h.files,read:async path=>{if(path.includes('/replies/'))await authority.tick();return h.files.read(path);},dispatch:async command=>{dispatched.push(command.kind);await authority.dispatch(command);}},h.request.host.directory,h.now,h.now,async()=>{await authority.tick();});
+  await client.command({kind:'register',jobId:h.request.id,request:h.request});
+  await client.command({kind:'heartbeat',jobId:h.request.id,epoch:1});
+  await client.command({kind:'claim',jobId:h.request.id});
+  assert.deepEqual(dispatched,['register']);client.dispose();authority.stop();
+});
+
 test('presence maintenance cannot put an interactive send behind a full command batch',async()=>{
   const h=harness();
   for(let i=0;i<60;i++){const command={id:randomUUID(),actor:h.actor,jobId:randomUUID(),kind:'presence'};await h.files.write(leasePaths(h.request.host.directory,command.id).command,JSON.stringify(command));}

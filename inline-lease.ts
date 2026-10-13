@@ -550,7 +550,7 @@ export class InlineLeaseClient {
     if(!retained)await this.files.write(paths.command,JSON.stringify(command));
     writeMs=Math.max(0,this.monotonic()-monotonic);phase='waiting-for-reply';
     if(trace)logEvent('ownership.command.sent',{...fields,writeMs});
-    if(!retained&&this.files.dispatch){phase='dispatching-command';await this.files.dispatch(command);phase='waiting-for-reply';}
+    if(!retained&&this.files.dispatch&&!['claim','heartbeat','presence','observe'].includes(command.kind)){phase='dispatching-command';await this.files.dispatch(command);phase='waiting-for-reply';}
     for(let attempt=0;attempt<(input.kind==='stop'?300:50)&&!this.stopped&&this.monotonic()<deadline;attempt++){
       attempts++;const reading=this.monotonic();
       let raw:string|undefined;

@@ -56,7 +56,7 @@ The fixture uses synthetic T3 completion evidence and real remote file Sync;
 native input, file propagation and editor adoption are distinct observations.
 Desktop core Sync and native iPhone/Android behavior are not verified by this lab.
 
-The production build passed. The final complete suite passed with 1,441 TypeScript
+The production build passed. The final complete suite passed with 1,442 TypeScript
 tests and 14 Python tests, with CPU affinity limited to four cores for the timing
 fixtures. Immutable QLO2 deployment, a real delivery and a
 native client smoke receipt remain release requirements.
@@ -87,3 +87,8 @@ Fresh directory discovery drops entries whose files are already
 absent even if their callback never arrived. File-only removal uses `unlink`.
 Durable lease, proof and receipt writes still complete under the authority
 transaction; no uncertain write is cancelled or treated as acknowledged.
+
+Direct same-process dispatch is reserved for interactive commands. Presence,
+claim, heartbeat and observation maintenance retain the bounded mailbox path,
+so background callers cannot bypass its capacity limit and compete directly
+with final-save grants.
