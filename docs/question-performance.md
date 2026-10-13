@@ -61,3 +61,19 @@ or prove the cause of an earlier connection timeout. Memory pressure and the
 Obsidian filesystem queue are separate service concerns. Desktop checks and
 synthetic small-window checks do not prove native Windows or phone rendering;
 report those coverage limits with the release evidence.
+
+Release 2.38.0 passed the build, all 1,431 TypeScript tests, and all 14 Python
+tests. The release tool installed the immutable archive in both vaults,
+preserved device settings, and completed a fresh QLO2 Sync scan. A real VPS
+QLO2 client loaded 2.38.0 after native app reload. Screenshots verify both
+panels in Live Preview and Reading view, a narrow desktop window, a question
+draft restored after another reload, immediate submitting feedback, and
+explicit question resolution. One real async answer resumed its T3 thread and
+completed with `QUESTIONS_PATCH_SMOKE_OK`. The original bounded wait expired
+during UI inspection; the later answer exercised a still-open question after
+that first turn completed. The original note and window were restored, and the
+synthetic test note was removed. Windows and native phones were not tested.
+
+Immutable evidence is recorded in
+`/home/ubuntu/backups/send-to-t3-code/releases/2.38.0/smoke-vps-qlo2.json` and
+its referenced evidence file. The source commits are `fdeea54` and `bf3d97e`.
