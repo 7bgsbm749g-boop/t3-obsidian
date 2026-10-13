@@ -12,8 +12,9 @@ by response-boundary errors and an incorrect second “not started” entry.
 
 Both question answers and Ask/Send now use `NoteTabPanel`: Obsidian controls in
 an overlay attached to the captured Markdown view. It does not create a global
-backdrop. It closes on Escape within the panel or a tab change, restores focus
-without scrolling, and limits height for a small window or virtual keyboard.
+backdrop. It closes on Escape within the panel or a note/tab change, restores
+focus without scrolling only while the original view is still active, and
+limits height for a small window or virtual keyboard.
 The native modal remains the fallback when no note view exists. The custom
 question-field glow is removed.
 

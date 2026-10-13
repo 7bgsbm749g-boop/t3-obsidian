@@ -35,7 +35,7 @@ test('the panel belongs to the captured note tab and closes once without changin
   assert.equal(panel.modalEl.attributes.get('aria-modal'),'false');
   h.events.get('active-leaf-change')!({view:{file:{path:'Other.md'}}});
   assert.equal(panel.modalEl.parentElement,undefined);assert.equal(h.closed,1);assert.equal(h.callbacks.size,0);assert.equal(h.events.size,0);
-  assert.equal(h.doc.activeElement.focusOptions.preventScroll,true);
+  assert.equal(h.doc.activeElement.focusOptions,undefined,'a tab change must keep focus in the new tab');
   panel.close();assert.equal(h.closed,1);assert.equal(h.nativeClose,0);
 });
 
@@ -54,4 +54,11 @@ test('a workspace with no note tab retains the native modal',async()=>{
 test('opening gives an enabled panel control keyboard focus without scrolling the note',async()=>{
   const h=await fixture(),panel=h.create(),control=new h.doc.defaultView.HTMLElement();
   panel.modalEl.querySelector=()=>control;panel.open();assert.equal(control.focusOptions.preventScroll,true);panel.close();
+});
+
+test('opening another file in the same view closes the old panel without restoring old focus',async()=>{
+  const h=await fixture(),panel=h.create();panel.open();
+  h.app.workspace.activeLeaf.view.file={path:'Other.md'};h.events.get('file-open')!();
+  assert.equal(h.closed,1);assert.equal(panel.modalEl.parentElement,undefined);assert.equal(h.doc.activeElement.focusOptions,undefined);
+  assert.equal(h.events.size,0);assert.equal(h.callbacks.size,0);
 });

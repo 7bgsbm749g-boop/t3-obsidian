@@ -10,7 +10,7 @@ Connection retries keep the normal live response display and the latest received
 
 Large tool groups use small summaries in Live Preview. Open a group to load its complete output. The saved note, sends, selection context, and recovery records keep the full output. Source mode shows the full saved Markdown. The editor rejects changes that would save a summary without its original output.
 
-Questions and Ask/Send open in a rectangular panel at the bottom of the current note tab. The panel covers the note content, uses Obsidian's theme and controls, scrolls within the tab, and closes on Escape or when you switch tabs. Workspaces without an open note use the standard Obsidian modal.
+Questions and Ask/Send open in a rectangular panel at the bottom of the current note tab. The panel covers the note content, uses Obsidian's theme and controls, scrolls within the tab, and closes on Escape or when you switch notes or tabs. Workspaces without an open note use the standard Obsidian modal.
 
 Thread selection reads current control state without downloading tool output. The selected-thread check has a five-second limit, supports Retry, and stops when the panel closes. You can click the previous-thread action immediately; the send waits for that exact check. New thread and Existing thread remain available during the check. Sending still checks the current project, turn, approval, and input state.
 
