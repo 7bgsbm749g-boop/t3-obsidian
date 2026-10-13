@@ -47,7 +47,13 @@
   from { background-position: -4.5rem 0, 0 0; }
   to { background-position: calc(100% + 4.5rem) 0, 0 0; }
 }
-/* Stationary segments fade out and return as the gap travels around the ring. */
+/* Smoothly move the fade over eight stationary, rounded SVG arcs. Older
+   WebViews still use the eight keyframe angles if typed properties are absent. */
+@property --send-to-t3-circle-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
 @keyframes send-to-t3-circle-gap {
   0% { --send-to-t3-circle-angle: 0deg; }
   12.5% { --send-to-t3-circle-angle: 45deg; }
@@ -67,16 +73,17 @@
   margin-inline-end: 0.4em;
   vertical-align: -0.05em;
   background: currentColor;
+  opacity: 0.72;
   --send-to-t3-circle-angle: 0deg;
   --send-to-t3-circle-gap-mask: linear-gradient(#000, #000);
   --send-to-t3-circle-mask:
-    radial-gradient(farthest-side, transparent calc(100% - 1.3px), #000 calc(100% - 1.3px) calc(100% - 0.2px), transparent 100%),
-    repeating-conic-gradient(from -14deg, #000 0deg 28deg, transparent 28deg 45deg),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7.15' pathLength='8' fill='none' stroke='white' stroke-width='1.4' stroke-linecap='round' stroke-dasharray='.42 .58' stroke-dashoffset='.21'/%3E%3C/svg%3E"),
     var(--send-to-t3-circle-gap-mask);
   -webkit-mask-image: var(--send-to-t3-circle-mask);
   mask-image: var(--send-to-t3-circle-mask);
-  -webkit-mask-composite: source-in, source-in, source-over;
-  mask-composite: intersect, intersect, add;
+  -webkit-mask-composite: source-in, source-over;
+  mask-composite: intersect, add;
+  mask-mode: alpha;
   mask-size: 100% 100%;
   mask-repeat: no-repeat;
   forced-color-adjust: none;
@@ -94,7 +101,7 @@
 @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
   [data-t3-shine="true"],
   [data-t3-circle="true"]::before {
-    --send-to-t3-circle-gap-mask: conic-gradient(from calc(var(--send-to-t3-circle-angle) - 14deg), transparent 0deg 28deg, #000 40deg 360deg);
+    --send-to-t3-circle-gap-mask: conic-gradient(from var(--send-to-t3-circle-angle), #000 0deg, transparent 22.5deg 67.5deg, #000 90deg 360deg);
     /* currentColor keeps each label's theme or custom colour. Fonts are inherited. */
     background-image:
       linear-gradient(to right, transparent, color-mix(in srgb, currentColor 40%, white), transparent),
@@ -113,11 +120,11 @@
   }
   [data-t3-circle="true"]::before {
     background-image:
-      linear-gradient(to right, transparent, color-mix(in srgb, currentColor, white var(--send-to-t3-shine-strength)), transparent),
+      linear-gradient(to right, transparent, color-mix(in srgb, currentColor, white calc(var(--send-to-t3-shine-strength) * 0.18)), transparent),
       linear-gradient(currentColor, currentColor);
     animation-name: send-to-t3-text-shine, send-to-t3-circle-gap;
-    animation-duration: 2.2s, 1.2s;
-    animation-timing-function: steps(30), step-end;
+    animation-duration: 2.2s, 1.5s;
+    animation-timing-function: steps(30), linear;
   }
 }
 
