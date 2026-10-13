@@ -1,11 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {activeResponseFolders,decorateActivityTabs} from '../activity-titles';
+import {activeResponseFolders,decorateActivityTabs,decorateMobileActivityTabs} from '../activity-titles';
 import {decorateNoteIndicators} from '../folder-indicator';
 import type {NoteIndicator} from '../explorer-responses';
 
 class Element {
-  className='';title='';children:Element[]=[];attrs=new Map<string,string>();
+  className='';title='';textContent='';children:Element[]=[];attrs=new Map<string,string>();
   classList={contains:(name:string)=>this.className.split(' ').includes(name)};
   ownerDocument={createElement:()=>new Element()};
   parent?:Element;
@@ -49,4 +49,24 @@ test('tabs follow exact note paths across duplicate names, multiple panes, renam
   notes.delete('App/Note.md');notes.set('App/Renamed.md',note(1));tabs[0].path='App/Renamed.md';
   decorateActivityTabs(tabs as any,notes);assert.equal(first.hasAttribute('data-t3-active-title'),true);assert.equal(mirror.hasAttribute('data-t3-active-title'),false);
   notes.clear();decorateActivityTabs(tabs as any,notes);assert.equal(first.hasAttribute('data-t3-active-title'),false);
+});
+
+test('Mobile Tab Bar shines the exact current and adjacent notes, respects wrapping and clears terminal activity',()=>{
+  const previous=new Element(),current=new Element(),next=new Element(),activeRow=new Element(),otherRow=new Element();
+  for(const [row,path] of [[activeRow,'App/Note.md'],[otherRow,'Other/Note.md']] as const){
+    const name=new Element();name.className='mtb-tab-name';name.textContent='Note';row.appendChild(name);
+    const detail=new Element();detail.className='mtb-tab-detail';detail.textContent='1 · '+path;row.appendChild(detail);
+  }
+  const root={querySelectorAll:(selector:string)=>selector==='.mtb-tab-row'?[activeRow,otherRow]:selector==='.mtb-title-previous'?[previous]:selector==='.mtb-title-current'?[current]:[next]};
+  const paths=['App/Note.md','Other/Note.md','App/Run.md'];
+  const notes=new Map([['App/Note.md',note(1)],['App/Run.md',note(1)]]);
+  const active=(label:Element)=>label.hasAttribute('data-t3-active-title');
+  decorateMobileActivityTabs(root as any,paths,0,false,notes);
+  assert.deepEqual([active(previous),active(current),active(next)],[false,true,false]);
+  assert.equal(active(activeRow.children[0]),true);assert.equal(active(otherRow.children[0]),false,'Duplicate names use the row file path');
+  decorateMobileActivityTabs(root as any,paths,2,true,notes);
+  assert.deepEqual([active(previous),active(current),active(next)],[false,true,true]);
+  decorateMobileActivityTabs(root as any,paths,2,false,notes);assert.equal(active(next),false);
+  notes.clear();decorateMobileActivityTabs(root as any,paths,2,false,notes);
+  for(const label of [previous,current,next,activeRow.children[0]])assert.equal(active(label),false);
 });

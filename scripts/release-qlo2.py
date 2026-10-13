@@ -412,7 +412,8 @@ def release_checks(skip_tests_reason: str | None = None) -> dict:
     run(['npm', 'run', 'build'])
     if skip_tests_reason is not None:
         return {'status': 'skipped', 'reason': skip_tests_reason.strip()}
-    run(['npm', 'test'])
+    # The full suite must also finish under a bounded, single-CPU release scope.
+    run(['npm', 'test'], timeout=900)
     return {'status': 'passed'}
 
 

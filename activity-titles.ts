@@ -19,3 +19,21 @@ export interface ActivityTab {path?:string;title:HTMLElement|null}
 export function decorateActivityTabs(tabs:ActivityTab[],notes:Map<string,NoteIndicator>):void {
   for(const tab of tabs)setActiveTitle(tab.title,!!tab.path&&!!notes.get(tab.path)?.active);
 }
+
+/** Mobile Tab Bar owns separate labels. Its public leaf order keeps duplicate
+ * names distinct; overview rows expose their exact file paths in the detail. */
+export function decorateMobileActivityTabs(root:ParentNode,paths:Array<string|undefined>,current:number,wrap:boolean,notes:Map<string,NoteIndicator>):void {
+  const adjacent=(offset:number)=>{
+    if(current<0||current>=paths.length||offset!==0&&paths.length<2)return;
+    const index=current+offset;
+    return index>=0&&index<paths.length?paths[index]:wrap?paths[(index+paths.length)%paths.length]:undefined;
+  };
+  for(const [name,offset] of [['previous',-1],['current',0],['next',1]] as const){
+    const path=adjacent(offset);
+    for(const title of Array.from(root.querySelectorAll<HTMLElement>(`.mtb-title-${name}`)))setActiveTitle(title,!!path&&!!notes.get(path)?.active);
+  }
+  for(const row of Array.from(root.querySelectorAll<HTMLElement>('.mtb-tab-row'))){
+    const path=/^\d+ · (.+)$/.exec(row.querySelector('.mtb-tab-detail')?.textContent??'')?.[1];
+    setActiveTitle(row.querySelector('.mtb-tab-name'),!!path&&!!notes.get(path)?.active);
+  }
+}
