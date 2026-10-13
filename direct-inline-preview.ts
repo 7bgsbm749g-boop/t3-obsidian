@@ -1,6 +1,6 @@
 import type {LeaseRecord} from './inline-lease';
 import type {HostedInlineRequest} from './hosted-inline';
-import {applyThreadItem,inlineBindingCheckpoint,inlineTurnMessages,restoreInlineBindings,turnForMessage,renderInlineTurn,rememberInlineTurns,type InlineThreadState,type InlineStartRequest} from './inline-thread';
+import {applyThreadItem,inlineBindingCheckpoint,inlineTurnMessages,restoreInlineBindings,turnForMessage,renderInlineTurn,rememberInlineTurns,type InlineThreadState,type InlineStartRequest,type InlineActivity} from './inline-thread';
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs} from './inline-questions';
 import {mergeProse,observeIncoming} from './inline-steering';
 import {completionTime,finalAnswerFormat,intermediateMode} from './response-presentation';
@@ -9,7 +9,7 @@ import {logFailure} from './diagnostics';
 import {checkFinalResponse,finalResponseKey} from './final-response';
 import {responseTooLarge,type StreamReadFailure} from './t3-response-limits';
 
-export interface DirectInlineUpdate {request:HostedInlineRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>}
+export interface DirectInlineUpdate {request:HostedInlineRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
 type Watch=typeof watchThread;
 export interface PreviewClock {now():number;later(callback:()=>void,ms:number):unknown;cancel(handle:unknown):void}
 const displayClock:PreviewClock={now:()=>performance.now(),later:(callback,ms)=>setTimeout(callback,ms),cancel:handle=>clearTimeout(handle as ReturnType<typeof setTimeout>)};
@@ -118,7 +118,8 @@ export class DirectInlinePreview {
     const exactStopped=this.state.protocolVersion===2&&phase==='interrupted'&&this.state.turns?.[turnId]?.state==='interrupted';
     const terminal=phase==='complete'||phase==='interrupted',completionVerified=terminal&&(exactStopped||(this.state.protocolVersion===2?!!key&&key===this.verifiedKey:this.verifiedSequence>=(this.state.sequence??0)));
     this.terminal=terminal;
-    this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,turnId,turnIds:this.turnIds.slice(),phase:this.failure&&!completionVerified?'error':phase,completionVerified,failure:completionVerified?undefined:this.failure,checkpoint:inlineBindingCheckpoint(this.state)});
+    const questionActivities=this.state.activities.filter(activity=>activity.kind.startsWith('user-input.')||activity.kind==='provider.user-input.respond.failed');
+    this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,turnId,turnIds:this.turnIds.slice(),phase:this.failure&&!completionVerified?'error':phase,completionVerified,failure:completionVerified?undefined:this.failure,checkpoint:inlineBindingCheckpoint(this.state),...(questionActivities.length?{questionActivities}:{})});
     if(request.deviceCompletion&&terminal&&!completionVerified)this.verifyCompletion();
     return true;
   }

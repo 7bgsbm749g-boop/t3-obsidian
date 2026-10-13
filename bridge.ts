@@ -13,7 +13,9 @@ export interface Project { id: string; title: string; workspaceRoot: string; con
 export function projectKey(project:Project){return project.connectionId?`${project.connectionId}:${project.id}`:project.id;}
 export function projectLabel(project:Project){return project.title+(project.connectionName?` · ${project.connectionName}`:'');}
 export interface Connection { executable: string; host: string; scriptPath?: string; transport?: 'desktop'|'https'|'direct'; url?: string; native?:boolean; baseDir?:string; stateDir?:string;connectionId?:string;environmentId?:string }
-export interface Request {noteCoverage?:{notePath:string;blocks:import('./missing-three').SourceBlock[]};jobOptions?:ResolvedJobOptions;agentCommand?:NoteCommand; id: string; project: Project; title: string; prompt: string; connection: Connection; threadId?:string; folderLinkIntent?:FolderLink; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion; noteThread?:Omit<NoteThread,'threadId'|'selectedAt'>;/** Legacy saved request field; only read when resuming old requests. */noteLink?:Omit<NoteThread,'threadId'|'selectedAt'>;directPlan?:DirectPlan;inlineHost?:HostedInlineRequest;inlineBindings?:HostedInlineRequest[];inlineSteering?:{jobId:string;host?:HostedInlineRequest['host'];input:SteeringInput};inlineFollow?:{jobId:string;host?:HostedInlineRequest['host'];notePath?:string;previousMessageId:string;messageId:string} }
+export interface Request {acceptedThreadId?:string;noteCoverage?:{notePath:string;blocks:import('./missing-three').SourceBlock[]};jobOptions?:ResolvedJobOptions;agentCommand?:NoteCommand; id: string; project: Project; title: string; prompt: string; connection: Connection; threadId?:string; folderLinkIntent?:FolderLink; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion; noteThread?:Omit<NoteThread,'threadId'|'selectedAt'>;/** Legacy saved request field; only read when resuming old requests. */noteLink?:Omit<NoteThread,'threadId'|'selectedAt'>;directPlan?:DirectPlan;inlineHost?:HostedInlineRequest;inlineBindings?:HostedInlineRequest[];inlineSteering?:{jobId:string;host?:HostedInlineRequest['host'];input:SteeringInput};inlineFollow?:{jobId:string;host?:HostedInlineRequest['host'];notePath?:string;previousMessageId:string;messageId:string} }
+/** A receipt/started plan proves acceptance even if a later local save fails. */
+export function acceptedRequestThread(request?:Request):string|undefined{return request?.acceptedThreadId??(request?.directPlan?.phase==='started'?request.directPlan.turn.threadId:undefined);}
 export class RequestDeliveryError extends Error {
   constructor(message:string,readonly requestSaved:boolean,readonly terminal=false){super(message);}
 }
@@ -54,5 +56,6 @@ export async function sendRequest(request: Request) {
   const hasPayload = Boolean(request.attachments?.length||request.threadId);
   const result = await runBridge(request.connection, ['start','--project',request.project.id,'--title',request.title,'--request-id',request.id,hasPayload ? '--payload-file' : '--prompt-file','-'], hasPayload ? JSON.stringify({prompt:request.prompt,attachments:request.attachments,context:request.context,threadId:request.threadId}) : request.prompt);
   if (result.ok !== true || result.phase!=='started' || typeof result.threadId !== 'string' || result.projectId !== request.project.id) throw new Error('T3 did not confirm the new turn. Retry the saved request.');
+  request.acceptedThreadId=result.threadId;
   return result as {threadId:string;phase:'started'};
 }

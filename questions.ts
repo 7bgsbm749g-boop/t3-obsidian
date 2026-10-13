@@ -55,8 +55,10 @@ export function renderQuestion(request:PendingQuestion,target:QuestionTarget):st
 }
 /** Exact generated sections only; examples inside code remain ordinary text. */
 export function questionSections(document:string):{from:number;to:number;target:QuestionTarget}[]{
+  const candidates=[...document.matchAll(/^<!-- t3-question:(start|end):([^\s]+) -->$/gm)];
+  if(!candidates.some(match=>match[1]==='start'))return [];
   const code=markdownCodeRanges(document),sections=[];
-  const markers=[...document.matchAll(/^<!-- t3-question:(start|end):([^\s]+) -->$/gm)].filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to));
+  const markers=candidates.filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to));
   for(const match of markers){
     if(match[1]!=='start')continue;
     const from=match.index!,target=parseQuestionToken(match[2]),own=markers.filter(marker=>marker[2]===match[2]);

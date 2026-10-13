@@ -45,7 +45,7 @@ import {ensureVaultIdentityRecord} from './vault-identity';
 import { collectImages, imageReferenceDefinitions, MAX_IMAGE_BYTES } from './images';
 import { applyOrchestration, OrchestrationSettings } from './orchestration';
 import { CompletionSettings, CompletionJob, CompletionAction, archiveFolder, contentHash, completionState, isOriginalCompletedTurn, cleanCompletedNote } from './completion';
-import { Connection, Project, Request, RequestDeliveryError, parseProjects, runBridge, sendRequest, configureBridge, retiredConnection, RETIRED_MESSAGE, projectKey, projectLabel } from './bridge';
+import { Connection, Project, Request, RequestDeliveryError, acceptedRequestThread, parseProjects, runBridge, sendRequest, configureBridge, retiredConnection, RETIRED_MESSAGE, projectKey, projectLabel } from './bridge';
 import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from './folder-link';
 import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from './folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from './palette-chat';
@@ -78,6 +78,7 @@ import {installMobileSelectionAction} from './mobile-selection-action';
 import {hiddenInlineMarkerExtension,hideResponseContainerBoundaries} from './inline-markers';
 import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,selectionOverlapsInlineResponse,selectionAnchor,initialRegion,endInsertionOffset,endMarker,failedInlineIds,regionBody,finalizeRegion,startMarker,type SelectionAnchor} from './inline-thread';
 import {QuestionController} from './question-controller';
+import {closeNoteTabPanel} from './note-tab-panel';
 import {QuestionModal,questionButton,questionEditorExtension} from './question-ui';
 import {questionTargets,parseQuestionToken,clearResolvedQuestion,removeDismissedQuestions,type QuestionTarget} from './questions';
 import {ApprovalController} from './approval-controller';
@@ -171,13 +172,22 @@ export default class SendToT3 extends Plugin {
   private failureKey(){return `t3-send-failures-v1:${this.settings.vaultId}`;}
   private recordSendFailure(request:Request|undefined,error:unknown,stage:string,startedAt:number){
     const derived=(part:string)=>{try{return request?commandId(request.id,part):undefined;}catch{return undefined;}};
-    const failure:SendFailure={at:new Date().toISOString(),stage,elapsedMs:Math.max(0,Date.now()-startedAt),delivery:request?.directPlan?.delivery||['delivery-evidence','local-confirmation'].includes(stage)?'accepted':['dispatch','startup-recovery'].includes(stage)?'unconfirmed':'not-started',...(request?{requestId:request.id,threadId:request.threadId??derived('thread'),messageId:derived('message'),environmentId:request.connection.environmentId,bindingIds:(request.inlineBindings??(request.inlineHost?[request.inlineHost]:[])).map(binding=>binding.id)}:{}),error};
+    const failure:SendFailure={at:new Date().toISOString(),stage,elapsedMs:Math.max(0,Date.now()-startedAt),delivery:acceptedRequestThread(request)||request?.directPlan?.delivery||['delivery-evidence','local-confirmation'].includes(stage)?'accepted':['dispatch','startup-recovery'].includes(stage)?'unconfirmed':'not-started',...(request?{requestId:request.id,threadId:acceptedRequestThread(request)??request.threadId??derived('thread'),messageId:derived('message'),environmentId:request.connection.environmentId,bindingIds:(request.inlineBindings??(request.inlineHost?[request.inlineHost]:[])).map(binding=>binding.id)}:{}),error};
     try{this.app.saveLocalStorage(this.failureKey(),appendSendFailure(this.app.loadLocalStorage(this.failureKey()),failure));}catch{new Notice('The send failed. The device could not save its failure log.',10000);}
   }
   private async failRequest(request:Request,error:unknown,stage:string,startedAt:number){
     if(this.failedRequests.has(request))return;this.failedRequests.add(request);
     this.recordSendFailure(request,error,stage,startedAt);
     this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);
+    const accepted=acceptedRequestThread(request);
+    if(accepted){
+      // Local rendering cannot revoke an acknowledged T3 message. Retain its
+      // registered response and note/thread link; recovery never sends again.
+      this.rememberStarted(request,accepted);
+      try{this.persistAgentCommand(request,accepted);}catch(saveError){this.recordSendFailure(request,saveError,'accepted-command-receipt',startedAt);}
+      try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'accepted-local-save',startedAt);}
+      return;
+    }
     if(request.agentCommand)this.app.saveLocalStorage(`${this.localKey}-note-command-${request.agentCommand.id}`,{command:request.agentCommand,discarded:true});
     const bindings=request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]);
     for(const binding of bindings){
@@ -283,7 +293,7 @@ export default class SendToT3 extends Plugin {
     }),()=>this.settings.folderLinks.map(link=>({...link,environmentId:link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??this.eventLocalEnvironmentId})),this.settings.vaultId,{load:()=>this.settings.codebase,save:async state=>{this.settings.codebase=state;await this.save();},projectChanged:async(scope,change)=>{await this.updateCodebaseProjectLinks(scope,change);}});
     await this.codebase.install();
     }
-    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),connectionTimeout:(target,error)=>{if(this.connectionRecovery?.failed(this.connectionRecoveryTarget(target),error))this.recordSendFailure(undefined,error,'connection-timeout',Date.now()-error.elapsedMs);},connectionRecovered:target=>this.connectionRecovery?.recovered(this.connectionRecoveryTarget(target)),completionActor:this.deviceId,completionAcknowledged:record=>deviceCompletion.acknowledged(record),completeResponse:(record,original,staged,prepare,abort)=>deviceCompletion.complete(record,original,staged,prepare,abort),completionFailed:error=>new Notice(`T3 Code: ${message(error)}`,10000),loadStops:()=>this.app.loadLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`)??[],saveStops:ids=>this.app.saveLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`,ids),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>{this.codebase?.observeSource(record.request,record.state?.notePath??record.request.notePath);return nativeResponses(this.app).receive(record,proof);},receiveDirect:update=>{this.codebase?.observeSource(update.request);return nativeResponses(this.app).stream(update);},receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target,false),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
+    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),connectionTimeout:(target,error)=>{if(this.connectionRecovery?.failed(this.connectionRecoveryTarget(target),error))this.recordSendFailure(undefined,error,'connection-timeout',Date.now()-error.elapsedMs);},connectionRecovered:target=>this.connectionRecovery?.recovered(this.connectionRecoveryTarget(target)),completionActor:this.deviceId,completionAcknowledged:record=>deviceCompletion.acknowledged(record),completeResponse:(record,original,staged,prepare,abort)=>deviceCompletion.complete(record,original,staged,prepare,abort),completionFailed:error=>new Notice(`T3 Code: ${message(error)}`,10000),loadStops:()=>this.app.loadLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`)??[],saveStops:ids=>this.app.saveLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`,ids),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>{this.codebase?.observeSource(record.request,record.state?.notePath??record.request.notePath);return nativeResponses(this.app).receive(record,proof);},receiveDirect:update=>{this.codebase?.observeSource(update.request);if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);return nativeResponses(this.app).stream(update);},receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target,false),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
     let completionCleanupCursor=0,completionCleanupBusy=false,lastProofCleanup=0;
     this.app.workspace.onLayoutReady(()=>this.registerInlineInterval(()=>{
       if(completionCleanupBusy||this.stopped)return;completionCleanupBusy=true;
@@ -328,7 +338,9 @@ export default class SendToT3 extends Plugin {
     const approvalStorage=`${this.localKey}-approvals-${this.settings.vaultId}`;
     this.approvals=new ApprovalController(environmentId=>this.inlineThreadAccess(environmentId),{load:()=>{const saved=this.app.loadLocalStorage(approvalStorage);return Array.isArray(saved)?saved:[];},save:records=>this.app.saveLocalStorage(approvalStorage,records)},randomId);
     const questionPaths=this.app.loadLocalStorage(`${questionStorage}-paths`);if(Array.isArray(questionPaths))for(const path of questionPaths)if(typeof path==='string')this.questionPaths.add(path);
-    this.questions.subscribe(()=>{void this.cleanDismissedQuestions();});
+    let dismissalRevision=this.questions.dismissalRevision;
+    this.questions.subscribe(()=>{if(dismissalRevision===this.questions!.dismissalRevision)return;dismissalRevision=this.questions!.dismissalRevision;void this.cleanDismissedQuestions();});
+    if(typeof window!=='undefined'&&typeof window.addEventListener==='function')this.registerDomEvent(window,'pagehide',()=>{try{this.questions?.flushDrafts();}catch(error){logFailure('question.draft.flush',error);}});
     if(typeof this.registerEditorExtension==='function'){this.registerEditorExtension(hiddenInlineMarkerExtension());this.registerEditorExtension(questionEditorExtension(this.questions,target=>this.openQuestion(target)));this.registerEditorExtension(approvalEditorExtension(this.approvals));}
     if(typeof this.registerMarkdownPostProcessor==='function')this.registerMarkdownPostProcessor((element,ctx)=>{
       hideResponseContainerBoundaries(element,ctx);
@@ -347,10 +359,17 @@ export default class SendToT3 extends Plugin {
       }
     });
     this.addCommand({id:'answer-t3-question',name:'Answer T3 question…',checkCallback:checking=>{
-      const view=this.app.workspace.getActiveViewOfType(MarkdownView);const targets=view?questionTargets(view.editor?.getValue()??'').filter(target=>!this.questions!.isDismissed(target)):[];
+      const view=this.app.workspace.getActiveViewOfType(MarkdownView);const targets=view?questionTargets(view.editor?.getValue()??'').filter(target=>!this.questions!.isDismissed(target)&&this.questions!.view(target).status!=='resolved'):[];
       if(!targets.length)return false;if(!checking)this.openQuestion(targets[0]);return true;
     }});
-    this.app.workspace.onLayoutReady(()=>{void this.refreshQuestions();this.registerInterval(window.setInterval(()=>void this.refreshQuestions(),1500));});
+    this.app.workspace.onLayoutReady(()=>{
+      void this.refreshQuestions();
+      this.registerInterval(window.setInterval(()=>{
+        // Control polling must not wait for a note's filesystem save queue.
+        void this.questions?.refresh(this.questions.watchedTargets(),1000);
+        void this.refreshQuestions();
+      },1500));
+    });
     if(Platform.isMobile&&typeof document.addEventListener==='function'){
       this.mobileSelectionAction=installMobileSelectionAction(this.app,()=>this.app.workspace.getActiveViewOfType(MarkdownView),()=>!this.busy,captureEditorSelection,({editor,view,text,anchor})=>this.openEditorChat(text,view.file!,{editor,view,anchor}));
     }
@@ -537,13 +556,21 @@ export default class SendToT3 extends Plugin {
     this.questionModal?.close();this.questionModal=new QuestionModal(this.app,this.questions,target);this.questionModal.open();
   }
   private cleaningDismissedQuestions=false;
+  private dismissedCleanup=new Map<string,{hash:string;revision:number}>();
   private async cleanDismissedQuestions(){
     if(this.stopped||!this.questions?.hasDismissals()||this.cleaningDismissedQuestions)return;
     this.cleaningDismissedQuestions=true;
     try{
       const paths=new Set([...this.questionPaths,...this.app.workspace.getLeavesOfType('markdown').map(leaf=>(leaf.view as MarkdownView).file?.path).filter((path):path is string=>!!path)]);
       const io=deviceNoteIO(this.app);
-      for(const path of paths)try{await io.updateNote(path,current=>removeDismissedQuestions(current,target=>this.questions!.isDismissed(target)),()=>!this.stopped);}catch{/* Saved cleanup retries; editor decorations already hide the question. */}
+      for(const path of paths)try{await io.updateNote(path,current=>{
+        const previous=this.dismissedCleanup.get(path),revision=this.questions!.dismissalRevision;
+        if(previous?.revision===revision&&previous.hash===contentHash(current))return current;
+        const next=removeDismissedQuestions(current,target=>this.questions!.isDismissed(target));
+        this.dismissedCleanup.set(path,{hash:contentHash(next),revision});
+        if(this.dismissedCleanup.size>32)this.dismissedCleanup.delete(this.dismissedCleanup.keys().next().value!);
+        return next;
+      },()=>!this.stopped);}catch{/* Saved cleanup retries; editor decorations already hide the question. */}
     }finally{this.cleaningDismissedQuestions=false;}
   }
   private async refreshQuestions(){
@@ -552,8 +579,13 @@ export default class SendToT3 extends Plugin {
       await this.cleanDismissedQuestions();
       for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file)this.questionPaths.add(view.file.path);}
       const io=deviceNoteIO(this.app),notes=new Map<string,QuestionTarget[]>(),approvalNotes=new Map<string,ApprovalTarget[]>();
-      for(const path of this.questionPaths){const text=await io.readNote(path),targets=text===undefined?[]:questionTargets(text),approvals=text===undefined?[]:approvalTargets(text);if(targets.length)notes.set(path,targets);if(approvals.length)approvalNotes.set(path,approvals);if(!targets.length&&!approvals.length)this.questionPaths.delete(path);}
-      await Promise.all([this.questions.refresh([...notes.values()].flat().concat(this.questions.pendingDismissals())),this.approvals.refresh([...approvalNotes.values()].flat().concat(this.approvals.watchedTargets()))]);
+      const openViews=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView);
+      for(const path of this.questionPaths){
+        const text=await io.readNote(path),displayed=openViews.filter(view=>view.file?.path===path).map(view=>view.editor?.getValue()??'').join('\n');
+        const targets=questionTargets((text??'')+'\n'+displayed),approvals=approvalTargets((text??'')+'\n'+displayed);
+        if(targets.length)notes.set(path,targets);if(approvals.length)approvalNotes.set(path,approvals);if(!targets.length&&!approvals.length)this.questionPaths.delete(path);
+      }
+      await Promise.all([this.questions.refresh([...notes.values()].flat(),1000),this.approvals.refresh([...approvalNotes.values()].flat().concat(this.approvals.watchedTargets()))]);
       this.questions.retryDismissals();
       for(const [path,targets] of notes){
         const resolved=targets.filter(target=>this.questions!.view(target).status==='resolved'&&!this.questions!.isDismissed(target));
@@ -2143,7 +2175,7 @@ export default class SendToT3 extends Plugin {
       if(inlineView&&this.notePromptDocument(inlineView)!==content)throw Error('The note changed while preparing the send. Try again with the current text.');
       const note=this.noteContext(file),link=options?.folderLink??folderLinkForPath(this.settings.folderLinks,file.path)??{id:'manual',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true};
       const destination=this.destinationNotePath(note,project,link)??note.absolutePath??'(unmapped on destination)';
-      const request:Request = {jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path),prompt:applyOrchestration(images.markdown+(inlineView?`\n\n${INLINE_REPLY_INSTRUCTION}`:'')+this.messageFooter(destination),orchestration),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
+      request = {jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path),prompt:applyOrchestration(images.markdown+(inlineView?`\n\n${INLINE_REPLY_INSTRUCTION}`:'')+this.messageFooter(destination),orchestration),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
       if(request.prompt.length>120_000) throw new Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
       if(threadId){
         const evidence=await this.missingThreeResponses(file.path);
@@ -2297,9 +2329,14 @@ export default class SendToT3 extends Plugin {
     this.settings.pending=this.settings.pending.filter(r=>r.id!==request.id);
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;this.settings.settlementJobs=before.settlementJobs;this.settings.noteThreads=before.noteThreads;this.settings.folderLinks=before.folderLinks;throw e;}
     if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
-    }catch(error){logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});await this.failRequest(request,error,stage,startedAt);throw error;}
+    }catch(error){
+      logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});await this.failRequest(request,error,stage,startedAt);
+      const accepted=acceptedRequestThread(request);
+      if(accepted){new Notice(`T3 received your message in thread ${accepted.slice(0,8)}. The local response needs recovery. See the send failure log.`,12000);return accepted;}
+      throw error;
+    }
   }
-  onunload(){this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineHostService?.dispose();this.mobileSelectionAction?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;

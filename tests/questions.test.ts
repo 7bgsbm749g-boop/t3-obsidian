@@ -4,6 +4,7 @@ import {pendingQuestions,questionAnswers,questionTargets,questionToken,parseQues
 import {QuestionController,type QuestionRecord} from '../question-controller';
 import {applyThreadItem,renderInlineTurn,initialRegion,finalizeRegion} from '../inline-thread';
 import {contentHash} from '../completion';
+import {markdownCodeCacheStatus} from '../reply-html';
 const target:QuestionTarget={environmentId:'original-machine',threadId:'original-thread',requestId:'native:123'};
 const questions=[{id:' exact id ',header:'Choice',question:'Which option?',multiSelect:false,options:[{label:' Label ',description:'Description',value:' exact value '},{label:'Second',description:''}]}];
 const opened=(requestId=target.requestId,responseMode?:'message')=>({id:'opened-'+requestId,kind:'user-input.requested',summary:'Input needed',turnId:'turn',createdAt:'2026-09-30T00:00:00Z',payload:{requestId,questions,...(responseMode?{responseMode}:{})}});
@@ -50,7 +51,7 @@ function harness(){
   const access=async(environmentId:string)=>{accesses.push(environmentId);return {origin:'https://t3.example',api:async(path:string,payload?:any)=>{
     if(offline)throw Error('Disconnected');
     if(payload){order.push('dispatch');dispatches.push(structuredClone(payload));assert.equal(saved[0].command?.commandId,payload.commandId);if(resolveDispatch)activities.push(resolved());if(throwDispatch)throw Error('Lost acknowledgement');return {};}
-    assert.equal(path,'/api/orchestration/threads/original-thread');return {thread:{id:target.threadId,activities}};
+    assert.equal(path,'/api/orchestration/threads/original-thread?controlOnly=true');return {thread:{id:target.threadId,activities}};
   },close:()=>{}};};
   const create=()=>new QuestionController(access,store,()=>`command-${++id}`,()=> '2026-09-30T01:00:00Z');
   return {create,dispatches,accesses,order,activities,get saved(){return saved;},offline:(v:boolean)=>{offline=v;},throwDispatch:(v:boolean)=>{throwDispatch=v;},resolveDispatch:(v:boolean)=>{resolveDispatch=v;},failSave:(v:boolean)=>{failSave=v;}};
@@ -134,4 +135,77 @@ test('dismissed section cleanup preserves answers, other questions, code example
   assert.equal(removeDismissedQuestions(live.replaceAll('t3-inline:','t3-response:'),dismissed),live.replaceAll('t3-inline:','t3-response:'));
   assert.equal(removeDismissedQuestions(section.replace('t3-question:end:','broken:end:'),dismissed),section.replace('t3-question:end:','broken:end:'));
   assert.match(clearResolvedQuestion(section,target),/Question answered/);
+});
+
+test('one submission uses two control reads and shows feedback before access begins',async()=>{
+  const h=harness(),controller=h.create();await controller.refresh([target]);controller.draft(target,' exact id ',{text:'draft'});
+  h.accesses.length=0;
+  const work=controller.submit(target);
+  assert.equal(controller.view(target).status,'submitting');assert.equal(h.accesses.length,0);
+  await work;
+  assert.equal(h.accesses.length,3,'one preflight, one dispatch, one confirmation; no duplicate preflight');
+  assert.equal(h.dispatches.length,1);assert.equal(controller.view(target).accepted,true);
+  assert.deepEqual(controller.watchedTargets(),[target],'an accepted answer stays monitored without saved-note controls');
+  h.activities.push(resolved());await controller.refresh(controller.watchedTargets());assert.equal(controller.view(target).status,'resolved');controller.dispose();
+});
+
+test('concurrent refreshes share one snapshot, including a target added during the read',async()=>{
+  let reads=0,release!:(value:any)=>void,entered!:()=>void;const started=new Promise<void>(resolve=>{entered=resolve;});
+  const controller=new QuestionController(async()=>({origin:'test',api:async()=>{reads++;return new Promise(resolve=>{release=resolve;entered();});}}),{load:()=>[],save:()=>{}},()=> 'command');
+  const first=controller.refresh([target]);await started;
+  const other={...target,requestId:'other'},second=controller.refresh([other]);
+  release({thread:{id:target.threadId,activities:[opened(),opened('other')]}});
+  await Promise.all([first,second]);assert.equal(reads,1);assert.equal(controller.view(target).status,'pending');assert.equal(controller.view(other).status,'pending');controller.dispose();
+});
+
+test('draft writes coalesce while live updates run and flush exact text before close or disposal',async()=>{
+  const h=harness(),controller=h.create();await controller.refresh([target]);
+  const before=h.order.length;
+  for(let index=0;index<20;index++){controller.draft(target,' exact id ',{text:'Draft '+index});controller.observe(target.environmentId,target.threadId,[opened()],index);}
+  assert.equal(h.order.length,before,'status updates do not force keystroke saves');
+  controller.flushDrafts();assert.equal(h.order.length,before+1);assert.equal(h.saved[0].drafts[' exact id '].text,'Draft 19');
+  controller.dispose();assert.equal(h.order.length,before+1);
+});
+
+test('tracked display-only questions resolve from live events and stale snapshots cannot restore them',async()=>{
+  const h=harness(),controller=h.create(),untrack=controller.track(target);
+  controller.observe(target.environmentId,target.threadId,[opened()],10);assert.equal(controller.view(target).status,'pending');
+  controller.observe(target.environmentId,target.threadId,[opened(),resolved()],12);assert.equal(controller.view(target).status,'resolved');
+  controller.observe(target.environmentId,target.threadId,[opened()],11);assert.equal(controller.view(target).status,'resolved');
+  untrack();assert.deepEqual(controller.watchedTargets(),[]);controller.dispose();
+});
+
+test('an omitted old control can resolve from its explicit runtime request, but absence is not resolution',async()=>{
+  let remote:any={status:'pending'},activities:any[]=[opened()];
+  const controller=new QuestionController(async()=>({origin:'test',api:async()=>({thread:{id:target.threadId,activities,v2Requests:{[target.requestId]:remote}}})}),{load:()=>[],save:()=>{}},()=> 'command');
+  await controller.refresh([target]);activities=[];await controller.refresh([target]);assert.equal(controller.view(target).status,'pending');
+  remote={status:'resolved',answers:{}};await controller.refresh([target]);assert.equal(controller.view(target).status,'resolved');controller.dispose();
+});
+
+test('large notes without question markers do not invoke the Markdown code parser after old dismissals',()=>{
+  const before=markdownCodeCacheStatus().sourceParses;
+  assert.equal(removeDismissedQuestions('ordinary content '.repeat(30000),()=>true).length,510000);
+  assert.equal(markdownCodeCacheStatus().sourceParses,before);
+});
+
+test('a timed-out read releases the shared slot and cannot apply a late snapshot',async context=>{
+  context.mock.timers.enable({apis:['setTimeout']});
+  let entered!:()=>void,release!:(value:any)=>void,signal:AbortSignal|undefined,reads=0;
+  const started=new Promise<void>(resolve=>{entered=resolve;});
+  const controller=new QuestionController(async()=>({origin:'test',api:async(_path,_payload,options)=>{signal=options?.signal;if(++reads===1)return new Promise(resolve=>{release=resolve;entered();});return {thread:{id:target.threadId,activities:[opened()]}};}}),{load:()=>[],save:()=>{}},()=> 'command');
+  const first=controller.refresh([target]);await started;context.mock.timers.tick(8000);await first;
+  assert.equal(signal?.aborted,true);assert.equal(controller.view(target).status,'error');
+  await controller.refresh([target]);assert.equal(reads,2);assert.equal(controller.view(target).status,'pending');
+  release({thread:{id:target.threadId,activities:[resolved()]}});await Promise.resolve();assert.equal(controller.view(target).status,'pending');controller.dispose();
+});
+
+test('resolution or disposal while acquiring dispatch access prevents a stale mutation',async()=>{
+  for(const stop of [false,true]){
+    let accesses=0,dispatches=0,entered!:()=>void,release!:(value:any)=>void;const started=new Promise<void>(resolve=>{entered=resolve;});
+    const connection={origin:'test',api:async(_path:string,payload?:any)=>{if(payload){dispatches++;return {};}return {thread:{id:target.threadId,activities:[opened()]}};}};
+    const controller=new QuestionController(async()=>{if(++accesses===3)return new Promise(resolve=>{release=resolve;entered();});return connection;},{load:()=>[],save:()=>{}},()=> 'command');
+    await controller.refresh([target]);controller.draft(target,' exact id ',{text:'Draft'});const submission=controller.submit(target);await started;
+    if(stop)controller.dispose();else controller.observe(target.environmentId,target.threadId,[opened(),resolved()],20);
+    release(connection);await submission;assert.equal(dispatches,0);controller.dispose();
+  }
 });

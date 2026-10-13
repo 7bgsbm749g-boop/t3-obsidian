@@ -38,3 +38,10 @@ test('New thread uses captured routing without awaiting old check and refuses un
 test('close before the first deferred check never starts host work',async()=>{
  const h=await fixture(undefined,true);await h.modal.ready;assert.equal(h.calls.length,0);assert.equal(h.sent.length,0);
 });
+
+test('the previous-thread action is usable immediately and a click waits for its exact check',async()=>{
+ const h=await fixture();assert.equal(h.modal.defaultButton.disabled,false);
+ const sending=h.modal.choose('default');assert.equal(h.sent.length,0);assert.equal(h.modal.defaultButton.disabled,true);
+ h.calls[0].resolve({label:'Continue thread',threadId:'checked',projectKey:'project'});await sending;
+ assert.equal(h.sent.length,1);assert.equal(h.sent[0].d.threadId,'checked');
+});

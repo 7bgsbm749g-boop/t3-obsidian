@@ -309,6 +309,26 @@ test('failure-only logging survives reload without restoring a send or private p
   }finally{plugin.onunload();}
 });
 
+for(const surface of ['chat','note'])for(const fault of ['accepted-save','local-confirmation'])test(`accepted ${surface} sends keep their thread and display after ${fault} fails`,async()=>{
+  const h=await chatHarness();
+  try{
+    const note=h.attachEditor('Notes/AcceptedLocalFailure.md','Synthetic accepted-send check.');
+    Object.assign(note.file,{basename:'AcceptedLocalFailure',stat:{ctime:123}});
+    const persist=h.plugin.persistAgentCommand.bind(h.plugin);let failed=false,stops=0;
+    h.plugin.persistAgentCommand=(...args:any[])=>{if(!failed&&(fault==='accepted-save'?args[0].directPlan?.phase==='started':args[1]!==undefined)){failed=true;throw Error('Synthetic local confirmation failure');}return persist(...args);};
+    h.plugin.inlineChat.deliveryFailed=async()=>{stops++;};
+    if(surface==='chat')await h.plugin.sendChat('Synthetic accepted send.',{path:note.file.path},{newThread:true});
+    else await h.plugin.send(note.file,project,{newThread:true,throwOnError:true,streamReply:true});
+    assert.equal(failed,true);assert.equal(stops,0);assert.equal(h.plugin.settings.pending.length,0);
+    const turn=h.commands.find(command=>command.type==='thread.turn.start');
+    assert.ok(h.plugin.settings.noteThreads.some((entry:any)=>entry.notePath===note.file.path&&entry.threadId===turn.threadId));
+    const failures=h.plugin.app.loadLocalStorage(`t3-send-failures-v1:${h.plugin.settings.vaultId}`);
+    assert.equal(failures.length,1);assert.equal(failures[0].delivery,'accepted');assert.equal(failures[0].threadId,turn.threadId);
+    assert.ok(h.notices.some(text=>/T3 received your message/.test(text)));
+    assert.equal(h.commands.filter(command=>command.type==='thread.turn.start').length,1);
+  }finally{h.plugin.onunload();}
+});
+
 test('mobile chat without a note uses the root link, preserves the prompt, advertises event queries, and never enrolls note cleanup',async()=>{
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';

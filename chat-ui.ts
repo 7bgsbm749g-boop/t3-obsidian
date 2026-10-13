@@ -1,6 +1,7 @@
 import {resolveJobOptions,overrideCount,type JobOverrides,type ResolvedJobOptions,type InlineDefaults} from './job-options';
 import {logEvent,logFailure} from './diagnostics';
 import {App, FuzzySuggestModal, Modal, Notice, Setting} from 'obsidian';
+import {NoteTabPanel} from './note-tab-panel';
 import {RequestDeliveryError} from './bridge';
 import {ProjectCreationCancelled} from './project-create-ui';
 import {abortableRead,cancelledRequest} from './t3-api';
@@ -67,7 +68,7 @@ export class JobOverridesModal extends Modal {
 type Destination='default'|'new'|'existing';
 
 /** The same compact destination UI handles whole notes, selections, and typed asks. */
-class SendDestinationModal extends Modal {
+class SendDestinationModal extends NoteTabPanel {
   ready:Promise<ChatDestination|undefined>=Promise.resolve(undefined);
   private revision=0;
   private opened=false;
@@ -81,7 +82,7 @@ class SendDestinationModal extends Modal {
   private projectKey?:string;
   private composing:boolean;
   private check?:{key?:string;controller:AbortController;work:Promise<ChatDestination>;started:number};
-  constructor(app:App,private host:ChatHost,private prompt?:string){super(app);this.composing=prompt===undefined;this.projectKey=host.getDefaultProjectKey?.();}
+  constructor(app:App,private host:ChatHost,private prompt?:string){super(app,host.getNotePath());this.composing=prompt===undefined;this.projectKey=host.getDefaultProjectKey?.();}
   private cancelCheck(){this.check?.controller.abort(cancelledRequest('Conversation check cancelled.'));this.check=undefined;}
   private checkDestination(key?:string){
     if(this.check&&this.check.key===key&&!this.check.controller.signal.aborted&&Date.now()-this.check.started<DESTINATION_CHECK_TIMEOUT_MS)return this.check.work;
@@ -125,15 +126,15 @@ class SendDestinationModal extends Modal {
     if(remembered||this.host.steering)this.actions.addButton(button=>{
       defaultButton=button.buttonEl;
       this.defaultButton=defaultButton;
-      button.setButtonText(this.host.getDefaultDestination?'Checking thread…':this.host.steering?'Send to running thread':'Previous thread').setCta().onClick(()=>this.choose('default'));
+      button.setButtonText(this.host.steering?'Send to running thread':'Previous thread').setCta().onClick(()=>this.choose('default'));
       if(this.host.getDefaultDestination){
         this.checkingDefault=true;
-        this.defaultDisabled=true;button.setDisabled(true);detail.setText('Checking the selected T3 conversation…');
+        detail.setText('Checking the selected T3 conversation…');
         const started=Date.now();
         this.ready=this.checkDestination(this.projectKey).then(destination=>{
           if(this.opened&&revision===this.revision&&this.projectKey===undefined&&destination.projectKey){this.projectKey=destination.projectKey;if(this.check)this.check.key=destination.projectKey;projectButton.setText(this.host.getProjectName(this.projectKey));}
           if(this.opened&&revision===this.revision){
-            this.defaultDisabled=Boolean(destination.unavailable);button.setButtonText(destination.label).setDisabled(Boolean(this.host.busy||this.defaultDisabled));detail.setText(destination.detail??'');
+            this.defaultDisabled=Boolean(destination.unavailable);button.setButtonText(destination.label).setDisabled(Boolean(this.host.busy||this.defaultDisabled||this.choosing));detail.setText(destination.detail??'');
             logEvent('ui.destination.checked',{notePath:this.host.getNotePath(),elapsedMs:Date.now()-started,unavailable:destination.unavailable,threadId:destination.threadId});
             if(destination.unavailable){const retry=detail.createEl('button',{text:'Retry'});retry.addEventListener('click',()=>{if(this.field)this.prompt=this.field.value;this.cancelCheck();this.onOpen();});}
           }

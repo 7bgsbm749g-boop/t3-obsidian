@@ -1,19 +1,22 @@
-import {Modal,Notice,type App} from 'obsidian';
+import {Notice,type App} from 'obsidian';
+import {NoteTabPanel} from './note-tab-panel';
 import type {Extension} from '@codemirror/state';
 import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
 import {parseQuestionToken,questionKey,questionSections,type QuestionTarget} from './questions';
 import {QuestionController} from './question-controller';
 
-function buttonLabel(controller:QuestionController,target:QuestionTarget){const view=controller.view(target);return view.status==='submitting'?'Submitting…':view.status==='resolved'?'Answered':'Answer';}
+function buttonLabel(controller:QuestionController,target:QuestionTarget){const view=controller.view(target);return view.status==='submitting'?(view.accepted?'Answer sent':'Submitting…'):view.status==='resolved'?'Answered':'Answer';}
 export function questionButton(controller:QuestionController,target:QuestionTarget,open:(target:QuestionTarget)=>void){
+  const untrack=controller.track(target);
   const button=document.createElement('button');button.className='send-to-t3-question-answer';
   const update=()=>{button.textContent=buttonLabel(controller,target);button.disabled=controller.view(target).status==='resolved';const quote=button.closest('blockquote');if(quote)quote.hidden=controller.isDismissed(target);};
   update();button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();open(target);});
-  const unsubscribe=controller.subscribe(update);return {button,unsubscribe};
+  const stop=controller.subscribe(update);return {button,unsubscribe:()=>{stop();untrack();}};
 }
 
-export class QuestionModal extends Modal {
+export class QuestionModal extends NoteTabPanel {
   private unsubscribe?:()=>void;
+  private untrack?:()=>void;
   private form?:HTMLElement;
   private status?:HTMLElement;
   private submitButton?:HTMLButtonElement;
@@ -23,6 +26,8 @@ export class QuestionModal extends Modal {
   constructor(app:App,private controller:QuestionController,readonly target:QuestionTarget){super(app);}
   onOpen(){
     this.opened=true;
+    this.unsubscribe?.();
+    this.contentEl.empty();this.untrack?.();this.untrack=this.controller.track(this.target);
     this.signature='';
     this.contentEl.addClass('send-to-t3-question-dialog');this.contentEl.createEl('h2',{text:'Answer T3 question'});
     this.status=this.contentEl.createEl('p',{attr:{'aria-live':'polite'}});this.form=this.contentEl.createDiv();
@@ -38,7 +43,7 @@ export class QuestionModal extends Modal {
     const view=this.controller.view(this.target),record=this.controller.record(this.target);
     if(this.controller.isDismissed(this.target)){this.close();new Notice('T3 question dismissed.');return;}
     if(view.status==='resolved'){this.close();new Notice('T3 question resolved.');return;}
-    this.status!.textContent=view.status==='submitting'?'Submitting… Waiting for T3 to confirm.':view.detail??(view.request?.responseMode==='message'?'Question pending. T3 can keep working while you answer.':view.request?'T3 is waiting for your answer.':'Loading question…');
+    this.status!.textContent=view.status==='submitting'?(view.accepted?'Answer sent. Waiting for T3 to continue.':'Submitting…'):view.detail??(view.request?.responseMode==='message'?'Question pending. T3 can keep working while you answer.':view.request?'T3 is waiting for your answer.':'Loading question…');
     const signature=JSON.stringify(view.request?.questions??[]);
     // Streaming refreshes update status only. Keep DOM, focus, selection, and drafts intact.
     if(signature!==this.signature){
@@ -70,10 +75,10 @@ export class QuestionModal extends Modal {
         }
       }
     }
-    const locked=!!record.command||!view.request;
+    const locked=!!record.command||!view.request||view.status==='submitting';
     for(const input of Array.from(this.form!.querySelectorAll<HTMLInputElement|HTMLTextAreaElement>('input,textarea')))input.disabled=locked;
     this.submitButton!.disabled=!view.request||['loading','resolved','unavailable','submitting'].includes(view.status);
-    this.submitButton!.textContent=view.status==='submitting'?'Submitting…':record.command?'Retry saved answer':'Submit answer';
+    this.submitButton!.textContent=view.status==='submitting'?(view.accepted?'Answer sent':'Submitting…'):record.command?'Retry saved answer':'Submit answer';
     this.dismissButton!.hidden=view.request?.responseMode!=='message';this.dismissButton!.disabled=locked;
   }
   close(){
@@ -85,7 +90,7 @@ export class QuestionModal extends Modal {
     super.close();
     for(const {editor,scroll} of positions)if(scroll)editor.scrollTo(scroll.left,scroll.top);
   }
-  onClose(){this.opened=false;this.unsubscribe?.();this.contentEl.empty();}
+  onClose(){this.opened=false;this.unsubscribe?.();this.untrack?.();this.untrack=undefined;try{this.controller.flushDrafts();}catch(error){new Notice(error instanceof Error?error.message:'Cannot save the draft.',8000);}this.contentEl.empty();}
 }
 
 /** Replace the readable Markdown answer link with a real Live Preview button. */
@@ -98,12 +103,25 @@ export function questionEditorExtension(controller:QuestionController,open:(targ
   // underlying live response remains untouched, preserving its writer hash.
   const dismissed=StateField.define<DecorationSet>({
     create:state=>hidden(state.doc.toString()),
-    update:(value,transaction)=>transaction.docChanged||transaction.effects.some(effect=>effect.is(refreshDismissed))?hidden(transaction.state.doc.toString()):value,
+    update:(value,transaction)=>{
+      if(transaction.effects.some(effect=>effect.is(refreshDismissed)))return hidden(transaction.state.doc.toString());
+      if(!transaction.docChanged)return value;
+      // Ordinary typing only maps existing ranges. Structural edits can create
+      // a marker, change a code fence, or change the hidden section itself.
+      let structural=false;
+      transaction.changes.iterChanges((from,to,_from,_to,inserted)=>{
+        if(/[\n`~<>]/.test(inserted.toString())||/[\n`~<>]/.test(transaction.startState.doc.sliceString(from,to)))structural=true;
+        const line=transaction.startState.doc.lineAt(from);
+        if(from-line.from<=4&&(/^\s/.test(inserted.toString())||/^\s*(?:`|~|>)/.test(line.text)))structural=true;
+        value.between(Math.max(0,from-1),Math.min(transaction.startState.doc.length,to+1),()=>{structural=true;});
+      });
+      return structural?hidden(transaction.state.doc.toString()):value.map(transaction.changes);
+    },
     provide:field=>[EditorView.decorations.from(field),EditorView.atomicRanges.of(view=>view.state.field(field))],
   });
   const dismissalUpdates=ViewPlugin.fromClass(class {
     private unsubscribe:()=>void;
-    constructor(view:EditorView){this.unsubscribe=controller.subscribe(()=>view.dispatch({effects:refreshDismissed.of(undefined)}));}
+    constructor(view:EditorView){let revision=controller.dismissalRevision;this.unsubscribe=controller.subscribe(()=>{if(revision===controller.dismissalRevision)return;revision=controller.dismissalRevision;view.dispatch({effects:refreshDismissed.of(undefined)});});}
     destroy(){this.unsubscribe();}
   });
   class AnswerWidget extends WidgetType {

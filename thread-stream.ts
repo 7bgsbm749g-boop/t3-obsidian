@@ -6,7 +6,7 @@ import {T3_PROTOCOL_VERSION,normalizeV2StreamItem,normalizeV2Snapshot,normalizeV
 import {responseTooLarge} from './t3-response-limits';
 
 export type ThreadAccessCloseReason='cache-expired'|'auth-rejected'|'host-disposed'|'stop-complete'|'stop-timeout'|'stream-reconnect'|'stream-stopped'|'late-access'|'caller-closed';
-export interface ThreadAccess {origin:string;api:(path:string,payload?:any)=>Promise<any>;expiresAt?:number;close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
+export interface ThreadAccess {origin:string;api:(path:string,payload?:any,options?:{signal?:AbortSignal})=>Promise<any>;expiresAt?:number;close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
 export type ThreadAccessFactory=()=>Promise<ThreadAccess>;
 export type ThreadStreamItem={kind:'snapshot';snapshot:any}|{kind:'event';event:any}|{kind:'synchronized'};
 export interface ThreadStreamCallbacks {item:(item:ThreadStreamItem)=>void;reconnecting:(error:Error)=>void;failure?:(error:Error)=>void}

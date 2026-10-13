@@ -10,7 +10,13 @@ Connection retries keep the normal live response display and the latest received
 
 Large tool groups use small summaries in Live Preview. Open a group to load its complete output. The saved note, sends, selection context, and recovery records keep the full output. Source mode shows the full saved Markdown. The editor rejects changes that would save a summary without its original output.
 
-Thread selection reads current control state without downloading tool output. The selected-thread check has a five-second limit, supports Retry, and stops when the dialog closes. New thread and Existing thread remain available during that check. Sending still checks the current project, turn, approval, and input state.
+Questions and Ask/Send open in a rectangular panel at the bottom of the current note tab. The panel covers the note content, uses Obsidian's theme and controls, scrolls within the tab, and closes on Escape or when you switch tabs. Workspaces without an open note use the standard Obsidian modal.
+
+Thread selection reads current control state without downloading tool output. The selected-thread check has a five-second limit, supports Retry, and stops when the panel closes. You can click the previous-thread action immediately; the send waits for that exact check. New thread and Existing thread remain available during the check. Sending still checks the current project, turn, approval, and input state.
+
+Question status follows the live response feed and has a small control-read fallback. Visible questions and open forms stay monitored even when the saved note has only a response anchor. Concurrent refreshes share a read. Submit shows feedback immediately, performs one fresh control check, saves the exact answer command, and dispatches once. “Answer sent” means T3 accepted the command; the panel closes only after resolution. Lost acknowledgements retain the same command for a safe explicit retry. Draft writes are grouped while typing and flushed on close, submission, app backgrounding, or plugin unload. See [question performance and recovery](docs/question-performance.md).
+
+When T3 has accepted a message, a later local display or save failure retains its response and note/thread link. The notice identifies the accepted thread, and the failure log records accepted delivery. Local recovery never sends another prompt or interrupts that accepted work. Sends without acceptance evidence retain their terminal failure handling.
 
 Stop has separate states for the local display, host acknowledgement, completed T3 turn, and final note save. A completed turn does not remain active because its final note save is pending. Stop uses a stable command ID and a small host receipt. Failed confirmations retry with increasing delays. A Stop for an old turn cannot interrupt a newer turn.
 
