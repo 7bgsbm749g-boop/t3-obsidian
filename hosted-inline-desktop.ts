@@ -105,6 +105,7 @@ export class DesktopInlineHost {
     this.writer=new HostedInlineWriter(identity,this.writerIO);
   }
   async responseCommand(kind:string,id:string,hash?:string,notePath?:string,importPage?:import('./response-command').ImportRecordsCommand){return this.coordinated.command(kind,id,hash,notePath,importPage);}
+  dispatch(command:import('./inline-lease').LeaseCommand){return this.authority.dispatch(command);}
   eventContent(path:string,content:string){return this.coordinated.eventContent(path,content);}
   responseBindings(target:import('./event-subscriptions').EventTarget){return this.coordinated.responseBindings(target);}
   matchesTarget(target:import('./hosted-inline').InlineHostTarget){return this.identity.environmentId===target.environmentId&&this.identity.directory===target.directory&&sameWorkspacePath(this.identity.workspaceRoot,target.workspaceRoot);}

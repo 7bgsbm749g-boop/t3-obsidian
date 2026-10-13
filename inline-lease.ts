@@ -104,33 +104,27 @@ export class InlineLeaseAuthority {
     }
     const mailbox=await this.files.list(`${directory}/mailbox`);
     const commands:Array<{path:string;command:LeaseCommand}>=[];
-    for(const path of mailbox){
-      if(this.stopped)return;
-      let command:LeaseCommand;
-      try{command=JSON.parse((await this.files.read(path))??'');}catch{continue;}
-      if(![command.id,command.jobId,command.actor].every(value=>uuid.test(value))||path!==leasePaths(directory,command.id).command)continue;
-      commands.push({path,command});
+    // Independent reads must not make the final save wait for one native IO
+    // callback per historical command. Bound parallelism and keep list order.
+    for(let offset=0;offset<mailbox.length;offset+=32){
+      const batch=await Promise.all(mailbox.slice(offset,offset+32).map(async path=>{
+        if(this.stopped)return;
+        let command:LeaseCommand;
+        try{command=JSON.parse((await this.files.read(path))??'');}catch{return;}
+        if(![command.id,command.jobId,command.actor].every(value=>uuid.test(value))||path!==leasePaths(directory,command.id).command)return;
+        return {path,command};
+      }));
+      for(const entry of batch)if(entry)commands.push(entry);
     }
     // A legacy claim backlog must not gate sends or hold the authority lock
     // for an entire mailbox. Leave background capacity in every batch.
-    const interactive=(command:LeaseCommand)=>!['claim','heartbeat'].includes(command.kind);
+    const interactive=(command:LeaseCommand)=>!['claim','heartbeat','presence'].includes(command.kind);
     const foreground=commands.filter(({command})=>interactive(command));
     const background=commands.filter(({command})=>!interactive(command));
     const batch=foreground.slice(0,24).concat(background.slice(0,8));
     for(const {path,command} of batch){
       if(this.stopped)return;
-      const replyPath=leasePaths(directory,command.id).reply;
-      if(!await this.files.read(replyPath)){
-        const started=this.now(),trace=['register','follow','steer'].includes(command.kind);
-        const fields={...this.identity,commandId:command.id,jobId:command.jobId,actor:command.actor,kind:command.kind,pendingCommands:mailbox.length};
-        if(trace)logEvent('ownership.coordinator.received',fields);
-        const reply=await this.apply(command);
-        if(this.stopped)return;
-        const compact=command.kind==='stop'&&command.receiptOnly===1&&reply.record?{...reply,record:undefined,recordRef:undefined,stopReceipt:responseStopReceipt(reply.record,command.id)}:command.compactReply===1&&reply.record?{...reply,record:undefined,recordRef:{id:reply.record.request.id,epoch:reply.record.epoch,revision:reply.record.revision},...(!reply.ok?{stopReceipt:responseStopReceipt(reply.record,command.id)}:{})}:reply;
-        await this.files.write(replyPath,JSON.stringify(compact));
-        if(trace||command.kind==='claim'&&reply.ok)logEvent('ownership.coordinator.replied',{...fields,ok:reply.ok,error:reply.error,durationMs:this.now()-started,epoch:reply.record?.epoch,revision:reply.record?.revision,owner:reply.record?.owner},reply.ok?'info':'warning');
-      }
-      await this.files.remove(path);
+      await this.answerCommand(path,command,mailbox.length);
     }
     // Historical route migration is bounded maintenance. A cold host must
     // answer interactive work before hundreds of sidecar reads and writes.
@@ -144,6 +138,33 @@ export class InlineLeaseAuthority {
     // Receipt cleanup is maintenance, never a prerequisite for answering a
     // send. Rotate a bounded slice so retained replies cannot stall the lock.
     if(this.now()-this.lastCleanup>30_000){this.lastCleanup=this.now();void this.cleanupReplies().catch(error=>logFailure('ownership.receipt-cleanup.failed',error,this.identity));}
+  }
+  /** Same-process callers retain the identical durable mailbox and receipt,
+   * but do not wait for a discovery timer to find their completed run. */
+  async dispatch(command:LeaseCommand){
+    if(![command.id,command.jobId,command.actor].every(value=>uuid.test(value)))throw Error('Invalid local response command identity.');
+    if(!this.recovered)await this.tick();
+    return this.exclusive(async()=>{
+      const path=leasePaths(this.identity.directory,command.id).command,raw=await this.files.read(path);
+      if(raw===undefined&&await this.files.read(leasePaths(this.identity.directory,command.id).reply))return;
+      if(raw!==JSON.stringify(command))throw Error('The durable local response command changed.');
+      await this.answerCommand(path,command,1);
+    });
+  }
+  private async answerCommand(path:string,command:LeaseCommand,pendingCommands:number){
+      const directory=this.identity.directory;
+      const replyPath=leasePaths(directory,command.id).reply;
+      if(!await this.files.read(replyPath)){
+        const started=this.now(),trace=['register','follow','steer'].includes(command.kind);
+        const fields={...this.identity,commandId:command.id,jobId:command.jobId,actor:command.actor,kind:command.kind,pendingCommands};
+        if(trace)logEvent('ownership.coordinator.received',fields);
+        const reply=await this.apply(command);
+        if(this.stopped)return;
+        const compact=command.kind==='stop'&&command.receiptOnly===1&&reply.record?{...reply,record:undefined,recordRef:undefined,stopReceipt:responseStopReceipt(reply.record,command.id)}:command.compactReply===1&&reply.record?{...reply,record:undefined,recordRef:{id:reply.record.request.id,epoch:reply.record.epoch,revision:reply.record.revision},...(!reply.ok?{stopReceipt:responseStopReceipt(reply.record,command.id)}:{})}:reply;
+        await this.files.write(replyPath,JSON.stringify(compact));
+        if(trace||command.kind==='claim'&&reply.ok)logEvent('ownership.coordinator.replied',{...fields,ok:reply.ok,error:reply.error,durationMs:this.now()-started,epoch:reply.record?.epoch,revision:reply.record?.revision,owner:reply.record?.owner},reply.ok?'info':'warning');
+      }
+      await this.files.remove(path);
   }
   /** Maintenance never holds the authority transaction. Keep at least one
    * minute for acknowledgements and preserve every pending command. A streaming
@@ -516,6 +537,7 @@ export class InlineLeaseClient {
     if(!retained)await this.files.write(paths.command,JSON.stringify(command));
     writeMs=Math.max(0,this.monotonic()-monotonic);phase='waiting-for-reply';
     if(trace)logEvent('ownership.command.sent',{...fields,writeMs});
+    if(!retained&&this.files.dispatch){phase='dispatching-command';await this.files.dispatch(command);phase='waiting-for-reply';}
     for(let attempt=0;attempt<(input.kind==='stop'?300:50)&&!this.stopped&&this.monotonic()<deadline;attempt++){
       attempts++;const reading=this.monotonic();
       let raw:string|undefined;

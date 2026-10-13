@@ -26,6 +26,46 @@ function harness(){
   return {actor,request,region,files,remote,data,client,record,state,authority:()=>authority,now:()=>time,advance:(ms:number)=>{time+=ms;},restart:()=>{authority.stop();authority=new InlineLeaseAuthority(identity,files,()=>time);return authority.tick();}};
 }
 
+test('same-process command dispatch saves the normal immutable receipt without a polling timer',async()=>{
+  const h=harness(),authority=new InlineLeaseAuthority({...h.request.host,vaultId:h.request.vaultId},h.files,h.now);
+  let pauses=0;
+  const client=new InlineLeaseClient(h.actor,{...h.files,dispatch:command=>authority.dispatch(command)},h.request.host.directory,h.now,h.now,async()=>{pauses++;throw Error('A local receipt must not need polling.');});
+  const identity={id:randomUUID(),actor:h.actor};
+  const reply=await client.command({kind:'register',jobId:h.request.id,request:h.request},identity);
+  assert.equal(reply.ok,true);assert.equal(reply.record?.request.id,h.request.id);assert.equal(pauses,0);
+  const retained=await h.files.read(leasePaths(h.request.host.directory,identity.id).reply);
+  assert.ok(retained);assert.equal(await h.files.read(leasePaths(h.request.host.directory,identity.id).command),undefined);
+  assert.equal((await client.command({kind:'register',jobId:h.request.id,request:h.request},identity)).record?.epoch,reply.record?.epoch);
+  assert.equal(await h.files.read(leasePaths(h.request.host.directory,identity.id).reply),retained);
+});
+
+test('local dispatch rejects changed durable input before it can mutate a lease',async()=>{
+  const h=harness();await h.authority().tick();
+  const command={id:randomUUID(),actor:h.actor,jobId:h.request.id,kind:'register' as const,request:h.request};
+  await h.files.write(leasePaths(h.request.host.directory,command.id).command,JSON.stringify({...command,actor:randomUUID()}));
+  await assert.rejects(h.authority().dispatch(command),/durable local response command changed/);
+  assert.equal(await h.files.read(leasePaths(h.request.host.directory,h.request.id).record),undefined);
+});
+
+test('presence maintenance cannot put an interactive send behind a full command batch',async()=>{
+  const h=harness();
+  for(let i=0;i<60;i++){const command={id:randomUUID(),actor:h.actor,jobId:randomUUID(),kind:'presence'};await h.files.write(leasePaths(h.request.host.directory,command.id).command,JSON.stringify(command));}
+  const command={id:randomUUID(),actor:h.actor,jobId:h.request.id,kind:'register',request:h.request};
+  await h.files.write(leasePaths(h.request.host.directory,command.id).command,JSON.stringify(command));await h.authority().tick();
+  assert.equal(JSON.parse((await h.files.read(leasePaths(h.request.host.directory,command.id).reply))!).ok,true);
+  assert.equal((await h.files.list(h.request.host.directory+'/mailbox')).length,52);
+});
+
+test('mailbox discovery overlaps independent reads with a bounded number of open operations',async()=>{
+  const h=harness();let pending=0,maximum=0;
+  for(let i=0;i<75;i++)await h.files.write(leasePaths(h.request.host.directory,randomUUID()).command,'{}');
+  const authority=new InlineLeaseAuthority({...h.request.host,vaultId:h.request.vaultId},{...h.files,read:async path=>{
+    if(!path.includes('/mailbox/'))return h.files.read(path);
+    pending++;maximum=Math.max(maximum,pending);await new Promise(resolve=>setImmediate(resolve));pending--;return h.files.read(path);
+  }},h.now);
+  await authority.tick();assert.equal(maximum,32);assert.equal(pending,0);
+});
+
 test('coordinated checkpoints cannot move a response back to a stale writer path',async()=>{
  const h=harness(),request={...h.request,nativeProjection:true},state={...h.state,requestHash:hostedRequestHash({...h.request,nativeProjection:true})},client=h.client();
  await client.command({kind:'register',jobId:request.id,request});await h.authority().migrated(request.id);

@@ -78,7 +78,11 @@ export class DeviceInlineManager {
     let connection:Promise<{files:InlineFiles;readonly closed?:boolean;close():void}>|undefined;
     const perform=async<T>(fn:(files:InlineFiles)=>Promise<T>,retryRead=false):Promise<T>=>{
       for(let attempt=0; ;attempt++){
-      const opened=connection??=this.open(target);
+      const opened=connection??=this.open(target).then(value=>{
+        if(value.files.dispatch)files.dispatch=command=>perform(io=>io.dispatch?.(command)??Promise.resolve());
+        else delete files.dispatch;
+        return value;
+      });
       try{const result=await fn((await opened).files);this.io.connectionRecovered?.(target);return result;}catch(error){
         // A file/RPC failure belongs to this operation. Only replace a dead
         // transport; closing a healthy shared socket cancels unrelated sends.

@@ -81,6 +81,7 @@ export interface HostedInlineState {
   prose?:InlineMessage[];turnIds?:string[];steering?:InlineSteering[];incoming?:InlineSteering[];questionFollows?:InlineQuestionFollow[];
 }
 export interface InlineFiles {
+  dispatch?(command:import('./inline-lease').LeaseCommand):Promise<void>;
   read(path:string):Promise<string|undefined>;
   write(path:string,contents:string):Promise<void>;
 }

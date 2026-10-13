@@ -1541,7 +1541,12 @@ export default class SendToT3 extends Plugin {
       const files=(await import('./hosted-inline-desktop')).localInlineFiles(target.workspaceRoot,target.directory);
       // Existing records are readable while the writer starts or releases its
       // old lock. Mailbox writes retain the host-readiness requirement.
-      return {closed:false,files:{read:files.read,write:async(path,contents)=>{await this.refreshInlineHost();await files.write(path,contents);}},close:()=>{}};
+      return {closed:false,files:{read:files.read,write:async(path,contents)=>{await this.refreshInlineHost();await files.write(path,contents);},dispatch:async command=>{
+        await this.refreshInlineHost();
+        const host=this.inlineHostService;
+        if(!host?.matchesTarget(target))throw Error('The local response host changed before command dispatch.');
+        await host.dispatch(command);
+      }},close:()=>{}};
     }
     const paired=this.settings.paired.find(c=>c.environmentId===target.environmentId&&(c.id===target.connectionId||!target.connectionId))??this.settings.paired.find(c=>c.environmentId===target.environmentId);
     if(!paired)throw Error('Connect the vault project machine on this device before streaming replies.');
