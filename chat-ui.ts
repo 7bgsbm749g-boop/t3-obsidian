@@ -20,6 +20,7 @@ export interface ChatHost {
   steering?:boolean;
   getInlineDefaults?():InlineDefaults;
   busy?:boolean;
+  onBusyChange?(listener:()=>void):()=>void;
   getNotePath():string;
   getProjectName(projectKey?:string):string;
   getDefaultProjectKey?():string|undefined;
@@ -76,6 +77,8 @@ class SendDestinationModal extends NoteTabPanel {
   private defaultDisabled=false;
   private checkingDefault=false;
   private choosing=false;
+  private unwatchBusy?:()=>void;
+  private refreshAvailability?:()=>void;
   private overrides:JobOverrides={};
   private actions!:Setting;
   private field?:HTMLTextAreaElement;
@@ -112,6 +115,7 @@ class SendDestinationModal extends NoteTabPanel {
       new JobOverridesModal(this.app,this.overrides,this.host.getInlineDefaults?.()??{enabled:false},draft=>{this.overrides=draft;this.onOpen();}).open();
     });
     const detail=this.contentEl.createEl('p',{text:''});
+    const busyDetail=this.contentEl.createEl('p',{text:'Another send is in progress. This window will become available when it finishes.',attr:{role:'status'}});
     if(this.composing){
       this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Message for T3',placeholder:'What would you like to do?',rows:'5'}});
       this.field.style.width='100%';this.field.value=this.prompt??'';
@@ -148,19 +152,26 @@ class SendDestinationModal extends NoteTabPanel {
       button.onClick(()=>this.choose('new'));
     });
     this.actions.addButton(button=>button.setButtonText('Existing thread…').onClick(()=>this.choose('existing')));
-    this.actions.setDisabled(Boolean(this.host.busy));
-    const checkedButton=this.defaultButton as HTMLButtonElement|undefined;
-    if(checkedButton)checkedButton.disabled=Boolean(this.host.busy||this.defaultDisabled);
+    this.refreshAvailability=()=>{
+      const busy=Boolean(this.host.busy),disabled=busy||this.choosing;
+      projectButton.disabled=disabled;overridesButton.disabled=disabled;
+      this.actions.setDisabled(disabled);
+      if(this.defaultButton)this.defaultButton.disabled=disabled||this.defaultDisabled;
+      busyDetail.hidden=!busy;
+    };
+    this.unwatchBusy?.();
+    this.unwatchBusy=this.host.onBusyChange?.(()=>{if(this.opened&&revision===this.revision)this.refreshAvailability?.();});
+    this.refreshAvailability();
     if(this.field)this.field.focus();
     else setTimeout(()=>{if(defaultButton?.isConnected)defaultButton.focus();},0);
   }
-  onClose(){this.opened=false;this.cancelCheck();logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
+  onClose(){this.opened=false;this.unwatchBusy?.();this.unwatchBusy=undefined;this.cancelCheck();logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
   private async choose(target:Destination|boolean='default'){
     if(this.choosing||this.host.busy)return;
     target=target===false?'default':target===true?'existing':target;
     if(this.field){this.prompt=this.field.value;if(!this.prompt.trim())return;}
     logEvent('ui.destination.submitted',{notePath:this.host.getNotePath(),target,projectKey:this.projectKey,steering:this.host.steering});
-    const revision=this.revision;this.choosing=true;this.actions.setDisabled(true);
+    const revision=this.revision;this.choosing=true;this.refreshAvailability?.();
     const prompt=this.prompt??'';
     const resolve=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
     const returnToDraft=()=>this.open();
@@ -182,7 +193,7 @@ class SendDestinationModal extends NoteTabPanel {
       logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});
       new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
       if(!this.opened&&!(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)))this.open();
-    }finally{this.choosing=false;if(revision===this.revision){this.actions.setDisabled(Boolean(this.host.busy));if(this.defaultButton)this.defaultButton.disabled=Boolean(this.host.busy||this.defaultDisabled);}}
+    }finally{this.choosing=false;this.refreshAvailability?.();}
   }
 }
 

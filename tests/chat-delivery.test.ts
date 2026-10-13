@@ -74,7 +74,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     name='';buttons:any[]=[];
     constructor(_element:any){settingsControls.push(this);}
     setClass(_value:string){return this;}
-    setName(text:string){this.name=text;return this;}setDesc(text:string){(this as any).desc=text;return this;}setDisabled(_value:boolean){return this;}
+    setName(text:string){this.name=text;return this;}setDesc(text:string){(this as any).desc=text;return this;}setDisabled(value:boolean){for(const button of this.buttons)button.buttonEl.disabled=value;return this;}
     addToggle(callback:(toggle:any)=>void){const toggle={setValue:()=>toggle,onChange:()=>toggle};callback(toggle);return this;}
     addButton(callback:(button:any)=>void){const button:any={text:'',click:()=>{},buttonEl:{isConnected:true,focus:()=>{focusedButton=button;}},setButtonText:(text:string)=>{button.text=text;return button;},setCta:()=>button,setDisabled:(value:boolean)=>{button.buttonEl.disabled=value;return button;},onClick:(click:()=>void)=>{button.click=click;return button;}};callback(button);this.buttons.push(button);return this;}
     addDropdown(callback:(d:any)=>void){const d:any={options:{},value:'',disabled:false,change:()=>{},addOption:(key:string,label:string)=>{d.options[key]=label;return d;},setValue:(value:string)=>{d.value=value;return d;},setDisabled:(value:boolean)=>{d.disabled=value;return d;},onChange:(fn:any)=>{d.change=fn;return d;}};(this as any).dropdown=d;callback(d);return this;}
@@ -1490,6 +1490,24 @@ for(const surface of ['editor','ordinary-ask','palette','explicit-target'])test(
     assert.equal((opened.value.match(/Use a simpler approach\./g)??[]).length,1);assert.ok(!opened.value.startsWith(selected));
     assert.match(opened.value,/Earlier progress\.[\s\S]*\[!t3-steering\] You[\s\S]*Use a simpler approach\.[\s\S]*Changed approach\./);
     assert.doesNotMatch(opened.value,/t3-inline:/);assert.match(opened.value,/Tail/);
+  }finally{h.plugin.onunload();}
+});
+
+test('the full-note window follows the current send state and can dispatch after an earlier send finishes',async()=>{
+  const h=await chatHarness();
+  try{
+    h.plugin.settings.inlineStreaming.enabled=false;
+    h.plugin.app.vault.read=async()=> '# Synthetic note\nSend after the busy state clears.';
+    const file={path:'Notes/Busy.md',basename:'Busy',extension:'md',stat:{ctime:123}};
+    h.plugin.busy=true;h.plugin.openNoteSend(file);
+    const destination=h.modals.at(-1),buttons=h.settingsControls.at(-1).buttons;
+    assert.equal(buttons.every((button:any)=>button.buttonEl.disabled),true);
+    h.plugin.busy=false;
+    assert.equal(buttons.every((button:any)=>!button.buttonEl.disabled),true);
+    await destination.choose('new');
+    assert.equal(h.commands.filter((command:any)=>command.type==='thread.turn.start').length,1);
+    assert.match(h.commands.at(-1).message.text,/Send after the busy state clears/);
+    assert.equal(h.plugin.busyListeners.size,0);
   }finally{h.plugin.onunload();}
 });
 

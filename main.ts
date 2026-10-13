@@ -123,7 +123,14 @@ export default class SendToT3 extends Plugin {
   private readonly localKey = 'send-to-t3-code-device-v1';
   private readonly chatDraftKey = 'send-to-t3-code-chat-draft-v1';
   private deviceId = '';
-  busy = false;
+  private sending = false;
+  private busyListeners=new Set<()=>void>();
+  get busy(){return this.sending;}
+  set busy(value:boolean){
+    if(this.sending===value)return;
+    this.sending=value;
+    for(const listener of this.busyListeners)try{listener();}catch(error){logFailure('ui.destination.busy-update',error);}
+  }
   private monitoring = false;
   private stopped = false;
   private projectCreateModal?:ProjectCreateModal;
@@ -1003,11 +1010,11 @@ export default class SendToT3 extends Plugin {
     return this.chatReadinessError();
   }
   openNoteSend(file:TFile){
-    const host:ChatHost={...this.destinationContext(this.noteContext(file)),busy:this.busy,
+    const host:ChatHost=this.withSendAvailability({...this.destinationContext(this.noteContext(file)),
       sendChat:(_text,key,resolve,_back,destination)=>this.sendNote(file,destination?.threadId,destination?.projectKey,false,key,resolve?.()),
       sendToNew:(_text,key,resolve)=>this.sendNote(file,undefined,undefined,true,key,resolve?.()),
       sendToExisting:(_text,key,resolve,back)=>this.openNoteThreads(file,key,resolve,back),
-    };
+    });
     openNoteSendFlow(this.app,host);
   }
   async openNoteThreads(file:TFile,overrideKey?:string,resolve?:()=>ResolvedJobOptions,back?:()=>void){
@@ -1253,12 +1260,18 @@ export default class SendToT3 extends Plugin {
     // before the chooser/network waits: streaming may replace its surroundings.
     if(inline?.anchor)inline=this.canonicalChatContext(inline);
     const send=(text:string,options:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions})=>this.sendResolvedChat(text,note,inline,answerOnly,options);
-    const host:ChatHost={...this.destinationContext(note,inline),
+    const host:ChatHost=this.withSendAvailability({...this.destinationContext(note,inline),
       sendChat:(text,key,resolve,_back,destination)=>send(text,{threadId:destination?.threadId,responseId:destination?.responseId,expectedProjectKey:destination?.projectKey,projectOverrideKey:key,jobOptions:resolve?.()}),
       sendToNew:(text,key,resolve)=>send(text,{newThread:true,projectOverrideKey:key??VAULT_PROJECT,jobOptions:resolve?.()}),
       sendToExisting:(text,key,resolve,back)=>this.openChatThreads(text,note,inline,answerOnly,key,resolve,back),
-    };
+    });
     return openChatFlow(this.app,host,prompt);
+  }
+  private withSendAvailability(host:ChatHost):ChatHost{
+    const plugin=this;
+    Object.defineProperty(host,'busy',{get:()=>plugin.busy});
+    host.onBusyChange=listener=>{this.busyListeners.add(listener);return ()=>this.busyListeners.delete(listener);};
+    return host;
   }
   private async openChatThreads(prompt:string,note?:{path:string;absolutePath?:string},inline?:EditorChatContext,answerOnly=false,overrideKey?:string,resolve?:()=>ResolvedJobOptions,back?:()=>void){
     const target=await this.existingTarget(note?.path,overrideKey);
