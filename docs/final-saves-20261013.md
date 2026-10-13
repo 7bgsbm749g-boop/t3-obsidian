@@ -58,8 +58,9 @@ Desktop core Sync and native iPhone/Android behavior are not verified by this la
 
 The production build passed. The final complete suite passed with 1,442 TypeScript
 tests and 14 Python tests, with CPU affinity limited to four cores for the timing
-fixtures. Immutable QLO2 deployment, a real delivery and a
-native client smoke receipt remain release requirements.
+fixtures. The supported release command also passed the full suite before
+installing immutable release 2.38.6 in the development vault and QLO2. Both
+installations retained their settings, and QLO2 completed a fresh Sync scan.
 
 The first production smoke used real T3 runs in the existing routing test
 thread. Final delivery and ordinary typing succeeded, but disk save took about
@@ -92,3 +93,32 @@ Direct same-process dispatch is reserved for interactive commands. Presence,
 claim, heartbeat and observation maintenance retain the bounded mailbox path,
 so background callers cannot bypass its capacity limit and compete directly
 with final-save grants.
+
+## QLO2 release verification
+
+The real QLO2 client loaded 2.38.6 after a verified plugin reload. A bounded
+delivery in the existing test thread produced real T3 run 7, which completed at
+18:00:42.907 UTC. The 742 KB destination contained the final reply at
+18:00:46.485 UTC: 3.578 seconds after completion. The final-writer reservation
+receipt took 63 ms; final-save and cleanup acknowledgements both completed.
+This is one measured delivery, not a guarantee of zero network or disk latency.
+
+The saved note retained its collapsed intermediate block and tool history,
+with the final reply below it. Actual native typing after completion remained
+in the editor and on disk during a later check. Earlier live evidence also
+retains native typing during the final save. All nine local response records
+for Improve Questions Popup Layout reported inactive, including the four
+original completed runs. Pending historical save verification does not keep
+their working indicator active.
+
+The five temporary QLO2 notes were backed up outside the vault and removed
+through the native vault API. The original note and temporary CLI setting were
+restored. Both independent lab Sync services and their original configuration
+were restored. No phone or laptop client was changed or tested.
+
+The immutable completed smoke receipt is
+`/home/ubuntu/backups/send-to-t3-code/releases/2.38.6/smoke-vps-qlo2-final-saves.json`.
+Its evidence index links the real T3 record, filesystem timing trace, saved
+notes, native screenshots, two-client Sync evidence and complete test logs by
+SHA-256. Older intermediate releases remain superseded; this receipt completes
+2.38.6. Desktop core Sync and native iPhone/Android coverage remain unverified.
