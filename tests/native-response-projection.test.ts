@@ -169,7 +169,7 @@ test('incoming overlapping edits retain competing versions and block saves',()=>
   const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);fixture.edit(fixture.read().replace('Before','Local before'));
   fixture.view.setViewData(saved.replace('Before','External before'),false);
   assert.equal(fixture.conflicts.length,1);assert.ok(fixture.conflicts[0].local.includes('Local before'));assert.ok(fixture.conflicts[0].incoming.includes('External before'));
-  assert.throws(()=>fixture.view.getViewData(),/overlap/);fixture.adapter.dispose();assert.equal(fixture.read(),saved.replace('Before','External before'));assert.ok(fixture.conflicts[0].local.includes('Local before')); // unload strips transient response text without saving the competing buffer
+  assert.throws(()=>fixture.view.getViewData(),/overlap/);fixture.adapter.dispose();assert.equal(fixture.read(),saved.replace('Before','Local before'));assert.ok(fixture.conflicts[0].incoming.includes('External before')); // unload retains ordinary typing and strips transient response text
 });
 test('a mode switch or own-save echo adopts identical ordinary edits without a false conflict',()=>{
   const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);fixture.edit(fixture.read().replace('Before','Saved user edit'));
@@ -280,10 +280,20 @@ test('a switched file unwraps the old projection before loading another note',()
  assert.equal(fixture.view.getViewData(),'# Another note');assert.equal(fixture.adapter.isDisposed(),true);
 });
 
-test('saved adoption discards competing ordinary text and resumes the active projection',()=>{
+test('saved adoption retains competing ordinary text and the active projection',()=>{
  const fixture=fakeView(saved);fixture.adapter.setResponses([{id,body:'> Stream'}]);fixture.edit(fixture.read().replace('Before','Local before'));
  const incoming=saved.replace('Before','Remote before');fixture.view.setViewData(incoming,false);const conflict=fixture.adapter.conflictRecord()!;assert.ok(conflict.local.includes('Local before'));
- assert.equal(fixture.adapter.adoptSaved(incoming),true);assert.equal(fixture.view.getViewData(),incoming);assert.ok(fixture.read().includes('> Stream'));assert.ok(fixture.conflicts[0].local.includes('Local before'));
+ assert.equal(fixture.adapter.adoptSaved(incoming),false);assert.ok(fixture.read().includes('Local before'));assert.ok(fixture.read().includes('> Stream'));assert.ok(fixture.conflicts[0].local.includes('Local before'));
+});
+test('a late conflicting file update cannot erase typing after every response has finished',()=>{
+ const document='Finished response\n\nOrdinary paragraph\n',fixture=fakeView(document);fixture.adapter.setResponses([]);
+ fixture.edit(document.replace('Ordinary paragraph','NEW USER TYPING paragraph'));
+ fixture.view.setViewData(document.replace('Ordinary paragraph','Old incoming paragraph'),false);
+ assert.equal(fixture.adapter.responseIds().length,0);assert.equal(fixture.adapter.adoptSaved(document.replace('Ordinary paragraph','Old incoming paragraph')),false);
+ let state=EditorState.create({doc:fixture.read(),extensions:[fixture.adapter.extension()]});fixture.view.editor={cm:{state}};
+ state=state.update({changes:{from:state.doc.length,insert:'More typing'}}).state;fixture.view.editor.cm.state=state;fixture.edit(state.doc.toString());
+ assert.match(fixture.read(),/NEW USER TYPING/);assert.match(fixture.read(),/More typing/);
+ fixture.adapter.dispose();assert.match(fixture.view.getViewData(),/NEW USER TYPING/);assert.match(fixture.view.getViewData(),/More typing/);
 });
 
 test('an exact verified native load can settle an old projection after its completed anchor has disappeared',()=>{

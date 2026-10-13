@@ -1,5 +1,6 @@
 import type {LeaseRecord} from './inline-lease';
 import {legacyQuestionReply} from './hosted-inline';
+import {responseRunTerminal} from './response-stop-receipt';
 
 /** A read-only projection of response bindings, never a second run lifecycle. */
 export interface ExplorerResponse {
@@ -12,7 +13,7 @@ export function leaseExplorerResponse(record:LeaseRecord):ExplorerResponse {
   const input=!state?.userStopped&&(legacyQuestionReply(state)||!!state?.questionFollows?.some(q=>!q.answered&&!q.dismissed));
   return {id:record.request.id,notePath:state?.notePath??record.request.notePath,epoch:record.epoch,revision:record.revision,
     ...(record.responseRemovedAt!==undefined?{deleted:true}:{}),
-    active:record.responseRemovedAt===undefined&&!record.stopRequestedAt&&!state?.userStopped&&(!state?.finishedAt||!!state.pendingMessageId)&&(!state||state.status==='running'||state.status==='waiting'&&!input||!!state.pendingMessageId),
+    active:record.responseRemovedAt===undefined&&!record.stopRequestedAt&&!state?.userStopped&&(!responseRunTerminal(record)||!!state?.pendingMessageId)&&(!state?.finishedAt||!!state.pendingMessageId)&&(!state||state.status==='running'||state.status==='waiting'&&!input||!!state.pendingMessageId),
     input:record.responseRemovedAt===undefined&&input,complete:record.responseRemovedAt===undefined&&state?.status==='complete'&&!input&&!state.pendingMessageId&&!state.userStopped};
 }
 export function loadExplorerResponses(value:unknown):ExplorerResponse[] {

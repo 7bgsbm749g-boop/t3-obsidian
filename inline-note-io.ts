@@ -124,6 +124,11 @@ export function deviceFinalNoteIO(app:App,allowed:()=>boolean){
     }finally{if(prepared)manager.cancel(path);release?.();}
   };
   return {
+    readCommitted:async(path:string)=>{
+      const file=app.vault.getFileByPath(path);if(!file||!allowed())return;
+      const disk=await app.vault.read(file);
+      if(allowed()&&file.path===path&&app.vault.getFileByPath(path)===file)return disk;
+    },
     reviewRead:async(path:string)=>{
       const release=await acquire(path,true);try{
         const file=app.vault.getFileByPath(path);if(!file||!allowed())return;

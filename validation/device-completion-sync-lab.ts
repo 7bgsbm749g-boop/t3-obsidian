@@ -9,6 +9,7 @@ import {installResponsePresentation} from '../response-presentation';
 import {responseAnchor} from '../native-response-projection';
 import {contentHash} from '../completion';
 import {hostedRequestHash} from '../hosted-inline';
+import {nativeCommitMatches} from '../native-response-commit';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 /** Synthetic real-Sync lab only: no production credentials or T3 dispatch. */
@@ -45,6 +46,7 @@ export default class DeviceCompletionSyncLab extends Plugin {
       const authority=new InlineLeaseAuthority(identity,hostFiles),storage=deviceCompletionStore(c.actor,request.vaultId);
       const files={...hostFiles,read:async(p:string)=>{if(p.includes('/replies/'))await authority.tick();return hostFiles.read(p);}};
       const completion=new DeviceResponseCompletion(c.actor,storage.store,deviceFinalNoteIO(app,()=>!this.stopped),(p,proof)=>native.deviceCommitted(p,proof));
+      this.registerEvent(app.vault.on('modify',file=>completion.changed(file.path)));
       for(const record of await storage.restore())completion.restore(record);
       for(const record of await storage.restoreReceipts())completion.restoreReceipt(record);
       const pending=[];let offset=0;
@@ -60,13 +62,20 @@ export default class DeviceCompletionSyncLab extends Plugin {
       const current=native.view(view)!.currentProjection().display,index=current.indexOf('Ordinary tail');
       if(index<0)throw Error('Cannot locate synthetic ordinary text.');
       const start=view.editor.offsetToPos(index),end=view.editor.offsetToPos(index+'Ordinary tail'.length);view.editor.replaceRange('Local ordinary edit',start,end);
+      if(c.typingRace){
+        const process=app.vault.process.bind(app.vault);let inserted=false;
+        app.vault.process=async(file,change)=>{const result=await process(file,change);if(!inserted&&file.path===note){inserted=true;const at=view.editor.getValue().indexOf('Local ordinary edit');if(at<0)throw Error('Cannot locate live sender typing.');view.editor.replaceRange(' with sender typing during final save',view.editor.offsetToPos(at+'Local ordinary edit'.length));view.requestSave();this.write('typing-during-write',{visible:view.editor.getValue()});}return result;};
+        this.register(()=>{app.vault.process=process;});
+      }
       const started=performance.now(),turnId='synthetic-turn';
       await authority.checkpoint(request.id,{requestHash:hostedRequestHash(initial.request),accepted:true,notePath:note,status:'complete',hashes:[],updatedAt:'',turnId,turnIds:[turnId],directFinalBody:c.body,finalPhase:'complete',bindingCheckpoint:{sequence:25,bindings:{[request.messageId]:{turnId,kind:'explicit'}},turns:{[turnId]:{turnId,messageId:request.messageId,state:'completed'}}}});
       await this.manager.register(request);
       let record:LeaseRecord=initial;
       for(let n=0;n<300&&!this.stopped;n++){this.manager.tick();record=JSON.parse(data.get(leasePaths(identity.directory,request.id).record)!);if(record.state?.cleanupComplete)break;await pause(50);}
       if(!record.state?.cleanupComplete)throw Error('Local completion did not finish.');
+      if(c.typingRace)await view.save();
       const saved=await app.vault.read(file),proof=await storage.store.read(request.id),materialization=nativeCommit(proof);
+      if(c.typingRace&&(!saved.includes('sender typing during final save')||!nativeCommitMatches(materialization,saved)||!saved.includes('Intermediate progress stays saved.')||!saved.includes('Synthetic final reply stays below')))throw Error('Typing or retained response history did not survive the sender save.');
       await completion.acknowledged(record);
       const retired=await storage.store.retired!(request.id);
       if(!retired||await storage.store.read(request.id)||retired.receipt.hash!==record.state.delivery?.hash||!retired.proof)throw Error('Acknowledged completion recovery was not retired safely.');
@@ -82,8 +91,24 @@ export default class DeviceCompletionSyncLab extends Plugin {
     let loaded=false;
     for(let n=0;n<900&&!this.stopped;n++){
       const completed=this.read('completed');
-      if(completed&&!loaded){await native.receive(completed.record,JSON.stringify(completed.proof));loaded=true;this.write('waiting-for-sync',{disk:await app.vault.read(file),savedProjection:view.getViewData(),visible:native.view(view)?.currentProjection().display});await this.capture('waiting-for-sync');}
-      if(loaded&&await app.vault.read(file)===completed.saved){await native.changed(note);await pause(250);const adopted=view.getViewData()===completed.saved&&!native.view(view)?.conflictRecord();this.write('adopted',{adopted,saved:await app.vault.read(file),savedProjection:view.getViewData(),visible:native.view(view)?.currentProjection().display,withoutReload:true});await this.capture('adopted');if(adopted)return;}
+      if(completed&&!loaded){
+        await native.receive(completed.record,JSON.stringify(completed.proof));loaded=true;
+        if(c.typingRace){const at=view.editor.getValue().indexOf('Ordinary heading');view.editor.replaceRange('Receiver ordinary edit',view.editor.offsetToPos(at),view.editor.offsetToPos(at+'Ordinary heading'.length));await view.save();}
+        this.write('waiting-for-sync',{disk:await app.vault.read(file),savedProjection:view.getViewData(),visible:native.view(view)?.currentProjection().display});await this.capture('waiting-for-sync');
+      }
+      const disk=loaded?await app.vault.read(file):undefined;
+      if(loaded&&(c.typingRace?disk?.includes('Receiver ordinary edit')&&disk.includes('sender typing during final save')&&nativeCommitMatches(completed.proof,disk):disk===completed.saved)){
+        await native.changed(note);await pause(250);const adopted=view.getViewData()===disk&&!native.view(view)?.conflictRecord();this.write('adopted',{adopted,saved:disk,savedProjection:view.getViewData(),visible:native.view(view)?.currentProjection().display,withoutReload:true});await this.capture('adopted');
+        if(adopted){
+          if(c.typingRace){
+            const current=view.editor.getValue(),at=current.indexOf('Receiver ordinary edit');view.editor.replaceRange(' LATE USER TYPING',view.editor.offsetToPos(at+'Receiver ordinary edit'.length));
+            view.setViewData(disk!.replace('Receiver ordinary edit','Older incoming heading'),false);await pause(500);
+            const visible=view.editor.getValue();this.write('late-incoming',{typingRetained:visible.includes('LATE USER TYPING'),activeResponses:native.view(view)?.responseIds().length,visible});await this.capture('late-incoming');
+            if(!visible.includes('LATE USER TYPING'))throw Error('A late native file update erased typing after completion.');
+          }
+          return;
+        }
+      }
       await pause(200);
     }
     throw Error('The receiving open editor did not adopt the synced completion.');

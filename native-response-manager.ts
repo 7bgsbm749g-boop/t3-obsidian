@@ -358,6 +358,7 @@ export class NativeResponseManager {
     let adapter!:NativeResponseView;
     adapter=new NativeResponseView(view,saved,conflict=>{
       logFailure('note.projection.conflict',Error(conflict.reason),{notePath:file.path});
+      const fence=this.activeFinalSaves.get(file.path);if(fence)fence.invalid=true;
       void this.adoptSaved(view);
     },async()=>view.file===file?this.app.vault.read(file):undefined,incoming=>this.normalize(file.path,incoming),incoming=>this.completed(file.path,incoming,new Set(adapter.responseIds())));
     this.views.set(view,adapter);this.uninitializedViews.add(adapter);

@@ -43,37 +43,37 @@ async function adopted(h:ReturnType<typeof fixture>,pane=0){
   assert.equal(h.manager.view(h.views[pane] as any)?.conflictRecord(),undefined);
 }
 
-test('a conflicting pane adopts fresh disk text without writing or storing recovery copies',async()=>{
+test('a conflicting pane keeps current typing instead of replacing it with fresh disk text',async()=>{
   const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));
   const saved=before.replace('Before','Saved edit');h.disk(saved);
   h.views[0].setViewData(before.replace('Before','Unsaved pane echo'));assert.ok(h.manager.view(h.views[0] as any)!.conflictRecord());
-  await adopted(h);assert.equal(h.views[0].getViewData(),saved);assert.ok(h.visible().includes(body));assert.ok(h.visible().includes(otherBody));assert.equal(h.local.size,0);
-  await h.views[0].save();assert.equal(h.views[0].getViewData(),saved);h.manager.dispose();
+  await new Promise(resolve=>setTimeout(resolve,10));assert.ok(h.manager.view(h.views[0] as any)!.conflictRecord());assert.ok(h.visible().startsWith('Local edit'));assert.ok(h.visible().includes(body));assert.ok(h.visible().includes(otherBody));assert.equal(h.local.size,0);
+  h.manager.dispose();assert.ok(h.visible().startsWith('Local edit'));
 });
 
 test('automatic adoption repeats a read if the saved revision changes while reading',async()=>{
   const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));
   const older=before.replace('Before','Older saved edit'),newer=before.replace('Before','Newest saved edit');let reads=0;
   h.readWith(async()=>++reads===2?older:newer);h.views[0].setViewData(older);
-  await adopted(h);assert.equal(h.views[0].getViewData(),newer);assert.equal(reads,5);assert.equal(h.local.size,0);h.manager.dispose();
+  await new Promise(resolve=>setTimeout(resolve,10));assert.equal(h.manager.view(h.views[0] as any)!.conflictRecord()!.incoming,newer);assert.ok(h.visible().startsWith('Local edit'));assert.equal(reads,5);assert.equal(h.local.size,0);h.manager.dispose();
 });
 
 test('automatic selection invalidates a held final-save snapshot before it can write',async()=>{
   const h=fixture();await start(h);const release=await h.manager.beginFinalSave('Note.md');assert.equal(h.manager.finalSaveReady('Note.md'),true);
-  try{h.edit(h.visible().replace('Before','Local edit'));const saved=before.replace('Before','Saved edit');h.disk(saved);h.views[0].setViewData(saved);await adopted(h);assert.equal(h.views[0].getViewData(),saved);assert.equal(h.manager.finalSaveReady('Note.md'),false);}finally{release();h.manager.dispose();}
+  try{h.edit(h.visible().replace('Before','Local edit'));const saved=before.replace('Before','Saved edit');h.disk(saved);h.views[0].setViewData(saved);await new Promise(resolve=>setTimeout(resolve,10));assert.ok(h.visible().startsWith('Local edit'));assert.equal(h.manager.finalSaveReady('Note.md'),false);}finally{release();h.manager.dispose();}
 });
 
 test('automatic selection waits for a native write already in progress before reading saved text',async()=>{
   const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));(h.views[0] as any).saving=true;const saved=before.replace('Before','Saved edit');h.disk(saved);h.views[0].setViewData(saved);
   await new Promise(resolve=>setTimeout(resolve,5));assert.ok(h.visible().startsWith('Local edit'));
-  const landed=before.replace('Before','Last captured write');h.disk(landed);(h.views[0] as any).saving=false;await adopted(h);assert.equal(h.views[0].getViewData(),landed);h.manager.dispose();
+  const landed=before.replace('Before','Last captured write');h.disk(landed);(h.views[0] as any).saving=false;await new Promise(resolve=>setTimeout(resolve,25));assert.ok(h.visible().startsWith('Local edit'));assert.equal(h.manager.view(h.views[0] as any)!.conflictRecord()!.incoming,landed);h.manager.dispose();
 });
 
 test('a failed read creates no recovery copy and a later refresh retries adoption',async()=>{
   const h=fixture();await start(h);h.edit(h.visible().replace('Before','Local edit'));const saved=before.replace('Before','Saved edit');
   h.readWith(async()=>{throw Error('Temporary read failure');});h.views[0].setViewData(saved);await new Promise(resolve=>setTimeout(resolve,5));
   assert.ok(h.manager.view(h.views[0] as any)!.conflictRecord());assert.equal(h.local.size,0);
-  h.readWith(async()=>saved);h.manager.refresh();await adopted(h);assert.equal(h.views[0].getViewData(),saved);h.manager.dispose();
+  h.readWith(async()=>saved);h.manager.refresh();await new Promise(resolve=>setTimeout(resolve,10));assert.ok(h.visible().startsWith('Local edit'));assert.equal(h.manager.view(h.views[0] as any)!.conflictRecord()!.incoming,saved);h.manager.dispose();
 });
 
 test('an adoption cannot replace a switched or closed pane after a delayed read',async()=>{
@@ -86,11 +86,11 @@ test('an adoption cannot replace a switched or closed pane after a delayed read'
   }
 });
 
-test('verified completion selects saved ordinary text and retains an independent active response',async()=>{
+test('verified completion cannot discard conflicting ordinary typing or an independent response',async()=>{
   const h=fixture(2);await start(h);h.edit(h.visible().replace('Before','Conflicting local edit'));
   const saved=final.replace('Before','Saved edit'),proof=evidence(saved),done=completed(2,saved);done.state!.delivery!.proofHash=proof.proofHash;
-  h.disk(saved);h.views[0].setViewData(saved);await h.manager.receive(done,proof.bytes);await adopted(h);
-  assert.equal(h.views[0].getViewData(),saved);assert.ok(h.visible().includes(body));assert.ok(h.visible().includes(otherBody));assert.equal(h.visible().includes('Conflicting local edit'),false);assert.equal(h.manager.view(h.views[0] as any)!.hasMaterialized(id),true);assert.equal(h.local.size,0);h.manager.dispose();
+  h.disk(saved);h.views[0].setViewData(saved);await h.manager.receive(done,proof.bytes);await new Promise(resolve=>setTimeout(resolve,10));
+  assert.ok(h.manager.view(h.views[0] as any)!.conflictRecord());assert.ok(h.visible().includes(body));assert.ok(h.visible().includes(otherBody));assert.equal(h.visible().includes('Conflicting local edit'),true);assert.equal(h.local.size,0);h.manager.dispose();
 });
 
 test('legacy conflict copies and choice receipts are removed only through the current vault API',()=>{
@@ -105,7 +105,7 @@ test('device completion tombstones protect a reloaded native pane from a late ol
  h.manager.deviceCommitted('Note.md',proof);assert.ok(h.manager.view(h.views[0] as any));
  h.edit(h.visible().replace('Before','New ordinary edit'));
  h.views[0].setViewData(before);const conflict=h.manager.view(h.views[0] as any)!.conflictRecord()!;assert.match(conflict.local,/New ordinary edit/);assert.equal(conflict.incoming,before);assert.equal(h.local.size,0);
- await h.views[0].save();await adopted(h);assert.equal(h.views[0].getViewData(),final);assert.equal(h.visible().includes('New ordinary edit'),false);assert.equal(h.manager.view(h.views[0] as any)!.hasMaterialized(id),true);h.manager.dispose();
+ await h.views[0].save();await adopted(h);assert.equal(h.views[0].getViewData(),final.replace('Before','New ordinary edit'));assert.equal(h.visible().includes('New ordinary edit'),true);assert.equal(h.manager.view(h.views[0] as any)!.hasMaterialized(id),true);h.manager.dispose();
 });
 
 test('a stale anchor already on disk at reload is preserved against the retained verified device result',()=>{

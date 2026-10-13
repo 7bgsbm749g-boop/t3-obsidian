@@ -21,6 +21,20 @@ export interface DeviceCompletionPhase {id:string;host:DeviceGeneration['request
 export const COMPLETED_DEVICE_PROOFS=32;
 export const COMPLETED_DEVICE_PROOF_CHARACTERS=8_000_000;
 export const COMPLETED_DEVICE_PROOF_AGE_MS=30*24*60*60*1000;
+/** Keep recovery inputs once, rather than repeating the complete original and
+ * proposed note in every historical conflict snapshot. */
+function compactCompletion(record:DeviceGeneration){
+  const conflicts=record.conflicts.length>2?[record.conflicts[0],record.conflicts.at(-1)!]:record.conflicts;
+  return {...record,conflicts:conflicts.map(conflict=>{
+    const proposedFrom=conflict.proposed!==undefined?(conflict.proposed===record.attempt?.expected?'attempt':conflict.proposed===record.staged?'staged':undefined):undefined;
+    return {...conflict,...(conflict.original===record.original?{original:undefined}:{}),...(proposedFrom?{proposed:undefined,proposedFrom}:{})};
+  })};
+}
+function expandCompletion(record:DeviceGeneration){
+  const conflicts=(record.conflicts.length>2?[record.conflicts[0],record.conflicts.at(-1)!]:record.conflicts).map((conflict:any)=>{
+    const {proposedFrom,...rest}=conflict;return {...rest,original:conflict.original??record.original,...(proposedFrom?{proposed:proposedFrom==='attempt'?record.attempt?.expected:record.staged}:{})};
+  });return {...record,conflicts};
+}
 export interface DeviceCompletionNoteIO extends GeneratedNoteIO {
   recover?(path:string,expected:string,ids:string[]):Promise<void>;
   reviewRead?(path:string):Promise<string|undefined>;
@@ -31,13 +45,23 @@ export interface DeviceCompletionNoteIO extends GeneratedNoteIO {
  * Record and discovery index are committed in the same local transaction. */
 export function deviceCompletionStore(actor:string,vaultId:string,now=()=>Date.now()){
   const prefix=`response-completion:${actor}:${vaultId}:`,indexKey=prefix+'index',phaseKey=prefix+'phase-index';
+  let conflictCursor=0;
   const phase=(record:DeviceGeneration):DeviceCompletionPhase=>({id:record.request.id,host:record.request.host,notePath:record.notePath,status:record.status,journalRevision:record.journalRevision??0,attemptPhase:record.attempt?.superseding?'superseding':record.attempt?.writeState??(record.attempt?'unknown':undefined),hash:record.attempt?.hash??record.verified?.hash,at:now()});
   const valid=(record:DeviceGeneration|undefined,id:string)=>{
     if(record&&(record.request.id!==id||record.request.vaultId!==vaultId||record.deviceGrant?.actor!==actor||record.request.deviceCompletion?.actor!==actor))throw Error('Invalid local completion identity.');
-    return record;
+    return record&&expandCompletion(record);
   };
   const pruneProofs=async()=>{
     const db=await openStateDatabase();try{await new Promise<void>((resolve,reject)=>{const transaction=db.transaction('devices','readwrite'),objects=transaction.objectStore('devices'),index=objects.get(prefix+'proof-index');index.onsuccess=()=>{const entries:Array<{id:string;at:number}>=Array.isArray(index.result)?index.result:[];for(const entry of entries)if(entry.at<now()-COMPLETED_DEVICE_PROOF_AGE_MS)objects.delete(prefix+'proof:'+entry.id);objects.put(entries.filter(entry=>entry.at>=now()-COMPLETED_DEVICE_PROOF_AGE_MS),prefix+'proof-index');};transaction.oncomplete=()=>resolve();transaction.onabort=transaction.onerror=()=>reject(Error('Cannot prune expired completion proofs.'));});}finally{db.close();}
+    const ids=await deviceState(indexKey) as string[]|undefined,phases=await deviceState(phaseKey) as Record<string,DeviceCompletionPhase>|undefined;
+    const conflicts=(ids??[]).filter(id=>!phases?.[id]||phases[id].status==='conflict'),selected=conflicts.slice(conflictCursor,conflictCursor+8);
+    conflictCursor=conflictCursor+8>=conflicts.length?0:conflictCursor+8;
+    if(!selected.length)return;
+    const compactDb=await openStateDatabase();try{await new Promise<void>((resolve,reject)=>{
+      const transaction=compactDb.transaction('devices','readwrite'),objects=transaction.objectStore('devices');
+      for(const id of selected){const request=objects.get(prefix+id);request.onsuccess=()=>{const record=request.result;if(!record)return;const before=JSON.stringify(record),compact=compactCompletion(valid(record,id)!);if(JSON.stringify(compact)!==before)objects.put(compact,prefix+id);};}
+      transaction.oncomplete=()=>resolve();transaction.onabort=transaction.onerror=()=>reject(Error('Cannot compact retained completion conflicts.'));
+    });}finally{compactDb.close();}
   };
   const store:DeviceCompletionStore={
     read:async id=>valid(await deviceState(prefix+id),id),
@@ -47,7 +71,7 @@ export function deviceCompletionStore(actor:string,vaultId:string,now=()=>Date.n
         const transaction=db.transaction('devices','readwrite'),objects=transaction.objectStore('devices'),previous=objects.get(prefix+id),retired=objects.get(prefix+'retired:'+id),phases=objects.get(phaseKey),index=objects.get(indexKey);
         index.onsuccess=()=>{
           if(retired.result||(previous.result?.journalRevision??0)!==(record.journalRevision??0)-1){transaction.abort();return;}
-          const ids=new Set<string>(Array.isArray(index.result)?index.result:[]);ids.add(id);objects.put([...ids],indexKey);objects.put(record,prefix+id);objects.put({...phases.result??{},[id]:phase(record)},phaseKey);
+          const ids=new Set<string>(Array.isArray(index.result)?index.result:[]);ids.add(id);objects.put([...ids],indexKey);objects.put(compactCompletion(record),prefix+id);objects.put({...phases.result??{},[id]:phase(record)},phaseKey);
         };
         transaction.oncomplete=()=>resolve();transaction.onabort=transaction.onerror=()=>reject(Error('Cannot save the local response completion.'));
       });}finally{db.close();}
@@ -121,6 +145,7 @@ export class DeviceResponseCompletion {
   private preparations=new Map<string,(proof:NativeCommitProof)=>Promise<void>>();
   private paths=new Map<string,string>();
   private reportedConflicts=new Map<string,string>();
+  private waitingForEdits=new Set<string>();
   private coordinator:GeneratedNoteCoordinator;
   constructor(private actor:string,private store:DeviceCompletionStore,private notes:DeviceCompletionNoteIO,private committed:(path:string,proof:NativeCommitProof)=>void,private conflict?:(record:NoteGeneration)=>void,private retired?:(receipt:DeviceCompletionReceipt)=>void){
     const journal:GenerationJournal={
@@ -142,8 +167,18 @@ export class DeviceResponseCompletion {
     if(['verified','removed'].includes(record.status))throw Error('Only unfinished local completions can be resumed.');
     this.paths.set(record.request.id,record.notePath);this.grants.set(record.request.id,record.deviceGrant);
   }
+  changed(path:string){for(const [id,notePath] of this.paths)if(notePath===path)this.waitingForEdits.delete(id);}
   restoreReceipt(record:{receipt:DeviceCompletionReceipt;proof?:NativeCommitProof}){this.paths.set(record.receipt.id,record.receipt.notePath);if(record.proof)this.committed(record.receipt.notePath,record.proof);else this.retired?.(record.receipt);}
-  acknowledged(lease:LeaseRecord){return this.store.retire?.(lease)??Promise.resolve();}
+  async acknowledged(lease:LeaseRecord){
+    const id=lease.request.id,delivery=lease.state?.delivery;
+    if(delivery&&lease.state?.cleanupComplete&&lease.finalWriter?.actor===this.actor){
+      const record=await this.store.read(id);
+      if(record?.attempt&&record.status==='conflict'&&record.attempt.id===delivery.commitId&&record.attempt.hash===delivery.hash){
+        const recovered=await this.coordinator.recoverSaved(id);if(recovered.status==='verified')this.waitingForEdits.delete(id);
+      }
+    }
+    await this.store.retire?.(lease);
+  }
   async renamed(before:string,after:string){
     await this.store.renameRetired?.(before,after);
     for(const [id,path] of this.paths){
@@ -176,10 +211,11 @@ export class DeviceResponseCompletion {
     if(!/^[0-9a-f]{64}$/.test(currentHash))throw Error('Invalid reviewed note hash.');
     const record=await this.store.read(id);if(!record||record.deviceGrant.actor!==this.actor)throw Error('This device does not own the pending final save.');
     this.restorePending(record);
-    return this.coordinator.supersedeAttempt(id,record=>this.abortAttempt(record,abort),currentHash,this.notes.reviewRead);
+    const result=await this.coordinator.supersedeAttempt(id,record=>this.abortAttempt(record,abort),currentHash,this.notes.reviewRead);this.waitingForEdits.delete(id);return result;
   }
   async complete(lease:LeaseRecord,original?:string,stagedDocument?:string,prepare?:(proof:NativeCommitProof)=>Promise<void>,abort?:(proof:NativeCommitProof,evidence:FinalAttemptAbort)=>Promise<void>){
     const request=lease.request,grant=lease.finalWriter;
+    if(this.waitingForEdits.has(request.id))return;
     if(!request.deviceCompletion||!grant||grant.actor!==this.actor||request.deviceCompletion.actor!==this.actor)throw Error('This device does not own the final response write.');
     const retired=await this.store.retired?.(request.id);
     if(retired){if(retired.receipt.token!==grant.token||retired.receipt.requestHash!==hostedRequestHash(request))throw Error('The completed response identity changed.');if(retired.proof)return retired.proof;throw Error('This response is already saved and acknowledged. Its recovery payload has been retired; no note write is permitted.');}
@@ -200,11 +236,14 @@ export class DeviceResponseCompletion {
       await this.coordinator.result(request.id,draft,grant.body);
     }
     let pending=await this.store.read(request.id);
+    if(pending?.attempt&&!['verified','removed'].includes(pending.status)){await this.coordinator.recoverSaved(request.id);pending=await this.store.read(request.id);}
+    if(pending?.status==='verified'&&pending.verified){const proof=this.coordinator.materialization(pending);this.reportedConflicts.delete(request.id);this.committed(path,proof);return proof;}
     if(pending?.attempt&&abort){await this.coordinator.supersedeAttempt(request.id,record=>this.abortAttempt(record,abort),undefined,pending.attempt.reviewedCurrentHash?this.notes.reviewRead:undefined);pending=await this.store.read(request.id);}
     if(pending?.status==='commit-pending'&&pending.attempt){await prepare?.(this.intentProof(pending));await this.notes.recover?.(path,pending.attempt.expected,[request.id]);}
     if(pending?.status==='conflict')await this.coordinator.recheckSeparatedConflict(request.id);
     const result=await this.coordinator.commit(request.id);
     if(result.status==='conflict'){
+      this.waitingForEdits.add(request.id);
       const fingerprint=contentHash(JSON.stringify(result.conflicts.at(-1)));
       if(this.reportedConflicts.get(request.id)!==fingerprint){this.reportedConflicts.set(request.id,fingerprint);this.conflict?.(result);}
       return undefined;
@@ -212,6 +251,7 @@ export class DeviceResponseCompletion {
     if(result.status!=='verified'||!result.verified)return undefined;
     const proof=this.coordinator.materialization(result);
     this.reportedConflicts.delete(request.id);
+    this.waitingForEdits.delete(request.id);
     this.committed(path,proof);return proof;
   }
 }

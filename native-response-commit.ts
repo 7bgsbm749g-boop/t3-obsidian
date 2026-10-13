@@ -29,7 +29,8 @@ export function readNativeCommitProof(bytes:string,id:string,delivery:NonNullabl
 }
 /** Later ordinary edits and independent commits may change the note checksum.
  * Accept them only when unique unchanged lines prove all result ranges intact.
- * Ambiguous, touching, deleted or reordered results remain pending/conflicted. */
+ * Edits outside half-open generated ranges are ordinary typing, including
+ * insertions at either outer edge. Deleted/reordered results stay conflicted. */
 export function nativeCommitMatches(proof:NativeCommitProof,document:string){
-  return changedEdits(proof.document,document).every(edit=>proof.ranges.every(range=>edit.to<range.from||edit.from>range.to));
+  return changedEdits(proof.document,document).every(edit=>proof.ranges.every(range=>range.from===range.to?edit.to<range.from||edit.from>range.to:edit.to<=range.from||edit.from>=range.to));
 }

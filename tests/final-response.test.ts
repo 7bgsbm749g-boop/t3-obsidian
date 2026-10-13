@@ -19,10 +19,10 @@ test('a ready session, a streaming reply and a different run cannot prove comple
  const checked=await checkFinalResponse({origin:'',api:async()=>{assert.fail('Cannot read without exact completion evidence');}},'thread',current,'run');assert.equal(checked.verified,false);}
  for(const override of [{runId:'another-run'},{threadId:'another-thread'},{messageId:'another-message'},{id:'another-item'},{status:'running'},{streaming:true},{updatedAt:'2026-10-10T12:00:00.000Z'}])await assert.rejects(checkFinalResponse({origin:'',api:async()=>({...item(),...override})},'thread',state(),'run'));
 });
-test('different final text corrects only that message and requires a matching check before save',async()=>{
+test('different authoritative final text corrects only that message and is ready to save after one read',async()=>{
  const current=state();current.messages.push({id:'other',role:'assistant',turnId:'other-run',text:'Keep me',streaming:false});
  const access={origin:'',api:async()=>({...item(),text:'Canonical final reply'})};
- const changed=await checkFinalResponse(access,'thread',current,'run');assert.equal(changed.verified,false);assert.equal(changed.state.messages[0].text,'Canonical final reply');assert.equal(changed.state.messages[1].text,'Keep me');assert.equal(current.messages[0].text,'Final reply');
+ const changed=await checkFinalResponse(access,'thread',current,'run');assert.equal(changed.verified,true);assert.equal(changed.state.messages[0].text,'Canonical final reply');assert.equal(changed.state.messages[1].text,'Keep me');assert.equal(current.messages[0].text,'Final reply');
  assert.equal((await checkFinalResponse(access,'thread',changed.state,'run')).verified,true);
 });
 test('completion handles the real RPC item envelope from authentication through final comparison',async()=>{

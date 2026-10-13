@@ -449,3 +449,34 @@ test('completion polling uses atomic body-free phase metadata and migrates a leg
     assert.equal((await storage.restorePending()).records[0].finalBody,h.final.body);
   }finally{IDBObjectStore.prototype.get=get;}
 });
+test('IndexedDB conflict storage retains first/latest versions without duplicating original or proposed notes',async()=>{
+  const h=await fixture(),storage=deviceCompletionStore(h.actor,h.request.vaultId);await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+  const original=h.original,staged=original+'Synthetic proposed note\n';
+  const record:DeviceGeneration={request:h.request,notePath:h.request.notePath,original,originalHash:contentHash(original),staged,finalBody:h.final.body,status:'conflict',journalRevision:1,deviceGrant:h.record().finalWriter!,acknowledgements:[],conflicts:Array.from({length:8},(_,n)=>({original,latest:`Synthetic conflict ${n}`,proposed:staged,reason:'Synthetic overlap'}))};
+  await storage.store.write(h.id,record);
+  const raw=await deviceState(`response-completion:${h.actor}:${h.request.vaultId}:${h.id}`);
+  assert.equal(raw.conflicts.length,2);assert.ok(raw.conflicts.every((conflict:any)=>conflict.original===undefined&&conflict.proposed===undefined));
+  const expanded=(await storage.store.read(h.id))!;assert.equal(expanded.conflicts[0].latest,'Synthetic conflict 0');assert.equal(expanded.conflicts[1].latest,'Synthetic conflict 7');assert.ok(expanded.conflicts.every(conflict=>conflict.original===original&&conflict.proposed===staged));
+  assert.equal(record.conflicts.length,8,'Storage must not mutate the caller');
+});
+test('old stored conflict history compacts in a bounded maintenance pass without losing replay identity',async()=>{
+  const h=await fixture(),storage=deviceCompletionStore(h.actor,h.request.vaultId);await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+  const key=`response-completion:${h.actor}:${h.request.vaultId}:`,record:DeviceGeneration={request:h.request,notePath:h.request.notePath,original:h.original,originalHash:contentHash(h.original),staged:h.original,finalBody:h.final.body,status:'conflict',journalRevision:3,deviceGrant:h.record().finalWriter!,acknowledgements:[],conflicts:Array.from({length:20},(_,n)=>({original:h.original,latest:`Old conflict ${n}`,proposed:h.original,reason:'Old overlap'}))};
+  await deviceState(key+'index',[h.id]);await deviceState(key+h.id,record);await storage.pruneProofs();
+  const raw=await deviceState(key+h.id);assert.equal(raw.conflicts.length,2);assert.equal(raw.journalRevision,3);assert.deepEqual(raw.deviceGrant,record.deviceGrant);assert.equal(raw.conflicts[0].latest,'Old conflict 0');assert.equal(raw.conflicts[1].latest,'Old conflict 19');
+});
+test('an acknowledged old false conflict retires after saved-range recovery without rewriting the note',async()=>{
+  const h=await fixture(),storage=deviceCompletionStore(h.actor,h.request.vaultId);await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});
+  const completion=new DeviceResponseCompletion(h.actor,storage.store,h.notes,()=>{}),proof=await completion.complete(h.record(),h.original,undefined,async proof=>{assert.equal((await h.client().command({kind:'prepare-final',jobId:h.id,token:h.record().finalWriter!.token,proof})).ok,true);});assert.ok(proof);
+  const old=(await storage.store.read(h.id))!;old.status='conflict';old.conflicts=[{original:h.original,latest:h.document(),reason:'Saved result did not survive readback.'}];old.journalRevision!++;await storage.store.write(h.id,old);h.edit(h.document()+'Later ordinary typing');
+  assert.equal((await h.client().command({kind:'commit-final',jobId:h.id,token:h.record().finalWriter!.token,proof})).ok,true);
+  await completion.acknowledged(h.record());assert.equal(await storage.store.read(h.id),undefined);assert.equal((await storage.store.retired!(h.id))!.receipt.commitId,proof.commitId);assert.equal(h.writes(),1);assert.match(h.document(),/Later ordinary typing/);
+});
+test('unchanged genuine conflicts do not repeatedly read notes and wake only after a note edit',async()=>{
+  const h=await fixture();await h.client().command({kind:'reserve-final',jobId:h.id,final:h.final});h.edit('User removed the response anchor');let reads=0,notices=0;
+  const completion=new DeviceResponseCompletion(h.actor,h.store,{...h.notes,read:async()=>{reads++;return h.document();}},()=>{},()=>{notices++;});
+  await completion.complete(h.record(),h.original);const first=reads;
+  for(let n=0;n<20;n++)await completion.complete(h.record(),h.original);
+  assert.equal(reads,first);assert.equal(notices,1);assert.equal(h.local.get(h.id)!.conflicts.length,1);
+  h.edit(h.original);completion.changed(h.request.notePath);assert.ok(await completion.complete(h.record(),h.original));assert.equal(h.writes(),1);
+});

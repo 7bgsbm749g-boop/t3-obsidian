@@ -77,6 +77,32 @@ test('lost compare-and-set and failed readback never certify delivery',async()=>
     const record=await f.coordinator.commit(id);assert.equal(record.verified,undefined);assert.equal(record.status,fail==='cas'?'commit-pending':'conflict');
   }
 });
+test('ordinary typing after the final disk write verifies generated ranges without replacing that typing',async()=>{
+  const f=fixture();await f.coordinator.accept(request(),f.original);await f.coordinator.result(id,f.original,'> Final reply');
+  f.afterWrite(text=>text.replace('Tail','User typing after the write'));
+  const result=await f.coordinator.commit(id);
+  assert.equal(result.status,'verified');assert.equal(result.conflicts.length,0);assert.equal(f.writes(),1);
+  assert.match(f.get(),/User typing after the write/);assert.match(f.get(),/> Final reply/);
+  assert.ok(nativeCommitMatches(f.coordinator.materialization(result),f.get()));
+});
+test('ordinary insertions immediately outside saved response edges retain valid completion evidence',async()=>{
+  const f=fixture();await f.coordinator.accept(request(),f.original);await f.coordinator.result(id,f.original,'> Final reply');const record=await f.coordinator.commit(id),proof=f.coordinator.materialization(record),range=proof.responseRange!;
+  for(const at of [range.from,range.to])assert.ok(nativeCommitMatches(proof,proof.document.slice(0,at)+'Ordinary typing'+proof.document.slice(at)));
+  const at=range.from+2;assert.equal(nativeCommitMatches(proof,proof.document.slice(0,at)+'Changed generated text'+proof.document.slice(at)),false);
+});
+test('an old false readback conflict recovers from saved generated ranges without another write',async()=>{
+  const f=fixture();await f.coordinator.accept(request(),f.original);await f.coordinator.result(id,f.original,'> Final reply');await f.coordinator.commit(id);
+  const old=f.events.find(event=>event.event==='commit-pending').state;old.status='conflict';old.conflicts=[{original:f.original,latest:f.get(),reason:'Saved result did not survive readback.'}];f.records.set(id,old);
+  f.set(f.get().replace('Tail','Typing long after the save'));
+  const recovered=await new GeneratedNoteCoordinator(f.journal,f.notes).commit(id);
+  assert.equal(recovered.status,'verified');assert.equal(f.writes(),1);assert.match(f.get(),/Typing long after the save/);
+});
+test('repeated genuine conflict reviews retain at most the first and latest full versions',async()=>{
+  const f=fixture();await f.coordinator.accept(request(),f.original);await f.coordinator.result(id,staged(f.original),'> Reply');
+  f.set(f.original.replace('| Barb | 20 |','| Barb | 21 |'));await f.coordinator.commit(id);
+  for(let n=0;n<12;n++){f.set(f.original.replace('| Barb | 20 |',`| Barb | ${22+n} |`));await f.coordinator.restore(id,contentHash(f.get()));}
+  const record=(await f.journal.read(id))!;assert.equal(record.conflicts.length,2);assert.match(record.conflicts[0].latest,/21/);assert.match(record.conflicts[1].latest,/33/);assert.equal(f.writes(),0);
+});
 test('independent responses in one note serialize and do not bind a job or thread to one destination',async()=>{
   const f=fixture();const original=f.original.replace('Tail',`${responseAnchor(other)}\n\nTail`);f.set(original);
   await f.coordinator.accept(request(),original);await f.coordinator.accept({...request(other),messageId:other,threadId:'another-thread'},original);

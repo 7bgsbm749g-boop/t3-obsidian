@@ -34,6 +34,7 @@ export class NativeResponseView {
   private base:string;
   private diskBase:string;
   private blocked?:NativeViewConflict;
+  private blockedDisplay?:string;
   private disposed=false;
   private unloading=false;
   private file:TFile|null;
@@ -126,6 +127,9 @@ export class NativeResponseView {
   private displayed(){return this.originalGet.call(this.view);}
   saved():string {
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
+    return this.localSaved();
+  }
+  private localSaved():string {
     const display=this.displayed();
     if(!this.projection.ranges.length&&display===this.projection.saved)return display;
     const doc=(this.view.editor as any)?.cm?.state?.doc,cached=doc&&this.checkedDocuments.get(doc);
@@ -134,6 +138,9 @@ export class NativeResponseView {
     // actual native bytes are identical. Every ordinary edit takes the full
     // projection path; a cached whole-note snapshot never strips changed text.
     return display===this.projection.display?this.projection.saved:this.restoreSaved(display);
+  }
+  private conflictLocal():string {
+    return this.blocked&&this.displayed()===this.blockedDisplay?this.blocked.local:this.localSaved();
   }
   currentProjection(){
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
@@ -292,26 +299,29 @@ export class NativeResponseView {
   }
   markMaterialized(id:string){this.materialized.add(id);}
   preserveConflict(record:NativeViewConflict){if(!this.blocked)this.block(record);}
-  /** Discard competing ordinary text. Only a fresh file read may enter here;
-   * lost or resurrected response anchors still require completion evidence. */
+  /** Reconcile a fresh saved revision with current ordinary typing. Conflicting
+   * edits stay visible; reading disk never authorizes discarding the editor. */
   adoptSaved(saved:string,completed:readonly string[]=[]){
     if(this.disposed||!this.blocked)return false;
     let projection:ResponseProjection;
     const responses=this.responses.filter(response=>!completed.includes(response.id));
+    let merged:string;
     try{
       if([...this.materialized,...completed].some(id=>responseRegion(saved,id)))return false;
-      projection=this.buildProjection(saved,responses);
+      const local=this.conflictLocal(),result=mergeSavedEdits(this.blocked.base,saved,changedEdits(this.blocked.base,local));
+      if(!result.ok){this.blocked={...this.blocked,local,incoming:saved};return false;}
+      merged=result.text;projection=this.buildProjection(merged,responses);
     }catch{return false;}
     this.responses=responses;this.base=saved;this.diskBase=saved;this.ownSave=undefined;this.blocked=undefined;this.unloading=false;this.projection=projection;
     for(const id of completed)this.materialized.add(id);
-    this.render(projection.display,false);return true;
+    this.render(projection.display,false);if(merged!==saved)this.view.requestSave();return true;
   }
   hasMaterialized(id:string){return this.materialized.has(id);}
   responseIds(){return this.responses.map(response=>response.id);}
   resolveCommitted(saved:string,ids:readonly string[],clear=false){
     if(this.disposed)return false;
     const base=this.blocked?.base??this.base;
-    const local=this.blocked?.local??(this.displayed()===saved?this.base:this.saved());
+    const local=this.displayed()===saved?this.blocked?.local??this.base:this.conflictLocal();
     const merge=mergeSavedEdits(base,saved,changedEdits(base,local));
     if(!merge.ok){if(!this.blocked||this.blocked.awaitingCompletion)this.block({base,local,incoming:saved,reason:merge.reason});return false;}
     const responses=this.responses.filter(r=>!ids.includes(r.id));
@@ -337,7 +347,7 @@ export class NativeResponseView {
     this.savedToolHistory.clear();
     this.disposed=true;
   }
-  private block(record:NativeViewConflict){this.scroll.suspend();this.blocked=record;this.conflict(record);}
+  private block(record:NativeViewConflict){this.scroll.suspend();this.blockedDisplay=this.displayed();this.blocked=record;this.conflict(record);}
   /** Install only AFTER the coordinator's immutable write intent is durable,
    * before vault.process can synchronously notify native views. The incoming
    * exact bytes may be displayed, but coordinator delivery remains pending
@@ -414,16 +424,22 @@ export class NativeResponseView {
       transaction.changes.iterChangedRanges((from,to)=>{if(groups.some(group=>from<group.to&&to>group.from&&!(from<=group.from&&to>=group.to)||from===to&&from>group.from&&from<group.to))throw new ProjectionConflict('The retained tool summary is only partly edited.');});
       let projection=this.checkedDocuments.get(transaction.startState.doc);
       if(!projection){const current=transaction.startState.doc.toString();projection=current===this.projection.display?this.projection:this.buildProjection(this.restoreSaved(current),this.responses);this.checkedDocuments.set(transaction.startState.doc,projection);}
-      this.checkedDocuments.set(transaction.newDoc,this.canonicalProjection(advanceProjection(transaction,projection)));return transaction;
+      const next=this.canonicalProjection(advanceProjection(transaction,projection));
+      this.checkedDocuments.set(transaction.newDoc,next);
+      if(this.blocked)this.blocked={...this.blocked,local:next.saved};
+      return transaction;
     }catch{return [];}
   }
   /** Remove local output before unwrapping the save boundary. A conflict must
    * first reach a safe saved projection; unwrapping a blocked view could save bad data. */
   dispose(){
     if(this.disposed)return;
+    if(this.view.file!==this.file){this.unwrap();return;}
     if(this.blocked?.unsafeIncoming){this.unloading=true;this.scroll.dispose();return;}
-    // Unload discards competing local text and must not save it over the incoming version.
-    const saved=this.blocked?this.blocked.incoming:this.saved();
+    // Unload must retain the user's current ordinary buffer, including typing
+    // after a conflict. Transient response bodies still stay out of autosave.
+    let saved=this.conflictLocal();
+    if(this.blocked){const merge=mergeSavedEdits(this.blocked.base,this.blocked.incoming,changedEdits(this.blocked.base,saved));if(merge.ok)saved=merge.text;}
     try{assertCanonicalToolGroups(saved);}catch{this.unloading=true;this.scroll.dispose();return;}
     this.responses=[];this.projection=projectResponses(saved,[]);this.render(saved,false);
     this.unwrap();

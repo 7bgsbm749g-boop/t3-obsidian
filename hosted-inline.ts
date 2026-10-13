@@ -429,7 +429,7 @@ export class HostedInlineWriter {
         const checkCompletion=phase==='complete';
         if(state.steering?.some(input=>!input.confirmed||!turnForMessage(current!,input.messageId)))phase='running';
         // V2 completion checks read only the final item for this exact run.
-        // A changed stream must be checked again before the save can start.
+        // Canonical text replaces the preview in this same completion step.
         if(checkCompletion&&current.protocolVersion===2){
           const key=finalResponseKey(current,state.turnId);
           if(!key||state.streamFailure?.operation==='final-reply'&&state.streamFailure.key===key)phase='running';

@@ -222,34 +222,34 @@ async function nativeConflicts(h:Awaited<ReturnType<typeof chatHarness>>,panes=1
   return {notes,disk,conflict,dialogs:()=>h.modals.filter(modal=>modal.titleEl.text==='Resolve response view conflict')};
 }
 
-test('native conflicts use saved text automatically without a dialog, command or recovery copy',async()=>{
+test('native conflicts retain ordinary typing without a dialog, command or recovery copy',async()=>{
   const h=await chatHarness(),n=await nativeConflicts(h);
   try{
     n.conflict();const note=n.notes[0],saved=note.original.replace('Before','Saved before');
-    await waitForReply(()=>note.visible().startsWith('Saved before'),'Saved note is adopted automatically');
-    assert.equal(note.view.getViewData(),saved);assert.equal(n.disk.get(note.file.path),saved);assert.ok(note.visible().includes('Synthetic local response'));
+    await new Promise(resolve=>setTimeout(resolve,10));
+    assert.ok(note.visible().startsWith('Local before'));assert.equal(n.disk.get(note.file.path),saved);assert.ok(note.visible().includes('Synthetic local response'));
     assert.equal(n.dialogs().length,0);assert.equal(h.registered.some(command=>command.id==='resolve-native-response-conflict'),false);
     assert.equal([...h.localStorage.keys()].some(key=>key.startsWith('t3-native-conflict:')||key.startsWith('t3-native-resolutions:')),false);
     assert.equal(h.commands.length,0,'Automatic selection does not dispatch T3 work');
   }finally{h.plugin.onunload();}
 });
 
-test('independent pane conflicts select their latest saved revisions without serial choice UI',async()=>{
+test('independent pane conflicts preserve both current typing buffers without serial choice UI',async()=>{
   const h=await chatHarness(),n=await nativeConflicts(h,2);
   try{
     n.conflict(0);n.conflict(1);const note=n.notes[0];n.disk.set(note.file.path,note.original.replace('Before','Newer saved before'));
-    await waitForReply(()=>n.notes[0].visible().startsWith('Newer saved before')&&n.notes[1].visible().startsWith('Saved before'),'Both panes select the fresh saved file');
+    await new Promise(resolve=>setTimeout(resolve,10));assert.ok(n.notes.every(note=>note.visible().startsWith('Local before')));
     assert.equal(n.dialogs().length,0);assert.equal(h.notices.length,0);
   }finally{h.plugin.onunload();}
 });
 
-test('repeated conflicts discard local text each time without creating recovery UI',async()=>{
+test('repeated conflicting native updates cannot erase newer typing or create recovery UI',async()=>{
   const h=await chatHarness(),n=await nativeConflicts(h);
   try{
-    n.conflict();const note=n.notes[0];await waitForReply(()=>note.visible().startsWith('Saved before'),'First saved selection');
-    note.edit(note.visible().replace('Saved before','Second local before'));
-    const saved=note.original.replace('Before','Second saved before');n.disk.set(note.file.path,saved);note.view.setViewData(saved,false);
-    await waitForReply(()=>note.visible().startsWith('Second saved before'),'Second saved selection');assert.equal(note.view.getViewData(),saved);assert.equal(n.dialogs().length,0);
+    n.conflict();const note=n.notes[0];await new Promise(resolve=>setTimeout(resolve,10));assert.ok(note.visible().startsWith('Local before'));
+    note.edit(note.visible().replace('Local before','Second local before'));
+    const saved=note.original.replace('Before','Second saved before');n.disk.set(note.file.path,saved);assert.throws(()=>note.view.setViewData(saved,false),/overlap/);
+    await new Promise(resolve=>setTimeout(resolve,10));assert.ok(note.visible().startsWith('Second local before'));assert.equal(n.dialogs().length,0);
   }finally{h.plugin.onunload();}
 });
 

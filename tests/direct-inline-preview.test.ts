@@ -39,10 +39,16 @@ test('v2 saves from a matching final item without a thread download and unrelate
  h.preview.tick(true);h.item(completeV2(h));await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.deepEqual(calls.map(c=>c.path),['/api/orchestration/turn-item']);
  h.item({kind:'event',event:{sequence:3,aggregateId:'thread',type:'v2.unknown',payload:{}}});h.clock.advance(1000);h.preview.tick(true);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(calls.length,1);h.preview.dispose();
 });
-test('a mismatched v2 final reply is corrected and checked again before save',async()=>{
+test('a corrected v2 final reply saves immediately after one authoritative read',async()=>{
  let calls=0;const h=fixture(false,async()=>{calls++;return finalItem('Actual final reply');});h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};
- h.preview.tick(true);h.item(completeV2(h));await settle();assert.match(h.updates.at(-1)!.body,/Actual final reply/);assert.equal(h.updates.at(-1)!.completionVerified,false);
- h.clock.advance(1000);h.preview.tick(true);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(calls,2);h.preview.dispose();
+ h.preview.tick(true);h.item(completeV2(h));await settle();assert.match(h.updates.at(-1)!.body,/Actual final reply/);assert.equal(h.updates.at(-1)!.completionVerified,true);
+ h.clock.advance(1000);h.preview.tick(true);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(calls,1);h.preview.dispose();
+});
+test('run completion immediately retains collapsed intermediate history and adopts a shorter authoritative final',async()=>{
+ let calls=0;const h=fixture(false,async()=>{calls++;return finalItem('Final');});h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};h.record.request.intermediateMode='collapse';h.preview.tick(true);
+ const live=completeV2(h) as any;live.snapshot.thread.turns.turn.state='running';live.snapshot.thread.latestTurn.state='running';live.snapshot.thread.messages.splice(1,0,{id:'progress',role:'assistant',turnId:'turn',streaming:false,text:'Intermediate history stays'});h.item(live);
+ h.item({kind:'event',event:{sequence:3,aggregateId:'thread',type:'thread.run-updated',payload:{id:'turn',status:'completed',userMessageId:'prompt',ordinal:1,completedAt:'2026-10-06T03:02:00.000Z'}}});await settle();
+ const update=h.updates.at(-1)!;assert.equal(update.completionVerified,true);assert.equal(calls,1);assert.equal(h.clock.now(),0);assert.match(update.body,/\[!t3-progress\]-/);assert.match(update.body,/Intermediate history stays/);assert.doesNotMatch(update.body,/Final reply/);assert.ok(update.body.indexOf('Intermediate history stays')<update.body.lastIndexOf('Final'));h.preview.dispose();
 });
 test('oversized final reads show failure and stop repeat downloads while text remains visible',async()=>{
  let calls=0;const h=fixture(false,async()=>{calls++;throw new T3ResponseTooLargeError();});h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};

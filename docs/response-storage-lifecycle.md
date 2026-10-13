@@ -79,12 +79,22 @@ of 32 records, eight million serialized characters and 30 days. Proof expiry
 does not expire replay identities. A resurrected old response anchor requires
 checked host evidence and cannot trigger a save from an expired local document.
 
-Native editor conflicts automatically select a fresh, rechecked saved file and
-discard conflicting local text. They create no device-local recovery copies or
-choice receipts. Existing copies and receipts from the removed manual workflow
-are deleted through Obsidian's vault-scoped storage API on load. Temporary
-in-memory save boundaries still wait for missing completion proof or an unsafe
-saved document; they cannot write a stale response anchor over a completed reply.
+Native editor conflicts merge a fresh, rechecked saved file with the current
+ordinary typing. Conflicting local text stays visible and editable; a saved
+file read does not authorize discarding it. There are no extra native-view
+recovery copies or choice receipts. Temporary save boundaries still wait for
+missing completion proof or an unsafe saved document; they cannot write a stale
+response anchor over a completed reply.
+
+Completion conflict history retains its first and latest snapshots. Device
+storage references the already retained original and proposed note instead of
+serializing those full strings again in each conflict. Existing conflict
+journals compact in maintenance batches of at most eight, without changing
+their revision, grant, or replay identity. Unchanged conflicts stop retrying
+note reads until a saved-note change or explicit recovery review; conflict
+notices do not create repeated popup warnings. Successful range verification
+releases obsolete conflict snapshots, and matching host acknowledgement retires
+the full completed journal. Unresolved recovery inputs have no arbitrary expiry.
 
 ## Verification
 

@@ -36,9 +36,9 @@ test('v2 host completion reads only the final item and saves a matching reply',a
  h.io.access=async()=>({origin:'',api:async path=>{paths.push(path);assert.equal(path,'/api/orchestration/turn-item');return hostFinalItem(h);}});
  const writer=h.create();await writer.tick();assert.equal(h.state.status,'complete');assert.match(h.document,/Streamed reply/);assert.deepEqual(paths,['/api/orchestration/turn-item']);writer.stop();
 });
-test('v2 host mismatch corrects the stream but needs a second matching check before final save',async()=>{
+test('v2 host mismatch adopts canonical text and saves after one read',async()=>{
  const h=harness();let current=completedV2(h),calls=0;h.io.threadState=async()=>current;h.io.adoptFinalResponse=(_request,state)=>{current=state;return true;};h.io.access=async()=>({origin:'',api:async()=>{calls++;return hostFinalItem(h,'Canonical reply');}});
- const writer=h.create();await writer.tick();assert.equal(h.state.status,'running');assert.match(h.document,/Canonical reply/);await writer.tick();assert.equal(h.state.status,'complete');assert.equal(calls,2);writer.stop();
+ const writer=h.create();await writer.tick();assert.equal(h.state.status,'complete');assert.match(h.document,/Canonical reply/);await writer.tick();assert.equal(h.state.status,'complete');assert.equal(calls,1);writer.stop();
 });
 test('an oversized final item has a durable visible failure and is not downloaded again',async()=>{
  const h=harness();let calls=0;h.io.threadState=async()=>completedV2(h);h.io.readFailure=()=>({kind:'response-too-large',operation:'snapshot'});h.io.access=async()=>({origin:'',api:async()=>{calls++;throw new T3ResponseTooLargeError();}});

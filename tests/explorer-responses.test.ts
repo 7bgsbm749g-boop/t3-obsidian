@@ -4,6 +4,14 @@ import {leaseExplorerResponse,noteIndicators,relocateExplorerResponses,loadExplo
 import {folderNotePath} from '../folder-note-adapter';
 import type {LeaseRecord} from '../inline-lease';
 const record=(state?:any):LeaseRecord=>({request:{id:'binding',notePath:'Note.md'} as any,epoch:1,revision:2,owner:'writer',expiresAt:0,state});
+test('terminal exact runs and permanent final grants stop the spinner while their save is pending',()=>{
+  for(const status of ['running','waiting']){
+    const pending=record({status});pending.finalWriter={actor:'device',token:'token',messageId:'message',turnId:'run',sequence:1,body:'Reply',phase:'complete'};
+    assert.equal(leaseExplorerResponse(pending).active,false);
+    delete pending.finalWriter;pending.state!.turnId='run';pending.state!.bindingCheckpoint={turns:{run:{turnId:'run',state:'completed'}}};
+    assert.equal(leaseExplorerResponse(pending).active,false);
+  }
+});
 
 test('exact binding checkpoints distinguish running, unresolved input, answered followups and terminal failure',()=>{
   assert.equal(leaseExplorerResponse(record()).active,true);

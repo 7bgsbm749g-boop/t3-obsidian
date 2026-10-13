@@ -282,7 +282,6 @@ export default class SendToT3 extends Plugin {
     const deviceCompletion=this.deviceCompletion=new DeviceResponseCompletion(this.deviceId,completionStorage.store,deviceFinalNoteIO(this.app,()=>!this.stopped),(path,proof)=>nativeResponses(this.app).deviceCommitted(path,proof,!restoringCompletions),record=>{
       const conflict=record.conflicts.at(-1);if(!conflict)return;
       nativeResponses(this.app).completionConflict(record.notePath,conflict.original,conflict.latest,conflict.proposed??conflict.latest,conflict.reason);
-      new Notice('T3 Code: Final note edits conflict. Both versions are preserved on this device.',10000);
     },receipt=>nativeResponses(this.app).retiredCommitted(receipt));
     try{let cursor=0;do{const batch=await completionStorage.restorePending(cursor);for(const record of batch.records){deviceCompletion.restorePending(record);this.rememberInlineTarget(record.request.host);}cursor=batch.next;}while(cursor);const restored=await completionStorage.restore();for(const record of restored)deviceCompletion.restore(record);const receipts=await completionStorage.restoreReceipts();for(const record of receipts)deviceCompletion.restoreReceipt(record);if(restored.length||receipts.length)nativeResponses(this.app).refresh();}catch(error){logFailure('response.device-completion.restore',error);new Notice(message(error),10000);}finally{restoringCompletions=false;}
     if(typeof this.registerView==='function'){
@@ -487,7 +486,7 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('file-open',()=>this.inlineChat?.flushAvailable()));
     this.registerEvent(this.app.workspace.on('layout-change',()=>this.inlineChat?.flushAvailable()));
     if(typeof this.app.vault?.on==='function'){
-      for(const name of ['create','modify'] as const)this.registerEvent(this.app.vault.on(name as any,(file:TAbstractFile)=>{this.deviceInline?.changed(file.path);void nativeResponses(this.app).changed(file.path).catch(error=>logFailure('note.projection.file-update',error,{notePath:file.path}));}));
+      for(const name of ['create','modify'] as const)this.registerEvent(this.app.vault.on(name as any,(file:TAbstractFile)=>{this.deviceCompletion?.changed(file.path);this.deviceInline?.changed(file.path);void nativeResponses(this.app).changed(file.path).catch(error=>logFailure('note.projection.file-update',error,{notePath:file.path}));}));
       this.registerEvent(this.app.vault.on('delete',file=>{this.deviceInline?.deleted(file.path);nativeResponses(this.app).deleted(file.path);this.inlineHostService?.deleted(file.path);this.folderIndicators?.refresh();}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.inlineChat?.renamed(oldPath,file.path)));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{if(file instanceof TFolder)void this.renameLinkedFolder(oldPath,file.path).catch(error=>new Notice(`T3 folder links: ${message(error)}`,10000));}));

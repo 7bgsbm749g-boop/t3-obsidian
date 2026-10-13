@@ -78,10 +78,10 @@ test('completion recovery after a view conflict uses saved text and still reject
  const h=localFinalFixture(),adapter=h.manager.view(h.views[0] as any)!,local=h.before.replace('Before','Local ordinary heading'),incoming=h.before.replace('After','Incoming ordinary tail');
  adapter.preserveConflict({base:h.before,local,incoming,reason:'Synthetic completion conflict'});h.setDisk(incoming);
  for(let i=0;i<20&&adapter.conflictRecord();i++)await new Promise(resolve=>setTimeout(resolve,1));
- const candidate=(await h.io.reviewRead('Note.md'))!;assert.equal(candidate,incoming);assert.equal(adapter.conflictRecord(),undefined);assert.equal(h.saves(),0);assert.equal(h.writes(),0);assert.equal(h.disk(),incoming);
+ const candidate=(await h.io.reviewRead('Note.md'))!;assert.equal(candidate,incoming.replace('Before','Local ordinary heading'));assert.equal(adapter.conflictRecord(),undefined);assert.equal(h.saves(),0);assert.equal(h.writes(),0);assert.equal(h.disk(),incoming);
  h.setDisk(incoming+'New ordinary edit');await assert.rejects(h.io.resumeReviewed('Note.md',contentHash(candidate)),/reviewed note changed/);assert.equal(h.writes(),0);
  h.setDisk(incoming);await h.io.resumeReviewed('Note.md',contentHash(candidate));const before=(await h.io.read('Note.md'))!,after=before.replace(responseAnchor(h.id),'> Final response');
- assert.equal(await h.io.compareAndSet('Note.md',before,after),true);assert.equal(h.writes(),1);assert.equal(h.disk().includes('Local ordinary heading'),false);assert.ok(h.disk().includes('Incoming ordinary tail'));assert.ok(h.disk().includes('Final response'));assert.equal(h.saves(),0);h.manager.dispose();
+ assert.equal(await h.io.compareAndSet('Note.md',before,after),true);assert.equal(h.writes(),1);assert.equal(h.disk().includes('Local ordinary heading'),true);assert.ok(h.disk().includes('Incoming ordinary tail'));assert.ok(h.disk().includes('Final response'));assert.equal(h.saves(),0);h.manager.dispose();
 });
 
 test('completion checks distinguish saved proof from saved cleanup despite another stream changing the note',async()=>{

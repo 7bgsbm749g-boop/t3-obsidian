@@ -21,8 +21,12 @@ if(process.argv.includes('--restore')){
 }
 const binding=randomUUID(),actor=randomUUID(),vaultId=randomUUID(),note=`Device completion ${binding}.md`,directory='private/synthetic/inline';
 const {responseAnchor}=await import('../native-response-projection.ts');
+const {renderInlineTurn}=await import('../inline-thread.ts');
+const typingRace=process.argv.includes('--typing-race');
 const original=`# Device completion Sync fixture\n\nOrdinary heading\n\n${responseAnchor(binding)}\n\nOrdinary tail\n`;
 const request={version:4,id:binding,initialOwner:randomUUID(),nativeProjection:true,independent:true,vaultId,host:{environmentId:'synthetic-host',workspaceRoot:'/unavailable-synthetic-host',directory},notePath:note,threadId:'synthetic-thread',projectId:'synthetic-project',messageId:randomUUID(),threadEnvironmentId:'synthetic-host',initialHash:'0'.repeat(64),createdAt:new Date().toISOString()};
+const completedAt=new Date().toISOString(),turnId='synthetic-turn';
+const body=typingRace?renderInlineTurn({protocolVersion:2,messages:[{id:'progress',role:'assistant',turnId,text:'Intermediate progress stays saved.',streaming:false},{id:'final',role:'assistant',turnId,text:'Synthetic final reply stays below the intermediate block.',streaming:false}],activities:[],turns:{[turnId]:{turnId,state:'completed',completedAt,assistantMessageId:'final'}},latestTurn:{turnId,state:'completed',completedAt,assistantMessageId:'final'}},turnId,'synthetic-thread','complete','collapse',undefined,undefined,undefined,'Synthetic Sync fixture',{startedAt:request.createdAt,finishedAt:completedAt}):'> Synthetic locally completed reply.\n';
 const backups=[],source=await readFile('validation/device-completion-sync-lab.ts');
 await writeFile(join(evidence,'SYNTHETIC-SYNC-LAB'),'Synthetic content only. No production settings or T3 dispatch.\n');
 await writeFile(join(evidence,'SOURCE.json'),JSON.stringify({fixtureHash:createHash('sha256').update(source).digest('hex')}));
@@ -37,7 +41,7 @@ for(const role of roles){
     await writeFile(file,JSON.stringify(name==='app.json'?{...parsed,safeMode:false,livePreview:true}:Array.from(new Set([...parsed,id]))));
   }
   await writeFile(join(plugin,'manifest.json'),JSON.stringify({id,name:'Synthetic device completion Sync lab',version:'0.0.1',minAppVersion:'1.8.7',description:'Dedicated synthetic test only',author:'Local validation',isDesktopOnly:true}));
-  await writeFile(join(plugin,'config.json'),JSON.stringify({role,evidence,note,actor,request,original,body:'> Synthetic locally completed reply.\n'}));
+  await writeFile(join(plugin,'config.json'),JSON.stringify({role,evidence,note,actor,request,original,body,typingRace}));
   await writeFile(join(plugin,'styles.css'),await readFile('styles.css'));
   await build({entryPoints:['validation/device-completion-sync-lab.ts'],bundle:true,external:['electron','@electron/remote','obsidian',...editorExternals,'node:*',...builtinModules.filter(n=>n!=='buffer')],platform:'browser',format:'cjs',target:'es2022',outfile:join(plugin,'main.js')});
 }

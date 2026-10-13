@@ -48,6 +48,8 @@ export function applyGenerationCheckpoint(record:NoteGeneration,sequence:number,
 }
 export interface GeneratedNoteIO {
   read(path:string):Promise<string|undefined>;
+  /** Saved-file recovery must not depend on a conflicted editor projection. */
+  readCommitted?(path:string):Promise<string|undefined>;
   /** Atomic compare-and-set, including unsaved native buffers, note identity
    * and host-lock validity. Returns false if any of those changed. */
   compareAndSet(path:string,before:string,after:string):Promise<boolean>;
@@ -158,7 +160,9 @@ export class GeneratedNoteCoordinator {
     });
   }
   private async conflict(record:NoteGeneration,latest:string,reason:string){
-    record.status='conflict';record.conflicts.push({original:record.original,latest,proposed:record.attempt?.expected??record.staged,reason});
+    const conflict={original:record.original,latest,proposed:record.attempt?.expected??record.staged,reason};
+    if(record.status==='conflict'&&JSON.stringify(record.conflicts.at(-1))===JSON.stringify(conflict))return record;
+    record.status='conflict';record.conflicts=record.conflicts.length?[record.conflicts[0],conflict]:[conflict];
     await this.journal.append(record.request.id,record,'conflict');return record;
   }
   /** Recheck a never-written local result after separated boundary edits.
@@ -216,8 +220,16 @@ export class GeneratedNoteCoordinator {
     const initial=await this.require(id);
     return this.serial(initial.notePath,async()=>{
       const record=await this.require(id);
-      if(['verified','removed','conflict'].includes(record.status))return record;
+      if(['verified','removed'].includes(record.status))return record;
       if(record.attempt?.superseding)return record;
+      // A response can have reached disk before typing, Sync, or a crash made
+      // the old whole-document readback fail. Verify the actual generated
+      // ranges against the immutable intent; never write an old note over it.
+      if(record.attempt){
+        const disk=await (this.notes.readCommitted??this.notes.read.bind(this.notes))(record.notePath);
+        if(disk!==undefined&&this.savedResultMatches(record,disk))return this.verify(record,record.attempt.expected);
+      }
+      if(record.status==='conflict')return record;
       const latest=await this.notes.read(record.notePath);
       if(latest===undefined)return record;
       // Restart after the vault write but before the verified journal append.
@@ -230,9 +242,27 @@ export class GeneratedNoteCoordinator {
         await this.journal.append(id,record,'commit-pending');
       }else if(record.attempt.expected!==merged.text)throw Error('The pending commit intent changed.');
       const outcome=await this.writeAttempt(record,latest,merged.text);if(outcome.status==='no-write'||outcome.status==='unknown')return record;
-      const readback=await this.notes.read(record.notePath);
-      if(readback!==merged.text)return this.conflict(record,readback??'',readback===undefined?'Note disappeared during readback.':'Saved result did not survive readback.');
-      return this.verify(record,readback);
+      // Native IO already checked the disk and pane identities. Another
+      // editor read here can turn ordinary typing into a false save failure.
+      if(outcome.status==='verified')return this.verify(record,merged.text);
+      const readback=await (this.notes.readCommitted??this.notes.read.bind(this.notes))(record.notePath);
+      if(readback===undefined||!this.savedResultMatches(record,readback))return this.conflict(record,readback??'',readback===undefined?'Note disappeared during readback.':'Saved result did not survive readback.');
+      return this.verify(record,merged.text);
+    });
+  }
+  private savedResultMatches(record:NoteGeneration,document:string){
+    const attempt=record.attempt;if(!attempt)return false;
+    if(document===attempt.expected)return true;
+    const proof=this.materialization({...record,status:'verified',verified:{commitId:attempt.id,hash:attempt.hash,document:attempt.expected}});
+    return nativeCommitMatches(proof,document);
+  }
+  async recoverSaved(id:string){
+    const initial=await this.require(id);
+    return this.serial(initial.notePath,async()=>{
+      const record=await this.require(id);
+      if(!record.attempt||record.attempt.superseding||['verified','removed'].includes(record.status))return record;
+      const disk=await (this.notes.readCommitted??this.notes.read.bind(this.notes))(record.notePath);
+      return disk!==undefined&&this.savedResultMatches(record,disk)?this.verify(record,record.attempt.expected):record;
     });
   }
   private async verify(record:NoteGeneration,document:string){
@@ -242,6 +272,7 @@ export class GeneratedNoteCoordinator {
     const final=merged.edits.at(-1)!,offset=final.from+1+merged.edits.filter(edit=>edit.from<final.from).reduce((delta,edit)=>delta+edit.text.length-(edit.to-edit.from),0);
     record.verified={commitId:record.attempt.id,hash:record.attempt.hash,document,responseAnchor:{length:offset,hash:contentHash(document.slice(0,offset))}};record.status='verified';
     record.attempt.writeState='verified';
+    record.conflicts=[];
     await this.journal.append(record.request.id,record,record.attempt.kind==='repair'?'repair-verified':'saved-and-verified');return record;
   }
   /** Device acknowledgements must originate from an authenticated device read
