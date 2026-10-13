@@ -4,6 +4,8 @@ import {normalizeV2Snapshot,normalizeV2StreamItem} from '../orchestration-v2';
 import {applyThreadItem,renderInlineTurn,turnPhase} from '../inline-thread';
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
+import {stoppedResponseBody} from '../response-stop';
+import {responseEmissions} from '../response-emissions';
 
 const at=(n:number)=>new Date(n*1000).toISOString();
 function fixture(items:any[]){return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:normalizeV2Snapshot({snapshotSequence:1,projection:{
@@ -33,6 +35,27 @@ test('compaction replaces its own display row and cannot complete an app run',()
   const finished=renderInlineTurn(state,'run','thread','running','collapse');
   assert.equal((finished.match(/Context compacted/g)??[]).length,1);assert.doesNotMatch(finished,/Compacting context|Running compaction/);
   assert.equal(turnPhase(state,'run'),'running');
+});
+
+test('terminal replies and Stop clear compaction activity when its terminal record is missing',()=>{
+  const state=fixture([{id:'compact',type:'compaction',status:'running',startedAt:at(5)}]);
+  for(const mode of ['remove','keep','collapse'] as const){
+    for(const phase of ['complete','interrupted','cancelled','error'] as const){
+      assert.doesNotMatch(renderInlineTurn(state,'run','thread',phase,mode),/inline-spinner|Compacting context/);
+    }
+    const live=renderInlineTurn(state,'run','thread','running',mode);
+    const stopped=stoppedResponseBody(live);
+    assert.doesNotMatch(stopped,/inline-spinner|Compacting context/);
+    assert.match(stopped,/Context compaction stopped/);
+    const example='```html\n'+live+'\n```';assert.equal(stoppedResponseBody(example),example);
+  }
+});
+
+test('compaction retained from an earlier turn cannot animate in the current turn history',()=>{
+  const state=fixture([{id:'compact',type:'compaction',status:'running',startedAt:at(5)}]);
+  const older={...state,activities:state.activities.map(activity=>({...activity,turnId:'older'}))};
+  const [history]=responseEmissions(older,['older','run'],text=>text,'run');
+  assert.equal(history.active,false);assert.match(history.body,/Context compaction/);assert.doesNotMatch(history.body,/inline-spinner|Compacting context/);
 });
 
 test('unrelated run emissions are excluded and completed errors are visible without live controls',()=>{

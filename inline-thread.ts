@@ -531,7 +531,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const spinner=['running','sending'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const displayedTurns=[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])];
   const toolGroups=responseToolGroups(state,displayedTurns);
-  const emissions=responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim())));
+  const emissions=responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim())),phase==='running'?turnId:undefined);
   let currentTool=phase==='running'?currentResponseToolGroup(state,turnId,toolGroups):undefined;
   const latestEmission=phase==='running'?emissions.at(-1):undefined;
   const currentEmission=latestEmission?.active&&latestEmission.turnId===turnId&&

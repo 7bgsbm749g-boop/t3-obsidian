@@ -22,6 +22,9 @@ export function stoppedResponseBody(body:string):string {
   body=body.split('\n').map(line=>{
     const position=stopOffset;stopOffset+=line.length+1;
     if(beforeStop.some(([from,to])=>position>=from&&position<to))return line;
+    if(/^(?:> )?<span class="send-to-t3-context" data-t3-emission-id="/.test(line))return line
+      .replace(/ <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>/,'')
+      .replace('<span>Compacting context</span>','<span>Context compaction stopped</span>');
     if(line.includes('class="send-to-t3-tool"')&&line.includes('data-t3-tool-status="inProgress"'))line=line.replaceAll('data-t3-tool-status="inProgress"','data-t3-tool-status="stopped"').replace(/(<span>)(?:Running|Reading|Viewing|Searching|Editing) /g,'$1Stopped ');
     if(line.includes('data-t3-live-tool="true"')){
       const count=(line.match(/class="send-to-t3-tool"/g)??[]).length;

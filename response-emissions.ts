@@ -7,7 +7,7 @@ const html=(text:string)=>text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replac
 const separateCallout=(body:string)=>`<!-- t3-display-block -->\n\n${body}\n\n<!-- t3-display-block -->`;
 
 /** Public timeline emissions are display data, never run completion evidence. */
-export function responseEmissions(state:InlineThreadState,turns:string[],markdown:(text:string)=>string):ResponseEmission[] {
+export function responseEmissions(state:InlineThreadState,turns:string[],markdown:(text:string)=>string,activeTurn?:string):ResponseEmission[] {
   const result:ResponseEmission[]=[];
   for(const message of state.messages){
     if(message.role!=='reasoning'||!turns.includes(message.turnId??'')||!message.text.trim())continue;
@@ -18,8 +18,9 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
     if(!turns.includes(activity.turnId??'')||!['context-compaction','response.plan','response.notification'].includes(activity.kind))continue;
     const p=activity.payload??{};let body:string,active=false;
     if(activity.kind==='context-compaction'){
-      active=p.status==='inProgress';
-      const label=active?'Compacting context':p.status==='failed'?'Context compaction failed':p.status==='stopped'?'Context compaction stopped':'Context compacted';
+      const running=p.status==='inProgress';
+      active=running&&!!activeTurn&&activity.turnId===activeTurn;
+      const label=running?(active?'Compacting context':'Context compaction'):p.status==='failed'?'Context compaction failed':p.status==='stopped'?'Context compaction stopped':'Context compacted';
       body=`<span class="send-to-t3-context" data-t3-emission-id="${html(activity.id)}"><span data-t3-tool-icon="minimize-2" aria-hidden="true"></span><span>${label}</span>${active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':''}</span>`;
     }else if(activity.kind==='response.plan'){
       const text=typeof p.text==='string'?p.text:(p.steps??[]).map((step:any)=>`- [${step.status==='completed'?'x':' '}] ${String(step.step??step.text??step.content??'').replace(/[\r\n]+/g,' ')}${step.status==='in_progress'?' (In progress)':''}`).join('\n');
