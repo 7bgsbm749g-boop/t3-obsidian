@@ -1993,87 +1993,41 @@ for(const picker of ['project','existing'])test(`an override preserves the captu
   }finally{h.plugin.onunload();}
 });
 
-test('Missing 3 expands the captured snapshot and records coverage only after a fresh successful send',{timeout:15000},async()=>{
-  let fail=true;
-  const h=await chatHarness(async command=>{if(command.type==='thread.turn.start'&&fail){fail=false;throw Error('lost acknowledgement');}});
-  const path='Notes/Missing-three.md',id='31111111-1111-4111-8111-111111111111',body='> Verified response 2';
-  const seed=()=>{
+test('selection asks send only the captured request and typed question after a completed reply',{timeout:10000},async()=>{
+  const h=await chatHarness();
+  try{
+    const path='Notes/Selection-only.md',id='31111111-1111-4111-8111-111111111111',body='> Earlier reply';
     const host={environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1',connectionId:'chat-connection'};
-    const request={version:2,id,vaultId:h.plugin.settings.vaultId,host,notePath:path,threadId:'missing-thread',messageId:'31111111-1111-4111-8111-111111111112',projectId:project.id,threadEnvironmentId:'chat-env',initialHash:contentHash(body),createdAt:new Date().toISOString(),independent:true};
+    const request={version:2,id,vaultId:h.plugin.settings.vaultId,host,notePath:path,threadId:'selected-thread',messageId:'31111111-1111-4111-8111-111111111112',projectId:project.id,threadEnvironmentId:'chat-env',initialHash:contentHash(body),createdAt:new Date().toISOString(),independent:true};
     const state={status:'complete',turnId:'exact-turn',bindingCheckpoint:{bindings:{[request.messageId]:{turnId:'exact-turn',kind:'explicit'}}},finalBody:body,responseAnchor:{length:8,hash:contentHash('Idea 1\n\n')},finalSaved:true,cleanupComplete:true,notePath:path};
     h.hostFiles.set(`${host.directory}/explorer-responses.json`,JSON.stringify([{id,notePath:path,epoch:1,revision:1,active:false,input:false,complete:true}]));
     h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,state,epoch:1,revision:1,owner:'fixture',expiresAt:0}));
-    h.plugin.settings.noteThreads.push({notePath:path,threadId:request.threadId,projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:'chat-connection',environmentId:'chat-env',selectedAt:new Date().toISOString()});
-  };
-  try{
-    seed();
-    const document=`Idea 1\n\n${body}\n\nMISSING-CAPTURED-CONTEXT\n\nImplement`;
-    const view=h.attachEditor(path,document),start=document.lastIndexOf('Implement');
+    const document=`Idea 1\n\n${body}\n\nUNSELECTED-CONTEXT\n\nImplement`,view=h.attachEditor(path,document),start=document.lastIndexOf('Implement');
     const context={editor:view.editor,view:view.view,anchor:{text:'Implement',start,end:start+9,before:document.slice(start-24,start),after:''},snapshot:document};
-    await assert.rejects(h.plugin.sendResolvedChat('Implement',{path},context,true,{jobOptions:{inline:{enabled:false,intermediateMode:'remove',finalAnswerFormat:'formatted'}}}),/send failed/);
-    assert.equal(h.plugin.settings.pending.length,0);
-    const prompt=h.commands.filter(command=>command.type==='thread.turn.start').at(-1).message.text;
-    assert.match(prompt,/Additional context preceding your selection:\nMISSING-CAPTURED-CONTEXT\n\nYour selected request:\nImplement/);
-    assert.doesNotMatch(prompt,/Idea 1|Verified response 2/);
-    assert.equal(h.plugin.settings.noteDeliveries.length,0);
-    await h.plugin.sendResolvedChat('Implement',{path},context,true,{jobOptions:{inline:{enabled:false,intermediateMode:'remove',finalAnswerFormat:'formatted'}}});
-    assert.equal(h.commands.filter(command=>command.type==='thread.turn.start').at(-1).message.text,prompt);
-    assert.equal(h.plugin.settings.noteDeliveries.length,1);
-    await h.plugin.onExternalSettingsChange({...h.shared.at(-1),noteDeliveries:[]});
-    assert.equal(h.plugin.settings.noteDeliveries.length,1,'Stale synced settings retain confirmed coverage');
-    assert.equal(h.shared.at(-1).noteDeliveries.length,1);
-    const prepared=await h.plugin.prepareMissingThree('Implement',path,context,'missing-thread',project,h.plugin.connection(project));
-    assert.equal(prepared.prompt,'Implement');
-    const edited=document.replace('MISSING-CAPTURED-CONTEXT','EDITED-CAPTURED-CONTEXT'),editedStart=edited.lastIndexOf('Implement');
-    const changed=await h.plugin.prepareMissingThree('Implement',path,{...context,snapshot:edited,anchor:{...context.anchor,start:editedStart,end:editedStart+9}},'missing-thread',project,h.plugin.connection(project));
-    assert.match(changed.prompt,/EDITED-CAPTURED-CONTEXT/);
-    await h.plugin.save();h.plugin.onunload();const restored=await h.start();
-    try{assert.equal(restored.settings.noteDeliveries.length,1);}finally{restored.onunload();}
+    const prompt='Selected text:\nImplement\n\nQuestion:\nMake this change.';
+    await h.plugin.sendResolvedChat(prompt,{path},context,true,{threadId:request.threadId,jobOptions:{inline:{enabled:false,intermediateMode:'remove',finalAnswerFormat:'formatted'}}});
+    const sent=h.commands.find(command=>command.type==='thread.turn.start');assert.ok(sent);
+    assert.ok(sent.message.text.startsWith(prompt+'\n\nAnswer in the T3 thread.'));
+    assert.doesNotMatch(sent.message.text,/Idea 1|Earlier reply|UNSELECTED-CONTEXT|Additional context preceding/);
+    assert.equal(h.modals.length,0);assert.equal(view.value,document);
   }finally{h.plugin.onunload();}
 });
 
-test('Missing 3 review shows context, cancellation dispatches nothing, and explicit selection-only skips expansion',{timeout:10000},async()=>{
+test('selection asks need no preceding-response evidence and discard obsolete delivery coverage',{timeout:10000},async()=>{
   const h=await chatHarness();
   try{
-    const body='> Verified response',document=`${body}\n\n# Another topic\n\nIdea 3\n\nImplement`,path='Notes/Review.md';
+    const path='Notes/Selection-review.md',document='> Copied reply\n\n> Copied reply\n\n# Another topic\n\nUNSELECTED-CONTEXT\n\nImplement';
     const view=h.attachEditor(path,document),start=document.lastIndexOf('Implement');
     const context={view:view.view,editor:view.editor,snapshot:document,anchor:{text:'Implement',start,end:start+9,before:document.slice(start-24,start),after:''}};
-    h.plugin.missingThreeResponses=async()=>({responses:[{id:'response',threadId:'thread',projectId:project.id,environmentId:'chat-env',body}],unavailable:false});
-    const work=h.plugin.sendChat('Implement',{path},{threadId:'thread',sourceContext:context});
-    for(let i=0;i<30&&h.modals.at(-1)?.constructor.name!=='MissingThreeModal';i++)await new Promise(resolve=>setTimeout(resolve,10));
-    const modal=h.modals.at(-1);assert.equal(modal.constructor.name,'MissingThreeModal');
-    assert.ok(modal.contentEl.children.some((child:any)=>child.tag==='pre'&&child.text.includes('Idea 3')));
-    modal.close();await assert.rejects(work,/Context review cancelled/);assert.equal(h.commands.length,0);
-    const next=h.plugin.sendChat('Implement',{path},{threadId:'thread',sourceContext:context});
-    for(let i=0;i<30&&h.modals.at(-1)===modal;i++)await new Promise(resolve=>setTimeout(resolve,10));
-    [...h.settingsControls].reverse().find((setting:any)=>setting.buttons.some((button:any)=>button.text==='Send selected request only')).buttons[0].click();
-    await next;assert.ok(h.commands.at(-1).message.text.startsWith('Implement'));assert.doesNotMatch(h.commands.at(-1).message.text,/Idea 3/);
-    assert.equal(h.plugin.settings.noteDeliveries.length,0);
-  }finally{h.plugin.onunload();}
-});
-
-test('a real completed writer retains marker-free positional provenance usable by Missing 3',{timeout:12000},async()=>{
-  const h=await chatHarness();
-  try{
-    const path='Notes/AnchorProof.md',note=h.attachEditor(path,'Baseline prompt.');
-    Object.assign(note.file,{basename:'AnchorProof',stat:{ctime:123}});
-    const result=await h.plugin.send(note.file,project,{newThread:true,streamReply:true,throwOnError:true});
-    const binding=result.request.inlineBindings[0];
-    let record:any;
-    for(let i=0;i<100;i++){
-      const bytes=h.hostFiles.get(leasePaths(binding.host.directory,binding.id).record);
-      if(bytes)record=JSON.parse(bytes);
-      if(record?.state?.cleanupComplete)break;
-      await new Promise(resolve=>setTimeout(resolve,25));
-    }
-    assert.equal(record.state.cleanupComplete,true);assert.doesNotMatch(note.value,/t3-(?:inline|response):/);
-    const body=record.state.finalBody.replace(/\n+$/,'');
-    const offset=note.value.indexOf(body);
-    assert.equal(record.state.responseAnchor.length,offset);
-    assert.equal(record.state.responseAnchor.hash,contentHash(note.value.slice(0,offset)));
-    const document=note.value+'\n\nFresh idea 3\n\nImplement',start=document.lastIndexOf('Implement');
-    const prepared=await h.plugin.prepareMissingThree('Implement',path,{editor:note.editor,view:note.view,snapshot:document,anchor:{text:'Implement',start,end:start+9,before:document.slice(start-24,start),after:''}},result.threadId,project,h.plugin.connection(project));
-    assert.match(prepared.prompt,/Additional context preceding your selection:\nFresh idea 3\n\nYour selected request:\nImplement/);
+    await h.plugin.onExternalSettingsChange({...h.shared.at(-1),noteDeliveries:[{id:'old',notePath:path,threadId:'selected-thread',projectId:project.id,environmentId:'chat-env',blocks:[{responseId:'old',offset:0,markdown:'UNSELECTED-CONTEXT'}]}]});
+    h.plugin.inlineHostFiles=async()=>{throw Error('Preceding response host is unavailable');};
+    await h.plugin.sendResolvedChat('Implement',{path},context,true,{threadId:'selected-thread',jobOptions:{inline:{enabled:false,intermediateMode:'remove',finalAnswerFormat:'formatted'}}});
+    const sent=h.commands.find(command=>command.type==='thread.turn.start');assert.ok(sent);
+    assert.ok(sent.message.text.startsWith('Implement\n\nAnswer in the T3 thread.'));
+    assert.doesNotMatch(sent.message.text,/Copied reply|Another topic|UNSELECTED-CONTEXT|Additional context preceding/);
+    assert.equal(h.modals.length,0);assert.equal(view.value,document);
+    assert.equal(Object.hasOwn(h.plugin.settings,'noteDeliveries'),false);
+    assert.equal(Object.hasOwn(h.shared.at(-1),'noteDeliveries'),false);
   }finally{h.plugin.onunload();}
 });
 

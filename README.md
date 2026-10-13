@@ -671,31 +671,12 @@ The elapsed counter sits beside the animated working status. It measures wall ti
 
 The current activity dropdown sits at the bottom inside the progress box and uses the same text size as earlier tool dropdowns. When no tool label is active, the bottom row shows **Thinking** with a brain icon; the top status still shows **Working**. Like T3, its latest successful call keeps a present-tense label until another timeline entry or the end of the turn replaces it; the expanded result already shows its actual completed status. Failed, declined and stopped calls keep their outcomes. Final answers and question controls remain visible. Each response and destination follows its own bound turn. Completion removes the live row and retains its calls in history. Stop removes the live animation and preserves the displayed results.
 
-### Missing 3 context for selected follow-ups
+### Selected requests
 
-When a selection follows a verified T3 reply in the same note and destination
-thread, Ask includes any omitted user Markdown between that reply and the
-selection. It uses the captured editor snapshot, preserves complete Markdown
-blocks, and packages embedded images through the ordinary attachment pipeline.
-Selecting the entire passage or sending the note already supplies that context.
-
-Confirmed delivery coverage records exact Markdown blocks relative to the
-response ID, scoped to note, project, environment, and thread. Unchanged blocks
-can be omitted on later requests; edited or shifted blocks resend. Image blocks
-resend conservatively because unchanged embed text does not prove unchanged
-image bytes. Saved unconfirmed requests retain their prepared prompt and
-attachments for retries.
-
-Provenance comes from authoritative response lease records and their exact
-message-to-turn binding, saved final body and position fingerprint, and completed
-save/cleanup proofs.
-Completed replies keep their existing marker-free cleanup. A duplicated or
-edited reply, unavailable provenance, a different preceding thread, or an
-intervening heading requires a context review; closing that review cancels the
-send. If no unique response boundary can be established, select the surrounding
-context explicitly. Older replies without saved positional provenance cannot
-anchor automatic expansion. Changes before the preceding reply remain outside
-this detector's scope; changes to its saved prefix require explicit review.
+Ask T3 Code sends the captured selection and any question you type. It does not
+add surrounding note text or open a preceding-context review. To send more
+context, include it in your selection or send the whole note. Embedded images
+in the selected text use the normal attachment pipeline.
 
 ### Native coordinated responses
 

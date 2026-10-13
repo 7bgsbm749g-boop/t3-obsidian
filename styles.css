@@ -290,12 +290,6 @@
   align-items: center;
 }
 
-.send-to-t3-context-preview {
-  max-height: 45vh;
-  overflow: auto;
-  white-space: pre-wrap;
-}
-
 .send-to-t3-approval-button {
   font-size: var(--font-ui-small);
   height: 1.65em;
