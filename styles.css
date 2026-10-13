@@ -47,13 +47,7 @@
   from { background-position: -4.5rem 0, 0 0; }
   to { background-position: calc(100% + 4.5rem) 0, 0 0; }
 }
-/* Smoothly move the fade over eight stationary, rounded SVG arcs. Older
-   WebViews still use the eight keyframe angles if typed properties are absent. */
-@property --send-to-t3-circle-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
+/* Eight stationary SVG arcs. Each step switches one whole segment off. */
 @keyframes send-to-t3-circle-gap {
   0% { --send-to-t3-circle-angle: 0deg; }
   12.5% { --send-to-t3-circle-angle: 45deg; }
@@ -68,8 +62,10 @@
 [data-t3-circle="true"]::before {
   content: "";
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: 0.75em;
+  height: 0.75em;
+  max-width: 10px;
+  max-height: 10px;
   margin-inline-end: 0.4em;
   vertical-align: -0.05em;
   background: currentColor;
@@ -101,7 +97,7 @@
 @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
   [data-t3-shine="true"],
   [data-t3-circle="true"]::before {
-    --send-to-t3-circle-gap-mask: conic-gradient(from var(--send-to-t3-circle-angle), #000 0deg, transparent 22.5deg 67.5deg, #000 90deg 360deg);
+    --send-to-t3-circle-gap-mask: conic-gradient(from calc(var(--send-to-t3-circle-angle) - 22.5deg), transparent 0deg 45deg, #000 45deg 360deg);
     /* currentColor keeps each label's theme or custom colour. Fonts are inherited. */
     background-image:
       linear-gradient(to right, transparent, color-mix(in srgb, currentColor 40%, white), transparent),
@@ -123,8 +119,8 @@
       linear-gradient(to right, transparent, color-mix(in srgb, currentColor, white calc(var(--send-to-t3-shine-strength) * 0.18)), transparent),
       linear-gradient(currentColor, currentColor);
     animation-name: send-to-t3-text-shine, send-to-t3-circle-gap;
-    animation-duration: 2.2s, 1.5s;
-    animation-timing-function: steps(30), linear;
+    animation-duration: 2.2s, 1.2s;
+    animation-timing-function: steps(30), step-end;
   }
 }
 
