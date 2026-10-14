@@ -49,7 +49,7 @@ function compatible(value: unknown): value is PaletteModal {
 
 export function installPaletteChat(
   app: unknown,
-  onSubmit: (query: string, selectedText: string) => void | Promise<void>,
+  onSubmit: (query: string, selectedText: string, showSelector:boolean) => void | Promise<void>,
   options: PaletteChatOptions = {},
 ): PaletteChatController {
   let status: PaletteChatStatus = 'unavailable';
@@ -117,7 +117,7 @@ export function installPaletteChat(
         if (!own) return originals.onChooseSuggestion.apply(this, args);
         if (!active || own.epoch !== epoch || own.query !== modal.inputEl.value || submitted || composing || args[1]?.isComposing) return;
         submitted = true;
-        try { Promise.resolve(onSubmit(own.query,own.selection)).catch(error => options.onError?.(error)); }
+        try { Promise.resolve(onSubmit(own.query,own.selection,Boolean(args[1]?.ctrlKey))).catch(error => options.onError?.(error)); }
         catch (error) { options.onError?.(error); }
       },
       onOpen(...args) {

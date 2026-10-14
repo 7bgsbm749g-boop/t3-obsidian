@@ -21,6 +21,7 @@ export interface ChatHost {
   getInlineDefaults?():InlineDefaults;
   busy?:boolean;
   onBusyChange?(listener:()=>void):()=>void;
+  runDefaultSend?(send:()=>Promise<void>):Promise<void>;
   getNotePath():string;
   getProjectName(projectKey?:string):string;
   getDefaultProjectKey?():string|undefined;
@@ -197,11 +198,40 @@ class SendDestinationModal extends NoteTabPanel {
   }
 }
 
-/** Both entry points preserve the note captured when the send was opened. */
-export async function openChatFlow(app:App,host:ChatHost,prompt?:string):Promise<void>{
+/** Resolve the same default as the selector, without creating a panel. */
+async function sendDefault(host:ChatHost,prompt:string):Promise<void>{
+  const send=async()=>{
+    const key=host.getDefaultProjectKey?.();
+    const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false});
+    const resolve=()=>options;
+    if(!host.getDefaultThread(key)&&!host.steering){await host.sendToNew(prompt,key,resolve);return;}
+    let destination:ChatDestination|undefined;
+    if(host.getDefaultDestination){
+      const controller=new AbortController();
+      const timer=setTimeout(()=>controller.abort(Error('The conversation check took too long. Hold Control and send again to retry or choose another thread.')),DESTINATION_CHECK_TIMEOUT_MS);
+      try{destination=await abortableRead(host.getDefaultDestination(key,controller.signal),controller.signal);}
+      finally{clearTimeout(timer);}
+      if(destination.unavailable)throw new RequestDeliveryError(destination.detail??'This conversation is unavailable. Hold Control and send again to choose another thread.',false);
+    }
+    await host.sendChat(prompt,key,resolve,undefined,destination);
+  };
+  try{
+    if(host.busy)throw new RequestDeliveryError('Another send is in progress. Wait for it to finish.',false);
+    if(host.runDefaultSend)await host.runDefaultSend(send);else await send();
+  }catch(error){
+    if(error instanceof ProjectCreationCancelled)return;
+    logFailure('ui.default-send.failed',error,{notePath:host.getNotePath()});
+    new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
+  }
+}
+
+/** Both entry points preserve the note captured when the action was activated. */
+export async function openChatFlow(app:App,host:ChatHost,prompt?:string,showSelector=false):Promise<void>{
   if(prompt!==undefined&&!prompt.trim())return;
+  if(prompt!==undefined&&!showSelector)return sendDefault(host,prompt);
   const modal=new SendDestinationModal(app,host,prompt);modal.open();await modal.ready;
 }
-export function openNoteSendFlow(app:App,host:ChatHost):void{
-  new SendDestinationModal(app,host,'').open();
+export async function openNoteSendFlow(app:App,host:ChatHost,showSelector=false):Promise<void>{
+  if(showSelector){new SendDestinationModal(app,host,'').open();return;}
+  await sendDefault(host,'');
 }

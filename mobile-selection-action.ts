@@ -7,6 +7,7 @@ interface SelectedText {
   text:string;
   anchor:SelectionAnchor;
   path:string;
+  showSelector?:boolean;
 }
 
 /** A small, device-local action beside a selection. It never changes the note. */
@@ -55,16 +56,16 @@ export function installMobileSelectionAction(app:App,activeView:()=>MarkdownView
     button.hidden=false;
   };
   const schedule=()=>{if(timer)clearTimeout(timer);timer=setTimeout(refresh,80);};
-  const activate=()=>{
+  const activate=(showSelector=false)=>{
     const value=current;
     hide();
     if(!value||!canAsk(value.path)||activeView()!==value.view||value.view.file?.path!==value.path||value.editor.getSelection()!==value.text)return;
-    ask(value);
+    ask({...value,showSelector});
   };
   // Prevent iOS from collapsing the selection before the existing inline flow
   // captures it. The click handler covers keyboard and accessibility activation.
-  const pointerDown=(event:PointerEvent)=>{event.preventDefault();event.stopPropagation();lastPointerActivation=Date.now();activate();};
-  const click=(event:MouseEvent)=>{event.preventDefault();event.stopPropagation();if(Date.now()-lastPointerActivation>500)activate();};
+  const pointerDown=(event:PointerEvent)=>{event.preventDefault();event.stopPropagation();lastPointerActivation=Date.now();activate(Boolean(event.ctrlKey));};
+  const click=(event:MouseEvent)=>{event.preventDefault();event.stopPropagation();if(Date.now()-lastPointerActivation>500)activate(Boolean(event.ctrlKey));};
   button.addEventListener('pointerdown',pointerDown);
   button.addEventListener('click',click);
   document.addEventListener('selectionchange',schedule);

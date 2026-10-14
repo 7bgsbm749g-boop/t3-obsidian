@@ -232,3 +232,13 @@ test('the dynamic row hides only the registered manual command and disposal rest
   hook.dispose();
   assert.deepEqual(suggest(modal,'').map(row=>row.item.id),['send-to-t3-code:send-or-ask','ordinary']);
 });
+
+test('Control is captured from the palette activation, including keyboard and mouse choices',()=>{
+  const {app,modal}=fixture(),sent:any[]=[];
+  const hook=installPaletteChat(app,(query,selection,showSelector)=>{sent.push({query,selection,showSelector});});
+  modal.onOpen();modal.selectSuggestion(suggest(modal,'Direct')[0],{ctrlKey:false});
+  modal.onOpen();modal.selectSuggestion(suggest(modal,'Keyboard picker')[0],{ctrlKey:true,key:'Enter'});
+  modal.onOpen();modal.selectSuggestion(suggest(modal,'Mouse picker')[0],{ctrlKey:true,type:'click'});
+  assert.deepEqual(sent.map(s=>s.showSelector),[false,true,true]);
+  hook.dispose();
+});

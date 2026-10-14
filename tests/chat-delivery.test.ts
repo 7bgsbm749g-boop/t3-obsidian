@@ -85,9 +85,9 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   }
   class File {extension='md';constructor(public path:string){}}
   class MenuItem {
-    title='';disabled=false;callback:()=>any=()=>{};
+    title='';disabled=false;callback:(event?:{ctrlKey?:boolean})=>any=()=>{};
     setTitle(value:string){this.title=value;return this;}setIcon(_value:string){return this;}
-    setDisabled(value:boolean){this.disabled=value;return this;}onClick(callback:()=>any){this.callback=callback;return this;}
+    setDisabled(value:boolean){this.disabled=value;return this;}onClick(callback:(event?:{ctrlKey?:boolean})=>any){this.callback=callback;return this;}
   }
   class Menu {
     items:MenuItem[]=[];
@@ -108,7 +108,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     addCommand(command:any){registered.push(command);}
   }
   class Notice {constructor(text:string){notices.push(text);}}
-  const api={Plugin,Platform:{isMobile:true},Modal,Menu,MenuItem,Setting,SuggestModal:Modal,FuzzySuggestModal:Modal,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice,TFile:File,MarkdownView:Base};
+  const api={Plugin,Platform:{isMobile:true},Modal,Menu,MenuItem,Setting,SuggestModal:Modal,FuzzySuggestModal:Modal,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice,TFile:File,TFolder:class{},MarkdownView:Base};
   const fetcher=async(url:string,options:any)=>{
     assert.equal(options.credentials,'omit');
     assert.equal(options.redirect,'error');
@@ -186,7 +186,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },{timeout:5000});
   const start=async()=>{const plugin=new module.exports.default();await plugin.onload();const timer=setInterval(()=>plugin.deviceInline?.tick(),20);const unload=plugin.onunload.bind(plugin);plugin.onunload=()=>{clearInterval(timer);unload();};return plugin;};
   const plugin=await start();
-  return {platform:api.Platform,setSnapshotOverride:(value:typeof snapshotOverride)=>{snapshotOverride=value;},setReadOverride:(value:typeof readOverride)=>{readOverride=value;},notices,setStreaming:(value:boolean)=>{streaming=value;},plugin,start,commands,shared,hostFiles,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
+  return {platform:api.Platform,setSnapshotOverride:(value:typeof snapshotOverride)=>{snapshotOverride=value;},setReadOverride:(value:typeof readOverride)=>{readOverride=value;},notices,setStreaming:(value:boolean)=>{streaming=value;},plugin,start,commands,shared,hostFiles,registered,modals,settingsControls,sockets,focusedButton:()=>focusedButton,pressEnter:()=>focusedButton?.click(),setProjects:(value:any[])=>{catalog=value;},setThreads:(value:any[])=>{threads=value;},setActiveNote:(path?:string)=>{activeNote=path?{path,extension:'md'}:undefined;activeEditor=undefined;},setActiveEditorView:(value:boolean)=>{activeEditorView=value;},fileMenu:(file:any)=>{const menu=new Menu();for(const listener of workspaceEvents['file-menu']??[])listener(menu,file,'file-explorer-context-menu');return menu;},menuFor:(view:any)=>{const menu=new Menu();for(const listener of workspaceEvents['editor-menu']??[])listener(menu,view.editor,view);return menu;},editorMenu:(selection:string,path='Notes/Selected.md',structuralFile=false)=>{
     const menu=new Menu(),file=structuralFile?{path,extension:'md'}:new File(path);
     let value=selection+'\nTail';
     const offsetToPos=(offset:number)=>{const before=value.slice(0,offset).split('\n');return {line:before.length-1,ch:before.at(-1)!.length};};
@@ -338,7 +338,7 @@ test('mobile chat without a note uses the root link, preserves the prompt, adver
   const h=await chatHarness();
   const prompt='\n\n  Plan\tmy   café 🧪 notes  \n\nKeep **Markdown**, "quotes", and [[links]] exactly.\n';
   try {
-    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','send-or-ask','stop-all-responses','send-note-to-multiple-notes','import-t3-run','manage-note-t3-streams','answer-t3-question'],'Manual send, stop, and multi-destination commands are available');
+    assert.deepEqual(h.registered.map(command=>command.id),['export-diagnostics','send-or-ask','send-or-ask-choose','stop-all-responses','send-note-to-multiple-notes','import-t3-run','manage-note-t3-streams','answer-t3-question'],'Manual send, stop, and multi-destination commands are available');
     await h.plugin.sendChat(prompt);
     assert.equal(h.commands.length,2);
     assert.equal(h.commands[0].type,'thread.create');
@@ -501,7 +501,7 @@ test('palette chat sends the visible note path through its nearest link without 
     h.plugin.settings.folderLinks.push({...h.plugin.settings.folderLinks[0],id:'inner',folderPath:'Notes/Inner',self:false});
     h.setActiveNote('Notes/Inner/café "draft".md');
     const prompt='  Work on this note.\nKeep these spaces.  ';
-    await h.plugin.openChat(prompt);
+    await h.plugin.openChat(prompt,true);
     assert.equal(h.commands.length,0,'Selecting the live palette row must ask for a destination before sending');
     await h.modals.at(-1).choose(false);
     assert.equal(h.commands[0].projectId,project.id);
@@ -521,7 +521,7 @@ test('palette chat can target an existing thread and labels active and idle conv
       {id:'active',projectId:project.id,title:'Working now',updatedAt:'2026-09-19T12:00:00Z',latestTurn:{state:'running'},session:{status:'running',activeTurnId:'turn'}},
       {id:'idle',projectId:project.id,title:'Finished earlier',updatedAt:'2026-09-19T11:00:00Z',latestTurn:{state:'completed'},session:{status:'ready',activeTurnId:null}},
     ]);
-    await h.plugin.openChat('Add this context');
+    await h.plugin.openChat('Add this context',true);
     const destination=h.modals.at(-1);await destination.choose(true);
     const picker=h.modals.at(-1),items=picker.getItems();
     assert.equal(items.map((thread:any)=>thread.status).join(','),'Active,Idle');
@@ -536,7 +536,7 @@ test('palette chat can target an existing thread and labels active and idle conv
 test('the manual hotkey checks availability without opening a dialog and cancellation sends nothing',async()=>{
   const h=await chatHarness();
   try{
-    const command=h.registered.find(command=>command.id==='send-or-ask');
+    const command=h.registered.find(command=>command.id==='send-or-ask-choose');
     const opened=h.attachEditor('Notes/Hotkey.md','Full note');
     const before=h.modals.length;
     assert.equal(command.editorCheckCallback(true,opened.editor,opened.view),true);
@@ -562,7 +562,7 @@ for(const streaming of [false,true])for(const selected of [false,true])test(`one
     opened.editor.getSelection=()=>selected?'Selected question':'';
     opened.editor.getCursor=(side:string)=>opened.editor.offsetToPos(side==='from'?0:17);
     h.plugin.app.saveLocalStorage('send-to-t3-code-chat-draft-v1','Unrelated palette draft');
-    h.registered.find(command=>command.id==='send-or-ask').editorCheckCallback(false,opened.editor,opened.view);
+    h.registered.find(command=>command.id==='send-or-ask-choose').editorCheckCallback(false,opened.editor,opened.view);
     assert.equal(h.commands.length,0,'The hotkey opens the chooser before delivery');
     if(selected)h.setActiveNote('Notes/Different.md');
     await h.modals.at(-1).choose('new');
@@ -587,7 +587,7 @@ test('a typed palette question sends only the question and streams at the note e
   try{
     const editor=h.attachEditor('Notes/Palette.md','# Private note\nBody not sent.');
     h.plugin.app.saveLocalStorage('send-to-t3-code-chat-draft-v1','Why does this matter?');
-    await h.plugin.openPaletteAction('Why does this matter?','');
+    await h.plugin.openPaletteAction('Why does this matter?','',true);
     assert.equal(h.modals.at(-1).titleEl.text,'Send to T3 Code');
     await h.modals.at(-1).choose(false);
     assert.match(editor.value,/> > \[!t3-steering\] You\n> > Why does this matter\?/);
@@ -608,7 +608,7 @@ test('an empty palette action uses the full note send path',async()=>{
     h.plugin.settings.folderLinks=[];
     const editor=h.attachEditor('Notes/Send.md','# Send this note');
     Object.assign(editor.file,{basename:'Send',stat:{ctime:123}});
-    await h.plugin.openPaletteAction('','');
+    await h.plugin.openPaletteAction('','',true);
     const chooser=h.modals.at(-1);
     assert.equal(chooser.constructor.name,'SendDestinationModal');
     h.plugin.settings.folderLinks.push({id:'root',folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,self:true});
@@ -629,7 +629,7 @@ test('an empty palette action on a note with history opens a destination modal',
       {notePath:'Notes/Linked.md',threadId:'older',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-01T00:00:00Z'},
       {notePath:'Notes/Linked.md',threadId:'current',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-02T00:00:00Z'},
     );
-    await h.plugin.openPaletteAction('','');
+    await h.plugin.openPaletteAction('','',true);
     const modal=h.modals.at(-1);
     await modal.ready;
     assert.equal(modal.constructor.name,'SendDestinationModal');
@@ -649,7 +649,7 @@ test('a palette question about selected text includes both parts and inserts bel
     editor.editor.getSelection=()=> 'Claim';
     editor.editor.getCursor=(side:string)=>editor.editor.offsetToPos(side==='from'?0:5);
     h.plugin.app.saveLocalStorage('send-to-t3-code-chat-draft-v1','Why?');
-    await h.plugin.openPaletteAction('Why?','Claim');
+    await h.plugin.openPaletteAction('Why?','Claim',true);
     await h.modals.at(-1).choose(false);
     const text=h.commands[1].message.text;
     assert.match(text,/^Selected text:\nClaim\n\nQuestion:\nWhy\?/);
@@ -670,7 +670,7 @@ test('project picker changes this send without reusing the note’s last used th
     h.setProjects([project,other]);
     const path='Notes/Linked.md';h.setActiveNote(path);
     h.plugin.settings.noteThreads.push({notePath:path,threadId:'old-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-28T00:00:00Z'});
-    await h.plugin.openChat('Send to other work');
+    await h.plugin.openChat('Send to other work',true);
     const destination=h.modals.at(-1);
     const change=destination.contentEl.children[0].children[0];
     assert.equal(change.text,project.title);
@@ -691,7 +691,7 @@ test('Enter on the destination dialog uses the purple new or last used thread bu
   const h=await chatHarness();
   try{
     h.setActiveNote('Notes/New.md');
-    await h.plugin.openChat('Start here');
+    await h.plugin.openChat('Start here',true);
     await new Promise(resolve=>setTimeout(resolve,0));
     assert.equal(h.focusedButton()?.text,'New thread');
     h.pressEnter();
@@ -702,7 +702,7 @@ test('Enter on the destination dialog uses the purple new or last used thread bu
     h.setActiveNote(path);
     h.plugin.settings.noteThreads.push({notePath:path,threadId:'previous-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-28T00:00:00Z'});
     h.setThreads([{id:'previous-thread',projectId:project.id,title:'Previous',updatedAt:'2026-09-28T00:00:00Z',runtimeMode:'approval-required',interactionMode:'default'}]);
-    await h.plugin.openChat('Continue here');
+    await h.plugin.openChat('Continue here',true);
     await new Promise(resolve=>setTimeout(resolve,0));
     assert.equal(h.focusedButton()?.text,'Continue thread');
     h.pressEnter();
@@ -724,7 +724,7 @@ test('existing-thread picker keeps the displayed remembered project across folde
     h.setActiveEditorView(false);
     h.setThreads([{id:'vault-thread',projectId:project.id,title:'Vault thread',updatedAt:'2026-09-28T01:00:00Z'},
       {id:'nested-thread',projectId:nested.id,title:'Nested thread',updatedAt:'2026-09-28T01:00:00Z',runtimeMode:'approval-required',interactionMode:'default'}]);
-    await h.plugin.openChat('Continue in the nested project');
+    await h.plugin.openChat('Continue in the nested project',true);
     await h.modals.at(-1).choose(true);
     const picker=h.modals.at(-1);
     assert.equal(picker.getItems().map((thread:any)=>thread.id).join(','),'vault-thread');
@@ -749,8 +749,8 @@ for(const surface of ['ask','note'])for(const action of ['new','default'])for(co
     h.plugin.app.vault.read=async()=> 'Bounded full-note prompt';
     h.plugin.pickFolderProject=async()=>{throw Error('Unexpected project creation');};
     const links=JSON.stringify(h.plugin.settings.folderLinks);
-    if(surface==='ask')await h.plugin.openChat('Bounded question');
-    else h.plugin.openNoteSend({path,basename:'Diagnose',extension:'md',stat:{ctime:123}});
+    if(surface==='ask')await h.plugin.openChat('Bounded question',true);
+    else h.plugin.openNoteSend({path,basename:'Diagnose',extension:'md',stat:{ctime:123}},true);
     const modal=h.modals.at(-1);await modal.ready;
     assert.equal(modal.contentEl.children[0].children[0].text,selected.title);
     if(target==='vault'){
@@ -765,8 +765,8 @@ for(const surface of ['ask','note'])for(const action of ['new','default'])for(co
     else assert.equal(h.commands[0].threadId,'remembered-thread');
     assert.equal(JSON.stringify(h.plugin.settings.folderLinks),links);
     // Reopen after delivery: a second New thread must use the same displayed project.
-    if(surface==='ask')await h.plugin.openChat('Second question');
-    else h.plugin.openNoteSend({path,basename:'Diagnose',extension:'md',stat:{ctime:123}});
+    if(surface==='ask')await h.plugin.openChat('Second question',true);
+    else h.plugin.openNoteSend({path,basename:'Diagnose',extension:'md',stat:{ctime:123}},true);
     const reopened=h.modals.at(-1);await reopened.ready;
     assert.equal(reopened.contentEl.children[0].children[0].text,selected.title);
     await reopened.choose('new');assert.equal(h.commands.at(-2).type,'thread.create');assert.equal(h.commands.at(-2).projectId,selected.id);
@@ -778,10 +778,10 @@ test('unlinked note without history uses the vault project unless New project is
   try{
     h.setActiveNote('Unlinked/Fresh.md');h.plugin.settings.inlineStreaming.enabled=false;
     let created=0;h.plugin.pickFolderProject=async()=>{created++;return project;};
-    await h.plugin.openChat('Use displayed project');const modal=h.modals.at(-1);
+    await h.plugin.openChat('Use displayed project',true);const modal=h.modals.at(-1);
     assert.equal(modal.contentEl.children[0].children[0].text,project.title);
     await modal.choose('new');assert.equal(created,0);assert.equal(h.commands[0].projectId,project.id);
-    await h.plugin.openChat('Explicit folder setup');const next=h.modals.at(-1);next.contentEl.children[0].children[0].click();
+    await h.plugin.openChat('Explicit folder setup',true);const next=h.modals.at(-1);next.contentEl.children[0].children[0].click();
     const picker=h.modals.at(-1);picker.onChooseItem(picker.getItems().find((item:any)=>item.key==='folder:new'));
     await next.choose('new');assert.equal(created,1);
   }finally{h.plugin.onunload();}
@@ -794,7 +794,7 @@ test('editor selection menu streams a T3 reply into its original note for new an
     assert.ok(h.editorMenu('Cross-window selection','Notes/Popout.md',true).menu.items.some(item=>item.title==='Ask T3 Code'),'Editor menu accepts Obsidian file objects from another window realm');
     const selection='Explain why **this claim** follows.\nKeep [[source links]].';
     const first=h.editorMenu(selection,'Notes/Original.md');let entry=first.menu.items.find(item=>item.title==='Ask T3 Code');assert.ok(entry);
-    await entry!.callback();
+    await entry!.callback({ctrlKey:true});
     const destination=h.modals.at(-1);assert.equal(destination.constructor.name,'SendDestinationModal');
     h.setActiveNote('Notes/Different.md');await destination.choose(false);
     assert.equal(h.commands[0].type,'thread.create');assert.equal(h.commands[0].title,'Original');
@@ -811,7 +811,7 @@ test('editor selection menu streams a T3 reply into its original note for new an
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',updatedAt:'2026-09-19T11:00:00Z',latestTurn:{state:'completed'}}]);
     const followup='Add the selected evidence to the conclusion.';
     const second=h.editorMenu(followup,'Notes/Original.md');entry=second.menu.items.find(item=>item.title==='Ask T3 Code');assert.ok(entry);
-    await entry!.callback();await h.modals.at(-1).choose(true);
+    await entry!.callback({ctrlKey:true});await h.modals.at(-1).choose(true);
     const picker=h.modals.at(-1);await picker.choose(picker.getItems()[0]);
     const secondTurn=h.commands.filter(command=>command.type==='thread.turn.start').at(-1);
     assert.equal(secondTurn.type,'thread.turn.start');assert.equal(secondTurn.threadId,'old-thread');
@@ -834,7 +834,7 @@ test('stopping a local editor response removes both tracking tags and the Stop m
     const runtime=manager.runtime(job);runtime.sequence=1;
     runtime.state={messages:[{id:'partial',role:'assistant',turnId:'old-turn',text:'Partial answer',streaming:true}],activities:[]};
     assert.ok(h.menuFor(opened.view).items.some(item=>item.title==='Stop T3 response'));
-    await h.menuFor(opened.view).items.find(item=>item.title==='Stop T3 response')!.callback();
+    await h.menuFor(opened.view).items.find(item=>item.title==='Stop T3 response')!.callback({ctrlKey:true});
     for(let n=0;n<20&&opened.value.includes('t3-inline:');n++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.doesNotMatch(opened.value,/t3-inline:(?:start|end)/);
     assert.doesNotMatch(opened.value,/T3 · (?:Working|Stopped)/);assert.match(opened.value,/Partial answer/);
@@ -874,7 +874,7 @@ test('a failed editor response offers recovery and a new saved turn reuses its b
     assert.ok(menu.items.some(item=>item.title==='Attach latest T3 continuation'));
     assert.ok(menu.items.some(item=>item.title==='Stop T3 response'),'failed blocks also support local cleanup');
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Earlier work',updatedAt:new Date().toISOString(),session:{status:'error',activeTurnId:null,lastError:'Usage limit'},latestTurn:{turnId:'old-turn',state:'error'}}]);
-    await menu.items.find(item=>item.title==='Continue T3 response')!.callback();
+    await menu.items.find(item=>item.title==='Continue T3 response')!.callback({ctrlKey:true});
     assert.equal(h.commands.length,1,'continuation creates one turn in the existing thread');
     assert.equal(h.commands[0].threadId,'old-thread');
     assert.equal(h.commands[0].message.text,'Continue.');
@@ -919,7 +919,7 @@ test('Ask T3 refuses a switched editor before dispatching or inserting',async()=
   try{
     const context=h.editorMenu('What changed?','Notes/Original.md');
     const item=context.menu.items.find(entry=>entry.title==='Ask T3 Code');assert.ok(item);
-    await item.callback();
+    await item.callback({ctrlKey:true});
     context.file.path='Notes/Another.md';
     await h.modals.at(-1).choose(false);
     assert.equal(h.commands.length,0);
@@ -931,7 +931,7 @@ test('editor Ask opens the inline chooser without changing the note',async()=>{
   const h=await chatHarness();
   try{
     const context=h.editorMenu('Explain this sentence.','Notes/Original.md');
-    await context.menu.items.find(item=>item.title==='Ask T3 Code')!.callback();
+    await context.menu.items.find(item=>item.title==='Ask T3 Code')!.callback({ctrlKey:true});
     assert.equal(h.modals.at(-1).constructor.name,'SendDestinationModal');
     assert.equal(h.commands.length,0,'Opening the chooser does not dispatch or edit the note');
     assert.doesNotMatch(context.value,/t3-inline:start/);
@@ -942,7 +942,7 @@ test('unlinked mobile sends choose an external workspace and descendants inherit
   const h=await chatHarness();
   try{
     h.plugin.pickFolderProject=async()=>{const location=await h.plugin.projectLocation({id:project.connectionId,name:'Laptop'});try{return await location.create('/workspaces/unlinked','Unlinked');}finally{location.close();}};
-    h.setActiveNote('Unlinked/draft.md');await h.plugin.openChat('Edit draft');
+    h.setActiveNote('Unlinked/draft.md');await h.plugin.openChat('Edit draft',true);
     const modal=h.modals.at(-1);
     assert.equal(modal.contentEl.children[0].children[0].text,project.title);
     modal.contentEl.children[0].children[0].click();
@@ -962,7 +962,7 @@ test('unlinked mobile sends choose an external workspace and descendants inherit
     await h.plugin.sendChat('Use the child folder',{path:'Unlinked/deeper/child.md'},{newThread:true});
     assert.equal(h.commands.filter(c=>c.type==='project.create').length,1);
     assert.equal(h.commands.at(-2).projectId,link.projectId);
-    h.setActiveNote('root.md');await h.plugin.openChat('Edit root');await h.modals.at(-1).choose('new');
+    h.setActiveNote('root.md');await h.plugin.openChat('Edit root',true);await h.modals.at(-1).choose('new');
     assert.equal(h.commands.at(-2).projectId,project.id);
     assert.equal(h.vaultAccesses(),0);
   }finally{h.plugin.onunload();}
@@ -1058,7 +1058,7 @@ test('cancelling mobile root setup preserves the original chat and creates no pr
   const h=await chatHarness();
   try{
     h.plugin.settings.folderLinks=[];
-    await h.plugin.openChat('Keep this draft');
+    await h.plugin.openChat('Keep this draft',true);
     const chat=h.modals.at(-1),sending=chat.choose(false);
     for(let attempt=0;attempt<20&&h.modals.at(-1)===chat;attempt++)await new Promise(resolve=>setTimeout(resolve,0));
     const setup=h.modals.at(-1);assert.notEqual(chat,setup);setup.close();await sending;
@@ -1180,7 +1180,7 @@ test('Ask T3 keeps the answer in the T3 thread when its streaming switch is off'
   try{
     h.plugin.settings.inlineStreaming.enabled=false;
     const context=h.editorMenu('Why is this here?');
-    await context.menu.items.find(item=>item.title==='Ask T3 Code')!.callback();
+    await context.menu.items.find(item=>item.title==='Ask T3 Code')!.callback({ctrlKey:true});
     await h.modals.at(-1).choose(false);
     assert.doesNotMatch(context.value,/t3-inline:start/);
     assert.match(h.commands.at(-1).message.text,/Answer in the T3 thread\./);
@@ -1228,7 +1228,7 @@ for(const composer of [false,true])test(`the ${composer?'composer':'destination'
   const enteredTurn=new Promise<void>(resolve=>{entered=resolve;});
   const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')await new Promise<void>(resolve=>{release=resolve;entered();});});
   try{
-    await h.plugin.openChat(composer?undefined:'Background send');
+    await h.plugin.openChat(composer?undefined:'Background send',true);
     const modal=h.modals.at(-1);if(composer)modal.field.value='Background send';
     const sending=composer?modal.choose():modal.choose(false);
     assert.equal(modal.closed,true,'The editor is usable before any network response');
@@ -1243,7 +1243,7 @@ test('a background delivery failure ends without a saved request or opening sett
   const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')throw Error('Disconnected');});
   try{
     h.plugin.openSettings=()=>assert.fail('A background send must not take over the editor');
-    await h.plugin.openChat('Keep this request');const modal=h.modals.at(-1);await modal.choose(false);
+    await h.plugin.openChat('Keep this request',true);const modal=h.modals.at(-1);await modal.choose(false);
     assert.equal(modal.closed,true);assert.equal(h.plugin.settings.pending.length,0);
   }finally{h.plugin.onunload();}
 });
@@ -1254,7 +1254,7 @@ test('new inline responses capture the retention setting in their immutable host
   try{
     h.plugin.settings.inlineStreaming.keepIntermediate=true;
     h.attachEditor('Notes/Retention.md','Question');
-    await h.plugin.openPaletteAction('Explain this.','');
+    await h.plugin.openPaletteAction('Explain this.','',true);
     await h.modals.at(-1).choose(false);
     // The durable handoff is created before dispatch and retains its preference.
     const job=h.plugin.inlineChat.activeFor('Notes/Retention.md')[0]??h.plugin.inlineChat.jobs.at(-1);
@@ -1289,7 +1289,7 @@ for(const active of [false,true])for(const indexed of [false,true])test(`a renam
     if(indexed)h.hostFiles.set(routePath,JSON.stringify({version:1,id,vaultId:record.request.vaultId,host:record.request.host,notePath:previous,threadId:'same-thread',projectId:project.id,threadEnvironmentId:'chat-env',messageId:record.request.messageId,turnId:record.state.turnId}));
     h.plugin.settings.inlineStreaming.enabled=false;
     h.setThreads([{id:'same-thread',projectId:project.id,title:'Original conversation',session:{status:active?'running':'ready',activeTurnId:active?'old-turn':null}}]);
-    await h.plugin.openPaletteAction('Follow this response.','');
+    await h.plugin.openPaletteAction('Follow this response.','',true);
     const modal=h.modals.at(-1);assert.equal(h.settingsControls.at(-1).buttons[0].text,active?'Send to running thread':'Continue thread');
     assert.equal(h.hostFiles.get(recordPath),original,'opening the chooser is read-only');assert.equal(h.commands.length,0);
     await modal.choose('default');
@@ -1307,7 +1307,7 @@ test('a copied response at the old and current paths remains unavailable without
     h.attachEditor(previous,opened.value);h.attachEditor(path,opened.value);
     const record=JSON.parse(h.hostFiles.get(recordPath)!);record.request.notePath=previous;record.state.notePath=previous;
     const original=JSON.stringify(record);h.hostFiles.set(recordPath,original);
-    await h.plugin.openPaletteAction('Do not guess.','');const modal=h.modals.at(-1),destination=await modal.ready;
+    await h.plugin.openPaletteAction('Do not guess.','',true);const modal=h.modals.at(-1),destination=await modal.ready;
     assert.equal(destination.unavailable,true);assert.match(destination.detail,/both the previous note and this note/);
     await modal.choose('default');assert.equal(h.commands.length,0);assert.equal(h.hostFiles.get(recordPath),original);assert.ok(regionBody(opened.value,id));
   }finally{h.plugin.onunload();}
@@ -1320,7 +1320,7 @@ test('a reused old note path without this response does not block a renamed resp
     h.attachEditor(previous,'A new unrelated note.');h.attachEditor(path,opened.value);
     const record=JSON.parse(h.hostFiles.get(recordPath)!);record.request.notePath=previous;record.state.notePath=previous;h.hostFiles.set(recordPath,JSON.stringify(record));
     h.setThreads([{id:'same-thread',projectId:project.id,title:'Original conversation',session:{status:'running',activeTurnId:'old-turn'}}]);
-    await h.plugin.openPaletteAction('Keep the original conversation.','');assert.equal(h.settingsControls.at(-1).buttons[0].text,'Send to running thread');
+    await h.plugin.openPaletteAction('Keep the original conversation.','',true);assert.equal(h.settingsControls.at(-1).buttons[0].text,'Send to running thread');
     h.modals.at(-1).close();assert.equal(h.commands.length,0);
   }finally{h.plugin.onunload();}
 });
@@ -1332,7 +1332,7 @@ test('an empty saved native response container can steer after a rename with sta
     const opened=h.attachEditor(path,`Question\n\n${responseAnchor(id)}\n\nFollow-up`);
     const record=JSON.parse(h.hostFiles.get(recordPath)!);record.request.notePath=previous;record.request.nativeProjection=true;record.coordinated=true;record.state.notePath=previous;record.state.requestHash=hostedRequestHash(record.request);h.hostFiles.set(recordPath,JSON.stringify(record));
     h.setThreads([{id:'same-thread',projectId:project.id,title:'Original conversation',session:{status:'running',activeTurnId:'old-turn'}}]);
-    await h.plugin.openChatWithNote({path},'Continue the native response.',{view:opened.view,editor:opened.editor,responseId:id},true);assert.equal(h.settingsControls.at(-1).buttons[0].text,'Send to running thread');
+    await h.plugin.openChatWithNote({path},'Continue the native response.',{view:opened.view,editor:opened.editor,responseId:id},true,true);assert.equal(h.settingsControls.at(-1).buttons[0].text,'Send to running thread');
     await h.modals.at(-1).choose('default');assert.deepEqual(h.commands.map(c=>c.threadId),['same-thread']);
     const saved=JSON.parse(h.hostFiles.get(recordPath)!);assert.equal(saved.state.notePath,path);assert.equal(saved.state.steering[0].text,'Continue the native response.');
   }finally{h.plugin.onunload();}
@@ -1346,7 +1346,7 @@ test('an accepted but undispatched response cannot advertise running or override
     h.plugin.settings.noteThreads.push({notePath:path,threadId:'real-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-10-05T00:00:00Z'});
     h.setThreads([{id:'real-thread',projectId:project.id,title:'Real conversation',updatedAt:'2026-10-05T00:00:00Z',session:{status:'ready'}}]);
     h.setReadOverride(id=>id==='never-created'?new Response('{}',{status:404}):undefined);
-    await h.plugin.openPaletteAction('Follow up.','');
+    await h.plugin.openPaletteAction('Follow up.','',true);
     const modal=h.modals.at(-1),button=h.settingsControls.at(-1).buttons[0];
     assert.equal(button.text,'Thread unavailable');assert.equal(button.buttonEl.disabled,true);
     assert.match(modal.contentEl.children.map((e:any)=>e.text).join('\n'),/does not exist/);
@@ -1367,11 +1367,11 @@ for(const active of [false,true])test(`selection and whole-note chooser agree on
     const {opened}=seedResponse(h,path,'same-thread');
     h.plugin.settings.noteThreads.push({notePath:path,threadId:'same-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-10-05T00:00:00Z'});
     h.setThreads([{id:'same-thread',projectId:project.id,title:'Same conversation',session:{status:active?'running':'ready',activeTurnId:active?'old-turn':null}}]);
-    await h.plugin.openPaletteAction('Question.','');
+    await h.plugin.openPaletteAction('Question.','',true);
     const selection=h.modals.at(-1),resolved=await selection.ready,label=h.settingsControls.at(-1).buttons[0].text;
     assert.equal(label,active?'Send to running thread':'Continue thread');
     assert.equal(resolved.responseId!==undefined,active,'idle stale headers do not extend the old binding');
-    selection.close();h.plugin.openNoteSend(opened.file);await h.modals.at(-1).ready;
+    selection.close();h.plugin.openNoteSend(opened.file,true);await h.modals.at(-1).ready;
     assert.equal(h.settingsControls.at(-1).buttons[0].text,label);
     assert.equal(h.commands.length,0,'opening either chooser is read-only');
   }finally{h.plugin.onunload();}
@@ -1383,7 +1383,7 @@ test('the chooser freezes its response identity across subsequent editor project
     const {id,opened,recordPath}=seedResponse(h,path,'original-thread');
     h.setThreads([{id:'original-thread',projectId:project.id,title:'Original',session:{status:'running',activeTurnId:'old-turn'}}]);
     h.plugin.settings.inlineStreaming.enabled=false;
-    await h.plugin.openPaletteAction('Keep this target.','');const modal=h.modals.at(-1);
+    await h.plugin.openPaletteAction('Keep this target.','',true);const modal=h.modals.at(-1);
     const before=opened.value,other=initialRegion(webcrypto.randomUUID()).text;
     opened.editor.replaceRange(other,opened.editor.offsetToPos(0),opened.editor.offsetToPos(before.length));
     // Keep the selected original anchor available but place a different response at the cursor.
@@ -1400,7 +1400,7 @@ test('a stale response cannot steer a different active provider turn in the same
   try{
     const {recordPath,originalRecord}=seedResponse(h,path,'same-thread');
     h.setThreads([{id:'same-thread',projectId:project.id,title:'Same thread',session:{status:'running',activeTurnId:'unrelated-turn'}}]);
-    await h.plugin.openPaletteAction('Stay scoped.','');const modal=h.modals.at(-1);
+    await h.plugin.openPaletteAction('Stay scoped.','',true);const modal=h.modals.at(-1);
     assert.equal(h.settingsControls.at(-1).buttons[0].text,'Thread unavailable');
     await modal.choose('default');
     assert.equal(h.commands.length,0);assert.equal(h.hostFiles.get(recordPath),originalRecord);
@@ -1412,7 +1412,7 @@ test('a thread disappearing after validation does not save, dispatch, move text 
   try{
     const {opened,recordPath,originalRecord}=seedResponse(h,path,'gone-thread');
     h.setThreads([{id:'gone-thread',projectId:project.id,title:'Temporary',session:{status:'running',activeTurnId:'old-turn'}}]);
-    await h.plugin.openPaletteAction('Preserve this.','');const modal=h.modals.at(-1),document=opened.value;
+    await h.plugin.openPaletteAction('Preserve this.','',true);const modal=h.modals.at(-1),document=opened.value;
     h.setReadOverride(()=>new Response('{}',{status:404}));await modal.choose('default');
     assert.equal(h.commands.length,0);assert.equal(h.plugin.settings.pending.length,0);
     assert.equal(opened.value,document);assert.equal(h.hostFiles.get(recordPath),originalRecord);
@@ -1426,7 +1426,7 @@ test('closing a chooser during thread validation cannot deliver a queued Enter a
   try{
     const {opened}=seedResponse(h,path,'slow-thread');
     h.setReadOverride(()=>new Promise<Response>(resolve=>{release=resolve;}));
-    const opening=h.plugin.openPaletteAction('Cancelled question.','');
+    const opening=h.plugin.openPaletteAction('Cancelled question.','',true);
     await waitForReply(()=>!!release,'read-only validation started');const modal=h.modals.at(-1),document=opened.value;
     const sending=modal.choose('default');modal.close();
     release(new Response(JSON.stringify({thread:{id:'slow-thread',projectId:project.id,session:{status:'running'}}})));
@@ -1445,7 +1445,7 @@ for(const streamingDefault of [false,true])for(const destination of ['default','
     const initialMessage=webcrypto.randomUUID(),request={version:2 as const,initialOwner:webcrypto.randomUUID(),id,vaultId:h.plugin.settings.vaultId,host,notePath:path,threadId:'old-thread',messageId:initialMessage,projectId:project.id,threadEnvironmentId:'chat-env',initialHash:region.bodyHash,createdAt:'original-time',intermediateMode:'collapse' as const,keepIntermediate:true,finalAnswerFormat:'raw-markdown' as const};
     h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,owner:request.initialOwner,epoch:1,revision:1,expiresAt:Date.now()+15_000,state:{requestHash:hostedRequestHash(request),accepted:true,notePath:path,status:'running',hashes:[region.bodyHash,contentHash(body)],turnId:'old-turn',prose:[{id:'old-progress',role:'assistant',text:'Earlier progress.',turnId:'old-turn',streaming:false}],updatedAt:''}}));
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Working',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running',requestedAt:'original-time'},messages:[{id:initialMessage,role:'user',createdAt:'original-time'}]}]);
-    await h.plugin.openPaletteAction('Change the approach.','');
+    await h.plugin.openPaletteAction('Change the approach.','',true);
     assert.deepEqual(h.settingsControls.at(-1).buttons.map((button:any)=>button.text),['Send to running thread','New thread','Existing thread…']);
     const destinationModal=h.modals.at(-1);
     editOverrides(h,destinationModal,{'Stream replies into the editor':'on','Final answer format':'formatted'});
@@ -1481,10 +1481,10 @@ for(const surface of ['editor','ordinary-ask','palette','explicit-target'])test(
     const runtime=manager.runtime(job);runtime.sequence=1;runtime.state={messages:[{id:'progress',role:'assistant',turnId:'old-turn',text:'Earlier progress.',streaming:false}],activities:[]};
     const ask=h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 in this response');assert.ok(ask);assert.equal(ask.disabled,false);
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Working',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running',requestedAt:'original-time'}}]);
-    if(surface==='editor')await ask.callback();
-    else if(surface==='ordinary-ask')await h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code')!.callback();
-    else if(surface==='palette')await h.plugin.openPaletteAction('',selected);
-    else h.plugin.openEditorChat(selected,opened.file,{editor:opened.editor,view:opened.view,anchor:{text:selected,start:0,end:selected.length,before:'',after:'\n'+region.text.slice(0,23)},responseId:id});
+    if(surface==='editor')await ask.callback({ctrlKey:true});
+    else if(surface==='ordinary-ask')await h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code')!.callback({ctrlKey:true});
+    else if(surface==='palette')await h.plugin.openPaletteAction('',selected,true);
+    else h.plugin.openEditorChat(selected,opened.file,{editor:opened.editor,view:opened.view,anchor:{text:selected,start:0,end:selected.length,before:'',after:'\n'+region.text.slice(0,23)},responseId:id},true);
     await h.modals.at(-1).ready;
     assert.equal(h.settingsControls.at(-1).buttons[0].text,'Send to running thread');
     await h.modals.at(-1).choose(false);
@@ -1504,7 +1504,7 @@ test('the full-note window follows the current send state and can dispatch after
     h.plugin.settings.inlineStreaming.enabled=false;
     h.plugin.app.vault.read=async()=> '# Synthetic note\nSend after the busy state clears.';
     const file={path:'Notes/Busy.md',basename:'Busy',extension:'md',stat:{ctime:123}};
-    h.plugin.busy=true;h.plugin.openNoteSend(file);
+    h.plugin.busy=true;h.plugin.openNoteSend(file,true);
     const destination=h.modals.at(-1),buttons=h.settingsControls.at(-1).buttons;
     assert.equal(buttons.every((button:any)=>button.buttonEl.disabled),true);
     h.plugin.busy=false;
@@ -1526,7 +1526,7 @@ test('the full-note modal changes project for one send without reusing another p
     const path='Notes/Whole.md',file={path,basename:'Whole',extension:'md',stat:{ctime:123}};
     h.plugin.settings.noteThreads.push({notePath:path,threadId:'old-thread',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-09-28T00:00:00Z'});
     const links=JSON.stringify(h.plugin.settings.folderLinks);
-    h.plugin.openNoteSend(file);
+    h.plugin.openNoteSend(file,true);
     const destination=h.modals.at(-1);
     await destination.ready;
     assert.equal(destination.constructor.name,'SendDestinationModal');
@@ -1581,7 +1581,7 @@ for(const streaming of [false,true])test(`selection questions attach local image
     h.plugin.settings.inlineStreaming.enabled=streaming;
     const selected='Before\n![[picture.png|300]]\n![again](picture.png)\nAfter';
     const context=h.editorMenu(selected,'Notes/Image selection.md');
-    await context.menu.items.find(item=>item.title==='Ask T3 Code')!.callback();
+    await context.menu.items.find(item=>item.title==='Ask T3 Code')!.callback({ctrlKey:true});
     await h.modals.at(-1).choose(false);
     const first=h.commands.find(command=>command.type==='thread.turn.start');
     assert.equal(first.message.attachments.length,1,'Repeated embeds share the same native attachment');
@@ -1592,7 +1592,7 @@ for(const streaming of [false,true])test(`selection questions attach local image
     assert.equal(resolved[0].source,'Notes/Image selection.md');
     if(streaming)await waitForReply(()=>context.value.includes('Inline reply from T3.')&&!responseIds(context.value).length,'Selected-image reply completes');
     const palette=h.attachEditor('Notes/Palette images.md',selected+'\nUnselected ![[outside.png]]');
-    await h.plugin.openPaletteAction('Describe it.',selected);
+    await h.plugin.openPaletteAction('Describe it.',selected,true);
     await h.modals.at(-1).choose(false);
     const next=h.commands.filter(command=>command.type==='thread.turn.start').at(-1);
     assert.equal(next.message.attachments.length,1);
@@ -1603,7 +1603,7 @@ for(const streaming of [false,true])test(`selection questions attach local image
     const hotkey=h.attachEditor('Notes/Hotkey images.md',selected+'\nUnselected ![[outside.png]]');
     hotkey.editor.getSelection=()=>selected;
     hotkey.editor.getCursor=(side:string)=>hotkey.editor.offsetToPos(side==='from'?0:selected.length);
-    h.registered.find(command=>command.id==='send-or-ask').editorCheckCallback(false,hotkey.editor,hotkey.view);
+    h.registered.find(command=>command.id==='send-or-ask-choose').editorCheckCallback(false,hotkey.editor,hotkey.view);
     await h.modals.at(-1).choose('new');
     const last=h.commands.filter(command=>command.type==='thread.turn.start').at(-1);
     assert.equal(last.message.attachments.length,1);
@@ -1646,10 +1646,10 @@ test('cancelling unlinked dialogs or browsing existing threads creates no projec
   try{
     h.setActiveNote('Unlinked/draft.md');
     const before=JSON.stringify(h.plugin.settings.folderLinks);
-    await h.plugin.openChat('Keep this unsent');
+    await h.plugin.openChat('Keep this unsent',true);
     h.modals.at(-1).close();
     assert.equal(h.commands.length,0);
-    await h.plugin.openChat('Look for threads');await h.modals.at(-1).choose('existing');
+    await h.plugin.openChat('Look for threads',true);await h.modals.at(-1).choose('existing');
     assert.equal(h.modals.at(-1).getItems().length,0);
     assert.equal(h.commands.length,0);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),before);
   }finally{h.plugin.onunload();}
@@ -1658,7 +1658,7 @@ test('cancelling unlinked dialogs or browsing existing threads creates no projec
 test('choosing the vault project sends there without linking the containing folder',async()=>{
   const h=await chatHarness();
   try{
-    h.setActiveNote('Unlinked/draft.md');await h.plugin.openChat('Use vault notes');
+    h.setActiveNote('Unlinked/draft.md');await h.plugin.openChat('Use vault notes',true);
     const modal=h.modals.at(-1);modal.contentEl.children[0].children[0].click();
     const picker=h.modals.at(-1);picker.onChooseItem(picker.getItems()[1]);
     assert.equal(modal.contentEl.children[0].children[0].text,project.title);
@@ -1922,9 +1922,9 @@ for(const hosted of [false,true])for(const surface of ['editor','targeted','pale
       h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,owner:request.initialOwner,epoch:1,revision:1,expiresAt:Date.now()+15_000,state:{requestHash:hostedRequestHash(request as any),accepted:true,notePath:path,status:'running',hashes:[contentHash(body)],turnId:'old-turn',prose,updatedAt:''}}));
     }else {manager.jobs.push(job);const runtime=manager.runtime(job);runtime.sequence=1;runtime.state={messages:prose,activities:[]};}
     h.setThreads([{id:'old-thread',projectId:project.id,title:'Working',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running',requestedAt:'original-time'}}]);
-    if(surface==='palette')await h.plugin.openPaletteAction('Explain this claim.',selected);
-    else if(surface==='editor'||surface==='targeted')await h.menuFor(opened.view).items.find(item=>item.title===(surface==='editor'?'Ask T3 Code':'Ask T3 in this response'))!.callback();
-    else h.plugin.openEditorChat(selected,opened.file,{editor:opened.editor,view:opened.view,anchor:{text:selected,start,end,before:opened.value.slice(Math.max(0,start-24),start),after:opened.value.slice(end,end+24)},responseId:id});
+    if(surface==='palette')await h.plugin.openPaletteAction('Explain this claim.',selected,true);
+    else if(surface==='editor'||surface==='targeted')await h.menuFor(opened.view).items.find(item=>item.title===(surface==='editor'?'Ask T3 Code':'Ask T3 in this response'))!.callback({ctrlKey:true});
+    else h.plugin.openEditorChat(selected,opened.file,{editor:opened.editor,view:opened.view,anchor:{text:selected,start,end,before:opened.value.slice(Math.max(0,start-24),start),after:opened.value.slice(end,end+24)},responseId:id},true);
     const expanded=body+' More streamed text.',region=regionBody(opened.value,id)!;
     opened.editor.replaceRange(expanded,opened.editor.offsetToPos(region.from),opened.editor.offsetToPos(region.to));
     if(hosted){const record=JSON.parse(h.hostFiles.get(leasePaths(host.directory,id).record)!);record.state.hashes.push(contentHash(expanded));h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify(record));}
@@ -1969,6 +1969,84 @@ function editOverrides(h:Awaited<ReturnType<typeof chatHarness>>,destination:any
   return modal;
 }
 
+for(const surface of ['palette','palette-note','sidebar','editor','command','command-selection'])test(`${surface} sends immediately, remembers the thread, and provides explicit selector access`,async()=>{
+  const h=await chatHarness();
+  try{
+    h.plugin.settings.inlineStreaming.enabled=false;
+    const opened=h.attachEditor('Notes/Automatic.md','Selected question\nPrivate remainder');
+    Object.assign(opened.file,{basename:'Automatic',stat:{ctime:123}});
+    if(surface==='editor'||surface==='command-selection'){
+      opened.editor.getSelection=()=> 'Selected question';
+      opened.editor.getCursor=(side:string)=>opened.editor.offsetToPos(side==='from'?0:17);
+    }
+    const activate=async(showSelector=false)=>{
+      if(surface==='palette')await h.plugin.openPaletteAction('Quick question.','',showSelector);
+      else if(surface==='palette-note')await h.plugin.openPaletteAction('','',showSelector);
+      else if(surface==='sidebar')await h.fileMenu(opened.file).items.find(item=>item.title==='Open in T3 Code')!.callback({ctrlKey:showSelector});
+      else if(surface==='editor')await h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code')!.callback({ctrlKey:showSelector});
+      else h.registered.find(command=>command.id===(showSelector?'send-or-ask-choose':'send-or-ask')).editorCheckCallback(false,opened.editor,opened.view);
+    };
+    await activate();await waitForReply(()=>h.commands.length===2&&!h.plugin.defaultSending,'First automatic send completes');
+    assert.equal(h.modals.length,0);assert.deepEqual(h.commands.map(c=>c.type),['thread.create','thread.turn.start']);
+    const first=h.commands[1];assert.equal(h.commands[0].projectId,project.id);
+    if(surface==='editor'||surface==='command-selection')assert.doesNotMatch(first.message.text,/Private remainder/);
+    else if(surface!=='palette')assert.match(first.message.text,/Private remainder/);
+    await activate();await waitForReply(()=>h.commands.length===3&&!h.plugin.defaultSending,'Automatic continuation completes');
+    assert.equal(h.commands[2].threadId,first.threadId);assert.equal(h.modals.length,0);
+    await activate(true);const modal=h.modals.at(-1);await modal.ready;
+    assert.equal(modal.constructor.name,'SendDestinationModal');assert.equal(h.commands.length,3);modal.close();
+    assert.equal(h.commands.length,3,'Cancelling the selector sends nothing');
+  }finally{h.plugin.onunload();}
+});
+
+test('automatic asks steer the selected running response without remembered thread history',async()=>{
+  const h=await chatHarness();
+  try{
+    const {id,recordPath}=seedResponse(h,'Notes/Automatic steering.md','running-thread');
+    h.setThreads([{id:'running-thread',projectId:project.id,title:'Running',session:{status:'running',activeTurnId:'old-turn'},latestTurn:{turnId:'old-turn',state:'running'}}]);
+    await h.plugin.openPaletteAction('Change the approach.','');
+    assert.equal(h.modals.length,0);assert.deepEqual(h.commands.map(c=>[c.type,c.threadId]),[['thread.turn.start','running-thread']]);
+    const record=JSON.parse(h.hostFiles.get(recordPath)!);assert.equal(record.state.steering[0].text,'Change the approach.');assert.equal(record.request.id,id);
+  }finally{h.plugin.onunload();}
+});
+
+test('the registered command reads Control from its editor window and ignores Control required by its shortcut',async()=>{
+  const h=await chatHarness(),listeners=new Map<string,Function>();
+  const win={addEventListener:(name:string,fn:Function)=>listeners.set(name,fn),removeEventListener:(name:string)=>listeners.delete(name)};
+  try{
+    h.plugin.settings.inlineStreaming.enabled=false;
+    const opened=h.attachEditor('Notes/Command modifier.md','Bounded test question');
+    Object.assign(opened.file,{basename:'Command modifier',stat:{ctime:123}});
+    Object.assign(opened.view,{containerEl:{ownerDocument:{defaultView:win}}});
+    const dispose=h.plugin.sendGesture.watch(win),command=h.registered.find(command=>command.id==='send-or-ask');
+    listeners.get('keydown')!({key:'Enter',ctrlKey:true});
+    command.editorCheckCallback(false,opened.editor,opened.view);const selector=h.modals.at(-1);
+    assert.equal(selector.constructor.name,'SendDestinationModal');assert.equal(h.commands.length,0);selector.close();
+    h.plugin.app.hotkeyManager={customKeys:{'send-to-t3-code:send-or-ask':[{key:'S',modifiers:['Ctrl']}]}};
+    listeners.get('keydown')!({key:'s',ctrlKey:true,metaKey:false,altKey:false,shiftKey:false});
+    command.editorCheckCallback(false,opened.editor,opened.view);
+    await waitForReply(()=>h.commands.length===2&&!h.plugin.defaultSending,'Configured Control shortcut sends directly');
+    assert.equal(h.modals.length,1);dispose();
+  }finally{h.plugin.onunload();}
+});
+
+test('automatic checks block duplicate actions and unavailable defaults preserve the prompt',async()=>{
+  const h=await chatHarness();let release:()=>void=()=>{};
+  try{
+    const opened=h.attachEditor('Notes/Automatic check.md','Source stays here');
+    h.plugin.settings.inlineStreaming.enabled=false;
+    h.plugin.settings.noteThreads.push({notePath:opened.file.path,threadId:'remembered',projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId,selectedAt:'2026-10-14T00:00:00Z'});
+    const barrier=new Promise<void>(resolve=>{release=resolve;});
+    h.setReadOverride(async()=>{await barrier;return new Response('{}',{status:404});});
+    h.plugin.app.saveLocalStorage('send-to-t3-code-chat-draft-v1','Keep this prompt.');
+    const first=h.plugin.openPaletteAction('Keep this prompt.','');
+    await h.plugin.openPaletteAction('Duplicate.','');assert.equal(h.commands.length,0);release();await first;
+    assert.equal(h.commands.length,0);assert.equal(h.modals.length,0);assert.equal(opened.value,'Source stays here');
+    assert.equal(h.plugin.app.loadLocalStorage('send-to-t3-code-chat-draft-v1'),'Keep this prompt.');
+    assert.ok(h.notices.some(n=>/does not exist/.test(n)));assert.ok(h.notices.some(n=>/in progress/.test(n)));
+  }finally{release();h.plugin.onunload();}
+});
+
 for(const surface of ['editor','palette','hotkey','full-note'])for(const enabled of [true,false])test(`${surface} overrides streaming ${enabled?'On against default Off':'Off against default On'} without changing settings`,async()=>{
   const h=await chatHarness();
   try{
@@ -1978,9 +2056,9 @@ for(const surface of ['editor','palette','hotkey','full-note'])for(const enabled
     Object.assign(opened.file,{basename:'Overrides',stat:{ctime:1}});
     opened.editor.getSelection=()=>surface==='full-note'?'':'Selected question';
     opened.editor.getCursor=(side:string)=>opened.editor.offsetToPos(side==='from'?0:17);
-    if(surface==='editor')await h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code')!.callback();
-    else if(surface==='palette')await h.plugin.openPaletteAction('Explain.','Selected question');
-    else h.registered.find(command=>command.id==='send-or-ask').editorCheckCallback(false,opened.editor,opened.view);
+    if(surface==='editor')await h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code')!.callback({ctrlKey:true});
+    else if(surface==='palette')await h.plugin.openPaletteAction('Explain.','Selected question',true);
+    else h.registered.find(command=>command.id==='send-or-ask-choose').editorCheckCallback(false,opened.editor,opened.view);
     const destination=h.modals.at(-1);
     editOverrides(h,destination,{'Stream replies into the editor':enabled?'on':'off',...(enabled?{'Final answer format':'raw-markdown'}:{})});
     assert.equal(destination.contentEl.children[0].children[1].text,`Overrides · ${enabled?2:1}`);
@@ -1994,7 +2072,7 @@ for(const surface of ['editor','palette','hotkey','full-note'])for(const enabled
       const records=[{request:h.plugin.deviceInline.localResponse(h.plugin.settings.settlementJobs.at(-1).inlineJobId)}];
       assert.equal(records.length,1);assert.equal(records[0].request.intermediateMode,'collapse');assert.equal(records[0].request.finalAnswerFormat,'raw-markdown');
     }else{assert.equal(opened.value,'Selected question\nPrivate remainder');assert.doesNotMatch(sent.message.text,/plugin will insert/);}
-    await h.plugin.openPaletteAction('Later.','');
+    await h.plugin.openPaletteAction('Later.','',true);
     assert.equal(h.modals.at(-1).contentEl.children[0].children[1].text,'Overrides','A later send starts from defaults');h.modals.at(-1).close();
   }finally{h.plugin.onunload();}
 });
@@ -2002,7 +2080,7 @@ for(const surface of ['editor','palette','hotkey','full-note'])for(const enabled
 test('child Cancel and reset are isolated; Off disables dependent controls without losing their drafts',async()=>{
   const h=await chatHarness();
   try{
-    h.attachEditor('Notes/Overrides.md','Question');await h.plugin.openPaletteAction('Explain.','');const destination=h.modals.at(-1);
+    h.attachEditor('Notes/Overrides.md','Question');await h.plugin.openPaletteAction('Explain.','',true);const destination=h.modals.at(-1);
     editOverrides(h,destination,{'Final answer format':'raw-markdown','Stream replies into the editor':'off'});
     destination.contentEl.children[0].children[1].click();
     const child=h.modals.at(-1),controls=h.settingsControls.slice(-4);
@@ -2021,7 +2099,7 @@ test('project changes, existing-picker cancellation and safe errors preserve the
   try{
     h.attachEditor('Notes/Overrides.md','Question');h.plugin.settings.inlineStreaming.enabled=true;
     h.setThreads([{id:'existing',projectId:project.id,title:'Existing',latestTurn:{state:'completed'},session:{status:'ready',activeTurnId:null}}]);
-    await h.plugin.openPaletteAction('Explain.','');const destination=h.modals.at(-1);
+    await h.plugin.openPaletteAction('Explain.','',true);const destination=h.modals.at(-1);
     editOverrides(h,destination,{'Final answer format':'raw-markdown'});h.plugin.settings.inlineStreaming.enabled=false;
     destination.contentEl.children[0].children[0].click();h.modals.at(-1).onChooseItem(h.modals.at(-1).getItems().find((item:any)=>item.key==='vault:root'));
     assert.equal(destination.contentEl.children[0].children[1].text,'Overrides · 1');
@@ -2041,7 +2119,7 @@ test('an overridden failed inline job clears its response and does not return af
   const h=await chatHarness(async command=>{if(command.type==='thread.turn.start')throw Error('lost acknowledgement');});let restarted:any;
   try{
     const note=h.attachEditor('Notes/Overrides.md','Question');h.plugin.settings.inlineStreaming.enabled=false;
-    await h.plugin.openPaletteAction('Explain.','');const destination=h.modals.at(-1);
+    await h.plugin.openPaletteAction('Explain.','',true);const destination=h.modals.at(-1);
     editOverrides(h,destination,{'Stream replies into the editor':'on','Final answer format':'raw-markdown'});await destination.choose('new');
     assert.equal(destination.closed,true);assert.equal(h.plugin.settings.pending.length,0);assert.doesNotMatch(note.value,/Working|spinner|t3-inline:start:/);
     const count=h.commands.length;h.plugin.onunload();restarted=await h.start();assert.equal(restarted.settings.pending.length,0);assert.equal(h.commands.length,count);
@@ -2068,7 +2146,7 @@ for(const picker of ['project','existing'])test(`an override preserves the captu
     const opened=h.attachEditor('Notes/Original.md','Original selection\nTail');
     opened.editor.getSelection=()=> 'Original selection';opened.editor.getCursor=(side:string)=>opened.editor.offsetToPos(side==='from'?0:18);
     h.setThreads([{id:'existing',projectId:project.id,title:'Existing',latestTurn:{state:'completed'},session:{status:'ready',activeTurnId:null}}]);
-    await h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code')!.callback();const destination=h.modals.at(-1);
+    await h.menuFor(opened.view).items.find(item=>item.title==='Ask T3 Code')!.callback({ctrlKey:true});const destination=h.modals.at(-1);
     editOverrides(h,destination,{'Stream replies into the editor':'on'});
     if(picker==='project')destination.contentEl.children[0].children[0].click();else await destination.choose('existing');
     const chooser=h.modals.at(-1);h.setActiveNote('Notes/Other.md');opened.editor.getSelection=()=> 'Tail';opened.editor.getCursor=()=>opened.editor.offsetToPos(opened.value.length);

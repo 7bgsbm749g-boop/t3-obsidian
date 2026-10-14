@@ -55,6 +55,7 @@ import { Connection, Project, Request, RequestDeliveryError, acceptedRequestThre
 import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from './folder-link';
 import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from './folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from './palette-chat';
+import {SendGesture} from './send-gesture';
 import {openChatFlow,openNoteSendFlow,type ChatHost,type ChatDestination} from './chat-ui';
 import {selectionRange} from './inline-steering';
 import {projectThreads,type ThreadChoice} from './thread-target';
@@ -132,6 +133,8 @@ export default class SendToT3 extends Plugin {
   private readonly chatDraftKey = 'send-to-t3-code-chat-draft-v1';
   private deviceId = '';
   private sending = false;
+  private defaultSending=false;
+  private sendGesture=new SendGesture();
   private busyListeners=new Set<()=>void>();
   get busy(){return this.sending;}
   set busy(value:boolean){
@@ -274,10 +277,23 @@ export default class SendToT3 extends Plugin {
       try{await clearVaultDiagnostics(adapter,this.app.vault.configDir||'.obsidian');}catch(error){new Notice(`Could not clear plugin logs: ${message(error)}`);}
     }
     this.addCommand({id:'export-diagnostics',name:'Export send failure log…',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
+    if(typeof window!=='undefined'&&typeof window.addEventListener==='function'){
+      const watch=(win:Window)=>this.register(this.sendGesture.watch(win));
+      watch(window);
+      const windows=new Set<Window>([window]);
+      for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const win=leaf.view.containerEl?.ownerDocument.defaultView;if(win&&!windows.has(win)){windows.add(win);watch(win);}}
+      this.registerEvent(this.app.workspace.on('window-open',(_workspace,win)=>{if(!windows.has(win)){windows.add(win);watch(win);}}));
+    }
     this.addCommand({id:'send-or-ask',name:'Send to T3 Code',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;
-      if(this.stopped||this.busy||!file||file.extension.toLowerCase()!=='md')return false;
-      if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view}).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
+      if(this.stopped||this.busy||this.defaultSending||!file||file.extension.toLowerCase()!=='md')return false;
+      if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view},this.commandSendSelector(view)).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
+      return true;
+    }});
+    this.addCommand({id:'send-or-ask-choose',name:'Send or Ask T3 Code: choose destination…',editorCheckCallback:(checking,editor,view)=>{
+      const file=view.file;
+      if(this.stopped||this.busy||this.defaultSending||!file||file.extension.toLowerCase()!=='md')return false;
+      if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view},true).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
       return true;
     }});
     let migratedNoteThreads=false;
@@ -388,7 +404,7 @@ export default class SendToT3 extends Plugin {
       },1500));
     });
     if(Platform.isMobile&&typeof document.addEventListener==='function'){
-      this.mobileSelectionAction=installMobileSelectionAction(this.app,()=>this.app.workspace.getActiveViewOfType(MarkdownView),()=>!this.busy,captureEditorSelection,({editor,view,text,anchor})=>this.openEditorChat(text,view.file!,{editor,view,anchor}));
+      this.mobileSelectionAction=installMobileSelectionAction(this.app,()=>this.app.workspace.getActiveViewOfType(MarkdownView),()=>!this.busy&&!this.defaultSending,captureEditorSelection,({editor,view,text,anchor,showSelector})=>this.openEditorChat(text,view.file!,{editor,view,anchor},showSelector));
     }
     this.sharedBaseline=JSON.stringify(this.sharedSnapshot());
     for(const request of [...this.settings.pending])await this.failRequest(request,Error('The previous send ended without a local confirmation.'),'startup-recovery',Date.now());
@@ -427,7 +443,7 @@ export default class SendToT3 extends Plugin {
         this.registerDomEvent(document,'pointerdown',remember,true);
         this.registerDomEvent(document,'touchstart',remember,true);
       }
-      this.paletteChat=installPaletteChat(this.app,(prompt,selection)=>this.openPaletteAction(prompt,selection),{onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),getSelection:()=>this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getSelection()??''});
+      this.paletteChat=installPaletteChat(this.app,(prompt,selection,showSelector)=>this.openPaletteAction(prompt,selection,showSelector),{onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),getSelection:()=>this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getSelection()??''});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined'){
         this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>{
@@ -525,8 +541,9 @@ export default class SendToT3 extends Plugin {
       if (!(file instanceof TFile) || file.extension.toLowerCase() !== 'md' || (!Platform.isMobile && source !== 'file-explorer-context-menu')) return;
       menu.addItem(item => {
         item.setTitle('Open in T3 Code').setIcon('send');
-        item.setDisabled(this.busy).onClick(()=>this.openNoteSend(file));
+        item.setDisabled(this.busy||this.defaultSending).onClick(event=>this.openNoteSend(file,Boolean(event?.ctrlKey)));
       });
+      if(Platform.isMobile)menu.addItem(item=>item.setTitle('Open in T3 Code: choose destination…').setIcon('send').setDisabled(this.busy||this.defaultSending).onClick(()=>this.openNoteSend(file,true)));
     }));
     this.registerEvent(this.app.workspace.on('editor-menu',(menu,editor,view)=>{
       const selection=editor.getSelection();
@@ -549,11 +566,12 @@ export default class SendToT3 extends Plugin {
         if(failed){
           menu.addItem(item=>item.setTitle('Continue T3 response'+suffix).setIcon('rotate-cw').setDisabled(this.busy).onClick(()=>this.continueInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000))));
           menu.addItem(item=>item.setTitle('Attach latest T3 continuation'+suffix).setIcon('link').setDisabled(this.busy).onClick(()=>{void this.attachInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
-        }else {if(captured)menu.addItem(item=>item.setTitle('Ask T3 in this response'+suffix).setIcon('message-circle').onClick(()=>this.openEditorChat(selection,file,{editor,view,...captured,responseId:id})));}
+        }else {if(captured)menu.addItem(item=>item.setTitle('Ask T3 in this response'+suffix).setIcon('message-circle').onClick(event=>this.openEditorChat(selection,file,{editor,view,...captured,responseId:id},Boolean(event?.ctrlKey))));}
         menu.addItem(item=>item.setTitle('Stop T3 response'+suffix).setIcon('square').onClick(()=>{void this.inlineChat!.stopAt(id,editor,view).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
       }
       if(!captured)return;
-      menu.addItem(item=>item.setTitle('Ask T3 Code').setIcon('message-circle').setDisabled(this.busy).onClick(()=>this.openEditorChat(selection,file,{editor,view,...captured})));
+      menu.addItem(item=>item.setTitle('Ask T3 Code').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(event=>this.openEditorChat(selection,file,{editor,view,...captured},Boolean(event?.ctrlKey))));
+      if(Platform.isMobile)menu.addItem(item=>item.setTitle('Ask T3 Code: choose destination…').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(()=>this.openEditorChat(selection,file,{editor,view,...captured},true)));
     }));
   }
   private async renameLinkedFolder(before:string,after:string){
@@ -1040,13 +1058,13 @@ export default class SendToT3 extends Plugin {
     if(!project.connectionId)return Platform.isMobile?'This folder is linked to a local desktop project. Link it to a connected computer first.':undefined;
     return this.chatReadinessError();
   }
-  openNoteSend(file:TFile){
+  openNoteSend(file:TFile,showSelector=false){
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(this.noteContext(file)),
       sendChat:(_text,key,resolve,_back,destination)=>this.sendNote(file,destination?.threadId,destination?.projectKey,false,key,resolve?.()),
       sendToNew:(_text,key,resolve)=>this.sendNote(file,undefined,undefined,true,key,resolve?.()),
       sendToExisting:(_text,key,resolve,back)=>this.openNoteThreads(file,key,resolve,back),
     });
-    openNoteSendFlow(this.app,host);
+    return openNoteSendFlow(this.app,host,showSelector);
   }
   async openNoteThreads(file:TFile,overrideKey?:string,resolve?:()=>ResolvedJobOptions,back?:()=>void){
     if(this.busy)return;
@@ -1181,18 +1199,18 @@ export default class SendToT3 extends Plugin {
       await this.send(file,project,{threadId,newThread,projectOverrideKey:overrideKey,folderPicker:Boolean(expectedProjectKey),folderLink:link,prepared:{content,images},jobOptions,throwOnError:true});
     }catch(error){throw error;}
   }
-  openChat(prompt?:string){
+  openChat(prompt?:string,showSelector=false){
     const view=this.app.workspace.getActiveViewOfType(MarkdownView);
-    return this.openChatWithNote(this.chatNote(),prompt,view?.file&&view.editor?{view,editor:view.editor}:undefined);
+    return this.openChatWithNote(this.chatNote(),prompt,view?.file&&view.editor?{view,editor:view.editor}:undefined,false,showSelector);
   }
-  private async openPaletteAction(prompt:string,selection:string){
+  private async openPaletteAction(prompt:string,selection:string,showSelector=false){
     const file=this.app.workspace.getActiveFile();
     if(!file||file.extension.toLowerCase()!=='md')throw Error('Open a Markdown note before using T3 Code from the command palette.');
-    return this.openManualAction(file,prompt,selection);
+    return this.openManualAction(file,prompt,selection,undefined,showSelector);
   }
-  private async openManualAction(file:TFile,prompt:string,selection:string,captured?:EditorChatContext){
+  private async openManualAction(file:TFile,prompt:string,selection:string,captured?:EditorChatContext,showSelector=false){
     if(!prompt.trim()&&!selection.trim()){
-      return this.openNoteSend(file);
+      return this.openNoteSend(file,showSelector);
     }
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
     const view=captured?.view??(active?.file?.path===file.path?active:undefined);
@@ -1206,11 +1224,11 @@ export default class SendToT3 extends Plugin {
     if(context?.anchor)context=this.canonicalChatContext(context);
     const canonicalSelected=context?.canonicalAnchor?.text??selection;
     const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\nQuestion:\n${prompt}`:selected?canonicalSelected:prompt;
-    return this.openChatWithNote(this.noteContext(file),question,context,true);
+    return this.openChatWithNote(this.noteContext(file),question,context,true,showSelector);
   }
-  private openEditorChat(selection:string,file:TFile,context:EditorChatContext){
+  private openEditorChat(selection:string,file:TFile,context:EditorChatContext,showSelector=false){
     context=this.canonicalChatContext(context);
-    return this.openChatWithNote(this.noteContext(file),context.canonicalAnchor?.text??selection,context,true);
+    return this.openChatWithNote(this.noteContext(file),context.canonicalAnchor?.text??selection,context,true,showSelector);
   }
   private notePromptDocument(view:MarkdownView|MarkdownFileInfo){return nativeResponses(this.app).view(view as MarkdownView)?.canonicalDisplayed()??view.editor?.getValue()??'';}
   private canonicalChatContext(context:EditorChatContext):EditorChatContext {
@@ -1286,7 +1304,7 @@ export default class SendToT3 extends Plugin {
       },
     };
   }
-  private openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false){
+  private openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false,showSelector=false){
     // Generated text is captured context, never a source to move. Classify it
     // before the chooser/network waits: streaming may replace its surroundings.
     if(inline?.anchor)inline=this.canonicalChatContext(inline);
@@ -1296,11 +1314,24 @@ export default class SendToT3 extends Plugin {
       sendToNew:(text,key,resolve)=>send(text,{newThread:true,projectOverrideKey:key??VAULT_PROJECT,jobOptions:resolve?.()}),
       sendToExisting:(text,key,resolve,back)=>this.openChatThreads(text,note,inline,answerOnly,key,resolve,back),
     });
-    return openChatFlow(this.app,host,prompt);
+    return openChatFlow(this.app,host,prompt,showSelector);
+  }
+  private commandSendSelector(view:MarkdownView|MarkdownFileInfo){
+    const app=this.app as App&{hotkeyManager?:{customKeys?:Record<string,import('obsidian').Hotkey[]>;getHotkeys?:(id:string)=>import('obsidian').Hotkey[]}};
+    const id='send-to-t3-code:send-or-ask';
+    const hotkeys=app.hotkeyManager?.customKeys?.[id]??app.hotkeyManager?.getHotkeys?.(id)??[];
+    const win=(view as MarkdownView).containerEl?.ownerDocument.defaultView??(typeof window!=='undefined'?window:undefined);
+    return this.sendGesture.selector(win,hotkeys,Platform.isMacOS);
   }
   private withSendAvailability(host:ChatHost):ChatHost{
     const plugin=this;
-    Object.defineProperty(host,'busy',{get:()=>plugin.busy});
+    Object.defineProperty(host,'busy',{get:()=>plugin.busy||plugin.defaultSending});
+    host.runDefaultSend=async send=>{
+      if(this.busy||this.defaultSending||this.stopped)throw new RequestDeliveryError('Another send is in progress or the plugin is disabled.',false);
+      this.defaultSending=true;
+      const refresh=()=>{for(const listener of this.busyListeners)try{listener();}catch(error){logFailure('ui.destination.busy-update',error);}};
+      try{refresh();await send();}finally{this.defaultSending=false;refresh();}
+    };
     host.onBusyChange=listener=>{this.busyListeners.add(listener);return ()=>this.busyListeners.delete(listener);};
     return host;
   }

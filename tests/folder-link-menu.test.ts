@@ -70,12 +70,12 @@ async function folderMenuHarness(){
     addSettingTab(){}registerEvent(){}addCommand(){}
   }
   class MenuItem {
-    title='';disabled=false;submenu?:Menu;callback:()=>any=()=>{};
+    title='';disabled=false;submenu?:Menu;callback:(event?:{ctrlKey?:boolean})=>any=()=>{};
     setTitle(title:string){this.title=title;return this;}
     setIcon(_icon:string){return this;}
     setDisabled(value:boolean){this.disabled=value;return this;}
     setSubmenu(){return this.submenu=new Menu();}
-    onClick(callback:()=>any){this.callback=callback;return this;}
+    onClick(callback:(event?:{ctrlKey?:boolean})=>any){this.callback=callback;return this;}
   }
   class Menu {
     items:MenuItem[]=[];
@@ -184,7 +184,7 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
     const sent:any[]=[];h.plugin.send=async(file:any,project:any,options:any)=>{sent.push({file,project,options});};
     const {menu,file}=h.fileMenu('Notes/Inner/note.md',mobile);
     const item=menu.items.find(item=>item.title==='Open in T3 Code');assert.ok(item);
-    await item.callback();
+    await item.callback({ctrlKey:true});
     const choices=h.modals.at(-1);assert.ok(choices);
     assert.equal(choices.constructor.name,'SendDestinationModal');
     assert.equal(choices.titleEl.text,'Send to T3 Code');
@@ -195,8 +195,8 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
     h.setThreads([{id:'thread',projectId:'nested',title:'Existing',updatedAt:'2026-09-19',session:{status:'running',activeTurnId:'turn'},latestTurn:{state:'running'}},
       {id:'foreign',projectId:h.project.id,title:'Remembered project',updatedAt:'2026-09-20'},
       {id:'archived',projectId:'nested',title:'Archived',archivedAt:'2026-09-19'}]);
-    if(mobile){h.plugin.openNoteSend(file);await h.button(h.modals.at(-1),'Existing thread…').click();}
-    else {h.plugin.openNoteSend(file);await h.button(h.modals.at(-1),'Existing thread…').click();}
+    if(mobile){h.plugin.openNoteSend(file,true);await h.button(h.modals.at(-1),'Existing thread…').click();}
+    else {h.plugin.openNoteSend(file,true);await h.button(h.modals.at(-1),'Existing thread…').click();}
     const picker=h.modals.at(-1);assert.equal(picker.getItems().length,1);
     assert.equal(picker.getItems()[0].id,'foreign');
     assert.match(picker.getItemText(picker.getItems()[0]),/Remembered project · Idle/);
@@ -212,13 +212,13 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
 test('unlinked and root notes open the project-name destination dialog on desktop',async()=>{
   const h=await folderMenuHarness();
   try{
-    await h.fileMenu('Unlinked/note.md',false).menu.items[0].callback();
+    await h.fileMenu('Unlinked/note.md',false).menu.items[0].callback({ctrlKey:true});
     let modal=h.modals.at(-1);
     assert.equal(modal.host.getProjectName(),'QLO2');
     assert.equal(modal.host.getProjectChoices().slice(0,2).map((item:any)=>item.key).join(','),'folder:new,vault:root');
     modal.close();
     h.plugin.settings.folderLinks=[{id:'root',folderPath:'/',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot,connectionId:'c',self:false}];
-    await h.fileMenu('note.md',false).menu.items[0].callback();
+    await h.fileMenu('note.md',false).menu.items[0].callback({ctrlKey:true});
     modal=h.modals.at(-1);assert.equal(modal.host.getProjectName(),h.project.title);
     h.plugin.busy=true;assert.equal(h.fileMenu('note.md',false).menu.items[0].disabled,true);
   }finally{h.plugin.onunload();}

@@ -5,7 +5,7 @@ import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
 const compiled=build({entryPoints:['chat-ui.ts'],bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
-async function fixture(alternative?:string,closeImmediately=false,initialBusy=false){
+async function fixture(alternative?:string,closeImmediately=false,initialBusy=false,automatic=false,remembered=true){
  const modals:any[]=[];
  class Element{value='';text='';style:any={};disabled=false;isConnected=true;children:any[]=[];events:any={};empty(){this.children=[];}setText(t:string){this.text=t;}focus(){}addEventListener(n:string,f:any){this.events[n]=f;}createEl(_tag:string,o:any={}){const el=new Element();el.text=o.text??'';this.children.push(el);return el;}}
  class Modal{titleEl=new Element();contentEl=new Element();constructor(public app:any){}open(){modals.push(this);(this as any).onOpen?.();}close(){(this as any).onClose?.();}setPlaceholder(){}}
@@ -13,9 +13,9 @@ async function fixture(alternative?:string,closeImmediately=false,initialBusy=fa
  const module:any={exports:{}},notices:string[]=[],calls:Array<{key?:string;signal:AbortSignal;resolve:(v:any)=>void}>=[],sent:any[]=[];
  runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal,FuzzySuggestModal:Modal,Setting,Notice:class{constructor(t:string){notices.push(t);}}}:require(id),setTimeout:(fn:any,ms:number)=>setTimeout(fn,ms===5000?30:ms),clearTimeout,performance,AbortController,DOMException,Event,URL,URLSearchParams,Buffer});
  let busy=initialBusy;const busyListeners=new Set<()=>void>();
- const host={get busy(){return busy;},onBusyChange:(listener:()=>void)=>{busyListeners.add(listener);return ()=>busyListeners.delete(listener);},steering:true,getNotePath:()=> 'Synthetic.md',getDefaultProjectKey:()=> 'project',getAlternativeProjectKey:()=>alternative,getProjectName:()=> 'Synthetic',getTargetDescription:()=> 'Synthetic',getProjectChoices:()=>[],getDefaultThread:()=> 'thread',getDefaultDestination:(key:string|undefined,signal:AbortSignal)=>new Promise(resolve=>{calls.push({key,signal,resolve});}),sendChat:async(_p:any,key:any,_r:any,_b:any,d:any)=>{sent.push({target:'default',key,d});},sendToNew:async(_p:any,key:any)=>{sent.push({target:'new',key});},sendToExisting:async(_p:any,key:any)=>{sent.push({target:'existing',key});}};
- module.exports.openNoteSendFlow({},host);if(closeImmediately)modals[0].close();await Promise.resolve();
- return {modal:modals[0],calls,sent,notices,busyListeners,setBusy:(value:boolean)=>{busy=value;for(const listener of busyListeners)listener();}};
+ const host={get busy(){return busy;},onBusyChange:(listener:()=>void)=>{busyListeners.add(listener);return ()=>busyListeners.delete(listener);},steering:remembered,getNotePath:()=> 'Synthetic.md',getDefaultProjectKey:()=> 'project',getAlternativeProjectKey:()=>alternative,getProjectName:()=> 'Synthetic',getTargetDescription:()=> 'Synthetic',getProjectChoices:()=>[],getDefaultThread:()=>remembered?'thread':undefined,getDefaultDestination:(key:string|undefined,signal:AbortSignal)=>new Promise(resolve=>{calls.push({key,signal,resolve});}),sendChat:async(_p:any,key:any,_r:any,_b:any,d:any)=>{sent.push({target:'default',key,d});},sendToNew:async(_p:any,key:any)=>{sent.push({target:'new',key});},sendToExisting:async(_p:any,key:any)=>{sent.push({target:'existing',key});}};
+ const opening=module.exports.openNoteSendFlow({},host,!automatic);if(closeImmediately)modals[0].close();await Promise.resolve();
+ return {opening,modals,modal:modals[0],calls,sent,notices,busyListeners,setBusy:(value:boolean)=>{busy=value;for(const listener of busyListeners)listener();}};
 }
 test('same project redraw coalesces one pending check and obsolete UI cannot update the new project',async()=>{
  const h=await fixture();h.modal.onOpen();await Promise.resolve();assert.equal(h.calls.length,1);
@@ -76,4 +76,23 @@ test('redraw and close release busy listeners and preserve an unsent composer dr
  assert.equal(h.busyListeners.size,1);
  h.setBusy(true);h.setBusy(false);assert.equal(h.modal.field.value,'Keep this message.');
  h.modal.close();assert.equal(h.busyListeners.size,0);h.setBusy(true);assert.equal(h.sent.length,0);
+});
+
+test('automatic default checks and sends the exact previous thread without opening a panel',async()=>{
+ const h=await fixture(undefined,false,false,true);assert.equal(h.modals.length,0);assert.equal(h.sent.length,0);
+ h.calls[0].resolve({label:'Continue thread',threadId:'checked',projectKey:'project'});await h.opening;
+ assert.equal(h.modals.length,0);assert.equal(h.sent.length,1);assert.equal(h.sent[0].d.threadId,'checked');
+});
+
+test('automatic sending creates a new thread only when no default exists',async()=>{
+ const h=await fixture(undefined,false,false,true,false);await h.opening;
+ assert.equal(h.modals.length,0);assert.equal(h.calls.length,0);assert.deepEqual(h.sent,[{target:'new',key:'project'}]);
+});
+
+test('an unavailable or timed-out automatic default sends nothing and never falls back to New thread',async()=>{
+ const unavailable=await fixture(undefined,false,false,true);unavailable.calls[0].resolve({label:'Thread unavailable',unavailable:true,detail:'Missing thread'});await unavailable.opening;
+ assert.equal(unavailable.sent.length,0);assert.equal(unavailable.modals.length,0);assert.match(unavailable.notices[0],/Missing thread/);
+ const timeout=await fixture(undefined,false,false,true);await timeout.opening;
+ assert.equal(timeout.sent.length,0);assert.equal(timeout.calls[0].signal.aborted,true);assert.match(timeout.notices[0],/took too long/);
+ timeout.calls[0].resolve({label:'Late thread',threadId:'late'});await Promise.resolve();assert.equal(timeout.sent.length,0);
 });
