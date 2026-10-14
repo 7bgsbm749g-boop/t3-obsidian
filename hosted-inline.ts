@@ -33,6 +33,12 @@ function durableResponseIdentity(state:HostedInlineState):string {
 
 export interface InlineHostTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface HostedInlineRequest {
+  /** Self-contained saved binding; no remote writer or registration grant. */
+  localOnly?:true;
+  localMessageId?:string;
+  localSteering?:InlineSteering[];
+  localStage?:{originalHash:string;stagedHash:string};
+  localResume?:{bindingCheckpoint?:InlineBindingCheckpoint;turnIds?:string[];questionFollows?:InlineQuestionFollow[];incoming?:InlineSteering[];presentationTurns?:Record<string,InlineTurn>};
   /** Exact source lifecycle retained when importing an already existing run. */
   importTurn?:InlineTurn;
   replyFolders?:ReplyFolders;
@@ -96,6 +102,8 @@ export function safeNotePath(path:unknown):path is string {
   return typeof path==='string'&&path.endsWith('.md')&&!path.includes('\\')&&!/[\x00-\x1f:]/.test(path)&&path.split('/').every(p=>!!p&&p!=='.'&&p!=='..'&&!p.startsWith('.'));
 }
 export function validateHostedRequest(value:any):HostedInlineRequest {
+  if(value?.localOnly!==undefined&&(value.localOnly!==true||value.version!==4||value.nativeProjection!==true||value.responseContainer!==true))throw Error('Invalid local response binding.');
+  if(value?.localStage!==undefined&&(!value.localOnly||![value.localStage.originalHash,value.localStage.stagedHash].every(hash=>typeof hash==='string'&&/^[0-9a-f]{64}$/.test(hash))))throw Error('Invalid local staged edit.');
   if(value?.importTurn!==undefined){const turn=value.importTurn;if(value.version!==4||turn.messageId!==value.messageId||typeof turn.turnId!=='string'||!turn.turnId||turn.turnId.length>200||!['running','completed','interrupted','error','cancelled'].includes(turn.state)||!Number.isFinite(Date.parse(turn.requestedAt)))throw Error('Invalid imported run evidence.');}
   if(value?.replyFolders!==undefined)validateReplyFolders(value.replyFolders);
   if(value?.nativeProjection!==undefined&&typeof value.nativeProjection!=='boolean')throw Error('Invalid native projection preference.');

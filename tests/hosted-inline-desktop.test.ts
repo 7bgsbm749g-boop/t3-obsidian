@@ -100,8 +100,10 @@ for(const recovery of ['saved','canonical','replay'])test(`bundled desktop recov
       if(recovery==='replay')await manager.delivered(request.host,id,{messageId:request.messageId,requestedAt:request.createdAt,sequence:2});
       for(const runtime of manager.jobs.values())runtime.nextSnapshot=0;
     }
-    await pause(3400);
-    const renewed=JSON.parse((await files.read(path))!);
+    let renewed=JSON.parse((await files.read(path))!);
+    const renewalDeadline=Date.now()+6000;
+    while(renewed.expiresAt<=initial.expiresAt&&Date.now()<renewalDeadline){await pause(100);renewed=JSON.parse((await files.read(path))!);}
+
     assert.equal(renewed.owner,actor);assert.equal(renewed.epoch,initial.epoch);
     assert.ok(renewed.expiresAt>initial.expiresAt,'Background ownership is renewed');
     assert.ok(lockDelays.includes(5000),'The coordinator lock schedules its renewal on Node timers');

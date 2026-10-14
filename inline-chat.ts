@@ -1,3 +1,5 @@
+import type {DirectInlineUpdate} from './direct-inline-preview';
+import {withLocalResponseBinding} from './local-response-binding';
 import {nativeResponses} from './native-response-manager';
 import {responseAnchor} from './native-response-projection';
 import type {ExplorerResponse} from './explorer-responses';
@@ -25,7 +27,7 @@ import type {ResponseStopReceipt} from './response-stop-receipt';
 export interface InlineJob {
   id:string;path:string;requestId:string;threadId?:string;turnId?:string;messageId?:string;projectId?:string;connection?:Connection;
   bodyHash:string;phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'|'conflict';createdAt:string;finalized?:boolean;
-  hosted?:boolean;bindingCheckpoint?:InlineBindingCheckpoint;
+  hosted?:boolean;localOnly?:boolean;threadEnvironmentId?:string;bindingCheckpoint?:InlineBindingCheckpoint;
   remoteStopPending?:boolean;
   remoteStopOperationId?:string;remoteStopFailures?:number;remoteStopNextAt?:number;stopReceipt?:ResponseStopReceipt;stopRunTerminal?:boolean;
   keepIntermediate?:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat;presentationTurns?:Record<string,InlineTurn>;finishedAt?:string;
@@ -92,6 +94,17 @@ export class InlineChatManager {
     const input=!!job.questionFollows?.some(q=>!q.answered&&!q.dismissed);
     return {id:job.id,notePath:job.path,epoch:0,revision:0,active:['sending','running','reconnecting'].includes(job.phase),input,complete:job.phase==='complete'&&!!job.finalized&&!input};
   });}
+  observeLocal(update:DirectInlineUpdate){
+    if(!update.request.localOnly)return;
+    const request=update.request;
+    let job=this.jobs.find(item=>item.id===request.id);
+    if(!job){job={id:request.id,path:request.notePath,requestId:request.id,bodyHash:request.initialHash,phase:'running',createdAt:request.createdAt,hosted:true,localOnly:true,threadEnvironmentId:request.threadEnvironmentId,hostTarget:request.host};this.jobs.push(job);}
+    if(job.phase==='cancelled'||job.finalized)return;
+    const before=JSON.stringify([job.threadId,job.projectId,job.messageId,job.turnId,job.phase]);
+    job.threadId=request.threadId;job.projectId=request.projectId;job.messageId=update.messageId;job.turnId=update.turnId;job.turnIds=update.turnIds;job.threadEnvironmentId=request.threadEnvironmentId;
+    job.phase=update.completionVerified&&(update.phase==='complete'||update.phase==='interrupted')?update.phase:update.phase==='error'?'error':'running';
+    if(before!==JSON.stringify([job.threadId,job.projectId,job.messageId,job.turnId,job.phase]))this.persist();
+  }
   private persist(){this.app.saveLocalStorage(this.key,this.jobs.map(j=>({...j})));}
   private runtime(job:InlineJob){let runtime=this.runtimes.get(job.id);if(!runtime){runtime={state:restoreInlineBindings({messages:[],activities:[]},job.bindingCheckpoint),sequence:-1};this.runtimes.set(job.id,runtime);}return runtime;}
 
@@ -113,12 +126,14 @@ export class InlineChatManager {
   }
   async prepare(job:InlineJob,request:Request){
     job.connection=request.connection;job.projectId=request.project.id;job.threadId=request.threadId??commandId(request.id,'thread');job.messageId=commandId(request.id,'message');this.persist();
-    if(this.hosted){await this.hosted.prepare(job,request);job.hosted=true;this.persist();
-      const source=this.runtime(job).source,view=source?.info as MarkdownView;
-      if(request.inlineHost?.nativeProjection&&source&&typeof view.getViewData==='function'){
+    if(this.hosted){await this.hosted.prepare(job,request);job.hosted=true;job.localOnly=request.inlineHost?.localOnly;job.threadEnvironmentId=request.inlineHost?.threadEnvironmentId;this.persist();
+      const source=this.runtime(job).source,sourceView=source?.info as MarkdownView;
+      const view=typeof sourceView?.getViewData==='function'?sourceView:this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===job.path&&view.editor===source?.editor);
+      if(request.inlineHost?.nativeProjection&&source&&view&&typeof view.getViewData==='function'){
         const document=source.editor.getValue(),region=regionBody(document,job.id);
         if(region){const start=document.indexOf(startMarker(job.id)),end=document.indexOf(endMarker(job.id),region.to)+endMarker(job.id).length;
-          replaceChangedText(source.editor,document,document.slice(0,start)+responseAnchor(job.id,request.inlineHost.responseContainer?undefined:document)+document.slice(end));await view.save();nativeResponses(this.app).preview(view,job.id,region.body);}
+          const anchor=responseAnchor(job.id,request.inlineHost.responseContainer?undefined:document);
+          replaceChangedText(source.editor,document,document.slice(0,start)+(request.inlineHost.localOnly?withLocalResponseBinding(anchor,request.inlineHost):anchor)+document.slice(end));await view.save();nativeResponses(this.app).preview(view,job.id,region.body);}
       }
     }
   }

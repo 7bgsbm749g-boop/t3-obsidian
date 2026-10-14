@@ -248,6 +248,13 @@ export class NativeResponseManager {
     this.streams.set(update.request.id,{...update,request:{...update.request,notePath:path}});this.refresh(new Set([path,previous?.request.notePath??path]));
   }
   title(id:string,title:string){if(!title.trim()||this.titles.get(id)===title)return;this.titles.set(id,title);this.refresh();}
+  localCompleted(id:string,path:string){this.records.delete(id);this.streams.delete(id);this.provisional.delete(id);this.forgetPreview(id);this.refresh(new Set([path]));}
+  async allowLocalBinding(id:string,path:string){
+    const file=this.app.vault.getFileByPath(path);if(!file)return;
+    const disk=await this.app.vault.read(file);if(!responseRegion(disk,id))return;
+    this.deviceCommits.delete(id);this.completionIdentities.delete(id);this.proofs.delete(id);this.records.delete(id);
+    for(const [view,adapter] of this.views)if(view.file===file)adapter.allowLocalBinding(id,disk);
+  }
   private titled(id:string,body:string){const title=this.titles.get(id);return title?renameInlineHeader(body,title):body;}
   deviceCommitted(path:string,proof:NativeCommitProof,refresh=true){
     this.deviceCommits.set(proof.bindingId,{path,proof});this.streams.delete(proof.bindingId);this.provisional.delete(proof.bindingId);this.forgetPreview(proof.bindingId);
@@ -311,6 +318,7 @@ export class NativeResponseManager {
     const hash=contentHash(document),ids:string[]=[];
     for(const record of this.records.values()){
       const delivery=record.state?.delivery,id=record.request.id,proof=this.proofs.get(id);
+      if(pending.has(id)&&record.request.nativeProjection&&(record.state?.notePath??record.request.notePath)===path&&!responseRegion(document,id)){ids.push(id);continue;}
       if(!pending.has(id)||record.state?.notePath!==path||!record.state.cleanupComplete||!delivery)continue;
       if(containsResponseBoundary(document,id)&&responseRegion(document,id))continue;
       if(hash===delivery.hash||proof?.commitId===delivery.commitId&&proof.hash===delivery.hash&&nativeCommitMatches(proof,document))ids.push(id);

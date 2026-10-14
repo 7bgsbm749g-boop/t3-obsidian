@@ -18,12 +18,26 @@ import type {FinalAttemptAbort} from './completion-attempt';
 import {T3ConnectionTimeoutError} from './t3-rpc';
 import {finalResponseKey} from './final-response';
 import {responseTooLarge,T3ResponseTooLargeError} from './t3-response-limits';
+import {LocalResponseManager,type LocalFinalNoteIO} from './local-response-manager';
+import {localStagePaths} from './local-response-staging';
+import {responseAnchor,responseRegion} from './native-response-projection';
 
 export const INLINE_SNAPSHOT_INTERVAL_MS=10_000;
 export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
 
 export interface PendingResponseRename {id:string;actor:string;bindingId:string;host:InlineHostTarget;before:string;after:string}
 export interface DeviceInlineIO {
+  localFinalNotes?:LocalFinalNoteIO;
+  openedNotes?():Array<{path:string;document:string}>;
+  saveLocalNote?(path:string):Promise<void>;
+  syncReady?():boolean;
+  localCompleted?(id:string,path:string):void;
+  localFinalBody?(update:DirectInlineUpdate):Promise<string>;
+  localFinalDraft?(document:string,request:HostedInlineRequest):Promise<string>;
+  retainLocalFinal?(update:DirectInlineUpdate):Promise<void>;
+  loadLocalFinal?(request:HostedInlineRequest):Promise<DirectInlineUpdate|undefined>;
+  allowLocalMigration?(id:string,path:string):Promise<void>;
+  localQuestions?(update:DirectInlineUpdate):void;
   connectionTimeout?(target:InlineHostTarget,error:T3ConnectionTimeoutError):void;
   connectionRecovered?(target:InlineHostTarget):void;
   completionActor?:string;
@@ -58,6 +72,8 @@ const comparable=(state:HostedInlineState|undefined)=>state?JSON.stringify({...s
 /** One writer per granted epoch. Disposing or backgrounding never releases it:
  * only missing heartbeats allow another instance to take ownership. */
 export class DeviceInlineManager {
+  private local?:LocalResponseManager;
+  private localMigrations=new Set<string>();
   private stopped=false;
   private localStops=new Set<string>();
   private stops=new Map<string,Promise<ResponseStopReceipt>>();
@@ -105,6 +121,11 @@ export class DeviceInlineManager {
   }
   async register(request:HostedInlineRequest){
     if(this.stopped)throw Error('The plugin stopped before registering the response.');
+    if(request.localOnly){
+      if(!this.io.localFinalNotes)throw Error('Local response saves are unavailable.');
+      this.local??=new LocalResponseManager(this.io.completionActor??this.actor,this.vaultId,this.io,this.io.localFinalNotes,this.now);
+      return this.local.register(request);
+    }
     const host=this.host(request.host);let original:string|undefined;
     if(request.version===4&&request.nativeProjection&&!request.deviceCompletion&&this.io.completeResponse){
       const previous=await host.files.read(leasePaths(host.target.directory,request.id).record);
@@ -122,16 +143,19 @@ export class DeviceInlineManager {
     this.receiveRecord(host,reply.record);const runtime=this.jobs.get(request.id);if(runtime){runtime.lastHeartbeat=this.now();if(original!==undefined)runtime.original=original;}this.tick();
   }
   async delivered(target:InlineHostTarget,id:string,delivery:InlineStartRequest){
+    if(this.local?.has(id)){this.local.delivered(id,delivery);return;}
     this.previews.get(id)?.delivery(delivery);
     const host=this.host(target),reply=await host.client.command({kind:'delivery',jobId:id,delivery});
     if(!reply.ok||!reply.record)throw Error(reply.error??'Could not retain the prompt delivery evidence.');
     this.receiveRecord(host,reply.record);this.tick();
   }
   stopLocally(id:string){
+    this.local?.stopLocally(id);
     this.localStops.add(id);this.io.saveStops?.([...this.localStops]);
     this.previews.get(id)?.dispose();this.previews.delete(id);
   }
   async failResponse(target:InlineHostTarget,id:string){
+    if(this.local?.has(id))return this.local.cancel(id);
     this.stopLocally(id);
     const host=this.host(target);
     // This survives a registration acknowledgement arriving after failure.
@@ -142,6 +166,11 @@ export class DeviceInlineManager {
     this.tick();
   }
   stopResponse(target:InlineHostTarget,id:string,stoppedBody?:string,operationId=commandId(id,'stop')):Promise<ResponseStopReceipt>{
+    if(this.local?.has(id)){
+      const key=hostKey(target)+':'+id,previous=this.stops.get(key);if(previous)return previous;
+      const work=this.local.stop(id,stoppedBody);this.stops.set(key,work);
+      void work.finally(()=>{if(this.stops.get(key)===work)this.stops.delete(key);}).catch(()=>{});return work;
+    }
     const key=hostKey(target)+':'+id,previous=this.stops.get(key);if(previous)return previous;
     const started=this.monotonic();
     const work=this.recordStop(target,id,stoppedBody,operationId).then(receipt=>{
@@ -168,11 +197,13 @@ export class DeviceInlineManager {
     // a prerequisite for accepting a checked, durable Stop acknowledgement.
     this.tick();return receipt;
   }
-  responseStatus(id:string){const record=this.jobs.get(id)?.record;return record?responseStopReceipt(record):this.statuses.get(id);}
-  cachedResponse(id:string){const runtime=this.jobs.get(id);return runtime?{record:runtime.record,host:runtime.host.target}:undefined;}
+  responseStatus(id:string){const local=this.local?.status(id);if(local)return local;const record=this.jobs.get(id)?.record;return record?responseStopReceipt(record):this.statuses.get(id);}
+  localResponse(id:string){return this.local?.request(id);}
+  cachedResponse(id:string){const local=this.local?.record(id);if(local)return {record:local,host:local.request.host};const runtime=this.jobs.get(id);return runtime?{record:runtime.record,host:runtime.host.target}:undefined;}
   /** Repair a verified local destination before reserving a steering input.
    * The host compares the old path and retains an idempotent acknowledgement. */
   async relocateResponse(target:InlineHostTarget,record:LeaseRecord,path:string){
+    if(this.local?.has(record.request.id)){await this.local.register({...record.request,notePath:path});return this.local.record(record.request.id)!;}
     const {request}=record,before=record.state?.notePath??request.notePath;
     if(this.stopped||!record.coordinated||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(target))throw Error('The response destination is unavailable.');
     const [document,original]=await Promise.all([this.io.readNote(path),this.io.readNote(before)]);
@@ -192,12 +223,14 @@ export class DeviceInlineManager {
     if(!reply.ok)throw Error(reply.error??'The superseded final-save intent is waiting for host confirmation.');
   }
   async follow(target:InlineHostTarget,id:string,previousMessageId:string,messageId:string,notePath?:string){
+    if(this.local?.has(id))return this.local.follow(id,messageId,notePath,previousMessageId);
     if(this.stopped)throw Error('The response writer is unavailable.');
     const host=this.host(target),reply=await host.client.command({kind:'follow',jobId:id,previousMessageId,messageId,notePath});
     if(!reply.ok||!reply.record)throw Error(reply.error??'Could not attach the continuation.');
     this.receiveRecord(host,reply.record);this.tick();
   }
   async steer(target:InlineHostTarget,id:string,steering:SteeringInput){
+    if(this.local?.has(id))return this.local.steer(id,steering);
     if(this.stopped)throw Error('The response writer is unavailable.');
     const host=this.host(target),reply=await host.client.command({kind:'steer',jobId:id,steering});
     if(!reply.ok||!reply.record)throw Error(reply.error??'Could not attach the steering message.');
@@ -206,6 +239,7 @@ export class DeviceInlineManager {
   /** App return starts a new read-only feed without the old retry deadline.
    * Writer grants, response identity and applied event cursors remain intact. */
   resume(targets:InlineHostTarget[],priorityIds:readonly string[]=[]){
+    if(this.io.localFinalNotes){this.local??=new LocalResponseManager(this.io.completionActor??this.actor,this.vaultId,this.io,this.io.localFinalNotes,this.now);this.local.resume();}
     if(this.stopped)return;
     for(const host of this.hosts.values()){host.lastDiscovery=-Infinity;host.priorityKey=undefined;}
     for(const [id,preview] of this.previews){
@@ -215,11 +249,35 @@ export class DeviceInlineManager {
     }
     this.discover(targets,priorityIds);this.tick();
   }
+  private async migrateLocal(host:Host,record:LeaseRecord):Promise<boolean>{
+    const request=record.request,id=request.id;
+    if(!this.io.localFinalNotes||!record.coordinated||!request.nativeProjection||record.stopRequestedAt||record.responseRemovedAt!==undefined||this.jobs.get(id)?.finalWork)return false;
+    if(this.local?.has(id)||this.localMigrations.has(id))return true;
+    this.localMigrations.add(id);
+    try{
+      for(const note of this.io.openedNotes?.()??[])await this.io.allowLocalMigration?.(id,note.path);
+      const path=await this.location(record);if(path===undefined||!this.io.isOpen(path))return false;
+      await this.io.allowLocalMigration?.(id,path);
+      const document=await this.io.readNote(path),region=document!==undefined?responseRegion(document,id):undefined;
+      if(document===undefined||!region||document.slice(region.from,region.to)!==responseAnchor(id,document))return false;
+      const state=record.state;
+      const localRequest:HostedInlineRequest={...request,version:4,localOnly:true,nativeProjection:true,responseContainer:true,deviceCompletion:undefined,notePath:path,localMessageId:state?.pendingMessageId??state?.messageId??request.messageId,localSteering:state?.steering,localResume:{bindingCheckpoint:state?.bindingCheckpoint,turnIds:state?.turnIds,questionFollows:state?.questionFollows,incoming:state?.incoming,presentationTurns:state?.presentationTurns}};
+      if(state?.deviceStaged){
+        const {originalHash,hash}=state.deviceStaged,original=await host.files.read(deviceOriginalPath(host.target.directory,id)),staged=await host.files.read(deviceStagedPath(host.target.directory,id,hash));
+        if(original===undefined||staged===undefined||contentHash(original)!==originalHash||contentHash(staged)!==hash)throw Error('The existing staged response edit is unavailable for local recovery.');
+        await host.files.write(localStagePaths(localRequest,originalHash).original,original);await host.files.write(localStagePaths(localRequest,hash).staged,staged);localRequest.localStage={originalHash,stagedHash:hash};
+      }
+      await this.register(localRequest);
+      const old=this.jobs.get(id);old?.refresh?.cancel(Error('Response migrated to local completion.'));old?.monitor?.stop();old?.writer.stop();this.jobs.delete(id);this.previews.get(id)?.dispose();this.previews.delete(id);
+      return true;
+    }finally{this.localMigrations.delete(id);}
+  }
   private async discoverResponse(host:Host,id:string){
-    if(this.stopped||this.jobs.has(id))return;
+    if(this.stopped||this.jobs.has(id)||this.local?.has(id))return;
     const bytes=await host.files.read(leasePaths(host.target.directory,id).record);if(!bytes||this.stopped)return;
     let record:LeaseRecord=JSON.parse(bytes);const request=validateHostedRequest(record.request);
     if(request.id!==id||![2,3,4].includes(request.version)||request.vaultId!==this.vaultId||hostKey(request.host)!==hostKey(host.target))return;
+    if(await this.migrateLocal(host,record))return;
     void Promise.resolve(this.io.completionAcknowledged?.(record)).catch(error=>logFailure('response.completion-cleanup.failed',error,{bindingId:id}));
     // A prepared permanent grant may have an already verified local receipt.
     // Discover that exact writer even if the note was later edited or deleted;
@@ -253,11 +311,12 @@ export class DeviceInlineManager {
   }
   discover(targets:InlineHostTarget[],priorityIds:readonly string[]=[]){
     if(this.stopped)return;
+    if(this.io.localFinalNotes){this.local??=new LocalResponseManager(this.io.completionActor??this.actor,this.vaultId,this.io,this.io.localFinalNotes,this.now);this.local.resume();for(const runtime of this.jobs.values())if(this.io.isOpen(runtime.record.state?.notePath??runtime.record.request.notePath))void this.migrateLocal(runtime.host,runtime.record).catch(error=>logFailure('response.local.migrate',error,{bindingId:runtime.record.request.id}));priorityIds=priorityIds.filter(id=>!this.local!.has(id));if(!priorityIds.length&&!this.jobs.size)return;}
     for(const target of targets)this.host(target);
     for(const host of this.hosts.values()){
       // Restored previews already identify their exact records. Completed
       // responses leave the active catalog, so recover them by ID as well.
-      const ids=[...new Set(priorityIds)].filter(id=>/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)&&!this.jobs.has(id)),key=ids.join(',');
+      const ids=[...new Set(priorityIds)].filter(id=>/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)&&!this.jobs.has(id)&&!this.local?.has(id)),key=ids.join(',');
       if(ids.length&&!host.priorityDiscovery&&(host.priorityKey!==key||this.now()-(host.lastPriorityDiscovery??-Infinity)>=3000)){
         host.priorityKey=key;host.lastPriorityDiscovery=this.now();
         const work=Promise.allSettled(ids.map(id=>this.discoverResponse(host,id))).then(()=>{});
@@ -287,7 +346,7 @@ export class DeviceInlineManager {
       })();host.discovery=work;void work.finally(()=>{host.discovery=undefined;}).catch(()=>{});
     }
   }
-  explorerResponses():ExplorerResponse[]{return [...this.hosts.values()].flatMap(host=>host.responses).filter(response=>!this.localStops.has(response.id));}
+  explorerResponses():ExplorerResponse[]{return [...this.local?.responses()??[],...[...this.hosts.values()].flatMap(host=>host.responses)].filter(response=>!this.localStops.has(response.id));}
   stoppableResponses(path:string){return [...this.jobs.values()].filter(({record})=>(record.state?.notePath??record.request.notePath)===path&&!this.localStops.has(record.request.id)&&!record.stopRequestedAt&&!record.state?.userStopped&&!terminalLease(record)&&!responseStopReceipt(record).runTerminal).map(({record,host})=>({id:record.request.id,hostTarget:host.target}));}
   private receivePreview(record:LeaseRecord){
     if(!record.coordinated||!this.io.receiveDirect||this.localStops.has(record.request.id))return;
@@ -296,6 +355,7 @@ export class DeviceInlineManager {
     else preview.update(record);
   }
   private receiveRecord(host:Host,record:LeaseRecord){
+    if(this.local?.has(record.request.id)||this.localMigrations.has(record.request.id))return;
     if(this.stopped||record.request.vaultId!==this.vaultId||hostKey(record.request.host)!==hostKey(host.target))return;
     if(this.bindings.get(record.request.id)?.removed&&record.responseRemovedAt===undefined)return;
     const current=this.jobs.get(record.request.id)?.record;
@@ -443,6 +503,7 @@ export class DeviceInlineManager {
     this.renameWork=work;void work.finally(()=>{this.renameWork=undefined;}).catch(()=>{});
   }
   tick(){
+    this.local?.tick();
     if(this.stopped)return;
     // A synchronous tick sees one current workspace. Several independent
     // replies in the same note need only one fresh open-view query; never
@@ -612,9 +673,10 @@ export class DeviceInlineManager {
     runtime.state=applied.state;if(applied.sequence!==undefined)runtime.sequence=applied.sequence;
     if(item.kind==='snapshot'){runtime.nextSnapshot=this.monotonic()+INLINE_SNAPSHOT_INTERVAL_MS;runtime.snapshotFailures=0;}
   }
-  changed(path:string){this.io.noteChanged?.(path);}
+  changed(path:string){this.io.noteChanged?.(path);this.local?.resume();}
   deleted(path:string){this.io.noteDeleted?.(path);for(const [id,runtime] of this.jobs){const current=runtime.record.state?.notePath??runtime.record.request.notePath;if(current===path||current.startsWith(path+'/')){this.previews.get(id)?.dispose();this.previews.delete(id);}}for(const host of this.hosts.values())host.responses=relocateExplorerResponses(host.responses,path);}
   renamed(before:string,after:string){
+    this.local?.renamed(before,after);
     this.io.noteRenamed?.(before,after);
     for(const host of this.hosts.values())host.responses=relocateExplorerResponses(host.responses,before,after);
     for(const runtime of this.jobs.values()){
@@ -634,6 +696,7 @@ export class DeviceInlineManager {
     this.tick();
   }
   dispose(){
+    this.local?.dispose();
     this.stopped=true;
     this.titles?.dispose();
     for(const preview of this.previews.values())preview.dispose();this.previews.clear();

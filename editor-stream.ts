@@ -4,6 +4,7 @@ import {intermediateMode} from './response-presentation';
 import {commandId} from './direct';
 import {initialRegion,endInsertionOffset,regionBody,startMarker} from './inline-thread';
 import {safeNotePath,type HostedInlineRequest} from './hosted-inline';
+import {withLocalResponseBinding} from './local-response-binding';
 
 export interface StreamNoteIO {
   updateNote(path:string,change:(document:string)=>string,allowed:()=>boolean):Promise<string|undefined>;
@@ -22,7 +23,8 @@ export async function editorStream(source:HostedInlineRequest,notePath:string,io
     if(regionBody(current,id)||current.includes(`<!-- t3-response:start:${id} -->`))return current;
     const offset=destinationOffset(current,source.destinationSection);
     const before=current.slice(0,offset);
-    return before+(source.nativeProjection?(before&&!before.endsWith('\n')?'\n':'')+responseAnchor(id,source.responseContainer?undefined:startMarker(id))+'\n':region.text)+current.slice(offset);
+    const anchor=responseAnchor(id,source.responseContainer?undefined:startMarker(id));
+    return before+(source.nativeProjection?(before&&!before.endsWith('\n')?'\n':'')+(source.localOnly?withLocalResponseBinding(anchor,request):anchor)+'\n':region.text)+current.slice(offset);
   },allowed);
   if(document===undefined)throw Error(`Destination note unavailable: ${notePath}`);
   return request;

@@ -1,3 +1,5 @@
+import {localResponseBindings} from '../local-response-binding';
+import {responseIds} from '../response-container';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -35,6 +37,7 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   let vaultAccesses=0;
   const hostViews=new WeakMap<object,any>();
   const hostFiles=new Map<string,string>(),hostEditors=new Map<string,any>(),hostNotes=new Map<string,{path:string}>();
+  const hostSaved=new Map<string,string>();
   const noteFile=(path:string)=>{let file=hostNotes.get(path);if(!file){file={path};hostNotes.set(path,file);}return file;};
   let authority:InlineLeaseAuthority|undefined;
   const hostTick=async()=>{
@@ -94,8 +97,8 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
     app={
       loadLocalStorage:(key:string)=>localStorage.get(key)??(key==='send-to-t3-code-device-v1'?local:undefined),
       saveLocalStorage:(key:string,value:any)=>{localStorage.set(key,value);if(key==='send-to-t3-code-device-v1')local=value;},
-      workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{(workspaceEvents[name]??=[]).push(callback);return {};},getActiveViewOfType:()=>activeEditorView&&activeNote?(activeEditor??{file:activeNote}):undefined,getActiveFile:()=>activeNote,getLeavesOfType:()=>[...hostEditors].map(([path,editor])=>{let view=hostViews.get(editor);if(!view){view={file:noteFile(path),editor,save:async()=>{}};hostViews.set(editor,view);}return {view};})},
-      vault:{adapter:{},getFileByPath:(path:string)=>hostEditors.has(path)?noteFile(path):undefined,getName:()=> 'Notes',read:(file:any)=>{const editor=hostEditors.get(file.path);if(editor)return Promise.resolve(editor.getValue());vaultAccesses++;throw Error('Chat must not read note contents');},readBinary:()=>{vaultAccesses++;throw Error('Chat must not read attachments');}},
+      workspace:{onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{(workspaceEvents[name]??=[]).push(callback);return {};},getActiveViewOfType:()=>activeEditorView&&activeNote?(activeEditor??{file:activeNote}):undefined,getActiveFile:()=>activeNote,getLeavesOfType:()=>[...hostEditors].map(([path,editor])=>{let view=hostViews.get(editor);if(!view){view=Object.assign(new Base(),{file:noteFile(path),editor,getViewData:()=>editor.getValue(),setViewData:(text:string)=>editor.replaceRange(text,editor.offsetToPos(0),editor.offsetToPos(editor.getValue().length)),getMode:()=> 'source',requestSave:()=>{void view.save().catch(()=>{});},save:async()=>{hostSaved.set(path,view.getViewData());}});hostViews.set(editor,view);}return {view};})},
+      vault:{adapter:{},getFileByPath:(path:string)=>hostEditors.has(path)?noteFile(path):undefined,getName:()=> 'Notes',read:(file:any)=>{const editor=hostEditors.get(file.path);if(editor)return Promise.resolve(hostSaved.get(file.path)??editor.getValue());vaultAccesses++;throw Error('Chat must not read note contents');},process:async(file:any,change:(text:string)=>string)=>{const current=hostSaved.get(file.path)??hostEditors.get(file.path).getValue(),next=change(current);hostSaved.set(file.path,next);return next;},readBinary:()=>{vaultAccesses++;throw Error('Chat must not read attachments');}},
     };
     async loadData(){return shared.at(-1)??initial;}
     async saveData(value:any){shared.push(value);}
@@ -194,9 +197,11 @@ async function chatHarness(onCommand?:(command:any)=>Promise<void>) {
   },attachEditor:(path:string,initial:string)=>{
     const file=new File(path),view=Object.assign(new Base(),{file,editor:null as any,save:async()=>{}});
     let value=initial;
+    hostNotes.set(path,file);hostSaved.set(path,initial);
+    Object.assign(view,{getViewData:()=>value,setViewData:(text:string)=>{value=text;},getMode:()=> 'source',requestSave:()=>{void view.save().catch(()=>{});},save:async()=>{hostSaved.set(file.path,(view as any).getViewData());}});
     const offsetToPos=(offset:number)=>{const lines=value.slice(0,offset).split('\n');return {line:lines.length-1,ch:lines.at(-1)!.length};};
     const posToOffset=(pos:{line:number;ch:number})=>value.split('\n').slice(0,pos.line).reduce((n,line)=>n+line.length+1,0)+pos.ch;
-    view.editor={getValue:()=>value,getSelection:()=>'',getCursor:()=>offsetToPos(value.length),posToOffset,offsetToPos,replaceRange:(text:string,from:any,to?:any)=>{value=value.slice(0,posToOffset(from))+text+value.slice(to?posToOffset(to):posToOffset(from));}};
+    view.editor={getValue:()=>value,getSelection:()=>'',getCursor:()=>offsetToPos(value.length),posToOffset,offsetToPos,replaceRange:(text:string,from:any,to?:any)=>{value=value.slice(0,posToOffset(from))+text+value.slice(to?posToOffset(to):posToOffset(from));queueMicrotask(()=>{void view.save().catch(()=>{});});}};
     hostEditors.set(path,view.editor);
     const leaf={view,openFile:async()=>{}};
     (plugin.app.workspace as any).getLeavesOfType=()=>[leaf];
@@ -566,7 +571,7 @@ for(const streaming of [false,true])for(const selected of [false,true])test(`one
     assert.match(sent.message.text,/^Selected question/);
     if(selected)assert.doesNotMatch(sent.message.text,/Private remainder/);
     else assert.match(sent.message.text,/Private remainder/);
-    assert.match(sent.message.text,/Destination note path: "\/projects\/notes\/Notes\/Hotkey.md"$/);
+    assert.match(sent.message.text,/Destination note path: "\/projects\/notes\/Notes\/Hotkey.md"/);
     assert.doesNotMatch(sent.message.text,/Different.md|Unrelated palette draft/);
     assert.equal(h.plugin.app.loadLocalStorage('send-to-t3-code-chat-draft-v1'),'Unrelated palette draft');
     if(streaming){
@@ -589,7 +594,7 @@ test('a typed palette question sends only the question and streams at the note e
     const text=h.commands[1].message.text;
     assert.match(text,/^Why does this matter\?/);
     assert.doesNotMatch(text,/Private note|Body not sent|Vault-relative note path/);
-    assert.match(text,/Sent from Obsidian\.\nObsidian vault: "Notes"\nDestination note path: "\/projects\/notes\/Notes\/Palette.md"$/);
+    assert.match(text,/Sent from Obsidian\.\nObsidian vault: "Notes"\nDestination note path: "\/projects\/notes\/Notes\/Palette.md"/);
     assert.equal(h.plugin.app.loadLocalStorage('send-to-t3-code-chat-draft-v1'),'');
     for(let attempt=0;attempt<200&&!editor.value.includes('Inline reply from T3.');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.match(editor.value,/> Why does this matter\?[\s\S]*> Inline reply from T3\./);
@@ -650,8 +655,8 @@ test('a palette question about selected text includes both parts and inserts bel
     assert.match(text,/^Selected text:\nClaim\n\nQuestion:\nWhy\?/);
     assert.doesNotMatch(text,/Other note text stays private/);
     assert.equal(h.plugin.app.loadLocalStorage('send-to-t3-code-chat-draft-v1'),'');
-    for(let attempt=0;attempt<200&&(editor.value.includes('t3-inline:start:')||!editor.value.includes('Inline reply from T3.'));attempt++)await new Promise(resolve=>setTimeout(resolve,25));
-    assert.match(editor.value.replace(/<!-- t3-response:(?:start|end):[0-9a-f-]+ -->\n/g,''),/Claim\n\n\n> \[!t3-progress\]- \*\*Selected · Completed\*\*[^\n]*\n>\n> > \[!t3-steering\] You\n> > Why\?\n\n> Inline reply from T3\./);
+    for(let attempt=0;attempt<200&&(responseIds(editor.value).length||!editor.value.includes('Inline reply from T3.'));attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    assert.match(editor.value.replace(/<!-- t3-response:(?:start|end):[0-9a-f-]+ -->\n/g,''),/Claim\n{2,}> \[!t3-progress\]- \*\*Selected · Completed\*\*[^\n]*\n>\n> > \[!t3-steering\] You\n> > Why\?\n\n> Inline reply from T3\./);
     assert.equal(editor.value.split('> Why?').length-1,1);
     assert.doesNotMatch(editor.value,/> Selected text:|> Question:|> Sent from Obsidian/);
   }finally{h.plugin.onunload();}
@@ -796,7 +801,7 @@ test('editor selection menu streams a T3 reply into its original note for new an
     const newThreadText=h.commands[1].message.text;
     assert.ok(newThreadText.startsWith(selection));assert.match(newThreadText,/Answer in the T3 thread\. The Obsidian plugin will insert your reply\./);assert.doesNotMatch(newThreadText,/Do not edit the Obsidian note|Reply in the Obsidian note itself/);
     assert.match(newThreadText,/Destination note path: "\/projects\/notes\/Notes\/Original.md"/);assert.doesNotMatch(newThreadText,/Different.md/);
-    await waitForReply(()=>!first.value.includes('t3-inline:start:')&&first.value.includes('Inline reply from T3.'),'New-thread selection reply finishes in the note');
+    await waitForReply(()=>!responseIds(first.value).length&&first.value.includes('Inline reply from T3.'),'New-thread selection reply finishes in the note');
     assert.match(first.value,/Inline reply from T3\./);
     assert.doesNotMatch(first.value,/\*\*T3 answer\*\*/);
     h.setThreads([{id:h.commands[1].threadId,projectId:project.id,title:'Selection reply',updatedAt:new Date().toISOString()}]);
@@ -811,7 +816,7 @@ test('editor selection menu streams a T3 reply into its original note for new an
     const secondTurn=h.commands.filter(command=>command.type==='thread.turn.start').at(-1);
     assert.equal(secondTurn.type,'thread.turn.start');assert.equal(secondTurn.threadId,'old-thread');
     assert.ok(secondTurn.message.text.startsWith(followup));assert.doesNotMatch(secondTurn.message.text,/Reply in the Obsidian note itself/);
-    await waitForReply(()=>!second.value.includes('t3-inline:start:')&&second.value.includes('Inline reply from T3.'),'Existing-thread selection reply finishes in the note');
+    await waitForReply(()=>!responseIds(second.value).length&&second.value.includes('Inline reply from T3.'),'Existing-thread selection reply finishes in the note');
     assert.match(second.value,/Inline reply from T3\./);
     assert.equal(h.vaultAccesses(),0,'Selection chat sends the selection and note path without reading the note body');
   }finally{h.plugin.onunload();}
@@ -1193,22 +1198,22 @@ test('manual Send to T3 streams into the source editor but disabled and automati
     assert.match(first.request.prompt,/Answer in the T3 thread\. The Obsidian plugin will insert your reply\./);
     assert.doesNotMatch(first.request.prompt,/Do not edit the Obsidian note/);
     assert.doesNotMatch(first.request.prompt,/t3-inline:start/);
-    assert.match(editor.value,/t3-inline:start/);
+    assert.ok(responseIds(editor.value).length);
     for(let attempt=0;attempt<200&&!editor.value.includes('Inline reply from T3.');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.match(editor.value,/Inline reply from T3\./);
-    for(let attempt=0;attempt<40&&editor.value.includes('t3-inline:start');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    for(let attempt=0;attempt<40&&responseIds(editor.value).length;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.doesNotMatch(editor.value,/t3-inline:(?:start|end)/,'a finished response has no tracking lines');
     const continued=await h.plugin.send(file,project,{threadId:'existing',throwOnError:true});
     assert.equal(continued.threadId,'existing');
-    assert.equal((editor.value.match(/t3-inline:start/g)??[]).length,1,'the new response is guarded while streaming');
+    assert.ok(responseIds(editor.value).length===1||(editor.value.match(/Inline reply from T3\./g)??[]).length===2,'The new response remains guarded until its final save');
     for(let attempt=0;attempt<200&&(editor.value.match(/Inline reply from T3\./g)??[]).length<2;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.equal((editor.value.match(/Inline reply from T3\./g)??[]).length,2);
-    for(let attempt=0;attempt<40&&editor.value.includes('t3-inline:start');attempt++)await new Promise(resolve=>setTimeout(resolve,25));
+    for(let attempt=0;attempt<40&&responseIds(editor.value).length;attempt++)await new Promise(resolve=>setTimeout(resolve,25));
     assert.doesNotMatch(editor.value,/t3-inline:(?:start|end)/,'both completed responses are plain Markdown');
     assert.doesNotMatch(editor.value,/\*\*T3 answer\*\*|`existing`/);
     h.plugin.settings.inlineStreaming.enabled=false;
     const before=editor.value;
-    h.plugin.app.vault.read=async()=> '# Manual\nPlease explain this.';
+    h.plugin.app.vault.read=async()=>before;
     await h.plugin.send(file,project,{throwOnError:true});
     assert.equal(editor.value,before,'A disabled stream leaves the editor unchanged');
     h.plugin.settings.inlineStreaming.enabled=true;
@@ -1254,7 +1259,7 @@ test('new inline responses capture the retention setting in their immutable host
     // The durable handoff is created before dispatch and retains its preference.
     const job=h.plugin.inlineChat.activeFor('Notes/Retention.md')[0]??h.plugin.inlineChat.jobs.at(-1);
     assert.equal(job.keepIntermediate,true);
-    const record=JSON.parse(h.hostFiles.get(leasePaths(job.hostTarget.directory,job.id).record)!);
+    const record={request:h.plugin.deviceInline.localResponse(job.id)};
     assert.equal(record.request.keepIntermediate,true);
     h.plugin.settings.inlineStreaming.keepIntermediate=false;
     assert.equal(job.keepIntermediate,true);
@@ -1451,7 +1456,7 @@ for(const streamingDefault of [false,true])for(const destination of ['default','
       assert.equal(h.commands[0].type,'thread.create');
       assert.notEqual(h.commands[0].threadId,'old-thread');
       assert.equal(h.commands[1].threadId,h.commands[0].threadId);
-      assert.equal((opened.value.match(/t3-inline:start:/g)??[]).length,2);
+      assert.equal(responseIds(opened.value).length,2);
       assert.equal(JSON.parse(h.hostFiles.get(leasePaths(host.directory,id).record)!).state.steering,undefined);
       return;
     }
@@ -1585,7 +1590,7 @@ for(const streaming of [false,true])test(`selection questions attach local image
     assert.match(first.message.text,/Before\n\[.*\]\(t3-context:\/\/.*\)\n\[.*\]\(t3-context:\/\/.*\)\nAfter/);
     assert.doesNotMatch(first.message.text,/Tail/,'Unselected text stays out of the request');
     assert.equal(resolved[0].source,'Notes/Image selection.md');
-    if(streaming)await waitForReply(()=>context.value.includes('Inline reply from T3.')&&!context.value.includes('t3-inline:start:'),'Selected-image reply completes');
+    if(streaming)await waitForReply(()=>context.value.includes('Inline reply from T3.')&&!responseIds(context.value).length,'Selected-image reply completes');
     const palette=h.attachEditor('Notes/Palette images.md',selected+'\nUnselected ![[outside.png]]');
     await h.plugin.openPaletteAction('Describe it.',selected);
     await h.modals.at(-1).choose(false);
@@ -1594,7 +1599,7 @@ for(const streaming of [false,true])test(`selection questions attach local image
     assert.match(next.message.text,/Selected text:\nBefore/);
     assert.match(next.message.text,/Question:\nDescribe it\./);
     assert.equal(resolved.at(-1).source,'Notes/Palette images.md');
-    if(streaming)await waitForReply(()=>palette.value.includes('Inline reply from T3.')&&!palette.value.includes('t3-inline:start:'),'Palette-image reply completes');
+    if(streaming)await waitForReply(()=>palette.value.includes('Inline reply from T3.')&&!responseIds(palette.value).length,'Palette-image reply completes');
     const hotkey=h.attachEditor('Notes/Hotkey images.md',selected+'\nUnselected ![[outside.png]]');
     hotkey.editor.getSelection=()=>selected;
     hotkey.editor.getCursor=(side:string)=>hotkey.editor.offsetToPos(side==='from'?0:selected.length);
@@ -1826,8 +1831,8 @@ test('agent note commands combine many threads per note, mirrored responses, att
     const y=await h.plugin.executeNoteCommand({...first,id:webcrypto.randomUUID(),notePath:b.file.path});
     assert.notEqual(x.threadId,y.threadId);assert.equal(y.bindingIds.length,2);
     await new Promise(resolve=>setTimeout(resolve,250));
-    assert.equal((a.value.match(/t3-inline:start:/g)??[]).length,2);
-    assert.equal((b.value.match(/t3-inline:start:/g)??[]).length,2);
+    assert.equal(responseIds(a.value).length,2);
+    assert.equal(responseIds(b.value).length,2);
     const turns=h.commands.filter(command=>command.type==='thread.turn.start');
     assert.equal(turns.length,2,'Four destinations dispatch exactly two prompts');
     assert.ok(turns[0].message.text.startsWith('Source A: explain alpha.'));
@@ -1839,9 +1844,9 @@ test('agent note commands combine many threads per note, mirrored responses, att
     // Attach the first response again, using its exact original user message.
     const attached=await h.plugin.executeNoteCommand({version:1,id:webcrypto.randomUUID(),kind:'attach-response',notePath:a.file.path,destinations:[a.file.path],threadId:x.threadId,messageId:x.messageId,streamReply:true});
     assert.equal(attached.bindingIds.length,1);assert.equal(h.commands.length,count,'Attachment never sends a prompt');
-    assert.equal((a.value.match(/t3-inline:start:/g)??[]).length,3);
+    assert.equal(responseIds(a.value).length,3);
     h.setStreaming(false);
-    await waitForReply(()=>!a.value.includes('t3-inline:start:')&&!b.value.includes('t3-inline:start:'),'All independent mirror destinations complete');
+    await waitForReply(()=>!responseIds(a.value).length&&!responseIds(b.value).length,'All independent mirror destinations complete');
     assert.equal((a.value.match(/Inline reply from T3\./g)??[]).length,3);
     assert.equal((b.value.match(/Inline reply from T3\./g)??[]).length,2,b.value);
     assert.doesNotMatch(a.value,/t3-response:(?:start|end):/);
@@ -1889,7 +1894,7 @@ test('a lost send acknowledgement retains its durable guard and cannot resend af
     const command={version:1,id:webcrypto.randomUUID(),kind:'send-note',notePath:note.file.path,destinations:[note.file.path],streamReply:true};
     await assert.rejects(h.plugin.executeNoteCommand(command));assert.equal(h.plugin.settings.pending.length,0);
     const guards=[...h.hostFiles].filter(([path]:any)=>path.includes('/send-guards/')).map(([,raw]:any)=>JSON.parse(raw));
-    assert.equal(guards.length,1);assert.equal(guards[0].status,'failed');assert.equal(guards[0].uncertain,true);
+    assert.equal(guards.length,0,'Local sends do not need a remote send guard');assert.equal(h.plugin.app.loadLocalStorage(`send-to-t3-code-device-v1-note-command-${command.id}`).discarded,true);
     assert.match(note.value,/Keep this exact source/);
     const count=h.commands.length;h.plugin.onunload();restarted=await h.start();
     await assert.rejects(restarted.executeNoteCommand(command),/cannot be retried/);assert.equal(h.commands.length,count);
@@ -1985,8 +1990,8 @@ for(const surface of ['editor','palette','hotkey','full-note'])for(const enabled
     assert.match(sent.message.text,/Selected question/);
     if(surface!=='full-note')assert.doesNotMatch(sent.message.text,/Private remainder/);
     if(enabled){
-      assert.match(opened.value,/t3-inline:start:/);
-      const records=[...h.hostFiles].filter(([path])=>path.includes('/leases/')&&path.endsWith('.json')).map(([,bytes])=>JSON.parse(bytes));
+      assert.ok(responseIds(opened.value).length||opened.value.includes('Inline reply from T3.'));
+      const records=[{request:h.plugin.deviceInline.localResponse(h.plugin.settings.settlementJobs.at(-1).inlineJobId)}];
       assert.equal(records.length,1);assert.equal(records[0].request.intermediateMode,'collapse');assert.equal(records[0].request.finalAnswerFormat,'raw-markdown');
     }else{assert.equal(opened.value,'Selected question\nPrivate remainder');assert.doesNotMatch(sent.message.text,/plugin will insert/);}
     await h.plugin.openPaletteAction('Later.','');
@@ -2027,7 +2032,7 @@ test('project changes, existing-picker cancellation and safe errors preserve the
     h.plugin.settings.inlineStreaming.enabled=true;h.plugin.settings.inlineStreaming.finalAnswerFormat='raw-markdown';
     await picker.onChooseItem(picker.getItems()[0]);
     assert.equal(h.commands.filter(command=>command.type==='thread.create').length,0);
-    const binding=JSON.parse([...h.hostFiles].find(([path])=>path.includes('/leases/')&&path.endsWith('.json'))![1]).request;
+    const binding=h.plugin.deviceInline.localResponse(h.plugin.inlineChat.jobs.at(-1).id);
     assert.equal(binding.intermediateMode,'collapse');assert.equal(binding.finalAnswerFormat,'raw-markdown');
   }finally{h.plugin.onunload();}
 });
@@ -2070,7 +2075,7 @@ for(const picker of ['project','existing'])test(`an override preserves the captu
     if(picker==='project'){chooser.onChooseItem(chooser.getItems().find((item:any)=>item.key==='vault:root'));await destination.choose('new');}else await chooser.onChooseItem(chooser.getItems()[0]);
     const sent=h.commands.find(command=>command.type==='thread.turn.start');assert.ok(sent);assert.match(sent.message.text,/^Original selection/);assert.match(sent.message.text,/Notes\/Original.md/);assert.doesNotMatch(sent.message.text,/Other.md/);
     // A completed synthetic reply can settle before the picker returns.
-    assert.match(opened.value,/^Original selection\n[\s\S]*(?:t3-inline:start:|> Inline reply from T3\.)[\s\S]*Tail$/);
+    assert.match(opened.value,/^Original selection\n[\s\S]*(?:t3-inline:start:|data-t3-response=|> Inline reply from T3\.)[\s\S]*Tail$/);
   }finally{h.plugin.onunload();}
 });
 

@@ -320,6 +320,10 @@ def response_host_runtime(bundle: bytes) -> bytes | None:
 def install_response_host(version: str, bundle: bytes) -> dict[str, Any] | None:
     runtime = response_host_runtime(bundle)
     if runtime is None:
+        # Plugin-only releases retire the separately installed writer. Keep
+        # old immutable runtimes and private response records for migration.
+        if HOST_UNIT.exists():
+            run(['systemctl', '--user', 'disable', '--now', 'send-to-t3-code-response-host.service'])
         return None
     root = QLO2_PLUGIN.parents[2]
     route = read_json(root / '.obsidian/t3-code/storage-route.json')

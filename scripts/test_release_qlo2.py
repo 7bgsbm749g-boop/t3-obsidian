@@ -19,6 +19,15 @@ SPEC.loader.exec_module(release)
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    def test_plugin_only_release_disables_the_existing_external_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            unit = Path(directory) / 'old.service'
+            unit.write_text('old immutable runtime')
+            with patch.object(release, 'HOST_UNIT', unit), patch.object(release, 'run') as command:
+                self.assertIsNone(release.install_response_host('2.39.0', b'plugin only;'))
+                command.assert_called_once_with(['systemctl', '--user', 'disable', '--now', 'send-to-t3-code-response-host.service'])
+                self.assertEqual(unit.read_text(), 'old immutable runtime')
+
     def test_background_runtime_is_carried_by_exact_release_bytes(self) -> None:
         runtime = b'console.log("standalone host");\n'
         marker = b'// T3_RESPONSE_HOST_RUNTIME_V1:' + base64.b64encode(gzip.compress(runtime, mtime=0))

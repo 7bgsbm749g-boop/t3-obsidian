@@ -2,7 +2,7 @@ import type {LeaseRecord} from './inline-lease';
 import type {HostedInlineRequest} from './hosted-inline';
 import {applyThreadItem,inlineBindingCheckpoint,inlineTurnMessages,restoreInlineBindings,turnForMessage,renderInlineTurn,rememberInlineTurns,type InlineThreadState,type InlineStartRequest,type InlineActivity} from './inline-thread';
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs} from './inline-questions';
-import {mergeProse,observeIncoming} from './inline-steering';
+import {mergeProse,observeIncoming,steeringBoundary} from './inline-steering';
 import {completionTime,finalAnswerFormat,intermediateMode} from './response-presentation';
 import {watchThread,readInlineSnapshot,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import {logFailure} from './diagnostics';
@@ -55,6 +55,7 @@ export class DirectInlinePreview {
     this.incoming??=record.state?.incoming;
   }
   get notePath(){return this.record.state?.notePath??this.record.request.notePath;}
+  steeringProse(){return steeringBoundary(this.prose);}
   delivery(delivery:InlineStartRequest){
     if(this.stopped)return;
     this.state=restoreInlineBindings(this.state,{starts:{[delivery.messageId]:delivery}});
@@ -64,7 +65,7 @@ export class DirectInlinePreview {
     if(this.stopped)return;
     const record=this.record;
     if(!open||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.state?.status==='conflict'){this.suspend();return;}
-    if(this.monitor){if(this.terminal&&record.request.deviceCompletion)this.verifyCompletion();return;}
+    if(this.monitor){if(this.terminal&&(record.request.deviceCompletion||record.request.localOnly))this.verifyCompletion();return;}
     const generation=++this.generation;
     this.monitor=this.watch(record.request.threadId,this.access,{
       item:item=>{if(!this.stopped&&this.generation===generation)this.item(item);},
@@ -112,7 +113,8 @@ export class DirectInlinePreview {
     if(phase==='complete'&&(!inlineTurnMessages(this.state,turnId).length||inlineTurnMessages(this.state,turnId).at(-1)!.streaming))phase='running';
     const current={...this.state,messages:mergeProse(this.prose,this.state.messages,this.turnIds),turns:{...this.record.state?.presentationTurns,...this.state.turns}};
     if(request.finalAnswerFormat==='raw-markdown')current.turns=rememberInlineTurns(current,this.turnIds,current.turns);
-    const body=renderInlineTurn(current,turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,this.state.title??request.threadTitle,{startedAt:request.createdAt,finishedAt:phase==='complete'||phase==='interrupted'?completionTime(this.state,turnId):undefined},finalAnswerFormat(request.finalAnswerFormat));
+    const title=request.localOnly&&(phase==='complete'||phase==='interrupted')?request.threadTitle:this.state.title??request.threadTitle;
+    const body=renderInlineTurn(current,turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,title,{startedAt:request.createdAt,finishedAt:phase==='complete'||phase==='interrupted'?completionTime(this.state,turnId):undefined},finalAnswerFormat(request.finalAnswerFormat));
     this.completionTurnId=turnId;
     const key=finalResponseKey(this.state,turnId);
     const exactStopped=this.state.protocolVersion===2&&phase==='interrupted'&&this.state.turns?.[turnId]?.state==='interrupted';
@@ -120,7 +122,7 @@ export class DirectInlinePreview {
     this.terminal=terminal;
     const questionActivities=this.state.activities.filter(activity=>activity.kind.startsWith('user-input.')||activity.kind==='provider.user-input.respond.failed');
     this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,turnId,turnIds:this.turnIds.slice(),phase:this.failure&&!completionVerified?'error':phase,completionVerified,failure:completionVerified?undefined:this.failure,checkpoint:inlineBindingCheckpoint(this.state),...(questionActivities.length?{questionActivities}:{})});
-    if(request.deviceCompletion&&terminal&&!completionVerified)this.verifyCompletion();
+    if((request.deviceCompletion||request.localOnly)&&terminal&&!completionVerified)this.verifyCompletion();
     return true;
   }
   private verifyCompletion(){

@@ -7,6 +7,7 @@ import {ResponseScroll} from './response-scroll';
 import {presentToolGroups,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,canonicalToolGroup,type ToolPresentation} from './response-tool-presentation';
 import {toolDisplayOffset} from './response-tool-presentation';
 import {responseFrame} from './response-container';
+import {localResponseBindings} from './local-response-binding';
 
 export interface NativeViewConflict {base:string;local:string;incoming:string;reason:string;awaitingCompletion?:boolean;attemptedIncoming?:string;unsafeIncoming?:boolean}
 /** Native rendering with a separate saved projection. */
@@ -39,6 +40,7 @@ export class NativeResponseView {
   private unloading=false;
   private file:TFile|null;
   private materialized=new Set<string>();
+  private localMaterialized=new Set<string>();
   private ownSave?:{text:string};
   private materialization?:{before:string;after:string;ids:string[]};
   private scroll:ResponseScroll;
@@ -231,9 +233,14 @@ export class NativeResponseView {
       }
     }
     const local=this.saved();
+    // A local binding ends when its block disappears through Sync or an edit.
+    // It needs no independently transported writer receipt to adopt that file.
+    const localIds=new Set(localResponseBindings(this.base).map(binding=>binding.id));
+    for(const id of localIds)this.localMaterialized.add(id);
+    this.responses=this.responses.filter(response=>!localIds.has(response.id)||!!responseRegion(incoming,response.id));
     if(this.ownSave?.text===incoming)this.base=incoming;
     const edits=changedEdits(this.base,local);
-    if([...this.materialized].some(id=>responseRegion(incoming,id))){this.block({base:this.base,local,incoming,reason:'An incoming note resurrected an already materialized response anchor.'});return;}
+    if([...this.materialized].some(id=>!this.localMaterialized.has(id)&&responseRegion(incoming,id))){this.block({base:this.base,local,incoming,reason:'An incoming note resurrected an already materialized response anchor.'});return;}
     // Obsidian may load our own just-saved projection during a mode switch or
     // echo. Identical local/incoming edits are already the same revision.
     const merge=incoming===local?{ok:true as const,text:local}:mergeSavedEdits(this.base,incoming,edits);
@@ -297,7 +304,12 @@ export class NativeResponseView {
       if(merge.text!==disk)this.view.requestSave();
     }catch(error){const reason=error instanceof Error?error.message:String(error);this.block({base:baseline,local,incoming:disk,reason});throw error;}
   }
-  markMaterialized(id:string){this.materialized.add(id);}
+  markMaterialized(id:string){if(localResponseBindings(this.base).some(binding=>binding.id===id))this.localMaterialized.add(id);this.materialized.add(id);}
+  allowLocalBinding(id:string,disk:string){
+    if(!responseRegion(disk,id))return;
+    this.materialized.delete(id);this.localMaterialized.add(id);
+    if(this.blocked&&!this.adoptSaved(disk))throw new ProjectionConflict(this.blocked.reason);
+  }
   preserveConflict(record:NativeViewConflict){if(!this.blocked)this.block(record);}
   /** Reconcile a fresh saved revision with current ordinary typing. Conflicting
    * edits stay visible; reading disk never authorizes discarding the editor. */
@@ -321,6 +333,7 @@ export class NativeResponseView {
   resolveCommitted(saved:string,ids:readonly string[],clear=false){
     if(this.disposed)return false;
     const base=this.blocked?.base??this.base;
+    for(const binding of localResponseBindings(base))this.localMaterialized.add(binding.id);
     const local=this.displayed()===saved?this.blocked?.local??this.base:this.conflictLocal();
     const merge=mergeSavedEdits(base,saved,changedEdits(base,local));
     if(!merge.ok){if(!this.blocked||this.blocked.awaitingCompletion)this.block({base,local,incoming:saved,reason:merge.reason});return false;}
@@ -333,7 +346,7 @@ export class NativeResponseView {
     // All validation precedes this single transition. A failed merge cannot
     // retire a response, clear a conflict or briefly render an empty anchor.
     this.blocked=undefined;this.unloading=false;this.base=saved;this.diskBase=saved;this.ownSave=undefined;this.responses=responses;this.projection=projection;
-    for(const id of ids)this.materialized.add(id);
+    for(const id of ids)this.markMaterialized(id);
     this.render(projection.display,clear);
     if(merge.text!==saved)this.view.requestSave();return true;
   }

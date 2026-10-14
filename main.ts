@@ -1,3 +1,10 @@
+import {retainedLocalFinal,restoredLocalFinal} from './local-final-cache';
+import {hasResponseMarkers} from './inline-thread';
+import {interruptStoppedResponse} from './response-stop';
+import {localResponseBindings,responseBindingComment} from './local-response-binding';
+import {localStagedDraft,localStageCommand} from './local-response-staging';
+import {localSyncReady} from './local-sync-state';
+import {rewriteReplyReferences} from './reply-assets';
 import {prepareEventAction,executeEventAction,type ActionIO,type ActionPlan} from './event-actions';
 import {isClientCommand} from './client-command';
 import {markdownCodeCacheStatus} from './reply-html';
@@ -166,8 +173,6 @@ export default class SendToT3 extends Plugin {
   private inlineTargets:InlineHostTarget[]=[];
   private destinationRoutes=new Map<string,{record:LeaseRecord;host:InlineHostTarget;at:number}>();
   private inlineHostService?:import('./hosted-inline-desktop').DesktopInlineHost;
-  private backgroundCredentialsHash='';
-  private backgroundNoteLinks=new Set<string>();
   private inlineHostKey='';
   private inlineHostRefresh?:Promise<void>;
   private noteCommandOpening?:Promise<void>;
@@ -283,7 +288,7 @@ export default class SendToT3 extends Plugin {
       this.settings.noteThreads.push({notePath:job.notePath,threadId:job.threadId,projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId??'',...(job.connection.environmentId?{environmentId:job.connection.environmentId}:{}),selectedAt:new Date().toISOString()});
       migratedNoteThreads=true;
     }
-    this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>this.stopHostedInline(job.id,job.hostTarget,job.remoteStopOperationId),status:job=>this.deviceInline?.responseStatus(job.id)},()=>'collapse',()=>finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat));
+    this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>job.localOnly?this.stopLocalInline(job):this.stopHostedInline(job.id,job.hostTarget,job.remoteStopOperationId),status:job=>this.deviceInline?.responseStatus(job.id)},()=>'collapse',()=>finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat));
     const storedTargets=this.app.loadLocalStorage(`${this.localKey}-inline-hosts-${this.settings.vaultId}`);
     if(Array.isArray(storedTargets))this.inlineTargets=storedTargets.filter(target=>target&&typeof target.environmentId==='string'&&typeof target.workspaceRoot==='string'&&typeof target.directory==='string');
     if(typeof this.registerEditorExtension==='function'){const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)));}
@@ -305,7 +310,7 @@ export default class SendToT3 extends Plugin {
     }),()=>this.settings.folderLinks.map(link=>({...link,environmentId:link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??this.eventLocalEnvironmentId})),this.settings.vaultId,{load:()=>this.settings.codebase,save:async state=>{this.settings.codebase=state;await this.save();},projectChanged:async(scope,change)=>{await this.updateCodebaseProjectLinks(scope,change);}});
     await this.codebase.install();
     }
-    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),connectionTimeout:(target,error)=>{if(this.connectionRecovery?.failed(this.connectionRecoveryTarget(target),error))this.recordSendFailure(undefined,error,'connection-timeout',Date.now()-error.elapsedMs);},connectionRecovered:target=>this.connectionRecovery?.recovered(this.connectionRecoveryTarget(target)),completionActor:this.deviceId,completionAcknowledged:record=>deviceCompletion.acknowledged(record),completeResponse:(record,original,staged,prepare,abort)=>deviceCompletion.complete(record,original,staged,prepare,abort),completionFailed:error=>new Notice(`T3 Code: ${message(error)}`,10000),loadStops:()=>this.app.loadLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`)??[],saveStops:ids=>this.app.saveLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`,ids),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>{this.codebase?.observeSource(record.request,record.state?.notePath??record.request.notePath);return nativeResponses(this.app).receive(record,proof);},receiveDirect:update=>{this.codebase?.observeSource(update.request);if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);return nativeResponses(this.app).stream(update);},receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target,false),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
+    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),localFinalNotes:deviceFinalNoteIO(this.app,()=>!this.stopped),allowLocalMigration:(id,path)=>nativeResponses(this.app).allowLocalBinding(id,path),retainLocalFinal:async update=>{await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${update.request.id}`,retainedLocalFinal(update));},loadLocalFinal:async request=>restoredLocalFinal(await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${request.id}`),request),localFinalDraft:async(document,request)=>{if(!request.localStage)return document;const opened=await this.inlineHostFiles(request.host,false);try{return await localStagedDraft(document,request,opened.files);}finally{opened.close();}},syncReady:()=>localSyncReady(this.app),openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file&&typeof view.getViewData==='function').map(view=>({path:view.file!.path,document:nativeResponses(this.app).view(view)?.saved()??view.getViewData()})),saveLocalNote:async path=>{for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===path&&typeof view.save==='function')await view.save();}},localCompleted:(id,path)=>{nativeResponses(this.app).localCompleted(id,path);void deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${id}`,null).catch(error=>logFailure('response.local.final-cache-cleanup',error));this.inlineChat?.flushAvailable();},localQuestions:update=>{if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);},localFinalBody:async update=>rewriteReplyReferences(update.body,async reference=>{try{return await resolveReplyReference(this.app,reference,update.request,await this.inlineThreadAccess(update.request.threadEnvironmentId));}catch{return undefined;}}),connectionTimeout:(target,error)=>{if(this.connectionRecovery?.failed(this.connectionRecoveryTarget(target),error))this.recordSendFailure(undefined,error,'connection-timeout',Date.now()-error.elapsedMs);},connectionRecovered:target=>this.connectionRecovery?.recovered(this.connectionRecoveryTarget(target)),completionActor:this.deviceId,completionAcknowledged:record=>deviceCompletion.acknowledged(record),completeResponse:(record,original,staged,prepare,abort)=>deviceCompletion.complete(record,original,staged,prepare,abort),completionFailed:error=>new Notice(`T3 Code: ${message(error)}`,10000),loadStops:()=>this.app.loadLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`)??[],saveStops:ids=>this.app.saveLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`,ids),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>{this.codebase?.observeSource(record.request,record.state?.notePath??record.request.notePath);return nativeResponses(this.app).receive(record,proof);},receiveDirect:update=>{this.inlineChat?.observeLocal(update);this.codebase?.observeSource(update.request);if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);return nativeResponses(this.app).stream(update);},receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target,false),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
     let completionCleanupCursor=0,completionCleanupBusy=false,lastProofCleanup=0;
     this.app.workspace.onLayoutReady(()=>this.registerInlineInterval(()=>{
       if(completionCleanupBusy||this.stopped)return;completionCleanupBusy=true;
@@ -807,6 +812,25 @@ export default class SendToT3 extends Plugin {
     if(isResponseCommand(input)){
       const command=validateResponseCommand(input);
       if(command.kind==='response-import-records'||command.kind==='response-import-info')return this.executeImportRead(command,await this.inlineHostTarget());
+      if(command.kind==='stage-note-edit'||command.kind==='submit-note-edit'){
+        for(const file of this.app.vault.getMarkdownFiles?.()??[]){
+          const document=await deviceNoteIO(this.app).readNote(file.path);if(document===undefined)continue;
+          const binding=localResponseBindings(document).find(binding=>binding.id===command.bindingId&&binding.vaultId===this.settings.vaultId);if(!binding)continue;
+          if(Platform.isMobile)throw Error('Run the note staging command on the desktop plugin host.');
+          const request={...binding,notePath:file.path},opened=await this.inlineHostFiles(request.host,false);
+          try{
+            const result=await localStageCommand(command.kind,request,document,opened.files,command.hash);
+            if('request' in result&&result.request){
+              const stagedRequest=result.request,io=deviceNoteIO(this.app),saved=await io.updateNote(file.path,current=>{if(!localResponseBindings(current).some(value=>value.id===request.id))throw Error('The response completed before staging.');return current.replace(responseBindingComment(binding),responseBindingComment(stagedRequest));},()=>!this.stopped);
+              if(saved===undefined)throw Error('Save the note before submitting the staged edit.');
+              for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===file.path)await view.save();}
+              this.deviceInline?.resume(this.inlineTargets);
+            }
+            const {request:_request,...receipt}=result as any;return {id:command.id,ok:true,...receipt};
+          }finally{opened.close();}
+        }
+      }
+
       await this.refreshInlineHost();
       if(!this.inlineHostService){
         const target=await this.inlineHostTarget(),opened=await this.inlineHostFiles(target);
@@ -1312,8 +1336,7 @@ export default class SendToT3 extends Plugin {
     try{
       await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{...options,jobOptions,requestId,sourceContext:context,onPrepared:async request=>{
         // Package images before mutating the note.
-        const host=await this.inlineHostTarget();
-        await this.responseGuard({version:4,id:requestId,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:note.path,threadId:request.threadId??commandId(requestId,'thread'),messageId:commandId(requestId,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:'0'.repeat(64),createdAt:new Date().toISOString()},'prepared');
+
         job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
         await manager.prepare(job,request);
       }});delivered=true;if(job)manager.start(job);
@@ -1321,6 +1344,7 @@ export default class SendToT3 extends Plugin {
   }
 
   private async steeringRecord(id:string):Promise<{record:LeaseRecord;host:InlineHostTarget}|undefined>{
+    const local=this.deviceInline?.cachedResponse(id);if(local?.record.request.localOnly)return local;
     const job=this.inlineChat?.find(id);
     const targets=[job?.hostTarget,...this.inlineTargets].filter((value):value is InlineHostTarget=>!!value);
     if(!job||job.hosted)try{const current=await this.inlineHostTarget();if(!targets.some(target=>JSON.stringify(target)===JSON.stringify(current)))targets.push(current);}catch{}
@@ -1516,19 +1540,6 @@ export default class SendToT3 extends Plugin {
       // environment and vault path. A new default host does not strand jobs
       // already handed to the old host.
       const key=localRoot?JSON.stringify([localRoot,this.settings.vaultId,this.app.vault.configDir]):'';
-      if(localRoot){
-        const directory=`${this.app.vault.configDir||'.obsidian'}/t3-code/inline/v1`,files=(await import('./inline-host-storage-desktop')).localInlineFiles(localRoot,directory);
-        const raw=await files.read(`${directory}/background-host-config.json`);
-        if(raw){const config=JSON.parse(raw);if(config.version===1&&config.vaultId===this.settings.vaultId&&sameWorkspacePath(config.workspaceRoot,localRoot)){
-          if(this.inlineHostService){const previous=this.inlineHostService;this.inlineHostService=undefined;this.inlineHostKey='';await previous.dispose();}
-          const credentials=JSON.stringify({paired:this.settings.paired,sessions:this.pairedSessions,nativeAccount:this.nativeAccount}),hash=contentHash(credentials);
-          if(hash!==this.backgroundCredentialsHash){await files.write(`${directory}/background-connections.json`,credentials);this.backgroundCredentialsHash=hash;}
-          await files.write(`${directory}/desktop-client.json`,JSON.stringify({version:1,updatedAt:new Date().toISOString(),pluginVersion:pluginManifest.version}));
-          const links=(await files.list(`${directory}/note-thread-links`)).filter(path=>!this.backgroundNoteLinks.has(path)).slice(0,32);
-          if(links.length){const incoming=loadNoteThreads((await Promise.all(links.map(async path=>{const raw=await files.read(path);return raw?JSON.parse(raw):undefined;}))).filter(Boolean)),merged=mergeNoteThreads(this.settings.noteThreads,incoming);if(JSON.stringify(merged)!==JSON.stringify(this.settings.noteThreads)){this.settings.noteThreads=merged;await this.save();}for(const path of links)this.backgroundNoteLinks.add(path);}
-          return;
-        }}
-      }
       if(this.inlineHostService&&(!this.inlineHostService.active||this.inlineHostKey!==key)){
         const previous=this.inlineHostService;this.inlineHostService=undefined;this.inlineHostKey='';
         await previous.dispose().catch(()=>{});
@@ -1557,13 +1568,18 @@ export default class SendToT3 extends Plugin {
     if(!environmentId)throw Error('Reconnect the vault project machine before streaming replies.');
     return {environmentId,workspaceRoot:root.workspaceRoot,directory:`${this.app.vault.configDir||'.obsidian'}/t3-code/inline/v1`,...(root.connectionId?{connectionId:root.connectionId}:{})};
   }
+  private async localResponseTarget(request:Request):Promise<InlineHostTarget>{
+    const root=this.settings.folderLinks.find(link=>link.folderPath==='/');
+    const environmentId=root?.environmentId??this.settings.paired.find(connection=>connection.id===root?.connectionId)?.environmentId??request.connection.environmentId??await this.localInlineEnvironment();
+    return {environmentId,workspaceRoot:root?.workspaceRoot??request.project.workspaceRoot,directory:`${this.app.vault.configDir||'.obsidian'}/t3-code/inline/v1`,...(root?.connectionId?{connectionId:root.connectionId}:{})};
+  }
   private async prepareHostedInline(job:InlineJob,request:Request){
-    const host=await this.inlineHostTarget();
+    const host=await this.localResponseTarget(request);
     const threadEnvironmentId=request.connection.environmentId??await this.localInlineEnvironment();
     job.hostTarget=host;this.rememberInlineTarget(host);
-    request.inlineHost={...await this.coordinatedHostFormat(host),version:4,finalAnswerFormat:finalAnswerFormat(job.finalAnswerFormat),independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
-    await this.responseGuard(request.inlineHost,'prepared');
+    request.inlineHost={localOnly:true,nativeProjection:true,responseContainer:true,version:4,finalAnswerFormat:finalAnswerFormat(job.finalAnswerFormat),independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
     request.prompt+=stagedNoteInstruction([request.inlineHost]);if(request.prompt.length>120_000)throw Error('The note and staged-edit context exceed T3’s prompt limit.');
+
   }
   private async coordinatedHostFormat(target:InlineHostTarget){
     const opened=await this.inlineHostFiles(target);
@@ -1575,8 +1591,6 @@ export default class SendToT3 extends Plugin {
       if(waitForHost)await this.refreshInlineHost();
       else void this.refreshInlineHost().catch(error=>logFailure('ownership.coordinator.reader-start',error));
       const files=(await import('./inline-host-storage-desktop')).localInlineFiles(target.workspaceRoot,target.directory);
-      const background=await files.read(`${target.directory}/background-host-config.json`);
-      if(background){const config=JSON.parse(background);if(config.version===1&&config.vaultId===this.settings.vaultId&&sameWorkspacePath(config.workspaceRoot,target.workspaceRoot))return {closed:false,files,close:()=>{}};}
       // Existing records are readable while the writer starts or releases its
       // old lock. Mailbox writes retain the host-readiness requirement.
       return {closed:false,files:{read:files.read,write:async(path,contents)=>{await this.refreshInlineHost();await files.write(path,contents);},dispatch:async command=>{
@@ -1595,9 +1609,18 @@ export default class SendToT3 extends Plugin {
       return {get closed(){return remote.closed;},files:{read:async path=>remote.readFile(await storage(),path),write:async(path,contents)=>remote.writeFile(await storage(),path,contents)},close:()=>remote.close()};
     }catch(error){remote.close();throw error;}
   }
+  private async stopLocalInline(job:InlineJob){
+    const current=this.deviceInline?.localResponse(job.id);
+    if(current)return this.deviceInline!.stopResponse(current.host,job.id,nativeResponses(this.app).stoppedBody(job.id),job.remoteStopOperationId);
+    if(!job.threadId||!job.threadEnvironmentId)throw Error('The saved local response has no T3 routing identity.');
+    await interruptStoppedResponse(()=>this.inlineThreadAccess(job.threadEnvironmentId!),job.remoteStopOperationId??job.id,job.threadId,job.turnId,10_000,job.messageId,job.projectId,job.createdAt,job.stopRunTerminal);
+    return {version:1 as const,bindingId:job.id,commandId:job.remoteStopOperationId??'',epoch:1,revision:1,hostRecorded:true,runTerminal:!!job.stopRunTerminal,finalSaved:true,finalWriterPending:false};
+  }
   private async stopHostedInline(id:string,target?:InlineHostTarget,operationId?:string){
     this.deviceInline?.stopLocally(id);
-    const host=target??await this.inlineHostTarget(),opened=await this.inlineHostFiles(host);
+    const host=target??await this.inlineHostTarget();
+    const local=this.deviceInline?.responseStatus(id);if(this.deviceInline?.localResponse(id))return this.deviceInline.stopResponse(host,id,nativeResponses(this.app).stoppedBody(id),operationId);
+    const opened=await this.inlineHostFiles(host);
     try{
       const paths=hostedPaths(host.directory,id);
       const request=await opened.files.read(paths.request);
@@ -2201,23 +2224,16 @@ export default class SendToT3 extends Plugin {
   }
   private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string,destinationSection?:string,sourcePath?:string){
     const policy=request.jobOptions?.inline??resolveJobOptions(this.settings.inlineStreaming).inline;
-    const io=deviceNoteIO(this.app),host=await this.inlineHostTarget();
+    const io=deviceNoteIO(this.app),host=await this.localResponseTarget(request);
     for(const path of destinations){const document=await io.readNote(path);if(document===undefined)throw Error(`Destination note unavailable: ${path}`);endInsertionOffset(document);}
-    const source:HostedInlineRequest={destinationSection,...await this.coordinatedHostFormat(host),version:4,finalAnswerFormat:policy.finalAnswerFormat,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode};
+    const source:HostedInlineRequest={destinationSection,localOnly:true,nativeProjection:true,responseContainer:true,version:4,finalAnswerFormat:policy.finalAnswerFormat,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode};
     request.inlineBindings=[];this.rememberInlineTarget(host);
-    const opened=await this.inlineHostFiles(host);
-    try{
-      const bindingIO={...io,beforeInsert:(binding:HostedInlineRequest)=>this.responseGuard(binding,'prepared'),completed:async(id:string)=>{
-        const raw=await opened.files.read(leasePaths(host.directory,id).record);
-        if(!raw)return false;
-        const record:LeaseRecord=JSON.parse(raw);
-        return record.request.threadId===source.threadId&&record.request.messageId===source.messageId&&!!record.state&&(record.state.finalSaved===true||['complete','interrupted'].includes(record.state.status));
-      }};
-      for(const path of destinations)request.inlineBindings.push(await editorStream(source,path,bindingIO,()=>!this.stopped));
-    }finally{opened.close();}
-    request.inlineHost=request.inlineBindings[0];request.prompt+=stagedNoteInstruction(request.inlineBindings);if(request.prompt.length>120_000)throw Error('The note and staged-edit context exceed T3’s prompt limit.');
+    for(const path of destinations)request.inlineBindings.push(await editorStream(source,path,io,()=>!this.stopped));
+    request.inlineHost=request.inlineBindings[0];
+    request.prompt+=stagedNoteInstruction(request.inlineBindings);if(request.prompt.length>120_000)throw Error('The note and staged-edit context exceed T3’s prompt limit.');
   }
   private async responseGuard(binding:HostedInlineRequest,status:'prepared'|'accepted'|'failed',uncertain=false){
+    if(binding.localOnly)return;
     const opened=await this.inlineHostFiles(binding.host);
     try{if(status==='prepared')await prepareSendGuard(opened.files,binding);else await updateSendGuard(opened.files,binding,status,uncertain);}finally{opened.close();}
   }
@@ -2280,7 +2296,7 @@ export default class SendToT3 extends Plugin {
     const inlineJobId=request.inlineSteering?.jobId??request.inlineFollow?.jobId??(request.inlineHost||this.inlineChat?.find(request.id)?request.id:undefined);
     const inlineHost=request.inlineSteering?.host??request.inlineFollow?.host??request.inlineHost?.host;
     this.settings.settlementJobs.push({requestId:request.id,messageId:commandId(request.id,'message'),threadId,projectId:request.project.id,connection:{...request.connection},
-      ...(inlineJobId?{inlineJobId:request.inlineHost?.id??inlineJobId}:{}),...(request.inlineBindings?{inlineBindings:request.inlineBindings.map(binding=>({id:binding.id,host:binding.host}))}:{}),...(inlineHost?{inlineHost,inlineVersion:(request.inlineHost?.version??2) as 1|2|3}:{})});
+      ...(request.inlineHost?.localOnly?{inlineLocal:true as const,inlineNotePath:request.inlineHost.notePath}:{}),...(inlineJobId?{inlineJobId:request.inlineHost?.id??inlineJobId}:{}),...(request.inlineBindings?{inlineBindings:request.inlineBindings.map(binding=>({id:binding.id,host:binding.host,notePath:binding.notePath}))}:{}),...(inlineHost?{inlineHost,inlineVersion:(request.inlineHost?.version??2) as 1|2|3}:{})});
   }
   rememberStarted(request:Request,threadId:string) {
     if(request.folderLinkIntent&&!this.settings.folderLinks.some(link=>link.folderPath===request.folderLinkIntent!.folderPath))this.settings.folderLinks=upsertFolderLink(this.settings.folderLinks,request.folderLinkIntent);
@@ -2400,8 +2416,11 @@ export default class SendToT3 extends Plugin {
     this.settings.pending=this.settings.pending.filter(r=>r.id!==request.id);await this.save();
   }
   private async inlineSettlementStatus(job:ThreadSettlementJob):Promise<'wait'|'ready'|'discard'>{
-    if(job.inlineBindings?.length){for(const binding of job.inlineBindings){const status=await this.inlineSettlementStatus({...job,inlineBindings:undefined,inlineJobId:binding.id,inlineHost:binding.host,inlineVersion:2});if(status!=='ready')return status;}return 'ready';}
+    if(job.inlineBindings?.length){for(const binding of job.inlineBindings){const status=await this.inlineSettlementStatus({...job,inlineBindings:undefined,inlineJobId:binding.id,inlineHost:binding.host,inlineNotePath:binding.notePath,inlineVersion:2});if(status!=='ready')return status;}return 'ready';}
     if(!job.inlineJobId)return 'ready';
+    const local=this.deviceInline?.localResponse(job.inlineJobId);
+    if(local){const status=this.deviceInline!.responseStatus(job.inlineJobId);return status?.finalSaved?'ready':status?.hostRecorded?'discard':'wait';}
+    if(job.inlineLocal){const file=job.inlineNotePath&&this.app.vault.getFileByPath(job.inlineNotePath);if(!file)return 'discard';return hasResponseMarkers(await this.app.vault.read(file),job.inlineJobId)?'wait':'ready';}
     if(!job.inlineHost)return this.inlineChat?.settlementStatus(job.inlineJobId)??'wait';
     const opened=await this.inlineHostFiles(job.inlineHost);
     try{

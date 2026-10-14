@@ -4,7 +4,8 @@ import type {InlineHostTarget} from './hosted-inline';
 /** One confirmed Obsidian turn, stored on the sending device until it settles or advances. */
 export interface ThreadSettlementJob {
   requestId:string;messageId:string;threadId:string;projectId:string;connection:Connection;
-  inlineBindings?:Array<{id:string;host:InlineHostTarget}>;
+  inlineLocal?:true;inlineNotePath?:string;
+  inlineBindings?:Array<{id:string;host:InlineHostTarget;notePath?:string}>;
   inlineJobId?:string;inlineHost?:InlineHostTarget;inlineVersion?:1|2|3;
 }
 
