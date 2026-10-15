@@ -1,4 +1,6 @@
 import {retainedLocalFinal,restoredLocalFinal} from './local-final-cache';
+import {HtmlResultStore} from './html-result-store';
+import {HtmlResultViews} from './html-result-view';
 import {hasResponseMarkers} from './inline-thread';
 import {interruptStoppedResponse} from './response-stop';
 import {localResponseBindings,localResponseRange} from './local-response-binding';
@@ -43,7 +45,7 @@ import {clearVaultDiagnostics} from './disabled-diagnostics';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from './cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from './native-account';
 import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from './direct';
-import { setIcon, App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer, parseYaml, stringifyYaml } from 'obsidian';
+import { setIcon, App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer, parseYaml, stringifyYaml,requestUrl } from 'obsidian';
 import { Buffer } from 'buffer';
 import { deviceState,clearDeviceDiagnostics } from './device-state';
 import {nativeStoppedStore} from './native-stop-store';
@@ -52,7 +54,7 @@ import {ensureVaultIdentityRecord} from './vault-identity';
 import { collectImages, imageReferenceDefinitions, MAX_IMAGE_BYTES } from './images';
 import { applyOrchestration, OrchestrationSettings } from './orchestration';
 import { CompletionSettings, CompletionJob, CompletionAction, archiveFolder, contentHash, completionState, isOriginalCompletedTurn, cleanCompletedNote } from './completion';
-import { Connection, Project, Request, RequestDeliveryError, acceptedRequestThread, parseProjects, runBridge, sendRequest, configureBridge, retiredConnection, RETIRED_MESSAGE, projectKey, projectLabel } from './bridge';
+import { Connection, Project, Request, RequestDeliveryError, acceptedRequestThread, parseProjects, runBridge, sendRequest, configureBridge, retiredConnection, RETIRED_MESSAGE, projectKey, projectLabel,withTimeout } from './bridge';
 import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from './folder-link';
 import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from './folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from './palette-chat';
@@ -169,6 +171,7 @@ export default class SendToT3 extends Plugin {
   private questionModal?:QuestionModal;
   private questionPaths=new Set<string>();
   private toolRenderings=new Map<HTMLDetailsElement,{ref:string;child:MarkdownRenderChild;dispose:()=>void}>();
+  private htmlResults?:HtmlResultViews;
   private refreshingQuestions=false;
   private deviceInline?:DeviceResponseManager;
 
@@ -310,6 +313,14 @@ export default class SendToT3 extends Plugin {
     });
     this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>job.localOnly?this.stopLocalInline(job):this.stopHostedInline(job.id,job.hostTarget,job.remoteStopOperationId),status:job=>this.deviceInline?.responseStatus(job.id)},()=>'collapse',()=>finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat));
     if(typeof this.registerEditorExtension==='function'){const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)));}
+    if(typeof this.registerMarkdownCodeBlockProcessor==='function'){
+      const prefix=`html-result:v1:${this.settings.vaultId}:`;
+      const store=new HtmlResultStore({read:key=>deviceState(prefix+key),write:async(key,value)=>{await deviceState(prefix+key,value);}},environmentId=>this.inlineThreadAccess(environmentId),async url=>{
+        const response=await withTimeout(requestUrl({url,headers:{Accept:'text/html'},throw:false}),30_000);
+        return {status:response.status,mimeType:Object.entries(response.headers).find(([key])=>key.toLowerCase()==='content-type')?.[1]??'',bytes:response.arrayBuffer};
+      });
+      this.htmlResults=new HtmlResultViews(this.app,store);this.htmlResults.install(this);
+    }
     const previewKey=`native-preview:${this.deviceId}:${this.settings.vaultId}`;
     let savedPreviews:unknown;try{savedPreviews=await deviceState(previewKey);}catch(error){logFailure('note.preview.cache-load',error);}
     nativeResponses(this.app).configurePreviewCache(this.settings.vaultId,savedPreviews,async snapshot=>{await deviceState(previewKey,snapshot);});

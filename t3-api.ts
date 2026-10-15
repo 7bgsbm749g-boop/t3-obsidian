@@ -70,6 +70,10 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
   return async(path,payload,options)=>{
     requestAborted(options?.signal);
     const request:T3Api=(target,body)=>raw(target,body,options);
+    if(path==='/api/assets/create-url'){
+      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      try{return await rpc.call('assets.createUrl',payload);}finally{rpc.close();}
+    }
     // Internal adapter route: the server provides this read over RPC only.
     if(path==='/api/orchestration/turn-item'){
       const rpc=await connectT3Rpc(raw,origin,makeSocket);

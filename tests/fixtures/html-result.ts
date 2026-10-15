@@ -1,0 +1,3 @@
+import type {HtmlResultReference} from '../../html-results';
+export const reference:HtmlResultReference={version:1,environmentId:'environment',threadId:'thread',runId:'run',itemId:'tool',revision:'2026-10-15T15:00:00.000Z',attachmentId:'thread-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-html',title:'Interactive page',height:300,heights:[[375,500],[728,300]]};
+export const tool=(output:any={htmlRender:reference})=>({id:reference.itemId,threadId:reference.threadId,runId:reference.runId,type:'dynamic_tool',toolName:'mcp__t3_code__html_render',status:'completed',updatedAt:reference.revision,startedAt:'2026-10-15T14:59:00.000Z',ordinal:2,output});

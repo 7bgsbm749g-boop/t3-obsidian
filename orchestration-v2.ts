@@ -1,4 +1,5 @@
 import type {InlineActivity,InlineMessage,InlineThreadState,InlineTurn} from './inline-thread';
+import {htmlRenderFromToolItem} from './html-results';
 
 export const T3_PROTOCOL_VERSION=2;
 export const T3_PROTOCOL_HEADER='x-t3-orchestration-protocol';
@@ -37,6 +38,8 @@ export function normalizeV2ShellThread(thread:any){
 
 export function itemActivities(item:any,requests:Record<string,any>={}):InlineActivity[]{
   const at=item.startedAt??item.updatedAt,base={turnId:item.runId??null,createdAt:at,sequence:item.ordinal};
+  const htmlRender=htmlRenderFromToolItem(item);
+  if(htmlRender)return [{...base,id:`v2:${item.id}`,kind:'response.html',summary:htmlRender.title,payload:{itemId:item.id,revision:item.updatedAt,htmlRender}}];
   if(item.type==='user_input_request'||item.type==='approval_request'){
     const request=requests[item.requestId],question=item.type==='user_input_request';
     if(!request)return []; // Controls need an authoritative response capability.

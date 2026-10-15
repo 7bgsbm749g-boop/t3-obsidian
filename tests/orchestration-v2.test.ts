@@ -37,6 +37,13 @@ test('final-item adapter uses the existing authenticated unary RPC',async()=>{
  assert.equal((await api('/api/orchestration/turn-item',{threadId:'thread',itemId:'opaque-item'})).text,'Reply');assert.deepEqual(calls,[{tag:'orchestration.getTurnItem',payload:{threadId:'thread',itemId:'opaque-item'}}]);assert.equal(raw.length,1);
 });
 
+test('HTML attachment URLs use the existing authenticated asset RPC',async()=>{
+ const calls:any[]=[],Socket=settingsSocket(undefined,undefined,(tag,payload)=>{calls.push({tag,payload});return {relativeUrl:'/api/assets/page',expiresAt:123};});
+ const api=t3Api(async path=>{assert.equal(path,'/api/auth/websocket-ticket');return {ticket:'ticket'};},'https://fixture',url=>new Socket(url) as any);
+ const payload={resource:{_tag:'attachment',attachmentId:'page-html',mimeType:'text/html',disposition:'inline'}};
+ assert.deepEqual(await api('/api/assets/create-url',payload),{relativeUrl:'/api/assets/page',expiresAt:123});assert.deepEqual(calls,[{tag:'assets.createUrl',payload}]);
+});
+
 test('title normalization does not inspect duplicate history or unrelated event payloads',()=>{
  const forbidden=()=>{throw Error('Title listener read transcript data');};
  const projection={thread:{id:'thread',projectId:'project',title:'Only title'},get messages(){return forbidden();},get runs(){return forbidden();},get turnItems(){return forbidden();},get runtimeRequests(){return forbidden();}};

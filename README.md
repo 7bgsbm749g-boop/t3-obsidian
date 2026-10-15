@@ -63,6 +63,16 @@ The VPS fleet adapter attaches a `fleet-sender` context record after verifying t
 
 Live events retain the existing complete-paragraph boundary, including code-fence protection. The installed T3 detail feed omits start-request events, so incoming-message display uses the observed active response or its canonical lifecycle; it never treats that display association as an execution binding or a reason to adopt another turn. A recovered input without an observed boundary is marked **Recovered (paragraph position approximate)** because snapshots cannot reconstruct historical growth within one assistant message. Completed reply blocks retain their exact response binding. The existing opt-in `stream-thread` registration displays future turns in its chosen destinations; it now includes each turn's canonical initial input and sender label.
 
+## HTML results
+
+T3 `html_render` results appear as live pages in Live Preview and Reading mode. Pages keep their scripts, charts and controls. They remain visible outside folded tool history and above the final answer. Hover, focus, or tap to use **Expand HTML**; the expanded view has zoom controls. Escape returns from the page. Source mode shows a small `t3-html` reference instead of page bytes.
+
+The plugin verifies the exact completed T3 tool item, then downloads its attachment through the existing authenticated connection and signed asset API. HTML runs in an opaque-origin sandbox, with no Obsidian or Node API. T3's theme and size messages adapt the page to the note's colors, fonts and width. Other response HTML stays escaped.
+
+Verified page bytes are cached in device-local IndexedDB, outside the synced vault and plugin settings. A downloaded, self-contained page can reopen offline, including after a plugin reload. The cache retains at most 64 pages and 100 MiB; each page can use up to 25 MiB. A new device must download a page while connected. Remote scripts, fonts, images and live data still require their network sources; caching the HTML does not package those dependencies. Cache failures show a small Retry control and do not block the reply's final save. No attachment folder is created in the vault.
+
+See [HTML result integration and validation](docs/html-results.md).
+
 ## Thread event subscriptions
 
 The plugin notices changes; the subscribing T3 thread decides what to do. There is no workflow builder, stored task definition, setup thread, or new thread for each change. An agent registers a subscription through the same private command mailbox used for note sends. A subscription contains only a note/folder scope, selected change types, and the originating thread, project, and machine IDs.
