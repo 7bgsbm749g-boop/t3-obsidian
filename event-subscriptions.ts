@@ -145,7 +145,11 @@ export class EventSubscriptions {
     const {threads,...control}=this.state;
     return {...clone(control),...(threads?{threads:{...threads}}:{})};
   }
-  private async save(){this.dirty=true;await this.host.save(this.state);this.dirty=false;}
+  private pruneThreads(){
+    const retained=new Set([...this.state.subscriptions.flatMap(subscription=>subscription.enabled&&subscription.job&&!subscription.observation?.terminal?[this.threadKey(subscription.job)]:[]),...(this.state.displays??[]).filter(display=>display.enabled&&!display.cancelled).map(display=>this.threadKey(display))]);
+    for(const key of Object.keys(this.state.threads??{}))if(!retained.has(key)){delete this.state.threads![key];this.canonicalUntil.delete(key);}
+  }
+  private async save(){this.pruneThreads();this.dirty=true;await this.host.save(this.state);this.dirty=false;}
   private async saveIfDirty(){if(this.dirty)await this.save();}
   async initialize(){return this.serialize(async()=>{
     const saved=await this.host.load() as EventState|undefined;
@@ -153,8 +157,8 @@ export class EventSubscriptions {
       if(saved.version!==1||!Array.isArray(saved.subscriptions)||!Array.isArray(saved.notifications)||!saved.commands||!Array.isArray(saved.feedback))throw Error('Invalid saved event subscription state.');
       for(const subscription of saved.subscriptions){validateEventCommand({version:1,id:subscription.id,kind:subscription.job?'subscribe-job':'subscribe',...(subscription.action?{action:subscription.action,jobStates:subscription.jobStates}:{target:subscription}),...(subscription.job?{job:subscription.job}:{scope:subscription.scope,filter:subscription.filter})});if(typeof subscription.enabled!=='boolean')throw Error('Invalid saved subscription.');}
       this.state=clone(saved);
-      const retained=new Set([...this.state.subscriptions.flatMap(subscription=>subscription.job?[this.threadKey(subscription.job)]:[]),...(this.state.displays??[]).map(display=>this.threadKey(display))]);
-      for(const [key,thread] of Object.entries(this.state.threads??{})){if(thread.state.protocolVersion===2&&!retained.has(key))delete this.state.threads![key];else thread.state=compactObservedThread(thread.state);}
+      this.pruneThreads();
+      for(const thread of Object.values(this.state.threads??{}))thread.state=compactObservedThread(thread.state);
       for(const display of this.state.displays??[])for(const binding of display.bindings)if(binding.request&&!binding.request.localOnly){binding.status='skipped';delete binding.request;delete binding.error;}
       // Command receipts remain idempotent but never replay old reply plans.
       for(const receipt of Object.values(this.state.commands))for(const display of [...(receipt.result.displays??[]),...(receipt.result.display?[receipt.result.display]:[])])for(const binding of display.bindings)if(binding.request&&!binding.request.localOnly){binding.status='skipped';delete binding.request;delete binding.error;}

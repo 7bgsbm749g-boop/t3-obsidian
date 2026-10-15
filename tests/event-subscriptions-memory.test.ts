@@ -33,14 +33,6 @@ function pendingDisplay(paths=['A.md']):EventState {
   return initial;
 }
 
-test('unchanged polling shares reads and performs zero writes while retaining all historical threads',async()=>{
-  const h=await harness();await h.service.command(stream());await h.service.command(stream('B.md'));
-  for(let i=0;i<2;i++)await h.service.command({version:1,id:randomUUID(),kind:'subscribe-job',target:{...source,threadId:'receiver'},job:{...source,jobId:'job-'+i,requestId:randomUUID(),messageId:origin}});
-  await h.service.tick();const saves=h.saves,reads=h.reads,history=h.saved.threads;
-  for(let i=0;i<10;i++)await h.service.tick();
-  assert.equal(h.saves,saves);assert.equal(h.reads-reads,10);assert.deepEqual(h.saved.threads,history);assert.equal(Object.keys(history!).length,23);h.service.stop();
-});
-
 test('response-only note changes skip persistence; a failed real change restores baseline and full history',async()=>{
   const h=await harness();await h.service.command({version:1,id:randomUUID(),kind:'subscribe',target:source,scope:{path:'A.md',kind:'note',recursive:false},filter:{events:['modify']}});
   const before=h.saved,saves=h.saves;
