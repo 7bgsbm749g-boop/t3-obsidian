@@ -4,7 +4,7 @@ import {projectLink,projectPathRoutes} from './codebase-links';
 import {registerProjectReferences} from './project-reference';
 import type {FolderLink} from './folder-link';
 import type {ReplyReference} from './reply-assets';
-import type {HostedInlineRequest} from './hosted-inline';
+import type {ResponseRequest} from './response-model';
 import type {ThreadAccess} from './thread-stream';
 import {CodebaseBrowseCache,type BrowseState} from './codebase-cache';
 import {CODEBASE_VIEW as VIEW,CodebaseView} from './codebase-view';
@@ -297,7 +297,7 @@ export class CodebaseBridge {
     const draft=this.drafts[item.file.path];if(draft!==undefined&&draft!==text&&!this.recoveryNotices.has(item.file.path)){this.recoveryNotices.add(item.file.path);new Notice('An unsaved project edit is kept on this device. Use Review unsaved project edit to compare and recover it.',10000);}
     if(state?.eState&&Object.keys(state.eState).length)leaf.view.setEphemeralState(state.eState);
   }
-  async reply(reference:ReplyReference,request:HostedInlineRequest,access:ThreadAccess){
+  async reply(reference:ReplyReference,request:ResponseRequest,access:ThreadAccess){
     this.observeSource(request);
     const parsed=projectLink(reference.source);if(!parsed)return undefined;
     const shell=await access.api('/api/orchestration/shell'),project=shell.projects?.find((p:any)=>p.id===request.projectId),thread=shell.threads?.find((t:any)=>t.id===request.threadId);
@@ -314,7 +314,7 @@ export class CodebaseBridge {
   }
   private automaticChoice(source:string,name:string,path:string){const key=JSON.stringify([source,name]);let paths=this.automaticChoices.get(key);if(!paths&&this.choices[key])return;if(!paths){paths=new Set();this.automaticChoices.set(key,paths);}paths.add(path);if(paths.size===1)this.choices[key]=path;else delete this.choices[key];}
   /** Constant work per response update; no Markdown parse, file IO or network. */
-  observeSource(request:HostedInlineRequest,note=request.notePath){
+  observeSource(request:ResponseRequest,note=request.notePath){
     let origins=this.sourceOrigins.get(note);if(!origins){origins=new Map();this.sourceOrigins.set(note,origins);}if(origins.has(request.id))return;origins.set(request.id,{environmentId:request.threadEnvironmentId,projectId:request.projectId});
   }
   /** Handle local file URLs that native Markdown classifies as external links. */

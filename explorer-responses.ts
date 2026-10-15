@@ -1,5 +1,5 @@
-import type {LeaseRecord} from './inline-lease';
-import {legacyQuestionReply} from './hosted-inline';
+import type {ResponseRecord} from './response-record';
+import {legacyQuestionReply} from './response-model';
 import {responseRunTerminal} from './response-stop-receipt';
 
 /** A read-only projection of response bindings, never a second run lifecycle. */
@@ -8,7 +8,7 @@ export interface ExplorerResponse {
   active:boolean;input:boolean;complete:boolean;deleted?:boolean;sourceNotePath?:string;
 }
 export const explorerResponsePath=(directory:string)=>`${directory}/explorer-responses.json`;
-export function leaseExplorerResponse(record:LeaseRecord):ExplorerResponse {
+export function leaseExplorerResponse(record:ResponseRecord):ExplorerResponse {
   const state=record.state;
   const input=!state?.userStopped&&(legacyQuestionReply(state)||!!state?.questionFollows?.some(q=>!q.answered&&!q.dismissed));
   return {id:record.request.id,notePath:state?.notePath??record.request.notePath,epoch:record.epoch,revision:record.revision,

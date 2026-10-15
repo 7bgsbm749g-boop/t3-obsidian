@@ -1,12 +1,12 @@
 import {commandId} from './direct';
 import {turnForMessage,turnPhase,type InlineThreadState,type InlineTurn} from './inline-thread';
 import {visibleInlineInput} from './input-presentation';
-import type {LeaseRecord} from './inline-lease';
-import type {HostedInlineState} from './hosted-inline';
+import type {ResponseRecord} from './response-record';
+import type {ResponseState} from './response-model';
 
-export interface ImportRecord {request:LeaseRecord['request'];state?:Pick<HostedInlineState,'status'|'notePath'|'finalSaved'|'messageId'|'turnId'|'turnIds'|'bindingCheckpoint'>&{steering?:Array<{messageId:string}>;questionFollows?:Array<{requestId:string;input?:{messageId:string}}>}}
+export interface ImportRecord {request:ResponseRecord['request'];state?:Pick<ResponseState,'status'|'notePath'|'finalSaved'|'messageId'|'turnId'|'turnIds'|'bindingCheckpoint'>&{steering?:Array<{messageId:string}>;questionFollows?:Array<{requestId:string;input?:{messageId:string}}>}}
 /** Read-only import evidence excludes prose, save documents and steering text. */
-export function compactImportRecord(record:LeaseRecord):ImportRecord {
+export function compactImportRecord(record:ResponseRecord):ImportRecord {
   const state=record.state,checkpoint=state?.bindingCheckpoint;
   return {request:record.request,...(state?{state:{status:state.status,notePath:state.notePath,finalSaved:state.finalSaved,messageId:state.messageId,turnId:state.turnId,turnIds:state.turnIds,
     ...(checkpoint?{bindingCheckpoint:{protocolVersion:checkpoint.protocolVersion,sequence:checkpoint.sequence,bindings:checkpoint.bindings,starts:checkpoint.starts,turns:checkpoint.turns}}:{}),

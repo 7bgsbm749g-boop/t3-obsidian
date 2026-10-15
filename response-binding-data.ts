@@ -1,12 +1,12 @@
-import {validateHostedRequest,type HostedInlineRequest} from './hosted-inline';
+import {validateResponseRequest,type ResponseRequest} from './response-model';
 import {validSteeringInput} from './inline-steering';
 
-export interface ResponseBindingEntry {version:1;clock:number;actor:string;request:HostedInlineRequest}
+export interface ResponseBindingEntry {version:1;clock:number;actor:string;request:ResponseRequest}
 export type ResponseBindingData=Record<string,ResponseBindingEntry>;
 const keys=['initialOwner','localMessageId','localStage','importTurn','replyFolders','keepIntermediate','intermediateMode','finalAnswerFormat','initialInput','independent','destinationSection','threadTitle','id','vaultId','notePath','threadId','messageId','projectId','threadEnvironmentId','initialHash','createdAt'] as const;
 /** Shared routing and user choices only. Checkpoints, received prose and final
  * recovery bodies remain in the device's existing local stores. */
-export function compactResponseBinding(request:HostedInlineRequest):HostedInlineRequest {
+export function compactResponseBinding(request:ResponseRequest):ResponseRequest {
   const value:any={version:4,localOnly:true,nativeProjection:true,responseContainer:true};
   for(const key of keys)if(request[key]!==undefined)value[key]=request[key];
   value.host={environmentId:request.host.environmentId,workspaceRoot:request.host.workspaceRoot,directory:request.host.directory,...(request.host.connectionId?{connectionId:request.host.connectionId}:{})};
@@ -14,7 +14,7 @@ export function compactResponseBinding(request:HostedInlineRequest):HostedInline
     if(!validSteeringInput(input))throw Error('Invalid saved response input.');
     return {messageId:input.messageId,text:input.text,before:[],...(input.selection?{selection:input.selection}:{}),...(input.confirmed?{confirmed:true}:{}),...(input.label?{label:input.label}:{}),...(input.createdAt?{createdAt:input.createdAt}:{})};
   });
-  return JSON.parse(JSON.stringify(validateHostedRequest(value)));
+  return JSON.parse(JSON.stringify(validateResponseRequest(value)));
 }
 export function loadResponseBindingData(value:unknown):ResponseBindingData {
   const result:ResponseBindingData={};
@@ -35,10 +35,10 @@ export function mergeResponseBindingData(...sources:unknown[]):ResponseBindingDa
   }
   return Object.fromEntries(Object.entries(result).sort(([a],[b])=>a.localeCompare(b)));
 }
-export function updateResponseBindingData(data:ResponseBindingData,request:HostedInlineRequest,actor:string,now=Date.now()):ResponseBindingData {
+export function updateResponseBindingData(data:ResponseBindingData,request:ResponseRequest,actor:string,now=Date.now()):ResponseBindingData {
   const compact=compactResponseBinding(request),old=data[request.id];
   if(old&&canonical(old.request)===canonical(compact))return data;
   return {...data,[request.id]:{version:1,clock:Math.max(now,(old?.clock??0)+1),actor,request:compact}};
 }
-const requests=new WeakMap<ResponseBindingData,readonly HostedInlineRequest[]>();
+const requests=new WeakMap<ResponseBindingData,readonly ResponseRequest[]>();
 export function responseBindingRequests(data:ResponseBindingData){let value=requests.get(data);if(!value){value=Object.values(data).map(entry=>entry.request);requests.set(data,value);}return value;}

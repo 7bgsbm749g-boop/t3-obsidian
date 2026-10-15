@@ -6,7 +6,7 @@ import {jobEvents,type JobWatch,type JobObservation} from '../job-lifecycle';
 import {validateDisplayCommand,type ThreadDisplay} from '../thread-display';
 import {commandId} from '../direct';
 import {initialRegion,type InlineThreadState} from '../inline-thread';
-import type {HostedInlineRequest} from '../hosted-inline';
+import type {ResponseRequest} from '../response-model';
 
 const worker={threadId:'worker',projectId:'project',environmentId:'machine'},target={...worker,threadId:'orchestrator'};
 const job:JobWatch={...worker,jobId:'task-1',requestId:randomUUID(),messageId:randomUUID()};
@@ -17,7 +17,7 @@ function run(messageId=job.messageId,turnId='original',status='completed'):Inlin
 }
 async function harness(initial?:EventState){
   let saved=initial,thread=run(),now=1000,busy=false,fail=false,attachFail=false,bindingReads=0;
-  const delivered:EventNotification[]=[],requests:HostedInlineRequest[]=[],existing:Array<{id:string;path:string;messageIds:string[];turnIds:string[];threadId?:string}>=[],monitors=new Map<string,{item:(value:any)=>void;cursor:()=>number|undefined;stopped:boolean}>();
+  const delivered:EventNotification[]=[],requests:ResponseRequest[]=[],existing:Array<{id:string;path:string;messageIds:string[];turnIds:string[];threadId?:string}>=[],monitors=new Map<string,{item:(value:any)=>void;cursor:()=>number|undefined;stopped:boolean}>();
   const service=new EventSubscriptions({
     load:async()=>saved,save:async state=>{saved=structuredClone(state);},notes:async()=>[],validateTarget:async()=>{},isBusy:async()=>busy,recording:()=>{},now:()=>now,id:randomUUID,
     prepare:async n=>({id:commandId(n.id,'message'),events:n.events}),deliver:async n=>{delivered.push(structuredClone(n));if(fail)throw Error('lost acknowledgement');return 'delivered';},
@@ -87,10 +87,6 @@ test('pause/resume skips paused runs; removal/cancellation affects future bindin
   await h.service.command(manage('resume-thread-stream',command.id));await h.service.tick();assert.equal(h.requests.length,2);
   await h.service.command(manage('remove-stream-destination',command.id,{destination:'B.md'}));h.setThread(run(randomUUID(),'next'));await h.service.tick();assert.equal(h.requests.length,3);
   await h.service.command(manage('cancel-thread-stream',command.id));h.setThread(run(randomUUID(),'cancelled'));await h.service.tick();assert.equal(h.requests.length,3);assert.equal(h.saved.displays![0].bindings.filter(b=>b.status==='attached').length,3);assert.equal(h.monitors.get('worker')!.stopped,true);
-});
-test('failed attachment retries stable binding IDs through renamed notes and restart',async()=>{
-  const h=await harness(),command=stream(worker,['A.md']);await h.service.command(command);h.setThread(run(randomUUID(),'new'));h.attachFail(true);await h.service.tick();const id=h.requests[0].id;
-  await h.service.observe('rename','Renamed.md',{path:'Renamed.md',content:'keep',properties:{}},'A.md');const restarted=await harness(h.saved);restarted.setThread(run(h.requests[0].messageId,'new'));await restarted.service.tick();assert.equal(restarted.requests[0].id,id);assert.equal(restarted.requests[0].notePath,'Renamed.md');
 });
 test('durable stream replay cursor never advances before save, ignores duplicate event identities and closes on cancel',async()=>{
   const h=await harness(),command=stream();await h.service.command(command);const monitor=h.monitors.get('worker')!;

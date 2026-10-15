@@ -1,21 +1,21 @@
 import {validateDestinationSection} from './destination-section';
 import {commandId} from './direct';
-import {safeNotePath,type HostedInlineRequest} from './hosted-inline';
+import {safeNotePath,type ResponseRequest} from './response-model';
 import {turnForMessage,type InlineMessage,type InlineThreadState} from './inline-thread';
 import type {EventTarget} from './event-subscriptions';
 
 export const STREAM_COMMANDS=['stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination'] as const;
 export interface ThreadDisplayCommand {version:1;id:string;kind:typeof STREAM_COMMANDS[number];source?:EventTarget;destinationSection?:string;destinations?:string[];subscriptionId?:string;destination?:string;scope?:'thread';start?:'future'|'history'}
 export interface DisplayDestination {id:string;path:string;section?:string;removed?:boolean}
-export interface DisplayBinding {messageId:string;turnId?:string;destinationId:string;request?:HostedInlineRequest;bindingId?:string;status:'planned'|'attached'|'skipped';error?:string}
+export interface DisplayBinding {messageId:string;turnId?:string;destinationId:string;request?:ResponseRequest;bindingId?:string;status:'planned'|'attached'|'skipped';error?:string}
 export interface ThreadDisplay extends EventTarget {id:string;scope:'thread';enabled:boolean;cancelled?:boolean;createdAt:string;boundary:string[];destinations:DisplayDestination[];bindings:DisplayBinding[];error?:string}
 export interface DisplayHost {
   readThread(target:EventTarget):Promise<InlineThreadState>;
   validateDestination(path:string):Promise<void>;
   /** Existing bindings include completed records, steering and continuations. */
   responseBindings(target:EventTarget):Promise<Array<{id:string;path:string;messageIds:string[];turnIds:string[]}>>;
-  prepareDisplay(display:ThreadDisplay,destination:DisplayDestination,message:InlineMessage):Promise<HostedInlineRequest>;
-  attachDisplay(request:HostedInlineRequest,path:string):Promise<void>;
+  prepareDisplay(display:ThreadDisplay,destination:DisplayDestination,message:InlineMessage):Promise<ResponseRequest>;
+  attachDisplay(request:ResponseRequest,path:string):Promise<void>;
   save():Promise<void>;
 }
 export function validateDisplayCommand(value:any):ThreadDisplayCommand {

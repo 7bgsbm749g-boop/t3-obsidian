@@ -1,10 +1,10 @@
 import {DirectInlinePreview,type DirectInlineUpdate} from './direct-inline-preview';
 import {localResponseBindings,localResponseRange,withoutLocalResponseBinding} from './local-response-binding';
 import {compactResponseBinding} from './response-binding-data';
-import type {HostedInlineRequest} from './hosted-inline';
-import type {LeaseRecord} from './inline-lease';
+import type {ResponseRequest} from './response-model';
+import type {ResponseRecord} from './response-record';
 import type {InlineStartRequest} from './inline-thread';
-import type {DeviceInlineIO} from './leased-inline';
+import type {DeviceResponseIO} from './device-local-responses';
 import {logFailure} from './diagnostics';
 import type {ResponseStopReceipt} from './response-stop-receipt';
 import {localFinalIdentity} from './local-final-cache';
@@ -15,21 +15,21 @@ export interface LocalFinalNoteIO {
   read(path:string):Promise<string|undefined>;
   compareAndSet(path:string,before:string,after:string,guard?:()=>boolean):Promise<boolean>;
 }
-type Runtime={request:HostedInlineRequest;record:LeaseRecord;preview:DirectInlinePreview;update?:DirectInlineUpdate;retained?:Promise<void>;work?:Promise<void>;stopped?:boolean;stopAcknowledged?:boolean;done?:boolean;retryAt:number};
+type Runtime={request:ResponseRequest;record:ResponseRecord;preview:DirectInlinePreview;update?:DirectInlineUpdate;retained?:Promise<void>;work?:Promise<void>;stopped?:boolean;stopAcknowledged?:boolean;done?:boolean;retryAt:number};
 /** A loaded anchor and its synced settings record reconnect independently of
  * any remote writer. Identical device final writes converge through Sync. */
 export class LocalResponseManager {
   private jobs=new Map<string,Runtime>();
   private migrations=new Map<string,Promise<void>>();
-  private documents=new Map<string,{document:string;stored:readonly HostedInlineRequest[];bindings:HostedInlineRequest[]}>();
+  private documents=new Map<string,{document:string;stored:readonly ResponseRequest[];bindings:ResponseRequest[]}>();
   private closed=false;
-  constructor(private actor:string,private vaultId:string,private io:DeviceInlineIO,private notes:LocalFinalNoteIO,private now=()=>Date.now(),private makePreview=(record:LeaseRecord,access:()=>ReturnType<DeviceInlineIO['access']>,receive:(update:DirectInlineUpdate)=>void)=>new DirectInlinePreview(record,access,receive)){}
+  constructor(private actor:string,private vaultId:string,private io:DeviceResponseIO,private notes:LocalFinalNoteIO,private now=()=>Date.now(),private makePreview=(record:ResponseRecord,access:()=>ReturnType<DeviceResponseIO['access']>,receive:(update:DirectInlineUpdate)=>void)=>new DirectInlinePreview(record,access,receive)){}
   has(id:string){return this.jobs.has(id);}
   request(id:string){return this.jobs.get(id)?.request;}
   record(id:string){return this.jobs.get(id)?.record;}
   private stored(){return this.io.localBindings?.()??[];}
   private range(document:string,id:string){return localResponseRange(document,id,this.stored());}
-  private adopt(request:HostedInlineRequest){
+  private adopt(request:ResponseRequest){
     if(this.jobs.get(request.id)?.done){this.jobs.delete(request.id);}
     const old=this.jobs.get(request.id);if(old){
       if(JSON.stringify(compactResponseBinding(old.request))!==JSON.stringify(compactResponseBinding(request))){
@@ -40,7 +40,7 @@ export class LocalResponseManager {
       }
       return old;
     }
-    const record:LeaseRecord={request,epoch:1,revision:1,owner:this.actor,expiresAt:0,coordinated:true,state:{...request.localResume,requestHash:'',accepted:true,notePath:request.notePath,messageId:request.localMessageId??request.messageId,steering:request.localSteering,status:'waiting',hashes:[],updatedAt:request.createdAt}};
+    const record:ResponseRecord={request,epoch:1,revision:1,owner:this.actor,expiresAt:0,coordinated:true,state:{...request.localResume,requestHash:'',accepted:true,notePath:request.notePath,messageId:request.localMessageId??request.messageId,steering:request.localSteering,status:'waiting',hashes:[],updatedAt:request.createdAt}};
     const runtime={request,record,retryAt:0} as Runtime;
     runtime.preview=this.makePreview(record,()=>this.io.access(request.threadEnvironmentId),update=>{
       if(this.closed||runtime.done||runtime.stopped)return;
@@ -58,7 +58,7 @@ export class LocalResponseManager {
     void this.io.loadLocalFinal?.(request).then(update=>{if(!update||this.closed||runtime.done||runtime.stopped||runtime.update?.completionVerified)return;runtime.update={...update,request:runtime.record.request};this.io.receiveDirect?.(runtime.update);this.finish(runtime);}).catch(error=>logFailure('response.local.final-restore',error,{bindingId:request.id}));
     return runtime;
   }
-  async register(request:HostedInlineRequest){
+  async register(request:ResponseRequest){
     if(this.closed||request.vaultId!==this.vaultId)throw Error('This response belongs to another vault.');
     const current=await this.io.readNote(request.notePath);if(current===undefined)throw Error('The response note is unavailable.');
     if(!localResponseRange(current,request.id,[request]))throw Error('The response block changed before registration.');
@@ -77,7 +77,7 @@ export class LocalResponseManager {
   delivered(id:string,delivery:InlineStartRequest){this.jobs.get(id)?.preview.delivery(delivery);}
   resume(){
     if(this.closed)return;
-    const documents=this.io.openedNotes?.()??[],locations=new Map<string,HostedInlineRequest[]>(),stored=this.stored();
+    const documents=this.io.openedNotes?.()??[],locations=new Map<string,ResponseRequest[]>(),stored=this.stored();
     for(const path of this.documents.keys())if(!documents.some(note=>note.path===path))this.documents.delete(path);
     for(const {path,document} of documents){
       let cached=this.documents.get(path);
@@ -154,7 +154,7 @@ export class LocalResponseManager {
     if(range&&!await this.notes.compareAndSet(path,current,current.slice(0,range.from)+body+current.slice(range.to)))throw Error('The frozen response is waiting for its local save.');
     runtime.done=true;this.io.localCompleted?.(runtime.request.id,path);
   }
-  private async changeBinding(id:string,change:(request:HostedInlineRequest)=>HostedInlineRequest){
+  private async changeBinding(id:string,change:(request:ResponseRequest)=>ResponseRequest){
     const runtime=this.jobs.get(id);if(!runtime||runtime.done||runtime.stopped)throw Error('The response is no longer active.');
     const before=runtime.request,next=change(before),document=await this.io.readNote(before.notePath);
     if(document===undefined||!this.range(document,id))throw Error('The response block is missing.');

@@ -5,7 +5,7 @@ import {responseAnchor} from '../native-response-projection';
 import {hiddenInlineMarkerExtension} from '../inline-markers';
 import {installResponsePresentation} from '../response-presentation';
 import {contentHash} from '../completion';
-import type {LeaseRecord} from '../inline-lease';
+import type {ResponseRecord} from '../response-record';
 import type {ThreadStreamCallbacks,watchThread} from '../thread-stream';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -28,7 +28,7 @@ export default class DirectInlineLab extends Plugin {
     const file=await app.vault.create('Direct.md',saved),first=app.workspace.getLeaf(false);await first.openFile(file);
     const second=app.workspace.createLeafBySplit(first,'vertical');await second.openFile(file);
     const leaves=[first,second],views=leaves.map(leaf=>leaf.view as MarkdownView);
-    const record:LeaseRecord={coordinated:true,migrating:true,owner:'host',epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:4,nativeProjection:true,id,initialOwner:crypto.randomUUID(),vaultId:crypto.randomUUID(),host:{environmentId:'fixture',workspaceRoot:'/unavailable-host',directory:'.obsidian/inline'},notePath:file.path,threadId:'fixture-thread',messageId:'fixture-prompt',projectId:'fixture-project',threadEnvironmentId:'fixture',initialHash:contentHash(''),createdAt:startedAt,intermediateMode:'keep',threadTitle:'Direct stream'}};
+    const record:ResponseRecord={coordinated:true,migrating:true,owner:'host',epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:4,nativeProjection:true,id,initialOwner:crypto.randomUUID(),vaultId:crypto.randomUUID(),host:{environmentId:'fixture',workspaceRoot:'/unavailable-host',directory:'.obsidian/inline'},notePath:file.path,threadId:'fixture-thread',messageId:'fixture-prompt',projectId:'fixture-project',threadEnvironmentId:'fixture',initialHash:contentHash(''),createdAt:startedAt,intermediateMode:'keep',threadTitle:'Direct stream'}};
     let callbacks!:ThreadStreamCallbacks;
     const watch:typeof watchThread=(_id,_access,next)=>{callbacks=next;return {stop:()=>{}};};
     this.preview=new DirectInlinePreview(record,async()=>{throw Error('The delayed fixture host has no network or note');},update=>manager.stream(update),watch);
@@ -43,7 +43,7 @@ export default class DirectInlineLab extends Plugin {
       rows.push({mode,hostMigrating:record.migrating,hostAccepted:false,visible:visible.every(text=>text.includes(body)),savedProjectionClean:views.every(view=>view.getViewData()===saved),diskClean:await app.vault.read(file)===saved,hostDidNotRegress:visible.every(text=>!text.includes('Delayed old host body'))});
       await this.capture('direct-'+mode+'.png');
     }
-    const final=saved.replace(responseAnchor(id),'> '+body),completed:LeaseRecord={...record,revision:++record.revision,migrating:false,state:{requestHash:'fixture',accepted:true,notePath:file.path,status:'complete',hashes:[],updatedAt:'',body:'> '+body,finalBody:'> '+body,cleanupComplete:true,finalSaved:true,delivery:{commitId:crypto.randomUUID(),hash:contentHash(final),verifiedOnHost:true,observedBy:[]}}};
+    const final=saved.replace(responseAnchor(id),'> '+body),completed:ResponseRecord={...record,revision:++record.revision,migrating:false,state:{requestHash:'fixture',accepted:true,notePath:file.path,status:'complete',hashes:[],updatedAt:'',body:'> '+body,finalBody:'> '+body,cleanupComplete:true,finalSaved:true,delivery:{commitId:crypto.randomUUID(),hash:contentHash(final),verifiedOnHost:true,observedBy:[]}}};
     this.preview.update(completed);this.preview.tick(true);await manager.receive(completed);await pause(500);
     rows.push({mode:'delayed-final',visible:views.every(view=>manager.view(view)?.currentProjection().display.includes(body)),diskClean:await app.vault.read(file)===saved});
     await app.vault.modify(file,final);await manager.changed(file.path);await pause(500);

@@ -1,4 +1,4 @@
-import {safeNotePath} from './hosted-inline';
+import {safeNotePath} from './response-model';
 export const RESPONSE_COMMANDS=['resolve-response-location','response-status','response-import-info','response-import-records','resume-response','stage-note-edit','submit-note-edit','repair-response','remove-response','close-stream-block'] as const;
 export interface ImportSource {threadId:string;projectId:string;environmentId:string}
 export interface ImportRecordsCommand {version:1;id:string;kind:'response-import-records';source:ImportSource;cursor?:string}

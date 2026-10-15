@@ -5,7 +5,7 @@ import {responseAnchor} from '../native-response-projection';
 import {hiddenInlineMarkerExtension} from '../inline-markers';
 import {installResponsePresentation} from '../response-presentation';
 import {contentHash} from '../completion';
-import type {LeaseRecord} from '../inline-lease';
+import type {ResponseRecord} from '../response-record';
 import type {ThreadStreamCallbacks,watchThread} from '../thread-stream';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -26,7 +26,7 @@ export default class DenseStreamLab extends Plugin {
     let saved='# Dense stream fixture\n\nOrdinary text before.\n\n'+responseAnchor(id)+'\n\nOrdinary text after.\n';
     const file=await app.vault.create('Dense.md',saved),first=app.workspace.getLeaf(false);await first.openFile(file);
     const second=app.workspace.createLeafBySplit(first,'vertical');await second.openFile(file);const leaves=[first,second];
-    const record:LeaseRecord={coordinated:true,migrating:true,owner:'host',epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:4,nativeProjection:true,id,initialOwner:crypto.randomUUID(),vaultId:crypto.randomUUID(),host:{environmentId:'fixture',workspaceRoot:'/unavailable-host',directory:'.obsidian/inline'},notePath:file.path,threadId:'fixture-thread',messageId:'prompt',projectId:'fixture-project',threadEnvironmentId:'fixture',initialHash:contentHash(''),createdAt:startedAt,intermediateMode:'collapse',threadTitle:'Dense stream'}};
+    const record:ResponseRecord={coordinated:true,migrating:true,owner:'host',epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:4,nativeProjection:true,id,initialOwner:crypto.randomUUID(),vaultId:crypto.randomUUID(),host:{environmentId:'fixture',workspaceRoot:'/unavailable-host',directory:'.obsidian/inline'},notePath:file.path,threadId:'fixture-thread',messageId:'prompt',projectId:'fixture-project',threadEnvironmentId:'fixture',initialHash:contentHash(''),createdAt:startedAt,intermediateMode:'collapse',threadTitle:'Dense stream'}};
     let callbacks!:ThreadStreamCallbacks,updates=0,lastBody='',sequence=2;
     const watch:typeof watchThread=(_id,_access,next)=>{callbacks=next;return {stop:()=>{}};};
     this.preview=new DirectInlinePreview(record,async()=>{throw Error('No network in dense fixture');},update=>{updates++;lastBody=update.body;manager.stream(update);},watch);
@@ -115,7 +115,7 @@ export default class DenseStreamLab extends Plugin {
     this.write('TERMINAL-DOM.json',{body:lastBody,folds:leaves.map(leaf=>fold(leaf)?.outerHTML)});
     check('finished answer outside closed history and no active tools',!lastBody.includes('stream-tail')&&!lastBody.includes('status="inProgress"')&&leaves.every(leaf=>fold(leaf)?.classList.contains('is-collapsed')));
     const final=saved.replace(responseAnchor(id),lastBody.trimEnd());
-    const complete:LeaseRecord={...record,revision:2,migrating:false,state:{requestHash:'fixture',accepted:true,notePath:file.path,status:'complete',hashes:[],updatedAt:'',body:lastBody,finalBody:lastBody.trimEnd(),cleanupComplete:true,finalSaved:true,delivery:{commitId:crypto.randomUUID(),hash:contentHash(final),verifiedOnHost:true,observedBy:[]}}};
+    const complete:ResponseRecord={...record,revision:2,migrating:false,state:{requestHash:'fixture',accepted:true,notePath:file.path,status:'complete',hashes:[],updatedAt:'',body:lastBody,finalBody:lastBody.trimEnd(),cleanupComplete:true,finalSaved:true,delivery:{commitId:crypto.randomUUID(),hash:contentHash(final),verifiedOnHost:true,observedBy:[]}}};
     this.preview.update(complete);this.preview.tick(true);await manager.receive(complete);await pause(100);check('delayed checked final leaves disk clean',await app.vault.read(file)===saved);
     await app.vault.modify(file,final);await manager.changed(file.path);await pause(350);check('checked final adopted in both panes',leaves.every(leaf=>(leaf.view as MarkdownView).getViewData()===final&&!manager.view(leaf.view as MarkdownView)?.conflictRecord()));
     this.write('RESULT.json',{pass:failures.length===0,rows,frames,missingFrames,closedFrames,replacedFrames,groupMissing,groupClosed,groupReplaced,receivedDeltas:Math.ceil(text.length/3),displayUpdates:updates});await this.capture('dense-final.png');

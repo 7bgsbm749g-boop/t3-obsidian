@@ -6,13 +6,13 @@ import type {App,MarkdownView} from 'obsidian';
 import type {Transaction} from '@codemirror/state';
 import {NativeResponseView} from './native-response-view';
 import {responseAnchor,responseRegion,type LocalResponse} from './native-response-projection';
-import type {LeaseRecord} from './inline-lease';
+import type {ResponseRecord} from './response-record';
 import {regionBody,initialRegion,startMarker,endMarker,renameInlineHeader} from './inline-thread';
 import {logFailure} from './diagnostics';
 import {nativeCommitMatches,readNativeCommitProof,type NativeCommitProof} from './native-response-commit';
 import type {DirectInlineUpdate} from './direct-inline-preview';
 import {loadNativePreviews,checkedNativePreview,sameNativePreview,previewMatches,previewMessageId,MAX_NATIVE_PREVIEWS,MAX_NATIVE_PREVIEW_CHARACTERS,type NativePreviewEntry,type NativePreviewSnapshot} from './native-preview-cache';
-import type {DeviceCompletionReceipt} from './device-response-completion';
+interface DeviceCompletionReceipt {version:1;id:string;actor:string;vaultId:string;notePath:string;commitId:string;hash:string;token:string;requestHash:string;at:number}
 import type {NativeStoppedResponse,NativeStoppedStore} from './native-stop-store';
 import {retainedLease,isCompletedLeaseIndex,canCompactLease} from './completed-lease-index';
 
@@ -38,7 +38,7 @@ export class NativeResponseManager {
   private uninitializedViews=new WeakSet<NativeResponseView>();
   private provisional=new Map<string,{path:string;body:string}>();
   private streams=new Map<string,DirectInlineUpdate>();
-  private records=new Map<string,LeaseRecord>();
+  private records=new Map<string,ResponseRecord>();
   retentionStatus(){return {records:this.records.size,completedIndexes:[...this.records.values()].filter(isCompletedLeaseIndex).length,proofs:this.proofs.size,proofCharacters:[...this.proofs.values()].reduce((total,proof)=>total+proof.document.length,0),deviceProofs:this.deviceCommits.size,deviceProofCharacters:[...this.deviceCommits.values()].reduce((total,item)=>total+item.proof.document.length,0)};}
   private titles=new Map<string,string>();
   private proofs=new Map<string,NativeCommitProof>();
@@ -162,7 +162,7 @@ export class NativeResponseManager {
     }
   }
   private forgetPreview(id:string){if(this.cached.delete(id))this.dirtyPreview();this.reconnecting.delete(id);}
-  private rememberPreview(record:LeaseRecord,body:string){
+  private rememberPreview(record:ResponseRecord,body:string){
     if(!this.previewVault||record.request.vaultId!==this.previewVault||this.reconnecting.has(record.request.id)||record.finalWriter||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict)return;
     if(this.localStops.has(record.request.id))return;
     const request=record.request,stream=this.streams.get(request.id);
@@ -268,7 +268,7 @@ export class NativeResponseManager {
     this.refresh();
     for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.preserveConflict({base,local,incoming,reason});
   }
-  async receive(record:LeaseRecord,proofBytes?:string){
+  async receive(record:ResponseRecord,proofBytes?:string){
     if(!record.coordinated)return;
     const cached=this.cached.get(record.request.id);
     // Local record revisions belong to one manager lifetime. A settings-based

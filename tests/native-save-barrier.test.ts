@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {NativeResponseView} from '../native-response-view';
 import {NativeResponseManager} from '../native-response-manager';
 import {responseAnchor} from '../native-response-projection';
-import type {LeaseRecord} from '../inline-lease';
+import type {ResponseRecord} from '../response-record';
 import type {NativeStoppedResponse,NativeStoppedStore} from '../native-stop-store';
 import {deviceFinalNoteIO} from '../inline-note-io';
 import {nativeResponses} from '../native-response-manager';
@@ -55,7 +55,7 @@ function adapterFixture(){
   const h=nativeFixture(),adapter=new NativeResponseView(h.view,before,conflict=>{throw Error(conflict.reason);},async()=>h.disk());
   adapter.setResponses([{id,body}]);return {...h,adapter};
 }
-function record(revision=1):LeaseRecord{return {coordinated:true,owner:'host',epoch:1,revision,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:3,id,vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:'Note.md',threadId:'thread',messageId:id,projectId:'project',threadEnvironmentId:'host',initialHash:'initial',createdAt:'2026-10-10T00:00:00Z'},state:{requestHash:'request',accepted:true,notePath:'Note.md',status:'running',hashes:[],body,updatedAt:''}};}
+function record(revision=1):ResponseRecord{return {coordinated:true,owner:'host',epoch:1,revision,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:3,id,vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:'Note.md',threadId:'thread',messageId:id,projectId:'project',threadEnvironmentId:'host',initialHash:'initial',createdAt:'2026-10-10T00:00:00Z'},state:{requestHash:'request',accepted:true,notePath:'Note.md',status:'running',hashes:[],body,updatedAt:''}};}
 
 test('final save drains a constructor-bound native save that already captured the old anchors',async()=>{
   const h=adapterFixture(),gate=deferred();h.edit(h.visible().replace('Ordinary text','Earlier ordinary edit'));h.view.requestSave();h.blockAdapter(gate.promise);
@@ -201,7 +201,7 @@ test('identical durable Stops do not serialize or rewrite the frozen body list',
 function contentElement(){
   const children:any[]=[];return {ownerDocument:{defaultView:undefined},children,createDiv:()=>{const element:any={isConnected:true,textContent:'',setAttribute(){},setText(text:string){this.textContent=text;},remove(){this.isConnected=false;}};return element;},prepend:(element:any)=>{children.unshift(element);}};
 }
-function granted(revision=2):LeaseRecord {return {...record(revision),state:{...record().state!,body:'**T3 · Working**\n\n> Stale checkpoint reply'},finalWriter:{actor:'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',token:'retained-token',messageId:id,turnId:'completed-turn',sequence:20,body,phase:'complete'}};}
+function granted(revision=2):ResponseRecord {return {...record(revision),state:{...record().state!,body:'**T3 · Working**\n\n> Stale checkpoint reply'},finalWriter:{actor:'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',token:'retained-token',messageId:id,turnId:'completed-turn',sequence:20,body,phase:'complete'}};}
 test('a retained final grant replaces stale stream and reconnect text without adding a save banner',async()=>{
   const initial=nativeFixture(),first=new NativeResponseManager(initial.app);let checkpoint:unknown;first.configurePreviewCache('vault',undefined,async value=>{checkpoint=structuredClone(value);});await first.receive(record());first.stream({request:record().request,messageId:id,sequence:10,body:'**T3 · Working**\n\n> Stale cached reply'});await first.prepareReload();first.dispose();
   const h=nativeFixture(),manager=new NativeResponseManager(h.app),element=contentElement();h.view.contentEl=element;

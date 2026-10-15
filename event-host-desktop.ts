@@ -2,7 +2,7 @@ import {promises as fs} from 'node:fs';
 import {join} from 'node:path';
 import lockfile from 'proper-lockfile';
 import {desktopInterval} from './desktop-timers';
-import {localInlineFiles} from './hosted-inline-desktop';
+import {localInlineFiles} from './response-storage-desktop';
 import {ensurePrivateStorage} from './private-storage-desktop';
 import {eventCanonical,eventRequest,type EventHostIdentity} from './event-host';
 import {validateEventCommand,type EventSubscriptionCommand,type EventCommandResult,type EventState} from './event-subscriptions';

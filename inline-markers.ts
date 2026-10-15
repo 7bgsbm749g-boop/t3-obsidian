@@ -3,7 +3,7 @@ import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
 import type {MarkdownPostProcessorContext} from 'obsidian';
 import {responseBoundaries,responseFrame} from './response-container';
 import {ContainerMarkerIndex} from './container-marker-index';
-import {validateHostedRequest} from './hosted-inline';
+import {validateResponseRequest} from './response-model';
 import {markdownCodeRanges} from './reply-html';
 
 export interface ContainerMarkerDecorations {index:ContainerMarkerIndex;decorations:DecorationSet}
@@ -23,7 +23,7 @@ export function hiddenInlineMarkerExtension():Extension {
       if(markdownCodeRanges(document).some(([from,to])=>pos>=from&&pos<to))return null;
       try{
         if(match[0].startsWith('<!-- t3-response-binding:')){
-          const encoded=/^<!-- t3-response-binding:([0-9a-f-]{36}):(.*) -->$/i.exec(match[0])!,request=validateHostedRequest(JSON.parse(decodeURIComponent(encoded[2])));
+          const encoded=/^<!-- t3-response-binding:([0-9a-f-]{36}):(.*) -->$/i.exec(match[0])!,request=validateResponseRequest(JSON.parse(decodeURIComponent(encoded[2])));
           if(!request.localOnly||request.id!==encoded[1]||!responseFrame(document,request.id))return null;
         }else{
           const value=JSON.parse(decodeURIComponent(match[0].slice('<!-- t3-run-import:'.length,-4)));

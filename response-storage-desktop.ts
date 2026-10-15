@@ -2,10 +2,10 @@ import {promises as fs} from 'node:fs';
 import {join,resolve,dirname} from 'node:path';
 import {DesktopInlineReadCache,inlineFileVersion} from './inline-file-cache-desktop';
 import {existingPrivateStorage} from './private-storage-desktop';
-import type {LeaseFiles} from './inline-lease';
+import type {ResponseStorageFiles} from './response-record';
 const inlineReadCache=new DesktopInlineReadCache();
 
-export function localInlineFiles(root:string,directory:string,storageRoot?:string):LeaseFiles&{requests():Promise<string[]>;listSidecars(path:string):Promise<string[]>}{
+export function localInlineFiles(root:string,directory:string,storageRoot?:string):ResponseStorageFiles&{requests():Promise<string[]>;listSidecars(path:string):Promise<string[]>}{
   const cursors=new Map<string,import('node:fs').Dir>();
   const configDir=directory.includes('/t3-code/')?directory.slice(0,directory.indexOf('/t3-code/')):directory.split('/')[0]!;
   let selectedRoot=storageRoot;

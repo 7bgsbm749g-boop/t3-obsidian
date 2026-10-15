@@ -4,14 +4,14 @@ import {randomUUID} from 'node:crypto';
 import {NativeResponseManager} from '../native-response-manager';
 import {responseAnchor} from '../native-response-projection';
 import {contentHash} from '../completion';
-import type {LeaseRecord} from '../inline-lease';
+import type {ResponseRecord} from '../response-record';
 
 function fixture(open=true){
  const id=randomUUID(),commitId=randomUUID(),body='Completed reply '.repeat(10000),anchor=responseAnchor(id),before=`Before\n\n${anchor}\n\nAfter\n`,final=before.replace(anchor,body),file={path:'Done.md'};
  let disk=before,value=before;
  const view:any={file,getViewData:()=>value,setViewData:(text:string)=>{value=text;},getMode:()=> 'preview',requestSave:()=>{},save:async()=>{disk=value;}};
  const app:any={workspace:{getLeavesOfType:()=>open?[{view}]:[]},vault:{getFileByPath:()=>file,read:async()=>disk},saveLocalStorage:()=>{}};
- const record:LeaseRecord={coordinated:true,owner:'host',epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:3,id,vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:file.path,threadId:'thread',messageId:id,projectId:'project',threadEnvironmentId:'host',initialHash:'initial',createdAt:'2026-10-11T00:00:00Z'},state:{requestHash:'request',accepted:true,notePath:file.path,status:'complete',hashes:[],updatedAt:'',body,finalBody:body,finalPhase:'complete',finalSaved:true,cleanupComplete:true,delivery:{commitId,hash:contentHash(final),verifiedOnHost:true,observedBy:[]}}};
+ const record:ResponseRecord={coordinated:true,owner:'host',epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:3,id,vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:file.path,threadId:'thread',messageId:id,projectId:'project',threadEnvironmentId:'host',initialHash:'initial',createdAt:'2026-10-11T00:00:00Z'},state:{requestHash:'request',accepted:true,notePath:file.path,status:'complete',hashes:[],updatedAt:'',body,finalBody:body,finalPhase:'complete',finalSaved:true,cleanupComplete:true,delivery:{commitId,hash:contentHash(final),verifiedOnHost:true,observedBy:[]}}};
  const from=final.indexOf(body),proof={version:1,bindingId:id,commitId,hash:contentHash(final),document:final,ranges:[{from,to:from+body.length}]},bytes=JSON.stringify(proof);record.state!.delivery!.proofHash=contentHash(bytes);
  const manager=new NativeResponseManager(app);return {manager,record,bytes,id,body,final,view,visible:()=>value,disk:(text:string)=>{disk=text;},open:(value:boolean)=>{open=value;}};
 }

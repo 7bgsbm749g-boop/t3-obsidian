@@ -1,5 +1,5 @@
-import type {LeaseRecord} from './inline-lease';
-import type {HostedInlineRequest} from './hosted-inline';
+import type {ResponseRecord} from './response-record';
+import type {ResponseRequest} from './response-model';
 import {applyThreadItem,inlineBindingCheckpoint,inlineTurnMessages,restoreInlineBindings,turnForMessage,renderInlineTurn,rememberInlineTurns,type InlineThreadState,type InlineStartRequest,type InlineActivity} from './inline-thread';
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs} from './inline-questions';
 import {mergeProse,observeIncoming,steeringBoundary} from './inline-steering';
@@ -9,7 +9,7 @@ import {logFailure} from './diagnostics';
 import {checkFinalResponse,finalResponseKey} from './final-response';
 import {responseTooLarge,type StreamReadFailure} from './t3-response-limits';
 
-export interface DirectInlineUpdate {request:HostedInlineRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
+export interface DirectInlineUpdate {request:ResponseRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
 type Watch=typeof watchThread;
 export interface PreviewClock {now():number;later(callback:()=>void,ms:number):unknown;cancel(handle:unknown):void}
 const displayClock:PreviewClock={now:()=>performance.now(),later:(callback,ms)=>setTimeout(callback,ms),cancel:handle=>clearTimeout(handle as ReturnType<typeof setTimeout>)};
@@ -20,7 +20,7 @@ export const DIRECT_DISPLAY_INTERVAL_MS=80;
  * this preview itself never mutates the note or grants write authority. */
 export class DirectInlinePreview {
   private state:InlineThreadState={messages:[],activities:[]};
-  private record:LeaseRecord;
+  private record:ResponseRecord;
   private monitor?:{stop():void};
   private generation=0;
   private prose:InlineThreadState['messages']=[];
@@ -38,8 +38,8 @@ export class DirectInlinePreview {
   private verification?:Promise<void>;
   private nextVerification=0;
   private terminal=false;
-  constructor(record:LeaseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
-  update(record:LeaseRecord){
+  constructor(record:ResponseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
+  update(record:ResponseRecord){
     if(record.epoch<this.record.epoch||record.epoch===this.record.epoch&&record.revision<this.record.revision)return;
     this.record=record;
     this.failure??=record.state?.streamFailure;

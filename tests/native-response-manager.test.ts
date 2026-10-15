@@ -5,7 +5,7 @@ import {responseAnchor,projectResponses} from '../native-response-projection';
 import {initialRegion,regionBody} from '../inline-thread';
 import {contentHash} from '../completion';
 import {readNativeCommitProof,type NativeCommitProof} from '../native-response-commit';
-import type {LeaseRecord} from '../inline-lease';
+import type {ResponseRecord} from '../response-record';
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
 import {RESPONSE_SIZE_FAILURE} from '../t3-response-limits';
@@ -14,10 +14,10 @@ const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-e
 const body='> Final answer',otherBody='> Independent response';
 const before=`Before\n\n${responseAnchor(id)}\n\nBetween\n\n${responseAnchor(other)}\n\nAfter\n`;
 const final=before.replace(responseAnchor(id),body);
-function record(binding=id,revision=1):LeaseRecord {
+function record(binding=id,revision=1):ResponseRecord {
   return {coordinated:true,owner:'host',epoch:1,revision,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:3,id:binding,vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:'Note.md',threadId:'thread',messageId:binding,projectId:'project',threadEnvironmentId:'host',initialHash:'initial',createdAt:'2026-10-03T12:00:00Z'},state:{requestHash:'request',accepted:true,notePath:'Note.md',status:'running',hashes:[],body:binding===id?body:otherBody,updatedAt:''}};
 }
-function completed(revision=2,document=final):LeaseRecord {const active=record(id,revision);return {...active,state:{...active.state!,status:'complete',finalBody:body,finalPhase:'complete',finalSaved:true,cleanupComplete:true,delivery:{commitId,hash:contentHash(document),verifiedOnHost:true,observedBy:[]}}};}
+function completed(revision=2,document=final):ResponseRecord {const active=record(id,revision);return {...active,state:{...active.state!,status:'complete',finalBody:body,finalPhase:'complete',finalSaved:true,cleanupComplete:true,delivery:{commitId,hash:contentHash(document),verifiedOnHost:true,observedBy:[]}}};}
 function evidence(document=final){const from=document.indexOf(body);const proof:NativeCommitProof={version:1,bindingId:id,commitId,hash:contentHash(document),document,ranges:[{from,to:from+body.length}]};const bytes=JSON.stringify(proof);return {bytes,proofHash:contentHash(bytes)};}
 function fixture(panes=1,local=new Map<string,unknown>()){
   const file={path:'Note.md'},frames:string[][]=Array.from({length:panes},()=>[]),values=Array.from({length:panes},()=>before),conflicts:any[]=[];

@@ -2,9 +2,9 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {compactResponseBinding,loadResponseBindingData,mergeResponseBindingData,updateResponseBindingData,responseBindingRequests} from '../response-binding-data';
-import type {HostedInlineRequest} from '../hosted-inline';
+import type {ResponseRequest} from '../response-model';
 
-const request=():HostedInlineRequest=>({version:4,localOnly:true,nativeProjection:true,responseContainer:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',notePath:'A.md',host:{environmentId:'env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},threadId:randomUUID(),messageId:randomUUID(),projectId:randomUUID(),threadEnvironmentId:'env',initialHash:'0'.repeat(64),createdAt:'2026-10-15T00:00:00Z'});
+const request=():ResponseRequest=>({version:4,localOnly:true,nativeProjection:true,responseContainer:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',notePath:'A.md',host:{environmentId:'env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},threadId:randomUUID(),messageId:randomUUID(),projectId:randomUUID(),threadEnvironmentId:'env',initialHash:'0'.repeat(64),createdAt:'2026-10-15T00:00:00Z'});
 test('independent settings records merge in either arrival order and survive stale whole-file replacement',()=>{
   const a=request(),b=request(),left=updateResponseBindingData({},a,'A',1),right=updateResponseBindingData({},b,'B',1);
   const merged=mergeResponseBindingData(left,right);assert.deepEqual(merged,mergeResponseBindingData(right,left));assert.equal(Object.keys(merged).length,2);

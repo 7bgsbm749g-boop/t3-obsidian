@@ -1,5 +1,5 @@
 import {contentHash} from './completion';
-import type {LeaseRecord} from './inline-lease';
+import type {ResponseRecord} from './response-record';
 
 export interface StoppedBodyReference {hash:string;length:number}
 export interface ResponseStopReceipt {
@@ -17,14 +17,14 @@ export function validStoppedBodyReference(value:unknown):value is StoppedBodyRef
   return !!ref&&/^[a-f0-9]{64}$/.test(ref.hash)&&Number.isSafeInteger(ref.length)&&ref.length>=0&&ref.length<=2_000_000;
 }
 export function stoppedBodyReference(body:string):StoppedBodyReference{return {hash:contentHash(body),length:body.length};}
-export function responseRunTerminal(record:LeaseRecord){
+export function responseRunTerminal(record:ResponseRecord){
   // A permanent final grant contains the exact completed turn even if an
   // older host checkpoint still describes its previous running state.
   if(record.finalWriter)return ['complete','interrupted'].includes(record.finalWriter.phase);
   const state=record.state,turn=state?.bindingCheckpoint?.turns?.[state.turnId??''];
   return !!state&&(['complete','interrupted'].includes(state.status)||!!state.finishedAt&&['complete','interrupted'].includes(state.finalPhase??'')||!!turn&&['completed','interrupted','cancelled','error'].includes(turn.state));
 }
-export function responseStopReceipt(record:LeaseRecord,commandId=''):ResponseStopReceipt {
+export function responseStopReceipt(record:ResponseRecord,commandId=''):ResponseStopReceipt {
   const finalSaved=record.state?.finalSaved===true&&record.state?.cleanupComplete===true;
   return {version:1,bindingId:record.request.id,commandId,epoch:record.epoch,revision:record.revision,hostRecorded:!!record.stopRequestedAt||record.responseRemovedAt!==undefined,runTerminal:responseRunTerminal(record),finalSaved,finalWriterPending:!!record.finalWriter&&!finalSaved,...(record.stopRequestedAt?{stopRequestedAt:record.stopRequestedAt}:{})};
 }

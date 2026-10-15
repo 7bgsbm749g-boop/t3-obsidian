@@ -4,10 +4,10 @@ import {randomUUID} from 'node:crypto';
 import {editorStream} from '../editor-stream';
 import {initialRegion,inlineTargetAt,regionBody,completionProof,hasCompletionProof} from '../inline-thread';
 import {validateNoteCommand} from '../note-command';
-import type {HostedInlineRequest} from '../hosted-inline';
+import type {ResponseRequest} from '../response-model';
 import {eventContent} from '../event-subscriptions';
 
-const source=():HostedInlineRequest=>({version:2,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'machine',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:'A.md',threadId:randomUUID(),messageId:randomUUID(),projectId:'project',threadEnvironmentId:'machine',initialHash:initialRegion(randomUUID()).bodyHash,createdAt:new Date().toISOString()});
+const source=():ResponseRequest=>({version:2,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'machine',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:'A.md',threadId:randomUUID(),messageId:randomUUID(),projectId:'project',threadEnvironmentId:'machine',initialHash:initialRegion(randomUUID()).bodyHash,createdAt:new Date().toISOString()});
 test('native section registration preserves the watcher baseline without adding ordinary blank lines',async()=>{
   const original='# Note\n\n## CURRENT\n\n## AFTER\n\nTail\n';let document=original;
   await editorStream({...source(),nativeProjection:true,destinationSection:'CURRENT'},'A.md',{updateNote:async(_path,change)=>document=change(document)},()=>true);

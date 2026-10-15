@@ -3,19 +3,19 @@ import {responseAnchor} from './native-response-projection';
 import {intermediateMode} from './response-presentation';
 import {commandId} from './direct';
 import {initialRegion,endInsertionOffset,regionBody,startMarker} from './inline-thread';
-import {safeNotePath,type HostedInlineRequest} from './hosted-inline';
+import {safeNotePath,type ResponseRequest} from './response-model';
 
 export interface StreamNoteIO {
   updateNote(path:string,change:(document:string)=>string,allowed:()=>boolean):Promise<string|undefined>;
   completed?(id:string):Promise<boolean>;
-  beforeInsert?(request:HostedInlineRequest):Promise<void>;
+  beforeInsert?(request:ResponseRequest):Promise<void>;
 }
 /** Attach a single response to a note without dispatching another prompt.
  * Stable IDs make registration/recovery retries reuse the same block. */
-export async function editorStream(source:HostedInlineRequest,notePath:string,io:StreamNoteIO,allowed:()=>boolean,bindingId?:string):Promise<HostedInlineRequest>{
+export async function editorStream(source:ResponseRequest,notePath:string,io:StreamNoteIO,allowed:()=>boolean,bindingId?:string):Promise<ResponseRequest>{
   if(!safeNotePath(notePath))throw Error('Choose a vault-relative Markdown note path.');
   const id=bindingId??commandId(source.id,`binding:${notePath}`),region=initialRegion(id,source.initialInput,source.threadTitle,intermediateMode(source.intermediateMode,source.keepIntermediate),{startedAt:source.createdAt});
-  const request:HostedInlineRequest={...source,id,notePath,initialHash:region.bodyHash,independent:true};
+  const request:ResponseRequest={...source,id,notePath,initialHash:region.bodyHash,independent:true};
   if(await io.completed?.(id))return request;
   await io.beforeInsert?.(request);
   const document=await io.updateNote(notePath,current=>{

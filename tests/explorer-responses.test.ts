@@ -2,8 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {leaseExplorerResponse,noteIndicators,relocateExplorerResponses,loadExplorerResponses} from '../explorer-responses';
 import {folderNotePath} from '../folder-note-adapter';
-import type {LeaseRecord} from '../inline-lease';
-const record=(state?:any):LeaseRecord=>({request:{id:'binding',notePath:'Note.md'} as any,epoch:1,revision:2,owner:'writer',expiresAt:0,state});
+import type {ResponseRecord} from '../response-record';
+const record=(state?:any):ResponseRecord=>({request:{id:'binding',notePath:'Note.md'} as any,epoch:1,revision:2,owner:'writer',expiresAt:0,state});
 test('terminal exact runs and permanent final grants stop the spinner while their save is pending',()=>{
   for(const status of ['running','waiting']){
     const pending=record({status});pending.finalWriter={actor:'device',token:'token',messageId:'message',turnId:'run',sequence:1,body:'Reply',phase:'complete'};

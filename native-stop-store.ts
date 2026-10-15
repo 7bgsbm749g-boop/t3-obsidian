@@ -1,6 +1,6 @@
 import {openStateDatabase} from './local-state';
 import {contentHash} from './completion';
-import {safeNotePath} from './hosted-inline';
+import {safeNotePath} from './response-model';
 
 export interface NativeStoppedResponse {id:string;path:string;body:string;hidden:boolean}
 export interface NativeStoppedStore {readAll():Promise<NativeStoppedResponse[]>;write(stop:NativeStoppedResponse):Promise<void>}

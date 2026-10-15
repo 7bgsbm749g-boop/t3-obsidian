@@ -2,10 +2,9 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {DirectInlinePreview,type DirectInlineUpdate,type PreviewClock} from '../direct-inline-preview';
-import type {LeaseRecord} from '../inline-lease';
+import type {ResponseRecord} from '../response-record';
 import type {ThreadStreamCallbacks,ThreadStreamItem,watchThread} from '../thread-stream';
-import {DeviceInlineManager} from '../leased-inline';
-import {InlineLeaseAuthority,leasePaths,type LeaseFiles} from '../inline-lease';
+import {type ResponseStorageFiles} from '../response-record';
 import {T3ResponseTooLargeError} from '../t3-response-limits';
 
 class TestClock implements PreviewClock {
@@ -17,7 +16,7 @@ class TestClock implements PreviewClock {
 }
 function fixture(paced=true,verify?:(path:string,payload?:any)=>Promise<any>){
   const request={version:4 as const,nativeProjection:true,id:randomUUID(),vaultId:randomUUID(),host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/inline'},initialOwner:randomUUID(),notePath:'Note.md',threadId:'thread',messageId:'prompt',projectId:'project',threadEnvironmentId:'host',initialHash:'hash',createdAt:'2026-10-06T03:00:00Z',intermediateMode:'keep' as const};
-  const record:LeaseRecord={request,coordinated:true,migrating:true,owner:'host',epoch:1,revision:0,expiresAt:Number.MAX_SAFE_INTEGER};
+  const record:ResponseRecord={request,coordinated:true,migrating:true,owner:'host',epoch:1,revision:0,expiresAt:Number.MAX_SAFE_INTEGER};
   const streams:Array<{callbacks:ThreadStreamCallbacks;cursor:()=>number|undefined;stopped:boolean}>=[],updates:DirectInlineUpdate[]=[];
   const watch:typeof watchThread=(_id,_access,callbacks,_socket,_targets,replay)=>{const stream={callbacks,cursor:replay!.afterSequence,stopped:false};streams.push(stream);return {stop:()=>{stream.stopped=true;}};};
   const clock=new TestClock();
@@ -122,35 +121,6 @@ test('a durable conflict suspends direct display work immediately and explicit r
  h.clock.advance(1000);h.item(h.snapshot(99,'Late conflict data'));assert.equal(h.updates.length,count);h.preview.tick(true);assert.equal(h.streams.length,1);
  h.preview.update({...h.record,state:{...state,status:'waiting'}});h.preview.tick(true);assert.equal(h.streams.length,2);assert.equal(h.streams[1].cursor(),3);
  h.event(4,' after explicit resume');h.clock.advance(1000);assert.match(h.updates.at(-1)!.body,/First paragraph queued after explicit resume/);h.preview.dispose();
-});
-
-test('device registration starts the direct transport while host migration has no note, with no checkpoint or note writes',async()=>{
- const h=fixture(),storage=new Map<string,string>(),updates:DirectInlineUpdate[]=[],identity={...h.record.request.host,vaultId:h.record.request.vaultId};
- const files:LeaseFiles={read:async path=>storage.get(path),write:async(path,value)=>{storage.set(path,value);},remove:async path=>{storage.delete(path);},list:async dir=>[...storage.keys()].filter(path=>path.startsWith(dir+'/'))};
- const authority=new InlineLeaseAuthority(identity,files),remote={...files,read:async(path:string)=>{if(path.includes('/replies/'))await authority.tick();return files.read(path);}};
- const oldSocket=globalThis.WebSocket;
- class Socket {onopen?:()=>void;onclose?:()=>void;onmessage?:(item:{data:string})=>void;onerror?:()=>void;constructor(){queueMicrotask(()=>this.onopen?.());}send(raw:string){if(JSON.parse(raw).tag==='orchestration.subscribeThread')queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[h.snapshot()]})}));}close(){this.onclose?.();}}
- globalThis.WebSocket=Socket as any;
- const manager=new DeviceInlineManager(h.record.request.initialOwner!,identity.vaultId,{receiveDirect:update=>updates.push(update),receiveCoordinated:()=>{},access:async()=>({origin:'https://fixture',api:async()=>({ticket:'fixture'})}),readNote:async()=>undefined,isOpen:()=>true,updateNote:async()=>{throw Error('Direct transport must not save generated text');}},async()=>({files:remote,close:()=>{}}),undefined,undefined,async()=>{await authority.tick();});
- try{
-  await manager.register({...h.record.request,messageId:randomUUID(),initialHash:'0'.repeat(64)});
-  // The fixture's response belongs to a different prompt, so it is excluded.
-  await new Promise(resolve=>setImmediate(resolve));assert.equal(updates.length,0);
-  const request={...h.record.request,id:randomUUID(),messageId:randomUUID(),initialHash:'0'.repeat(64)};
-  const originalSnapshot=h.snapshot;h.snapshot=(...args)=>{const item=originalSnapshot(...args) as any;item.snapshot.thread.messages[0].id=request.messageId;item.snapshot.thread.latestTurn.messageId=request.messageId;return item;};
-  await manager.register(request);for(let n=0;n<5;n++)await new Promise(resolve=>setImmediate(resolve));
-  assert.ok(updates.some(update=>update.request.id===request.id&&update.body.includes('First paragraph')));
-  const record=JSON.parse(storage.get(leasePaths(identity.directory,request.id).record)!);assert.equal(record.migrating,true);assert.equal(record.state,undefined);
-  const commands=[...storage].filter(([path])=>path.includes('/commands/')).map(([,bytes])=>JSON.parse(bytes));assert.ok(commands.every(command=>command.kind!=='checkpoint'));
-  await authority.migrated(request.id);const removed=await authority.removeResponse(request.id),runtime=(manager as any).jobs.get(request.id);
-  await (manager as any).observeCoordinated(runtime);manager.tick();
-  assert.equal((manager as any).jobs.has(request.id),false);assert.equal((manager as any).previews.has(request.id),false);
-  assert.equal(manager.stoppableResponses(request.notePath).some(item=>item.id===request.id),false);
-  (manager as any).receiveRecord(runtime.host,record);manager.tick();
-  assert.equal((manager as any).jobs.has(request.id),false,'late discovery must not recreate a removed delivery');
-  assert.equal((manager as any).previews.has(request.id),false);assert.equal(removed.stopRequestedAt,undefined);
-
- }finally{manager.dispose();authority.stop();globalThis.WebSocket=oldSocket;}
 });
 
 test('dense deltas advance the replay cursor immediately but display the full accumulated text at bounded intervals',()=>{

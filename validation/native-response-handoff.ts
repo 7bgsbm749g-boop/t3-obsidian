@@ -2,7 +2,7 @@ import type {App,MarkdownView} from 'obsidian';
 import {nativeResponses} from '../native-response-manager';
 import {responseAnchor} from '../native-response-projection';
 import {contentHash} from '../completion';
-import type {LeaseRecord} from '../inline-lease';
+import type {ResponseRecord} from '../response-record';
 
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 /** Deliberately separate host completion from local note arrival in a real,
@@ -16,9 +16,9 @@ export async function nativeResponseHandoff(app:App,root:string){
     const file=await app.vault.create(`Handoff-${mode}.md`,before);
     for(const leaf of leaves){await leaf.openFile(file);await leaf.setViewState({...leaf.getViewState(),state:{...leaf.getViewState().state,mode:mode==='preview'?'preview':'source',source:mode==='source'}});}
     const views=leaves.map(leaf=>leaf.view as MarkdownView),displayed=views.map(view=>view.getViewData.bind(view));
-    const active:LeaseRecord={request:{version:3,id,vaultId:'fixture',host:{environmentId:'fixture',workspaceRoot:'/fixture',directory:'.obsidian/t3-code/inline/v1'},notePath:file.path,threadId:'fixture',messageId:id,projectId:'fixture',threadEnvironmentId:'fixture',createdAt:new Date().toISOString(),initialHash:'fixture'},coordinated:true,owner:'fixture',epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,state:{requestHash:'fixture',accepted:true,notePath:file.path,status:'running',hashes:[],body,updatedAt:''}};
+    const active:ResponseRecord={request:{version:3,id,vaultId:'fixture',host:{environmentId:'fixture',workspaceRoot:'/fixture',directory:'.obsidian/t3-code/inline/v1'},notePath:file.path,threadId:'fixture',messageId:id,projectId:'fixture',threadEnvironmentId:'fixture',createdAt:new Date().toISOString(),initialHash:'fixture'},coordinated:true,owner:'fixture',epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,state:{requestHash:'fixture',accepted:true,notePath:file.path,status:'running',hashes:[],body,updatedAt:''}};
     await manager.receive(active);await pause(300);
-    const completed:LeaseRecord={...active,revision:2,state:{...active.state!,status:'complete',finalSaved:true,cleanupComplete:true,finalBody:body,delivery:{commitId:crypto.randomUUID(),hash:contentHash(final),verifiedOnHost:true,observedBy:[]}}};
+    const completed:ResponseRecord={...active,revision:2,state:{...active.state!,status:'complete',finalSaved:true,cleanupComplete:true,finalBody:body,delivery:{commitId:crypto.randomUUID(),hash:contentHash(final),verifiedOnHost:true,observedBy:[]}}};
     let samples=0,blank=0,savedLeak=0,done=false;
     const sample=()=>{if(done)return;samples++;if(displayed.some(read=>!read().includes(token)))blank++;if(views.some(view=>view.getViewData().includes(token)&&!manager.view(view)?.hasMaterialized(id)))savedLeak++;requestAnimationFrame(sample);};
     requestAnimationFrame(sample);

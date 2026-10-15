@@ -1,6 +1,6 @@
 import {contentHash} from './completion';
 import {changedEdits} from './coordinated-merge';
-import type {HostedInlineState} from './hosted-inline';
+import type {ResponseState} from './response-model';
 
 /** Private transport evidence, separate from the frequently polled lease.
  * Ranges protect every generated change in the verified saved document. */
@@ -14,7 +14,7 @@ export function nativeCommitPath(directory:string,id:string,commitId:string){
   if(!uuid.test(id)||!uuid.test(commitId))throw Error('Invalid native commit identity.');
   return `${directory}/materializations/${id}/${commitId}.json`;
 }
-export function readNativeCommitProof(bytes:string,id:string,delivery:NonNullable<HostedInlineState['delivery']>):NativeCommitProof {
+export function readNativeCommitProof(bytes:string,id:string,delivery:NonNullable<ResponseState['delivery']>):NativeCommitProof {
   if(!delivery.proofHash||contentHash(bytes)!==delivery.proofHash)throw Error('Native commit evidence checksum changed.');
   const proof:NativeCommitProof=JSON.parse(bytes);
   if(proof.version!==1||proof.bindingId!==id||proof.commitId!==delivery.commitId||proof.hash!==delivery.hash||typeof proof.document!=='string'||contentHash(proof.document)!==proof.hash||!Array.isArray(proof.ranges)||!proof.ranges.length)throw Error('Native commit evidence does not match this delivery.');

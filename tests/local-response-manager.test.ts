@@ -12,14 +12,14 @@ import {localStageCommand,localStagedDraft} from '../local-response-staging';
 import {promises as fs} from 'node:fs';
 import {dirname} from 'node:path';
 import {retainedLocalFinal,restoredLocalFinal} from '../local-final-cache';
-import type {HostedInlineRequest} from '../hosted-inline';
+import type {ResponseRequest} from '../response-model';
 import type {DirectInlineUpdate} from '../direct-inline-preview';
 
-function request():HostedInlineRequest{return {version:4,localOnly:true,nativeProjection:true,responseContainer:true,independent:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},notePath:'Test.md',threadId:randomUUID(),projectId:randomUUID(),messageId:randomUUID(),threadEnvironmentId:'env',initialHash:contentHash(''),createdAt:'2026-10-14T00:00:00Z'};}
+function request():ResponseRequest{return {version:4,localOnly:true,nativeProjection:true,responseContainer:true,independent:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},notePath:'Test.md',threadId:randomUUID(),projectId:randomUUID(),messageId:randomUUID(),threadEnvironmentId:'env',initialHash:contentHash(''),createdAt:'2026-10-14T00:00:00Z'};}
 function fixture(binding=request(),initial?:string,records:ResponseBindingData={}){
   let document=initial??`Before\n\n${responseAnchor(binding.id)}\n\nAfter`,open=true,ready=true,now=0,writes=0;
   const callbacks=new Map<string,(update:DirectInlineUpdate)=>void>(),registered:any[]=[],errors:any[]=[],finished:string[]=[];
-  const io:any={localBindings:()=>responseBindingRequests(records),saveLocalBinding:async(request:HostedInlineRequest)=>{records=updateResponseBindingData(records,request,'test');},openedNotes:()=>open?[{path:binding.notePath,document}]:[],readNote:async()=>document,updateNote:async(_path:string,change:(text:string)=>string)=>document=change(document),saveLocalNote:async()=>{},syncReady:()=>ready,isOpen:()=>open,access:async()=>{throw Error('No host or T3 access needed by this replay.');},receiveCoordinated:(record:any)=>registered.push(record),receiveDirect:()=>{},localCompleted:(id:string)=>finished.push(id),completionFailed:(error:any)=>errors.push(error)};
+  const io:any={localBindings:()=>responseBindingRequests(records),saveLocalBinding:async(request:ResponseRequest)=>{records=updateResponseBindingData(records,request,'test');},openedNotes:()=>open?[{path:binding.notePath,document}]:[],readNote:async()=>document,updateNote:async(_path:string,change:(text:string)=>string)=>document=change(document),saveLocalNote:async()=>{},syncReady:()=>ready,isOpen:()=>open,access:async()=>{throw Error('No host or T3 access needed by this replay.');},receiveCoordinated:(record:any)=>registered.push(record),receiveDirect:()=>{},localCompleted:(id:string)=>finished.push(id),completionFailed:(error:any)=>errors.push(error)};
   const notes={read:async()=>document,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean)=>{if(document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
   const manager=new LocalResponseManager(randomUUID(),'vault',io,notes,()=>now,(record,_access,receive)=>{callbacks.set(record.request.id,receive);return {tick:()=>{},update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{}} as any;});
   return {binding,manager,io,notes,records:()=>records,receiveRecords:(value:ResponseBindingData)=>records=value,callbacks,registered,errors,finished,read:()=>document,write:(text:string)=>document=text,open:(value:boolean)=>open=value,ready:(value:boolean)=>ready=value,advance:()=>now+=1100,writes:()=>writes,emit:(body='Final answer',verified=true,messageId=binding.messageId)=>callbacks.get(binding.id)!({request:binding,messageId,sequence:5,body,turnId:'exact-turn',phase:'complete',completionVerified:verified})};
@@ -62,7 +62,7 @@ test('a stale response block that returns through Sync can be replaced with the 
 test('verified final recovery survives reload without another T3 read and rejects another binding',async()=>{
   const first=fixture();await first.manager.register(first.binding);first.ready(false);
   let saved:any;first.io.retainLocalFinal=async(update:DirectInlineUpdate)=>{saved=retainedLocalFinal(update);};first.emit('Retained canonical final');await drain();
-  const next=fixture(first.binding,first.read(),first.records());next.io.loadLocalFinal=async(request:HostedInlineRequest)=>restoredLocalFinal(saved,request);next.manager.resume();await drain();assert.match(next.read(),/Retained canonical final/);assert.equal(next.writes(),1);
+  const next=fixture(first.binding,first.read(),first.records());next.io.loadLocalFinal=async(request:ResponseRequest)=>restoredLocalFinal(saved,request);next.manager.resume();await drain();assert.match(next.read(),/Retained canonical final/);assert.equal(next.writes(),1);
   assert.equal(restoredLocalFinal(saved,{...first.binding,messageId:randomUUID()}),undefined);
   assert.equal(restoredLocalFinal({...saved,bodyHash:'0'.repeat(64)},first.binding),undefined);first.manager.dispose();next.manager.dispose();
 });
@@ -106,7 +106,7 @@ test('notes and settings can arrive in either order without remote registration'
 });
 test('legacy tags migrate only after settings are stored and retain all ordinary text',async()=>{
   const binding=request(),document=withLocalResponseBinding(`Before\n\n${responseAnchor(binding.id)}\n\nAfter`,binding),h=fixture(binding,document);
-  const save=h.io.saveLocalBinding;let release!:()=>void;h.io.saveLocalBinding=async(request:HostedInlineRequest)=>{await new Promise<void>(resolve=>release=resolve);await save(request);};
+  const save=h.io.saveLocalBinding;let release!:()=>void;h.io.saveLocalBinding=async(request:ResponseRequest)=>{await new Promise<void>(resolve=>release=resolve);await save(request);};
   h.manager.resume();assert.equal(h.read(),document);assert.equal(h.registered.length,0);await drain();release();await drain();
   assert.doesNotMatch(h.read(),/t3-response-binding/);assert.equal(h.read(),`Before\n\n${responseAnchor(binding.id)}\n\nAfter`);assert.ok(h.records()[binding.id]);h.manager.dispose();
   const failed=fixture(binding,document);failed.io.saveLocalBinding=async()=>{throw Error('Storage failed');};failed.manager.resume();await drain();assert.equal(failed.read(),document);failed.manager.dispose();

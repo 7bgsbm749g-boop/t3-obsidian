@@ -9,10 +9,10 @@ export interface ClientCommandResult {
   client?:{instanceId:string;loadedVersion:string};reloadScheduled?:boolean;
   failureLog?:import('./send-failures').SendFailureLog;
   replyImports?:{files:number;removed:number;directory:string;sha256?:Record<string,string>};
-  responseHostOpening?:boolean;
+  legacyRepliesRetired?:true;
   connectionRecovery?:import('./connection-recovery').ConnectionReloadState&{pending:boolean;reloading:boolean};
   codeRangeCache?:ReturnType<typeof import('./reply-html').markdownCodeCacheStatus>;
-  responseHost?:{active:boolean;authority:{busy:boolean;stopped:boolean;recovered:boolean};storage:import('./authority-storage-desktop').AuthorityStorageStatus};
+  responseHost?:{active:false;retired:true};
 }
 export function isClientCommand(value:{kind?:string}):value is ClientCommand{return ['client-status','send-failure-log','reload-client','archive-reply-imports'].includes(value.kind??'');}
 export function validateClientCommand(value:any):ClientCommand {

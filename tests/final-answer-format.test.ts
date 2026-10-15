@@ -5,7 +5,7 @@ import {unified} from 'unified';
 import remarkParse from 'remark-parse';
 import {renderInlineTurn,initialRegion,type InlineThreadState} from '../inline-thread';
 import {finalAnswerFormat,type IntermediateMode} from '../response-presentation';
-import {validateHostedRequest,hostedRequestHash,type HostedInlineRequest} from '../hosted-inline';
+import {validateResponseRequest,responseRequestHash,type ResponseRequest} from '../response-model';
 import {rewriteReplyReferences} from '../reply-assets';
 
 const state:InlineThreadState={messages:[
@@ -66,12 +66,12 @@ test('raw final imports files and images in place with table escaping and code e
 });
 
 test('legacy requests keep exact bytes and hashes; raw jobs require the new writer version',()=>{
-  const request:HostedInlineRequest={version:2,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:'Note.md',threadId:randomUUID(),messageId:randomUUID(),projectId:'project',threadEnvironmentId:'host',initialHash:initialRegion(randomUUID()).bodyHash,createdAt:'2026-10-02T10:00:00Z'};
-  const bytes=JSON.stringify(request),hash=hostedRequestHash(request);
+  const request:ResponseRequest={version:2,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:'Note.md',threadId:randomUUID(),messageId:randomUUID(),projectId:'project',threadEnvironmentId:'host',initialHash:initialRegion(randomUUID()).bodyHash,createdAt:'2026-10-02T10:00:00Z'};
+  const bytes=JSON.stringify(request),hash=responseRequestHash(request);
   assert.equal(finalAnswerFormat(undefined),'formatted');assert.equal(finalAnswerFormat('unknown'),'formatted');
-  validateHostedRequest(request);finalAnswerFormat(request.finalAnswerFormat);
-  assert.equal(JSON.stringify(request),bytes);assert.equal(hostedRequestHash(request),hash);
-  assert.throws(()=>validateHostedRequest({...request,finalAnswerFormat:'raw-markdown'}),/updated response writer/);
-  assert.throws(()=>validateHostedRequest({...request,version:3,finalAnswerFormat:'invalid'}),/final answer format/);
-  assert.equal(validateHostedRequest({...request,version:3,finalAnswerFormat:'raw-markdown'}).finalAnswerFormat,'raw-markdown');
+  validateResponseRequest(request);finalAnswerFormat(request.finalAnswerFormat);
+  assert.equal(JSON.stringify(request),bytes);assert.equal(responseRequestHash(request),hash);
+  assert.throws(()=>validateResponseRequest({...request,finalAnswerFormat:'raw-markdown'}),/updated response writer/);
+  assert.throws(()=>validateResponseRequest({...request,version:3,finalAnswerFormat:'invalid'}),/final answer format/);
+  assert.equal(validateResponseRequest({...request,version:3,finalAnswerFormat:'raw-markdown'}).finalAnswerFormat,'raw-markdown');
 });

@@ -1,12 +1,12 @@
 import type {Connection} from './bridge';
-import type {InlineHostTarget} from './hosted-inline';
+import type {ResponseStorageTarget} from './response-model';
 
 /** One confirmed Obsidian turn, stored on the sending device until it settles or advances. */
 export interface ThreadSettlementJob {
   requestId:string;messageId:string;threadId:string;projectId:string;connection:Connection;
   inlineLocal?:true;inlineNotePath?:string;
-  inlineBindings?:Array<{id:string;host:InlineHostTarget;notePath?:string}>;
-  inlineJobId?:string;inlineHost?:InlineHostTarget;inlineVersion?:1|2|3;
+  inlineBindings?:Array<{id:string;host:ResponseStorageTarget;notePath?:string}>;
+  inlineJobId?:string;inlineHost?:ResponseStorageTarget;inlineVersion?:1|2|3;
 }
 
 export function settlementState(thread:any,job:ThreadSettlementJob):'wait'|'settle'|'discard' {

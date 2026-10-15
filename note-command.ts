@@ -3,7 +3,7 @@ import {isRecoveryCommand,validateRecoveryCommand,type RecoveryCommand,type Reco
 import {isClientCommand,validateClientCommand,type ClientCommand,type ClientCommandResult} from './client-command';
 import {validateDestinationSection} from './destination-section';
 import {validateEventCommand,type EventSubscriptionCommand,type EventCommandResult} from './event-subscriptions';
-import {safeNotePath} from './hosted-inline';
+import {safeNotePath} from './response-model';
 import {isFolderCommand,validateFolderCommand,type FolderCommand,type FolderCommandResult} from './folder-command';
 export interface NoteCommand {
   version:1;id:string;kind:'send-note'|'attach-response';notePath:string;

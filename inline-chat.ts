@@ -13,7 +13,7 @@ import {commandId,endpoint,environmentApi,type PairedSession} from './direct';
 import {contentHash} from './completion';
 import {activeInlineIds,failedInlineIds,applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,endInsertionOffset,endMarker,finalizeRegion,hasResponseMarkers,initialRegion,insertionOffset,inlineResponseRange,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type InlineTurn,type SelectionAnchor} from './inline-thread';
 import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
-import type {InlineHostTarget} from './hosted-inline';
+import type {ResponseStorageTarget} from './response-model';
 import {replaceInlineEditorText} from './inline-editor';
 import {pendingQuestions} from './questions';
 import {pendingApprovals} from './approvals';
@@ -30,7 +30,7 @@ export interface InlineJob {
   remoteStopPending?:boolean;
   remoteStopOperationId?:string;remoteStopFailures?:number;remoteStopNextAt?:number;stopReceipt?:ResponseStopReceipt;stopRunTerminal?:boolean;
   keepIntermediate?:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat;presentationTurns?:Record<string,InlineTurn>;finishedAt?:string;
-  hostTarget?:InlineHostTarget;
+  hostTarget?:ResponseStorageTarget;
   initialInput?:InitialInlineInput;
   steering?:InlineSteering[];incoming?:InlineSteering[];prose?:InlineMessage[];turnIds?:string[];questionFollows?:InlineQuestionFollow[];
 }
@@ -43,7 +43,8 @@ export class InlineChatManager {
   private stopped=false;
   constructor(private app:App,private key:string,private sessionFor:(id:string)=>Promise<PairedSession|undefined>,private hosted?:{prepare(job:InlineJob,request:Request):Promise<void>;stop(job:InlineJob):Promise<void|ResponseStopReceipt>;status?(job:Pick<InlineJob,'id'>):ResponseStopReceipt|undefined},private keepIntermediate:()=>boolean|IntermediateMode=()=>false,private answerFormat:()=>FinalAnswerFormat=()=> 'formatted') {
     const saved=this.app.loadLocalStorage(key);
-    if(Array.isArray(saved))this.jobs=saved.filter(validJob).map(job=>{
+    if(Array.isArray(saved))this.jobs=saved.filter(validJob).filter(job=>!job.hosted||job.localOnly===true||job.phase==='cancelled').map(job=>{
+      if(job.hosted&&!job.localOnly)job.remoteStopPending=false;
       // 2.12.6 mistook the client command ID for T3's provider-assigned turn ID.
       if(job.turnId===commandId(job.requestId,'turn'))delete job.turnId;
       job.messageId??=commandId(job.requestId,'message');
@@ -285,7 +286,7 @@ export class InlineChatManager {
     if(terminal)runtime.monitor?.stop();
   }
   /** Menu cleanup also works for an orphaned block with no runtime or connection. */
-  stopAt(id:string,editor:Editor,info:MarkdownView|MarkdownFileInfo,hostTarget?:InlineHostTarget){
+  stopAt(id:string,editor:Editor,info:MarkdownView|MarkdownFileInfo,hostTarget?:ResponseStorageTarget){
     const path=info.file?.path;if(!path)return Promise.resolve();
     let job=this.jobs.find(item=>item.id===id);
     if(!job){job={id,path,requestId:id,bodyHash:'',phase:'running',createdAt:new Date().toISOString(),hosted:true,...(hostTarget?{hostTarget}:{})};this.jobs.push(job);}
@@ -294,7 +295,7 @@ export class InlineChatManager {
     return this.stop(job);
   }
   /** Palette cleanup needs neither a selection nor a device-local job record. */
-  async stopAllAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,hosted:Array<{id:string;hostTarget:InlineHostTarget}>=[]){
+  async stopAllAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,hosted:Array<{id:string;hostTarget:ResponseStorageTarget}>=[]){
     const path=info.file?.path;if(!path)return 0;
     const document=editor.getValue(),targets=new Map(hosted.map(job=>[job.id,job.hostTarget]));
     const ids=[...new Set([...this.activeFor(path).map(job=>job.id),...activeInlineIds(document),...failedInlineIds(document),...targets.keys()])].filter(id=>!this.hosted?.status?.({id})?.runTerminal);

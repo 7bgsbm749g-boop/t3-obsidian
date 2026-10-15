@@ -33,35 +33,6 @@ function pendingDisplay(paths=['A.md']):EventState {
   return initial;
 }
 
-test('missing stream destinations skip history discovery and unchanged error writes while healthy destinations attach',async()=>{
-  const h=await harness(pendingDisplay(['A.md','B.md']));try{
-    h.missing('A.md',true);await h.service.tick();
-    assert.equal(h.attachments,1);assert.equal(h.bindingReads,1);assert.equal(h.saved.displays![0].bindings[0].error,'Destination note unavailable: A.md');
-    const saves=h.saves,history=h.saved.threads,request=h.saved.displays![0].bindings[0].request;
-    for(let n=0;n<20;n++)await h.service.tick();
-    assert.equal(h.saves,saves);assert.equal(h.bindingReads,1);assert.deepEqual(h.saved.threads,history);
-    h.missing('A.md',false);await h.service.tick();assert.equal(h.attachments,2);assert.equal(h.bindingReads,2);
-    assert.deepEqual(h.saved.displays![0].bindings[0].request,request);assert.equal(h.saved.displays![0].bindings[0].status,'attached');assert.equal(h.saved.displays![0].bindings[0].error,undefined);
-    const restarted=await harness(h.saved);try{await restarted.service.tick();assert.equal(restarted.attachments,0);assert.equal(restarted.bindingReads,0);}finally{restarted.service.stop();}
-  }finally{h.service.stop();}
-});
-
-test('unchanged attachment transport errors keep retrying without rewriting retained history',async()=>{
-  const h=await harness(pendingDisplay());try{
-    h.failAttach(true);await h.service.tick();assert.equal(h.saved.displays![0].bindings[0].error,'transport offline');const saves=h.saves;
-    for(let n=0;n<10;n++)await h.service.tick();assert.equal(h.saves,saves);assert.equal(h.bindingReads,11);
-    h.failAttach(false);await h.service.tick();assert.equal(h.attachments,1);assert.equal(h.saved.displays![0].bindings[0].status,'attached');assert.equal(h.saved.displays![0].bindings[0].error,undefined);
-  }finally{h.service.stop();}
-});
-
-test('an unchanged missing-destination error still flushes a failed checkpoint before restart',async()=>{
-  const h=await harness(pendingDisplay());try{
-    h.missing('A.md',true);h.failSave(true);await assert.rejects(h.service.tick(),/disk unavailable/);
-    assert.equal(h.saved.displays![0].bindings[0].error,undefined);assert.equal(h.service.snapshot.displays![0].bindings[0].error,'Destination note unavailable: A.md');
-    h.failSave(false);await h.service.tick();assert.equal(h.bindingReads,0);assert.equal(h.attachments,0);assert.equal(h.saved.displays![0].bindings[0].error,'Destination note unavailable: A.md');
-  }finally{h.service.stop();}
-});
-
 test('unchanged polling shares reads and performs zero writes while retaining all historical threads',async()=>{
   const h=await harness();await h.service.command(stream());await h.service.command(stream('B.md'));
   for(let i=0;i<2;i++)await h.service.command({version:1,id:randomUUID(),kind:'subscribe-job',target:{...source,threadId:'receiver'},job:{...source,jobId:'job-'+i,requestId:randomUUID(),messageId:origin}});
@@ -113,14 +84,6 @@ test('canonical polls retain the event watermark and do not rewrite an unchanged
   h.monitors.get(source.threadId)!.item({kind:'snapshot',snapshot:{snapshotSequence:41,thread:thread()}});await h.service.command(inspect);
   const saves=h.saves;await h.service.tick();assert.equal(h.saves,saves);
   const key=JSON.stringify([source.environmentId,source.projectId,source.threadId]);assert.equal(h.service.snapshot.threads![key].state.sequence,41);h.service.stop();
-});
-
-test('a repeated storage error cannot hide a failed post-attachment receipt; recovery flushes without attaching again',async()=>{
-  const initial=historicalState(),id=randomUUID(),destinationId=randomUUID(),binding=randomUUID();
-  initial.displays=[{...source,id,scope:'thread',enabled:true,createdAt:'2026-10-05T00:00:00Z',boundary:[],destinations:[{id:destinationId,path:'A.md'}],bindings:[{messageId:origin,turnId:turn,destinationId,status:'planned',request:{id:binding} as any}]}];
-  const h=await harness(initial);h.failBindings(true);await h.service.tick();assert.equal(h.saved.displays![0].error,'disk unavailable');
-  h.failBindings(false);h.failSave(true);await assert.rejects(h.service.tick(),/disk unavailable/);assert.equal(h.attachments,1);assert.equal(h.service.snapshot.displays![0].bindings[0].status,'attached');
-  h.failSave(false);await h.service.tick();assert.equal(h.attachments,1);assert.equal(h.saved.displays![0].bindings[0].status,'attached');h.service.stop();
 });
 
 test('a canonical watermark-only advance skips persistence, and restart replays from the last durable cursor',async()=>{

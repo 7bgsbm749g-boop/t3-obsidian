@@ -3,11 +3,11 @@ import {changedEdits,mergeSavedEdits} from './coordinated-merge';
 import {localResponseRange,withoutLocalResponseBinding} from './local-response-binding';
 import {responseIds} from './response-container';
 import {responseRegion} from './native-response-projection';
-import type {HostedInlineRequest,InlineFiles} from './hosted-inline';
+import type {ResponseRequest,ResponseFiles} from './response-model';
 
-export const localStagePaths=(request:HostedInlineRequest,hash:string)=>({original:`${request.host.directory}/local-staging/${request.id}/${hash}.original.md`,staged:`${request.host.directory}/local-staging/${request.id}/${hash}.staged.md`});
+export const localStagePaths=(request:ResponseRequest,hash:string)=>({original:`${request.host.directory}/local-staging/${request.id}/${hash}.original.md`,staged:`${request.host.directory}/local-staging/${request.id}/${hash}.staged.md`});
 const normalized=(document:string)=>{for(const id of responseIds(document))document=withoutLocalResponseBinding(document,id);return document;};
-export async function localStagedDraft(document:string,request:HostedInlineRequest,files:InlineFiles){
+export async function localStagedDraft(document:string,request:ResponseRequest,files:ResponseFiles){
   if(!request.localStage)return document;
   const {originalHash,stagedHash}=request.localStage;
   const original=await files.read(localStagePaths(request,originalHash).original),staged=await files.read(localStagePaths(request,stagedHash).staged);
@@ -21,7 +21,7 @@ export async function localStagedDraft(document:string,request:HostedInlineReque
 /** Called by the desktop plugin's existing command endpoint. Agent staging is
  * outside the live vault. Immutable checked inputs travel through T3's file
  * transport; they grant no remote writer and create no background service. */
-export async function localStageCommand(kind:'stage-note-edit'|'submit-note-edit',request:HostedInlineRequest,document:string,files:InlineFiles,expectedHash?:string){
+export async function localStageCommand(kind:'stage-note-edit'|'submit-note-edit',request:ResponseRequest,document:string,files:ResponseFiles,expectedHash?:string){
   const fs=(await import('node:fs')).promises,path=await import('node:path'),os=await import('node:os');
   const root=path.join(os.tmpdir(),'send-to-t3-code-local-staging',contentHash(request.vaultId).slice(0,24),request.id);
   const originalPath=path.join(root,'original.md'),stagingPath=path.join(root,'staged.md');

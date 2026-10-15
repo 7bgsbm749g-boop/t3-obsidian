@@ -15,7 +15,6 @@ import {renderApproval,clearApprovalControls} from '../approvals';
 import {historyFixture} from './fixtures/stream-history';
 import {streamBlock,removeStreamBlock} from '../stream-block';
 import {restoreResponseAnchor} from '../response-anchor-recovery';
-import {validateFinalResponseBody} from '../generated-note-coordinator';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='11111111-2222-4333-8444-555555555555';
 const legacy=(id:string)=>`${startMarker(id)}\n\n${endMarker(id)}`;
@@ -50,22 +49,8 @@ test('ordinary section closing tags and literal examples cannot close the active
   const body='<section>\n\nOrdinary inner section\n\n</section>\n\n`</section>`';
   assert.equal(responseFrame(containerBody(id,body),id)?.body,body);
 });
-test('finished answers can describe container IDs and literal syntax without introducing tracking',()=>{
-  assert.doesNotThrow(()=>validateFinalResponseBody('The field is `data-t3-response="'+id+'"`.'));
-  assert.doesNotThrow(()=>validateFinalResponseBody('<pre><code>data-t3-response=&quot;'+id+'&quot;</code></pre>'));
-  assert.doesNotThrow(()=>validateFinalResponseBody('```md\n'+containerBody(id,'Example')+'\n```'));
-  assert.throws(()=>validateFinalResponseBody(containerBody(id,'Actual registration')),/tracking boundaries/);
-});
 test('a generated stray closer cannot truncate the validated projection frame',()=>{
   assert.throws(()=>projectResponses(responseAnchor(id),[{id,body:'Before\n\n'+containerEnd+'\n\nAfter'}]),/boundaries|container/i);
-});
-test('literal container syntax in native tool code is not a response boundary',()=>{
-  const body='<details><summary>Tool</summary><pre><code>'+containerBody(other,'Literal example')+'</code></pre></details>';
-  const projection=projectResponses(responseAnchor(id),[{id,body}]);
-  assert.equal(responseFrame(projection.display,id)?.body,body);
-  assert.deepEqual(responseIds(projection.display),[id]);
-  assert.equal(savedProjection(projection.display,projection),responseAnchor(id));
-  assert.doesNotThrow(()=>validateFinalResponseBody(body));
 });
 test('literal legacy markers do not change container format, and legacy repair retains its original anchor',()=>{
   const example='```html\n'+legacy(id)+'\n```\n\n',saved=example+responseAnchor(id);

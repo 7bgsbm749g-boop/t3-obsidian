@@ -4,7 +4,7 @@ import {jobEvents,validateJob,type JobWatch,type JobEvent,type JobObservation} f
 import {STREAM_COMMANDS,validateDisplayCommand,displayCommand,tickDisplay,renameDisplays,type ThreadDisplayCommand,type ThreadDisplay,type DisplayHost} from './thread-display';
 import {applyThreadItem,type InlineThreadState} from './inline-thread';
 import {sha256} from '@noble/hashes/sha256';
-import {safeNotePath} from './hosted-inline';
+import {safeNotePath} from './response-model';
 import {isLogPath} from './synced-event-logs';
 import {markdownCodeRanges} from './reply-html';
 
@@ -34,7 +34,7 @@ export interface EventSubscriptionHost {
   deliverAction?(notification:EventNotification):Promise<void>;
   readThread?(target:EventTarget):Promise<InlineThreadState>;
   displayHost?:Omit<DisplayHost,'save'|'readThread'>;
-  watchThread?(target:EventTarget,item:(value:any)=>void,sequence:()=>number|undefined):{stop():void};
+  watchThread?(target:EventTarget,item:(value:any)=>void,sequence:()=>number|undefined,reconnecting?:()=>void):{stop():void};
   recording(active:boolean):void;now():number;id():string;
 }
 const uuid=(value:unknown):value is string=>typeof value==='string'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
@@ -110,8 +110,22 @@ function sameObservedThread(a:InlineThreadState,b:InlineThreadState){
   return sameThreadData(left,right);
 }
 
+/** Lifecycle subscriptions need prompts, run identities and blocking controls.
+ * Tool output and assistant/reasoning bodies belong to the reply renderer. */
+function compactObservedThread(state:InlineThreadState):InlineThreadState {
+  if(state.protocolVersion!==2)return state;
+  const {inputBoundaries:_boundaries,...rest}=state;
+  const lifecycle=new Set(['approval.requested','approval.resolved','user-input.requested','user-input.resolved','provider.turn.start.failed','runtime.error']);
+  const controls=Object.fromEntries(Object.entries(state.v2Controls??{}).map(([id,c])=>[id,{id:c.id,type:c.type,requestId:c.requestId,runId:c.runId,status:c.status,startedAt:c.startedAt,updatedAt:c.updatedAt,completedAt:c.completedAt,responseMode:c.responseMode}]));
+  const requests=Object.fromEntries(Object.entries(state.v2Requests??{}).map(([id,r])=>[id,{id:r.id,status:r.status,resolvedAt:r.resolvedAt,responseCapability:r.responseCapability?{type:r.responseCapability.type}:undefined,answers:r.answers?{}:undefined}]));
+  return {...rest,messages:state.messages.filter(m=>m.role==='user'||m.role==='assistant').map(m=>m.role==='user'?{id:m.id,role:m.role,text:m.text,turnId:m.turnId,streaming:m.streaming,createdAt:m.createdAt,createdBy:m.createdBy,senderThreadId:m.senderThreadId,senderThreadTitle:m.senderThreadTitle}:{id:m.id,role:m.role,text:'',turnId:m.turnId,streaming:m.streaming,createdAt:m.createdAt}),
+    activities:state.activities.filter(a=>lifecycle.has(a.kind)).map(a=>({...a,payload:a.payload?{requestId:a.payload.requestId,responseMode:a.payload.responseMode,detail:a.payload.detail,answers:a.payload.answers?{}:undefined}:undefined})),
+    ...(state.v2Controls?{v2Controls:controls}:{}),...(state.v2Requests?{v2Requests:requests}:{})};
+}
+
 /** One desktop host, serialized capture, durable messages; no task definitions. */
 export class EventSubscriptions {
+  private canonicalUntil=new Map<string,number>();
   private state=empty();private baselines=new Map<string,Map<string,NoteEventSnapshot>>();private work=Promise.resolve();private ticking?:Promise<void>;private tickNeedsSave=false;private dirty=false;private reads?:Map<string,Promise<InlineThreadState>>;private stopped=false;private monitors=new Map<string,{stop():void}>();
   constructor(private host:EventSubscriptionHost){}
   get active(){return this.state.subscriptions.some(subscription=>subscription.enabled)||(this.state.displays??[]).some(d=>d.enabled&&!d.cancelled);}
@@ -139,6 +153,11 @@ export class EventSubscriptions {
       if(saved.version!==1||!Array.isArray(saved.subscriptions)||!Array.isArray(saved.notifications)||!saved.commands||!Array.isArray(saved.feedback))throw Error('Invalid saved event subscription state.');
       for(const subscription of saved.subscriptions){validateEventCommand({version:1,id:subscription.id,kind:subscription.job?'subscribe-job':'subscribe',...(subscription.action?{action:subscription.action,jobStates:subscription.jobStates}:{target:subscription}),...(subscription.job?{job:subscription.job}:{scope:subscription.scope,filter:subscription.filter})});if(typeof subscription.enabled!=='boolean')throw Error('Invalid saved subscription.');}
       this.state=clone(saved);
+      const retained=new Set([...this.state.subscriptions.flatMap(subscription=>subscription.job?[this.threadKey(subscription.job)]:[]),...(this.state.displays??[]).map(display=>this.threadKey(display))]);
+      for(const [key,thread] of Object.entries(this.state.threads??{})){if(thread.state.protocolVersion===2&&!retained.has(key))delete this.state.threads![key];else thread.state=compactObservedThread(thread.state);}
+      for(const display of this.state.displays??[])for(const binding of display.bindings)if(binding.request&&!binding.request.localOnly){binding.status='skipped';delete binding.request;delete binding.error;}
+      // Command receipts remain idempotent but never replay old reply plans.
+      for(const receipt of Object.values(this.state.commands))for(const display of [...(receipt.result.displays??[]),...(receipt.result.display?[receipt.result.display]:[])])for(const binding of display.bindings)if(binding.request&&!binding.request.localOnly){binding.status='skipped';delete binding.request;delete binding.error;}
     }
     for(const subscription of this.state.subscriptions)if(subscription.enabled)await this.seed(subscription);
   });}
@@ -147,7 +166,7 @@ export class EventSubscriptions {
     const command=validateEventCommand(input),key=canonical(command),prior=this.state.commands[command.id];
     if(prior){if(prior.input!==key)throw Error('This request ID already belongs to different input.');return clone(prior.result);}
     if((STREAM_COMMANDS as readonly string[]).includes(command.kind)){
-      const fields=await displayCommand(this.state.displays??= [],command as ThreadDisplayCommand,this.displayIO(),this.host.now());
+      const fields=await displayCommand(this.state.displays??= [],command as ThreadDisplayCommand,this.displayIO(true),this.host.now());
       const result:EventCommandResult={id:command.id,ok:true,monitoring:this.active,...clone(fields)};
       this.state.commands[command.id]={input:key,result};await this.save();return result;
     }
@@ -310,11 +329,13 @@ export class EventSubscriptions {
     await this.saveIfDirty();
   },false).catch(error=>{this.tickNeedsSave=true;throw error;});this.ticking=run;void run.finally(()=>{this.ticking=undefined;}).catch(()=>{});return run;}
   private threadKey(target:EventTarget){return JSON.stringify([target.environmentId,target.projectId,target.threadId]);}
-  private async readObservedThread(target:EventTarget){
+  private async readObservedThread(target:EventTarget,forceCanonical=false){
     if(!this.host.readThread)throw Error('Thread lifecycle observation is unavailable.');
-    const key=this.threadKey(target);
+    const key=this.threadKey(target),cached=this.state.threads?.[key];
+    if(!forceCanonical&&this.monitors.has(key)&&cached?.state.protocolVersion===2&&cached.state.historyComplete&&this.host.now()<(this.canonicalUntil.get(key)??0))return cached.state;
     let read=this.reads?.get(key);if(!read){read=this.host.readThread(target);this.reads?.set(key,read);}
-    const state=await read,prior=this.state.threads?.[key];
+    const state=compactObservedThread(await read),prior=this.state.threads?.[key];
+    this.canonicalUntil.set(key,this.host.now()+30_000);
     if(state.sequence!==undefined&&prior?.state.sequence!==undefined&&state.sequence<prior.state.sequence)return prior.state;
     const merged={...state,...(state.sequence===undefined&&prior?.state.sequence!==undefined?{sequence:prior.state.sequence}:{}),turns:{...prior?.state.turns,...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})}};
     if(prior&&sameObservedThread(prior.state,merged)){
@@ -325,29 +346,29 @@ export class EventSubscriptions {
     }
     (this.state.threads??={})[key]={state:merged,sequence:prior?.sequence};this.dirty=true;return merged;
   }
-  private displayIO():DisplayHost {
+  private displayIO(forceCanonical=false):DisplayHost {
     if(!this.host.displayHost)throw Error('Thread streaming is unavailable.');
-    return {...this.host.displayHost,readThread:target=>this.readObservedThread(target),save:()=>this.save()};
+    return {...this.host.displayHost,readThread:target=>this.readObservedThread(target,forceCanonical),save:()=>this.save()};
   }
   private syncMonitors(){
     if(this.stopped||!this.host.watchThread)return;
     const targets=new Map<string,EventTarget>();
     for(const s of this.state.subscriptions)if(s.enabled&&s.job&&!s.observation?.terminal)targets.set(this.threadKey(s.job),s.job);
     for(const d of this.state.displays??[])if(d.enabled&&!d.cancelled)targets.set(this.threadKey(d),d);
-    for(const [key,monitor] of this.monitors)if(!targets.has(key)){monitor.stop();this.monitors.delete(key);}
+    for(const [key,monitor] of this.monitors)if(!targets.has(key)){monitor.stop();this.monitors.delete(key);this.canonicalUntil.delete(key);}
     for(const [key,target] of targets)if(!this.monitors.has(key))this.monitors.set(key,this.host.watchThread(target,item=>{
       void this.serialize(async()=>{
         const prior=this.state.threads?.[key]??{state:{messages:[],activities:[]}};
         if(item.kind==='event'&&item.event?.sequence<= (prior.sequence??-1))return;
-        const applied=applyThreadItem(prior.state,item);
+        const reduced=applyThreadItem(prior.state,item),applied={...reduced,state:compactObservedThread(reduced.state)};
         const sequence=item.kind==='snapshot'&&prior.sequence!==undefined?prior.sequence:applied.sequence??prior.sequence;
-        if(sequence===prior.sequence&&sameObservedThread(prior.state,applied.state)){
-          if(applied.state.sequence!==prior.state.sequence)(this.state.threads??={})[key]={...prior,state:applied.state};
+        if(sameObservedThread(prior.state,applied.state)&&!(item.kind==='snapshot'&&prior.sequence===undefined&&sequence!==undefined)){
+          if(applied.state.sequence!==prior.state.sequence||sequence!==prior.sequence)(this.state.threads??={})[key]={state:applied.state,sequence};
           return;
         }
         (this.state.threads??={})[key]={state:applied.state,sequence};this.dirty=true;await this.save();
       }).catch(()=>{});
-    },()=>this.state.threads?.[key]?.sequence));
+    },()=>this.state.threads?.[key]?.sequence,()=>{this.canonicalUntil.delete(key);}));
   }
   stop(){this.stopped=true;for(const monitor of this.monitors.values())monitor.stop();this.monitors.clear();this.baselines.clear();this.host.recording(false);}
 }

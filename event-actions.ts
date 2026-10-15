@@ -1,4 +1,4 @@
-import {safeNotePath} from './hosted-inline';
+import {safeNotePath} from './response-model';
 import {isLogPath} from './synced-event-logs';
 
 export type EventAction =

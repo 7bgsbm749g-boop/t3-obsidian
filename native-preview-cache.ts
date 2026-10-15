@@ -1,6 +1,6 @@
-import {safeNotePath} from './hosted-inline';
+import {safeNotePath} from './response-model';
 import {projectResponses,responseAnchor} from './native-response-projection';
-import type {LeaseRecord} from './inline-lease';
+import type {ResponseRecord} from './response-record';
 
 /** Display evidence only. These entries cannot register a job, acquire a
  * writer lease, restore a marker or authorize a native final commit. */
@@ -13,8 +13,8 @@ export interface NativePreviewSnapshot {version:1;vaultId:string;entries:NativeP
 export const MAX_NATIVE_PREVIEWS=32;
 export const MAX_NATIVE_PREVIEW_CHARACTERS=8_000_000;
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-export const previewMessageId=(record:LeaseRecord)=>record.state?.pendingMessageId??record.state?.messageId??record.request.messageId;
-export function previewMatches(entry:NativePreviewEntry,record:LeaseRecord){
+export const previewMessageId=(record:ResponseRecord)=>record.state?.pendingMessageId??record.state?.messageId??record.request.messageId;
+export function previewMatches(entry:NativePreviewEntry,record:ResponseRecord){
   const request=record.request;
   return entry.id===request.id&&entry.vaultId===request.vaultId&&entry.notePath===(record.state?.notePath??request.notePath)&&entry.threadId===request.threadId&&entry.projectId===request.projectId&&entry.threadEnvironmentId===request.threadEnvironmentId&&entry.messageId===previewMessageId(record);
 }
