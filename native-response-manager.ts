@@ -271,8 +271,10 @@ export class NativeResponseManager {
   async receive(record:LeaseRecord,proofBytes?:string){
     if(!record.coordinated)return;
     const cached=this.cached.get(record.request.id);
-    if(cached&&previewMatches(cached,record)&&(cached.epoch>record.epoch||cached.epoch===record.epoch&&cached.revision>record.revision))return;
-    const old=this.records.get(record.request.id);if(old&&(old.epoch>record.epoch||old.epoch===record.epoch&&old.revision>record.revision))return;
+    // Local record revisions belong to one manager lifetime. A settings-based
+    // reconnect after reload can start below the retained preview revision.
+    if(!record.request.localOnly&&cached&&previewMatches(cached,record)&&(cached.epoch>record.epoch||cached.epoch===record.epoch&&cached.revision>record.revision))return;
+    const old=this.records.get(record.request.id);if(!record.request.localOnly&&old&&(old.epoch>record.epoch||old.epoch===record.epoch&&old.revision>record.revision))return;
     if(proofBytes&&record.state?.delivery)this.proofs.set(record.request.id,readNativeCommitProof(proofBytes,record.request.id,record.state.delivery));
     const path=record.state?.notePath??record.request.notePath;
     const move=[...this.relocations.get(record.request.id)??[]].sort((a,b)=>b[0].length-a[0].length).find(([before])=>path===before||path.startsWith(before+'/'));
@@ -434,6 +436,7 @@ export class NativeResponseManager {
           opened.add(file.path);
         }
         if(adapter){
+          adapter.registerLocalBindings([...this.records.values()].filter(record=>record.request.localOnly&&(record.state?.notePath??record.request.notePath)===view.file!.path).map(record=>record.request.id));
           for(const id of settled)adapter.markMaterialized(id);
           for(const receipt of retired){adapter.markMaterialized(receipt.id);if(responseRegion(saved,receipt.id))adapter.preserveConflict({base:saved,local:saved,incoming:saved,reason:'An incoming note contains an already completed response anchor. The completion identity is retained; recovery requires the host proof.'});}
           for(const {proof} of commits){

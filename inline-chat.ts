@@ -1,5 +1,4 @@
 import type {DirectInlineUpdate} from './direct-inline-preview';
-import {withLocalResponseBinding} from './local-response-binding';
 import {nativeResponses} from './native-response-manager';
 import {responseAnchor} from './native-response-projection';
 import type {ExplorerResponse} from './explorer-responses';
@@ -133,7 +132,7 @@ export class InlineChatManager {
         const document=source.editor.getValue(),region=regionBody(document,job.id);
         if(region){const start=document.indexOf(startMarker(job.id)),end=document.indexOf(endMarker(job.id),region.to)+endMarker(job.id).length;
           const anchor=responseAnchor(job.id,request.inlineHost.responseContainer?undefined:document);
-          replaceChangedText(source.editor,document,document.slice(0,start)+(request.inlineHost.localOnly?withLocalResponseBinding(anchor,request.inlineHost):anchor)+document.slice(end));await view.save();nativeResponses(this.app).preview(view,job.id,region.body);}
+          replaceChangedText(source.editor,document,document.slice(0,start)+anchor+document.slice(end));await view.save();nativeResponses(this.app).preview(view,job.id,region.body);}
       }
     }
   }

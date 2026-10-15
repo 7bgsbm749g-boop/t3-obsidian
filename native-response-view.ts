@@ -41,6 +41,7 @@ export class NativeResponseView {
   private file:TFile|null;
   private materialized=new Set<string>();
   private localMaterialized=new Set<string>();
+  private knownLocal=new Set<string>();
   private ownSave?:{text:string};
   private materialization?:{before:string;after:string;ids:string[]};
   private scroll:ResponseScroll;
@@ -88,6 +89,8 @@ export class NativeResponseView {
     view.getViewData=this.getWrapper;view.setViewData=this.setWrapper;view.save=this.saveWrapper;view.requestSave=this.requestSaveWrapper;
   }
   responseBody(id:string){return this.responses.find(response=>response.id===id)?.body??regionBody(this.displayed(),id)?.body;}
+  registerLocalBindings(ids:readonly string[]){for(const id of ids)this.knownLocal.add(id);}
+  private localIds(document:string){return new Set([...this.knownLocal,...localResponseBindings(document).map(binding=>binding.id)]);}
   scrollControl(key:string){return !this.blocked&&!this.disposed?this.scroll.control(key):undefined;}
   toggleScroll(key:string){if(!this.blocked&&!this.disposed)this.scroll.toggle(key);}
   toolGroup(ref:string){return this.savedToolHistory.get(ref)?.canonical??[...this.responseTools.values()].map(presentation=>canonicalToolGroup(presentation,ref)).find(body=>body!==undefined);}
@@ -235,7 +238,7 @@ export class NativeResponseView {
     const local=this.saved();
     // A local binding ends when its block disappears through Sync or an edit.
     // It needs no independently transported writer receipt to adopt that file.
-    const localIds=new Set(localResponseBindings(this.base).map(binding=>binding.id));
+    const localIds=this.localIds(this.base);
     for(const id of localIds)this.localMaterialized.add(id);
     this.responses=this.responses.filter(response=>!localIds.has(response.id)||!!responseRegion(incoming,response.id));
     if(this.ownSave?.text===incoming)this.base=incoming;
@@ -304,7 +307,7 @@ export class NativeResponseView {
       if(merge.text!==disk)this.view.requestSave();
     }catch(error){const reason=error instanceof Error?error.message:String(error);this.block({base:baseline,local,incoming:disk,reason});throw error;}
   }
-  markMaterialized(id:string){if(localResponseBindings(this.base).some(binding=>binding.id===id))this.localMaterialized.add(id);this.materialized.add(id);}
+  markMaterialized(id:string){if(this.localIds(this.base).has(id))this.localMaterialized.add(id);this.materialized.add(id);}
   allowLocalBinding(id:string,disk:string){
     if(!responseRegion(disk,id))return;
     this.materialized.delete(id);this.localMaterialized.add(id);
@@ -333,7 +336,7 @@ export class NativeResponseView {
   resolveCommitted(saved:string,ids:readonly string[],clear=false){
     if(this.disposed)return false;
     const base=this.blocked?.base??this.base;
-    for(const binding of localResponseBindings(base))this.localMaterialized.add(binding.id);
+    for(const id of this.localIds(base))this.localMaterialized.add(id);
     const local=this.displayed()===saved?this.blocked?.local??this.base:this.conflictLocal();
     const merge=mergeSavedEdits(base,saved,changedEdits(base,local));
     if(!merge.ok){if(!this.blocked||this.blocked.awaitingCompletion)this.block({base,local,incoming:saved,reason:merge.reason});return false;}

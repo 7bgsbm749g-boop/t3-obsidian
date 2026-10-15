@@ -28,6 +28,8 @@ export const INLINE_SNAPSHOT_TIMEOUT_MS=30_000;
 export interface PendingResponseRename {id:string;actor:string;bindingId:string;host:InlineHostTarget;before:string;after:string}
 export interface DeviceInlineIO {
   localFinalNotes?:LocalFinalNoteIO;
+  localBindings?():readonly HostedInlineRequest[];
+  saveLocalBinding?(request:HostedInlineRequest):Promise<void>;
   openedNotes?():Array<{path:string;document:string}>;
   saveLocalNote?(path:string):Promise<void>;
   syncReady?():boolean;
@@ -238,8 +240,12 @@ export class DeviceInlineManager {
   }
   /** App return starts a new read-only feed without the old retry deadline.
    * Writer grants, response identity and applied event cursors remain intact. */
+  localBindingsChanged(){
+    if(this.stopped||!this.io.localFinalNotes)return;
+    this.local??=new LocalResponseManager(this.io.completionActor??this.actor,this.vaultId,this.io,this.io.localFinalNotes,this.now);this.local.resume();
+  }
   resume(targets:InlineHostTarget[],priorityIds:readonly string[]=[]){
-    if(this.io.localFinalNotes){this.local??=new LocalResponseManager(this.io.completionActor??this.actor,this.vaultId,this.io,this.io.localFinalNotes,this.now);this.local.resume();}
+    this.localBindingsChanged();
     if(this.stopped)return;
     for(const host of this.hosts.values()){host.lastDiscovery=-Infinity;host.priorityKey=undefined;}
     for(const [id,preview] of this.previews){

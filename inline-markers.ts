@@ -3,19 +3,36 @@ import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
 import type {MarkdownPostProcessorContext} from 'obsidian';
 import {responseBoundaries,responseFrame} from './response-container';
 import {ContainerMarkerIndex} from './container-marker-index';
+import {validateHostedRequest} from './hosted-inline';
+import {markdownCodeRanges} from './reply-html';
 
 export interface ContainerMarkerDecorations {index:ContainerMarkerIndex;decorations:DecorationSet}
 
 /** Match only complete plugin tracking comments, including beside user text. */
 export function inlineMarkerRegex():RegExp {
-  return /<!-- (?:(?:t3-inline|t3-response):(?:start|end):[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|t3-(?:question|approval):(?:start|end):%7B[A-Za-z0-9%_.~-]+%7D) -->/g;
+  return /<!-- (?:(?:t3-inline|t3-response):(?:start|end):[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|t3-(?:question|approval):(?:start|end):%7B[A-Za-z0-9%_.~-]+%7D|t3-response-binding:[0-9a-fA-F-]{36}:%7B[A-Za-z0-9%_.!~*'()-]+%7D|t3-run-import:%7B[A-Za-z0-9%_.!~*'()-]+%7D) -->/g;
 }
 
 export function hiddenInlineMarkerExtension():Extension {
   // Obsidian supplies its own CodeMirror instance. Load that instance only when
   // registering the extension, so the decorations share the editor's classes.
   const {Decoration,EditorView,MatchDecorator,ViewPlugin}=require('@codemirror/view') as typeof import('@codemirror/view');
-  const matcher=new MatchDecorator({regexp:inlineMarkerRegex(),decoration:Decoration.replace({})});
+  const matcher=new MatchDecorator({regexp:inlineMarkerRegex(),maxLength:1_000_000,decoration:(match,view,pos)=>{
+    if(match[0].startsWith('<!-- t3-response-binding:')||match[0].startsWith('<!-- t3-run-import:')){
+      const document=view.state.doc.toString();
+      if(markdownCodeRanges(document).some(([from,to])=>pos>=from&&pos<to))return null;
+      try{
+        if(match[0].startsWith('<!-- t3-response-binding:')){
+          const encoded=/^<!-- t3-response-binding:([0-9a-f-]{36}):(.*) -->$/i.exec(match[0])!,request=validateHostedRequest(JSON.parse(decodeURIComponent(encoded[2])));
+          if(!request.localOnly||request.id!==encoded[1]||!responseFrame(document,request.id))return null;
+        }else{
+          const value=JSON.parse(decodeURIComponent(match[0].slice('<!-- t3-run-import:'.length,-4)));
+          if(value.version!==1||!value.bindingId||!value.threadId||!value.messageId||!value.runId)return null;
+        }
+      }catch{return null;}
+    }
+    return Decoration.replace({});
+  }});
   const plugin=ViewPlugin.fromClass(class {
     decorations:DecorationSet;
     constructor(view:EditorView){this.decorations=matcher.createDeco(view);}

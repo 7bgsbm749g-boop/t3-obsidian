@@ -100,13 +100,13 @@ export function deviceFinalNoteIO(app:App,allowed:()=>boolean){
   const observed=new Map<string,{file:unknown;disk:string;current:string}>();
   const recovered=new Map<string,{file:unknown;expected:string}>();
   const acquire=async(path:string,review=false)=>manager.beginFinalSave(path,review);
-  const compareAndSetAttempt=async(path:string,before:string,after:string,_attemptId:string):Promise<FinalWriteOutcome>=>{
+  const compareAndSetAttempt=async(path:string,before:string,after:string,_attemptId:string,guard=()=>true):Promise<FinalWriteOutcome>=>{
     let release:(()=>void)|undefined,prepared=false,written=false,ioStarted=false;
     const changed=Error('The local note changed before final save.');
     try{
       release=await acquire(path);
       const file=app.vault.getFileByPath(path);if(!file||!allowed())return {status:'no-write'};
-      const same=()=>allowed()&&file.path===path&&app.vault.getFileByPath(path)===file&&manager.finalSaveReady(path)&&manager.savedViews(path).every(view=>view.saved()===before);
+      const same=()=>allowed()&&guard()&&file.path===path&&app.vault.getFileByPath(path)===file&&manager.finalSaveReady(path)&&manager.savedViews(path).every(view=>view.saved()===before);
       const snapshot=observed.get(path);
       if(!snapshot||snapshot.file!==file||snapshot.current!==before||!same()||await app.vault.read(file)!==snapshot.disk||!same())return {status:'no-write'};
       const ids=responseIds(before).filter(id=>responseRegion(before,id)&&!responseRegion(after,id));
@@ -163,6 +163,6 @@ export function deviceFinalNoteIO(app:App,allowed:()=>boolean){
       }finally{release();}
     },
     compareAndSetAttempt,
-    compareAndSet:async(path:string,before:string,after:string)=>(await compareAndSetAttempt(path,before,after,'legacy')).status==='verified',
+    compareAndSet:async(path:string,before:string,after:string,guard?:()=>boolean)=>(await compareAndSetAttempt(path,before,after,'legacy',guard)).status==='verified',
   };
 }

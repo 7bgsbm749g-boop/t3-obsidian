@@ -1,23 +1,22 @@
 import {contentHash} from './completion';
 import {changedEdits,mergeSavedEdits} from './coordinated-merge';
-import {localResponseRange,responseBindingComment,withLocalResponseBinding} from './local-response-binding';
+import {localResponseRange,withoutLocalResponseBinding} from './local-response-binding';
 import {responseIds} from './response-container';
 import {responseRegion} from './native-response-projection';
 import type {HostedInlineRequest,InlineFiles} from './hosted-inline';
 
 export const localStagePaths=(request:HostedInlineRequest,hash:string)=>({original:`${request.host.directory}/local-staging/${request.id}/${hash}.original.md`,staged:`${request.host.directory}/local-staging/${request.id}/${hash}.staged.md`});
+const normalized=(document:string)=>{for(const id of responseIds(document))document=withoutLocalResponseBinding(document,id);return document;};
 export async function localStagedDraft(document:string,request:HostedInlineRequest,files:InlineFiles){
   if(!request.localStage)return document;
   const {originalHash,stagedHash}=request.localStage;
   const original=await files.read(localStagePaths(request,originalHash).original),staged=await files.read(localStagePaths(request,stagedHash).staged);
   if(original===undefined||staged===undefined||contentHash(original)!==originalHash||contentHash(staged)!==stagedHash)throw Error('The checked staged note edit is unavailable.');
-  const before=localResponseRange(original,request.id)??responseRegion(original,request.id),current=localResponseRange(document,request.id);
+  const before=localResponseRange(original,request.id,[request]),current=localResponseRange(document,request.id,[request]);
   if(!before||!current)throw Error('The staged response block changed.');
-  const canonical='request' in before?document.replace(responseBindingComment(current.request),responseBindingComment(before.request)):document.slice(0,current.from)+document.slice(responseRegion(document,request.id)!.from);
-  const merged=mergeSavedEdits(original,canonical,changedEdits(original,staged));
+  const canonical=normalized(original),merged=mergeSavedEdits(canonical,normalized(document),changedEdits(canonical,normalized(staged)));
   if(!merged.ok)throw Error(merged.reason);
-  const restored=localResponseRange(merged.text,request.id);
-  return restored?merged.text.replace(responseBindingComment(restored.request),responseBindingComment(request)):withLocalResponseBinding(merged.text,request);
+  return merged.text;
 }
 /** Called by the desktop plugin's existing command endpoint. Agent staging is
  * outside the live vault. Immutable checked inputs travel through T3's file
@@ -35,12 +34,12 @@ export async function localStageCommand(kind:'stage-note-edit'|'submit-note-edit
   }
   const original=await fs.readFile(originalPath,'utf8'),staged=await fs.readFile(stagingPath,'utf8');
   if(contentHash(original)!==expectedHash)throw Error('The staged original hash changed.');
-  const binding=localResponseRange(original,request.id);if(!binding||!localResponseRange(document,request.id))throw Error('The staged response is no longer active.');
+  const binding=localResponseRange(original,request.id,[request]);if(!binding||!localResponseRange(document,request.id,[request]))throw Error('The staged response is no longer active.');
   const ids=responseIds(original);if(JSON.stringify(ids)!==JSON.stringify(responseIds(staged)))throw Error('Do not change response anchors in the staged note.');
   for(const id of ids){const a=localResponseRange(original,id)??responseRegion(original,id),b=localResponseRange(staged,id)??responseRegion(staged,id);if(a&&(!b||original.slice(a.from,a.to)!==staged.slice(b.from,b.to)))throw Error('Do not change response bindings in the staged note.');}
   const originalHash=contentHash(original),stagedHash=contentHash(staged);
   for(const [name,bytes] of [[localStagePaths(request,originalHash).original,original],[localStagePaths(request,stagedHash).staged,staged]]){const previous=await files.read(name);if(previous!==undefined&&previous!==bytes)throw Error('The immutable staged edit changed.');if(previous===undefined)await files.write(name,bytes);}
   const updated={...request,localStage:{originalHash,stagedHash}};
-  await localStagedDraft(document.replace(responseBindingComment(request),responseBindingComment(updated)),updated,files);
+  await localStagedDraft(document,updated,files);
   return {staged:true,originalHash,stagedHash,request:updated};
 }

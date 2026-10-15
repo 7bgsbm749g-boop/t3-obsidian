@@ -123,7 +123,7 @@ export function observeIncoming(state:InlineThreadState,turns:string[],saved:Inl
     const localOffset=reservation?message.text.indexOf(reservation.text):-1;
     const exactLocal=reservation&&localOffset>=0&&message.text.indexOf(reservation.text,localOffset+1)<0;
     const observed=state.inputBoundaries?.[message.id]?.filter(item=>turns.includes(item.turnId??''));
-    const input:InlineSteering={messageId:message.id,text:exactLocal?message.text.slice(localOffset,localOffset+reservation.text.length):message.text,before:old?.before??reservation?.before??(observed?steeringBoundary(observed):steeringBoundary(preceding)),confirmed:true,label:incomingLabel(message,!!reservation),createdAt:message.createdAt,position:old?.position??(reservation||observed?'live':'recovered')};
+    const input:InlineSteering={messageId:message.id,text:exactLocal?message.text.slice(localOffset,localOffset+reservation.text.length):message.text,before:old?.before??(reservation?.before?.length?reservation.before:undefined)??(observed?steeringBoundary(observed):steeringBoundary(preceding)),confirmed:true,label:incomingLabel(message,!!reservation),createdAt:message.createdAt,position:old?.position??(reservation||observed?'live':'recovered')};
     if(old)Object.assign(old,input);else result.push(input);
   }
   const positions=new Map(state.messages.map((message,index)=>[message.id,index]));

@@ -369,3 +369,11 @@ test('scoped stale lease updates still reach a renamed native pane and its secon
  h.manager.stream({request:update.request,messageId:id,sequence:13,body:'> New direct paragraph after rename'});
  assert.ok(h.views.every((_,i)=>h.visible(i).includes('New direct paragraph after rename')));h.manager.dispose();
 });
+
+test('local settings records reconnect after retained preview revisions restart on reload',async()=>{
+  const h=fixture(),active=record(id,8);active.request={...active.request,version:4,localOnly:true,nativeProjection:true,responseContainer:true};
+  h.manager.configurePreviewCache('vault',{version:1,vaultId:'vault',entries:[{id,vaultId:'vault',notePath:'Note.md',threadId:'thread',projectId:'project',threadEnvironmentId:'host',messageId:id,epoch:1,revision:8,sequence:10,body:'Retained local preview'}]},async()=>{});
+  const fresh={...active,revision:1};await h.manager.receive(fresh);
+  h.manager.stream({request:fresh.request,messageId:id,sequence:11,body:'Fresh reconnected local reply',phase:'running'});
+  assert.match(h.visible(),/Fresh reconnected local reply/);assert.equal(h.manager.view(h.views[0] as any)?.conflictRecord(),undefined);h.manager.dispose();
+});

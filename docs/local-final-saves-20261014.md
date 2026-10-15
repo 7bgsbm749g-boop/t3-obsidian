@@ -1,12 +1,13 @@
 # Local response streaming and final saves
 
 New bindings use the Obsidian plugin as the T3 client. The saved note contains
-an encoded routing reference beside an empty response block. Credentials and
-intermediate stream text do not enter that reference. Each loaded device can
+an empty hidden response container and ID. The routing record is stored in the
+plugin data.json responseBindings map; see [response binding data](response-binding-data-20261015.md). Credentials and
+intermediate stream text do not enter that record. Each loaded device can
 subscribe to the exact T3 message and turn. It does not register a remote writer.
 
 After the exact completed assistant item is checked, the plugin retains a local
-recovery copy and replaces the current block and reference with the final
+recovery copy and replaces the current block with the final
 Markdown. It reads the latest native saved projection, retains ordinary edits,
 checks all native panes, and uses the existing atomic compare-and-set write.
 A missing block ends the attachment. A stale block that returns can receive the
@@ -28,14 +29,14 @@ retain their plugin paths.
 Agent staging runs in the desktop plugin's existing command endpoint. It writes
 an original and editable staging copy outside the vault, checks their hashes and
 unchanged response identities, and publishes immutable inputs through the
-existing T3 file transport. Their hashes are in the saved reference. A completing
+existing T3 file transport. Their hashes are in the shared settings record. A completing
 device merges those inputs with the latest note and commits them with the reply.
 This optional feature needs that desktop command endpoint, not a new daemon.
 
 The build no longer embeds or builds a standalone response-host runtime. The
 release command disables the old installed service. Immutable old runtimes,
 receipts, private response records, and user settings are retained. Loaded existing native bindings migrate from their old private routing records
-to local references. In-flight older writes retain their compatibility path.
+to local settings records. In-flight older writes retain their compatibility path.
 
 ## Evidence
 

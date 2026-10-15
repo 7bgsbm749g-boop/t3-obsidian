@@ -1,5 +1,6 @@
 import {DirectInlinePreview,type DirectInlineUpdate} from './direct-inline-preview';
-import {localResponseBindings,localResponseRange,withLocalResponseBinding,responseBindingComment} from './local-response-binding';
+import {localResponseBindings,localResponseRange,withoutLocalResponseBinding} from './local-response-binding';
+import {compactResponseBinding} from './response-binding-data';
 import type {HostedInlineRequest} from './hosted-inline';
 import type {LeaseRecord} from './inline-lease';
 import type {InlineStartRequest} from './inline-thread';
@@ -12,22 +13,26 @@ import {completedSelectionDraft,validSteeringInput,type SteeringInput} from './i
 
 export interface LocalFinalNoteIO {
   read(path:string):Promise<string|undefined>;
-  compareAndSet(path:string,before:string,after:string):Promise<boolean>;
+  compareAndSet(path:string,before:string,after:string,guard?:()=>boolean):Promise<boolean>;
 }
 type Runtime={request:HostedInlineRequest;record:LeaseRecord;preview:DirectInlinePreview;update?:DirectInlineUpdate;retained?:Promise<void>;work?:Promise<void>;stopped?:boolean;stopAcknowledged?:boolean;done?:boolean;retryAt:number};
-/** A loaded note is sufficient to reconnect. Final output replaces the exact
- * current block once per local note; identical device writes converge in Sync. */
+/** A loaded anchor and its synced settings record reconnect independently of
+ * any remote writer. Identical device final writes converge through Sync. */
 export class LocalResponseManager {
   private jobs=new Map<string,Runtime>();
+  private migrations=new Map<string,Promise<void>>();
+  private documents=new Map<string,{document:string;stored:readonly HostedInlineRequest[];bindings:HostedInlineRequest[]}>();
   private closed=false;
   constructor(private actor:string,private vaultId:string,private io:DeviceInlineIO,private notes:LocalFinalNoteIO,private now=()=>Date.now(),private makePreview=(record:LeaseRecord,access:()=>ReturnType<DeviceInlineIO['access']>,receive:(update:DirectInlineUpdate)=>void)=>new DirectInlinePreview(record,access,receive)){}
   has(id:string){return this.jobs.has(id);}
   request(id:string){return this.jobs.get(id)?.request;}
   record(id:string){return this.jobs.get(id)?.record;}
+  private stored(){return this.io.localBindings?.()??[];}
+  private range(document:string,id:string){return localResponseRange(document,id,this.stored());}
   private adopt(request:HostedInlineRequest){
     if(this.jobs.get(request.id)?.done){this.jobs.delete(request.id);}
     const old=this.jobs.get(request.id);if(old){
-      if(JSON.stringify(old.request)!==JSON.stringify(request)){
+      if(JSON.stringify(compactResponseBinding(old.request))!==JSON.stringify(compactResponseBinding(request))){
         const changed=localFinalIdentity(old.request)!==localFinalIdentity(request);
         old.request=request;old.record={...old.record,revision:old.record.revision+1,request,state:{...old.record.state!,notePath:request.notePath,messageId:request.localMessageId??request.messageId,steering:request.localSteering}};old.preview.update(old.record);
         void Promise.resolve(this.io.receiveCoordinated?.(old.record)).catch(error=>logFailure('response.local.update',error,{bindingId:request.id}));
@@ -56,8 +61,12 @@ export class LocalResponseManager {
   async register(request:HostedInlineRequest){
     if(this.closed||request.vaultId!==this.vaultId)throw Error('This response belongs to another vault.');
     const current=await this.io.readNote(request.notePath);if(current===undefined)throw Error('The response note is unavailable.');
-    const existing=localResponseBindings(current).find(binding=>binding.id===request.id);
-    const after=existing?current.replace(responseBindingComment(existing),responseBindingComment(request)):withLocalResponseBinding(current,request);
+    if(!localResponseRange(current,request.id,[request]))throw Error('The response block changed before registration.');
+    if(!this.io.saveLocalBinding)throw Error('Shared response storage is unavailable.');
+    // Persist the settings record before removing any older in-note record.
+    await this.io.saveLocalBinding(request);
+    if(this.closed)return;
+    const after=withoutLocalResponseBinding(current,request.id);
     if(after!==current){
       const saved=await this.io.updateNote(request.notePath,value=>{if(value!==current)throw Error('The response note changed before registration.');return after;},()=>!this.closed);
       if(saved!==after)throw Error('Save the response note before sending.');
@@ -68,11 +77,23 @@ export class LocalResponseManager {
   delivered(id:string,delivery:InlineStartRequest){this.jobs.get(id)?.preview.delivery(delivery);}
   resume(){
     if(this.closed)return;
-    const documents=this.io.openedNotes?.()??[],locations=new Map<string,HostedInlineRequest[]>();
-    for(const {path,document} of documents)for(const binding of localResponseBindings(document)){
+    const documents=this.io.openedNotes?.()??[],locations=new Map<string,HostedInlineRequest[]>(),stored=this.stored();
+    for(const path of this.documents.keys())if(!documents.some(note=>note.path===path))this.documents.delete(path);
+    for(const {path,document} of documents){
+      let cached=this.documents.get(path);
+      if(!cached||cached.document!==document||cached.stored!==stored){cached={document,stored,bindings:localResponseBindings(document,stored)};this.documents.set(path,cached);}
+      for(const binding of cached.bindings){
       if(binding.vaultId!==this.vaultId)continue;
+      if(document.includes(`<!-- t3-response-binding:${binding.id}:`)){
+        if(!this.migrations.has(binding.id)){
+          const request=stored.find(request=>request.id===binding.id)??binding;
+          const work=this.register({...request,notePath:path}).catch(error=>logFailure('response.local.migration',error,{bindingId:binding.id})).finally(()=>this.migrations.delete(binding.id));
+          this.migrations.set(binding.id,work);
+        }
+        continue;
+      }
       const list=locations.get(binding.id)??[];if(!list.some(item=>item.notePath===path))list.push({...binding,notePath:path});locations.set(binding.id,list);
-    }
+    }}
     for(const [id,bindings] of locations){
       if(bindings.length!==1){this.jobs.get(id)?.preview.suspend();continue;}
       const runtime=this.adopt(bindings[0]);if(!runtime.done&&!runtime.stopped)runtime.preview.tick(true);
@@ -81,7 +102,7 @@ export class LocalResponseManager {
       const loaded=locations.get(runtime.request.id);
       if(!loaded){
         runtime.preview.suspend();
-        if(!runtime.done&&documents.some(note=>note.path===runtime.request.notePath)){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,runtime.request.notePath);}
+        if(!runtime.done&&!this.migrations.has(runtime.request.id)&&documents.some(note=>note.path===runtime.request.notePath)){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,runtime.request.notePath);}
         continue;
       }
       if(loaded.length===1&&runtime.update?.completionVerified)this.finish(runtime);
@@ -95,18 +116,19 @@ export class LocalResponseManager {
       await runtime.retained;
       const path=runtime.request.notePath,current=await this.notes.read(path);
       if(current===undefined||this.closed||runtime.stopped||!this.io.isOpen(path)||this.io.syncReady?.()===false)return;
-      if(!localResponseRange(current,runtime.request.id)){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);return;}
-      let document=await this.io.localFinalDraft?.(current,localResponseRange(current,runtime.request.id)!.request)??current;
+      if(!this.range(current,runtime.request.id)){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);return;}
+      let document=await this.io.localFinalDraft?.(current,this.range(current,runtime.request.id)!.request)??current;
       const confirmed=(runtime.request.localSteering??[]).map(input=>({...input,confirmed:!!update.checkpoint?.bindings?.[input.messageId]}));
       document=completedSelectionDraft(document,runtime.request.id,confirmed);
-      const range=localResponseRange(document,runtime.request.id);
+      const range=this.range(document,runtime.request.id);
       // Incoming final text or explicit deletion ends this local attachment.
       if(!range){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);return;}
       if(range.request.threadId!==runtime.request.threadId||(range.request.localMessageId??range.request.messageId)!==update.messageId)return;
       const body=await this.io.localFinalBody?.(update)??update.body;
-      if(this.closed||runtime.stopped||runtime.update!==update||runtime.request.notePath!==path||this.io.syncReady?.()===false)return;
+      if(this.closed||runtime.stopped||runtime.update!==update||runtime.request.notePath!==path||this.io.syncReady?.()===false||JSON.stringify(this.range(document,runtime.request.id)?.request)!==JSON.stringify(range.request))return;
       const after=document.slice(0,range.from)+body+document.slice(range.to);
-      if(!await this.notes.compareAndSet(path,current,after))return;
+      const expected=JSON.stringify(range.request),guard=()=>!this.closed&&!runtime.stopped&&runtime.update===update&&this.io.syncReady?.()!==false&&JSON.stringify(this.range(document,runtime.request.id)?.request)===expected;
+      if(!await this.notes.compareAndSet(path,current,after,guard))return;
       runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);
     })().catch(error=>{logFailure('response.local.final-save',error,{bindingId:runtime.request.id});this.io.completionFailed?.(error,runtime.request.id);}).finally(()=>{runtime.work=undefined;runtime.retryAt=this.now()+1000;});
   }
@@ -128,20 +150,16 @@ export class LocalResponseManager {
   private async saveStopped(runtime:Runtime,body:string){
     await runtime.work;if(runtime.done)return;
     const path=runtime.request.notePath,current=await this.notes.read(path);if(current===undefined)throw Error('The frozen response note is unavailable.');
-    const range=localResponseRange(current,runtime.request.id);
+    const range=this.range(current,runtime.request.id);
     if(range&&!await this.notes.compareAndSet(path,current,current.slice(0,range.from)+body+current.slice(range.to)))throw Error('The frozen response is waiting for its local save.');
     runtime.done=true;this.io.localCompleted?.(runtime.request.id,path);
   }
   private async changeBinding(id:string,change:(request:HostedInlineRequest)=>HostedInlineRequest){
     const runtime=this.jobs.get(id);if(!runtime||runtime.done||runtime.stopped)throw Error('The response is no longer active.');
-    const before=runtime.request,next=change(before);
-    const saved=await this.io.updateNote(before.notePath,document=>{
-      const range=localResponseRange(document,id);if(!range)throw Error('The response block is missing.');
-      const anchor=document.slice(range.from,range.to),oldComment=anchor.slice(0,anchor.indexOf(' -->')+4);
-      return document.slice(0,range.from)+anchor.replace(oldComment,responseBindingComment(next))+document.slice(range.to);
-    },()=>!this.closed&&!runtime.done&&!runtime.stopped);
-    if(saved===undefined)throw Error('Save the response note before continuing.');
-    await this.io.saveLocalNote?.(before.notePath);this.adopt(next);
+    const before=runtime.request,next=change(before),document=await this.io.readNote(before.notePath);
+    if(document===undefined||!this.range(document,id))throw Error('The response block is missing.');
+    if(!this.io.saveLocalBinding)throw Error('Shared response storage is unavailable.');
+    await this.io.saveLocalBinding(next);this.adopt(next);
   }
   follow(id:string,messageId:string,_path?:string,previousMessageId?:string){return this.changeBinding(id,request=>{if(previousMessageId&&previousMessageId!==(request.localMessageId??request.messageId))throw Error('The response has advanced to another message.');return {...request,localMessageId:messageId};});}
   steer(id:string,input:SteeringInput){if(!validSteeringInput(input))throw Error('Invalid response steering input.');return this.changeBinding(id,request=>({...request,localSteering:[...request.localSteering??[],{...input,confirmed:false,before:this.jobs.get(id)?.preview.steeringProse?.()??[]}]}));}

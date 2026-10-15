@@ -1,7 +1,8 @@
 import {retainedLocalFinal,restoredLocalFinal} from './local-final-cache';
 import {hasResponseMarkers} from './inline-thread';
 import {interruptStoppedResponse} from './response-stop';
-import {localResponseBindings,responseBindingComment} from './local-response-binding';
+import {localResponseBindings,localResponseRange} from './local-response-binding';
+import {loadResponseBindingData,mergeResponseBindingData,updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from './response-binding-data';
 import {localStagedDraft,localStageCommand} from './local-response-staging';
 import {localSyncReady} from './local-sync-state';
 import {rewriteReplyReferences} from './reply-assets';
@@ -100,10 +101,11 @@ const NEW_FOLDER_PROJECT='folder:new';
 const VAULT_PROJECT='vault:root';
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
 type PreparedNote={content:string;images:Awaited<ReturnType<typeof collectImages>>};
-interface Settings {codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
+interface Settings {responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
 export default class SendToT3 extends Plugin {
   declare settings: Settings;
   mode: 'desktop'|'direct' = 'desktop';
+  private responseBindingReplica:ResponseBindingData={};
   private pairedSessions:Record<string,PairedSession>={};
   cloudAccount:CloudAccount|null=null;
   nativeAccount:NativeAccount|null=null;
@@ -265,9 +267,12 @@ export default class SendToT3 extends Plugin {
       });
       this.app.workspace.onLayoutReady(()=>this.registerInlineInterval(()=>this.connectionRecovery?.tick(),1000));
     }
+    this.responseBindingReplica=mergeResponseBindingData(data?.responseBindings,await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`));
+    this.settings.responseBindings=this.responseBindingReplica;
     this.folderLinkReplica=mergeFolderLinkChanges(this.settings.folderLinkChanges,loadFolderLinkChanges(await deviceState(`folder-links:${this.deviceId}:${this.settings.vaultId}`)));
     this.settings.folderLinkChanges=this.folderLinkReplica;
     this.settings.folderLinks=applyFolderLinkChanges(this.settings.folderLinks,this.folderLinkReplica);
+    const restoreResponseBindings=JSON.stringify(loadResponseBindingData(data?.responseBindings))!==JSON.stringify(this.responseBindingReplica);
     const restoreFolderLinks=JSON.stringify(loadFolderLinks(data))!==JSON.stringify(this.settings.folderLinks)||JSON.stringify(loadFolderLinkChanges(data?.folderLinkChanges))!==JSON.stringify(this.folderLinkReplica);
     // General logging is disabled for the performance isolation trial. Do not create
     // a journal, operation wrappers, diagnostic listeners or flush timers.
@@ -327,7 +332,7 @@ export default class SendToT3 extends Plugin {
     }),()=>this.settings.folderLinks.map(link=>({...link,environmentId:link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??this.eventLocalEnvironmentId})),this.settings.vaultId,{load:()=>this.settings.codebase,save:async state=>{this.settings.codebase=state;await this.save();},projectChanged:async(scope,change)=>{await this.updateCodebaseProjectLinks(scope,change);}});
     await this.codebase.install();
     }
-    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),localFinalNotes:deviceFinalNoteIO(this.app,()=>!this.stopped),allowLocalMigration:(id,path)=>nativeResponses(this.app).allowLocalBinding(id,path),retainLocalFinal:async update=>{await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${update.request.id}`,retainedLocalFinal(update));},loadLocalFinal:async request=>restoredLocalFinal(await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${request.id}`),request),localFinalDraft:async(document,request)=>{if(!request.localStage)return document;const opened=await this.inlineHostFiles(request.host,false);try{return await localStagedDraft(document,request,opened.files);}finally{opened.close();}},syncReady:()=>localSyncReady(this.app),openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file&&typeof view.getViewData==='function').map(view=>({path:view.file!.path,document:nativeResponses(this.app).view(view)?.saved()??view.getViewData()})),saveLocalNote:async path=>{for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===path&&typeof view.save==='function')await view.save();}},localCompleted:(id,path)=>{nativeResponses(this.app).localCompleted(id,path);void deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${id}`,null).catch(error=>logFailure('response.local.final-cache-cleanup',error));this.inlineChat?.flushAvailable();},localQuestions:update=>{if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);},localFinalBody:async update=>rewriteReplyReferences(update.body,async reference=>{try{return await resolveReplyReference(this.app,reference,update.request,await this.inlineThreadAccess(update.request.threadEnvironmentId));}catch{return undefined;}}),connectionTimeout:(target,error)=>{if(this.connectionRecovery?.failed(this.connectionRecoveryTarget(target),error))this.recordSendFailure(undefined,error,'connection-timeout',Date.now()-error.elapsedMs);},connectionRecovered:target=>this.connectionRecovery?.recovered(this.connectionRecoveryTarget(target)),completionActor:this.deviceId,completionAcknowledged:record=>deviceCompletion.acknowledged(record),completeResponse:(record,original,staged,prepare,abort)=>deviceCompletion.complete(record,original,staged,prepare,abort),completionFailed:error=>new Notice(`T3 Code: ${message(error)}`,10000),loadStops:()=>this.app.loadLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`)??[],saveStops:ids=>this.app.saveLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`,ids),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>{this.codebase?.observeSource(record.request,record.state?.notePath??record.request.notePath);return nativeResponses(this.app).receive(record,proof);},receiveDirect:update=>{this.inlineChat?.observeLocal(update);this.codebase?.observeSource(update.request);if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);return nativeResponses(this.app).stream(update);},receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target,false),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
+    this.deviceInline=new DeviceInlineManager(this.inlineActor,this.settings.vaultId,{...deviceNoteIO(this.app),localFinalNotes:deviceFinalNoteIO(this.app,()=>!this.stopped),localBindings:()=>responseBindingRequests(this.settings.responseBindings??this.responseBindingReplica),saveLocalBinding:request=>this.saveResponseBinding(request),allowLocalMigration:(id,path)=>nativeResponses(this.app).allowLocalBinding(id,path),retainLocalFinal:async update=>{await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${update.request.id}`,retainedLocalFinal(update));},loadLocalFinal:async request=>restoredLocalFinal(await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${request.id}`),request),localFinalDraft:async(document,request)=>{if(!request.localStage)return document;const opened=await this.inlineHostFiles(request.host,false);try{return await localStagedDraft(document,request,opened.files);}finally{opened.close();}},syncReady:()=>localSyncReady(this.app),openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file&&typeof view.getViewData==='function').map(view=>({path:view.file!.path,document:nativeResponses(this.app).view(view)?.saved()??view.getViewData()})),saveLocalNote:async path=>{for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===path&&typeof view.save==='function')await view.save();}},localCompleted:(id,path)=>{nativeResponses(this.app).localCompleted(id,path);void deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${id}`,null).catch(error=>logFailure('response.local.final-cache-cleanup',error));this.inlineChat?.flushAvailable();},localQuestions:update=>{if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);},localFinalBody:async update=>rewriteReplyReferences(update.body,async reference=>{try{return await resolveReplyReference(this.app,reference,update.request,await this.inlineThreadAccess(update.request.threadEnvironmentId));}catch{return undefined;}}),connectionTimeout:(target,error)=>{if(this.connectionRecovery?.failed(this.connectionRecoveryTarget(target),error))this.recordSendFailure(undefined,error,'connection-timeout',Date.now()-error.elapsedMs);},connectionRecovered:target=>this.connectionRecovery?.recovered(this.connectionRecoveryTarget(target)),completionActor:this.deviceId,completionAcknowledged:record=>deviceCompletion.acknowledged(record),completeResponse:(record,original,staged,prepare,abort)=>deviceCompletion.complete(record,original,staged,prepare,abort),completionFailed:error=>new Notice(`T3 Code: ${message(error)}`,10000),loadStops:()=>this.app.loadLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`)??[],saveStops:ids=>this.app.saveLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`,ids),loadRenames:()=>this.app.loadLocalStorage('t3-pending-response-renames')??[],saveRenames:renames=>this.app.saveLocalStorage('t3-pending-response-renames',renames),receiveCoordinated:(record,proof)=>{this.codebase?.observeSource(record.request,record.state?.notePath??record.request.notePath);return nativeResponses(this.app).receive(record,proof);},receiveDirect:update=>{this.inlineChat?.observeLocal(update);this.codebase?.observeSource(update.request);if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);return nativeResponses(this.app).stream(update);},receiveThreadTitle:(id,title)=>nativeResponses(this.app).title(id,title),readSaved:async path=>{const file=this.app.vault.getFileByPath(path);return file?this.app.vault.read(file):undefined;},access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),resolveReplyReference:(reference,request,access)=>resolveReplyReference(this.app,reference,request,access)},target=>this.inlineHostFiles(target,false),undefined,undefined,Platform.isMobile?undefined:async milliseconds=>(await import('./desktop-timers')).desktopPause(milliseconds));
     let completionCleanupCursor=0,completionCleanupBusy=false,lastProofCleanup=0;
     this.app.workspace.onLayoutReady(()=>this.registerInlineInterval(()=>{
       if(completionCleanupBusy||this.stopped)return;completionCleanupBusy=true;
@@ -434,7 +439,7 @@ export default class SendToT3 extends Plugin {
     // verify the same vault root. This is a one-time migration, not an
     // unconditional startup snapshot write, and uses the conflict-safe path.
     if(typeof data?.vaultId!=='string'||!data.vaultId)await this.save(true);
-    else if(migratedNoteThreads||restoreFolderLinks)await this.save(true);
+    else if(migratedNoteThreads||restoreFolderLinks||restoreResponseBindings)await this.save(true);
     await this.publishVaultIdentity();
     this.addSettingTab(new T3Settings(this.app,this));
     this.app.workspace.onLayoutReady(()=>{
@@ -832,16 +837,26 @@ export default class SendToT3 extends Plugin {
       const command=validateResponseCommand(input);
       if(command.kind==='response-import-records'||command.kind==='response-import-info')return this.executeImportRead(command,await this.inlineHostTarget());
       if(command.kind==='stage-note-edit'||command.kind==='submit-note-edit'){
-        for(const file of this.app.vault.getMarkdownFiles?.()??[]){
+        const known=responseBindingRequests(this.settings.responseBindings??{}).find(binding=>binding.id===command.bindingId);
+        // The fallback is only for an explicit staging command on an older
+        // still-comment-based response. It is never a background vault scan.
+        const located=await deviceNoteIO(this.app).locateNote(command.bindingId,known?.notePath??'');
+        const paths=new Set([located,known?.notePath,...this.app.workspace.getLeavesOfType('markdown').map(leaf=>(leaf.view as MarkdownView).file?.path)]);
+        for(const path of paths){
+          const file=path&&this.app.vault.getFileByPath(path);if(!file)continue;
           const document=await deviceNoteIO(this.app).readNote(file.path);if(document===undefined)continue;
-          const binding=localResponseBindings(document).find(binding=>binding.id===command.bindingId&&binding.vaultId===this.settings.vaultId);if(!binding)continue;
+          const binding=localResponseBindings(document,responseBindingRequests(this.settings.responseBindings??{})).find(binding=>binding.id===command.bindingId&&binding.vaultId===this.settings.vaultId);if(!binding)continue;
           if(Platform.isMobile)throw Error('Run the note staging command on the desktop plugin host.');
           const request={...binding,notePath:file.path},opened=await this.inlineHostFiles(request.host,false);
           try{
             const result=await localStageCommand(command.kind,request,document,opened.files,command.hash);
             if('request' in result&&result.request){
-              const stagedRequest=result.request,io=deviceNoteIO(this.app),saved=await io.updateNote(file.path,current=>{if(!localResponseBindings(current).some(value=>value.id===request.id))throw Error('The response completed before staging.');return current.replace(responseBindingComment(binding),responseBindingComment(stagedRequest));},()=>!this.stopped);
-              if(saved===undefined)throw Error('Save the note before submitting the staged edit.');
+              const stagedRequest=result.request,release=await nativeResponses(this.app).beginFinalSave(file.path);
+              try{
+                const current=await deviceNoteIO(this.app).readNote(file.path);
+                if(current===undefined||!localResponseRange(current,request.id,[request]))throw Error('The response completed before staging.');
+                await this.saveResponseBinding(stagedRequest);
+              }finally{release();}
               for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===file.path)await view.save();}
               this.deviceInline?.resume(this.inlineTargets);
             }
@@ -954,6 +969,12 @@ export default class SendToT3 extends Plugin {
     this.lastDiskSnapshot=JSON.stringify(data);
     const baseline=JSON.parse(this.sharedBaseline),remote=this.sharedData(data);
     const adopted=mergeSharedSettings(baseline,remote,this.sharedSnapshot());
+    const incomingBindings=loadResponseBindingData(data.responseBindings);
+    const previousBindings=JSON.stringify(this.responseBindingReplica);
+    this.responseBindingReplica=mergeResponseBindingData(this.responseBindingReplica,incomingBindings);
+    this.settings.responseBindings=this.responseBindingReplica;
+    const restoreResponseBindings=JSON.stringify(incomingBindings)!==JSON.stringify(this.responseBindingReplica);
+    await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`,this.responseBindingReplica);
     for(const key of ['inlineStreaming','orchestration','completion','threadTitleGeneration','replyFolders','codebase'] as const)this.settings[key]=adopted[key];
     const diskLinks=loadFolderLinks(data),diskChanges=loadFolderLinkChanges(data.folderLinkChanges);
     this.folderLinkReplica=mergeFolderLinkChanges(this.folderLinkReplica,diskChanges);
@@ -976,7 +997,8 @@ export default class SendToT3 extends Plugin {
     remote.folderLinks=this.settings.folderLinks;remote.folderLinkChanges=this.folderLinkReplica;
     this.sharedBaseline=JSON.stringify(remote);
     this.settings.noteThreads=mergedThreads;
-    if(restoreFolderLinks||JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save(restoreFolderLinks);
+    if(restoreFolderLinks||restoreResponseBindings||JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save(restoreFolderLinks||restoreResponseBindings);
+    if(previousBindings!==JSON.stringify(this.responseBindingReplica))this.deviceInline?.localBindingsChanged();
     this.refreshFolderIndicators();
   }
   private async publishVaultIdentity():Promise<void>{
@@ -2155,9 +2177,17 @@ export default class SendToT3 extends Plugin {
     this.app.saveLocalStorage(this.localKey,JSON.parse(JSON.stringify({deviceId:this.deviceId,mode:this.mode,connection:this.settings.connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,vaultRegistrations:this.vaultRegistrations})));
     return deviceState(this.deviceId,state??JSON.parse(JSON.stringify({pending:this.settings.pending,completionJobs:this.settings.completionJobs,settlementJobs:this.settings.settlementJobs})));
   }
+  private async saveResponseBinding(request:HostedInlineRequest){
+    if(request.vaultId!==this.settings.vaultId)throw Error('This response belongs to another vault.');
+    const next=updateResponseBindingData(this.responseBindingReplica,request,this.deviceId);
+    const persisted=loadResponseBindingData(this.lastDiskSnapshot?JSON.parse(this.lastDiskSnapshot)?.responseBindings:undefined);
+    if(next===this.responseBindingReplica&&JSON.stringify(persisted[request.id])===JSON.stringify(next[request.id]))return;
+    this.responseBindingReplica=next;this.settings.responseBindings=next;
+    await this.save(true);
+  }
   private sharedSnapshot(){const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,...shared}=this.settings;return JSON.parse(JSON.stringify(shared));}
   private sharedData(data:any){
-    return {...this.sharedSnapshot(),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),autoSettleThreads:data?.autoSettleThreads!==false,
+    return {...this.sharedSnapshot(),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),autoSettleThreads:data?.autoSettleThreads!==false,
       orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads===true},
       inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},
       completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder??'Archive/T3 Code'}};
@@ -2183,7 +2213,10 @@ export default class SendToT3 extends Plugin {
       snapshot.folderLinkChanges=mergeFolderLinkChanges(this.folderLinkReplica,loadFolderLinkChanges(current?.folderLinkChanges),intended.folderLinkChanges);
       snapshot.folderLinks=applyFolderLinkChanges(mergeLegacyFolderLinks(loadFolderLinks(baseline),loadFolderLinks(current),intended.folderLinks),snapshot.folderLinkChanges);
       snapshot.noteThreads=mergeNoteThreads(loadNoteThreads(current?.noteThreads),intended.noteThreads);
+      snapshot.responseBindings=mergeResponseBindingData(this.responseBindingReplica,current?.responseBindings,intended.responseBindings);
+      await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`,snapshot.responseBindings);
       await this.saveData(snapshot);
+      this.responseBindingReplica=mergeResponseBindingData(snapshot.responseBindings,this.responseBindingReplica);this.settings.responseBindings=this.responseBindingReplica;
       this.folderLinkReplica=snapshot.folderLinkChanges;
       await deviceState(`folder-links:${this.deviceId}:${this.settings.vaultId}`,this.folderLinkReplica);
       this.settings.folderLinkChanges=this.folderLinkReplica;

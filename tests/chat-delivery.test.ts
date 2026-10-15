@@ -1,4 +1,5 @@
 import {localResponseBindings} from '../local-response-binding';
+import {updateResponseBindingData} from '../response-binding-data';
 import {responseIds} from '../response-container';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -1725,7 +1726,7 @@ test('import picker previews an existing run, cancellation preserves the note, a
     assert.ok(h.registered.some(command=>command.id==='import-t3-run'&&command.checkCallback(true)));
     await choose();h.settingsControls.flatMap(control=>control.buttons).reverse().find(button=>button.text==='Cancel').click();assert.equal(note.value,'UI surrounding text');assert.equal(h.commands.length,0);
     await choose();h.settingsControls.flatMap(control=>control.buttons).reverse().find(button=>button.text==='Import response').click();
-    await waitForReply(()=>note.value.includes('UI IMPORTED ANSWER')&&!note.value.includes('t3-response-binding:'),'confirmed UI import finalized');
+    await waitForReply(()=>note.value.includes('UI IMPORTED ANSWER')&&!note.value.includes('data-t3-response='),'confirmed UI import finalized');
     assert.match(note.value,/UI surrounding text/);assert.equal(h.commands.length,0);
   }finally{h.plugin.onunload();}
 });
@@ -1744,9 +1745,9 @@ test('run import catches up a T3-created response and streams completion without
     await waitForReply(()=>note.value.includes('IMPORTED LIVE'),'existing T3 output caught up into an unrelated folder note');
     assert.equal(h.commands.length,0,'Import must never send a prompt or create a project');
     const repeated=await h.plugin.importRun(note.file.path,project,threadId,messageId);assert.equal(repeated.duplicate,true);
-    assert.equal((note.value.match(/t3-response-binding:/g)??[]).length,1);
+    assert.doesNotMatch(note.value,/t3-response-binding:/);assert.equal((note.value.match(/data-t3-response=/g)??[]).length,1);assert.equal(Object.keys(h.plugin.settings.responseBindings??{}).length,1);
     finished=true;
-    await waitForReply(()=>note.value.includes('IMPORTED FINAL')&&!note.value.includes('t3-response-binding:'),'imported running response finalized');
+    await waitForReply(()=>note.value.includes('IMPORTED FINAL')&&!note.value.includes('data-t3-response='),'imported running response finalized');
     note.editor.replaceRange('\nLater user edit',note.editor.offsetToPos(note.value.length));
     h.plugin.onunload();restarted=await h.start();
     const again=await restarted.importRun(note.file.path,project,threadId,messageId);assert.equal(again.duplicate,true);
@@ -2223,4 +2224,29 @@ test('canonical selection context after saved tools retains its display anchor f
   const phrase='Open to view tool details.',at=note.value.indexOf(phrase),partial=phrase.slice(0,4),toolContext=h.plugin.canonicalChatContext({view:note.view,editor:note.editor,anchor:{text:partial,start:at,end:at+4,before:note.value.slice(at-24,at),after:note.value.slice(at+4,at+28)}});
   assert.equal(toolContext.canonicalAnchor.text,note.tools);assert.equal(toolContext.referenceSelection,true);assert.equal(toolContext.anchor.text,partial);assert.doesNotMatch(toolContext.snapshot,/data-t3-tool-ref=/);
  }finally{h.plugin.onunload();}
+});
+
+test('response data merges concurrent local and incoming records and survives reload',async()=>{
+  const h=await chatHarness();let restarted:any;
+  const binding=()=>({version:4,localOnly:true,nativeProjection:true,responseContainer:true,id:webcrypto.randomUUID(),initialOwner:webcrypto.randomUUID(),vaultId:h.plugin.settings.vaultId,notePath:'Notes/Data.md',host:{environmentId:'chat-env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},threadId:webcrypto.randomUUID(),messageId:webcrypto.randomUUID(),projectId:project.id,threadEnvironmentId:'chat-env',initialHash:'0'.repeat(64),createdAt:'2026-10-15T00:00:00Z'} as const);
+  try{
+    const a=binding(),b=binding(),c=binding();
+    await Promise.all([h.plugin.saveResponseBinding(a),h.plugin.saveResponseBinding(b)]);
+    assert.equal(Object.keys(h.shared.at(-1).responseBindings).length,2);
+    const remote=updateResponseBindingData({},c,'other-device');
+    await h.plugin.onExternalSettingsChange({...h.shared.at(-1),responseBindings:remote});
+    assert.equal(Object.keys(h.plugin.settings.responseBindings).length,3);assert.equal(Object.keys(h.shared.at(-1).responseBindings).length,3);
+    h.plugin.onunload();restarted=await h.start();assert.equal(Object.keys(restarted.settings.responseBindings).length,3);
+  }finally{restarted?.onunload();h.plugin.onunload();}
+});
+
+test('a failed response-data save is retried before migration can remove its note record',async()=>{
+  const h=await chatHarness(),save=h.plugin.saveData;
+  const binding={version:4,localOnly:true,nativeProjection:true,responseContainer:true,id:webcrypto.randomUUID(),initialOwner:webcrypto.randomUUID(),vaultId:h.plugin.settings.vaultId,notePath:'Notes/Data.md',host:{environmentId:'chat-env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},threadId:webcrypto.randomUUID(),messageId:webcrypto.randomUUID(),projectId:project.id,threadEnvironmentId:'chat-env',initialHash:'0'.repeat(64),createdAt:'2026-10-15T00:00:00Z'} as const;
+  try{
+    h.plugin.saveData=async()=>{throw Error('Synthetic storage failure');};
+    await assert.rejects(h.plugin.saveResponseBinding(binding),/Synthetic storage failure/);
+    h.plugin.saveData=save;await h.plugin.saveResponseBinding(binding);
+    assert.ok(h.shared.at(-1).responseBindings[binding.id]);
+  }finally{h.plugin.saveData=save;h.plugin.onunload();}
 });
