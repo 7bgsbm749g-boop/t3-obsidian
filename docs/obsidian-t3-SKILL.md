@@ -68,7 +68,7 @@ python3 /home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py \
 ```
 
 - A new T3 thread is created by default.
-- `--thread-id THREAD_ID` sends an additional prompt into that existing thread; it can steer active work.
+- `--thread-id THREAD_ID` sends only added note text into that existing thread through Smart Send; it can steer active work. Deleted text and generated replies are excluded. A send with no new source sends no prompt.
 - Without `--destination`, the reply streams into the source note.
 - Explicit destinations replace that default. Include the source explicitly if it should also receive the reply.
 - `--no-stream` sends without editor streaming; do not combine it with streaming destinations.

@@ -17,6 +17,7 @@ export interface DeviceResponseIO {
   syncReady?():boolean;
   localCompleted?(id:string,path:string):void;
   localFinalBody?(update:DirectInlineUpdate):Promise<string>;
+  rememberResponse?(request:ResponseRequest,body:string,before:string,after:string,offset:number):Promise<void>;
   localFinalDraft?(document:string,request:ResponseRequest):Promise<string>;
   retainLocalFinal?(update:DirectInlineUpdate):Promise<void>;
   loadLocalFinal?(request:ResponseRequest):Promise<DirectInlineUpdate|undefined>;

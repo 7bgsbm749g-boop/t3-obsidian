@@ -23,22 +23,6 @@
 .send-to-t3-note-input { background: var(--color-blue, #448aff); }
 .send-to-t3-note-complete { background: var(--color-green, #4caf50); }
 
-.send-to-t3-selection-action {
-  position: fixed;
-  z-index: 1000;
-  min-height: 38px;
-  padding: 6px 14px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 20px;
-  background: var(--interactive-accent);
-  color: var(--text-on-accent);
-  box-shadow: var(--shadow-s);
-  font-size: var(--font-ui-small);
-  font-weight: 600;
-  touch-action: manipulation;
-}
-.send-to-t3-selection-action[hidden] { display: none; }
-
 .send-to-t3-inline-spinner { display: none; }
 
 /* T3's text shine: a 4.5rem highlight crossing the existing label in 2.2s.
@@ -159,6 +143,21 @@
 .send-to-t3-tab-panel .modal-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .send-to-t3-tab-panel .modal-title { font-size: var(--font-ui-medium); }
 .send-to-t3-tab-panel .setting-item { border: 0; }
+.send-to-t3-destination-actions button[hidden] { display: none !important; }
+.modal.send-to-t3-ask-composer {
+  inset: auto 12px max(12px, env(safe-area-inset-bottom));
+  width: calc(100% - 24px);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 20px;
+  padding: 14px;
+}
+.send-to-t3-ask-composer .modal-title { display: none; }
+.send-to-t3-ask-composer textarea {
+  width: 100%; min-height: 6em; max-height: 16em; resize: vertical;
+  border: 0; box-shadow: none; background: transparent; padding: 8px;
+  font: inherit;
+}
+.send-to-t3-ask-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; }
 
 /* User input stays a neutral indented quote in Live Preview and Reading view. */
 .callout[data-callout="t3-steering"] {

@@ -14,6 +14,7 @@ export interface ChatDestination {
   projectKey?:string;
   label:string;
   unavailable?:boolean;
+  empty?:boolean;
   detail?:string;
 }
 export interface ChatHost {
@@ -30,6 +31,7 @@ export interface ChatHost {
   getProjectChoices():{key:string;label:string}[];
   getDefaultThread(projectKey?:string):string|undefined;
   getDefaultDestination?(projectKey?:string,signal?:AbortSignal):Promise<ChatDestination>;
+  hasNewContent?(destination:ChatDestination,prompt:string):Promise<boolean>;
   /** Captured routing metadata, not an active-turn authorization. */
   getAlternativeProjectKey?(projectKey?:string):string|undefined;
   sendChat(prompt:string,projectKey?:string,resolve?:()=>ResolvedJobOptions,returnToDraft?:()=>void,destination?:ChatDestination):Promise<void>;
@@ -92,7 +94,7 @@ class SendDestinationModal extends NoteTabPanel {
     if(this.check&&this.check.key===key&&!this.check.controller.signal.aborted&&Date.now()-this.check.started<DESTINATION_CHECK_TIMEOUT_MS)return this.check.work;
     this.cancelCheck();const controller=new AbortController(),started=Date.now();
     const timer=setTimeout(()=>controller.abort(Error('The conversation check took too long. Retry or choose another thread.')),DESTINATION_CHECK_TIMEOUT_MS);
-    const work=abortableRead(Promise.resolve().then(()=>{if(controller.signal.aborted)throw controller.signal.reason;return this.host.getDefaultDestination!(key,controller.signal);}),controller.signal)
+    const work=abortableRead(Promise.resolve().then(async()=>{if(controller.signal.aborted)throw controller.signal.reason;const destination=await this.host.getDefaultDestination!(key,controller.signal);if(!destination.unavailable&&this.host.hasNewContent&&!await this.host.hasNewContent(destination,this.prompt??''))return {...destination,empty:true};return destination;}),controller.signal)
       .catch(error=>({label:'Thread unavailable',unavailable:true,detail:controller.signal.aborted&&!this.opened?'Conversation check cancelled.':error instanceof Error?error.message:'Cannot check this conversation. Reconnect T3 or choose another thread.'} as ChatDestination))
       .finally(()=>clearTimeout(timer));
     this.check={key,controller,work,started};return work;
@@ -126,6 +128,7 @@ class SendDestinationModal extends NoteTabPanel {
     }
     const remembered=this.host.getDefaultThread(this.projectKey);
     let defaultButton:HTMLButtonElement|undefined;
+    let newThreadButton:HTMLButtonElement|undefined;
     this.actions=new Setting(this.contentEl).setClass('send-to-t3-destination-actions');
     this.ready=Promise.resolve(undefined);this.defaultDisabled=false;this.defaultButton=undefined;this.checkingDefault=false;
     if(remembered||this.host.steering)this.actions.addButton(button=>{
@@ -139,7 +142,8 @@ class SendDestinationModal extends NoteTabPanel {
         this.ready=this.checkDestination(this.projectKey).then(destination=>{
           if(this.opened&&revision===this.revision&&this.projectKey===undefined&&destination.projectKey){this.projectKey=destination.projectKey;if(this.check)this.check.key=destination.projectKey;projectButton.setText(this.host.getProjectName(this.projectKey));}
           if(this.opened&&revision===this.revision){
-            this.defaultDisabled=Boolean(destination.unavailable);button.setButtonText(destination.label).setDisabled(Boolean(this.host.busy||this.defaultDisabled||this.choosing));detail.setText(destination.detail??'');
+            this.defaultDisabled=Boolean(destination.unavailable||destination.empty);button.buttonEl.hidden=Boolean(destination.empty);button.setButtonText(destination.label).setDisabled(Boolean(this.host.busy||this.defaultDisabled||this.choosing));detail.setText(destination.empty?'':destination.detail??'');
+            if(destination.empty){newThreadButton?.classList?.add('mod-cta');newThreadButton?.focus();}
             logEvent('ui.destination.checked',{notePath:this.host.getNotePath(),elapsedMs:Date.now()-started,unavailable:destination.unavailable,threadId:destination.threadId});
             if(destination.unavailable){const retry=detail.createEl('button',{text:'Retry'});retry.addEventListener('click',()=>{if(this.field)this.prompt=this.field.value;this.cancelCheck();this.onOpen();});}
           }
@@ -148,6 +152,7 @@ class SendDestinationModal extends NoteTabPanel {
       }
     });
     this.actions.addButton(button=>{
+      newThreadButton=button.buttonEl;
       button.setButtonText('New thread');
       if(!defaultButton){defaultButton=button.buttonEl;button.setCta();}
       button.onClick(()=>this.choose('new'));
@@ -185,6 +190,7 @@ class SendDestinationModal extends NoteTabPanel {
       const destination=target==='default'?checked:undefined;
       if(!this.opened||revision!==this.revision)return;
       if(destination?.unavailable)throw new RequestDeliveryError(destination.detail??'This conversation is unavailable. Choose another thread.',false);
+      if(destination?.empty){new Notice('Nothing new to send.');return;}
       this.close();
       if(target==='existing')await this.host.sendToExisting(prompt,this.projectKey,resolve,returnToDraft);
       else if(target==='new')await this.host.sendToNew(prompt,this.projectKey,resolve);
@@ -199,12 +205,15 @@ class SendDestinationModal extends NoteTabPanel {
 }
 
 /** Resolve the same default as the selector, without creating a panel. */
-async function sendDefault(host:ChatHost,prompt:string):Promise<void>{
+async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
   const send=async()=>{
     const key=host.getDefaultProjectKey?.();
     const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false});
     const resolve=()=>options;
-    if(!host.getDefaultThread(key)&&!host.steering){await host.sendToNew(prompt,key,resolve);return;}
+    if(!host.getDefaultThread(key)&&!host.steering){
+      if(host.hasNewContent&&!await host.hasNewContent({label:'New thread',projectKey:key},prompt)){new SendDestinationModal(app,host,prompt).open();return;}
+      await host.sendToNew(prompt,key,resolve);return;
+    }
     let destination:ChatDestination|undefined;
     if(host.getDefaultDestination){
       const controller=new AbortController();
@@ -212,6 +221,7 @@ async function sendDefault(host:ChatHost,prompt:string):Promise<void>{
       try{destination=await abortableRead(host.getDefaultDestination(key,controller.signal),controller.signal);}
       finally{clearTimeout(timer);}
       if(destination.unavailable)throw new RequestDeliveryError(destination.detail??'This conversation is unavailable. Hold Control and send again to choose another thread.',false);
+      if(host.hasNewContent&&!await host.hasNewContent(destination,prompt)){new SendDestinationModal(app,host,prompt).open();return;}
     }
     await host.sendChat(prompt,key,resolve,undefined,destination);
   };
@@ -228,10 +238,28 @@ async function sendDefault(host:ChatHost,prompt:string):Promise<void>{
 /** Both entry points preserve the note captured when the action was activated. */
 export async function openChatFlow(app:App,host:ChatHost,prompt?:string,showSelector=false):Promise<void>{
   if(prompt!==undefined&&!prompt.trim())return;
-  if(prompt!==undefined&&!showSelector)return sendDefault(host,prompt);
+  if(prompt!==undefined&&!showSelector)return sendDefault(app,host,prompt);
   const modal=new SendDestinationModal(app,host,prompt);modal.open();await modal.ready;
 }
 export async function openNoteSendFlow(app:App,host:ChatHost,showSelector=false):Promise<void>{
   if(showSelector){new SendDestinationModal(app,host,'').open();return;}
-  await sendDefault(host,'');
+  await sendDefault(app,host,'');
+}
+
+/** The command bar remains a direct Ask surface. */
+export class AskComposer extends NoteTabPanel {
+  private field?:HTMLTextAreaElement;
+  private sending=false;
+  constructor(app:App,path:string,private draft:string,private saveDraft:(text:string)=>void,private submit:(text:string,choose:boolean)=>Promise<void>){super(app,path);}
+  onOpen(){
+    this.titleEl.setText('Ask agent');this.titleEl.hidden=true;this.contentEl.empty();this.modalEl?.classList.add('send-to-t3-ask-composer');
+    this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Ask agent',placeholder:'Ask agent…',rows:'3'}});this.field.value=this.draft;
+    this.field.addEventListener('input',()=>{this.draft=this.field!.value;this.saveDraft(this.draft);});
+    this.field.addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.isComposing){event.preventDefault();void this.send(false);}});
+    const actions=this.contentEl.createEl('div',{cls:'send-to-t3-ask-actions'});
+    actions.createEl('button',{text:'Choose destination…'}).addEventListener('click',()=>void this.send(true));
+    actions.createEl('button',{text:'Send',cls:'mod-cta'}).addEventListener('click',()=>void this.send(false));this.field.focus();
+  }
+  onClose(){if(this.field){this.draft=this.field.value;this.saveDraft(this.draft);}}
+  private async send(choose:boolean){if(this.sending||!this.field?.value.trim())return;this.sending=true;this.draft=this.field.value;this.close();try{await this.submit(this.draft,choose);}catch(error){new Notice(error instanceof Error?error.message:String(error));this.open();}finally{this.sending=false;}}
 }

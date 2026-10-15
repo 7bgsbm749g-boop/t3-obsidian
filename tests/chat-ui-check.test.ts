@@ -5,7 +5,7 @@ import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
 const compiled=build({entryPoints:['chat-ui.ts'],bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
-async function fixture(alternative?:string,closeImmediately=false,initialBusy=false,automatic=false,remembered=true){
+async function fixture(alternative?:string,closeImmediately=false,initialBusy=false,automatic=false,remembered=true,hasContent?:boolean){
  const modals:any[]=[];
  class Element{value='';text='';style:any={};disabled=false;isConnected=true;children:any[]=[];events:any={};empty(){this.children=[];}setText(t:string){this.text=t;}focus(){}addEventListener(n:string,f:any){this.events[n]=f;}createEl(_tag:string,o:any={}){const el=new Element();el.text=o.text??'';this.children.push(el);return el;}}
  class Modal{titleEl=new Element();contentEl=new Element();constructor(public app:any){}open(){modals.push(this);(this as any).onOpen?.();}close(){(this as any).onClose?.();}setPlaceholder(){}}
@@ -13,9 +13,9 @@ async function fixture(alternative?:string,closeImmediately=false,initialBusy=fa
  const module:any={exports:{}},notices:string[]=[],calls:Array<{key?:string;signal:AbortSignal;resolve:(v:any)=>void}>=[],sent:any[]=[];
  runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal,FuzzySuggestModal:Modal,Setting,Notice:class{constructor(t:string){notices.push(t);}}}:require(id),setTimeout:(fn:any,ms:number)=>setTimeout(fn,ms===5000?30:ms),clearTimeout,performance,AbortController,DOMException,Event,URL,URLSearchParams,Buffer});
  let busy=initialBusy;const busyListeners=new Set<()=>void>();
- const host={get busy(){return busy;},onBusyChange:(listener:()=>void)=>{busyListeners.add(listener);return ()=>busyListeners.delete(listener);},steering:remembered,getNotePath:()=> 'Synthetic.md',getDefaultProjectKey:()=> 'project',getAlternativeProjectKey:()=>alternative,getProjectName:()=> 'Synthetic',getTargetDescription:()=> 'Synthetic',getProjectChoices:()=>[],getDefaultThread:()=>remembered?'thread':undefined,getDefaultDestination:(key:string|undefined,signal:AbortSignal)=>new Promise(resolve=>{calls.push({key,signal,resolve});}),sendChat:async(_p:any,key:any,_r:any,_b:any,d:any)=>{sent.push({target:'default',key,d});},sendToNew:async(_p:any,key:any)=>{sent.push({target:'new',key});},sendToExisting:async(_p:any,key:any)=>{sent.push({target:'existing',key});}};
+ const host={hasNewContent:hasContent===undefined?undefined:async()=>hasContent,get busy(){return busy;},onBusyChange:(listener:()=>void)=>{busyListeners.add(listener);return ()=>busyListeners.delete(listener);},steering:remembered,getNotePath:()=> 'Synthetic.md',getDefaultProjectKey:()=> 'project',getAlternativeProjectKey:()=>alternative,getProjectName:()=> 'Synthetic',getTargetDescription:()=> 'Synthetic',getProjectChoices:()=>[],getDefaultThread:()=>remembered?'thread':undefined,getDefaultDestination:(key:string|undefined,signal:AbortSignal)=>new Promise(resolve=>{calls.push({key,signal,resolve});}),sendChat:async(_p:any,key:any,_r:any,_b:any,d:any)=>{sent.push({target:'default',key,d});},sendToNew:async(_p:any,key:any)=>{sent.push({target:'new',key});},sendToExisting:async(_p:any,key:any)=>{sent.push({target:'existing',key});}};
  const opening=module.exports.openNoteSendFlow({},host,!automatic);if(closeImmediately)modals[0].close();await Promise.resolve();
- return {opening,modals,modal:modals[0],calls,sent,notices,busyListeners,setBusy:(value:boolean)=>{busy=value;for(const listener of busyListeners)listener();}};
+ return {exports:module.exports,host,opening,modals,modal:modals[0],calls,sent,notices,busyListeners,setBusy:(value:boolean)=>{busy=value;for(const listener of busyListeners)listener();}};
 }
 test('same project redraw coalesces one pending check and obsolete UI cannot update the new project',async()=>{
  const h=await fixture();h.modal.onOpen();await Promise.resolve();assert.equal(h.calls.length,1);
@@ -95,4 +95,29 @@ test('an unavailable or timed-out automatic default sends nothing and never fall
  const timeout=await fixture(undefined,false,false,true);await timeout.opening;
  assert.equal(timeout.sent.length,0);assert.equal(timeout.calls[0].signal.aborted,true);assert.match(timeout.notices[0],/took too long/);
  timeout.calls[0].resolve({label:'Late thread',threadId:'late'});await Promise.resolve();assert.equal(timeout.sent.length,0);
+});
+
+
+test('an unchanged automatic send opens the selector and removes the previous-thread action',async()=>{
+ const h=await fixture(undefined,false,false,true,true,false);
+ h.calls[0].resolve({label:'Continue thread',threadId:'checked',projectKey:'project'});await h.opening;
+ assert.equal(h.modals.length,1);assert.equal(h.sent.length,0);assert.deepEqual(h.notices,[]);
+ h.calls[1].resolve({label:'Continue thread',threadId:'checked',projectKey:'project'});await h.modals[0].ready;
+ assert.equal(h.modals[0].defaultButton.hidden,true);
+ const buttons=h.modals[0].actions.buttons.filter((button:any)=>!button.buttonEl.hidden).map((button:any)=>button.buttonEl.text);
+ assert.deepEqual(Array.from(buttons),['New thread','Existing thread…']);
+ await h.modals[0].choose('default');assert.deepEqual(h.notices,['Nothing new to send.']);assert.equal(h.sent.length,0);h.modals[0].close();
+});
+test('an unchanged selector still allows a new destination and typed Ask retains its draft',async()=>{
+ const h=await fixture(undefined,false,false,false,true,false);h.calls[0].resolve({label:'Continue thread',threadId:'checked',projectKey:'project'});await h.modal.ready;
+ await h.modal.choose('new');assert.deepEqual(h.sent,[{target:'new',key:'project'}]);
+ const saved:string[]=[],submitted:any[]=[];
+ const composer=new h.exports.AskComposer({},'Synthetic.md','Saved question',(text:string)=>saved.push(text),async(text:string,choose:boolean)=>{submitted.push({text,choose});});
+ composer.open();assert.equal(composer.titleEl.hidden,true);assert.equal(composer.field.value,'Saved question');
+ composer.field.value='Another question';composer.field.events.input();await composer.send(true);
+ assert.deepEqual(submitted,[{text:'Another question',choose:true}]);assert.ok(saved.includes('Another question'));
+});
+test('a note with no source also opens only New and Existing when no previous thread exists',async()=>{
+ const h=await fixture(undefined,false,false,true,false,false);await h.opening;
+ assert.equal(h.modals.length,1);assert.equal(h.calls.length,0);assert.equal(h.sent.length,0);assert.equal(h.modals[0].defaultButton,undefined);h.modals[0].close();
 });

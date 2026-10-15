@@ -125,6 +125,7 @@ export class LocalResponseManager {
       if(!range){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);return;}
       if(range.request.threadId!==runtime.request.threadId||(range.request.localMessageId??range.request.messageId)!==update.messageId)return;
       const body=await this.io.localFinalBody?.(update)??update.body;
+      await this.io.rememberResponse?.(runtime.request,body,document.slice(0,range.from),document.slice(range.to),range.from);
       if(this.closed||runtime.stopped||runtime.update!==update||runtime.request.notePath!==path||this.io.syncReady?.()===false||JSON.stringify(this.range(document,runtime.request.id)?.request)!==JSON.stringify(range.request))return;
       const after=document.slice(0,range.from)+body+document.slice(range.to);
       const expected=JSON.stringify(range.request),guard=()=>!this.closed&&!runtime.stopped&&runtime.update===update&&this.io.syncReady?.()!==false&&JSON.stringify(this.range(document,runtime.request.id)?.request)===expected;
@@ -151,6 +152,7 @@ export class LocalResponseManager {
     await runtime.work;if(runtime.done)return;
     const path=runtime.request.notePath,current=await this.notes.read(path);if(current===undefined)throw Error('The frozen response note is unavailable.');
     const range=this.range(current,runtime.request.id);
+    if(range)await this.io.rememberResponse?.(runtime.request,body,current.slice(0,range.from),current.slice(range.to),range.from);
     if(range&&!await this.notes.compareAndSet(path,current,current.slice(0,range.from)+body+current.slice(range.to)))throw Error('The frozen response is waiting for its local save.');
     runtime.done=true;this.io.localCompleted?.(runtime.request.id,path);
   }

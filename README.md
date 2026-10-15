@@ -16,9 +16,9 @@ Project media discovery and resource renewal run when media is rendered. Ordinar
 
 Connection retries keep the normal live response display and the latest received text. Restored replies do not show a reconnect banner. Automatic recovery continues in the background.
 
-Large tool groups use small summaries in Live Preview. Open a group to load its complete output. The saved note, sends, selection context, and recovery records keep the full output. Source mode shows the full saved Markdown. The editor rejects changes that would save a summary without its original output.
+Large tool groups use small summaries in Live Preview. Open a group to load its complete output. The saved note and recovery records keep the full output. Smart Send excludes generated output from automatic note context. Source mode shows the full saved Markdown. The editor rejects changes that would save a summary without its original output.
 
-Questions and Ask/Send open in a rectangular panel at the bottom of the current note tab. The panel covers the note content, uses Obsidian's theme and controls, scrolls within the tab, and closes on Escape or when you switch notes or tabs. Workspaces without an open note use the standard Obsidian modal.
+Questions and destination choices open in a panel at the bottom of the current note tab. Ask agent opens a separate rounded composer there. The panel covers the note content, uses Obsidian's theme and controls, scrolls within the tab, and closes on Escape or when you switch notes or tabs. Workspaces without an open note use the standard Obsidian modal.
 
 Thread selection reads current control state without downloading tool output. The selected-thread check has a five-second limit, supports Retry, and stops when the panel closes. You can click the previous-thread action immediately; the send waits for that exact check. New thread and Existing thread remain available during the check. Sending still checks the current project, turn, approval, and input state.
 
@@ -313,7 +313,13 @@ Shared preferences use a field-level three-way merge against the last adopted sn
 
 ### Sending notes into linked projects
 
-**Open in T3 Code** sends the whole note to its previous thread, or to a new thread in its default project when there is no previous thread. Hold Control while activating it to open the compact project/thread selector, with **New thread** and **Existing thread…** choices. Mobile also has an explicit **Open in T3 Code: choose destination…** action. The existing-thread option loads a searchable list of that project’s unarchived threads, newest first, with each thread labelled **Active** or **Idle**. All three thread actions use the displayed project; when there is no remembered project, nested links take precedence. The command palette uses the same automatic default and Control-to-select behavior for every note. Browsing existing threads for a new folder project does not create it; if no project exists yet, use New thread. A missing linked project reports an error instead of rerouting the note.
+**Send to agent** uses Smart Send for every note. It sends only text added since confirmed delivery to that particular thread, in note order. Deleted text produces no message or change label. Agent replies, generated history, and input echoes are excluded. A selection limits the source to that selection. A different or new thread has its own sent-text record. Hold Control while activating it to open the compact project/thread selector, with **New thread** and **Existing thread…** choices. Mobile also has an explicit **Send to agent: choose destination…** action. The existing-thread option loads a searchable list of that project’s unarchived threads, newest first, with each thread labelled **Active** or **Idle**. All three thread actions use the displayed project; when there is no remembered project, nested links take precedence. The command palette uses the same automatic default and Control-to-select behavior for every note. Browsing existing threads for a new folder project does not create it; if no project exists yet, use New thread. A missing linked project reports an error instead of rerouting the note.
+
+**Ask agent…** opens a wide rounded composer at the bottom of the note. The editor menu captures the selection; the note menu uses the current note. The command bar remains a direct Ask surface: type a question and submit as before. All Ask surfaces use the same Smart Send record for their accompanying source. Your typed question always sends, including repeated questions. The old floating mobile selection action is removed.
+
+If the previous thread has no new source and there is no typed question, normal Send opens the project/thread selector with only **New thread** and **Existing thread…**. The previous/continue action is hidden. Choosing a thread that also has no new text shows **Nothing new to send** and sends nothing.
+
+Smart Send is the normal send flow; there is no beta switch. Tracking and compressed response text live in the plugin’s synced `data.json`, with a device-local replica. Completed notes receive no new hidden boundaries. Each response body is stored once by its content hash; large bodies and current source snapshots use gzip when that reduces size. Confirmed records merge independently, so concurrent device records are retained. Sync does not serialize simultaneous sends on different devices.
 
 ### Previous thread
 
@@ -323,7 +329,7 @@ Thread history syncs in plugin settings and contains note paths, project destina
 
 Existing history and requests saved under the former note-thread-link terminology remain usable. Older sends without a unique recorded note path cannot be identified reliably by title alone. The plugin recovers a remembered destination from a confirmed completion job when its note and project still exist. Folder linking remains separate and continues to supply the default project.
 
-Both choices send the full Markdown and embedded images. Existing-thread sends preserve its model, runtime permissions and interaction mode. An idle thread starts another turn; a running thread receives input through T3’s steering behavior. Resolve pending approvals or structured input in T3 before sending another note. Retries reuse the original thread and message IDs without creating a new thread. Every confirmed manual note send keeps the note and supersedes any older cleanup job for it.
+Each destination receives only its unsent source and the images embedded in that source or your typed question. Existing-thread sends preserve its model, runtime permissions and interaction mode. An idle thread starts another turn; a running thread receives input through T3’s steering behavior. Resolve pending approvals or structured input in T3 before sending another note. Retries reuse the original thread and message IDs without creating a new thread. Every confirmed manual note send keeps the note and supersedes any older cleanup job for it.
 
 **Settings → Send to T3 Code → Threads → Settle completed threads** is on by default. After a successful Obsidian turn, the plugin moves its T3 thread from the active list to the Settled shelf. A streamed answer must finish saving into its note first. Checks run every 30 seconds while the sending Obsidian client is open and resume after a restart. Pending approval, requested input, live background work, failed or interrupted turns, and turns superseded by later activity do not trigger settlement. Only threads sent by this plugin are affected. A later send to the same settled thread automatically wakes it and preserves the note’s remembered destination. Turning the setting off cancels pending settle checks; later sends remain active. Settling does not archive or delete the thread.
 
@@ -695,10 +701,11 @@ The current activity dropdown sits at the bottom inside the progress box and use
 
 ### Selected requests
 
-Ask T3 Code sends the captured selection and any question you type. It does not
-add surrounding note text or open a preceding-context review. To send more
-context, include it in your selection or send the whole note. Embedded images
-in the selected text use the normal attachment pipeline.
+Send to agent submits only the unsent part of the captured selection. Ask agent
+opens the composer and sends your question with the unsent selected source.
+Neither action expands the selection or opens a preceding-context review.
+The command bar keeps its direct typed-question behavior and uses the same
+source tracking. Embedded images use the normal attachment pipeline.
 
 ### Native coordinated responses
 

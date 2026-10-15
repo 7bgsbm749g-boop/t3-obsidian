@@ -432,7 +432,7 @@ export function tableRowAt(text:string,offset:number):boolean {
   return false;
 }
 
-function quoteResponse(text:string):string {
+export function quoteResponse(text:string):string {
   const lines=escapeReplyHtml(text).split('\n'),modes=responseModes(lines);
   const segments:Array<{mode:'quote'|'raw'|'table';lines:string[]}>=[];
   for(let index=0;index<lines.length;index++){

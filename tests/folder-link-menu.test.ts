@@ -1,3 +1,4 @@
+import {rememberResponse} from '../smart-send';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -183,7 +184,7 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
     h.plugin.app.vault.read=async()=> '# Test note';
     const sent:any[]=[];h.plugin.send=async(file:any,project:any,options:any)=>{sent.push({file,project,options});};
     const {menu,file}=h.fileMenu('Notes/Inner/note.md',mobile);
-    const item=menu.items.find(item=>item.title==='Open in T3 Code');assert.ok(item);
+    const item=menu.items.find(item=>item.title==='Send to agent');assert.ok(item);
     await item.callback({ctrlKey:true});
     const choices=h.modals.at(-1);assert.ok(choices);
     assert.equal(choices.constructor.name,'SendDestinationModal');
@@ -397,4 +398,28 @@ test('switching machines clears a prepared new folder and search',async()=>{
     assert.equal(h.setting(modal,'Workspace location').controls[0].value,'~');assert.equal(h.setting(modal,'Search folders').controls[0].value,'');
     assert.ok(!modal.contentEl.children.some((el:any)=>el.text==='This folder will be created when you select Create and link.'));modal.close();
   }finally{h.plugin.onunload();}
+});
+
+
+test('whole-note sends, command-bar asks and confirmed receipts use one Smart Send history',async()=>{
+ const h=await folderMenuHarness();
+ try{
+  const {file}=h.fileMenu('Notes/Smart.md',false);Object.assign(file,{basename:'Smart',stat:{ctime:123}});
+  let document='First instruction.';const sent:any[]=[];
+  h.plugin.app.vault.read=async()=>document;h.plugin.app.vault.getFileByPath=()=>file;
+  h.plugin.settings.autoSettleThreads=false;h.plugin.settings.inlineStreaming.enabled=false;
+  h.plugin.settings.folderLinks=[{id:'link',folderPath:'Notes',connectionId:'c',environmentId:'env',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot}];
+  h.plugin.requestTitle=async()=> 'Smart';
+  h.plugin.readChatThread=async()=>({id:'smart-thread',projectId:h.project.id,title:'Smart',session:{status:'ready',activeTurnId:null},latestTurn:{state:'completed'}});
+  h.plugin.dispatch=async(request:any)=>{sent.push(request);h.plugin.rememberStarted(request,'smart-thread');await h.plugin.save();return 'smart-thread';};
+  await h.plugin.send(file,h.project,{streamReply:false,throwOnError:true});assert.equal(sent.length,1);assert.match(sent[0].prompt,/First instruction/);
+  const response='Agent final answer.';await rememberResponse(h.plugin.smartData(),file.path,'reply',response,'First instruction.\n','',19);
+  document+='\n'+response+'\nSecond instruction.';
+  await h.plugin.send(file,h.project,{streamReply:false,throwOnError:true});assert.equal(sent.length,2);assert.match(sent[1].prompt,/Second instruction/);assert.doesNotMatch(sent[1].prompt,/First instruction|Agent final/);
+  await h.plugin.send(file,h.project,{streamReply:false,throwOnError:true});assert.equal(sent.length,2);assert.ok(h.notices.includes('Nothing new to send.'));
+  const editor={getValue:()=>document,getSelection:()=>'',getCursor:()=>({line:0,ch:0}),posToOffset:()=>0},view={file,editor};
+  h.plugin.app.workspace.getActiveViewOfType=()=>view;
+  await h.plugin.openManualAction(file,'Why?', '',{editor,view},false);
+  assert.equal(sent.length,3);assert.match(sent[2].prompt,/Question:\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Second instruction|Agent final/);
+ }finally{h.plugin.onunload();}
 });
