@@ -1,5 +1,10 @@
 import {relativeCodebasePath,type CodebaseScope} from './codebase-core';
 
+export function projectMarkdownLink(scope:CodebaseScope,path:string,name:string){
+  const target=encodeURI(scope.root.replace(/\\/g,'/').replace(/\/$/,'')+'/'+path).replace(/[?#]/g,value=>encodeURIComponent(value));
+  return `[${name.replace(/[\\[\]]/g,value=>'\\'+value)}](<${target}>)`;
+}
+
 /** Parse a local reference without changing the text stored in the note. */
 export function projectLink(value:string){
   let path=value.replace(/^sandbox:/,'');

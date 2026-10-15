@@ -1,8 +1,16 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {projectLink,projectPathRoutes} from '../codebase-links';
+import {projectLink,projectMarkdownLink,projectPathRoutes} from '../codebase-links';
+import {replyReferences} from '../reply-assets';
 const main={environmentId:'a',projectId:'p',title:'Project',root:'/home/ubuntu/projects/code'};
 const worktree={...main,root:'/home/ubuntu/worktrees/code',threadId:'thread'};
+test('copied project Markdown links round-trip exact paths without using wiki syntax',()=>{
+ for(const scope of [main,worktree,{...main,root:'C:\\Projects\\Code'}]){
+  const path='docs/a [b] (c)#d?e%.md',name='a [b] (c)#d?e%.md',markdown=projectMarkdownLink(scope,path,name),references=replyReferences(markdown);
+  assert.equal(markdown.startsWith('[['),false);assert.equal(references.length,1);assert.equal(references[0].label,name);
+  assert.deepEqual(projectPathRoutes(references[0].source,[scope]).matches,[{scope,path}]);
+ }
+});
 test('exact absolute paths, slashless Obsidian paths and file URLs resolve without rewriting',()=>{
  for(const value of ['/home/ubuntu/projects/code/docs/a.md','home/ubuntu/projects/code/docs/a.md','file:///home/ubuntu/projects/code/docs/a.md','sandbox:/home/ubuntu/projects/code/docs/a.md'])assert.deepEqual(projectPathRoutes(value,[main,worktree]).matches,[{scope:main,path:'docs/a.md'}]);
  assert.deepEqual(projectPathRoutes(worktree.root+'/a.ts',[main,worktree]).matches,[{scope:worktree,path:'a.ts'}]);
