@@ -421,5 +421,11 @@ test('whole-note sends, command-bar asks and confirmed receipts use one Smart Se
   h.plugin.app.workspace.getActiveViewOfType=()=>view;
   await h.plugin.openManualAction(file,'Why?', '',{editor,view},false);
   assert.equal(sent.length,3);assert.match(sent[2].prompt,/Question:\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Second instruction|Agent final/);
+  const selected='First instruction.',firstAnchor={text:selected,start:0,end:selected.length,before:'',after:document.slice(selected.length,selected.length+80)};
+  await h.plugin.openManualAction(file,'Which passage?',selected,{editor,view,anchor:firstAnchor,canonicalAnchor:firstAnchor,snapshot:document},false);
+  assert.equal(sent.length,4);assert.match(sent[3].prompt,/Selection reference: First instruction\./);assert.doesNotMatch(sent[3].prompt,/Second instruction|Agent final/);
+  const start=document.indexOf(response),replyAnchor={text:response,start,end:start+response.length,before:document.slice(Math.max(0,start-80),start),after:document.slice(start+response.length,start+response.length+80)};
+  await h.plugin.openManualAction(file,'Explain this reply.',response,{editor,view,anchor:replyAnchor,canonicalAnchor:replyAnchor,snapshot:document},false);
+  assert.equal(sent.length,5);assert.match(sent[4].prompt,/Selected text:\nAgent final answer\./);assert.doesNotMatch(sent[4].prompt,/First instruction|Second instruction/);
  }finally{h.plugin.onunload();}
 });

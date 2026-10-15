@@ -1,4 +1,4 @@
-import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,rememberResponse,confirmSmartSend,moveSmartNotes,type SmartSendData,type SmartCapture,type Span} from './smart-send';
+import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,rememberResponse,confirmSmartSend,moveSmartNotes,sourceProjection,smartNote,type SmartSendData,type SmartCapture,type Span} from './smart-send';
 import {retainedLocalFinal,restoredLocalFinal} from './local-final-cache';
 import {HtmlResultStore} from './html-result-store';
 import {HtmlResultViews} from './html-result-view';
@@ -1280,6 +1280,12 @@ export default class SendToT3 extends Plugin {
       let scope:Span|undefined=anchor?[anchor.start,anchor.end]:undefined;
       if(selected&&!scope){const from=document.indexOf(selection);if(from<0||document.lastIndexOf(selection)!==from)throw Error('The selected text changed. Select it again before sending.');scope=[from,from+selection.length];}
       context={...context!,smartDocument:document,smartScope:scope,smartQuestion:prompt};
+      if(scope&&prompt.trim()&&!context.referenceSelection){
+        await this.recoverSmartReplies(file.path,document);
+        const data=this.smartData(),projection=await sourceProjection(data,smartNote(data,file.path),document);
+        const ordinary=projection.segments.reduce((sum,segment)=>sum+Math.max(0,Math.min(scope![1],segment.rawTo)-Math.max(scope![0],segment.rawFrom)),0);
+        if(ordinary<scope[1]-scope[0])context.referenceSelection=true;
+      }
     }else if(selected)throw Error('Open the source note before sending its selection.');
     const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\nQuestion:\n${prompt}`:selected?canonicalSelected:prompt;
     return this.openChatWithNote(this.noteContext(file),question,context,true,showSelector);
@@ -1789,7 +1795,9 @@ export default class SendToT3 extends Plugin {
         const plan=await prepareSmartSend(this.smartData(),note.path,await this.smartKey(project,connection,threadId??''),context.smartDocument!,context.smartScope);
         const question=context.smartQuestion??'';
         const reference=context.referenceSelection?context.canonicalAnchor?.text??context.anchor?.text:'';
-        const material=reference||plan.text;
+        const selected=context.canonicalAnchor?.text??context.anchor?.text??(context.smartScope?context.smartDocument!.slice(...context.smartScope):'');
+        const selectionReference=!reference&&!plan.text.trim()&&question.trim()&&selected?`Selection reference: ${selected.slice(0,160)}${selected.length>160?'…':''}`:'';
+        const material=reference?`Selected text:\n${reference}`:plan.text||selectionReference;
         if(!material.trim()&&!question.trim()){new Notice('Nothing new to send.');return;}
         const instruction=prompt.endsWith(INLINE_REPLY_INSTRUCTION)?INLINE_REPLY_INSTRUCTION:THREAD_REPLY_INSTRUCTION;
         prompt=[material,question.trim()?`Question:\n${question}`:'',instruction].filter(Boolean).join('\n\n');smartCapture=plan.capture;

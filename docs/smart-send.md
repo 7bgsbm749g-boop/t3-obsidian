@@ -16,7 +16,10 @@ Unchanged lines map coverage to the current note, with common prefixes and
 suffixes inside changed intervals. Repeated lines retain occurrence counts.
 Explicit selections cover only their requested intervals. New destinations
 start with no coverage. Typed questions always send independently of source
-coverage. No new source for the default destination opens the selector and
+coverage. An Ask about already delivered selected source includes a bounded
+160-character reference. An explicitly selected generated reply remains
+available as quoted Ask context, including when choosing another thread.
+No new source for the default destination opens the selector and
 hides its previous/continue action; an explicit empty submission shows the
 short no-content notice.
 
