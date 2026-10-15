@@ -123,7 +123,16 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     // turnLimit/reasoningMessages were v1 query options. V2 full reads are
     // authoritative; bounded/history endpoints use opaque v2 paging cursors.
     if(/^\/api\/orchestration\/threads\/[^/?]+(?:\?|$)/.test(path)){
-      const root=path.split('?')[0],query=new URLSearchParams(path.split('?')[1]),controlOnly=query.get('controlOnly')==='true',importOnly=query.get('importRuns')==='true',importRunId=query.get('importRunId'),snapshot=restoreCompactSnapshot(await request(root+'/bounded?compactTurnItems=1',payload));
+      const root=path.split('?')[0],query=new URLSearchParams(path.split('?')[1]),controlOnly=query.get('controlOnly')==='true',importOnly=query.get('importRuns')==='true',importRunId=query.get('importRunId');
+      if(importOnly){
+        // The bounded projection retains only recent runs. History pages carry
+        // conversation items, not the missing run rows. The canonical thread
+        // projection is the supported API for the complete run/prompt index.
+        const full=await request(root,payload),p=full?.projection;
+        requestAborted(options?.signal);
+        return normalizeV2Snapshot(p?{...full,hasMoreHistory:false,projection:{...p,turnItems:[],visibleTurnItems:[]}}:full);
+      }
+      const snapshot=restoreCompactSnapshot(await request(root+'/bounded?compactTurnItems=1',payload));
       requestAborted(options?.signal);
       if(controlOnly){
         if(!snapshot?.projection)return normalizeV2Snapshot(snapshot);
@@ -134,17 +143,17 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         normalized.thread.hasPendingApprovals||=pending.some((item:any)=>!['user_input','user-input'].includes(item.kind));
         return normalized;
       }
-      if(!snapshot?.projection||path.includes('turnLimit=')&&!importRunId)return normalizeV2Snapshot(importOnly?snapshot:await hydrate(snapshot));
+      if(!snapshot?.projection||path.includes('turnLimit=')&&!importRunId)return normalizeV2Snapshot(await hydrate(snapshot));
       // Full recovery follows opaque cursors rather than asking for one
       // unbounded HTTP body. Keep the initial control-plane watermark so live
       // events committed during pagination still replay after this snapshot.
       const conversation=(item:any)=>['user_message','assistant_message'].includes(item.type);
-      const needed=(item:any)=>importOnly?conversation(item):!importRunId||conversation(item)||item.runId===importRunId;
+      const needed=(item:any)=>!importRunId||conversation(item)||item.runId===importRunId;
       const rows=[...(snapshot.projection.visibleTurnItems??[])].filter(row=>needed(row.item));
       let cursor=snapshot.historyCursor,more=snapshot.hasMoreHistory===true,pages=0;
       while(more){
         if(!cursor||++pages>100)throw Error('T3 history exceeded its recovery page limit.');
-        const page=await raw(root+'/history?cursor='+encodeURIComponent(cursor)+(importOnly?'&view=conversation':''));
+        const page=await request(root+'/history?cursor='+encodeURIComponent(cursor));
         if(!Array.isArray(page.items))throw Error('T3 returned an invalid history page.');
         rows.unshift(...page.items.filter((row:any)=>needed(row.item)));cursor=page.nextCursor;more=page.hasMoreHistory===true;
       }
@@ -154,7 +163,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       for(const item of items.values())if(item.type==='user_message'||item.type==='assistant_message')messages.set(item.messageId,{id:item.messageId,threadId:p.thread.id,runId:item.runId,nodeId:item.nodeId,role:item.type==='user_message'?'user':'assistant',text:item.text,streaming:item.streaming===true,createdAt:item.startedAt??item.updatedAt,context:item.context,attachments:item.attachments??[],createdBy:item.createdBy,senderThreadId:item.senderThreadId});
       for(const message of p.messages)messages.set(message.id,message);
       const recovered={...snapshot,hasMoreHistory:false,projection:{...p,turnItems:[...items.values()].sort((a,b)=>a.ordinal-b.ordinal),messages:[...messages.values()].sort((a,b)=>(a.createdAt??'').localeCompare(b.createdAt??''))}};
-      return normalizeV2Snapshot(importOnly?recovered:await hydrate(recovered));
+      return normalizeV2Snapshot(await hydrate(recovered));
     }
     return normalizeV2Snapshot(await request(path,payload));
   };

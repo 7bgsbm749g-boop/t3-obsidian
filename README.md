@@ -4,6 +4,14 @@ One Obsidian plugin for desktop and mobile. Chat from the command palette, send 
 
 The plugin requires T3 Orchestrator v2 on each destination computer. Update T3 before connecting. Existing project, thread, and message IDs remain valid after T3's migration. T3 does not migrate old provider runs or pending approvals; those old controls cannot resume. New messages use the v2 delivery policy and keep the existing thread's permissions and model. See [Orchestrator v2 compatibility](docs/orchestrator-v2.md) for recovery and validation details.
 
+## Import and command performance
+
+Run imports read T3's canonical run/prompt records. They do not enumerate legacy response leases or send import requests through a host mailbox. The installed T3 API exposes its complete run list through the full thread projection; this metadata read does not hydrate tool details. A separate run-only endpoint would also reduce the initial network payload. The selected response uses the same local reply path as new sends. A small note-local import receipt prevents duplicate imports after completion, reload, rename, and Sync. Old duplicates use only the destination's index and exact route files.
+
+Desktop agent commands use an authenticated loopback HTTP endpoint. Its private endpoint descriptor and exact request/result receipts stay outside the vault. The plugin does not scan request history or execute old requests after startup. Retry the same UUID and input after a lost acknowledgement. `--retry` can retry a saved failure; successful receipts are replayed without executing again. A closed plugin does not accept or queue new commands. Legacy response maintenance must run on its desktop host. Updated laptop helpers use the same direct endpoint over private SSH.
+
+Project media discovery and resource renewal run when media is rendered. Ordinary `Vault.read` and `cachedRead` calls do not parse Markdown or search project files. The old full-note image parse cache is removed. Legacy host background discovery follows its active catalog after initial index recovery; completed history no longer receives periodic journal audits. Explicit maintenance retains access to saved records.
+
 ## Incoming messages and senders
 
 Connection retries keep the normal live response display and the latest received text. Restored replies do not show a reconnect banner. Automatic recovery continues in the background.
@@ -30,7 +38,7 @@ Stop has separate states for the local display, host acknowledgement, completed 
 
 Final saves retain their writer grant and exact output through a reload. Automatic recovery can replace an old save attempt only when the journal proves that it made no write. An uncertain old attempt needs review of the current saved note hash. Saves keep the native editor, multi-pane, rename, and Sync checks. Automated reload waits for ordinary edits, response recovery records, and final save operations.
 
-Thread snapshots always request T3's compact format. This removes duplicate timeline objects from the download; messages, reasoning, tool output and questions remain available. The plugin restores local timeline entries before it reads or displays them. The desktop host shares a live transcript for each thread instead of repeatedly downloading it while a reply runs. A cold connection and recovery can still read a compact snapshot.
+Live thread snapshots request T3's compact format. This removes duplicate timeline objects from the download; messages, reasoning, tool output and questions remain available. The plugin restores local timeline entries before it reads or displays them. The desktop host shares a live transcript for each thread instead of repeatedly downloading it while a reply runs. A cold connection and recovery can still read a compact snapshot.
 
 For T3 protocol 2, the exact run's completion event starts final delivery. The plugin reads its authoritative final item once and checks the thread/run/message IDs. Canonical text replaces the preview directly, with the intermediate history and final-answer layout retained. Healthy v2 streams do not repeatedly poll thread snapshots. Reconnect still recovers canonical state. A ready connection or replay-end marker does not prove completion.
 

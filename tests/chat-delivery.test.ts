@@ -1708,7 +1708,7 @@ test('mobile project creation uses the chosen external location and reuses its p
 test('import picker previews an existing run, cancellation preserves the note, and confirmation performs no dispatch',async()=>{
   const h=await chatHarness(),threadId=webcrypto.randomUUID(),messageId=webcrypto.randomUUID(),createdAt='2026-10-06T12:00:00Z';
   const thread={id:threadId,projectId:project.id,title:'UI import source',updatedAt:createdAt};
-  h.setThreads([thread]);h.setSnapshotOverride(id=>id===threadId?{thread:{...thread,messages:[{id:messageId,role:'user',text:'UI original prompt',createdAt,turnId:null,streaming:false},{id:'ui-answer',role:'assistant',text:'UI IMPORTED ANSWER',createdAt,turnId:'ui-turn',streaming:false}],activities:[],latestTurn:{turnId:'ui-turn',state:'completed',requestedAt:createdAt,assistantMessageId:'ui-answer'},session:{status:'ready',activeTurnId:null}}}:undefined);
+  h.setThreads([thread]);h.setSnapshotOverride(id=>id===threadId?{snapshotSequence:10,thread:{...thread,messages:[{id:messageId,role:'user',text:'UI original prompt',createdAt,turnId:null,streaming:false},{id:'ui-answer',role:'assistant',text:'UI IMPORTED ANSWER',createdAt,turnId:'ui-turn',streaming:false}],activities:[],latestTurn:{turnId:'ui-turn',state:'completed',requestedAt:createdAt,assistantMessageId:'ui-answer'},session:{status:'ready',activeTurnId:null}}}:undefined);
   const note=h.attachEditor('Notes/Import-UI.md','UI surrounding text');
   const choose=async()=>{
     const count=h.modals.length;h.plugin.openRunImport(note.file);
@@ -1725,7 +1725,7 @@ test('import picker previews an existing run, cancellation preserves the note, a
     assert.ok(h.registered.some(command=>command.id==='import-t3-run'&&command.checkCallback(true)));
     await choose();h.settingsControls.flatMap(control=>control.buttons).reverse().find(button=>button.text==='Cancel').click();assert.equal(note.value,'UI surrounding text');assert.equal(h.commands.length,0);
     await choose();h.settingsControls.flatMap(control=>control.buttons).reverse().find(button=>button.text==='Import response').click();
-    await waitForReply(()=>note.value.includes('UI IMPORTED ANSWER')&&!note.value.includes('t3-inline:start:'),'confirmed UI import finalized');
+    await waitForReply(()=>note.value.includes('UI IMPORTED ANSWER')&&!note.value.includes('t3-response-binding:'),'confirmed UI import finalized');
     assert.match(note.value,/UI surrounding text/);assert.equal(h.commands.length,0);
   }finally{h.plugin.onunload();}
 });
@@ -1744,9 +1744,9 @@ test('run import catches up a T3-created response and streams completion without
     await waitForReply(()=>note.value.includes('IMPORTED LIVE'),'existing T3 output caught up into an unrelated folder note');
     assert.equal(h.commands.length,0,'Import must never send a prompt or create a project');
     const repeated=await h.plugin.importRun(note.file.path,project,threadId,messageId);assert.equal(repeated.duplicate,true);
-    assert.equal((note.value.match(/t3-inline:start:/g)??[]).length,1);
+    assert.equal((note.value.match(/t3-response-binding:/g)??[]).length,1);
     finished=true;
-    await waitForReply(()=>note.value.includes('IMPORTED FINAL')&&!note.value.includes('t3-inline:start:'),'imported running response finalized');
+    await waitForReply(()=>note.value.includes('IMPORTED FINAL')&&!note.value.includes('t3-response-binding:'),'imported running response finalized');
     note.editor.replaceRange('\nLater user edit',note.editor.offsetToPos(note.value.length));
     h.plugin.onunload();restarted=await h.start();
     const again=await restarted.importRun(note.file.path,project,threadId,messageId);assert.equal(again.duplicate,true);
@@ -1764,27 +1764,27 @@ test('run import rejects unavailable associations and wrong source projects befo
   }finally{h.plugin.onunload();}
 });
 
-test('run import skips unrelated leases and recovers terminal evidence outside the active catalog without a duplicate',async()=>{
+test('run import reads only destination routes for legacy duplicates and never scans response bodies',async()=>{
   const h=await chatHarness(),threadId=webcrypto.randomUUID(),messageId=webcrypto.randomUUID(),createdAt='2026-10-06T10:00:00Z',id=webcrypto.randomUUID();
   const note=h.attachEditor('Notes/Already-imported.md','Existing saved answer');
   const host={environmentId:'chat-env',workspaceRoot:project.workspaceRoot,directory:'.obsidian/t3-code/inline/v1',connectionId:'chat-connection'};
   const request={version:4,id,vaultId:h.plugin.settings.vaultId,host,notePath:note.file.path,threadId,messageId,projectId:project.id,threadEnvironmentId:'chat-env',initialHash:contentHash('Existing saved answer'),createdAt,independent:true};
   const state={status:'complete',finalSaved:true,notePath:note.file.path,turnId:'old-run',bindingCheckpoint:{bindings:{[messageId]:{turnId:'old-run',kind:'explicit'}},turns:{'old-run':{turnId:'old-run',messageId,requestedAt:createdAt,state:'completed'}}}};
   h.hostFiles.set(leasePaths(host.directory,id).record,JSON.stringify({request,state}));
+  h.hostFiles.set(leasePaths(host.directory,id).route,JSON.stringify({version:1,id,vaultId:request.vaultId,notePath:request.notePath,threadId,projectId:project.id,threadEnvironmentId:'chat-env',messageId,turnId:'old-run',status:'complete'}));
   h.hostFiles.set(`${host.directory}/explorer-responses.json`,JSON.stringify([{id,notePath:note.file.path,epoch:1,revision:1,active:false,input:false,complete:true}]));
   const unrelated={...request,id:webcrypto.randomUUID(),threadId:webcrypto.randomUUID()};
   h.hostFiles.set(leasePaths(host.directory,'').catalog,JSON.stringify([unrelated]));
   h.hostFiles.set(leasePaths(host.directory,unrelated.id).record,'An unrelated large or unreadable lease must not block this picker.');
   h.hostFiles.set(`${host.directory}/requests/${unrelated.id}.json`,JSON.stringify(unrelated));
-  h.setSnapshotOverride(()=>({thread:{id:threadId,projectId:project.id,messages:[{id:messageId,role:'user',text:'Original',createdAt,turnId:null,streaming:false},{id:'old-answer',role:'assistant',text:'Existing saved answer',turnId:'old-run',createdAt,streaming:false},{id:'new',role:'user',text:'Later',createdAt:'2026-10-06T11:00:00Z',turnId:null,streaming:false}],activities:[],latestTurn:{turnId:'new-run',state:'running',requestedAt:'2026-10-06T11:00:00Z'},session:{status:'running',activeTurnId:'new-run'}}}));
+  h.setSnapshotOverride(()=>({thread:{id:threadId,projectId:project.id,messages:[{id:messageId,role:'user',text:'Original',createdAt,turnId:null,streaming:false},{id:'old-answer',role:'assistant',text:'Existing saved answer',turnId:'old-run',createdAt,streaming:false},{id:'new',role:'user',text:'Later',createdAt:'2026-10-06T11:00:00Z',turnId:null,streaming:false}],activities:[],turns:{'old-run':{turnId:'old-run',messageId,requestedAt:createdAt,state:'completed'}},latestTurn:{turnId:'new-run',state:'running',requestedAt:'2026-10-06T11:00:00Z'},session:{status:'running',activeTurnId:'new-run'}}}));
   try{
     const result=await h.plugin.importRun(note.file.path,project,threadId,messageId);assert.equal(result.duplicate,true);assert.equal(note.value,'Existing saved answer');assert.equal(h.commands.length,0);
     const open=h.plugin.inlineHostFiles.bind(h.plugin);let fullLeaseReads=0;
     h.plugin.inlineHostFiles=async(...args:any[])=>{const opened=await open(...args),read=opened.files.read;opened.files.read=async(path:string)=>{if(path===leasePaths(host.directory,id).record){fullLeaseReads++;throw Error(`T3 could not read the complete file: ${path}`);}return read(path);};return opened;};
-    h.plugin.inlineHostService={stop:()=>{},responseCommand:()=>{throw Error('The importing device is not the selected response host.');}};
+    h.plugin.inlineHostService={dispose:()=>{},responseCommand:()=>{throw Error('The importing device is not the selected response host.');}};
     h.platform.isMobile=false;h.plugin.app.vault.adapter.getFullPath=()=>project.workspaceRoot;h.plugin.localInlineEnvironment=async()=> 'other-device';
     const retried=await h.plugin.importRun(note.file.path,project,threadId,messageId);assert.equal(retried.duplicate,true);assert.equal(fullLeaseReads,0);assert.equal(note.value,'Existing saved answer');assert.equal(h.commands.length,0);
-    const evidence=await h.plugin.executeAgentCommand({version:1,id:webcrypto.randomUUID(),kind:'response-import-info',bindingId:id});assert.equal(evidence.importRecord.request.id,id);
     h.plugin.inlineHostService=undefined;
   }finally{h.plugin.onunload();}
 });

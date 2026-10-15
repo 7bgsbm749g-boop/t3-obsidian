@@ -3,14 +3,13 @@ import {CODEBASE_PREFIX,CodebaseDocument,codebaseRootLabels,contextualCandidates
 import {projectLink,projectPathRoutes} from './codebase-links';
 import {registerProjectReferences} from './project-reference';
 import type {FolderLink} from './folder-link';
-import {replyReferences,type ReplyReference} from './reply-assets';
+import type {ReplyReference} from './reply-assets';
 import type {HostedInlineRequest} from './hosted-inline';
 import type {ThreadAccess} from './thread-stream';
 import {CodebaseBrowseCache,type BrowseState} from './codebase-cache';
 import {CODEBASE_VIEW as VIEW,CodebaseView} from './codebase-view';
 import {timingSummaries} from './codebase-performance';
 import {NativeLanguageViews} from './language-views';
-import {EmbedReferenceCache} from './embed-reference-cache';
 import {contentHash} from './completion';
 export {CodebaseView} from './codebase-view';
 export interface CodebaseState {version:1;references:Record<string,SavedReference>;choices:Record<string,string>;automaticChoices?:Record<string,string[]>;vaultAliases?:Record<string,string>}
@@ -27,7 +26,6 @@ class FileChoice extends FuzzySuggestModal<RegisteredFile>{
   onClose(){super.onClose?.();setTimeout(()=>{if(!this.settled){this.settled=true;this.finish(undefined);}},0);}
 }
 export class CodebaseBridge {
-  private embedReferences=new EmbedReferenceCache();
   private files=new Map<string,RegisteredFile>();
   private folders=new Map<string,TFolder>();
   private undo:Array<()=>void>=[];
@@ -84,8 +82,8 @@ export class CodebaseBridge {
     this.nativePathLinks();
     for(const method of ['getFileByPath','getAbstractFileByPath'])this.patch(vault,method,(original:any)=>(path:string)=>this.files.get(path)?.file??this.files.get(this.legacyPaths[path])?.file??this.folders.get(path)??original(path)??this.vaultAlias(path)?.file??null);
     for(const method of ['read','cachedRead'])this.patch(vault,method,(original:any)=>async(file:TFile)=>{
-      const item=this.files.get(file.path);if(item){this.captureBases(item);await this.prepare(item);const before=item.document.base;item.text=await item.document.read();this.synchronizePeers(item,before,item.text);await this.prepareEmbeds(item.text,file.path);return item.text;}
-      const text=await original(file);void this.prepareEmbeds(text,file.path).then(changed=>{if(!changed)return;for(const leaf of workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===file.path)view.previewMode?.rerender(true);}});return text;
+      const item=this.files.get(file.path);if(item){this.captureBases(item);await this.prepare(item);const before=item.document.base;item.text=await item.document.read();this.synchronizePeers(item,before,item.text);return item.text;}
+      return original(file);
     });
     this.patch(vault,'modify',(original:any)=>async(file:TFile,text:string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,text,options);if(text===item.document.base)return;await this.prepare(item);const before=item.document.base,peers=this.editorLeaves().map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===file.path),matching=peers.filter(view=>this.viewText(view)===text),origins=peers.map(view=>({view,basis:this.viewBase(view,item)})).filter(({view,basis})=>{const native=view as MarkdownView&{lastSavedData?:string;saving?:unknown};return basis?.text===before&&!!native.saving&&native.data===text&&native.lastSavedData===text;});if(text===before)return;try{if(matching.some(view=>{const basis=this.viewBase(view,item);return basis&&basis.text!==before;})){item.document.uncertain=true;item.document.draft=text;this.retain(file.path,text);}await item.document.save(text);for(const {view,basis} of origins)if(view.file?.path===file.path&&this.viewBase(view,item)===basis)this.setViewBase(view,item,text);}catch(error){new Notice(`${error instanceof Error?error.message:String(error)} Use Review unsaved project edit to compare versions.`,10000);throw error;}item.text=text;this.synchronizePeers(item,before,text);file.stat.mtime=Date.now();file.stat.size=new TextEncoder().encode(text).length;});
     this.patch(vault,'process',(original:any)=>async(file:TFile,change:(text:string)=>string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,change,options);const text=change(await vault.read(file));await vault.modify(file,text);return text;});
@@ -270,15 +268,20 @@ export class CodebaseBridge {
   async list(scope:CodebaseScope,directory:string){await this.browse.load(scope,directory);const result=this.browse.get(scope,directory);if(!result)throw Error(this.browse.errors.get(JSON.stringify([scopeKey(scope),scope.root,directory]))??'The project folder is unavailable.');return result.entries;}
   private resource(item:RegisteredFile){if(this.stopped||!this.allowed(item.scope))return '';if(!item.resource||item.resource.expiresAt<Date.now()+5000){void this.prepare(item).catch(()=>{});return '';}return item.resource.url;}
   async prepare(item:RegisteredFile){if(this.stopped)throw Error('The project file bridge is stopped.');if(!this.allowed(item.scope))throw Error('This project is no longer linked to the vault.');if(MEDIA.test(item.path)&&(!item.resource||item.resource.expiresAt<Date.now()+60000)){if(!item.preparing){item.preparing=this.io.resource(item.scope,item.path).then(resource=>{if(this.stopped||!this.allowed(item.scope))throw Error('The project file is no longer available.');item.resource=resource;});void item.preparing.finally(()=>{item.preparing=undefined;}).catch(()=>{});}await item.preparing;}}
-  private async prepareEmbeds(text:string,source:string){
-    let changed=false;const refs=this.embedReferences.get(source,text).filter(r=>MEDIA.test(r.source.split('#')[0]));
-    for(const ref of refs){
-      try{let item=this.resolve(ref.source,source);if(!item&&!this.app.metadataCache.getFirstLinkpathDest(ref.source,source)){
-        const sourceItem=this.files.get(source);
-        if(sourceItem){const parts=sourceItem.path.split('/').slice(0,-1);for(const part of ref.source.split('#')[0].split('/')){if(part==='.')continue;if(part==='..'){if(!parts.length)throw Error('The image leaves the project.');parts.pop();}else parts.push(part);}item=this.register(sourceItem.scope,parts.join('/'));}
-        else if(!/^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(ref.source)){await this.search(ref.source,source);item=this.resolve(ref.source,source);}
-      }if(item){const before=item.resource?.url;await this.prepare(item);if(before!==item.resource?.url)changed=true;}}catch{/* Offline previews must not block note reading. */}
-    }return changed;
+  /** Only rendered media needs discovery or a signed resource. Vault reads
+   * remain free of Markdown parsing and background project searches. */
+  private async prepareRenderedEmbed(link:string,source:string){
+    if(this.stopped||!MEDIA.test(link.split('#')[0].split('?')[0]))return;
+    let item=this.resolve(link,source);
+    if(!item&&!this.app.metadataCache.getFirstLinkpathDest(link,source)){
+      const sourceItem=this.files.get(source);
+      if(sourceItem){
+        const parts=sourceItem.path.split('/').slice(0,-1);
+        for(const part of link.split('#')[0].split('/')){if(part==='.')continue;if(part==='..'){if(!parts.length)return;parts.pop();}else parts.push(part);}
+        item=this.register(sourceItem.scope,parts.join('/'));
+      }else if(!/^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(link)){await this.search(link,source);item=this.resolve(link,source);}
+    }
+    if(item){await this.prepare(item);return item;}
   }
 
   private fileCache(path:string){const text=this.files.get(path)?.text??'',headings:any[]=[];let offset=0;for(const [line,content] of text.split('\n').entries()){const match=/^(#{1,6})\s+(.+?)(?:\s+#+)?$/.exec(content);if(match)headings.push({heading:match[2],level:match[1].length,position:{start:{line,col:0,offset},end:{line,col:content.length,offset:offset+content.length}}});offset+=content.length+1;}return {headings};}
@@ -328,7 +331,42 @@ export class CodebaseBridge {
       const open=async()=>{const discovered=route.owned||await this.discoverWorkspaces();if(this.stopped)return;if(this.pathRoute(link,source).owned)await this.app.workspace.openLinkText(link,source,event.ctrlKey||event.metaKey);else if(!discovered||this.sourceOrigins.has(source)||this.files.has(source)){new Notice('Project locations are unavailable.');}else{replay.add(anchor);anchor.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:event.ctrlKey,metaKey:event.metaKey,shiftKey:event.shiftKey,altKey:event.altKey}));}};
       void open().catch(error=>new Notice(String(error),10000));
     },{capture:true});
-    this.plugin.registerMarkdownPostProcessor?.((el,context)=>{for(const image of Array.from(el.querySelectorAll('img[src]'))){const rendered=image.getAttribute('src');if(!rendered)continue;let link=rendered;if(/^app:\/\//i.test(link))try{const physicalRoot=this.app.vault.adapter.getResourcePath?.('').replace(/\/$/,'');if(physicalRoot&&(rendered===physicalRoot||rendered.startsWith(physicalRoot+'/')))continue;new URL(link);link=link.replace(/^app:\/\/[^/]+/i,'').split('?')[0];}catch{continue;}const prepare=async()=>{let route=this.pathRoute(link,context.sourcePath);if(/^app:\/\//i.test(rendered)&&!route.owned){const section=context.getSectionInfo?.(el);if(!section||!replyReferences(section.text).some(ref=>ref.image&&projectLink(ref.source)?.path===projectLink(link)?.path))return;}if(!route.owned&&this.absoluteReference(link)){const discovered=await this.discoverWorkspaces();route=this.pathRoute(link,context.sourcePath);if(!route.owned&&!discovered){if(!this.stopped){image.removeAttribute('src');image.setAttribute('alt','Project locations are unavailable.');}return;}}if(!route.owned||this.stopped)return;image.removeAttribute('src');const item=route.items.length===1?route.items[0]:undefined;if(item&&MEDIA.test(item.path))try{await this.prepare(item);if(!this.stopped&&this.allowed(item.scope)&&item.resource)image.setAttribute('src',item.resource.url);}catch{if(!this.stopped)image.setAttribute('alt','The project image is unavailable.');}};void prepare();}});
+    this.plugin.registerMarkdownPostProcessor?.(async(el,context)=>{
+      // Native embeds expose their original link. Discover relative project
+      // media here, rather than parsing every note read by unrelated services.
+      for(const embed of Array.from(el.querySelectorAll('.internal-embed[src], .internal-embed[data-src]'))){
+        const link=embed.getAttribute('src')??embed.getAttribute('data-src');if(!link)continue;
+        try{
+          const item=await this.prepareRenderedEmbed(link,context.sourcePath);
+          if(item&&!this.stopped&&this.allowed(item.scope)&&item.resource){
+            const media=embed.querySelector('img, video, audio, iframe, embed');
+            if(media)media.setAttribute('src',item.resource.url);
+            else if(/\.(?:png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(item.path)){const image=document.createElement('img');image.setAttribute('src',item.resource.url);image.setAttribute('alt',link);embed.replaceChildren(image);}
+          }
+        }catch{/* Offline media must not block rendering the rest of the note. */}
+      }
+      for(const image of Array.from(el.querySelectorAll('img[src]'))){
+        const rendered=image.getAttribute('src');if(!rendered||/^https?:/i.test(rendered))continue;
+        let link=rendered;
+        if(/^app:\/\//i.test(link))try{
+          const physicalRoot=this.app.vault.adapter.getResourcePath?.('').replace(/\/$/,'');
+          if(physicalRoot&&(rendered===physicalRoot||rendered.startsWith(physicalRoot+'/'))){
+            const relative=decodeURIComponent(rendered.slice(physicalRoot.length).replace(/^\//,'').split(/[?#]/)[0]);
+            if(this.physicalFileLookup?.(relative))continue;
+            link=relative;
+          }else{new URL(link);link=link.replace(/^app:\/\/[^/]+/i,'').split('?')[0];}
+        }catch{continue;}
+        try{
+          let route=this.pathRoute(link,context.sourcePath);
+          if(!route.owned&&this.absoluteReference(link)){await this.discoverWorkspaces();route=this.pathRoute(link,context.sourcePath);}
+          const item=route.owned?route.items.length===1?route.items[0]:undefined:await this.prepareRenderedEmbed(link,context.sourcePath);
+          if(route.owned&&!item){image.removeAttribute('src');image.setAttribute('alt','The project image is unavailable.');}
+          if(!item||this.stopped||!MEDIA.test(item.path))continue;
+          image.removeAttribute('src');await this.prepare(item);
+          if(!this.stopped&&this.allowed(item.scope)&&item.resource)image.setAttribute('src',item.resource.url);
+        }catch{if(!this.stopped)image.setAttribute('alt','The project image is unavailable.');}
+      }
+    });
   }
 
   private absoluteReference(name:string){const path=projectLink(name)?.path;if(!path)return false;return /^(?:\/|[a-z]:\/)/i.test(path)||this.scopes().some(scope=>scope.root.startsWith('/')&&path.startsWith(scope.root.split('/')[1]+'/'));}
@@ -433,7 +471,7 @@ export class CodebaseBridge {
       }));
     })();this.refreshing=work;void work.finally(()=>{if(this.refreshing===work)this.refreshing=undefined;}).catch(()=>{});return work;
   }
-  dispose(){this.stopped=true;this.embedReferences.clear();this.languageViews.dispose();for(const observer of this.chrome.values())observer.disconnect();this.chrome.clear();clearTimeout(this.browseTimer);if(this.persistTimer){clearTimeout(this.persistTimer);void this.persist().catch(()=>{});}this.browse.flush();this.browse.dispose();void this.io.dispose?.();this.app.workspace.iterateAllLeaves?.(leaf=>{const view=leaf.view as MarkdownView,item=view.file?this.files.get(view.file.path):undefined;if(item){const text=this.viewText(view);if(text!==undefined&&text!==item.document.base&&text!==this.viewBase(view,item)?.text)this.retain(item.file.path,text);leaf.detach();}});for(const undo of this.undo.reverse())undo();}
+  dispose(){this.stopped=true;this.languageViews.dispose();for(const observer of this.chrome.values())observer.disconnect();this.chrome.clear();clearTimeout(this.browseTimer);if(this.persistTimer){clearTimeout(this.persistTimer);void this.persist().catch(()=>{});}this.browse.flush();this.browse.dispose();void this.io.dispose?.();this.app.workspace.iterateAllLeaves?.(leaf=>{const view=leaf.view as MarkdownView,item=view.file?this.files.get(view.file.path):undefined;if(item){const text=this.viewText(view);if(text!==undefined&&text!==item.document.base&&text!==this.viewBase(view,item)?.text)this.retain(item.file.path,text);leaf.detach();}});for(const undo of this.undo.reverse())undo();}
 }
 
 class CodebaseLinkSuggest extends EditorSuggest<TFile> {

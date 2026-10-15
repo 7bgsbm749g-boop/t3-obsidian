@@ -25,6 +25,7 @@ import type {ImportRecordsCommand} from './response-command';
 import {readResponseBindings} from './response-bindings';
 import type {EventTarget} from './event-subscriptions';
 import {retainedLease,isCompletedLeaseIndex} from './completed-lease-index';
+import {sameWorkspacePath} from './folder-link';
 
 export interface CoordinatedHostRuntime {
   projection:Pick<ReturnType<typeof import('./native-response-manager').nativeResponses>,'receive'|'savedViews'|'prepare'|'committed'|'cancel'>;
@@ -49,9 +50,7 @@ export class CoordinatedHost {
   private scanning?:Promise<LeaseRecord[]>;
   private work=new Map<string,Promise<void>>();
   private terminalCursor=0;
-  private nextTerminalScan=0;
   private backgroundChecks=new Map<string,{epoch:number;revision:number;until:number}>();
-  private terminalRevisions=new Map<string,{epoch:number;revision:number}>();
   private terminalDiscoveryComplete=false;
   private async materialization(result:NoteGeneration){
     const proof=this.coordinator.materialization(result),bytes=JSON.stringify(proof);
@@ -155,32 +154,28 @@ export class CoordinatedHost {
     return readResponseBindings(this.files,this.identity.directory,target,path=>this.readLease(path));
   }
   private async scanRecords(background=false){
-    const active:LeaseRecord[]=[],terminal:LeaseRecord[]=[],changedTerminal:LeaseRecord[]=[];
-    const paths=await this.files.list(`${this.identity.directory}/leases`);
-    const retained=new Set(paths);this.leaseCache.retain(retained);
-    for(const path of this.leaseVersions.keys())if(!retained.has(path))this.leaseVersions.delete(path);
-    for(const id of this.records.keys())if(!retained.has(leasePaths(this.identity.directory,id).record)&&!this.work.has(id))this.records.delete(id);
-    for(const path of paths){
-      try{const record=await this.readLease(path);if(!record)continue;if(!this.work.has(record.request.id))this.records.set(record.request.id,retainedLease(record));
-        if(terminalLease(record)||record.state?.finalSaved){
-          const previous=this.terminalRevisions.get(record.request.id);
-          if(background&&this.terminalDiscoveryComplete&&(!previous||previous.epoch!==record.epoch||previous.revision!==record.revision))changedTerminal.push(record);
-          if(background||!this.terminalDiscoveryComplete)this.terminalRevisions.set(record.request.id,{epoch:record.epoch,revision:record.revision});terminal.push(record);
-        }else active.push(record);
-      }catch{/* A malformed historical record cannot gate a healthy response. */}
+    // A cold legacy host indexes its historical records once. Regular work
+    // follows the authority's active catalog; completed history requires an
+    // explicit maintenance request, not recurring recovery probes.
+    const catalogOnly=background&&this.terminalDiscoveryComplete;
+    const paths=catalogOnly
+      ? (JSON.parse((await this.files.read(leasePaths(this.identity.directory,'').catalog))??'[]') as HostedInlineRequest[])
+          .filter(request=>request.vaultId===this.identity.vaultId&&request.host?.environmentId===this.identity.environmentId&&typeof request.host?.workspaceRoot==='string'&&sameWorkspacePath(request.host.workspaceRoot,this.identity.workspaceRoot)&&request.host?.directory===this.identity.directory&&/^[0-9a-f-]{36}$/i.test(request.id)).map(request=>leasePaths(this.identity.directory,request.id).record)
+      : await this.files.list(`${this.identity.directory}/leases`);
+    if(!catalogOnly){
+      const retained=new Set(paths);this.leaseCache.retain(retained);
+      for(const path of this.leaseVersions.keys())if(!retained.has(path))this.leaseVersions.delete(path);
+      for(const id of this.records.keys())if(!retained.has(leasePaths(this.identity.directory,id).record)&&!this.work.has(id))this.records.delete(id);
     }
+    const selected:LeaseRecord[]=[],terminal:LeaseRecord[]=[];
+    for(const path of paths)try{
+      const record=await this.readLease(path);if(!record)continue;
+      if(!this.work.has(record.request.id))this.records.set(record.request.id,retainedLease(record));
+      if(!terminalLease(record))selected.push(record);else if(!background)terminal.push(record);
+    }catch{/* A malformed historical record cannot gate a healthy response. */}
     this.terminalDiscoveryComplete=true;
-    // Serve active responses every pass. Completed-history observation is
-    // rotating maintenance, so a cold journal audit cannot delay a new run.
     if(this.terminalCursor>=terminal.length)this.terminalCursor=0;
-    const now=Date.now();
-    const historical=!background||now>=this.nextTerminalScan?terminal.slice(this.terminalCursor,this.terminalCursor+(background?1:4)):[];
-    // Unchanged completed history is maintenance, not live reply work. Keep
-    // full journal verification but pace it like unchanged active audits.
-    // Changed leases above and explicit recovery scans still run immediately.
-    if(historical.length){this.terminalCursor+=historical.length;this.nextTerminalScan=now+30_000;}
-    const urgent=new Set(changedTerminal.map(record=>record.request.id));
-    const selected=active.concat(changedTerminal,historical.filter(record=>!urgent.has(record.request.id)));
+    const historical=terminal.slice(this.terminalCursor,this.terminalCursor+4);this.terminalCursor+=historical.length;selected.push(...historical);
     return (await Promise.all(selected.map(async record=>{
       try{return await this.fullLease(record);}catch(error){this.failures.set(record.request.id,error instanceof Error?error.message:String(error));}
     }))).filter((record):record is LeaseRecord=>!!record);
@@ -545,5 +540,5 @@ export class CoordinatedHost {
     throw Error('Unsupported response command.');
   }
   async renamed(before:string,after:string){await this.authority.renameNative(before,after);await this.scan();}
-  stop(){this.stopped=true;this.backgroundChecks.clear();this.terminalRevisions.clear();this.projections.clear();this.leaseCache.clear();this.leaseVersions.clear();return this.journal.stop();}
+  stop(){this.stopped=true;this.backgroundChecks.clear();this.projections.clear();this.leaseCache.clear();this.leaseVersions.clear();return this.journal.stop();}
 }

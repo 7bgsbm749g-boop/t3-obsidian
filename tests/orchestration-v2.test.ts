@@ -183,19 +183,15 @@ test('full recovery follows opaque history cursors without advancing past concur
   assert.equal(full.thread.messages[0].id,'old-prompt');assert.ok(paths.at(-1)?.endsWith('cursor=opaque%20%2F%20cursor'));
 });
 
-test('import run history requests compact conversation pages without hydrating tools or reading sender titles',async()=>{
- const calls:string[]=[],older={id:'old-input-item',type:'user_message',messageId:'old-input',runId:'old-run',text:'Original old prompt',ordinal:0,startedAt:'2026-10-08T00:00:00Z',createdBy:'agent',senderThreadId:'2c9cb7b6-a4c9-5746-b9b7-bc463c5024fa'};
- const tool={id:'tool',type:'command_execution',runId:run.id,ordinal:2,status:'completed',outputOmitted:true,updatedAt:at};
- const api=t3Api(async path=>{
-  calls.push(path);
-  if(path.endsWith('/bounded?compactTurnItems=1'))return {...snapshot({turnItems:undefined,visibleTurnItems:[{sourceThreadId:'thread',item:tool}]}),hasMoreHistory:true,historyCursor:'opaque / cursor'};
-  if(path.endsWith('/history?cursor=opaque%20%2F%20cursor&view=conversation'))return {snapshotSequence:50,items:[{sourceThreadId:'thread',item:older},{sourceThreadId:'other',item:{...older,id:'foreign',messageId:'foreign'}}],hasMoreHistory:false};
-  throw Error('Import metadata must not hydrate tool outputs or titles');
- },'https://t3.example',()=>{throw Error('Import metadata must not open a tool RPC socket');});
+test('import metadata uses all canonical run rows and exact root prompt IDs without a host history scan',async()=>{
+ const calls:string[]=[],runs=Array.from({length:19},(_,n)=>({...run,id:'run-'+n,ordinal:n+1,userMessageId:'input-'+n,status:'completed',completedAt:at}));
+ const messages=runs.map(r=>({...message,id:r.userMessageId,runId:r.id,text:'Prompt '+r.ordinal}));
+ const api=t3Api(async path=>{calls.push(path);assert.equal(path,'/api/orchestration/threads/thread');return snapshot({runs,messages,turnItems:[{id:'huge-tool',type:'command_execution',outputOmitted:true}]});},'https://t3.example',()=>{throw Error('Import metadata must not hydrate tool output');});
  const result=await api('/api/orchestration/threads/thread?importRuns=true');
- assert.equal(result.snapshotSequence,10);assert.equal(result.page.hasMore,false);assert.equal(result.thread.activities.length,0);assert.equal(result.thread.messages[0].id,'old-input');
- assert.equal(result.thread.messages[0].senderThreadId,older.senderThreadId);assert.equal(result.thread.messages.some((message:any)=>message.id==='foreign'),false);
- const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:result}).state;assert.equal(turnForMessage(state,'prompt'),run.id);assert.equal(calls.length,2);
+ assert.equal(Object.keys(result.thread.turns).length,19);assert.equal(result.page.hasMore,false);assert.equal(result.thread.activities.length,0);
+ const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:result}).state;
+ for(const r of runs)assert.equal(turnForMessage(state,r.userMessageId),r.id);
+ assert.deepEqual(calls,['/api/orchestration/threads/thread']);
 });
 
 test('selected imports reconstruct compact display items and hydrate only the exact run',async()=>{

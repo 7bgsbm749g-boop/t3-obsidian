@@ -473,7 +473,7 @@ test('unchanged active host scans authenticate recovery without copying the note
  }finally{await h.close();}
 });
 
-test('active delivery proceeds while completed journal observation rotates through bounded history batches',async t=>{
+test('active delivery uses its catalog while completed journal checks require explicit maintenance',async t=>{
  const h=await setup();try{
   let clock=Date.now();t.mock.method(Date,'now',()=>clock);
   await h.writer.tick();const historical=new Set<string>();
@@ -484,19 +484,20 @@ test('active delivery proceeds while completed journal observation rotates throu
   let activeReads=0;
   const read=h.host.journal.read.bind(h.host.journal),inspect=h.host.journal.inspect.bind(h.host.journal),observed=new Set<string>();h.host.journal.inspect=async id=>{if(historical.has(id)){observed.add(id);return undefined;}activeReads++;return inspect(id);};
   (h.host as any).terminalDiscoveryComplete=false;
-  await h.host.scan(true);assert.equal(observed.size,1,'background history audit takes one slot');
+  await h.host.scan(true);assert.equal(observed.size,0,'completed history has no background audit');
   const before=activeReads;
-  await h.host.scan(true);assert.equal(observed.size,1,'unchanged completed history waits for its maintenance interval');
+  await h.host.scan(true);assert.equal(observed.size,0,'completed history stays inactive');
   assert.equal(activeReads,before,'unchanged active leases do not repeat private journal audits every timer tick');
-  clock+=29_999;await h.host.scan(true);assert.equal(observed.size,1,'unchanged history does not consume another full journal audit before thirty seconds');
+  clock+=29_999;await h.host.scan(true);assert.equal(observed.size,0);
   clock++;
-  await h.host.scan(true);assert.equal(observed.size,2,'maintenance rotates after its interval');
-  await h.host.scan();assert.equal(observed.size,6,'explicit recovery scans retain the four-record batch');
+  await h.host.scan(true);assert.equal(observed.size,0,'elapsed time does not wake completed responses');
+  await h.host.scan();assert.equal(observed.size,4,'explicit recovery checks four historical records');
   h.complete();await h.writer.tick();assert.equal((await read(h.id))!.status,'verified');assert.match(h.notes.get('Note.md')!,/Added \*\*25kg\*\*/);
-  await h.host.scan();assert.ok(observed.size>6,'later scans still audit historical results');
+  await h.host.scan();assert.ok(observed.size>=7,'explicit maintenance audits another bounded batch');
   const changed=[...historical][0],path=leasePaths(h.identity.directory,changed).record,record=JSON.parse(h.storage.get(path)!);
   record.revision++;h.storage.set(path,JSON.stringify(record));observed.clear();
-  await h.host.scan(true);assert.ok(observed.has(changed),'a changed completed lease bypasses the cold-history budget, including native rename and delivery acknowledgements');
+  await h.host.scan(true);assert.equal(observed.size,0,'completed revisions do not restart background work');
+  for(let n=0;n<3&&!observed.has(changed);n++)await h.host.scan();assert.ok(observed.has(changed),'explicit maintenance still checks current historical revisions');
  }finally{await h.close();}
 });
 
@@ -512,13 +513,13 @@ test('unchanged oversized history uses fresh file versions without rereading or 
   (h.host as any).leaseCache=new LeaseRecordCache(100,1);
   h.files.version=async path=>{const raw=h.storage.get(path);return raw===undefined?undefined:contentHash(raw);};
   const read=h.files.read;let reads:string[]=[];h.files.read=async path=>{if(path.includes('/leases/'))reads.push(path);return read(path);};
-  await h.host.scan(true);assert.ok(reads.length>=24);const parsed=h.host.leaseCacheStatus().parses;
+  await h.host.scan();assert.ok(reads.length>=24);const parsed=h.host.leaseCacheStatus().parses;
   reads=[];for(let n=0;n<5;n++)await h.host.scan(true);
-  assert.equal(reads.length,0);assert.equal(h.host.leaseCacheStatus().parses,parsed);assert.ok(h.host.leaseCacheStatus().versionHits>=125);
+  assert.equal(reads.length,0);assert.equal(h.host.leaseCacheStatus().parses,parsed);assert.ok(h.host.leaseCacheStatus().versionHits>=5);
   const changed=historical[0],path=leasePaths(h.identity.directory,changed).record,record=JSON.parse(h.storage.get(path)!);record.revision++;record.state.body='New completed revision';h.storage.set(path,JSON.stringify(record));
-  await h.host.scan(true);assert.ok(reads.includes(path));assert.ok(reads.every(value=>value===path));
+  await h.host.scan(true);assert.equal(reads.length,0);await h.host.scan();assert.ok(reads.includes(path));
   assert.equal((h.host as any).records.get(changed).state.body,undefined);assert.equal((await (h.host as any).fullLease((h.host as any).records.get(changed))).state.body,'New completed revision');
-  h.storage.delete(path);await h.host.scan(true);assert.equal((h.host as any).leaseVersions.has(path),false);
+  h.storage.delete(path);await h.host.scan();assert.equal((h.host as any).leaseVersions.has(path),false);
  }finally{await h.close();}
 });
 
@@ -528,8 +529,8 @@ test('a lease replacement during discovery cannot authenticate the older decoded
   const record={request,coordinated:true,owner:COORDINATED_OWNER,epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,state:{requestHash:hostedRequestHash(request),accepted:true,status:'complete',body:'Before replacement',finalSaved:true,cleanupComplete:true,finalPhase:'complete',notePath:request.notePath,hashes:[],updatedAt:''}};
   h.storage.set(path,JSON.stringify(record));h.files.version=async value=>{const raw=h.storage.get(value);return raw===undefined?undefined:contentHash(raw);};
   const read=h.files.read;let replace=true;h.files.read=async value=>{const bytes=await read(value);if(value===path&&replace){replace=false;record.revision++;record.state.body='After replacement';h.storage.set(path,JSON.stringify(record));}return bytes;};
-  await h.host.scan(true);assert.equal((h.host as any).leaseVersions.has(path),false);
-  await h.host.scan(true);assert.equal((h.host as any).records.get(id).state.body,undefined);assert.equal((await (h.host as any).fullLease((h.host as any).records.get(id))).state.body,'After replacement');assert.equal((h.host as any).leaseVersions.has(path),true);
+  await h.host.scan();assert.equal((h.host as any).leaseVersions.has(path),false);
+  await h.host.scan();assert.equal((h.host as any).records.get(id).state.body,undefined);assert.equal((await (h.host as any).fullLease((h.host as any).records.get(id))).state.body,'After replacement');assert.equal((h.host as any).leaseVersions.has(path),true);
  }finally{await h.close();}
 });
 
@@ -538,7 +539,7 @@ test('a completed record damaged during its lazy read does not block another res
   await h.writer.tick();const id=randomUUID(),path=leasePaths(h.identity.directory,id).record,request={...h.request,id,notePath:'History.md'};
   h.storage.set(path,JSON.stringify({request,coordinated:true,owner:COORDINATED_OWNER,epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,state:{requestHash:hostedRequestHash(request),accepted:true,status:'complete',body:'Retained completed reply',finalSaved:true,cleanupComplete:true,notePath:request.notePath,hashes:[],updatedAt:''}}));
   const read=h.files.read;let reads=0;h.files.read=async value=>{if(value===path&&++reads===2)h.storage.set(path,'{');return read(value);};
-  await h.host.scan(true);assert.equal(reads,2);assert.ok((h.host as any).failures.has(id));
+  await h.host.scan();assert.equal(reads,2);assert.ok((h.host as any).failures.has(id));
   h.complete();await h.writer.tick();assert.equal((await h.host.journal.read(h.id))!.status,'verified');assert.ok(h.notes.get('Note.md')!.includes('Added **25kg**.'));assert.equal(h.storage.get(path),'{');
  }finally{await h.close();}
 });
@@ -554,7 +555,7 @@ test('stream binding discovery shares verified oversized history while checking 
   }
   (h.host as any).leaseCache=new LeaseRecordCache(100,1);
   h.files.version=async path=>{const raw=h.storage.get(path);return raw===undefined?undefined:contentHash(raw);};
-  await h.host.scan(true);
+  await h.host.scan();
   const read=h.files.read;let reads=0;h.files.read=async path=>{if(path.includes('/leases/'))reads++;return read(path);};
   const before=h.host.leaseCacheStatus(),note=h.notes.get('Note.md'),writes=h.writes();
   for(let n=0;n<8;n++){

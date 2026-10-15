@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reload the laptop's QLO2 window after Sync, using the plugin's private mailbox."""
+"""Reload the laptop's QLO2 window after Sync, using the plugin's direct command endpoint."""
 from __future__ import annotations
 
 import argparse
@@ -68,25 +68,16 @@ if($p.cleanup) {
   Remove-Item $request,$result -ErrorAction SilentlyContinue
   @{ok=$true} | ConvertTo-Json -Compress; exit
 }
-New-Item -ItemType Directory -Force (Join-Path $base 'requests'),(Join-Path $base 'results') | Out-Null
-$bytes=$p.command | ConvertTo-Json -Depth 8 -Compress
-if(Test-Path $request) {
-  if((Get-Content $request -Raw) -ne $bytes) { throw 'Reload command identity changed' }
-} else {
-  $temporary=$request+'.'+[guid]::NewGuid().ToString()+'.tmp'
-  [IO.File]::WriteAllText($temporary,$bytes,[Text.UTF8Encoding]::new($false))
-  Move-Item $temporary $request
+$endpointPath=Join-Path $base 'endpoint.json'
+if(-not (Test-Path $endpointPath)) {
+  @{id=$p.command.id;ok=$false;pending=$true;error='The direct laptop plugin endpoint is unavailable. Reload the updated plugin.'} | ConvertTo-Json -Compress; exit
 }
-if($p.retry -and (Test-Path $result)) {
-  $previous=Get-Content $result -Raw | ConvertFrom-Json
-  if(-not $previous.ok) { Remove-Item $result }
-}
-$deadline=[DateTime]::UtcNow.AddSeconds(5)
-do {
-  if(Test-Path $result) { Get-Content $result -Raw; exit }
-  Start-Sleep -Milliseconds 100
-} while([DateTime]::UtcNow -lt $deadline)
-@{id=$p.command.id;ok=$false;pending=$true;error='Waiting for the running laptop plugin'} | ConvertTo-Json -Compress
+$endpoint=Get-Content $endpointPath -Raw | ConvertFrom-Json
+$uri=[Uri]$endpoint.url
+if($endpoint.version -ne 1 -or $uri.Scheme -ne 'http' -or $uri.Host -ne '127.0.0.1' -or $uri.AbsolutePath -ne '/commands' -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or $endpoint.token -notmatch '^[0-9a-f]{64}$') { throw 'Invalid direct command endpoint' }
+$body=@{command=$p.command;retry=[bool]$p.retry} | ConvertTo-Json -Depth 12 -Compress
+$answer=Invoke-RestMethod -Method Post -Uri $uri -Headers @{Authorization=('Bearer '+$endpoint.token)} -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 5 -MaximumRedirection 0
+$answer | ConvertTo-Json -Depth 20 -Compress
 '''.replace('PAYLOAD', payload)
     bootstrap = '[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); & ([ScriptBlock]::Create([Console]::In.ReadToEnd()))'
     encoded = base64.b64encode(bootstrap.encode('utf-16le')).decode()

@@ -26,7 +26,7 @@ async function fixture(){
   return {root,directory,vaultId,plugin,async close(){plugin.stopped=true;await plugin.inlineHostService?.dispose();await plugin.noteCommandServer?.dispose();const route=await existingPrivateStorage(root,".obsidian");if(route)await rm(route.storageRoot,{recursive:true,force:true});await rm(root,{recursive:true,force:true});}};
 }
 
-test('packaged lease discovery checks fresh identities without rereading unchanged large replies',async()=>{
+test('packaged legacy discovery leaves completed history inactive until explicit maintenance',async()=>{
   const h=await fixture();
   try{
     await h.plugin.refreshInlineHost();const host=h.plugin.inlineHostService.coordinated,files=host.files,read=files.read;
@@ -35,11 +35,11 @@ test('packaged lease discovery checks fresh identities without rereading unchang
     files.read=async(p:string)=>{if(p===path)freshReads++;return read(p);};
     files.version=async(p:string)=>{if(p===path)versionChecks++;return version(p);};
     for(let i=0;i<100;i++)await host.scanRecords(true);
-    assert.equal(freshReads,1,'unchanged historical bodies need one fresh source read');assert.ok(versionChecks>=100,'every pass verifies the current file identity');
-    assert.equal(host.leaseCacheStatus().parses,1);assert.equal(host.leaseCacheStatus().versionHits,99);
+    assert.equal(freshReads,1,'unchanged historical bodies need one fresh source read');assert.equal(versionChecks,2,'completed history needs only its cold index identity check');
+    assert.equal(host.leaseCacheStatus().parses,1);assert.equal(host.leaseCacheStatus().versionHits,0);
     await files.write(path,JSON.stringify({...record,state:{...record.state,body:'Fresh same-revision replacement'}}));
-    await host.scanRecords(true);assert.equal(host.records.get(id).state.body,'Fresh same-revision replacement');assert.equal(freshReads,2);
-    await files.remove(path);await host.scanRecords(true);assert.equal(host.leaseCacheStatus().entries,0);
+    await host.scanRecords(true);assert.equal(freshReads,1);await host.scanRecords();assert.equal(host.records.get(id).state.body,'Fresh same-revision replacement');assert.equal(freshReads,2);
+    await files.remove(path);await host.scanRecords();assert.equal(host.leaseCacheStatus().entries,0);
     await h.plugin.inlineHostService.dispose();assert.equal(host.leaseCacheStatus().characters,0);assert.equal(host.leaseCacheStatus().versionEntries,0);
   }finally{await h.close();}
 });
@@ -62,7 +62,7 @@ test('lost host lock is reacquired and an original registration is acknowledged 
   }finally{await h.close();}
 });
 
-test('command bridge retries a startup lock refusal and processes the same retained command once',async()=>{
+test('direct command bridge retries a startup lock refusal without replaying a retained request',async()=>{
   const h=await fixture(),base=join(h.root,'.obsidian/t3-code/commands/v1');let calls=0;
   await mkdir(base,{recursive:true});let release:()=>Promise<void>=await lockfile.lock(base,{realpath:true});
   try{
@@ -72,7 +72,10 @@ test('command bridge retries a startup lock refusal and processes the same retai
     await mkdir(join(base,'requests'),{recursive:true});await writeFile(join(base,'requests',id+'.json'),JSON.stringify(command));
     await release();release=async()=>{};
     await Promise.all([h.plugin.refreshNoteCommandHost(),h.plugin.refreshNoteCommandHost()]);
-    await h.plugin.noteCommandServer.tick();
+    await h.plugin.noteCommandServer.tick();assert.equal(calls,0,'startup does not execute request files');
+    const privateBase=join((await existingPrivateStorage(h.root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1');
+    const endpoint=JSON.parse(await readFile(join(privateBase,'endpoint.json'),'utf8'));
+    const response=await fetch(endpoint.url,{method:'POST',headers:{Authorization:'Bearer '+endpoint.token},body:JSON.stringify({command})});assert.equal(response.status,200);await response.json();
     assert.equal(JSON.parse(await readFile(join((await existingPrivateStorage(h.root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1/results',id+'.json'),'utf8')).id,id);assert.equal(calls,1);
     await h.plugin.refreshNoteCommandHost();await h.plugin.noteCommandServer.tick();assert.equal(calls,1);
     await h.plugin.noteCommandServer.dispose();await h.plugin.refreshNoteCommandHost();

@@ -47,10 +47,12 @@ export class DirectInlinePreview {
     if(record.state?.status==='conflict')this.suspend();
     // A durable host cursor must not skip lifecycle events the device has not
     // read, or discard newer local prose while importing binding evidence.
+    const imported=record.request.importTurn;
+    if(imported)this.state=restoreInlineBindings(this.state,{bindings:{[imported.messageId!]:{turnId:imported.turnId,kind:'explicit'}},turns:{[imported.turnId]:imported}});
     const checkpoint=record.state?.bindingCheckpoint;
     if(checkpoint)this.state=restoreInlineBindings(this.state,{...checkpoint,sequence:undefined});
     this.prose=mergeProse(record.state?.prose??[],this.prose,[...new Set([...record.state?.turnIds??[],...this.turnIds])]);
-    this.turnIds=[...new Set([...this.turnIds,...record.state?.turnIds??[]])];
+    this.turnIds=[...new Set([...this.turnIds,...record.state?.turnIds??[],...(imported?[imported.turnId]:[])])];
     this.follows??=record.state?.questionFollows;
     this.incoming??=record.state?.incoming;
   }

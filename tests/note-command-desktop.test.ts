@@ -11,41 +11,39 @@ import {existingPrivateStorage} from '../private-storage-desktop';
 const cleanup=async(root:string,configDir='.obsidian')=>{const route=await existingPrivateStorage(root,configDir);if(route)await rm(route.storageRoot,{recursive:true,force:true});await rm(root,{recursive:true,force:true});};
 
 const run=(args:string[])=>new Promise<{code:number|null;out:string}>(resolve=>{const child=spawn('python3',['scripts/obsidian-command.py',...args]);let out='';child.stdout.on('data',data=>out+=data);child.stderr.on('data',data=>out+=data);child.on('close',code=>resolve({code,out}));});
-test('unchanged mailbox history does not repeat result access; new commands and result deletion remain immediate',{timeout:10000},async()=>{
-  const root=await mkdtemp(join(tmpdir(),'t3-mailbox-idle-'));let calls=0,accesses=0;
-  const server=await NoteCommandServer.open(root,'.obsidian',async command=>{calls++;return {id:command.id,ok:calls>1};},()=>true);
-  const storage=(await existingPrivateStorage(root,'.obsidian'))!.storageRoot;
-  const originalAccess=fs.access;
-  fs.access=(async(...args:Parameters<typeof fs.access>)=>{if(String(args[0]).startsWith(storage))accesses++;return originalAccess(...args);}) as typeof fs.access;
+test('archived requests never execute or scan; direct requests replay and retry only their exact receipt',{timeout:10000},async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3-direct-idle-'));let calls=0;
+  const server=await NoteCommandServer.open(root,'.obsidian',async command=>({id:command.id,ok:++calls>1}),()=>true);
   try{
-    const base=join((await existingPrivateStorage(root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1'),id=randomUUID();
-    await writeFile(join(base,'requests',id+'.json'),JSON.stringify({version:1,id,kind:'client-status'}));
-    await server.tick();await server.tick();
-    const warm=accesses;
-    for(let i=0;i<100;i++)await server.tick();
-    assert.equal(accesses,warm);assert.equal(calls,1);assert.ok(server.status().skippedScans>=100);
-    await rm(join(base,'results',id+'.json'));await server.tick();assert.equal(calls,2);
-    const next=randomUUID();await writeFile(join(base,'requests',next+'.json'),JSON.stringify({version:1,id:next,kind:'client-status'}));
-    await server.tick();assert.equal(calls,3);assert.equal(JSON.parse(await readFile(join(base,'results',next+'.json'),'utf8')).ok,true);
-    // The periodic full audit remains a separate fallback, even if directory
-    // metadata is restored by a filesystem or the system clock changes.
-    await server.tick();(server as any).unchanged.until=-1;
-    const before=accesses;await server.tick();assert.ok(accesses>before);assert.equal(calls,3);
-  }finally{fs.access=originalAccess;await server.dispose();await cleanup(root);}
-});
-
-test('unchanged mailbox scans retain pending native reload acknowledgement checks',{timeout:10000},async()=>{
-  const root=await mkdtemp(join(tmpdir(),'t3-mailbox-reload-'));let attempts=0,allow=false,calls=0;
-  const server=await NoteCommandServer.open(root,'.obsidian',async command=>{calls++;return {id:command.id,ok:true,reloadScheduled:true,client:{instanceId:'client',loadedVersion:'1.2.3'}};},()=>true,undefined,async()=>{attempts++;return allow;});
-  try{
-    const base=join((await existingPrivateStorage(root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1'),id=randomUUID();
-    await writeFile(join(base,'requests',id+'.json'),JSON.stringify({version:1,id,kind:'reload-client',releaseVersion:'1.2.4',runtimeSha256:{'main.js':'a'.repeat(64),'manifest.json':'b'.repeat(64),'styles.css':'c'.repeat(64)}}));
-    await server.tick();await server.tick();const before=attempts;
-    await server.tick();assert.ok(server.status().skippedScans>0);assert.equal(attempts,before+1);assert.equal(calls,1);
-    allow=true;await server.tick();assert.equal(attempts,before+2);assert.equal(calls,1);
+    const base=join((await existingPrivateStorage(root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1'),archived=randomUUID();
+    await writeFile(join(base,'requests',archived+'.json'),JSON.stringify({version:1,id:archived,kind:'client-status'}));
+    for(let i=0;i<100;i++)await server.tick();assert.equal(calls,0);
+    const id=randomUUID(),args=['--vault',root,'--request-id',id,'client-status'];
+    assert.equal((await run(args)).code,1);assert.equal(calls,1);
+    assert.equal((await run(args)).code,1);assert.equal(calls,1);
+    assert.equal((await run([...args,'--retry'])).code,0);assert.equal(calls,2);
+    assert.equal((await run(args)).code,0);assert.equal(calls,2);
+    assert.equal(server.status().transport,'direct');assert.equal(server.status().activeRequests,0);
+    await assert.rejects(readFile(join(base,'results',archived+'.json')),/ENOENT/);
+    const endpoint=JSON.parse(await readFile(join(base,'endpoint.json'),'utf8'));
+    assert.equal((await fs.stat(join(base,'endpoint.json'))).mode&0o777,0o600);
+    const denied=await fetch(endpoint.url,{method:'POST',body:JSON.stringify({command:{version:1,id:randomUUID(),kind:'client-status'}})});assert.equal(denied.status,403);
+    assert.equal(calls,2);
   }finally{await server.dispose();await cleanup(root);}
 });
-test('agent CLI reaches the running plugin mailbox once, replays results, and rejects changed command IDs',{timeout:10000},async()=>{
+
+test('only explicitly requested native reloads retain acknowledgement checks',{timeout:10000},async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3-direct-reload-'));let attempts=0,allow=false,calls=0;
+  const server=await NoteCommandServer.open(root,'.obsidian',async command=>{calls++;return {id:command.id,ok:true,reloadScheduled:true,client:{instanceId:'client',loadedVersion:'1.2.3'}};},()=>true,undefined,async()=>{attempts++;return allow;});
+  try{
+    const id=randomUUID(),args=['--vault',root,'--request-id',id,'reload-client','--release-version','1.2.4','--runtime-hashes',JSON.stringify({'main.js':'a'.repeat(64),'manifest.json':'b'.repeat(64),'styles.css':'c'.repeat(64)})];
+    assert.equal((await run(args)).code,0);await server.tick();const before=attempts;
+    await server.tick();assert.equal(attempts,before+1);assert.equal(calls,1);
+    allow=true;await server.tick();assert.equal(attempts,before+2);assert.equal(calls,1);
+    await server.tick();assert.equal(attempts,before+2);
+  }finally{await server.dispose();await cleanup(root);}
+});
+test('agent CLI reaches the running plugin directly once, replays results, and rejects changed command IDs',{timeout:10000},async()=>{
   const root=await mkdtemp(join(tmpdir(),'t3-note-command-'));let calls=0;
   const server=await NoteCommandServer.open(root,'.obsidian',async command=>{calls++;return {id:command.id,ok:true,threadId:'created-thread',bindingIds:['binding-a','binding-b']};},()=>true);
   try{
@@ -54,12 +52,11 @@ test('agent CLI reaches the running plugin mailbox once, replays results, and re
     assert.equal((await run(args)).code,0);assert.equal(calls,1);
     const changed=await run([...args,'--destination','C.md']);assert.notEqual(changed.code,0);assert.match(changed.out,/different input/);assert.equal(calls,1);
     const path=join((await existingPrivateStorage(root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1/requests',id+'.json');assert.equal(JSON.parse(await readFile(path,'utf8')).notePath,'A.md');
-    const bad=randomUUID();await writeFile(join((await existingPrivateStorage(root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1/requests',bad+'.json'),JSON.stringify({version:1,id:bad,kind:'send-note',notePath:'../secret.md',destinations:[],streamReply:true}));
-    await server.tick();const rejected=JSON.parse(await readFile(join((await existingPrivateStorage(root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1/results',bad+'.json'),'utf8'));assert.equal(rejected.ok,false);assert.equal(calls,1);
+    const bad=await run(['--vault',root,'send-note','../secret.md']);assert.equal(bad.code,1);assert.match(bad.out,/Invalid Obsidian note command/);assert.equal(calls,1);
   }finally{await server.dispose();await cleanup(root);}
 });
 
-test('subscription CLI shares the private mailbox and preserves typed property filters',{timeout:10000},async()=>{
+test('subscription CLI shares the direct endpoint and preserves typed property filters',{timeout:10000},async()=>{
   const root=await mkdtemp(join(tmpdir(),'t3-subscription-command-'));const received:any[]=[];
   const server=await NoteCommandServer.open(root,'.obsidian',async command=>{received.push(command);return {id:command.id,ok:true,monitoring:command.kind==='subscribe'};},()=>true);
   try{
@@ -74,7 +71,7 @@ test('subscription CLI shares the private mailbox and preserves typed property f
   }finally{await server.dispose();await cleanup(root);}
 });
 
-test('a second mailbox consumer cannot acquire authority and stop callbacks revoke delivery',{timeout:10000},async()=>{
+test('a second direct command server cannot acquire authority and stop callbacks revoke delivery',{timeout:10000},async()=>{
   const root=await mkdtemp(join(tmpdir(),'t3-event-authority-'));let stopped=false;
   const server=await NoteCommandServer.open(root,'.obsidian',async command=>({id:command.id,ok:true}),()=>true,()=>{stopped=true;});
   try{await assert.rejects(NoteCommandServer.open(root,'.obsidian',async command=>({id:command.id,ok:true}),()=>true),/lock/i);await server.dispose();assert.equal(stopped,true);}
@@ -108,4 +105,21 @@ test('direct action CLI registers without a thread, preserves JSON values and re
     const job=['--vault',root,'subscribe-job','--job-id','j','--job-request-id','r','--message-id','m','--job-thread-id','worker','--job-project-id','p','--job-environment-id','e','--job-state','failed','--action','{"kind":"set-property","notePath":"Jobs/A.md","property":"status","value":"failed"}'];
     assert.equal((await run(job)).code,0);assert.deepEqual(received.at(-1).jobStates,['failed']);assert.equal(received.at(-1).target,undefined);
   }finally{await server.dispose();await cleanup(root);}
+});
+
+test('a slow direct command does not block reads and concurrent retries execute once',{timeout:10000},async()=>{
+ const root=await mkdtemp(join(tmpdir(),'t3-direct-concurrent-'));let release!:()=>void,started!:()=>void,calls=0;
+ const gate=new Promise<void>(resolve=>{release=resolve;}),entered=new Promise<void>(resolve=>{started=resolve;});
+ const id=randomUUID(),command={version:1,id,kind:'inspect-folder',folderPath:'Nested/Ä note'};
+ const server=await NoteCommandServer.open(root,'.obsidian',async input=>{calls++;if(input.id===id){started();await gate;}return {id:input.id,ok:true};},()=>true);
+ try{
+  const endpoint=JSON.parse(await readFile(join((await existingPrivateStorage(root,'.obsidian'))!.storageRoot,'.obsidian/t3-code/commands/v1/endpoint.json'),'utf8'));
+  const post=(input:any,headers:any={})=>fetch(endpoint.url,{method:'POST',headers:{Authorization:'Bearer '+endpoint.token,...headers},body:JSON.stringify({command:input})});
+  const first=post(command);await entered;
+  const retry=post(command),changed=await post({...command,folderPath:'Different'});assert.equal(changed.status,400);assert.match((await changed.json()).error,/different input/);
+  const read=await post({version:1,id:randomUUID(),kind:'client-status'});assert.equal(read.status,200);assert.equal((await read.json()).ok,true);assert.equal(calls,2);
+  const origin=await post({version:1,id:randomUUID(),kind:'client-status'},{Origin:'https://untrusted.example'});assert.equal(origin.status,403);assert.equal(calls,2);
+  release();assert.equal((await (await first).json()).ok,true);assert.equal((await (await retry).json()).ok,true);assert.equal(calls,2);
+  await server.dispose();const closed=await run(['--vault',root,'client-status']);assert.equal(closed.code,1);assert.match(closed.out,/No request was queued/);assert.equal(calls,2);
+ }finally{release();await server.dispose();await cleanup(root);}
 });

@@ -31,8 +31,9 @@ import {isRecoveryCommand,validateRecoveryCommand} from './recovery-command';
 import {abortableRead,requestAborted} from './t3-api';
 import {mountToolGroups} from './response-tool-presentation';
 import {importRuns,importBindingId,importFollowId,type ImportRun} from './run-import';
+import {findRunImport,runImportReceipt} from './run-import-receipt';
 import {openRunImport,ImportStreamsModal} from './run-import-ui';
-import {restoreInlineBindings,type InlineThreadState} from './inline-thread';
+import {type InlineThreadState} from './inline-thread';
 import {nativeResponses} from './native-response-manager';
 import {editorStream} from './editor-stream';
 import {validateNoteCommand,isEventCommand,type NoteCommand,type NoteCommandResult} from './note-command';
@@ -825,7 +826,7 @@ export default class SendToT3 extends Plugin {
         return {...result,replyImports:await this.codebase.archiveReplyImports(input.environmentId!,input.projectId!,input.archiveDirectory!,archiveLegacyReplyImports)};
       }
       if(input.kind==='send-failure-log')return {...result,failureLog:sendFailureLog(this.app.loadLocalStorage(this.failureKey()),result.client!.loadedVersion,this.deviceId,input.since)};
-      return input.kind==='client-status'?{...result,responseHostOpening:!!this.inlineHostRefresh,connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),...(this.inlineHostService?{responseHost:this.inlineHostService.status()}: {})}:result;
+      return input.kind==='client-status'?{...result,responseHostOpening:!!this.inlineHostRefresh,commandServer:this.noteCommandServer?.status(),connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),...(this.inlineHostService?{responseHost:this.inlineHostService.status()}: {})}:result;
     }
     if(isResponseCommand(input)){
       const command=validateResponseCommand(input);
@@ -850,18 +851,7 @@ export default class SendToT3 extends Plugin {
       }
 
       await this.refreshInlineHost();
-      if(!this.inlineHostService){
-        const target=await this.inlineHostTarget(),opened=await this.inlineHostFiles(target);
-        const directory=target.directory.replace(/inline\/v1$/,'commands/v1');
-        try{
-          const path=`${directory}/requests/${command.id}.json`,bytes=JSON.stringify(command),previous=await opened.files.read(path);
-          if(previous!==undefined&&previous!==bytes)throw Error('This command ID already has different input.');
-          if(previous===undefined)await opened.files.write(path,bytes);
-          const deadline=Date.now()+60_000;
-          while(!this.stopped&&Date.now()<deadline){const raw=await opened.files.read(`${directory}/results/${command.id}.json`);if(raw){const result=JSON.parse(raw);if(!result.ok)throw Error(result.error);return result;}await new Promise(resolve=>window.setTimeout(resolve,250));}
-          throw Error(`The response host has not acknowledged command ${command.id}. Check the saved result before retrying.`);
-        }finally{opened.close();}
-      }
+      if(!this.inlineHostService)throw Error('Run legacy response maintenance on its desktop host.');
       return {id:command.id,ok:true,...await this.inlineHostService.responseCommand(command.kind,command.kind==='close-stream-block'?command.foldKey:command.bindingId,command.hash,command.notePath)};
     }
     if(isFolderCommand(input)){
@@ -1107,17 +1097,22 @@ export default class SendToT3 extends Plugin {
     if(paused)await this.executeAgentCommand({version:1,id:randomId(),kind:'resume-thread-stream',subscriptionId:paused.id});
     else await this.executeAgentCommand({version:1,id:history.length?randomId():importFollowId(source,notePath),kind:'stream-thread',scope:'thread',source,destinations:[notePath],start:'future'});
   }
-  private async readImportRecords(source:{threadId:string;projectId:string;environmentId:string}){
-    const host=await this.inlineHostTarget(),records:import('./run-import').ImportRecord[]=[],seen=new Set<string>();let cursor:string|undefined;
-    for(let page=0;page<100;page++){
-      const result=await this.executeImportRead({version:1,id:randomId(),kind:'response-import-records',source,...(cursor?{cursor}:{})},host) as import('./import-records').ImportRecordsPage;
-      if(!Array.isArray(result.importRecords)||result.importRecords.some(record=>!record?.request||record.request.vaultId!==this.settings.vaultId||record.request.threadId!==source.threadId||record.request.projectId!==source.projectId||record.request.threadEnvironmentId!==source.environmentId))throw Error('The response host returned invalid import evidence. Update and reload the host.');
-      records.push(...result.importRecords);
-      if(result.nextCursor===undefined)return records;
-      if(!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(result.nextCursor)||seen.has(result.nextCursor)||cursor&&result.nextCursor<=cursor)throw Error('The response host returned an invalid import history cursor.');
-      cursor=result.nextCursor;seen.add(cursor);
-    }
-    throw Error('The import history exceeds its page limit.');
+  private async importedLegacyRun(notePath:string,source:import('./response-command').ImportSource,messageId:string,runId:string){
+    // Legacy duplicate detection reads only the small destination index and
+    // exact routes. It never enumerates or parses historical response bodies.
+    const root=this.settings.folderLinks.find(link=>link.folderPath==='/');
+    if(!root)return false;
+    const host=await this.inlineHostTarget(),opened=await this.inlineHostFiles(host,false);
+    try{
+      const raw=await opened.files.read(explorerResponsePath(host.directory));
+      const entries=loadExplorerResponses(raw?JSON.parse(raw):[]).filter(row=>row.notePath===notePath&&!row.deleted);
+      for(const entry of entries){
+        const raw=await opened.files.read(leasePaths(host.directory,entry.id).route);if(!raw)continue;
+        const route=JSON.parse(raw);
+        if(route.id===entry.id&&route.vaultId===this.settings.vaultId&&route.notePath===notePath&&route.threadId===source.threadId&&route.projectId===source.projectId&&route.threadEnvironmentId===source.environmentId&&(route.messageId===messageId||route.turnId===runId||route.turnIds?.includes(runId)))return true;
+      }
+      return false;
+    }finally{opened.close();}
   }
   private async executeImportRead(command:import('./response-command').ResponseCommand,target:InlineHostTarget){
     if(command.kind!=='response-import-records'&&command.kind!=='response-import-info')throw Error('Choose a read-only import command.');
@@ -1128,15 +1123,7 @@ export default class SendToT3 extends Plugin {
       await this.refreshInlineHost();
       if(this.inlineHostService)return {id:command.id,ok:true,...await this.inlineHostService.responseCommand(command.kind,command.kind==='response-import-records'?command.id:command.bindingId,undefined,undefined,command.kind==='response-import-records'?command:undefined)};
     }
-    const opened=await this.inlineHostFiles(target),directory=target.directory.replace(/inline\/v1$/,'commands/v1');
-    try{
-      const path=`${directory}/requests/${command.id}.json`,bytes=JSON.stringify(command),previous=await opened.files.read(path);
-      if(previous!==undefined&&previous!==bytes)throw Error('This command ID already has different input.');
-      if(previous===undefined)await opened.files.write(path,bytes);
-      const deadline=Date.now()+60_000;
-      while(!this.stopped&&Date.now()<deadline){const raw=await opened.files.read(`${directory}/results/${command.id}.json`);if(raw){const result=JSON.parse(raw);if(!result.ok)throw Error(result.error);return result;}await new Promise(resolve=>window.setTimeout(resolve,250));}
-      throw Error(`The response host has not acknowledged command ${command.id}. Check the saved result before retrying.`);
-    }finally{opened.close();}
+    throw Error('Run legacy response maintenance on its desktop host. Imports read T3 directly.');
   }
   private async readImportHistory(project:Project,threadId:string){
     if(this.stopped)throw Error('The plugin is disabled.');
@@ -1145,10 +1132,8 @@ export default class SendToT3 extends Plugin {
     let snapshot:any;
     try{snapshot=await readInlineSnapshot(access,threadId,project.id,undefined,true,true);}finally{await access.close?.();}
     if(snapshot.thread.deletedAt||snapshot.thread.archivedAt)throw Error('This source thread is no longer available.');
-    let state:InlineThreadState=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
-    const records=await this.readImportRecords(source);
-    for(const record of records)state=restoreInlineBindings(state,record.state?.bindingCheckpoint);
-    return {source,state,records,title:String(snapshot.thread.title??'T3 response').slice(0,200)};
+    const state:InlineThreadState=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+    return {source,state,title:String(snapshot.thread.title??'T3 response').slice(0,200)};
   }
   /** Import is independent of note routing. The selected source never receives input. */
   async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false):Promise<{duplicate:boolean;following:boolean}>{
@@ -1158,26 +1143,20 @@ export default class SendToT3 extends Plugin {
       const history=await this.readImportHistory(project,threadId),run=importRuns(history.state).find(run=>run.messageId===messageId);
       if(!run||run.unavailable||!run.turnId||!run.turn)throw Error(run?.unavailable??'This response is no longer in the T3 history.');
       const document=await deviceNoteIO(this.app).readNote(notePath);if(document===undefined)throw Error('Destination note not found.');
-      const existing=history.records.find(record=>(record.state?.notePath??record.request.notePath)===notePath&&(
-        [record.request.messageId,record.state?.messageId,...record.state?.steering?.map(input=>input.messageId)??[],...record.state?.questionFollows?.flatMap(input=>[`async-answer:${input.requestId}`,...(input.input?[input.input.messageId]:[])])??[]].includes(messageId)
-        ||[record.state?.turnId,...record.state?.turnIds??[]].includes(run.turnId)));
-      const id=importBindingId(history.source,messageId,notePath),host=await this.inlineHostTarget(),opened=await this.inlineHostFiles(host);
-      let duplicate=!!existing;
-      try{
-        const raw=existing?JSON.stringify(existing):await opened.files.read(leasePaths(host.directory,id).record);
-        const record:LeaseRecord|undefined=raw?JSON.parse(raw):undefined;
-        if(record){
-          duplicate=true;
-          if(!record.state?.finalSaved&&!['complete','interrupted'].includes(record.state?.status??''))await this.deviceInline.register(record.request);
-        }else{
-          const prepared=await opened.files.read(`${host.directory}/requests/${id}.json`);
-          const policy=resolveJobOptions(this.settings.inlineStreaming).inline;
-          const request:HostedInlineRequest=prepared?JSON.parse(prepared):{version:4,id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath,threadId,messageId,projectId:project.id,threadEnvironmentId:history.source.environmentId,createdAt:run.createdAt,threadTitle:history.title,independent:true,importTurn:run.turn,...await this.coordinatedHostFormat(host),initialInput:/^[0-9a-f-]{36}$/i.test(messageId)?{messageId,text:history.state.messages.find(message=>message.id===messageId)!.text,label:incomingLabel(history.state.messages.find(message=>message.id===messageId)!)}:undefined,initialHash:initialRegion(id).bodyHash,keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode,finalAnswerFormat:policy.finalAnswerFormat};
-          this.rememberInlineTarget(host);
-          const binding=await editorStream(request,notePath,deviceNoteIO(this.app),()=>!this.stopped,id);
-          await this.deviceInline.register(binding);
-        }
-      }finally{opened.close();}
+      const previous=findRunImport(document,history.source,messageId);
+      const binding=previous&&localResponseBindings(document).find(request=>request.id===previous.bindingId&&request.vaultId===this.settings.vaultId);
+      let duplicate=!!previous;
+      if(binding)await this.deviceInline.register({...binding,notePath});
+      if(!duplicate)duplicate=await this.importedLegacyRun(notePath,history.source,messageId,run.turnId);
+      if(!duplicate){
+        const id=importBindingId(history.source,messageId,notePath),host=await this.localResponseTarget({project,connection:this.connection(project)} as Request);
+        const policy=resolveJobOptions(this.settings.inlineStreaming).inline;
+        const prompt=history.state.messages.find(message=>message.id===messageId)!;
+        const request:HostedInlineRequest={version:4,id,localOnly:true,nativeProjection:true,responseContainer:true,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath,threadId,messageId,projectId:project.id,threadEnvironmentId:history.source.environmentId,createdAt:run.createdAt,threadTitle:history.title,independent:true,importTurn:run.turn,initialInput:/^[0-9a-f-]{36}$/i.test(messageId)?{messageId,text:prompt.text,label:incomingLabel(prompt)}:undefined,initialHash:initialRegion(id).bodyHash,keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode,finalAnswerFormat:policy.finalAnswerFormat};
+        const io=deviceNoteIO(this.app),receipt=runImportReceipt({version:1,bindingId:id,...history.source,messageId,runId:run.turnId});
+        const inserted=await editorStream(request,notePath,{...io,updateNote:(path,change,allowed)=>io.updateNote(path,current=>{const next=change(current);return findRunImport(next,history.source,messageId)?next:next+(next.endsWith('\n')?'':'\n')+receipt+'\n';},allowed)},()=>!this.stopped,id);
+        await this.deviceInline.register(inserted);
+      }
       if(follow)await this.followImportedThread(history.source,notePath);
       return {duplicate,following:follow};
     }finally{this.busy=false;}

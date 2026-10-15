@@ -3,16 +3,18 @@
 import argparse
 import importlib.util
 import json
-import os
 from pathlib import Path
 import re
-import time
+import urllib.request
+import urllib.error
+import urllib.parse
+import socket
 import uuid
 
 
 def remote_failure_log(host, vault, command, retry=False):
-    # Reuse the existing private Windows SSH mailbox transport. No new server,
-    # T3 prompt, GUI input, or plugin settings change is involved.
+    # Reuse the existing private Windows SSH command transport. No T3 prompt, GUI input,
+    # or plugin settings change is involved.
     spec = importlib.util.spec_from_file_location('laptop_client_mailbox', Path(__file__).with_name('laptop-reload.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -233,39 +235,35 @@ def main():
             parser.error('Invalid private vault storage route.')
         storage_root = destination
     base = storage_root / args.config_dir / 't3-code' / 'commands' / 'v1'
-    if not (base / 'requests').is_dir():
-        parser.error('Command mailbox not found. Open the vault in Obsidian with the updated plugin enabled.')
-    request = base / 'requests' / (command_id + '.json')
-    result = base / 'results' / (command_id + '.json')
-    if request.exists():
-        if json.loads(request.read_text()) != command:
-            parser.error('This request ID already belongs to different input.')
-    else:
-        temporary = request.with_suffix('.' + str(uuid.uuid4()) + '.tmp')
+    try:
+        endpoint = json.loads((base / 'endpoint.json').read_text())
+        target = urllib.parse.urlsplit(endpoint.get('url', ''))
+        if (endpoint.get('version') != 1 or target.scheme != 'http' or target.hostname != '127.0.0.1'
+                or not target.port or target.path != '/commands' or target.query or target.fragment
+                or target.username or target.password or not re.fullmatch(r'[0-9a-f]{64}', endpoint.get('token', ''))):
+            parser.error('Invalid direct command endpoint.')
+        data = json.dumps(dict(command=command, retry=args.retry)).encode()
+        request = urllib.request.Request(endpoint['url'], data=data, method='POST', headers={
+            'Authorization': 'Bearer ' + endpoint['token'], 'Content-Type': 'application/json'})
+        # Loopback traffic never uses proxy settings or follows redirects.
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         try:
-            with open(temporary, 'x') as output:
-                os.chmod(temporary, 0o600)
-                json.dump(command, output)
-            # Publish without overwriting another caller's immutable request.
-            os.link(temporary, request)
-        finally:
-            temporary.unlink(missing_ok=True)
-    if args.retry and result.exists():
-        previous = json.loads(result.read_text())
-        if previous.get('ok'):
-            print(json.dumps(previous))
-            return
-        result.unlink()
-    deadline = time.monotonic() + args.timeout
-    while time.monotonic() < deadline:
-        if result.exists():
-            response = json.loads(result.read_text())
-            print(json.dumps(response))
-            raise SystemExit(0 if response.get('ok') else 1)
-        time.sleep(0.25)
-    print(json.dumps(dict(id=command_id, ok=False, pending=True,
-                         error='Timed out waiting for Obsidian. Reuse this request ID; do not create a replacement send.')))
-    raise SystemExit(2)
+            with opener.open(request, timeout=args.timeout) as response:
+                result = json.load(response)
+        except urllib.error.HTTPError as error:
+            result = json.load(error)
+        print(json.dumps(result))
+        raise SystemExit(0 if result.get('ok') else 1)
+    except (FileNotFoundError, ConnectionRefusedError):
+        print(json.dumps(dict(id=command_id, ok=False, error='The direct Obsidian command endpoint is unavailable. Open the vault with the updated plugin enabled. No request was queued.')))
+        raise SystemExit(1)
+    except (TimeoutError, socket.timeout, urllib.error.URLError, ConnectionError):
+        print(json.dumps(dict(id=command_id, ok=False, pending=True,
+                             error='The direct request was not confirmed. Reuse this request ID; do not create a replacement send.')))
+        raise SystemExit(2)
 
 
 if __name__ == '__main__':
