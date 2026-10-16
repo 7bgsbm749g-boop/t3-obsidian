@@ -1208,11 +1208,12 @@ export default class SendToT3 extends Plugin {
   }
   openRunImport(file:TFile){
     if(this.stopped||this.busy)return;
+    const insertion=this.noteSendInsertion(file);
     openRunImport(this.app,file.path,{
       projects:()=>this.projects(),projectLabel:project=>this.projectChoiceLabel(project),
       threads:async project=>projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id),
       runs:async(project,thread)=>importRuns((await this.readImportHistory(project,thread.id)).state),
-      attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow),
+      attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow,insertion),
     });
   }
   async openImportStreams(file:TFile){
@@ -1247,7 +1248,7 @@ export default class SendToT3 extends Plugin {
     return {source,state,title:String(snapshot.thread.title??'T3 response').slice(0,200)};
   }
   /** Import is independent of note routing. The selected source never receives input. */
-  async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false):Promise<{duplicate:boolean;following:boolean}>{
+  async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false,insertion?:CursorInsertion|null):Promise<{duplicate:boolean;following:boolean}>{
     if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
     this.busy=true;
     try{
@@ -1264,7 +1265,7 @@ export default class SendToT3 extends Plugin {
         const prompt=history.state.messages.find(message=>message.id===messageId)!;
         const request:ResponseRequest={version:4,id,localOnly:true,nativeProjection:true,responseContainer:true,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath,threadId,messageId,projectId:project.id,threadEnvironmentId:history.source.environmentId,createdAt:run.createdAt,threadTitle:history.title,independent:true,importTurn:run.turn,initialInput:/^[0-9a-f-]{36}$/i.test(messageId)?{messageId,text:prompt.text,label:incomingLabel(prompt)}:undefined,initialHash:initialRegion(id).bodyHash,keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode,finalAnswerFormat:policy.finalAnswerFormat};
         const io=deviceNoteIO(this.app),receipt=runImportReceipt({version:1,bindingId:id,...history.source,messageId,runId:run.turnId});
-        const inserted=await editorStream(request,notePath,{...io,updateNote:(path,change,allowed)=>io.updateNote(path,current=>{const next=change(current);return findRunImport(next,history.source,messageId)?next:next+(next.endsWith('\n')?'':'\n')+receipt+'\n';},allowed)},()=>!this.stopped,id);
+        const inserted=await editorStream(request,notePath,{...io,updateNote:(path,change,allowed)=>io.updateNote(path,current=>{const next=change(current);return findRunImport(next,history.source,messageId)?next:next+(next.endsWith('\n')?'':'\n')+receipt+'\n';},allowed)},()=>!this.stopped,id,insertion??undefined);
         await this.deviceInline.register(inserted);
       }
       if(follow)await this.followImportedThread(history.source,notePath);

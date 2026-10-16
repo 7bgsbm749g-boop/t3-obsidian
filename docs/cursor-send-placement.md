@@ -19,11 +19,14 @@ cannot shift insertion into another paragraph or a response container. A cursor
 inside a response maps after that response. Running-thread steering still uses
 the existing response identity and does not create a second response block.
 
-Ask without a selection uses the captured cursor too. Selection questions keep
-their existing placement below the selection. Sends from a file without an
-active editing cursor, agent commands, imports, and separate destination notes
-retain their existing end-of-note behavior. An explicit destination section
-takes precedence over the cursor hint. Cursor hints are transient preparation
+Ask without a selection uses the captured cursor too. Import T3 run captures
+the same saved cursor when the import picker opens, before selecting a project,
+thread, or run. Completed imports and running imports use the same block rules;
+duplicate imports remain idempotent. Following future runs retains the existing
+stream registration behavior. Selection questions keep their existing placement
+below the selection. Sends and imports without an active editing cursor, agent
+commands, and separate destination notes retain end-of-note placement. An
+explicit destination section takes precedence over the cursor hint. Cursor hints are transient preparation
 data; response requests and saved binding formats are unchanged.
 
 Regression tests cover paragraph and block boundaries, note properties, code
