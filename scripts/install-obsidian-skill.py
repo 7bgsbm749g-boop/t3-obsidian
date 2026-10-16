@@ -10,7 +10,7 @@ import shutil
 import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / 'docs' / 'obsidian-t3-SKILL.md'
+SOURCE = ROOT / 'skills' / 'obsidian-t3'
 
 
 def destinations(home):
@@ -19,37 +19,44 @@ def destinations(home):
                              (home / '.config' / 'opencode', home / '.config' / 'opencode' / 'skills')]:
         if detected.is_dir():
             roots.append(skills)
-    return [root / 'obsidian-t3' / 'SKILL.md' for root in roots]
+    return [root / 'obsidian-t3' for root in roots]
 
 
 def install(home, source=SOURCE, backups=None, check=False):
     source = source.resolve(strict=True)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    digest = hashlib.sha256((source / 'SKILL.md').read_bytes()).hexdigest()
     targets = destinations(home)
-    # Inspect all targets before changing any installation.
+    # Link the folder: Codex follows skill-directory links, but skips linked
+    # SKILL.md files inside otherwise ordinary directories.
     for target in targets:
         if target.is_symlink() and target.resolve() != source:
             raise ValueError(f'Refusing an unrelated skill link: {target}')
+        if target.exists() and not target.is_dir():
+            raise ValueError(f'Refusing an unrelated skill file: {target}')
     results = []
     for target in targets:
         current = target.is_symlink() and target.resolve() == source
         if not check and not current:
             target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists():
-                directory = backups or home / 'backups' / 'send-to-t3-code' / 'skills'
-                directory.mkdir(parents=True, exist_ok=True)
-                backup = directory / (dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex + '.md')
-                shutil.copy2(target, backup)
-                backup.chmod(0o600)
-            temporary = target.with_name('.SKILL.md.' + uuid.uuid4().hex)
+            backup = None
+            temporary = target.with_name('.obsidian-t3.' + uuid.uuid4().hex)
             try:
-                temporary.symlink_to(source)
+                temporary.symlink_to(source, target_is_directory=True)
+                if target.exists():
+                    directory = backups or home / 'backups' / 'send-to-t3-code' / 'skills'
+                    directory.mkdir(parents=True, exist_ok=True)
+                    backup = directory / (dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex)
+                    shutil.move(str(target), str(backup))
                 os.replace(temporary, target)
+            except BaseException:
+                if backup is not None and backup.exists() and not target.exists():
+                    shutil.move(str(backup), str(target))
+                raise
             finally:
                 temporary.unlink(missing_ok=True)
             current = True
         results.append({'path': str(target), 'current': current})
-    return {'source': str(source), 'sha256': digest, 'installations': results, 'ok': all(item['current'] for item in results)}
+    return {'source': str(source / 'SKILL.md'), 'sha256': digest, 'installations': results, 'ok': all(item['current'] for item in results)}
 
 
 def main():

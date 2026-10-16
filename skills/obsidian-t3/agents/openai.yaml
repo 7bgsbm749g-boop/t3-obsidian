@@ -1,0 +1,3 @@
+interface:
+  display_name: "Obsidian T3 Plugin"
+  short_description: "Send notes to T3 and manage streamed reply destinations"
