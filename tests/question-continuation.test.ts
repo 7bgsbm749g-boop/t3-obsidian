@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {continueQuestionAnswer,questionAnswerBindingId,type QuestionContinuationIO} from '../question-continuation';
 import {QuestionController,type QuestionAnswerFollow} from '../question-controller';
-import {renderQuestion} from '../questions';
+import {renderQuestion,type QuestionTarget} from '../questions';
 import {contentHash} from '../completion';
 import {responseAnchor} from '../native-response-projection';
 import {LocalResponseManager} from '../local-response-manager';
@@ -14,7 +14,7 @@ import type {DirectInlineUpdate} from '../direct-inline-preview';
 const at=(second:number)=>`2026-10-16T00:00:${String(second).padStart(2,'0')}.000Z`;
 const drain=async()=>{for(let n=0;n<10;n++)await new Promise(resolve=>setImmediate(resolve));};
 function fixture(){
- const target={environmentId:'environment',threadId:randomUUID(),requestId:randomUUID()},path='Late answer.md';
+ const target:QuestionTarget={environmentId:'environment',threadId:randomUUID(),requestId:randomUUID()},path='Late answer.md';
  const request={requestId:target.requestId,turnId:'source',responseMode:'message' as const,createdAt:at(1),questions:[{id:'choice',header:'Choice',question:'Continue?',options:[],multiSelect:false}]};
  const follow:QuestionAnswerFollow={request,command:{type:'thread.user-input.respond',commandId:randomUUID(),threadId:target.threadId,requestId:target.requestId,answers:{choice:'Yes'},createdAt:at(20)},notePath:path,accepted:true};
  const source:ResponseRequest={version:4,localOnly:true,nativeProjection:true,responseContainer:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'environment',workspaceRoot:'/synthetic',directory:'.obsidian/inline'},notePath:path,threadId:target.threadId,messageId:randomUUID(),projectId:randomUUID(),threadEnvironmentId:'environment',initialHash:contentHash(''),createdAt:at(0),intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'};
@@ -43,6 +43,13 @@ test('active-run answers use their current stream; unrelated output cannot stand
  const h=fixture();h.thread.messages[1].turnId='source';
  assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),true);assert.equal(h.registrations(),0);
  h.thread.messages=h.thread.messages.slice(0,1);assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),false);assert.equal(h.documents.get(h.path),h.saved);
+});
+
+test('native runtime request identities longer than 200 characters retain their exact async-answer binding',async()=>{
+ const h=fixture(),id='runtime-request:provider:codex:'+('native-request:async%3Acall_'.repeat(12));
+ h.target.requestId=id;h.follow.request.requestId=id;h.follow.command.requestId=id;
+ h.thread.messages[1].id=`async-answer:${id}`;h.thread.latestTurn.messageId=`async-answer:${id}`;h.thread.activities[1].payload.requestId=id;
+ assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),true);assert.equal(h.registered[0].messageId,`async-answer:${id}`);
 });
 
 test('failed registration after insertion retries the same container without another answer or duplicate block',async()=>{
