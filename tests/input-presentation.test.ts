@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {visibleInlineInput,INLINE_REPLY_INSTRUCTION,THREAD_REPLY_INSTRUCTION} from '../input-presentation';
 import {renderInlineTurn,type InlineThreadState} from '../inline-thread';
 import {observeIncoming} from '../inline-steering';
+import {obsidianFooter} from '../obsidian-prompt';
 
 const footer='\n\nSent from Obsidian.\nObsidian vault: "QLO2"\nDestination note path: "/vault/Jobs/Note.md"';
 
@@ -47,4 +48,15 @@ for(const mode of ['remove','keep','collapse'] as const)test(`${mode} cleans can
     assert.equal(incoming[0].messageId,'input');assert.equal(incoming[0].text,user.text);
   }
   assert.equal(JSON.stringify(state),before);assert.equal(JSON.stringify(inputs),saved);
+});
+
+
+test('new footer has exactly three lines and retains ordinary user delivery instructions',()=>{
+  const footer=obsidianFooter('Vault café','Projects/Task.md');
+  assert.equal(footer,'\n\nSent from Obsidian.\nVault: Vault café\nNote: Projects/Task.md');
+  const text='Please explain.\n\n'+INLINE_REPLY_INSTRUCTION;
+  assert.equal(visibleInlineInput(text+footer),text);
+  assert.equal(visibleInlineInput('Please explain.'+footer),'Please explain.');
+  assert.equal(visibleInlineInput('Example:\n\n```text'+footer+'\n```'),'Example:\n\n```text'+footer+'\n```');
+  assert.equal(obsidianFooter('A\nVault: injected','Task\r.md'),'\n\nSent from Obsidian.\nVault: A Vault: injected\nNote: Task .md');
 });

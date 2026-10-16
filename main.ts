@@ -19,7 +19,8 @@ import {hasPluginPermissions} from './environment-permissions';
 import {mergeSharedSettings} from './shared-settings';
 import {noteThreadTitle,threadTitleGeneration,type ThreadTitleGeneration} from './thread-title';
 import {ResponseLocationModal} from './response-location-ui';
-import {stagedNoteInstruction} from './staged-note-instruction';
+import {obsidianFooter} from './obsidian-prompt';
+import {isNoteContextCommand,noteContext,mergeNoteContexts,contextBindingIds,type NoteContextRecord} from './note-context';
 import {isResponseCommand,validateResponseCommand} from './response-command';
 import {installStreamBlockControls} from './stream-block-controls';
 import {incomingLabel} from './inline-steering';
@@ -54,7 +55,7 @@ import {nativeStoppedStore} from './native-stop-store';
 import { downloadImage,nativeAccountFetch } from './network';
 import {ensureVaultIdentityRecord} from './vault-identity';
 import { collectImages, imageReferenceDefinitions, MAX_IMAGE_BYTES } from './images';
-import { applyOrchestration, OrchestrationSettings } from './orchestration';
+import type {OrchestrationSettings} from './orchestration';
 import { CompletionSettings, CompletionJob, CompletionAction, archiveFolder, contentHash, completionState, isOriginalCompletedTurn, cleanCompletedNote } from './completion';
 import { Connection, Project, Request, RequestDeliveryError, acceptedRequestThread, parseProjects, runBridge, sendRequest, configureBridge, retiredConnection, RETIRED_MESSAGE, projectKey, projectLabel,withTimeout } from './bridge';
 import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from './folder-link';
@@ -95,13 +96,12 @@ import {ApprovalController} from './approval-controller';
 import {approvalButton,approvalEditorExtension} from './approval-ui';
 import {approvalTargets,parseApprovalUrl,clearApprovalControls,type ApprovalTarget} from './approvals';
 import {settlementState,type ThreadSettlementJob} from './thread-settlement';
-import {INLINE_REPLY_INSTRUCTION,THREAD_REPLY_INSTRUCTION} from './input-presentation';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
 const NEW_FOLDER_PROJECT='folder:new';
 const VAULT_PROJECT='vault:root';
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
 type PreparedNote={content:string;images:Awaited<ReturnType<typeof collectImages>>};
-interface Settings {smartSend?:SmartSendData;responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
+interface Settings {noteContexts?:NoteContextRecord[];smartSend?:SmartSendData;responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
 export default class SendToT3 extends Plugin {
   declare settings: Settings;
   mode: 'desktop'|'direct' = 'desktop';
@@ -255,7 +255,7 @@ export default class SendToT3 extends Plugin {
     this.cloudAccount=local?.cloudAccount??null;
     this.nativeAccount=local?.nativeAccount??null;
     this.vaultRegistrations=local?.vaultRegistrations??{};
-    this.settings = {codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
+    this.settings = {noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
     if(!Platform.isMobile){
       const key=`t3-connection-recovery-v1:${this.settings.vaultId}`;
       this.connectionRecovery=new ConnectionRecovery({
@@ -830,6 +830,11 @@ export default class SendToT3 extends Plugin {
     await service.renameFolder(oldPath,folder.path,notes);
   }
   async executeAgentCommand(input:import('./note-command').AgentCommand){
+    if(isNoteContextCommand(input)){
+      const latest=await this.loadData();
+      const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
+      return noteContext(input,mergeNoteContexts(this.settings.noteContexts,latest?.noteContexts),responseBindingRequests(mergeResponseBindingData(this.settings.responseBindings,latest?.responseBindings)),{name:this.app.vault.getName(),id:this.settings.vaultId,...(root?{workspaceRoot:root}:{})});
+    }
     if(isRecoveryCommand(input))throw Error('Legacy reply recovery has been retired. Its unfinished work was cancelled.');
     if(isClientCommand(input)){
       await this.refreshNoteCommandHost();
@@ -997,6 +1002,8 @@ export default class SendToT3 extends Plugin {
     Object.assign(this.smartReplica,mergeSmartSend(this.smartReplica,data.smartSend,this.settings.smartSend));this.settings.smartSend=this.smartReplica;await deviceState(`smart-send:${this.deviceId}:${this.settings.vaultId}`,this.smartReplica);
     this.responseBindingReplica=mergeResponseBindingData(this.responseBindingReplica,incomingBindings);
     this.settings.responseBindings=this.responseBindingReplica;
+    this.settings.noteContexts=mergeNoteContexts(this.settings.noteContexts,data.noteContexts);
+    const restoreNoteContexts=JSON.stringify(mergeNoteContexts(data.noteContexts))!==JSON.stringify(this.settings.noteContexts);
     const restoreResponseBindings=JSON.stringify(incomingBindings)!==JSON.stringify(this.responseBindingReplica);
     await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`,this.responseBindingReplica);
     for(const key of ['inlineStreaming','orchestration','completion','threadTitleGeneration','replyFolders','codebase'] as const)this.settings[key]=adopted[key];
@@ -1021,7 +1028,7 @@ export default class SendToT3 extends Plugin {
     remote.folderLinks=this.settings.folderLinks;remote.folderLinkChanges=this.folderLinkReplica;
     this.sharedBaseline=JSON.stringify(remote);
     this.settings.noteThreads=mergedThreads;
-    if(JSON.stringify(data.smartSend)!==JSON.stringify(this.smartReplica)||restoreFolderLinks||restoreResponseBindings||JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save(restoreFolderLinks||restoreResponseBindings);
+    if(JSON.stringify(data.smartSend)!==JSON.stringify(this.smartReplica)||restoreFolderLinks||restoreResponseBindings||restoreNoteContexts||JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save(restoreFolderLinks||restoreResponseBindings||restoreNoteContexts);
     if(previousBindings!==JSON.stringify(this.responseBindingReplica))this.deviceInline?.localBindingsChanged();
     this.refreshFolderIndicators();
   }
@@ -1426,7 +1433,7 @@ export default class SendToT3 extends Plugin {
       if(!context){const file=this.app.vault.getFileByPath(note.path);if(!file)throw Error('The original note is unavailable.');const view=await this.editorForNoteSend(file);if(!view)throw Error('A Markdown editor is required for inline streaming.');context={view,editor:view.editor};}
       return this.sendInlineChat(prompt,note,context,{...options,jobOptions});
     }
-    return this.sendChat(answerOnly?`${prompt}\n\n${THREAD_REPLY_INSTRUCTION}`:prompt,note,{...options,jobOptions:{...jobOptions,inline:{...jobOptions.inline,enabled:false}},sourceContext:context});
+    return this.sendChat(prompt,note,{...options,jobOptions:{...jobOptions,inline:{...jobOptions.inline,enabled:false}},sourceContext:context});
   }
   private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
     const manager=this.inlineChat;if(!manager)throw Error('Inline T3 response is unavailable. Reload the plugin.');
@@ -1437,7 +1444,7 @@ export default class SendToT3 extends Plugin {
     const requestId=randomId(),initialInput=context.initialQuestion?{messageId:commandId(requestId,'message'),text:context.initialQuestion}:undefined;
     let job:InlineJob|undefined,delivered=false;
     try{
-      await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{...options,jobOptions,requestId,sourceContext:context,onPrepared:async request=>{
+      await this.sendChat(prompt,note,{...options,jobOptions,requestId,sourceContext:context,onPrepared:async request=>{
         // Package images before mutating the note.
 
         job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
@@ -1474,7 +1481,7 @@ export default class SendToT3 extends Plugin {
     }
     const policy=hosted?.record.request??job!;
     const jobOptions=resolveJobOptions({enabled:true,intermediateMode:policy.intermediateMode,keepIntermediate:policy.keepIntermediate,finalAnswerFormat:policy.finalAnswerFormat});
-    await this.sendChat(`${prompt}\n\n${INLINE_REPLY_INSTRUCTION}`,note,{threadId,projectOverrideKey:key,jobOptions,sourceContext:context,onPrepared:request=>{
+    await this.sendChat(prompt,note,{threadId,projectOverrideKey:key,jobOptions,sourceContext:context,onPrepared:request=>{
       logEvent('steering.prepared',{jobId:id,requestId:request.id,messageId:commandId(request.id,'message'),threadId,projectId});
       request.inlineSteering={jobId:id,...(hosted?{host:hosted.host}:{}),input:{messageId:commandId(request.id,'message'),text:prompt,...(selection?{selection}:{})}};
     }});
@@ -1604,7 +1611,6 @@ export default class SendToT3 extends Plugin {
     const threadEnvironmentId=request.connection.environmentId??await this.localInlineEnvironment();
     job.hostTarget=host;
     request.inlineHost={localOnly:true,nativeProjection:true,responseContainer:true,version:4,finalAnswerFormat:finalAnswerFormat(job.finalAnswerFormat),independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
-    request.prompt+=stagedNoteInstruction([request.inlineHost]);if(request.prompt.length>120_000)throw Error('The note and staged-edit context exceed T3’s prompt limit.');
 
   }
   private async localResponseFiles(target:ResponseStorageTarget,_waitForHost=true):Promise<{files:ResponseFiles;readonly closed:boolean;close():void}>{
@@ -1744,8 +1750,8 @@ export default class SendToT3 extends Plugin {
     const separator=root.includes('\\')&&!root.includes('/')?'\\':'/';
     return root.replace(/[\\/]+$/,'')+separator+path.replace(/[\\/]+/g,separator);
   }
-  private messageFooter(destination:string):string {
-    return `\n\nSent from Obsidian.\nObsidian vault: ${JSON.stringify(this.app.vault.getName())}\nDestination note path: ${JSON.stringify(destination)}`;
+  private messageFooter(destination?:string):string {
+    return obsidianFooter(this.app.vault.getName(),destination);
   }
   private async prepareImages(markdown:string,sourcePath:string,resolveReferences=false,snapshot?:string){
     let definitions='';
@@ -1807,20 +1813,17 @@ export default class SendToT3 extends Plugin {
         const selectionReference=!reference&&!plan.text.trim()&&question.trim()&&selected?`Selection reference: ${selected.slice(0,160)}${selected.length>160?'…':''}`:'';
         const material=reference?`Selected text:\n${reference}`:plan.text||selectionReference;
         if(!material.trim()&&!question.trim()){new Notice('Nothing new to send.');return;}
-        const instruction=prompt.endsWith(INLINE_REPLY_INSTRUCTION)?INLINE_REPLY_INSTRUCTION:THREAD_REPLY_INSTRUCTION;
-        prompt=[material,question.trim()?`Question:\n${question}`:'',instruction].filter(Boolean).join('\n\n');smartCapture=plan.capture;
+        prompt=[material,question.trim()?`Question:\n${question}`:''].filter(Boolean).join('\n\n');smartCapture=plan.capture;
       }
       const images=options?.barePrompt?undefined:await this.prepareImages(prompt,note?.path??'',true,options?.sourceContext?.snapshot);
       let text=images?.markdown??prompt;
       if(options?.barePrompt){
-        text=prompt;
+        text=prompt+this.messageFooter(note?.path);
       }else if(note){
-        const destination=this.destinationNotePath(note,project,link);
-        text+=this.messageFooter(destination??note.absolutePath??'(unmapped on destination)');
+        text+=this.messageFooter(note.path);
       }else{
-        text+=this.messageFooter('(no note open)');
+        text+=this.messageFooter();
       }
-      if(!options?.barePrompt)text=applyOrchestration(text,this.settings.orchestration);
       if(text.length>120_000)throw Error('The message and note path exceed T3’s 120,000-character limit. Shorten the message before sending.');
       if(connection.transport==='direct'){
         const session=await this.sessionFor(connection.connectionId??'');
@@ -1845,7 +1848,7 @@ export default class SendToT3 extends Plugin {
       await this.dispatch(request);
       if(options?.sourceContext?.smartQuestion)this.app.saveLocalStorage(this.chatDraftKey,'');
       const draft=this.app.loadLocalStorage(this.chatDraftKey);
-      if(typeof draft==='string'&&draft&&(draft===prompt||[THREAD_REPLY_INSTRUCTION,INLINE_REPLY_INSTRUCTION].some(instruction=>prompt===`${draft}\n\n${instruction}`||prompt.endsWith(`\n\nQuestion:\n${draft}\n\n${instruction}`))))this.app.saveLocalStorage(this.chatDraftKey,'');
+      if(typeof draft==='string'&&draft&&(draft===prompt||prompt.endsWith(`\n\nQuestion:\n${draft}`)))this.app.saveLocalStorage(this.chatDraftKey,'');
     }catch(e){if(request)await this.failRequest(request,e,'preparation',startedAt);else if(!(e instanceof ProjectCreationCancelled))this.recordSendFailure(undefined,e,'preparation',startedAt);if(e instanceof ProjectCreationCancelled)throw e;throw new RequestDeliveryError(`${unsavedMessage(e)} ${request?'The send failed. Its response was removed. See the send failure log.':'No message was sent or queued.'}`,false,Boolean(request));}
     finally{this.busy=false;}
   }
@@ -2172,7 +2175,7 @@ export default class SendToT3 extends Plugin {
   }
   private sharedSnapshot(){const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,...shared}=this.settings;return JSON.parse(JSON.stringify(shared));}
   private sharedData(data:any){
-    return {...this.sharedSnapshot(),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads!==false,
+    return {...this.sharedSnapshot(),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads!==false,
       orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads===true},
       inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},
       completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder??'Archive/T3 Code'}};
@@ -2198,12 +2201,14 @@ export default class SendToT3 extends Plugin {
       snapshot.folderLinkChanges=mergeFolderLinkChanges(this.folderLinkReplica,loadFolderLinkChanges(current?.folderLinkChanges),intended.folderLinkChanges);
       snapshot.folderLinks=applyFolderLinkChanges(mergeLegacyFolderLinks(loadFolderLinks(baseline),loadFolderLinks(current),intended.folderLinks),snapshot.folderLinkChanges);
       snapshot.noteThreads=mergeNoteThreads(loadNoteThreads(current?.noteThreads),intended.noteThreads);
+      snapshot.noteContexts=mergeNoteContexts(current?.noteContexts,intended.noteContexts,this.settings.noteContexts);
       snapshot.smartSend=mergeSmartSend(this.smartReplica,current?.smartSend,intended.smartSend);
       await deviceState(`smart-send:${this.deviceId}:${this.settings.vaultId}`,snapshot.smartSend);
       snapshot.responseBindings=mergeResponseBindingData(this.responseBindingReplica,current?.responseBindings,intended.responseBindings);
       await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`,snapshot.responseBindings);
       await this.saveData(snapshot);
       Object.assign(this.smartReplica,mergeSmartSend(snapshot.smartSend,this.smartReplica,this.settings.smartSend));this.settings.smartSend=this.smartReplica;
+      this.settings.noteContexts=mergeNoteContexts(snapshot.noteContexts,this.settings.noteContexts);
       this.responseBindingReplica=mergeResponseBindingData(snapshot.responseBindings,this.responseBindingReplica);this.settings.responseBindings=this.responseBindingReplica;
       this.folderLinkReplica=snapshot.folderLinkChanges;
       await deviceState(`folder-links:${this.deviceId}:${this.settings.vaultId}`,this.folderLinkReplica);
@@ -2222,7 +2227,6 @@ export default class SendToT3 extends Plugin {
     if (this.busy) {if(options?.throwOnError)throw Error('Obsidian is sending another request. Retry shortly.');return;}
     this.busy = true;
     const startedAt=Date.now();let request:Request|undefined;
-    const orchestration = {...this.settings.orchestration};
     const completion = {...this.settings.completion};
     try {
       const savedThread=this.noteThread(file.path);
@@ -2245,8 +2249,7 @@ export default class SendToT3 extends Plugin {
       const images=await this.prepareImages(smart.text,file.path,true,content);
       if(inlineView&&this.notePromptDocument(inlineView)!==content)throw Error('The note changed while preparing the send. Try again with the current text.');
       const note=this.noteContext(file),link=options?.folderLink??folderLinkForPath(this.settings.folderLinks,file.path)??{id:'manual',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true};
-      const destination=this.destinationNotePath(note,project,link)??note.absolutePath??'(unmapped on destination)';
-      request = {smartSend:smart.capture,jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path),prompt:applyOrchestration(images.markdown+(inlineView?`\n\n${INLINE_REPLY_INSTRUCTION}`:'')+this.messageFooter(destination),orchestration),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
+      request = {smartSend:smart.capture,jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path),prompt:images.markdown+this.messageFooter(file.path),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
       if(request.prompt.length>120_000) throw new Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
       if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path],undefined,options?.destinationSection);
       await options?.onPrepared?.(request);
@@ -2264,7 +2267,6 @@ export default class SendToT3 extends Plugin {
     request.inlineBindings=[];
     for(const path of destinations)request.inlineBindings.push(await editorStream(source,path,io,()=>!this.stopped));
     request.inlineHost=request.inlineBindings[0];
-    request.prompt+=stagedNoteInstruction(request.inlineBindings);if(request.prompt.length>120_000)throw Error('The note and staged-edit context exceed T3’s prompt limit.');
   }
   private async responseGuard(binding:ResponseRequest,_status:'prepared'|'accepted'|'failed',_uncertain=false){if(!binding.localOnly)throw Error('Legacy reply creation was retired.');}
   private persistAgentCommand(request:Request,threadId?:string){
@@ -2343,8 +2345,18 @@ export default class SendToT3 extends Plugin {
     }
     this.rememberSettlement(request,threadId);
   }
+  private async captureNoteContext(request:Request){
+    const messageId=commandId(request.id,'message');
+    if(!request.prompt)return;
+    const threadId=request.threadId??commandId(request.id,'thread'),environmentId=request.connection.environmentId??await this.localInlineEnvironment();
+    if(this.settings.noteContexts?.some(record=>record.messageId===messageId&&record.threadId===threadId&&record.environmentId===environmentId))return;
+    const bindingIds=contextBindingIds(request);
+    this.settings.noteContexts=mergeNoteContexts(this.settings.noteContexts,[{messageId,threadId,projectId:request.project.id,environmentId,notePath:request.noteThread?.notePath??request.completion?.notePath,bindingIds,waitForOtherThreads:this.settings.orchestration.waitForOtherThreads,createdAt:new Date().toISOString()}]);
+    await this.save();
+  }
   async dispatch(request:Request,quiet=false) {
     const startedAt=Date.now();let stage='response-registration';
+    await this.captureNoteContext(request);
     logEvent('request.dispatch.started',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,jobId:request.inlineSteering?.jobId,kind:request.inlineSteering?'steering':request.inlineFollow?'continuation':'send'});
     try{
     if(request.inlineSteering){
@@ -2587,7 +2599,7 @@ class T3Settings extends PluginSettingTab {
     el.createEl('p',{text:'Project files stay in their T3 workspaces. Codebase view opens them in Obsidian. Reply attachments are not copied into the vault.'});
     new Setting(el).setName('Codebase view').addButton(b=>b.setButtonText('Open').onClick(()=>{void (this.app as any).commands.executeCommandById('send-to-t3-code:codebase-view');}));
     el.createEl('h3',{text:'Orchestration'});
-    new Setting(el).setName('Wait for other threads').setDesc('Prepend an instruction to wait for all other active T3 Code threads in the destination project to finish before starting work.').addToggle(t=>t.setValue(this.plugin.settings.orchestration.waitForOtherThreads).onChange(async enabled=>{this.plugin.settings.orchestration.waitForOtherThreads=enabled;await this.plugin.save();}));
+    new Setting(el).setName('Wait for other threads').setDesc('The Obsidian agent skill checks this choice and waits for other active threads in the destination project before starting work.').addToggle(t=>t.setValue(this.plugin.settings.orchestration.waitForOtherThreads).onChange(async enabled=>{this.plugin.settings.orchestration.waitForOtherThreads=enabled;await this.plugin.save();}));
     new Setting(el).setName('Legacy cleanup defaults').setDesc('Applies only to previously queued cleanup jobs. Manual sends and questions always keep their notes. Changed or renamed notes are kept.').addDropdown(d=>d.addOptions({keep:'Keep note',archive:'Archive note',delete:'Delete note (vault trash)'}).setValue(this.plugin.settings.completion.action).onChange(async value=>{this.plugin.settings.completion.action=value as CompletionAction;await this.plugin.save();this.display();}));
     if(this.plugin.settings.completion.action==='archive') new Setting(el).setName('Archive folder').setDesc('Folder inside this vault. Original subfolders are preserved; existing notes are never overwritten.').addText(t=>t.setValue(this.plugin.settings.completion.archiveFolder).onChange(async value=>{this.plugin.settings.completion.archiveFolder=value;await this.plugin.save();}));
     el.createEl('h3',{text:'Linked folders'});

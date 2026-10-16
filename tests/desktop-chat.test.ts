@@ -34,6 +34,7 @@ if(args[0]==='auth'){
   const commands:any[]=[],shared:any[]=[];
   const server=createServer(async(req,res)=>{
     try{
+      if(req.url==='/.well-known/t3/environment'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({environmentId:'test-environment',orchestrationProtocolVersion:2}));return;}
       assert.equal(req.headers.authorization,'Bearer test-only');
       res.setHeader('Content-Type','application/json');
       if(req.url?.endsWith('/shell')){
@@ -89,7 +90,7 @@ for(const existing of [false,true])test(`desktop chat ${existing?'reuses':'creat
     assert.equal(h.commands[0].projectId,h.project.id);
     assert.equal(h.commands[0].title,'draft');
     assert.match(h.commands[1].text,/draft.md/);
-    assert.ok(h.commands[1].text.includes(JSON.stringify(join(h.vaultRoot,'draft.md'))));
+    assert.equal(h.commands[1].text,'Edit this note\n\nSent from Obsidian.\nVault: Vault café with spaces\nNote: draft.md');
     assert.equal(h.commands[1].attachments.length,0);
     assert.equal(h.shared.at(-1).folderLinks[0].folderPath,'/');
     assert.equal(h.shared.at(-1).folderLinks[0].workspaceRoot,h.vaultRoot);
@@ -148,5 +149,35 @@ test('desktop new workspace creation checks vault exclusion before making a dire
     const blocked=join(h.vaultRoot,'blocked');
     await assert.rejects(location.create(blocked,'Blocked',{parentPath:h.vaultRoot,name:'blocked'}),/outside the Obsidian vault/);
     assert.ok(!(await location.browse(h.vaultRoot)).entries.some((entry:any)=>entry.name==='blocked'));
+  }finally{await h.dispose();}
+});
+
+
+test('the wait option is discovered through exact context and adds no prompt instructions',{timeout:20_000},async()=>{
+  const h=await harness(true);
+  try{
+    h.plugin.settings.orchestration.waitForOtherThreads=true;
+    h.setNote('draft.md');await h.plugin.sendChat('Use the requested plan',{path:'draft.md'});
+    const sent=h.commands[1];
+    assert.equal(sent.text,'Use the requested plan\n\nSent from Obsidian.\nVault: Vault café with spaces\nNote: draft.md');
+    const record=h.shared.at(-1).noteContexts[0];
+    assert.equal(record.waitForOtherThreads,true);assert.equal(record.notePath,'draft.md');
+    const saves=h.shared.length;
+    const result=await h.plugin.executeAgentCommand({version:1,id:randomUUID(),kind:'note-context',notePath:'draft.md',threadId:record.threadId,messageId:record.messageId});
+    assert.equal(result.context.send.messageId,record.messageId);assert.equal(result.context.send.waitForOtherThreads,true);assert.equal(result.context.destinations.length,0);
+    assert.equal(h.shared.length,saves,'Context inspection must not save settings or notes');
+    h.plugin.onunload();const restarted=await h.start();
+    const recovered=await restarted.executeAgentCommand({version:1,id:randomUUID(),kind:'note-context',messageId:record.messageId});
+    assert.equal(recovered.context.send.notePath,'draft.md');restarted.onunload();
+  }finally{await h.dispose();}
+});
+
+
+test('send context includes fresh bindings, steering destinations, and a continued response',{timeout:20_000},async()=>{
+  const h=await harness(true);
+  try{
+    const ids=Array.from({length:4},()=>randomUUID());
+    await h.plugin.captureNoteContext({id:randomUUID(),prompt:'Continue this task',project:h.project,connection:{environmentId:'test-environment'},noteThread:{notePath:'draft.md'},inlineBindings:[{id:ids[0]}],inlineSteering:{jobId:ids[1],targets:[{jobId:ids[1]},{jobId:ids[2]}]},inlineFollow:{jobId:ids[3]}});
+    assert.deepEqual(Array.from(h.shared.at(-1).noteContexts[0].bindingIds),ids);
   }finally{await h.dispose();}
 });

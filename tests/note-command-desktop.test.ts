@@ -123,3 +123,16 @@ test('a slow direct command does not block reads and concurrent retries execute 
   await server.dispose();const closed=await run(['--vault',root,'client-status']);assert.equal(closed.code,1);assert.match(closed.out,/No request was queued/);assert.equal(calls,2);
  }finally{release();await server.dispose();await cleanup(root);}
 });
+
+
+test('context CLI preserves exact source and T3 filters through the authenticated endpoint',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3-note-context-')),received:any[]=[];
+  const server=await NoteCommandServer.open(root,'.obsidian',async command=>{received.push(command);return {id:command.id,ok:true};},()=>true);
+  try{
+    const messageId=randomUUID(),id=randomUUID(),args=['--vault',root,'--request-id',id,'note-context','Source.md','--thread-id','thread','--message-id',messageId,'--environment-id','env'];
+    assert.equal((await run(args)).code,0);assert.deepEqual(received[0],{version:1,id,kind:'note-context',notePath:'Source.md',threadId:'thread',messageId,environmentId:'env'});
+    assert.equal((await run(args)).code,0);assert.equal(received.length,1);
+    assert.notEqual((await run(['--vault',root,'note-context','../secret.md'])).code,0);assert.equal(received.length,1);
+    assert.notEqual((await run([...args,'--destination','Other.md'])).code,0);assert.equal(received.length,1);
+  }finally{await server.dispose();await cleanup(root);}
+});

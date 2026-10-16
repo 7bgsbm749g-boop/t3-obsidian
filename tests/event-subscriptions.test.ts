@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {EventSubscriptions,eventContent,inEventScope,validateEventCommand,validateEventFilter,validateEventScope,type EventState,type NoteEventSubscriptionCommand as EventSubscriptionCommand,type NoteEventSnapshot,type EventNotification} from '../event-subscriptions';
+import {EventSubscriptions,notificationPrompt,eventContent,inEventScope,validateEventCommand,validateEventFilter,validateEventScope,type EventState,type NoteEventSubscriptionCommand as EventSubscriptionCommand,type NoteEventSnapshot,type EventNotification} from '../event-subscriptions';
 
 const target={threadId:'thread',projectId:'project',environmentId:'machine'};
 const note=(path='Gym/A.md',content='old',properties:Record<string,unknown>|null={}):NoteEventSnapshot=>({path,content,properties});
@@ -120,4 +120,12 @@ test('scope and filter validation excludes hidden paths, traversal, logs, and am
   assert.equal(inEventScope({path:'/',kind:'folder',recursive:false},'A.md'),true);assert.equal(inEventScope({path:'/',kind:'folder',recursive:false},'Gym/A.md'),false);
   assert.equal(inEventScope({path:'Gym',kind:'folder',recursive:true},'Gymnasium/A.md'),false);assert.equal(inEventScope({path:'/',kind:'folder',recursive:true},'T3 Code Logs/A.md'),false);
   assert.throws(()=>validateEventCommand({version:1,id:randomUUID(),kind:'pause-subscription',subscriptionId:randomUUID(),target}));
+});
+
+
+test('event notification prompts end with the clean footer and contain observed data only',async()=>{
+  const h=await harness();await h.service.command(subscription());await h.service.observe('modify','Gym/A.md',note('Gym/A.md','new'));
+  const prompt=notificationPrompt(h.service.snapshot.notifications[0],'QLO2');
+  assert.ok(prompt.endsWith('Sent from Obsidian.\nVault: QLO2\nNote: Gym/A.md'));assert.match(prompt,/Observed changes: 1/);
+  assert.doesNotMatch(prompt,/Continue the task agreed|Answer in the T3 thread|Your own notification turn/);
 });

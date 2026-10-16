@@ -5,6 +5,7 @@ import {validateDestinationSection} from './destination-section';
 import {validateEventCommand,type EventSubscriptionCommand,type EventCommandResult} from './event-subscriptions';
 import {safeNotePath} from './response-model';
 import {isFolderCommand,validateFolderCommand,type FolderCommand,type FolderCommandResult} from './folder-command';
+import {isNoteContextCommand,validateNoteContextCommand,type NoteContextCommand,type NoteContextResult} from './note-context';
 export interface NoteCommand {
   version:1;id:string;kind:'send-note'|'attach-response';notePath:string;
   destinationSection?:string;destinations:string[];threadId?:string;messageId?:string;streamReply:boolean;
@@ -20,7 +21,7 @@ export function validateNoteCommand(value:any):NoteCommand {
   return value;
 }
 
-export type AgentCommand=RecoveryCommand|ResponseCommand|NoteCommand|EventSubscriptionCommand|FolderCommand|ClientCommand;
-export type AgentCommandResult=RecoveryCommandResult|NoteCommandResult|EventCommandResult|FolderCommandResult|ClientCommandResult;
+export type AgentCommand=RecoveryCommand|ResponseCommand|NoteCommand|EventSubscriptionCommand|FolderCommand|ClientCommand|NoteContextCommand;
+export type AgentCommandResult=RecoveryCommandResult|NoteCommandResult|EventCommandResult|FolderCommandResult|ClientCommandResult|NoteContextResult;
 export function isEventCommand(value:{kind:string}):value is EventSubscriptionCommand{return ['stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination','subscribe-job','subscribe','subscriptions','update-subscription','pause-subscription','resume-subscription','cancel-subscription'].includes(value.kind);}
-export function validateAgentCommand(value:any):AgentCommand{return isRecoveryCommand(value??{})?validateRecoveryCommand(value):isClientCommand(value??{})?validateClientCommand(value):isResponseCommand(value??{})?validateResponseCommand(value):isFolderCommand(value??{})?validateFolderCommand(value):isEventCommand(value??{})?validateEventCommand(value):validateNoteCommand(value);}
+export function validateAgentCommand(value:any):AgentCommand{return isNoteContextCommand(value??{})?validateNoteContextCommand(value):isRecoveryCommand(value??{})?validateRecoveryCommand(value):isClientCommand(value??{})?validateClientCommand(value):isResponseCommand(value??{})?validateResponseCommand(value):isFolderCommand(value??{})?validateFolderCommand(value):isEventCommand(value??{})?validateEventCommand(value):validateNoteCommand(value);}

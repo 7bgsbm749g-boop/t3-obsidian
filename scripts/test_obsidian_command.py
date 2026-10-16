@@ -1,6 +1,8 @@
 import contextlib
 import importlib.util
 import io
+import json
+import tempfile
 from pathlib import Path
 import sys
 import unittest
@@ -23,6 +25,29 @@ class FailureLogCommandTests(unittest.TestCase):
         for kind, host in [('send-note', 'fleet-laptop'), ('reload-client', 'fleet-laptop'), ('send-failure-log', '-oProxyCommand=anything')]:
             with patch.object(sys, 'argv', ['obsidian-command.py', '--vault', 'unused', '--ssh-host=' + host, kind]), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 command.main()
+
+
+class VaultNameTests(unittest.TestCase):
+    def test_registered_name_resolves_without_scanning_vaults_and_duplicate_names_fail(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / 'config' / 'obsidian'
+            config.mkdir(parents=True)
+            registry = config / 'obsidian.json'
+            first = root / 'one' / 'QLO2'
+            registry.write_text(json.dumps({'vaults': {'first': {'path': str(first)}}}))
+            with patch.dict(command.os.environ, {'XDG_CONFIG_HOME': str(root / 'config')}), patch.object(command.sys, 'platform', 'linux'):
+                self.assertEqual(command.resolve_vault('QLO2'), first)
+                registry.write_text(json.dumps({'vaults': {'first': {'path': str(first)}, 'second': {'path': str(root / 'two' / 'QLO2')}}}))
+                with self.assertRaisesRegex(ValueError, 'ambiguous'):
+                    command.resolve_vault('QLO2')
+                self.assertEqual(command.resolve_vault(str(first)), first)
+                with self.assertRaisesRegex(ValueError, 'missing'):
+                    command.resolve_vault('NotRegistered')
+
+    def test_explicit_paths_do_not_require_an_obsidian_registry(self):
+        self.assertEqual(command.resolve_vault('/synthetic/QLO2'), Path('/synthetic/QLO2'))
+        self.assertEqual(command.resolve_vault('./QLO2'), Path('./QLO2'))
 
 
 if __name__ == '__main__':

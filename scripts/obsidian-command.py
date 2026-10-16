@@ -10,6 +10,32 @@ import urllib.error
 import urllib.parse
 import socket
 import uuid
+import os
+import sys
+
+
+def resolve_vault(value, config_dir='.obsidian'):
+    """Resolve a displayed vault name through Obsidian's own local registry."""
+    candidate = Path(value).expanduser()
+    if candidate.is_absolute() or '/' in value or '\\' in value or value.startswith('.'):
+        return candidate
+    if sys.platform == 'win32':
+        config = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming'))
+    elif sys.platform == 'darwin':
+        config = Path.home() / 'Library' / 'Application Support'
+    else:
+        config = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config'))
+    try:
+        registered = json.loads((config / 'obsidian' / 'obsidian.json').read_text(encoding='utf-8-sig'))
+    except (FileNotFoundError, ValueError):
+        raise ValueError('Cannot resolve the vault name. Supply its verified absolute path with --vault.')
+    if not isinstance(registered, dict) or not isinstance(registered.get('vaults'), dict):
+        raise ValueError('Invalid Obsidian vault registry. Supply a verified absolute path with --vault.')
+    matches = {Path(item['path']).resolve() for item in registered['vaults'].values()
+               if isinstance(item, dict) and isinstance(item.get('path'), str) and Path(item['path']).name == value}
+    if len(matches) != 1:
+        raise ValueError('Vault name is missing or ambiguous. Supply its verified absolute path with --vault.')
+    return matches.pop()
 
 
 def remote_failure_log(host, vault, command, retry=False):
@@ -23,13 +49,13 @@ def remote_failure_log(host, vault, command, retry=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--vault', required=True, type=Path, help='Local vault root')
+    parser.add_argument('--vault', required=True, help='Local vault root or exact registered vault name')
     parser.add_argument('--config-dir', default='.obsidian')
     parser.add_argument('--request-id', default=None, help='Reuse this UUID to inspect/retry the same command')
     parser.add_argument('--timeout', type=float, default=90)
     parser.add_argument('--retry', action='store_true', help='Retry a failed result with the original prepared send')
     parser.add_argument('--ssh-host', help='Private Windows SSH alias, for read-only send-failure-log from the VPS')
-    parser.add_argument('kind', choices=['client-status', 'send-failure-log', 'reload-client', 'archive-reply-imports', 'response-recovery-info', 'retry-response-save', 'resolve-response-location', 'response-status', 'response-import-info', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response', 'send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination', 'subscribe-job', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
+    parser.add_argument('kind', choices=['note-context', 'client-status', 'send-failure-log', 'reload-client', 'archive-reply-imports', 'response-recovery-info', 'retry-response-save', 'resolve-response-location', 'response-status', 'response-import-info', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response', 'send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination', 'subscribe-job', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
     parser.add_argument('--since', help='Read failure log entries at or after this UTC timestamp')
     parser.add_argument('--release-version', help='Exact immutable release for reload-client')
     parser.add_argument('--runtime-hashes', help='JSON object of exact release runtime SHA-256 hashes')
@@ -104,7 +130,16 @@ def main():
         parser.error('--request-id must be a UUID.')
     if args.archive_directory is not None and args.kind != 'archive-reply-imports':
         parser.error('--archive-directory requires archive-reply-imports.')
-    if args.kind in ['client-status', 'send-failure-log', 'reload-client', 'archive-reply-imports']:
+    if args.kind == 'note-context':
+        if any([args.destination, args.binding_id, args.no_stream, args.scope, args.event, args.subscription_id, args.project_id]):
+            parser.error('Context lookup is read-only and accepts a note, thread, message and environment only.')
+        if not any([args.note, args.thread_id, args.message_id]):
+            parser.error('note-context requires a source note or exact T3 identity.')
+        command = dict(version=1, id=command_id, kind=args.kind)
+        for key, value in [('notePath', args.note), ('threadId', args.thread_id), ('messageId', args.message_id), ('environmentId', args.environment_id)]:
+            if value is not None:
+                command[key] = value
+    elif args.kind in ['client-status', 'send-failure-log', 'reload-client', 'archive-reply-imports']:
         if any([args.note, args.destination, args.thread_id, args.message_id, args.binding_id, args.scope, args.event]):
             parser.error('Client commands do not send notes, prompts, or subscriptions.')
         command = dict(version=1, id=command_id, kind=args.kind)
@@ -220,9 +255,13 @@ def main():
             parser.error('--destination-section requires a streaming destination command.')
         command['destinationSection'] = args.destination_section
     if args.ssh_host:
-        outcome = remote_failure_log(args.ssh_host, args.vault, command, args.retry)
+        outcome = remote_failure_log(args.ssh_host, Path(args.vault), command, args.retry)
         print(json.dumps(outcome))
         return
+    try:
+        args.vault = resolve_vault(args.vault, args.config_dir)
+    except ValueError as error:
+        parser.error(str(error))
     storage_root = args.vault
     route_path = args.vault / args.config_dir / 't3-code' / 'storage-route.json'
     if route_path.exists():
