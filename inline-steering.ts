@@ -1,6 +1,7 @@
 import {turnForMessage,type InlineMessage,type InlineThreadState,type SelectionAnchor} from './inline-thread';
 import {responseRegion} from './native-response-projection';
 import {responseBoundaries} from './response-container';
+import type {SubmittedAnswer} from './response-answers';
 
 export function completedSelectionDraft(document:string,id:string,steering:InlineSteering[]=[]){
   for(const input of steering){
@@ -17,6 +18,7 @@ export interface InlineSteering {
   messageId:string;text:string;before:InlineMessage[];
   selection?:SelectionAnchor;selectionApplied?:boolean;confirmed?:boolean;
   label?:string;createdAt?:string;position?:'live'|'recovered';
+  answer?:SubmittedAnswer;
 }
 export interface SteeringInput {messageId:string;text:string;selection?:SelectionAnchor}
 
@@ -53,8 +55,8 @@ export function mergeProse(saved:InlineMessage[],incoming:InlineMessage[],turns:
   return result.sort((a,b)=>a.createdAt&&b.createdAt?a.createdAt.localeCompare(b.createdAt):0);
 }
 
-export function steeringSegments(messages:InlineMessage[],steering:InlineSteering[]):Array<{role:'assistant'|'user';text:string;messageId?:string;label?:string;position?:'live'|'recovered'}> {
-  const result:Array<{role:'assistant'|'user';text:string;messageId?:string;label?:string;position?:'live'|'recovered'}>=[],consumed=new Map<string,string>();
+export function steeringSegments(messages:InlineMessage[],steering:InlineSteering[]):Array<{role:'assistant'|'user';text:string;messageId?:string;label?:string;position?:'live'|'recovered';answer?:SubmittedAnswer;createdAt?:string}> {
+  const result:ReturnType<typeof steeringSegments>=[],consumed=new Map<string,string>();
   const append=(items:InlineMessage[])=>{
     for(const message of items){
       const before=consumed.get(message.id)??'';
@@ -63,7 +65,7 @@ export function steeringSegments(messages:InlineMessage[],steering:InlineSteerin
       consumed.set(message.id,message.text);
     }
   };
-  for(const input of steering){append(input.before);result.push({role:'user',text:input.text,messageId:input.messageId,label:input.label,position:input.position});}
+  for(const input of steering){append(input.before);result.push({role:'user',text:input.text,messageId:input.messageId,label:input.label,position:input.position,answer:input.answer,createdAt:input.createdAt});}
   append(messages);return result;
 }
 

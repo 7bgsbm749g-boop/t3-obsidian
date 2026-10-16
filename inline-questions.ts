@@ -1,15 +1,18 @@
 import {turnForMessage,turnPhase,type InlineThreadState,type InlineMessage} from './inline-thread';
 import {incomingLabel,mergeProse,steeringBoundary,type InlineSteering} from './inline-steering';
-import {staleQuestionFailure} from './questions';
+import {pendingQuestions,staleQuestionFailure,type Question} from './questions';
+import {submittedAnswers} from './response-answers';
 
-export interface InlineQuestionFollow {requestId:string;turnId:string|null;answered?:boolean;dismissed?:boolean;replyTurnId?:string;completed?:boolean;responseMode?:'message'|'native';input?:InlineSteering}
+export interface InlineQuestionFollow {requestId:string;turnId:string|null;answered?:boolean;dismissed?:boolean;replyTurnId?:string;completed?:boolean;responseMode?:'message'|'native';input?:InlineSteering;questions?:Question[]}
 /** Follow only T3's exact async-answer message, never an unrelated latest turn.
  * Keep the request binding durable when recent snapshots omit older activities. */
 export function followInlineQuestions(state:InlineThreadState,turnIds:string[],saved:InlineQuestionFollow[]=[],prose:InlineMessage[]=[]):{follows:InlineQuestionFollow[];turnIds:string[];turnId:string|undefined;waiting:boolean;continued:boolean}{
-  const follows=saved.map(item=>({...item})),turns=[...turnIds];
+  const follows=saved.map(item=>({...item,...(item.input?{input:{...item.input}}:{})})),turns=[...turnIds];
   for(const activity of state.activities){
     if(activity.kind!=='user-input.requested'||!activity.payload||typeof activity.payload.requestId!=='string'||activity.turnId!==null&&!turns.includes(activity.turnId))continue;
     if(!follows.some(item=>item.requestId===activity.payload!.requestId))follows.push({requestId:activity.payload.requestId,turnId:activity.turnId,responseMode:activity.payload.responseMode==='message'?'message':'native'});
+    const item=follows.find(item=>item.requestId===activity.payload!.requestId)!;
+    item.questions??=pendingQuestions([activity])[0]?.questions;
   }
   for(const item of follows){
     if(item.turnId&&turnPhase(state,item.turnId)==='complete')item.completed=true;
@@ -20,7 +23,7 @@ export function followInlineQuestions(state:InlineThreadState,turnIds:string[],s
     const reply=state.messages.find(m=>m.role==='user'&&m.id===`async-answer:${item.requestId}`);
     if(reply){item.answered=true;item.replyTurnId??=turnForMessage(state,reply.id)??completedQuestionSteeringTurn(state,item,reply);}
     if(!item.input&&(resolution?.payload?.answers||reply)){
-      const answers=resolution?.payload?.answers;
+      const answers=submittedAnswers(resolution?.payload?.answers);
       const text=answers&&typeof answers==='object'?Object.values(answers).map(answer=>Array.isArray(answer)?answer.join(', '):typeof answer==='string'?answer:'').filter(Boolean).join('\n\n'):reply?.text??'';
       if(text.trim()){
         const index=reply?state.messages.findIndex(m=>m.id===reply.id):-1,at=reply?.createdAt??resolution?.createdAt;
@@ -28,10 +31,14 @@ export function followInlineQuestions(state:InlineThreadState,turnIds:string[],s
         const previous=index>=0?state.messages.slice(0,index):state.messages.filter(before);
         const savedBefore=prose.filter(before).filter(message=>!reply||message.turnId!==item.replyTurnId);
         const history=reply?mergeProse(savedBefore,previous,turns):savedBefore.length?savedBefore:mergeProse([],previous,turns);
-        item.input={messageId:reply?.id??`${item.responseMode==='native'?'question-answer':'async-answer'}:${item.requestId}`,text,before:steeringBoundary(history),confirmed:true};
+        item.input={messageId:reply?.id??`${item.responseMode==='native'?'question-answer':'async-answer'}:${item.requestId}`,text,before:steeringBoundary(history),confirmed:true,createdAt:at};
       }
     }
-    if(item.input)item.input.label=reply?incomingLabel(reply):'User';
+    if(item.input){
+      item.input.label=reply?incomingLabel(reply):'User';
+      item.input.createdAt??=reply?.createdAt??resolution?.createdAt;
+      item.input.answer={requestId:item.requestId,questions:item.questions??item.input.answer?.questions??[],answers:submittedAnswers(resolution?.payload?.answers)??item.input.answer?.answers};
+    }
     if(item.replyTurnId&&!turns.includes(item.replyTurnId))turns.push(item.replyTurnId);
   }
   if(turns.length>turnIds.length)return followInlineQuestions(state,turns,follows,prose);
@@ -73,7 +80,8 @@ export function inlineQuestionPhase(state:InlineThreadState,turnId:string,follow
 /** Question quotes share the steering renderer but retain their native identities.
  * Order against T3's user messages, falling back to durable paragraph boundaries. */
 export function questionConversationInputs(state:InlineThreadState,steering:InlineSteering[],follows:InlineQuestionFollow[],prose:InlineMessage[]):InlineSteering[]{
-  const inputs=[...steering,...follows.flatMap(item=>item.input?[item.input]:[])];
+  const answers=follows.flatMap(item=>!item.dismissed&&item.input?[item.input]:[]);
+  const inputs=[...steering.map(input=>{const answer=answers.find(answer=>answer.messageId===input.messageId);return answer?{...input,...answer,before:input.before}:input;}),...answers];
   const positions=new Map(state.messages.map((message,index)=>[message.id,index]));
   const boundary=(input:InlineSteering)=>input.before.reduce((sum,message)=>{
     const index=prose.findIndex(item=>item.id===message.id);

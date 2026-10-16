@@ -33,6 +33,21 @@ const completeV2=(h:ReturnType<typeof fixture>,sequence=2,text='Final reply')=>{
 };
 const finalItem=(text='Final reply')=>({id:'opaque-item',threadId:'thread',runId:'turn',messageId:'answer',type:'assistant_message',text,streaming:false,status:'completed',updatedAt:'2026-10-06T03:01:00.000Z'});
 const settle=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
+test('live native question resolution produces a compact answer row and keeps it through subsequent stream text',()=>{
+ const h=fixture();h.preview.tick(true);h.item(h.snapshot(2,'Before input.\n\n'));
+ const event=(sequence:number,activity:any)=>h.item({kind:'event',event:{sequence,aggregateId:'thread',type:'thread.activity-appended',payload:{activity}}});
+ event(3,{id:'question',kind:'user-input.requested',turnId:'turn',summary:'Question',createdAt:'2026-10-06T03:00:10Z',payload:{requestId:'request',questions:[{id:'device',header:'Device',question:'Which device and vault?',options:[]}]}});
+ assert.match(h.updates.at(-1)!.body,/t3-question:/);
+ event(4,{id:'resolved',kind:'user-input.resolved',turnId:'turn',summary:'Resolved',createdAt:'2026-10-06T03:00:20Z',payload:{requestId:'request',answers:{device:'laptop QLO2'}}});
+ h.clock.advance(1000);
+ assert.match(h.updates.at(-1)!.body,/data-t3-answer-id="request"/);assert.doesNotMatch(h.updates.at(-1)!.body,/t3-question:/);
+ h.event(5,'After input.');h.clock.advance(1000);
+ const body=h.updates.at(-1)!.body;
+ assert.equal(body.match(/data-t3-answer-id="request"/g)?.length,1);
+ assert.ok(body.indexOf('Before input.')<body.indexOf('data-t3-answer-id='));assert.ok(body.indexOf('data-t3-answer-id=')<body.indexOf('After input.'));
+ assert.match(body,/Which device and vault\?<\/p><p class="send-to-t3-answer-text">laptop QLO2<\/p>/);
+ h.preview.dispose();
+});
 test('v2 saves from a matching final item without a thread download and unrelated events retain verification',async()=>{
  const calls:any[]=[],h=fixture(false,async(path,payload)=>{calls.push({path,payload});return finalItem();});h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};
  h.preview.tick(true);h.item(completeV2(h));await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.deepEqual(calls.map(c=>c.path),['/api/orchestration/turn-item']);

@@ -9,6 +9,7 @@ import {visibleInlineInput} from './input-presentation';
 import {responseToolGroups,currentResponseToolGroup,renderResponseToolGroup} from './response-tools';
 import {applyV2ControlEvent,responseRun} from './orchestration-v2';
 import {responseEmissions} from './response-emissions';
+import {renderSubmittedAnswer} from './response-answers';
 import {responseHtmlResults,renderHtmlResult} from './html-results';
 import {containerStart,responseFrame,responseIds,responseBoundaries} from './response-container';
 
@@ -554,10 +555,11 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
+  const renderInput=(input:InlineSteering|typeof segments[number])=>input.answer?renderSubmittedAnswer(input.answer,input.text,input.createdAt):renderInlineInput(input.text,input.label,input.position);
   let previousRole:string|undefined;
   let prose=transcript?segments.reduce((body,segment,index)=>{
-    const rendered=segment.role==='user'?renderInlineInput(segment.text,segment.label,segment.position):assistant(segment.text,segment.messageId);
-    const embedded=mode!=='collapse'?htmlBefore(Date.parse(all.find(message=>message.id===segment.messageId)?.createdAt??'')||0):'';
+    const rendered=segment.role==='user'?renderInput(segment):assistant(segment.text,segment.messageId);
+    const embedded=mode!=='collapse'?htmlBefore(Date.parse(segment.createdAt??all.find(message=>message.id===segment.messageId)?.createdAt??'')||0):'';
     // Only adjacent assistant quote blocks share a quoted blank line. Callouts
     // and raw Markdown blocks need a real boundary to avoid swallowing prose.
     const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&!rawFinal(segment.messageId)&&!rawFinal(segments[index-1]?.messageId)&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
@@ -589,9 +591,9 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     let toolIndex=0;
     const toolsBefore=(at=Infinity)=>{while(toolIndex<historyRows.length&&(Date.parse(historyRows[toolIndex].createdAt??'')||0)<=at)history.push(historyRows[toolIndex++].body);};
     for(const [index,piece] of pieces.entries()){
-      const message=state.messages.find(message=>message.id===piece.messageId)??all.find(message=>message.id===piece.messageId);if(message?.createdAt)toolsBefore(Date.parse(message.createdAt));
+      const message=state.messages.find(message=>message.id===piece.messageId)??all.find(message=>message.id===piece.messageId),createdAt=piece.createdAt??message?.createdAt;if(createdAt)toolsBefore(Date.parse(createdAt));
       if(index===finalIndex)final=assistant(piece.text,piece.messageId);
-      else if(piece.role==='user')history.push(renderInlineInput(piece.text,piece.label,piece.position));
+      else if(piece.role==='user')history.push(renderInput(piece));
       else if(piece.text.trim())history.push(growing(piece.messageId)?quoteStreamingResponse(piece.text):quoteResponse(closeOpenFence(piece.text.trim())));
     }
     toolsBefore();

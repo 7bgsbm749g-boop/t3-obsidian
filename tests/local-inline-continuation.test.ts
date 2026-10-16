@@ -57,7 +57,7 @@ for(const dismiss of [false,true])test(`local async ${dismiss?'dismissal':'answe
     thread.latestTurn={turnId:'next-turn',state:'completed',requestedAt:'2026-10-01T19:01:00Z',assistantMessageId:'next'};
   }
   receive();assert.equal(job.finalized,true);assert.doesNotMatch(value,/t3-inline:|t3-question:/);
-  if(!dismiss){assert.match(value,/First final[\s\S]*> \[!t3-steering\] User\n> Yes[\s\S]*Follow-up final/);assert.equal(value.split('> Yes').length-1,1);}
+  if(!dismiss){assert.match(value,/First final[\s\S]*data-t3-answer-id="late"[\s\S]*answer-question">Continue\?<\/p><p class="send-to-t3-answer-text">Yes<\/p>[\s\S]*Follow-up final/);assert.equal(value.match(/data-t3-answer-id="late"/g)?.length,1);}
   manager.dispose();
 });
 
@@ -74,6 +74,6 @@ test('local completed async steering clears Working from a persisted unbound ans
   const job=manager.find(id),thread={messages:[{id:'before',role:'assistant',turnId:'turn',text:'Before.',streaming:false,createdAt:at(0)},{id:'async-answer:steered',role:'user',turnId:null,text:'Yes',streaming:false,createdAt:at(10)},{id:'final',role:'assistant',turnId:'turn',text:'Same-turn final.',streaming:false,createdAt:at(20)}],activities:[{id:'resolved',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',payload:{requestId:'steered',answers:{choice:'Yes'}}}],latestTurn:{turnId:'turn',state:'completed',requestedAt:at(0),completedAt:at(30),assistantMessageId:'final'},session:{status:'ready',activeTurnId:null}};
   manager.receive(job,{kind:'snapshot',snapshot:{thread,snapshotSequence:1}});manager.flush(job);
   assert.equal(job.phase,'complete');assert.equal(job.finalized,true);assert.equal(job.questionFollows[0].replyTurnId,'turn');
-  assert.match(value,/Before[\s\S]*> Yes[\s\S]*Same-turn final/);assert.match(value,/Outside edit/);assert.doesNotMatch(value,/Working|send-to-t3-inline-spinner|t3-inline:/);
+  assert.match(value,/Before[\s\S]*data-t3-answer-id="steered"[\s\S]*answer-text">Yes<\/p>[\s\S]*Same-turn final/);assert.match(value,/Outside edit/);assert.doesNotMatch(value,/Working|send-to-t3-inline-spinner|t3-inline:/);
   manager.dispose();
 });

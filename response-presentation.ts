@@ -40,6 +40,8 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   const retainedTools=new WeakMap<Element,Map<string,HTMLElement>>();
   const toolChoices=new WeakMap<Element,Map<string,boolean>>();
   const owner=(element:Element)=>element.closest('.workspace-leaf-content')??root.documentElement;
+  const detailSelector='details[data-t3-tool-group], details[data-t3-tool-key], details[data-t3-answer-id]';
+  const detailId=(element:Element)=>element.getAttribute('data-t3-tool-group')??element.getAttribute('data-t3-tool-key')??(element.hasAttribute('data-t3-answer-id')?`answer:${element.getAttribute('data-t3-answer-id')}`:undefined);
   const key=(element:Element)=>element.querySelector<HTMLElement>('.send-to-t3-fold-key')?.dataset.t3Fold;
   const title=(element:Element)=>element.querySelector<HTMLElement>(':scope > .callout-title');
   const seen=new WeakMap<Element,{heading:HTMLElement;key:string|undefined}>();
@@ -111,18 +113,17 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
         heading.setAttribute('aria-expanded',String(!fold.classList.contains('is-collapsed')));
       }
     }
-    // Keep the current tool group's dropdown and result
-    // nodes through native renders, and keep user choices when it becomes history.
-    for(let group of Array.from(root.querySelectorAll<HTMLElement>('details[data-t3-tool-group]'))){
-      const id=group.dataset.t3ToolGroup!;
+    // Keep tool and submitted-answer disclosures through native renders.
+    for(let group of Array.from(root.querySelectorAll<HTMLElement>('details[data-t3-tool-group], details[data-t3-answer-id]'))){
+      const id=detailId(group)!;
       const surface=group.closest('.cm-content, .markdown-preview-view')??owner(group);
       let cache=retainedTools.get(surface);if(!cache){cache=new Map();retainedTools.set(surface,cache);}
       const previous=cache.get(id);
       if(previous&&previous!==group&&!previous.isConnected){reconcileResponseDOM(previous,group);group.replaceWith(previous);group=previous;}
       cache.set(id,group);if(cache.size>64)cache.delete(cache.keys().next().value!);
       for(const detail of [group,...Array.from(group.querySelectorAll<HTMLElement>('details[data-t3-tool-key]'))]){
-        const detailId=detail.getAttribute('data-t3-tool-group')??detail.getAttribute('data-t3-tool-key');
-        const choice=detailId?toolChoices.get(owner(group))?.get(detailId):undefined;
+        const id=detailId(detail);
+        const choice=id?toolChoices.get(owner(group))?.get(id):undefined;
         if(choice!==undefined)detail.toggleAttribute('open',choice);
       }
     }
@@ -164,8 +165,8 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   };
   const rememberTool=(event:Event)=>{
     const detail=event.target as HTMLElement;
-    if(!detail.matches?.('details[data-t3-tool-group], details[data-t3-tool-key]')||!detail.isConnected)return;
-    const id=detail.getAttribute('data-t3-tool-group')??detail.getAttribute('data-t3-tool-key');if(!id)return;
+    if(!detail.matches?.(detailSelector)||!detail.isConnected)return;
+    const id=detailId(detail);if(!id)return;
     const container=owner(detail);let saved=toolChoices.get(container);if(!saved){saved=new Map();toolChoices.set(container,saved);}
     saved.set(id,detail.hasAttribute('open'));
   };
@@ -177,10 +178,10 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   };
   const click=(event:Event)=>{
     const summary=(event.target as Element)?.closest?.('summary'),detail=summary?.parentElement;
-    if(detail?.matches('details[data-t3-tool-group], details[data-t3-tool-key]')){
+    if(detail?.matches(detailSelector)){
       // A native editor can replace the HTML widget before the asynchronous
       // toggle event arrives. Record the user's next choice before that render.
-      const id=detail.getAttribute('data-t3-tool-group')??detail.getAttribute('data-t3-tool-key')!;
+      const id=detailId(detail)!;
       const container=owner(detail);let saved=toolChoices.get(container);if(!saved){saved=new Map();toolChoices.set(container,saved);}
       const expanded=!detail.hasAttribute('open');saved.set(id,expanded);detail.toggleAttribute('open',expanded);
       event.preventDefault();event.stopImmediatePropagation();return;
