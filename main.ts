@@ -937,7 +937,8 @@ export default class SendToT3 extends Plugin {
       if(eventCanonical(current.host)!==eventCanonical(route.host))throw Error('This command belongs to the previous vault project machine. Restore that host to retry, or use a new request ID.');
       await this.refreshEventHost();
       const opened=await this.eventHostFiles(route);
-      try{return await forwardEventCommand(route.host,input,opened.files,async ms=>(await import('./desktop-timers')).desktopPause(ms));}finally{opened.close();}
+      const pause=Platform.isMobile?(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms)):async(ms:number)=>(await import('./desktop-timers')).desktopPause(ms);
+      try{return await forwardEventCommand(route.host,input,opened.files,pause);}finally{opened.close();}
     }
     return this.executeNoteCommand(input);
   }
