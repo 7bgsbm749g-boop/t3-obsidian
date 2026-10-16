@@ -393,7 +393,7 @@ Retain immutable request UUIDs and exact arguments. Replaying returns the origin
 
 ## Development and release pipeline
 
-The canonical source checkout is `/home/ubuntu/projects/send-to-t3-code`. It is deliberately separate from both installed copies:
+Implement and test in the current thread's source worktree so parallel tasks keep separate edits. `/home/ubuntu/projects/send-to-t3-code` is the integration and release checkout; integrate reviewed commits there before packaging. Source worktrees are separate from both installed copies:
 
 - `/home/ubuntu/Obsidian Vault/.obsidian/plugins/send-to-t3-code` is the development-vault installation and contains only runtime artifacts plus its local `data.json`.
 - `/home/ubuntu/vaults/QLO2/.obsidian/plugins/send-to-t3-code` is the QLO2 installation published by Obsidian Sync.

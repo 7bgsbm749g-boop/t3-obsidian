@@ -2,22 +2,23 @@
 
 ## Authoritative locations
 
-- The only source checkout is `/home/ubuntu/projects/send-to-t3-code`.
+- Implement and test in the current thread's source worktree. Parallel tasks use separate worktrees.
+- `/home/ubuntu/projects/send-to-t3-code` is the integration and release checkout. Integrate reviewed commits there before packaging a release.
 - `/home/ubuntu/Obsidian Vault/.obsidian/plugins/send-to-t3-code` is the development-vault installation. It may contain only `main.js`, `manifest.json`, `styles.css`, and its device-local `data.json`. Never edit source there.
 - `/home/ubuntu/vaults/QLO2/.obsidian/plugins/send-to-t3-code` is the QLO2 installation published by Obsidian Sync. Never edit it by hand.
 - Preserve every installation's `data.json`. Release tooling must prove it remained byte-identical.
 
-If the current working directory is an installed-plugin directory rather than the canonical source checkout, stop and move the work to the canonical checkout. Do not reconstruct source from an installed bundle.
+If the current working directory is an installed-plugin directory, stop and move the work to a source worktree. Do not reconstruct source from an installed bundle.
 
 ## Definition of done
 
 - Investigation, explanation, review, and feasibility work are read-only unless the user separately asks for implementation.
-- `source-only`, `prototype`, or `do not deploy` means edit and test the canonical checkout without installing or releasing it.
+- `source-only`, `prototype`, or `do not deploy` means edit and test the current source worktree without installing or releasing it.
 - For an ordinary user-requested product change, “implement”, “fix”, “add”, or “build” means the full QLO2 delivery path unless the user explicitly narrows the scope:
-  1. implement in the canonical checkout;
+  1. implement in the task's source worktree;
   2. run the build and complete test suite;
-  3. commit the reviewed source, documentation, and test changes in the canonical checkout;
-  4. create a strictly newer immutable release from that clean worktree;
+  3. commit the reviewed source, documentation, and test changes in that worktree;
+  4. integrate the reviewed commits into the clean canonical release checkout and create a strictly newer immutable release;
   5. install runtime artifacts into the development vault;
   6. back up and install QLO2 while preserving `data.json`;
   7. force and verify a fresh Obsidian Sync scan;
@@ -30,6 +31,7 @@ If the current working directory is an installed-plugin directory rather than th
 - Build: `npm run build` (writes `dist/main.js`, never into a vault).
 - Test: `npm test`.
 - Release: `npm run release:qlo2 -- --bump patch` (or `minor`/`major`). This is the only supported packaging/deployment entry point.
+- Run packaging and QLO2 delivery from the canonical release checkout, one release at a time. Other source worktrees can remain active and need not be clean.
 - If packaging succeeded but installation or Sync failed, retry the exact immutable bytes with `npm run release:qlo2 -- --resume VERSION`; never delete/rebuild that version with different bytes.
 - Commit the reviewed release changes before running the release command. Do not include unrelated user edits in that commit. The release command refuses a dirty worktree by default; `--allow-dirty` remains an exceptional path only when the user explicitly requests deployment of reviewed dirty bytes.
 - After a real client reload and smoke test, record evidence with:
@@ -57,7 +59,7 @@ The retired `scripts/deploy-qlo2.py` must continue to refuse direct use. Never h
 ## Worktree and safety
 
 - This repository may contain user changes. Preserve unrelated edits and inspect overlap before patching.
-- A user request for the full QLO2 product-change delivery path authorizes the pre-release commit of reviewed changes for that request. Do not commit unrelated user edits. Do not push, reset, or discard changes unless the user explicitly requests it.
+- A user request for the full QLO2 product-change delivery path authorizes the pre-release commit of reviewed changes for that request in its source worktree. Do not commit unrelated user edits. Do not push, reset, or discard changes unless the user explicitly requests it.
 - Backups live outside synced vaults under `/home/ubuntu/backups/send-to-t3-code`.
 
 ## Real Sync testing capability

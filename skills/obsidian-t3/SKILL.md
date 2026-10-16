@@ -285,9 +285,11 @@ UUID afterward.
 `--project-id`, `--environment-id`, and `--archive-directory` within that linked
 local project. Inspect results before claiming cleanup.
 
-For plugin implementation use `/home/ubuntu/projects/send-to-t3-code` and its
-`AGENTS.md`: build, full tests, reviewed commit, immutable QLO2 release, Sync,
-real-client reload, smoke evidence. Never hand-edit installed runtime artifacts
+For plugin implementation use the thread's source worktree and its `AGENTS.md`.
+Build, test, and commit there. Integrate reviewed commits into
+`/home/ubuntu/projects/send-to-t3-code` for the serialized immutable QLO2 release,
+Sync, real-client reload, and smoke evidence. Parallel source work stays in its
+own worktrees. Never hand-edit installed runtime artifacts
 or overwrite device-local `data.json`. Preserve the current note/settings,
 use temporary smoke notes, retain evidence outside synced vaults, and clean up.
 
