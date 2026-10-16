@@ -9,7 +9,7 @@ import {visibleInlineInput} from './input-presentation';
 import {responseToolGroups,currentResponseToolGroup,renderResponseToolGroup} from './response-tools';
 import {applyV2ControlEvent,responseRun} from './orchestration-v2';
 import {responseEmissions} from './response-emissions';
-import {renderSubmittedAnswer} from './response-answers';
+import {renderSubmittedAnswer,type SubmittedAnswer} from './response-answers';
 import {responseHtmlResults,renderHtmlResult} from './html-results';
 import {containerStart,responseFrame,responseIds,responseBoundaries} from './response-container';
 
@@ -78,7 +78,8 @@ export function activeInlineIds(document:string):string[]{
 export function failedInlineIds(document:string):string[]{
   return responseIds(document).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · Error\*\*/m.test(regionBody(document,id)?.body??''));
 }
-export interface InitialInlineInput {messageId:string;text:string;label?:string}
+export interface InitialInlineInput {messageId:string;text:string;label?:string;answer?:SubmittedAnswer}
+function renderInitialInput(input:InitialInlineInput,createdAt?:string){return input.answer?renderSubmittedAnswer(input.answer,input.text,createdAt):renderInlineInput(input.text,input.label);}
 
 /** The same neutral user quote is used for initial questions and steering. */
 export function renderInlineInput(text:string,label='You',position?:'live'|'recovered'):string {
@@ -88,7 +89,7 @@ export function renderInlineInput(text:string,label='You',position?:'live'|'reco
 
 export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming):{text:string;bodyHash:string} {
   const status=`${mode==='collapse'?'> [!t3-progress]+ ':''}**${inlineThreadLabel(threadTitle)} · Working**${timing?' '+runTimer(timing):''} <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
-  const contents=[...(initialInput?[renderInlineInput(initialInput.text,initialInput.label)]:[]),responseActivityRow()].join('\n\n');
+  const contents=[...(initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[]),responseActivityRow()].join('\n\n');
   const body=status+(mode==='collapse'?'\n>\n'+contents.split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'\n\n'+contents);
   // The final blank line also closes the quote in Obsidian Live Preview when
   // this response is the last block in the note.
@@ -575,7 +576,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null||conversation?.messages.some(m=>m.turnId===request.turnId)).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
   const approvals=!['complete','interrupted','cancelled'].includes(phase)?pendingApprovals(state.activities).filter(request=>request.turnId===turnId).map(request=>environmentId&&request.kind==='command'?renderApproval(request,{environmentId,threadId,requestId:request.requestId}):'Action needed in T3: '+safeStatus(request.summary)).join('\n\n'):'';
-  const input=initialInput?`${renderInlineInput(initialInput.text,initialInput.label)}\n\n`:'';
+  const input=initialInput?`${renderInitialInput(initialInput,timing?.startedAt)}\n\n`:'';
   if(mode==='collapse'){
     const pieces=steeringSegments(all,conversation?.steering.filter(item=>item.confirmed)??[]);
     const title=phase==='complete'?`**${label} · ${finalReady?'Completed':'Working'}**`:heading;
@@ -587,7 +588,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const finalIndex=finalId?pieces.reduce((last,piece,index)=>piece.role==='assistant'&&piece.messageId===finalId?index:last,-1):-1;
     // Initial questions and continuation prompts share steering's history
     // placement. Keep their exact input record separate from turn bindings.
-    const history:string[]=initialInput?[renderInlineInput(initialInput.text,initialInput.label)]:[];let final='';
+    const history:string[]=initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[];let final='';
     let toolIndex=0;
     const toolsBefore=(at=Infinity)=>{while(toolIndex<historyRows.length&&(Date.parse(historyRows[toolIndex].createdAt??'')||0)<=at)history.push(historyRows[toolIndex++].body);};
     for(const [index,piece] of pieces.entries()){

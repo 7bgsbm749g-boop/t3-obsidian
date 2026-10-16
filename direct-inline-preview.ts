@@ -102,7 +102,7 @@ export class DirectInlinePreview {
     this.turnIds=[...new Set([...this.turnIds,turnId])];
     const steering=(this.record.state?.steering??[]).map(input=>({...input}));
     for(const input of steering){const turn=turnForMessage(this.state,input.messageId);if(!turn)continue;input.confirmed=true;turnId=turn;if(!this.turnIds.includes(turn))this.turnIds.push(turn);}
-    const questions=followInlineQuestions(this.state,this.turnIds,this.follows,this.prose);
+    const questions=followInlineQuestions(this.state,this.turnIds,this.follows,this.prose,!request.localOnly);
     this.follows=questions.follows;this.turnIds=questions.turnIds;turnId=questions.turnId??turnId;
     this.incoming=observeIncoming(this.state,this.turnIds,this.incoming,steering,[request.messageId,request.initialInput?.messageId??'',...Object.values(this.state.turns??{}).filter(turn=>this.turnIds.includes(turn.turnId)).map(turn=>turn.messageId??''),...this.follows.flatMap(follow=>follow.input?[follow.input.messageId]:[])]);
     this.prose=mergeProse(this.prose,this.state.messages,this.turnIds);

@@ -92,3 +92,10 @@ test('an exact new-turn binding takes precedence over source-turn timing evidenc
   const followed=followInlineQuestions(state,['turn']);
   assert.equal(followed.follows[0].replyTurnId,'follow-up');assert.deepEqual(followed.turnIds,['turn','follow-up']);
 });
+
+test('local source-only tracking detaches an already accepted late answer without keeping the old run Working',()=>{
+ const state=steeredQuestion();state.messages[1].createdAt=at(40);state.messages[1].turnId='new-turn';
+ const followed=followInlineQuestions(state,['turn'],[{requestId:'steered',turnId:'turn',responseMode:'message',completed:true,answered:true}],[],false);
+ assert.deepEqual(followed.turnIds,['turn']);assert.equal(followed.follows[0].detached,true);assert.equal(followed.waiting,false);
+ assert.equal(inlineQuestionPhase(state,'turn',followed.follows),'complete');assert.equal(questionConversationInputs(state,[],followed.follows,state.messages).length,0);
+});

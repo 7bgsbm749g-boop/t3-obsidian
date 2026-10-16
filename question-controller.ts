@@ -7,7 +7,8 @@ import {abortableRead} from './t3-api';
 export const QUESTION_READ_TIMEOUT_MS=8000;
 
 export interface QuestionCommand {type:'thread.user-input.respond'|'thread.user-input.dismiss';commandId:string;threadId:string;requestId:string;answers?:Record<string,string|string[]>;createdAt:string}
-export interface QuestionRecord {target:QuestionTarget;drafts:QuestionDrafts;command?:QuestionCommand;failureIds?:string[];uncertain?:boolean;resolved?:boolean;dismissed?:boolean}
+export interface QuestionAnswerFollow {request:PendingQuestion;command:QuestionCommand;notePath?:string;accepted?:boolean}
+export interface QuestionRecord {target:QuestionTarget;drafts:QuestionDrafts;command?:QuestionCommand;failureIds?:string[];uncertain?:boolean;resolved?:boolean;dismissed?:boolean;answerFollow?:QuestionAnswerFollow}
 export interface QuestionView {request?:PendingQuestion;status:'loading'|'pending'|'submitting'|'resolved'|'unavailable'|'error';detail?:string;fresh?:boolean;accepted?:boolean}
 export interface QuestionStore {load():QuestionRecord[];save(records:QuestionRecord[]):void}
 
@@ -29,7 +30,8 @@ export class QuestionController {
   private sends=new Map<string,Promise<void>>();
   private dismissalRetries=new Map<string,number>();
   private stopped=false;
-  constructor(private access:(environmentId:string)=>Promise<ThreadAccess>,private store:QuestionStore,private newId:()=>string,private now=()=>new Date().toISOString()){
+  private following=new Map<string,Promise<void>>();
+  constructor(private access:(environmentId:string)=>Promise<ThreadAccess>,private store:QuestionStore,private newId:()=>string,private now=()=>new Date().toISOString(),private followAnswer?:(target:QuestionTarget,follow:QuestionAnswerFollow)=>Promise<boolean>){
     for(const record of store.load())if(record?.target&&typeof record.target.environmentId==='string'&&typeof record.target.threadId==='string'&&typeof record.target.requestId==='string'&&record.drafts&&typeof record.drafts==='object')this.records.set(questionKey(record.target),{...record,drafts:Object.assign(Object.create(null),record.drafts)});
     this.saved=JSON.stringify([...this.records.values()]);this.updateDismissals();
   }
@@ -49,6 +51,20 @@ export class QuestionController {
   pendingDismissals(){return [...this.records.values()].filter(record=>this.isDismissed(record.target)&&!record.resolved).map(record=>record.target);}
   /** Dismiss is an explicit durable intent, safe to finish without another click. */
   retryDismissals(){for(const target of this.pendingDismissals())if((this.dismissalRetries.get(questionKey(target))??0)<=Date.now())void this.submit(target,true).catch(()=>{});}
+  /** Retain accepted answers until their exact stream is attached. Recovery
+   * never dispatches an answer again, including after a lost acknowledgement. */
+  async recoverAnswerStreams(){
+    if(this.stopped||!this.followAnswer)return;
+    await Promise.all([...this.records.values()].filter(record=>record.answerFollow?.accepted&&!record.dismissed).map(record=>{
+      const key=questionKey(record.target),old=this.following.get(key);if(old)return old;
+      const follow=record.answerFollow!;
+      const work=Promise.resolve().then(async()=>{
+        if(this.stopped)return;
+        if(await this.followAnswer!(record.target,follow)&&!this.stopped&&record.answerFollow===follow){delete record.answerFollow;this.persist();}
+      }).catch(error=>logFailure('question.answer-stream',error,{...record.target})).finally(()=>{if(this.following.get(key)===work)this.following.delete(key);});
+      this.following.set(key,work);return work;
+    }));
+  }
   draft(target:QuestionTarget,questionId:string,value:QuestionDraft){
     const record=this.record(target);if(record.command)throw Error('Retry the saved submission before changing this answer.');
     record.drafts[questionId]=value;
@@ -107,8 +123,8 @@ export class QuestionController {
         const remote=requests?.[target.requestId];
         const terminal=related.some(a=>a.kind==='user-input.resolved'||staleQuestionFailure(a))||remote&&typeof remote.status==='string'&&remote.status!=='pending';
         const failure=related.find(a=>a.kind==='provider.user-input.respond.failed'&&!staleQuestionFailure(a)&&record.command&&!record.failureIds?.includes(a.id));
-        if(terminal||record.resolved){if(!record.resolved){changed=true;logEvent('question.resolved',{...target});}if(related.some(a=>a.kind==='user-input.resolved'&&!a.payload?.answers||staleQuestionFailure(a)))record.dismissed=true;record.resolved=true;delete record.command;delete record.failureIds;delete record.uncertain;record.drafts=Object.create(null);this.views.set(key,{status:'resolved',fresh:true});}
-        else if(failure){changed=true;delete record.command;delete record.failureIds;delete record.uncertain;this.views.set(key,{request,status:'error',fresh:true,detail:String(failure.payload?.detail??'T3 could not submit the answer. Your draft is saved.')});}
+        if(terminal||record.resolved){if(!record.resolved){changed=true;logEvent('question.resolved',{...target});}if(related.some(a=>a.kind==='user-input.resolved'&&!a.payload?.answers||staleQuestionFailure(a)))record.dismissed=true;if(record.answerFollow){if(record.dismissed)delete record.answerFollow;else record.answerFollow.accepted=true;changed=true;}record.resolved=true;delete record.command;delete record.failureIds;delete record.uncertain;record.drafts=Object.create(null);this.views.set(key,{status:'resolved',fresh:true});}
+        else if(failure){changed=true;delete record.command;delete record.answerFollow;delete record.failureIds;delete record.uncertain;this.views.set(key,{request,status:'error',fresh:true,detail:String(failure.payload?.detail??'T3 could not submit the answer. Your draft is saved.')});}
         else {
           const current=request??(remote?.status==='pending'?this.view(target).request:undefined);
           this.views.set(key,{request:current,fresh:true,accepted:!!record.command&&!record.uncertain,status:current?(this.sends.has(key)?'submitting':record.command?(record.uncertain?'error':'submitting'):'pending'):'unavailable',...(record.uncertain?{detail:this.isDismissed(target)?'Dismissal saved; waiting for T3.':'Connection lost during submission. Your answer is saved; retry safely.'}:!current?{detail:'This question is unavailable. Refresh the thread in T3.'}:{})});
@@ -116,7 +132,7 @@ export class QuestionController {
       }
       if(changed)this.persist();
   }
-  submit(target:QuestionTarget,dismiss=false):Promise<void>{
+  submit(target:QuestionTarget,dismiss=false,notePath?:string):Promise<void>{
     const key=questionKey(target),old=this.sends.get(key);if(old)return old;
     if(dismiss){
       const record=this.record(target),view=this.view(target);
@@ -132,11 +148,11 @@ export class QuestionController {
     }
     logEvent('question.submit.requested',{...target,dismiss});
     const view=this.view(target);if(view.status==='resolved')return Promise.resolve();
-    const work=Promise.resolve().then(()=>this.send(target,dismiss));this.sends.set(key,work);
+    const work=Promise.resolve().then(()=>this.send(target,dismiss,notePath));this.sends.set(key,work);
     this.views.set(key,{...view,status:'submitting',detail:undefined});this.notify();
     void work.finally(()=>{if(this.sends.get(key)===work)this.sends.delete(key);}).catch(()=>{});return work;
   }
-  private async send(target:QuestionTarget,dismiss:boolean){
+  private async send(target:QuestionTarget,dismiss:boolean,notePath?:string){
     const key=questionKey(target);
     try{
     await this.refresh([target]);if(this.stopped)return;
@@ -149,7 +165,11 @@ export class QuestionController {
       if(dismiss&&view.request.responseMode!=='message')throw Error('This blocking question cannot be dismissed.');
         const command:QuestionCommand={type:dismiss?'thread.user-input.dismiss':'thread.user-input.respond',commandId:this.newId(),threadId:target.threadId,requestId:target.requestId,...(!dismiss?{answers:questionAnswers(view.request,record.drafts)}:{}),createdAt:this.now()};
         record.command=command;record.uncertain=true;record.failureIds=this.failures.get(key)??[];
-        try{this.persist();}catch(error){delete record.command;delete record.failureIds;delete record.uncertain;throw error;}
+        if(this.followAnswer&&!dismiss&&view.request.responseMode==='message')record.answerFollow={request:view.request,command,notePath};
+        try{this.persist();}catch(error){delete record.command;delete record.answerFollow;delete record.failureIds;delete record.uncertain;throw error;}
+    }
+    if(this.followAnswer&&!record.answerFollow&&record.command?.type==='thread.user-input.respond'&&view.request.responseMode==='message'){
+      record.answerFollow={request:view.request,command:record.command,notePath};this.persist();
     }
     if(this.stopped)return;
     this.views.set(questionKey(target),{request:view.request,status:'submitting'});this.notify();
@@ -166,10 +186,12 @@ export class QuestionController {
     }
     finally{try{await access?.close?.();}catch(error){logFailure('question.send.close',error);}}
     if(this.stopped)return;
+    if(record.answerFollow)record.answerFollow.accepted=true;
     delete record.uncertain;
     try{this.persist();}catch(error){logFailure('question.accepted.save',error,{...target});}
     if(record.command)this.views.set(key,{...this.view(target),accepted:true});this.notify();
     await this.refresh([target]);
+    await this.recoverAnswerStreams();
     }catch(error){if(!this.stopped&&this.view(target).status!=='resolved'){this.views.set(key,{...this.view(target),status:'error',detail:error instanceof Error?error.message:'Cannot submit the answer.'});this.notify();}throw error;}
   }
 }

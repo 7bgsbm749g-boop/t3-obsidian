@@ -7,6 +7,7 @@ import type {InitialInlineInput,InlineMessage,InlineTurn,InlineBindingCheckpoint
 import type {InlineQuestionFollow} from './inline-questions';
 import type {IntermediateMode,FinalAnswerFormat} from './response-presentation';
 import type {StreamReadFailure} from './t3-response-limits';
+import {submittedAnswers} from './response-answers';
 /** Shared reply data and validation only. Remote lease writers are retired. */
 export interface ResponseStorageTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface ResponseRequest {
@@ -81,7 +82,11 @@ export function validateResponseRequest(value:any):ResponseRequest {
   if(value?.responseContainer!==undefined&&(typeof value.responseContainer!=='boolean'||value.responseContainer&&!value.nativeProjection))throw Error('Invalid response container preference.');
   if(value?.deviceCompletion!==undefined&&(value.version!==4||value.nativeProjection!==true||value.deviceCompletion?.version!==1||!uuid.test(value.deviceCompletion.actor??'')||! /^[0-9a-f]{64}$/.test(value.deviceCompletion.originalHash??'')))throw Error('Invalid device completion registration.');
   validateDestinationSection(value?.destinationSection);
-  if(value?.initialInput!==undefined&&(!uuid.test(value.initialInput?.messageId??'')||value.initialInput.messageId!==value.messageId||typeof value.initialInput.text!=='string'||!value.initialInput.text.trim()||value.initialInput.text.length>120_000||value.initialInput.label!==undefined&&(typeof value.initialInput.label!=='string'||value.initialInput.label.length>200)))throw Error('Invalid initial response input.');
+  if(value?.initialInput!==undefined){
+    const input=value.initialInput,answer=input?.answer;
+    const asyncAnswer=answer&&typeof answer.requestId==='string'&&answer.requestId.length>0&&input.messageId===`async-answer:${answer.requestId}`&&Array.isArray(answer.questions)&&answer.questions.every((question:any)=>question&&typeof question.id==='string'&&typeof question.question==='string')&&(!answer.answers||JSON.stringify(submittedAnswers(answer.answers))===JSON.stringify(answer.answers));
+    if(!uuid.test(input?.messageId??'')&&!asyncAnswer||answer&&!asyncAnswer||input.messageId!==value.messageId||typeof input.text!=='string'||!input.text.trim()||input.text.length>120_000||input.label!==undefined&&(typeof input.label!=='string'||input.label.length>200))throw Error('Invalid initial response input.');
+  }
   if(value?.threadTitle!==undefined&&(typeof value.threadTitle!=='string'||value.threadTitle.length>200))throw Error('Invalid thread title.');
   if(value?.independent!==undefined&&typeof value.independent!=='boolean')throw Error('Invalid binding preference.');
   if(value?.finalAnswerFormat!==undefined&&!['formatted','raw-markdown'].includes(value.finalAnswerFormat))throw Error('Invalid final answer format.');

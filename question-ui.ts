@@ -1,4 +1,4 @@
-import {Notice,type App} from 'obsidian';
+import {Notice,editorInfoField,type App} from 'obsidian';
 import {NoteTabPanel} from './note-tab-panel';
 import type {Extension} from '@codemirror/state';
 import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
@@ -23,7 +23,7 @@ export class QuestionModal extends NoteTabPanel {
   private dismissButton?:HTMLButtonElement;
   private signature='';
   private opened=false;
-  constructor(app:App,private controller:QuestionController,readonly target:QuestionTarget){super(app);}
+  constructor(app:App,private controller:QuestionController,readonly target:QuestionTarget,private sourceNotePath?:string){super(app);}
   onOpen(){
     this.opened=true;
     this.unsubscribe?.();
@@ -37,7 +37,7 @@ export class QuestionModal extends NoteTabPanel {
     actions.createEl('button',{text:'Close'}).onclick=()=>this.close();
     this.unsubscribe=this.controller.subscribe(()=>this.update());this.update();void this.controller.refresh([this.target]);
   }
-  private send(dismiss:boolean){void this.controller.submit(this.target,dismiss).catch(error=>{new Notice(error instanceof Error?error.message:'Cannot submit the answer.',8000);this.update();});}
+  private send(dismiss:boolean){void this.controller.submit(this.target,dismiss,this.sourceNotePath).catch(error=>{new Notice(error instanceof Error?error.message:'Cannot submit the answer.',8000);this.update();});}
   private update(){
     if(!this.opened)return;
     const view=this.controller.view(this.target),record=this.controller.record(this.target);
@@ -94,7 +94,7 @@ export class QuestionModal extends NoteTabPanel {
 }
 
 /** Replace the readable Markdown answer link with a real Live Preview button. */
-export function questionEditorExtension(controller:QuestionController,open:(target:QuestionTarget)=>void):Extension {
+export function questionEditorExtension(controller:QuestionController,open:(target:QuestionTarget,notePath?:string)=>void):Extension {
   const {Decoration,EditorView,ViewPlugin,WidgetType}=require('@codemirror/view') as typeof import('@codemirror/view');
   const {StateEffect,StateField}=require('@codemirror/state') as typeof import('@codemirror/state');
   const refreshDismissed=StateEffect.define<void>();
@@ -128,7 +128,7 @@ export function questionEditorExtension(controller:QuestionController,open:(targ
     private unsubscribe?:()=>void;
     constructor(readonly target:QuestionTarget){super();}
     eq(other:AnswerWidget){return questionKey(this.target)===questionKey(other.target);}
-    toDOM(){const result=questionButton(controller,this.target,open);this.unsubscribe=result.unsubscribe;return result.button;}
+    toDOM(view?:EditorView){const path=view&&editorInfoField?view.state.field(editorInfoField,false)?.file?.path:undefined;const result=questionButton(controller,this.target,target=>open(target,path));this.unsubscribe=result.unsubscribe;return result.button;}
     destroy(){this.unsubscribe?.();}
     ignoreEvent(){return true;}
   }

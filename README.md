@@ -34,6 +34,8 @@ Question status follows the live response feed and has a small control-read fall
 
 Submitted question answers use a closed **User input submitted** row in the editor stream, with a short answer preview. Open the row to see the original questions and full answers. Each row keeps its place in the conversation and its open or closed state while the stream updates. Saved question records retain the display after recovery; older records without a question show the saved answer alone. Ordinary prompts and steering keep their existing quotes. See [submitted answer display](docs/submitted-answer-display.md).
 
+An answer submitted after its source run finishes starts a new editor stream in the note that opened the question form. The saved reply remains in place. The new stream follows only T3's exact answer message. Accepted answers retain a local recovery intent until the stream is attached; reloads and retries do not send the answer again or recreate a completed stream. Answers within the source run keep their current stream. See [late question answer streams](docs/late-question-answer-streams.md).
+
 When T3 has accepted a message, a later local display or save failure retains its response and note/thread link. The notice identifies the accepted thread, and the failure log records accepted delivery. Local recovery never sends another prompt or interrupts that accepted work. Sends without acceptance evidence retain their terminal failure handling.
 
 Stop seals the local response, then interrupts only its exact T3 run. Completed turns do not stay active while a final note save is pending. A Stop for an old run cannot interrupt a newer run.

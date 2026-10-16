@@ -33,6 +33,15 @@ const completeV2=(h:ReturnType<typeof fixture>,sequence=2,text='Final reply')=>{
 };
 const finalItem=(text='Final reply')=>({id:'opaque-item',threadId:'thread',runId:'turn',messageId:'answer',type:'assistant_message',text,streaming:false,status:'completed',updatedAt:'2026-10-06T03:01:00.000Z'});
 const settle=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
+test('a local source awaiting final save cannot adopt a late question answer run',async()=>{
+ const h=fixture(false,async()=>finalItem('Source final'));h.record.request.localOnly=true;h.preview.tick(true);h.item(completeV2(h,2,'Source final'));await settle();
+ const next=completeV2(h,3,'Source final') as any,thread=next.snapshot.thread;
+ thread.messages.push({id:'async-answer:late',role:'user',turnId:'next-run',text:'Yes',streaming:false,createdAt:'2026-10-06T03:03:00Z'},{id:'next-answer',role:'assistant',turnId:'next-run',text:'New run must have its own stream',streaming:true,createdAt:'2026-10-06T03:03:01Z'});
+ thread.activities=[{id:'asked',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'late',responseMode:'message',questions:[]}},{id:'resolved',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',payload:{requestId:'late',answers:{choice:'Yes'}}}];
+ thread.latestTurn={turnId:'next-run',state:'running',messageId:'async-answer:late',requestedAt:'2026-10-06T03:03:00Z'};thread.turns['next-run']=thread.latestTurn;thread.session={status:'running',activeTurnId:'next-run'};
+ h.item(next);await settle();const update=h.updates.at(-1)!;
+ assert.equal(update.turnId,'turn');assert.equal(update.phase,'complete');assert.match(update.body,/Source final/);assert.doesNotMatch(update.body,/New run must|data-t3-answer-id/);h.preview.dispose();
+});
 test('live native question resolution produces a compact answer row and keeps it through subsequent stream text',()=>{
  const h=fixture();h.preview.tick(true);h.item(h.snapshot(2,'Before input.\n\n'));
  const event=(sequence:number,activity:any)=>h.item({kind:'event',event:{sequence,aggregateId:'thread',type:'thread.activity-appended',payload:{activity}}});

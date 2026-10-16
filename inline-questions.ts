@@ -3,10 +3,20 @@ import {incomingLabel,mergeProse,steeringBoundary,type InlineSteering} from './i
 import {pendingQuestions,staleQuestionFailure,type Question} from './questions';
 import {submittedAnswers} from './response-answers';
 
-export interface InlineQuestionFollow {requestId:string;turnId:string|null;answered?:boolean;dismissed?:boolean;replyTurnId?:string;completed?:boolean;responseMode?:'message'|'native';input?:InlineSteering;questions?:Question[]}
+export interface InlineQuestionFollow {requestId:string;turnId:string|null;answered?:boolean;dismissed?:boolean;detached?:boolean;replyTurnId?:string;completed?:boolean;responseMode?:'message'|'native';input?:InlineSteering;questions?:Question[]}
+/** Exact run ownership wins; timestamps only distinguish answers inside a
+ * known source lifecycle from answers submitted after its terminal boundary. */
+export function lateQuestionAnswer(state:InlineThreadState,sourceTurnId:string|null,reply:InlineMessage):boolean|undefined {
+  if(!sourceTurnId)return;
+  const bound=turnForMessage(state,reply.id);if(bound)return bound!==sourceTurnId;
+  const turn=state.latestTurn?.turnId===sourceTurnId?state.latestTurn:state.turns?.[sourceTurnId];
+  const end=Date.parse(turn?.completedAt??state.checkpoints?.find(item=>item.turnId===sourceTurnId)?.completedAt??''),at=Date.parse(reply.createdAt??'');
+  if(Number.isFinite(end)&&Number.isFinite(at))return at>=end;
+  if(turnPhase(state,sourceTurnId)==='running'&&state.session?.activeTurnId===sourceTurnId)return false;
+}
 /** Follow only T3's exact async-answer message, never an unrelated latest turn.
  * Keep the request binding durable when recent snapshots omit older activities. */
-export function followInlineQuestions(state:InlineThreadState,turnIds:string[],saved:InlineQuestionFollow[]=[],prose:InlineMessage[]=[]):{follows:InlineQuestionFollow[];turnIds:string[];turnId:string|undefined;waiting:boolean;continued:boolean}{
+export function followInlineQuestions(state:InlineThreadState,turnIds:string[],saved:InlineQuestionFollow[]=[],prose:InlineMessage[]=[],followLate=true):{follows:InlineQuestionFollow[];turnIds:string[];turnId:string|undefined;waiting:boolean;continued:boolean}{
   const follows=saved.map(item=>({...item,...(item.input?{input:{...item.input}}:{})})),turns=[...turnIds];
   for(const activity of state.activities){
     if(activity.kind!=='user-input.requested'||!activity.payload||typeof activity.payload.requestId!=='string'||activity.turnId!==null&&!turns.includes(activity.turnId))continue;
@@ -21,6 +31,7 @@ export function followInlineQuestions(state:InlineThreadState,turnIds:string[],s
     if(state.activities.some(a=>a.payload?.requestId===item.requestId&&staleQuestionFailure(a)))item.dismissed=true;
     if(item.dismissed)continue;
     const reply=state.messages.find(m=>m.role==='user'&&m.id===`async-answer:${item.requestId}`);
+    if(!followLate&&item.responseMode==='message'&&reply&&lateQuestionAnswer(state,item.turnId,reply)===true){item.detached=true;delete item.input;continue;}
     if(reply){item.answered=true;item.replyTurnId??=turnForMessage(state,reply.id)??completedQuestionSteeringTurn(state,item,reply);}
     if(!item.input&&(resolution?.payload?.answers||reply)){
       const answers=submittedAnswers(resolution?.payload?.answers);
@@ -41,8 +52,8 @@ export function followInlineQuestions(state:InlineThreadState,turnIds:string[],s
     }
     if(item.replyTurnId&&!turns.includes(item.replyTurnId))turns.push(item.replyTurnId);
   }
-  if(turns.length>turnIds.length)return followInlineQuestions(state,turns,follows,prose);
-  return {follows,turnIds:turns,turnId:turns.at(-1),waiting:follows.some(item=>!item.dismissed&&item.responseMode!=='native'&&!item.replyTurnId),continued:follows.some(item=>item.replyTurnId&&item.replyTurnId!==item.turnId||pendingQuestionReply(item))};
+  if(turns.length>turnIds.length)return followInlineQuestions(state,turns,follows,prose,followLate);
+  return {follows,turnIds:turns,turnId:turns.at(-1),waiting:follows.some(item=>!item.dismissed&&!item.detached&&item.responseMode!=='native'&&!item.replyTurnId),continued:follows.some(item=>!item.detached&&(item.replyTurnId&&item.replyTurnId!==item.turnId||pendingQuestionReply(item)))};
 }
 /** An async answer can steer its question's existing turn. T3 leaves that
  * user message's turnId null and retains the original requestedAt, so the
@@ -66,7 +77,7 @@ function completedQuestionSteeringTurn(state:InlineThreadState,item:InlineQuesti
   return item.turnId;
 }
 function pendingQuestionReply(item:InlineQuestionFollow):boolean {
-  return !!(item.completed&&item.answered&&!item.dismissed&&item.responseMode==='message'&&!item.replyTurnId);
+  return !!(item.completed&&item.answered&&!item.dismissed&&!item.detached&&item.responseMode==='message'&&!item.replyTurnId);
 }
 export function inlineQuestionPhase(state:InlineThreadState,turnId:string,follows:InlineQuestionFollow[]=[]){
   const observed=turnPhase(state,turnId);
@@ -80,7 +91,7 @@ export function inlineQuestionPhase(state:InlineThreadState,turnId:string,follow
 /** Question quotes share the steering renderer but retain their native identities.
  * Order against T3's user messages, falling back to durable paragraph boundaries. */
 export function questionConversationInputs(state:InlineThreadState,steering:InlineSteering[],follows:InlineQuestionFollow[],prose:InlineMessage[]):InlineSteering[]{
-  const answers=follows.flatMap(item=>!item.dismissed&&item.input?[item.input]:[]);
+  const answers=follows.flatMap(item=>!item.dismissed&&!item.detached&&item.input?[item.input]:[]);
   const inputs=[...steering.map(input=>{const answer=answers.find(answer=>answer.messageId===input.messageId);return answer?{...input,...answer,before:input.before}:input;}),...answers];
   const positions=new Map(state.messages.map((message,index)=>[message.id,index]));
   const boundary=(input:InlineSteering)=>input.before.reduce((sum,message)=>{
