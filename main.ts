@@ -3,6 +3,8 @@ import {retainedLocalFinal,restoredLocalFinal} from './local-final-cache';
 import {HtmlResultStore} from './html-result-store';
 import {HtmlResultViews} from './html-result-view';
 import {hasResponseMarkers} from './inline-thread';
+import {responseIds} from './response-container';
+import {noteSteeringTarget} from './note-steering';
 import {interruptStoppedResponse} from './response-stop';
 import {localResponseBindings,localResponseRange} from './local-response-binding';
 import {loadResponseBindingData,mergeResponseBindingData,updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from './response-binding-data';
@@ -220,7 +222,14 @@ export default class SendToT3 extends Plugin {
       if(this.deviceInline&&[2,3,4].includes(binding.version))void this.deviceInline.failResponse(binding.host,binding.id).catch(cleanupError=>this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt));
       else void this.stopHostedInline(binding.id,binding.host).catch(cleanupError=>this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt));
     }
-    const attached=request.inlineSteering??request.inlineFollow;
+    // Refusing a new input must not stop the existing response or its T3 turn.
+    if(request.inlineSteering&&!['dispatch','startup-recovery'].includes(stage)){
+      for(const target of request.inlineSteering.targets??[request.inlineSteering])try{
+        if(target.host)await this.deviceInline?.discardSteering(target.jobId,request.inlineSteering.input.messageId);
+        else {const job=this.inlineChat?.find(target.jobId);if(job)this.inlineChat!.discardSteering(job,request.inlineSteering.input.messageId);}
+      }catch(cleanupError){this.recordSendFailure(request,cleanupError,'steering-input-cleanup',startedAt);}
+    }
+    const attached=request.inlineFollow;
     if(attached){const existing=this.inlineChat?.find(attached.jobId);if(existing)await this.inlineChat!.stop(existing);else{await nativeResponses(this.app).stop(attached.jobId,request.inlineFollow?.notePath??request.noteThread?.notePath);this.deviceInline?.stopLocally(attached.jobId);if(attached.host)void this.stopHostedInline(attached.jobId,attached.host).catch(cleanupError=>this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt));}}
     const job=this.inlineChat?.find(request.id);if(job)await this.inlineChat!.deliveryFailed(job);
     // Save cleanup independently of the network. A cleanup failure never
@@ -1446,6 +1455,7 @@ export default class SendToT3 extends Plugin {
     try{
       await this.sendChat(prompt,note,{...options,jobOptions,requestId,sourceContext:context,onPrepared:async request=>{
         // Package images before mutating the note.
+        if(request.inlineSteering)return;
 
         job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
         await manager.prepare(job,request);
@@ -1481,9 +1491,10 @@ export default class SendToT3 extends Plugin {
     }
     const policy=hosted?.record.request??job!;
     const jobOptions=resolveJobOptions({enabled:true,intermediateMode:policy.intermediateMode,keepIntermediate:policy.keepIntermediate,finalAnswerFormat:policy.finalAnswerFormat});
-    await this.sendChat(prompt,note,{threadId,projectOverrideKey:key,jobOptions,sourceContext:context,onPrepared:request=>{
+    await this.sendChat(prompt,note,{threadId,responseId:id,projectOverrideKey:key,jobOptions,sourceContext:context,onPrepared:(request,input)=>{
       logEvent('steering.prepared',{jobId:id,requestId:request.id,messageId:commandId(request.id,'message'),threadId,projectId});
-      request.inlineSteering={jobId:id,...(hosted?{host:hosted.host}:{}),input:{messageId:commandId(request.id,'message'),text:prompt,...(selection?{selection}:{})}};
+      if(request.inlineSteering?.jobId!==id)throw Error('This response no longer owns the active turn. Reopen the chooser before sending.');
+      request.inlineSteering.input={messageId:commandId(request.id,'message'),text:input,...(selection?{selection}:{})};
     }});
   }
   private async recoveryRecord(id:string,_path:string):Promise<{record:ResponseRecord;host:ResponseStorageTarget}|undefined>{return this.deviceInline?.cachedResponse(id);}
@@ -1788,7 +1799,7 @@ export default class SendToT3 extends Plugin {
     const thread=await this.readChatThread(connection,project,threadId);
     return typeof thread.title==='string'&&thread.title.trim()?thread.title.slice(0,160):'T3 thread';
   }
-  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;sourceContext?:EditorChatContext;onPrepared?:(request:Request)=>void|Promise<void>}):Promise<void> {
+  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;sourceContext?:EditorChatContext;onPrepared?:(request:Request,input:string)=>void|Promise<void>}):Promise<void> {
     if(this.busy)throw Error('Another send is in progress. Wait for it to finish.');
     if(!prompt.trim())throw Error('Enter a message before sending.');
     if(this.stopped)throw Error('The plugin has been disabled. Re-enable it before sending.');
@@ -1796,6 +1807,7 @@ export default class SendToT3 extends Plugin {
     const startedAt=Date.now();let request:Request|undefined;
     try{
       let smartCapture:SmartCapture|undefined;
+      let preparedInput=prompt;
       const historical=note&&options?.threadId&&!options.expectedProjectKey?this.previousNoteThread(note.path,options.threadId):undefined;
       let {project,link}=await this.chatTarget(note?.path,historical,Boolean(options?.newThread||options?.expectedProjectKey),options?.projectOverrideKey??options?.expectedProjectKey);
       if(options?.expectedProjectKey&&projectKey(project)!==options.expectedProjectKey)throw Error('The note’s linked project changed. Choose a thread again.');
@@ -1813,7 +1825,8 @@ export default class SendToT3 extends Plugin {
         const selectionReference=!reference&&!plan.text.trim()&&question.trim()&&selected?`Selection reference: ${selected.slice(0,160)}${selected.length>160?'…':''}`:'';
         const material=reference?`Selected text:\n${reference}`:plan.text||selectionReference;
         if(!material.trim()&&!question.trim()){new Notice('Nothing new to send.');return;}
-        prompt=[material,question.trim()?`Question:\n${question}`:''].filter(Boolean).join('\n\n');smartCapture=plan.capture;
+        preparedInput=[material,question.trim()?`Question:\n${question}`:''].filter(Boolean).join('\n\n');
+        prompt=preparedInput;smartCapture=plan.capture;
       }
       const images=options?.barePrompt?undefined:await this.prepareImages(prompt,note?.path??'',true,options?.sourceContext?.snapshot);
       let text=images?.markdown??prompt;
@@ -1841,7 +1854,8 @@ export default class SendToT3 extends Plugin {
       if(this.stopped)throw Error('The plugin was disabled before sending.');
       const title=await this.requestTitle(connection,project,threadId,note?.path);
       request={...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
-      await options?.onPrepared?.(request);
+      if(note&&!options?.barePrompt)await this.prepareNoteSteering(request,note.path,preparedInput,options?.sourceContext,options?.responseId);
+      await options?.onPrepared?.(request,preparedInput);
       logEvent('request.prepared',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,notePath:note?.path,promptHash:contentHash(request.prompt),promptLength:request.prompt.length});
       this.settings.pending.push(request);
       try{await this.save();logEvent('request.saved',{requestId:request.id});}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);throw e;}
@@ -2251,7 +2265,8 @@ export default class SendToT3 extends Plugin {
       const note=this.noteContext(file),link=options?.folderLink??folderLinkForPath(this.settings.folderLinks,file.path)??{id:'manual',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true};
       request = {smartSend:smart.capture,jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path),prompt:images.markdown+this.messageFooter(file.path),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
       if(request.prompt.length>120_000) throw new Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
-      if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path],undefined,options?.destinationSection);
+      if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path],undefined,options?.destinationSection,undefined,smart.text);
+      else await this.prepareNoteSteering(request,file.path,smart.text);
       await options?.onPrepared?.(request);
       this.settings.pending.push(request); await this.save();
       const sentThreadId=await this.dispatch(request,options?.quiet);
@@ -2259,19 +2274,61 @@ export default class SendToT3 extends Plugin {
     } catch(e) {if(request)await this.failRequest(request,e,'preparation',startedAt);else this.recordSendFailure(undefined,e,'preparation',startedAt);const detail=`${unsavedMessage(e)} The send failed. See the send failure log.`;if(options?.throwOnError)throw new RequestDeliveryError(detail,false,Boolean(request));new Notice(`Send to T3 Code: ${detail}`,12000);}
     finally {this.busy = false;}
   }
-  private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string,destinationSection?:string,sourcePath?:string){
+  /** Resolve against the final thread and its provider turn, never the cursor.
+   * Reconnecting bindings block a send until ownership is known. */
+  private async prepareNoteSteering(request:Request,path:string,input:string,context?:EditorChatContext,preferredId?:string):Promise<boolean>{
+    if(!request.threadId)return false;
+    const environment=request.connection.environmentId??await this.localInlineEnvironment();
+    const stored=responseBindingRequests(this.settings.responseBindings??{}).filter(binding=>binding.vaultId===this.settings.vaultId&&binding.threadId===request.threadId&&binding.projectId===request.project.id&&binding.threadEnvironmentId===environment);
+    const jobs=this.inlineChat?.activeFor?.(path)??[];
+    if(!stored.length&&!jobs.length)return false;
+    const document=await deviceNoteIO(this.app).readNote(path);
+    if(document===undefined)throw Error('Save the response note before sending again.');
+    const candidates=responseIds(document).flatMap(id=>{
+      const hosted=this.deviceInline?.cachedResponse(id),job=jobs.find(job=>job.id===id),binding=hosted?.record.request??stored.find(binding=>binding.id===id);
+      if(!binding&&!job)return [];
+      if(!regionBody(document,id))throw Error('The response block is incomplete. Restore it before sending again.');
+      return [{id,notePath:path,threadId:binding?.threadId??job?.threadId??'',projectId:binding?.projectId??job?.projectId??'',environmentId:binding?.threadEnvironmentId??job?.threadEnvironmentId??job?.connection?.environmentId??'',state:hosted?.record.state??(job?{...job,status:job.phase}:undefined),hosted,job,binding}];
+    });
+    if(!candidates.length)return false;
+    const thread=await this.readChatThread(request.connection,request.project,request.threadId);
+    const target=noteSteeringTarget(thread,{notePath:path,threadId:request.threadId,projectId:request.project.id,environmentId:environment},candidates,preferredId);
+    if(!target)return false;
+    if(target.binding&&target.binding.vaultId!==this.settings.vaultId)throw Error('This response belongs to another vault.');
+    if(!target.hosted&&target.job?.hosted||!target.hosted&&!target.job)throw Error('The active response is reconnecting. Wait before sending again.');
+    if(target.hosted&&(target.hosted.record.state?.notePath??target.hosted.record.request.notePath)!==path){
+      await this.checkResponseNote(target.id,target.hosted.record.state?.notePath??target.hosted.record.request.notePath,path);
+      await this.deviceInline!.relocateResponse(target.hosted.host,target.hosted.record,path);
+    }
+    let selection=context&&!context.referenceSelection?context.canonicalAnchor??context.anchor:undefined;
+    if(selection){const source=this.notePromptDocument(context!.view),range=selectionRange(source,selection);if(!range)throw Error('The selected text changed. Select it again.');if(selectionOverlapsInlineResponse(source,{start:range.from,end:range.to}))selection=undefined;}
+    const policy=target.hosted?.record.request??target.job!;
+    request.jobOptions=resolveJobOptions({enabled:true,intermediateMode:policy.intermediateMode,keepIntermediate:policy.keepIntermediate,finalAnswerFormat:policy.finalAnswerFormat});
+    const destination={jobId:target.id,...(target.hosted?{host:target.hosted.host}:{}),notePath:path};
+    const steering=request.inlineSteering;
+    if(steering){
+      if(!steering.targets?.some(item=>item.jobId===target.id))steering.targets=[...steering.targets??[{jobId:steering.jobId,host:steering.host,notePath:request.noteThread?.notePath??path}],destination];
+    }else request.inlineSteering={...destination,input:{messageId:commandId(request.id,'message'),text:input,...(selection?{selection}:{})},targets:[destination]};
+    return true;
+  }
+  private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string,destinationSection?:string,sourcePath?:string,input?:string){
     const policy=request.jobOptions?.inline??resolveJobOptions(this.settings.inlineStreaming).inline;
     const io=deviceNoteIO(this.app),host=await this.localResponseTarget(request);
     for(const path of destinations){const document=await io.readNote(path);if(document===undefined)throw Error(`Destination note unavailable: ${path}`);endInsertionOffset(document);}
     const source:ResponseRequest={destinationSection,localOnly:true,nativeProjection:true,responseContainer:true,version:4,finalAnswerFormat:policy.finalAnswerFormat,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode};
     request.inlineBindings=[];
-    for(const path of destinations)request.inlineBindings.push(await editorStream(source,path,io,()=>!this.stopped));
+    const fresh:string[]=[];
+    for(const path of destinations)if(input===undefined||!await this.prepareNoteSteering(request,path,input))fresh.push(path);
+    for(const path of fresh)request.inlineBindings.push(await editorStream(source,path,io,()=>!this.stopped));
     request.inlineHost=request.inlineBindings[0];
   }
   private async responseGuard(binding:ResponseRequest,_status:'prepared'|'accepted'|'failed',_uncertain=false){if(!binding.localOnly)throw Error('Legacy reply creation was retired.');}
+  private requestBindingIds(request:Request){
+    return contextBindingIds(request);
+  }
   private persistAgentCommand(request:Request,threadId?:string){
     const command=request.agentCommand;if(!command)return;
-    const result:NoteCommandResult|undefined=threadId?{id:command.id,ok:true,threadId,messageId:commandId(request.id,'message'),bindingIds:request.inlineBindings?.map(binding=>binding.id)??[]}:undefined;
+    const result:NoteCommandResult|undefined=threadId?{id:command.id,ok:true,threadId,messageId:commandId(request.id,'message'),bindingIds:this.requestBindingIds(request)}:undefined;
     this.app.saveLocalStorage(`${this.localKey}-note-command-${command.id}`,JSON.parse(JSON.stringify(result?{command,result}:{command,request})));
   }
   private compactNoteCommandReceipts(){
@@ -2319,7 +2376,7 @@ export default class SendToT3 extends Plugin {
       const sent=await this.send(file,project,{id:command.id,newThread:!command.threadId,threadId:command.threadId,folderLink:link,throwOnError:true,streamReply:command.streamReply,destinations:command.destinations,destinationSection:command.destinationSection,onPrepared:async prepared=>{prepared.agentCommand=command;request=prepared;persist({request:prepared});}});
       if(!sent)throw Error('The note was not sent.');threadId=sent.threadId;request=sent.request;
     }
-    const result:NoteCommandResult={id:command.id,ok:true,threadId,messageId:command.kind==='attach-response'?command.messageId:commandId(command.id,'message'),bindingIds:request?.inlineBindings?.map(binding=>binding.id)??[]};
+    const result:NoteCommandResult={id:command.id,ok:true,threadId,messageId:command.kind==='attach-response'?command.messageId:commandId(command.id,'message'),bindingIds:request?this.requestBindingIds(request):[]};
     persist({request,result});return result;
   }
   private rememberSettlement(request:Request,threadId:string){
@@ -2362,8 +2419,10 @@ export default class SendToT3 extends Plugin {
     if(request.inlineSteering){
       const steering=request.inlineSteering;
       if(steering.input.messageId!==commandId(request.id,'message')||!request.threadId)throw Error('Invalid saved steering request.');
-      if(steering.host){if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');await this.deviceInline.steer(steering.host,steering.jobId,steering.input);}
-      else {const job=this.inlineChat?.find(steering.jobId)??this.inlineChat?.steeringJob(steering.jobId,steering.input.messageId);if(!job||job.threadId!==request.threadId)throw Error('The original response is unavailable on this device.');this.inlineChat!.steer(job,steering.input);}
+      for(const target of steering.targets??[steering]){
+        if(target.host){if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');await this.deviceInline.steer(target.host,target.jobId,steering.input);}
+        else {const job=this.inlineChat?.find(target.jobId)??this.inlineChat?.steeringJob(target.jobId,steering.input.messageId);if(!job||job.threadId!==request.threadId)throw Error('The original response is unavailable on this device.');this.inlineChat!.steer(job,steering.input);}
+      }
     }
     if(request.inlineSteering)logEvent('steering.reserved',{requestId:request.id,jobId:request.inlineSteering.jobId,messageId:request.inlineSteering.input.messageId,threadId:request.threadId});
     if(request.inlineFollow){
@@ -2386,7 +2445,7 @@ export default class SendToT3 extends Plugin {
     if(delivery&&this.deviceInline){
       const bindings=request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]);
       for(const binding of bindings)if([2,3,4].includes(binding.version))await this.deviceInline.delivered(binding.host,binding.id,delivery);
-      if(request.inlineSteering?.host)await this.deviceInline.delivered(request.inlineSteering.host,request.inlineSteering.jobId,delivery);
+      if(request.inlineSteering)for(const target of request.inlineSteering.targets??[request.inlineSteering])if(target.host)await this.deviceInline.delivered(target.host,target.jobId,delivery);
       if(request.inlineFollow?.host)await this.deviceInline.delivered(request.inlineFollow.host,request.inlineFollow.jobId,delivery);
     }
     stage='local-confirmation';this.persistAgentCommand(request,result.threadId);

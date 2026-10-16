@@ -61,6 +61,7 @@ export class DeviceResponseManager {
   async relocateResponse(_host:ResponseStorageTarget,record:ResponseRecord,path:string){await this.register({...record.request,notePath:path});return this.local!.record(record.request.id)!;}
   follow(_host:ResponseStorageTarget,id:string,previous:string,messageId:string,path?:string){return this.manager().follow(id,messageId,path,previous);}
   steer(_host:ResponseStorageTarget,id:string,input:SteeringInput){return this.manager().steer(id,input);}
+  discardSteering(id:string,messageId:string){return this.local?.discardSteering(id,messageId)??Promise.resolve();}
   resume(){if(!this.stopped)this.manager().resume();}
   localBindingsChanged(){if(!this.stopped)this.manager().resume();}
   explorerResponses(){return (this.local?.responses()??[]).filter(response=>!this.stops.has(response.id));}

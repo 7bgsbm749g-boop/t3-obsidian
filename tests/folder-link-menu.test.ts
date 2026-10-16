@@ -429,3 +429,128 @@ test('whole-note sends, command-bar asks and confirmed receipts use one Smart Se
   assert.equal(sent.length,5);assert.match(sent[4].prompt,/Selected text:\nAgent final answer\./);assert.doesNotMatch(sent[4].prompt,/First instruction|Second instruction/);
  }finally{h.plugin.onunload();}
 });
+
+async function runningSmartSendHarness(){
+ const h=await folderMenuHarness();
+ const {file}=h.fileMenu('Notes/Steering.md',false);Object.assign(file,{basename:'Steering',stat:{ctime:123}});
+ let document='First instruction.';const sent:any[]=[];let newBlocks=0;
+ const editor={getValue:()=>document,getSelection:()=>'',getCursor:()=>({line:0,ch:0}),posToOffset:(pos:any)=>pos.offset??0,offsetToPos:(offset:number)=>({line:0,ch:0,offset}),replaceRange:(text:string,from:any,to:any)=>{document=document.slice(0,from.offset)+text+document.slice(to.offset);}};
+ const view={file,editor,getMode:()=> 'source',getViewData:()=>document,save:async()=>{}};
+ h.plugin.app.workspace.getActiveViewOfType=()=>view;h.plugin.app.workspace.getLeavesOfType=()=>[{view}];
+ h.plugin.app.vault.read=async()=>document;h.plugin.app.vault.getFileByPath=(path:string)=>path===file.path?file:undefined;
+ h.plugin.settings.autoSettleThreads=false;h.plugin.settings.inlineStreaming.enabled=true;
+ h.plugin.settings.folderLinks=[{id:'link',folderPath:'Notes',connectionId:'c',environmentId:'env',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot}];
+ h.plugin.editorForNoteSend=async()=>view;h.plugin.notePromptDocument=()=>document;h.plugin.recoverSmartReplies=async()=>{};
+ h.plugin.requestTitle=async()=> 'Steering';
+ let active=true;
+ h.plugin.readChatThread=async()=>({id:'smart-thread',projectId:h.project.id,title:'Steering',session:{status:active?'running':'ready',activeTurnId:active?'turn':null},latestTurn:{turnId:'turn',state:active?'running':'completed'}});
+ h.plugin.dispatch=async(request:any)=>{sent.push(request);h.plugin.rememberStarted(request,'smart-thread');await h.plugin.save();return 'smart-thread';};
+ await h.plugin.send(file,h.project,{newThread:true,streamReply:false,throwOnError:true});
+ const id=randomUUID(),host={environmentId:'env',workspaceRoot:'/writing',directory:'.obsidian/t3-code'};
+ const binding={version:4,localOnly:true,nativeProjection:true,responseContainer:true,id,vaultId:h.plugin.settings.vaultId,host,notePath:file.path,threadId:'smart-thread',messageId:randomUUID(),projectId:h.project.id,threadEnvironmentId:'env',initialOwner:randomUUID(),initialHash:'a'.repeat(64),createdAt:new Date().toISOString(),keepIntermediate:true,intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'};
+ const record={request:binding,state:{turnId:'turn',status:'running',notePath:file.path}};
+ h.plugin.settings.responseBindings={[id]:{version:1,clock:1,actor:'test',request:binding}};
+ h.plugin.deviceInline={cachedResponse:(target:string)=>target===id?{record,host}:undefined,dispose:()=>{}};
+ h.plugin.localResponseTarget=async()=>host;
+ const prepare=h.plugin.prepareStreamBindings.bind(h.plugin);
+ h.plugin.prepareStreamBindings=async(...args:any[])=>{await prepare(...args);newBlocks+=args[0].inlineBindings?.length??0;};
+ const originalInline=h.plugin.inlineChat;
+ h.plugin.inlineChat={activeFor:()=>[],find:()=>undefined,reserve:()=>{throw Error('Steering must not reserve a block');},reserveAtEnd:()=>{throw Error('Steering must not reserve a block');},start:()=>{},dispose:()=>originalInline?.dispose()};
+ const anchor=`:::send-to-t3-response data-t3-response="${id}"\n\n\n\n:::/send-to-t3-response`;
+ document+='\n'+anchor+'\nSecond instruction.';
+ return {...h,file,editor,view,id,record,sent,newBlocks:()=>newBlocks,setActive:(value:boolean)=>{active=value;},setDocument:(value:string)=>{document=value;},document:()=>document};
+}
+
+test('whole-note Smart Send steers the running response without a new stream',async()=>{
+ const h=await runningSmartSendHarness();
+ try{
+  await h.plugin.openManualAction(h.file,'','',{editor:h.editor,view:h.view},false);
+  const request=h.sent.at(-1);assert.equal(h.sent.length,2);assert.equal(request.inlineSteering.jobId,h.id);
+  assert.equal(h.newBlocks(),0);assert.equal(request.inlineHost,undefined);assert.equal(request.inlineBindings.length,0);
+  assert.match(request.prompt,/Second instruction/);assert.doesNotMatch(request.prompt,/First instruction/);
+  assert.match(request.inlineSteering.input.text,/Second instruction/);assert.doesNotMatch(request.inlineSteering.input.text,/First instruction|Sent from Obsidian/);
+  assert.equal(request.jobOptions.inline.intermediateMode,'collapse');assert.equal(request.jobOptions.inline.finalAnswerFormat,'raw-markdown');
+  assert.deepEqual(Array.from(h.plugin.requestBindingIds(request)),[h.id]);
+ }finally{h.plugin.onunload();}
+});
+
+for(const enabled of [true,false])test(`explicit existing-thread Ask reuses the stream with draft streaming ${enabled?'on':'off'}`,async()=>{
+ const h=await runningSmartSendHarness();
+ try{
+  const context={editor:h.editor,view:h.view,smartDocument:h.document(),smartQuestion:'Why this change?'};
+  await h.plugin.sendResolvedChat('outdated unfiltered draft',{path:h.file.path},context,true,{threadId:'smart-thread',expectedProjectKey:'c:project',jobOptions:{inline:{enabled,intermediateMode:'remove',keepIntermediate:false,finalAnswerFormat:'formatted'}}});
+  const request=h.sent.at(-1);assert.equal(h.sent.length,2);assert.equal(h.newBlocks(),0);
+  assert.equal(request.inlineSteering.jobId,h.id);assert.equal(request.jobOptions.inline.enabled,true);
+  assert.match(request.inlineSteering.input.text,/Second instruction/);assert.match(request.inlineSteering.input.text,/Question:\nWhy this change\?/);
+  assert.doesNotMatch(request.inlineSteering.input.text,/First instruction|outdated unfiltered draft/);
+ }finally{h.plugin.onunload();}
+});
+
+test('selected source uses the same delta in steering and delivery',async()=>{
+ const h=await runningSmartSendHarness();
+ try{
+  const document=h.document(),start=document.indexOf('Second instruction.'),end=start+'Second instruction.'.length;
+  const anchor={text:'Second instruction.',start,end,before:document.slice(Math.max(0,start-24),start),after:document.slice(end,end+24)};
+  const context={editor:h.editor,view:h.view,anchor,canonicalAnchor:anchor,smartDocument:document,smartScope:[start,end],smartQuestion:''};
+  await h.plugin.sendResolvedChat('First instruction.\nSecond instruction.',{path:h.file.path},context,true,{threadId:'smart-thread',expectedProjectKey:'c:project'});
+  const request=h.sent.at(-1);assert.equal(request.inlineSteering.jobId,h.id);assert.equal(request.inlineSteering.input.text,'Second instruction.');
+  assert.equal(request.inlineSteering.input.selection.text,'Second instruction.');assert.equal(h.newBlocks(),0);
+ }finally{h.plugin.onunload();}
+});
+
+test('a reloaded unbound response blocks a second stream until its turn is known',async()=>{
+ const h=await runningSmartSendHarness();
+ try{
+  h.record.state.turnId=undefined as any;
+  await assert.rejects(h.plugin.send(h.file,h.project,{throwOnError:true}),/reconnecting/);
+  assert.equal(h.sent.length,1);assert.equal(h.newBlocks(),0);
+  h.record.state.turnId='turn';
+  await h.plugin.send(h.file,h.project,{throwOnError:true});
+  assert.equal(h.sent.length,2);assert.equal(h.sent.at(-1).inlineSteering.jobId,h.id);
+ }finally{h.plugin.onunload();}
+});
+
+test('a completed response permits a new stream and explicit New remains independent',async()=>{
+ for(const newThread of [false,true]){
+  const h=await runningSmartSendHarness();
+  try{
+   if(!newThread){h.setActive(false);h.setDocument('First instruction.\nSaved final reply.\nSecond instruction.');}
+   await h.plugin.send(h.file,h.project,{newThread,throwOnError:true});
+   const request=h.sent.at(-1);assert.equal(request.inlineSteering,undefined);assert.equal(h.newBlocks(),1);
+   assert.notEqual(request.inlineBindings[0].id,h.id);
+  }finally{h.plugin.onunload();}
+ }
+});
+
+test('mirrored destinations reuse each active stream and only add genuinely new destinations',async()=>{
+ const h=await runningSmartSendHarness();
+ try{
+  const mirror={...h.record.request,id:randomUUID(),notePath:'Notes/Mirror.md'},fresh={path:'Notes/Fresh.md'};
+  const mirrorFile={path:mirror.notePath};const docs=new Map([[mirror.notePath,`:::send-to-t3-response data-t3-response="${mirror.id}"\n\n\n\n:::/send-to-t3-response`],[fresh.path,'A fresh destination.']]);
+  const host=h.record.request.host;
+  h.plugin.settings.responseBindings[mirror.id]={version:1,clock:1,actor:'test',request:mirror};
+  h.plugin.deviceInline.cachedResponse=(id:string)=>id===h.id?{record:h.record,host}:id===mirror.id?{record:{request:mirror,state:{turnId:'turn',status:'running',notePath:mirror.notePath}},host}:undefined;
+  h.plugin.app.vault.getFileByPath=(path:string)=>path===h.file.path?h.file:path===mirror.notePath?mirrorFile:path===fresh.path?fresh:undefined;
+  h.plugin.app.vault.read=async(file:any)=>file.path===h.file.path?h.document():docs.get(file.path);
+  h.plugin.app.vault.process=async(file:any,change:Function)=>{const next=change(docs.get(file.path));docs.set(file.path,next);return next;};
+  await h.plugin.send(h.file,h.project,{threadId:'smart-thread',destinations:[h.file.path,mirror.notePath,fresh.path],throwOnError:true});
+  const request=h.sent.at(-1);assert.equal(h.newBlocks(),1);assert.equal(request.inlineBindings[0].notePath,fresh.path);
+  assert.deepEqual(Array.from(request.inlineSteering.targets,(target:any)=>target.jobId),[h.id,mirror.id]);
+  assert.deepEqual(Array.from(h.plugin.requestBindingIds(request)),[request.inlineBindings[0].id,h.id,mirror.id]);
+  assert.equal((docs.get(mirror.notePath)!.match(/data-t3-response=/g)??[]).length,1);
+ }finally{h.plugin.onunload();}
+});
+
+test('a failed preparation neither stops the old stream nor confirms its added text',async()=>{
+ const h=await runningSmartSendHarness();
+ try{
+  let discarded=0,stopped=0;
+  h.plugin.deviceInline.discardSteering=async()=>{discarded++;};
+  h.plugin.deviceInline.stopLocally=()=>{stopped++;};
+  const before=h.document();
+  await assert.rejects(h.plugin.send(h.file,h.project,{throwOnError:true,onPrepared:async()=>{throw Error('Synthetic preparation failure');}}),/Synthetic preparation failure/);
+  assert.equal(discarded,1);assert.equal(stopped,0);assert.equal(h.document(),before);assert.equal(h.sent.length,1);
+  await h.plugin.send(h.file,h.project,{throwOnError:true});
+  assert.equal(h.sent.length,2);assert.equal(h.sent.at(-1).inlineSteering.jobId,h.id);assert.match(h.sent.at(-1).inlineSteering.input.text,/Second instruction/);
+ }finally{h.plugin.onunload();}
+});

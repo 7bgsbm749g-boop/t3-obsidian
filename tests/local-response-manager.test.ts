@@ -138,3 +138,21 @@ test('agent staging retains checked immutable input and merges ordinary edits on
     await assert.rejects(localStageCommand('submit-note-edit',binding,document,files,'0'.repeat(64)),/original hash/);
   }finally{await fs.rm(dirname(stage.stagingPath!),{recursive:true,force:true});}
 });
+
+test('a refused steering preparation removes only its pending input and keeps the original stream',async()=>{
+ const h=fixture(),confirmed={messageId:randomUUID(),text:'Already accepted.',confirmed:true,before:[]};
+ h.binding.localSteering=[confirmed];
+ try{
+  await h.manager.register(h.binding);const before=h.read(),pending={messageId:randomUUID(),text:'Pending addition.'};
+  await h.manager.steer(h.binding.id,pending);
+  await h.manager.steer(h.binding.id,pending);
+  assert.equal(h.manager.request(h.binding.id)!.localSteering!.length,2);
+  assert.throws(()=>h.manager.steer(h.binding.id,{...pending,text:'Different input.'}),/already belongs/);
+  await h.manager.discardSteering(h.binding.id,pending.messageId);
+  assert.deepEqual(h.manager.request(h.binding.id)!.localSteering!.map(input=>input.messageId),[confirmed.messageId]);
+  assert.equal(h.read(),before);assert.equal(h.manager.responses().length,1);
+  await h.manager.discardSteering(h.binding.id,confirmed.messageId);
+  assert.equal(h.manager.request(h.binding.id)!.localSteering!.length,1);
+  h.emit('Original response still completes.');await drain();assert.match(h.read(),/Original response still completes/);
+ }finally{h.manager.dispose();}
+});

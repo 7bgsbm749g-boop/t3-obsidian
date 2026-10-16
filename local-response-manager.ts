@@ -164,7 +164,17 @@ export class LocalResponseManager {
     await this.io.saveLocalBinding(next);this.adopt(next);
   }
   follow(id:string,messageId:string,_path?:string,previousMessageId?:string){return this.changeBinding(id,request=>{if(previousMessageId&&previousMessageId!==(request.localMessageId??request.messageId))throw Error('The response has advanced to another message.');return {...request,localMessageId:messageId};});}
-  steer(id:string,input:SteeringInput){if(!validSteeringInput(input))throw Error('Invalid response steering input.');return this.changeBinding(id,request=>({...request,localSteering:[...request.localSteering??[],{...input,confirmed:false,before:this.jobs.get(id)?.preview.steeringProse?.()??[]}]}));}
+  steer(id:string,input:SteeringInput){
+    if(!validSteeringInput(input))throw Error('Invalid response steering input.');
+    const existing=this.jobs.get(id)?.request.localSteering?.find(item=>item.messageId===input.messageId);
+    if(existing){if(existing.text!==input.text||JSON.stringify(existing.selection)!==JSON.stringify(input.selection))throw Error('This steering ID already belongs to another message.');return Promise.resolve();}
+    return this.changeBinding(id,request=>({...request,localSteering:[...request.localSteering??[],{...input,confirmed:false,before:this.jobs.get(id)?.preview.steeringProse?.()??[]}]}));
+  }
+  discardSteering(id:string,messageId:string){
+    const request=this.jobs.get(id)?.request;
+    if(!request?.localSteering?.some(input=>input.messageId===messageId&&!input.confirmed))return Promise.resolve();
+    return this.changeBinding(id,request=>({...request,localSteering:request.localSteering?.filter(input=>input.messageId!==messageId||input.confirmed)}));
+  }
   renamed(before:string,after:string){for(const runtime of this.jobs.values())if(runtime.request.notePath===before||runtime.request.notePath.startsWith(before+'/')){runtime.request={...runtime.request,notePath:after+runtime.request.notePath.slice(before.length)};runtime.retryAt=0;}}
   deleted(path:string){for(const runtime of this.jobs.values())if(runtime.request.notePath===path||runtime.request.notePath.startsWith(path+'/'))this.stopLocally(runtime.request.id);}
   responses(){return [...this.jobs.values()].filter(runtime=>!runtime.done&&!runtime.stopped).map(runtime=>({id:runtime.request.id,notePath:runtime.request.notePath,epoch:1,revision:1,active:!runtime.update?.completionVerified,input:!!runtime.update?.questionActivities?.length,complete:false}));}

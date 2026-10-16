@@ -23,6 +23,18 @@ No new source for the default destination opens the selector and
 hides its previous/continue action; an explicit empty submission shows the
 short no-content notice.
 
+Before allocating an editor stream, every Send and Ask checks the selected
+machine, project, thread, and active provider turn against the responses still
+attached to the destination note. A matching response is steered in place and
+keeps its original streaming and formatting choices, including when the new
+draft has streaming switched off. The steering transcript uses the same
+prepared source delta and question as the delivered message. Mirrored notes
+reuse their own matching streams; only new destinations receive new blocks.
+Completed responses and explicit new threads receive independent blocks.
+After a reload, an attached response with no recovered turn proof must reconnect
+before another send. Several matching streams require an explicit response
+choice. This prevents an uncertain match from creating another copy.
+
 `data.json.smartSend` holds stable note identities, compressed current source
 snapshots, confirmed heads, retirement IDs, and response records. A snapshot
 successor retires only the heads it observed. Merge retains independent
