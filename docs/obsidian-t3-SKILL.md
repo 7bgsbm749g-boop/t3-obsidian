@@ -276,8 +276,11 @@ version and device identity. Explicit laptop diagnostics can use
 command only. Preserve typed content when a device endpoint cannot answer.
 
 `reload-client` requires `--release-version VERSION --runtime-hashes JSON` for
-all three immutable runtime files. Its guard checks saved-editor state and exact
-bytes before native reload. Recheck `client-status` with a new UUID afterward.
+all three immutable runtime files. Independently compare installed bytes with
+the release and inspect current editor state before calling it. The current
+maintenance endpoint validates the command shape and invokes native reload;
+it does not defer for unsaved editor text. Recheck `client-status` with a new
+UUID afterward.
 `archive-reply-imports` moves old imported files only when requested; supply exact
 `--project-id`, `--environment-id`, and `--archive-directory` within that linked
 local project. Inspect results before claiming cleanup.
