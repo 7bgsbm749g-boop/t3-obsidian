@@ -25,6 +25,7 @@ import {obsidianFooter} from './obsidian-prompt';
 import {isNoteContextCommand,noteContext,mergeNoteContexts,contextBindingIds,type NoteContextRecord} from './note-context';
 import {isResponseCommand,validateResponseCommand} from './response-command';
 import {installStreamBlockControls} from './stream-block-controls';
+import {responseMoveHistory} from './response-move';
 import {incomingLabel} from './inline-steering';
 import {ProjectDiscovery,type ProjectSource,type ProjectSnapshot} from './project-discovery';
 import {resolveJobOptions,type ResolvedJobOptions} from './job-options';
@@ -328,7 +329,7 @@ export default class SendToT3 extends Plugin {
       return !continuation?.host||responseBindingRequests(this.settings.responseBindings??{}).some(binding=>binding.id===continuation.jobId);
     });
     this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>job.localOnly?this.stopLocalInline(job):this.stopHostedInline(job.id,job.hostTarget,job.remoteStopOperationId),status:job=>this.deviceInline?.responseStatus(job.id)},()=>'collapse',()=>finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat));
-    if(typeof this.registerEditorExtension==='function'){const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)));}
+    if(typeof this.registerEditorExtension==='function'){const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');this.registerEditorExtension([EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)),responseMoveHistory()]);}
     if(typeof this.registerMarkdownCodeBlockProcessor==='function'){
       const prefix=`html-result:v1:${this.settings.vaultId}:`;
       const store=new HtmlResultStore({read:key=>deviceState(prefix+key),write:async(key,value)=>{await deviceState(prefix+key,value);}},environmentId=>this.inlineThreadAccess(environmentId),async url=>{

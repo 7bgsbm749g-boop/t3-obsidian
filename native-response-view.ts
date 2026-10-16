@@ -1,6 +1,6 @@
 import type {MarkdownView,TFile} from 'obsidian';
 import {regionBody} from './inline-thread';
-import type {Extension,Transaction as CMTransaction} from '@codemirror/state';
+import type {Extension,Transaction as CMTransaction,TransactionSpec} from '@codemirror/state';
 import {changedEdits,changedInterval,mergeSavedEdits} from './coordinated-merge';
 import {advanceProjection,projectResponses,savedProjection,savedToDisplay,responseRegion,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
 import {ResponseScroll} from './response-scroll';
@@ -8,6 +8,7 @@ import {presentToolGroups,recoverToolGroups,compactToolGroups,assertCanonicalToo
 import {toolDisplayOffset} from './response-tool-presentation';
 import {responseFrame} from './response-container';
 import {localResponseBindings} from './local-response-binding';
+import {movedResponse,responseMoveEffect,responseMoveHistory,guardResponseMoveHistory,type ResponseMove} from './response-move';
 
 export interface NativeViewConflict {base:string;local:string;incoming:string;reason:string;awaitingCompletion?:boolean;attemptedIncoming?:string;unsafeIncoming?:boolean}
 /** Native rendering with a separate saved projection. */
@@ -45,6 +46,8 @@ export class NativeResponseView {
   private ownSave?:{text:string};
   private materialization?:{before:string;after:string;ids:string[]};
   private scroll:ResponseScroll;
+  private moveEditor?:object;
+  private releaseMoveHistory?:()=>void;
   constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[]){
     this.file=view.file;this.base=saved;this.diskBase=saved;this.projection=this.buildProjection(saved,[]);
     this.scroll=new ResponseScroll(view,()=>this.currentProjection());
@@ -93,6 +96,40 @@ export class NativeResponseView {
   private localIds(document:string){return new Set([...this.knownLocal,...localResponseBindings(document).map(binding=>binding.id)]);}
   scrollControl(key:string){return !this.blocked&&!this.disposed?this.scroll.control(key):undefined;}
   toggleScroll(key:string){if(!this.blocked&&!this.disposed)this.scroll.toggle(key);}
+  moveControl(key:string):string|undefined {
+    if(this.blocked||this.disposed||this.unloading||this.saveFences||this.materialization||this.view.file!==this.file||this.view.getMode()==='preview'||!key.endsWith(':active'))return;
+    const matches=this.responses.filter(response=>response.movable&&response.body.includes(`data-t3-fold="${key}"`));
+    return matches.length===1?matches[0].id:undefined;
+  }
+  private displayedSavedOffset(offset:number){
+    let shift=0;
+    for(const group of this.savedTools.groups){
+      if(offset>group.canonicalFrom&&offset<group.canonicalTo)throw new ProjectionConflict('The drop position is inside a retained tool group.');
+      if(offset>=group.canonicalTo)shift+=group.placeholder.length-(group.canonicalTo-group.canonicalFrom);
+    }
+    for(const range of this.projection.ranges){
+      if(offset>range.savedFrom&&offset<range.savedTo)throw new ProjectionConflict('The drop position is inside another response.');
+      if(offset>=range.savedTo)shift+=range.displayTo-range.displayFrom-(range.savedTo-range.savedFrom);
+    }
+    return offset+shift;
+  }
+  moveTarget(key:string,displayOffset:number):{saved:number;display:number}|undefined {
+    const id=this.moveControl(key);if(!id)return;
+    const projection=this.currentProjection(),position=this.mapSelection(displayOffset,displayOffset).from;
+    if(position.kind!=='saved')return;
+    const moved=movedResponse(projection.saved,id,position.offset);if(!moved)return;
+    return {saved:moved.offset,display:this.displayedSavedOffset(moved.offset)};
+  }
+  moveResponse(key:string,displayOffset:number):boolean {
+    const id=this.moveControl(key),target=id&&this.moveTarget(key,displayOffset),cm=(this.view.editor as any)?.cm;
+    if(!id||!target||!cm?.dispatch)return false;
+    const before=this.saved(),next=movedResponse(before,id,target.saved);if(!next||next.text===before)return false;
+    const {Transaction}=require('@codemirror/state') as typeof import('@codemirror/state');
+    const {isolateHistory}=require('@codemirror/commands') as typeof import('@codemirror/commands');
+    this.scroll.suspend();
+    cm.dispatch(cm.state.update({effects:responseMoveEffect().of({id,key,before,after:next.text,edits:next.edits,inverse:next.inverse}),annotations:[Transaction.userEvent.of('move.response'),isolateHistory.of('full')],filter:false,scrollIntoView:false}));
+    const moved=this.saved()===next.text;if(moved)this.view.requestSave();return moved;
+  }
   toolGroup(ref:string){return this.savedToolHistory.get(ref)?.canonical??[...this.responseTools.values()].map(presentation=>canonicalToolGroup(presentation,ref)).find(body=>body!==undefined);}
   private canonicalOffset(display:string,offset:number){
     const compact=compactToolGroups(display);let shift=0;
@@ -190,7 +227,9 @@ export class NativeResponseView {
   setResponses(responses:readonly LocalResponse[]){
     if(this.disposed)throw Error('Native response view is disposed.');
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
-    if(this.compactTools===((this.view as any).getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body)&&this.displayed()===this.projection.display)return;
+    const cm=(this.view.editor as any)?.cm;
+    if(cm?.dispatch&&cm!==this.moveEditor){this.releaseMoveHistory?.();this.moveEditor=cm;this.releaseMoveHistory=guardResponseMoveHistory(cm,(transaction,move)=>this.moveTransaction(transaction,move));}
+    if(this.compactTools===((this.view as any).getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable)&&this.displayed()===this.projection.display)return;
     const saved=this.saved(),projection=this.buildProjection(saved,responses);
     this.responses=responses.map(response=>({...response}));this.projection=projection;
     for(const response of responses)this.materialized.delete(response.id);
@@ -356,6 +395,7 @@ export class NativeResponseView {
   isDisposed(){return this.disposed;}
   private unwrap(){
     this.scroll.dispose();
+    this.releaseMoveHistory?.();this.releaseMoveHistory=undefined;this.moveEditor=undefined;
     if(this.view.getViewData===this.getWrapper)this.view.getViewData=this.originalGet;
     if(this.view.setViewData===this.setWrapper)this.view.setViewData=this.originalSet;
     if(this.view.save===this.saveWrapper)this.view.save=this.originalSave;
@@ -426,13 +466,26 @@ export class NativeResponseView {
    * Ordinary edits, selection and history use Obsidian's normal commands. */
   extension():Extension {
     const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');
-    return EditorState.transactionFilter.of(transaction=>this.filterTransaction(transaction));
+    return [EditorState.transactionFilter.of(transaction=>this.filterTransaction(transaction)),responseMoveHistory()];
   }
-  filterTransaction(transaction:CMTransaction):CMTransaction|[] {
-    if(this.disposed||!transaction.docChanged)return transaction;
-    if(this.unloading)return [];
+  private moveTransaction(transaction:CMTransaction,move:ResponseMove):TransactionSpec|undefined {
+    if(transaction.docChanged||this.moveControl(move.key)!==move.id)return;
+    try{
+      const current=this.saved(),merged=mergeSavedEdits(move.before,current,move.edits);
+      if(!merged.ok)return;
+      const next=this.buildProjection(merged.text,this.responses),start=transaction.startState.doc;
+      const edits=changedEdits(start.toString(),next.display).map(edit=>({from:edit.from,to:edit.to,insert:edit.text})),{ChangeSet,Transaction}=require('@codemirror/state') as typeof import('@codemirror/state');
+      const selection=transaction.startState.selection.map(ChangeSet.of(edits,start.length));
+      this.projection=next;
+      return {changes:edits,selection,annotations:[Transaction.addToHistory.of(false),Transaction.userEvent.of('send-to-t3-projection')],filter:false,scrollIntoView:false};
+    }catch{return;}
+  }
+  filterTransaction(transaction:CMTransaction):CMTransaction|TransactionSpec[] {
+    if(this.disposed)return transaction;
     const cm=(this.view.editor as any)?.cm;
     if(!cm?.state||cm.state!==transaction.startState)return transaction;
+    if(!transaction.docChanged)return transaction;
+    if(this.unloading)return [];
     try{
       // A compact shell is presentation, not editable output. Ordinary edits
       // may remove its whole range; partial edits would lose retained bytes.

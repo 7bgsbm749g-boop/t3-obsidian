@@ -3,10 +3,12 @@ import {nativeResponses} from './native-response-manager';
 import {streamBlock} from './stream-block';
 import {removeStreamBlockFromEditor} from './stream-block-edit';
 import {responseScrollChanged} from './response-scroll';
+import {installResponseDrag} from './response-drag';
 
 /** Keep Live Preview's source cursor outside generated history, while native
  * browser selection, links, dropdowns and copy controls continue to work. */
 export function installStreamBlockControls(app:App,root:Document,icon:(element:HTMLElement,name:string)=>void,onError:(error:unknown)=>void):()=>void {
+  const stopDrag=installResponseDrag(app,root,icon,onError);
   const owned=new Map<HTMLElement,{close:HTMLElement;follow:HTMLElement;reading:boolean}>();
   const watched=new Set<Element>();
   let queued=false,disposed=false;
@@ -93,5 +95,5 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
   root.addEventListener(responseScrollChanged,schedule);
   const observer=new MutationObserver(schedule);observer.observe(root.body,{childList:true,subtree:true});
   const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving');if(controls.reading)actions.remove();}owned.clear();};
+  return ()=>{disposed=true;stopDrag();observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving');if(controls.reading)actions.remove();}owned.clear();};
 }

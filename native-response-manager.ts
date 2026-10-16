@@ -422,7 +422,8 @@ export class NativeResponseManager {
           const failureBody=restoring?cached.body:body;
           const displayed=record.state?.cleanupComplete||record.finalWriter?body:failure?failedStreamBody(this.titled(id,failureBody)):this.titled(id,body);
           if(!restoring)this.rememberPreview(record,displayed);
-          responses.push({id,body:restoring&&!failure?this.titled(id,cached.body):displayed});
+          const terminal=record.finalWriter||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict||['complete','completed','interrupted','error','cancelled','conflict'].includes(record.state?.status??'')||stream?.completionVerified||['complete','interrupted','error'].includes(stream?.phase??'');
+          responses.push({id,body:restoring&&!failure?this.titled(id,cached.body):displayed,movable:!terminal&&!failure});
         }
         for(const stop of this.localStops.values()){
           if(stop.path!==view.file.path||!responseRegion(saved,stop.id)||adapter?.hasMaterialized(stop.id))continue;

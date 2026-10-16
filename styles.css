@@ -213,6 +213,13 @@
 .callout[data-callout="t3-progress"] > .callout-title > .callout-title-inner,
 .callout[data-callout="t3-progress"] > .callout-title strong { font-weight: inherit; }
 .callout[data-callout="t3-progress"] > .callout-title > .callout-icon { display: none; }
+.send-to-t3-response-drag { display: inline-flex; align-items: center; flex: 0 0 auto; color: var(--text-faint); cursor: grab; touch-action: none; user-select: none; padding: 3px; border-radius: 4px; }
+.send-to-t3-response-drag svg { width: 16px; height: 16px; }
+.send-to-t3-response-drag:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.send-to-t3-response-dragging, .send-to-t3-response-dragging * { cursor: grabbing !important; }
+.send-to-t3-response-drop { position: fixed; z-index: 10000; height: 3px; background: var(--interactive-accent); border-radius: 2px; pointer-events: none; }
+.send-to-t3-response-drop[hidden] { display: none; }
+.send-to-t3-response-drag-ghost { position: fixed; z-index: 10001; pointer-events: none; padding: 5px 9px; border-radius: 5px; background: var(--background-primary); border: 1px solid var(--interactive-accent); color: var(--text-normal); font-size: var(--font-ui-small); box-shadow: var(--shadow-s); }
 /* Align the native editor action with the header, including wrapped titles. */
 .markdown-source-view.mod-cm6 .embed-actions.send-to-t3-progress-actions {
   top: var(--send-to-t3-header-center);
