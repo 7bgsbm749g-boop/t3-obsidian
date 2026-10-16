@@ -42,6 +42,7 @@ import {openRunImport,ImportStreamsModal} from './run-import-ui';
 import {type InlineThreadState} from './inline-thread';
 import {nativeResponses} from './native-response-manager';
 import {editorStream} from './editor-stream';
+import {captureCursorInsertion,resolveCursorInsertion,type CursorInsertion} from './cursor-insertion';
 import {continueQuestionAnswer} from './question-continuation';
 import {validateNoteCommand,isEventCommand,type NoteCommand,type NoteCommandResult} from './note-command';
 import {isFolderCommand,executeFolderCommand,type FolderCommand} from './folder-command';
@@ -98,7 +99,7 @@ import {ApprovalController} from './approval-controller';
 import {approvalButton,approvalEditorExtension} from './approval-ui';
 import {approvalTargets,parseApprovalUrl,clearApprovalControls,type ApprovalTarget} from './approvals';
 import {settlementState,type ThreadSettlementJob} from './thread-settlement';
-type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
+type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;insertion?:CursorInsertion;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
 const NEW_FOLDER_PROJECT='folder:new';
 const VAULT_PROJECT='vault:root';
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
@@ -1130,6 +1131,7 @@ export default class SendToT3 extends Plugin {
     const view=captured?.view??(active?.file?.path===file.path?active:undefined);
     if(view?.editor&&!captured)captured={view,editor:view.editor};
     if(captured&&selection.trim()&&!captured.anchor)captured={...captured,anchor:captureEditorSelection(captured.editor)};
+    if(captured&&!captured.anchor)captured={...captured,insertion:captured.insertion??captureCursorInsertion(captured.editor.getValue(),captured.editor.posToOffset(captured.editor.getCursor()))};
     const context=captured?this.canonicalChatContext(captured):undefined;
     new AskComposer(this.app,file.path,this.app.loadLocalStorage(this.chatDraftKey)??'',text=>this.app.saveLocalStorage(this.chatDraftKey,text),(question,selected)=>this.openManualAction(file,question,selection,context,choose||selected)).open();
   }
@@ -1172,16 +1174,26 @@ export default class SendToT3 extends Plugin {
     if(!project.connectionId)return Platform.isMobile?'This folder is linked to a local desktop project. Link it to a connected computer first.':undefined;
     return this.chatReadinessError();
   }
-  openNoteSend(file:TFile,showSelector=false){
+  private noteSendInsertion(file:TFile):CursorInsertion|null {
+    const view=this.app.workspace.getActiveViewOfType(MarkdownView);
+    if(view?.file?.path!==file.path||!view.editor||view.getMode?.()==='preview')return null;
+    const cursor=view.editor.posToOffset(view.editor.getCursor()),adapter=nativeResponses(this.app).view(view);
+    if(!adapter)return captureCursorInsertion(view.editor.getValue(),cursor);
+    const position=adapter.mapSelection(cursor,cursor).from;
+    const offset=position.kind==='saved'?position.offset:adapter.currentProjection().ranges.find(range=>range.id===position.id)?.savedTo;
+    if(offset===undefined)throw Error('The response at the send cursor changed. Send again from the desired position.');
+    return captureCursorInsertion(adapter.saved(),offset);
+  }
+  openNoteSend(file:TFile,showSelector=false,insertion=this.noteSendInsertion(file)){
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(this.noteContext(file)),
       hasNewContent:(destination)=>this.hasSmartContent(file,destination),
-      sendChat:(_text,key,resolve,_back,destination)=>this.sendNote(file,destination?.threadId,destination?.projectKey,false,key,resolve?.()),
-      sendToNew:(_text,key,resolve)=>this.sendNote(file,undefined,undefined,true,key,resolve?.()),
-      sendToExisting:(_text,key,resolve,back)=>this.openNoteThreads(file,key,resolve,back),
+      sendChat:(_text,key,resolve,_back,destination)=>this.sendNote(file,destination?.threadId,destination?.projectKey,false,key,resolve?.(),insertion),
+      sendToNew:(_text,key,resolve)=>this.sendNote(file,undefined,undefined,true,key,resolve?.(),insertion),
+      sendToExisting:(_text,key,resolve,back)=>this.openNoteThreads(file,key,resolve,back,insertion),
     });
     return openNoteSendFlow(this.app,host,showSelector);
   }
-  async openNoteThreads(file:TFile,overrideKey?:string,resolve?:()=>ResolvedJobOptions,back?:()=>void){
+  async openNoteThreads(file:TFile,overrideKey?:string,resolve?:()=>ResolvedJobOptions,back?:()=>void,insertion=this.noteSendInsertion(file)){
     if(this.busy)return;
     try{
       const target=await this.existingTarget(file.path,overrideKey);
@@ -1191,7 +1203,7 @@ export default class SendToT3 extends Plugin {
       new Notice('Loading threads…',2000);
       const threads=projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);
       if(this.stopped)return;
-      new ExistingThreadModal(this.app,threads,thread=>this.sendNote(file,thread.id,projectKey(project),false,overrideKey,resolve?.()),undefined,undefined,back).open();
+      new ExistingThreadModal(this.app,threads,thread=>this.sendNote(file,thread.id,projectKey(project),false,overrideKey,resolve?.(),insertion),undefined,undefined,back).open();
     }catch(error){if(back)throw error;new Notice(`Send to T3 Code: ${message(error)}`,10000);}
   }
   openRunImport(file:TFile){
@@ -1259,7 +1271,7 @@ export default class SendToT3 extends Plugin {
       return {duplicate,following:follow};
     }finally{this.busy=false;}
   }
-  async sendNote(file:TFile,threadId?:string,expectedProjectKey?:string,newThread=false,overrideKey?:string,jobOptions?:ResolvedJobOptions){
+  async sendNote(file:TFile,threadId?:string,expectedProjectKey?:string,newThread=false,overrideKey?:string,jobOptions?:ResolvedJobOptions,insertion=this.noteSendInsertion(file)){
     if(this.busy)return;
     jobOptions??=resolveJobOptions(this.settings.inlineStreaming);
     try{
@@ -1271,7 +1283,7 @@ export default class SendToT3 extends Plugin {
       const {project,link}=await this.chatTarget(file.path,chosen,Boolean(newThread||expectedProjectKey),overrideKey??expectedProjectKey);
       if(expectedProjectKey&&projectKey(project)!==expectedProjectKey)throw Error('The folder’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
-      await this.send(file,project,{threadId,newThread,projectOverrideKey:overrideKey,folderPicker:Boolean(expectedProjectKey),folderLink:link,jobOptions,throwOnError:true});
+      await this.send(file,project,{threadId,newThread,projectOverrideKey:overrideKey,folderPicker:Boolean(expectedProjectKey),folderLink:link,jobOptions,throwOnError:true,insertion});
     }catch(error){throw error;}
   }
   openChat(prompt?:string,showSelector=false){
@@ -1286,7 +1298,7 @@ export default class SendToT3 extends Plugin {
   }
   private async openManualAction(file:TFile,prompt:string,selection:string,captured?:EditorChatContext,showSelector=false){
     if(!prompt.trim()&&!selection.trim()){
-      return this.openNoteSend(file,showSelector);
+      return this.openNoteSend(file,showSelector,captured?.insertion);
     }
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
     const view=captured?.view??(active?.file?.path===file.path?active:undefined);
@@ -1295,6 +1307,7 @@ export default class SendToT3 extends Plugin {
     let context:EditorChatContext|undefined;
     if(view?.file?.path===file.path&&editor){
       context={...captured,editor,view,...(prompt.trim()?{initialQuestion:prompt}:{})};
+      if(!selected)context.insertion??=captureCursorInsertion(editor.getValue(),editor.posToOffset(editor.getCursor()));
       if(selected&&!context.anchor&&editor.getSelection()===selection){try{context.anchor=captureEditorSelection(editor);}catch(error){if(captured)throw error;/* Append when selection changed while palette was open. */}}
     }
     if(context?.anchor)context=this.canonicalChatContext(context);
@@ -1457,7 +1470,7 @@ export default class SendToT3 extends Plugin {
         // Package images before mutating the note.
         if(request.inlineSteering)return;
 
-        job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
+        job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):context.insertion?manager.reserveAtCursor(context.editor,context.view,context.insertion,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
         await manager.prepare(job,request);
       }});delivered=true;if(job)manager.start(job);
     }catch(error){if(job)await manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)));throw error;}
@@ -2237,7 +2250,7 @@ export default class SendToT3 extends Plugin {
     });
     const work=this.saving;void work.finally(()=>{if(this.saving===work)this.queuedSharedSnapshot=undefined;}).catch(()=>{});return work;
   }
-  async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote;streamReply?:boolean;jobOptions?:ResolvedJobOptions;destinations?:string[];destinationSection?:string;onPrepared?:(request:Request)=>Promise<void>}) {
+  async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote;streamReply?:boolean;jobOptions?:ResolvedJobOptions;destinations?:string[];destinationSection?:string;insertion?:CursorInsertion|null;onPrepared?:(request:Request)=>Promise<void>}) {
     if (this.busy) {if(options?.throwOnError)throw Error('Obsidian is sending another request. Retry shortly.');return;}
     this.busy = true;
     const startedAt=Date.now();let request:Request|undefined;
@@ -2265,7 +2278,7 @@ export default class SendToT3 extends Plugin {
       const note=this.noteContext(file),link=options?.folderLink??folderLinkForPath(this.settings.folderLinks,file.path)??{id:'manual',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true};
       request = {smartSend:smart.capture,jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path),prompt:images.markdown+this.messageFooter(file.path),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
       if(request.prompt.length>120_000) throw new Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
-      if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path],undefined,options?.destinationSection,undefined,smart.text);
+      if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path],undefined,options?.destinationSection,file.path,smart.text,options?.insertion);
       else await this.prepareNoteSteering(request,file.path,smart.text);
       await options?.onPrepared?.(request);
       this.settings.pending.push(request); await this.save();
@@ -2311,15 +2324,15 @@ export default class SendToT3 extends Plugin {
     }else request.inlineSteering={...destination,input:{messageId:commandId(request.id,'message'),text:input,...(selection?{selection}:{})},targets:[destination]};
     return true;
   }
-  private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string,destinationSection?:string,sourcePath?:string,input?:string){
+  private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string,destinationSection?:string,sourcePath?:string,input?:string,insertion?:CursorInsertion|null){
     const policy=request.jobOptions?.inline??resolveJobOptions(this.settings.inlineStreaming).inline;
     const io=deviceNoteIO(this.app),host=await this.localResponseTarget(request);
-    for(const path of destinations){const document=await io.readNote(path);if(document===undefined)throw Error(`Destination note unavailable: ${path}`);endInsertionOffset(document);}
+    for(const path of destinations){const document=await io.readNote(path);if(document===undefined)throw Error(`Destination note unavailable: ${path}`);if(insertion&&path===sourcePath&&!destinationSection)resolveCursorInsertion(document,insertion);else endInsertionOffset(document);}
     const source:ResponseRequest={destinationSection,localOnly:true,nativeProjection:true,responseContainer:true,version:4,finalAnswerFormat:policy.finalAnswerFormat,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode};
     request.inlineBindings=[];
     const fresh:string[]=[];
     for(const path of destinations)if(input===undefined||!await this.prepareNoteSteering(request,path,input))fresh.push(path);
-    for(const path of fresh)request.inlineBindings.push(await editorStream(source,path,io,()=>!this.stopped));
+    for(const path of fresh)request.inlineBindings.push(await editorStream(source,path,io,()=>!this.stopped,undefined,path===sourcePath?insertion??undefined:undefined));
     request.inlineHost=request.inlineBindings[0];
   }
   private async responseGuard(binding:ResponseRequest,_status:'prepared'|'accepted'|'failed',_uncertain=false){if(!binding.localOnly)throw Error('Legacy reply creation was retired.');}
@@ -2651,7 +2664,7 @@ class T3Settings extends PluginSettingTab {
     new Setting(el).setName('Command palette').setDesc(this.plugin.paletteChatStatus()==='active'?'Use the first T3 Code row to send the current note or ask a question about it.':'The live T3 Code row is unavailable in this Obsidian version or the core Command palette is disabled.');
     el.createEl('p',{text:'Sending includes the current note and its embedded images. Asking sends the question and note location. A selected passage and its embedded images are included with the question.'});
     el.createEl('h3',{text:'Inline responses'});
-    new Setting(el).setName('Stream replies into the editor').setDesc('For every manual Send or Ask, insert the reply into the note. Selection questions appear below the selection; other replies appear at the end.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));
+    new Setting(el).setName('Stream replies into the editor').setDesc('For every manual Send or Ask, insert the reply into the note. Selection questions appear below the selection; other replies use the cursor position captured for Send, or follow the paragraph when the cursor is inside it.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));
     new Setting(el).setName('Final answer format').setDesc('Choose how the completed final answer appears. Intermediate responses keep their formatting in the progress box. Images and files are handled in both formats. Applies to new responses.').addDropdown(dropdown=>dropdown.addOptions({formatted:'Current formatting','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));
     new Setting(el).setName('Intermediate agent responses').setDesc('Progress stays in an open box while the agent works. The box closes when the final answer is complete. Click the header to open or close it.');
     el.createEl('h3',{text:'Project files'});

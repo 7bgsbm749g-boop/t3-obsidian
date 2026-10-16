@@ -6,8 +6,31 @@ import {initialRegion,inlineTargetAt,regionBody,completionProof,hasCompletionPro
 import {validateNoteCommand} from '../note-command';
 import type {ResponseRequest} from '../response-model';
 import {eventContent} from '../event-subscriptions';
+import {captureCursorInsertion} from '../cursor-insertion';
+import {responseAnchor} from '../native-response-projection';
 
 const source=():ResponseRequest=>({version:2,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'machine',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:'A.md',threadId:randomUUID(),messageId:randomUUID(),projectId:'project',threadEnvironmentId:'machine',initialHash:initialRegion(randomUUID()).bodyHash,createdAt:new Date().toISOString()});
+test('native replies use the captured cursor, preserve both sides, and remain separate Markdown blocks',async()=>{
+  for(const cursor of [0,3,'First paragraph.'.length,'First paragraph.\n'.length]){
+    const original='First paragraph.\n\nLater paragraph.',insertion=captureCursorInsertion(original,cursor);
+    let document=original;
+    const request={...source(),nativeProjection:true,responseContainer:true},io={updateNote:async(_path:string,change:(current:string)=>string)=>document=change(document)};
+    const binding=await editorStream(request,'A.md',io,()=>true,undefined,insertion),anchor=responseAnchor(binding.id),at=document.indexOf(anchor);
+    assert.ok(at<document.indexOf('Later paragraph.'));
+    if(cursor)assert.ok(at>document.indexOf('First paragraph.'));
+    else assert.equal(at,0);
+    const completed=document.replace(anchor,'Final answer.');
+    assert.ok(!cursor||completed.includes('First paragraph.\n\nFinal answer.'));
+    assert.ok(completed.includes(cursor?'Final answer.\n\nLater paragraph.':'Final answer.\n\nFirst paragraph.'));
+    const once=document;await editorStream(request,'A.md',io,()=>true,undefined,insertion);assert.equal(document,once);
+  }
+});
+test('an explicit destination section takes precedence over a cursor hint',async()=>{
+  const original='Introduction.\n\n## Replies\n\nExisting material.\n\n## Later\n\nTail';let document=original;
+  await editorStream({...source(),nativeProjection:true,destinationSection:'Replies'},'A.md',{updateNote:async(_path,change)=>document=change(document)},()=>true,undefined,captureCursorInsertion(original,0));
+  assert.ok(document.indexOf('t3-inline:start:')>document.indexOf('Existing material.'));
+  assert.ok(document.indexOf('t3-inline:start:')<document.indexOf('## Later'));
+});
 test('native section registration preserves the watcher baseline without adding ordinary blank lines',async()=>{
   const original='# Note\n\n## CURRENT\n\n## AFTER\n\nTail\n';let document=original;
   await editorStream({...source(),nativeProjection:true,destinationSection:'CURRENT'},'A.md',{updateNote:async(_path,change)=>document=change(document)},()=>true);

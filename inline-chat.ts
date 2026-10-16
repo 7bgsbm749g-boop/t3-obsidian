@@ -22,6 +22,7 @@ import type {InlineMessage,InlineBindingCheckpoint} from './inline-thread';
 import {replaceChangedText} from './inline-note-io';
 import {interruptStoppedResponse,stopResponseEdit,stoppedResponseBody} from './response-stop';
 import type {ResponseStopReceipt} from './response-stop-receipt';
+import {resolveCursorInsertion,type CursorInsertion} from './cursor-insertion';
 
 export interface InlineJob {
   id:string;path:string;requestId:string;threadId?:string;turnId?:string;messageId?:string;projectId?:string;connection?:Connection;
@@ -115,13 +116,16 @@ export class InlineChatManager {
   reserveAtEnd(editor:Editor,info:MarkdownView|MarkdownFileInfo,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string,options?:ResolvedJobOptions):InlineJob {
     return this.reserveAt(editor,info,endInsertionOffset(editor.getValue()),requestId,expectedPath,initialInput,threadTitle,options);
   }
-  private reserveAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,offset:number,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string,options?:ResolvedJobOptions):InlineJob {
+  reserveAtCursor(editor:Editor,info:MarkdownView|MarkdownFileInfo,insertion:CursorInsertion,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string,options?:ResolvedJobOptions):InlineJob {
+    return this.reserveAt(editor,info,resolveCursorInsertion(editor.getValue(),insertion),requestId,expectedPath,initialInput,threadTitle,options,true);
+  }
+  private reserveAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,offset:number,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string,options?:ResolvedJobOptions,paragraphBreak=false):InlineJob {
     if(this.stopped)throw Error('The plugin was disabled.');
     const file=info.file;if(!file||file.path!==expectedPath||file.extension.toLowerCase()!=='md')throw Error('The original Markdown note is no longer open. Reopen it and ask T3 again.');
     const id=requestId,createdAt=new Date().toISOString(),mode=options?.inline.intermediateMode??intermediateMode(this.keepIntermediate()),region=initialRegion(id,initialInput,threadTitle,mode,{startedAt:createdAt});
     const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt,keepIntermediate:mode!=='remove',intermediateMode:mode,finalAnswerFormat:options?.inline.finalAnswerFormat??finalAnswerFormat(this.answerFormat()),...(initialInput?{initialInput}:{})};
     this.jobs.push(job);this.runtime(job).source={editor,info};
-    try{this.persist();replaceInlineEditorText(editor,region.text,offset);}
+    try{this.persist();replaceInlineEditorText(editor,(paragraphBreak&&offset>0&&editor.getValue()[offset-1]!=='\n'?'\n':'')+region.text,offset);}
     catch(error){this.jobs=this.jobs.filter(item=>item!==job);this.runtimes.delete(job.id);try{this.persist();}catch{/* Original storage error remains primary. */}throw error;}
     return job;
   }
