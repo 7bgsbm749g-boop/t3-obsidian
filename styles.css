@@ -68,39 +68,40 @@
   mask-repeat: no-repeat;
   forced-color-adjust: none;
 }
-/* Preserve native glyph rendering and tune the highlight to the existing
-   selected/unselected colours. These rules never assign font or layout styles. */
-[data-t3-shine="true"] { --send-to-t3-shine-strength: 24%; }
-.theme-light [data-t3-shine="true"] { --send-to-t3-shine-strength: 12%; }
+/* Paint the highlight in the text itself so opaque glyphs cannot hide it.
+   Keep the original colour between passes and the circle's softer highlight. */
+[data-t3-shine="true"] { --send-to-t3-shine-strength: 75%; --send-to-t3-circle-shine-strength: 24%; }
+.theme-light [data-t3-shine="true"] { --send-to-t3-shine-strength: 40%; --send-to-t3-circle-shine-strength: 12%; }
 :is(.nav-file-title, .nav-folder-title, .workspace-tab-header).is-active [data-t3-shine="true"],
 .mtb-title-current[data-t3-shine="true"],
-.mtb-tab-row.is-active [data-t3-shine="true"] { --send-to-t3-shine-strength: 50%; }
+.mtb-tab-row.is-active [data-t3-shine="true"] { --send-to-t3-shine-strength: 100%; --send-to-t3-circle-shine-strength: 50%; }
 .theme-light :is(.nav-file-title, .nav-folder-title, .workspace-tab-header).is-active [data-t3-shine="true"],
 .theme-light .mtb-title-current[data-t3-shine="true"],
-.theme-light .mtb-tab-row.is-active [data-t3-shine="true"] { --send-to-t3-shine-strength: 26%; }
+.theme-light .mtb-tab-row.is-active [data-t3-shine="true"] { --send-to-t3-shine-strength: 55%; --send-to-t3-circle-shine-strength: 26%; }
 @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
   [data-t3-shine="true"],
   [data-t3-circle="true"]::before {
     --send-to-t3-circle-gap-mask: conic-gradient(from calc(var(--send-to-t3-circle-angle) - 22.5deg), transparent 0deg 45deg, #000 45deg 360deg);
-    /* currentColor keeps each label's theme or custom colour. Fonts are inherited. */
-    background-image:
-      linear-gradient(to right, transparent, color-mix(in srgb, currentColor 40%, white), transparent),
-      linear-gradient(currentColor, currentColor);
     background-size: 4.5rem 100%, 100% 100%;
     background-repeat: no-repeat;
     animation: send-to-t3-text-shine 2.2s steps(30) infinite;
     animation-play-state: var(--send-to-t3-shine-state, paused);
   }
-  [data-t3-shine="true"] {
-    /* Keep the normal glyph paint, with only a small part of the gradient
-       visible through it. The original colour remains the gradient's base. */
-    -webkit-text-fill-color: color-mix(in srgb, currentColor calc(100% - var(--send-to-t3-shine-strength)), transparent);
-    -webkit-background-clip: text;
-    background-clip: text;
+  @supports ((background-clip: text) or (-webkit-background-clip: text)) and (color: color-mix(in srgb, black, white)) {
+    [data-t3-shine="true"] {
+      /* The solid background supplies normal text; the moving layer adds shine.
+         Unsupported browsers retain their ordinary, opaque text. */
+      background-image:
+        linear-gradient(to right, transparent, color-mix(in srgb, currentColor, white var(--send-to-t3-shine-strength)), transparent),
+        linear-gradient(currentColor, currentColor);
+      -webkit-text-fill-color: transparent;
+      -webkit-background-clip: text;
+      background-clip: text;
+    }
   }
   [data-t3-circle="true"]::before {
     background-image:
-      linear-gradient(to right, transparent, color-mix(in srgb, currentColor, white calc(var(--send-to-t3-shine-strength) * 0.18)), transparent),
+      linear-gradient(to right, transparent, color-mix(in srgb, currentColor, white calc(var(--send-to-t3-circle-shine-strength) * 0.18)), transparent),
       linear-gradient(currentColor, currentColor);
     animation-name: send-to-t3-text-shine, send-to-t3-circle-gap;
     animation-duration: 2.2s, 1.2s;
