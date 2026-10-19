@@ -1,10 +1,14 @@
 import {App,MarkdownRenderChild,Modal,Plugin,editorLivePreviewField,setIcon} from 'obsidian';
 import type {Extension,EditorState} from '@codemirror/state';
-import {HtmlResultStore} from './html-result-store';
+import {HtmlResultError,HtmlResultStore} from './html-result-store';
 import {HTML_RESULT_LANGUAGE,htmlResultBlocks,htmlResultFrameHeight,htmlResultKey,parseHtmlResult,type HtmlResultReference} from './html-results';
 
 interface Theme {appearance:'dark'|'light';variables:Record<string,string>}
-interface Mounted {root:HTMLElement;reference:HtmlResultReference;refreshTheme():void;dispose():void}
+interface Mounted {root:HTMLElement;reference:HtmlResultReference;refreshTheme():void;recover():Promise<void>;dispose():void}
+export interface HtmlResultViewOptions {
+  /** Open the host's sign-in UI. The host calls recover after access returns. */
+  onSignIn?:(environmentId:string)=>Promise<void>|void;
+}
 const variables:Record<string,string>={
   '--background':'--background-primary','--foreground':'--text-normal','--muted':'--background-secondary','--muted-foreground':'--text-muted',
   '--card':'--background-secondary','--card-foreground':'--text-normal','--popover':'--background-secondary','--popover-foreground':'--text-normal',
@@ -39,7 +43,7 @@ function viewerDocument(html:string,doc:Document):string {
 
 export class HtmlResultViews {
   private mounted=new Set<Mounted>();private stopped=false;
-  constructor(private app:App,private store:HtmlResultStore){}
+  constructor(private app:App,private store:HtmlResultStore,private options:HtmlResultViewOptions={}){}
   install(plugin:Plugin){
     plugin.registerMarkdownCodeBlockProcessor(HTML_RESULT_LANGUAGE,(source,el,ctx)=>{
       const reference=parseHtmlResult(source);if(!reference){el.createEl('p',{text:'Invalid T3 HTML reference.'});return;}
@@ -51,11 +55,19 @@ export class HtmlResultViews {
     plugin.register(()=>this.dispose());
   }
   refreshTheme(){for(const mounted of this.mounted)mounted.refreshTheme();}
+  /** One attempt per failed mounted result after a successful host access
+   * transition. No timers, polling, or retries of already loaded pages. */
+  async recover(environmentId?:string):Promise<void>{
+    if(this.stopped)return;
+    await Promise.all([...this.mounted].filter(mounted=>!environmentId||mounted.reference.environmentId===environmentId).map(mounted=>mounted.recover()));
+  }
   mount(reference:HtmlResultReference,doc:Document,expanded=false,onEscape?:()=>void):Mounted {
     const win=doc.defaultView! as Window&typeof globalThis,root=doc.createElement('div');root.className='send-to-t3-html-result';root.dataset.t3HtmlKey=htmlResultKey(reference);root.setAttribute('aria-label',reference.title);
     const surface=root.createDiv({cls:'send-to-t3-html-surface'}),controls=root.createDiv({cls:'send-to-t3-html-controls'});
     let disposed=false,generation=0,frame:HTMLIFrameElement|undefined,blob:string|undefined,reported:number|undefined;
-    const height=()=>{if(!expanded)root.style.height=htmlResultFrameHeight(reference,root.clientWidth||728,reported)+'px';};height();
+    let state:'loading'|'ready'|'failed'='loading',failure:HtmlResultError|undefined,loading:Promise<void>|undefined;
+    const height=()=>{root.style.height=state!=='ready'?'auto':expanded?'100%':htmlResultFrameHeight(reference,root.clientWidth||728,reported)+'px';};
+    const showState=(next:typeof state)=>{state=next;root.dataset.t3HtmlState=next;root.setAttribute('aria-busy',String(next==='loading'));controls.hidden=next!=='ready';height();};showState('loading');
     if(!expanded){const expand=controls.createEl('button',{attr:{'aria-label':'Expand HTML','title':'Expand HTML'}});setIcon(expand,'maximize-2');expand.addEventListener('click',()=>new HtmlResultModal(this.app,this,reference).open());}
     const postTheme=()=>frame?.contentWindow?.postMessage(themeMessage(themeFor(doc)),'*');
     const receive=(event:MessageEvent)=>{
@@ -70,20 +82,34 @@ export class HtmlResultViews {
     };
     win.addEventListener('message',receive);
     const resize=new win.ResizeObserver(height);resize.observe(root);
-    const load=async()=>{
-      const current=++generation;surface.empty();surface.createDiv({cls:'send-to-t3-html-loading',text:'Loading HTML…'});
+    const load=():Promise<void>=>{
+      if(disposed||this.stopped)return Promise.resolve();
+      if(loading)return loading;
+      const current=++generation;failure=undefined;delete root.dataset.t3HtmlError;showState('loading');surface.empty();surface.createDiv({cls:'send-to-t3-html-loading',text:'Loading HTML on this device…',attr:{role:'status'}});
+      loading=(async()=>{
       try{
         const html=await this.store.get(reference);if(disposed||this.stopped||current!==generation)return;
         const next=doc.createElement('iframe');next.title=reference.title;next.setAttribute('sandbox','allow-scripts allow-forms');next.referrerPolicy='no-referrer';next.loading='lazy';next.className='send-to-t3-html-frame';
         const theme=themeFor(doc);next.style.colorScheme=theme.appearance;
         blob=win.URL.createObjectURL(new win.Blob([viewerDocument(html,doc)],{type:'text/html;charset=utf-8'}));
-        next.src=blob+'#t3-theme='+encodeURIComponent(JSON.stringify(theme));next.addEventListener('load',postTheme);frame=next;surface.replaceChildren(next);
-      }catch{
-        if(disposed||current!==generation)return;
-        surface.empty();const failure=surface.createDiv({cls:'send-to-t3-html-loading'});failure.createSpan({text:'HTML is unavailable. '});const retry=failure.createEl('button',{text:'Retry'});retry.addEventListener('click',()=>void load());
+        next.src=blob+'#t3-theme='+encodeURIComponent(JSON.stringify(theme));next.addEventListener('load',postTheme);frame=next;surface.replaceChildren(next);showState('ready');
+      }catch(error){
+        if(disposed||this.stopped||current!==generation)return;
+        if(blob)win.URL.revokeObjectURL(blob);blob=undefined;frame=undefined;
+        failure=error instanceof HtmlResultError?error:new HtmlResultError('unavailable','reference');
+        root.dataset.t3HtmlError=failure.code;showState('failed');
+        surface.empty();const status=surface.createDiv({cls:'send-to-t3-html-loading',attr:{role:'status'}});status.createSpan({text:failure.message});
+        if(failure.code==='sign-in'&&this.options.onSignIn){
+          const signIn=status.createEl('button',{text:'Sign in'});signIn.addEventListener('click',()=>{
+            if(signIn.disabled||disposed||this.stopped)return;signIn.disabled=true;
+            void Promise.resolve().then(()=>this.options.onSignIn?.(reference.environmentId)).catch(()=>{/* Keep the safe sign-in state if the dialog fails or is canceled. */}).finally(()=>{signIn.disabled=false;});
+          });
+        }
+        const retry=status.createEl('button',{text:'Retry'});retry.addEventListener('click',()=>void load());
       }
+      })().finally(()=>{loading=undefined;});return loading;
     };
-    const mounted:Mounted={root,reference,refreshTheme:postTheme,dispose:()=>{if(disposed)return;disposed=true;generation++;resize.disconnect();win.removeEventListener('message',receive);frame?.remove();if(blob)win.URL.revokeObjectURL(blob);this.mounted.delete(mounted);}};
+    const mounted:Mounted={root,reference,refreshTheme:postTheme,recover:()=>failure?.recoverable?load():Promise.resolve(),dispose:()=>{if(disposed)return;disposed=true;generation++;resize.disconnect();win.removeEventListener('message',receive);frame?.remove();if(blob)win.URL.revokeObjectURL(blob);this.mounted.delete(mounted);}};
     this.mounted.add(mounted);if(!this.stopped)void load();else mounted.dispose();return mounted;
   }
   private extension():Extension {
@@ -96,22 +122,17 @@ export class HtmlResultViews {
       toDOM(view:import('@codemirror/view').EditorView){const mounted=owner.mount(this.reference,view.dom.ownerDocument);mounted.root.dataset.t3HtmlEditorWidget='true';roots.set(mounted.root,mounted);return mounted.root;}
       destroy(dom:HTMLElement){roots.get(dom)?.dispose();roots.delete(dom);}
       ignoreEvent(){return true;}
-      get estimatedHeight(){return htmlResultFrameHeight(this.reference,728);}
+      get estimatedHeight(){return 80;}
     }
     const live=(state:EditorState)=>state.field(editorLivePreviewField,false)===true;
     const decorations=(state:EditorState)=>!live(state)?Decoration.none:Decoration.set(htmlResultBlocks(state.doc.toString()).map(block=>Decoration.replace({widget:new HtmlWidget(block.reference),block:true}).range(block.from,block.to)),true);
     const field=StateField.define<import('@codemirror/view').DecorationSet>({create:decorations,update:(value,tr)=>{
       if(live(tr.startState)!==live(tr.state))return decorations(tr.state);
       if(!tr.docChanged||!live(tr.state))return value;
-      // Ordinary typing beside a result maps its existing widget. Parse again
-      // only for edits to a result or possible Markdown block boundaries.
-      let structural=false;
-      tr.changes.iterChanges((from,to,nextFrom,nextTo,inserted)=>{
-        value.between(from,to,()=>{structural=true;});
-        const removed=tr.startState.doc.sliceString(from,to),before=tr.startState.doc.lineAt(from).text,after=tr.newDoc.lineAt(nextFrom).text;
-        if(/[\r\n`~<>]/.test(removed+inserted.toString())||/[`~<>]/.test(before+after))structural=true;
-      });
-      return structural?decorations(tr.state):value.map(tr.changes);
+      // List markers, indentation and plain letters can change the surrounding
+      // Markdown context without touching a fence. Parse once per transaction;
+      // equal HtmlWidgets let CodeMirror retain the existing interactive frame.
+      return decorations(tr.state);
     },provide:field=>EditorView.decorations.from(field)});
     return [Prec.highest(field),EditorView.atomicRanges.of(view=>view.state.field(field))];
   }

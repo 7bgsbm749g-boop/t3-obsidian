@@ -20,10 +20,10 @@ export default class HtmlResultsLab extends Plugin {
   async onload(){
     this.root=path.dirname((this.app.vault.adapter as any).getFullPath(''));if(!fs.existsSync(path.join(this.root,'ISOLATED-NATIVE-LAB')))throw Error('An isolated vault is required.');
     this.registerDomEvent(window,'message',event=>{if(event.data?.type==='html-lab-report'){this.reports.set(event.source as Window,event.data);this.write('LATEST.json',{reports:[...this.reports.values()]});}});
-    this.views=this.makeViews(false);this.views.install(this);
+    this.views=this.makeViews(()=>true);this.views.install(this);
     this.app.workspace.onLayoutReady(()=>void this.run().catch(error=>this.write('ERROR.json',{error:String(error),stack:error.stack})));
   }
-  private makeViews(offline:boolean){return new HtmlResultViews(this.app,new HtmlResultStore({read:key=>deviceState('html-lab:'+key),write:async(key,value)=>{await deviceState('html-lab:'+key,value);}},async()=>{if(offline)throw Error('Offline fixture');return {origin:'https://fixture.test',api:async route=>route==='/api/orchestration/turn-item'?tool():{relativeUrl:'/api/assets/result',expiresAt:Date.now()+60_000}};},async()=>{this.downloads++;return {status:200,mimeType:'text/html',bytes:new TextEncoder().encode(page).buffer};}));}
+  private makeViews(online:()=>boolean,scope='sender'){return new HtmlResultViews(this.app,new HtmlResultStore({read:key=>deviceState('html-lab:'+scope+':'+key),write:async(key,value)=>{await deviceState('html-lab:'+scope+':'+key,value);}},async()=>{if(!online())throw Error('Offline fixture');return {origin:'https://fixture.test',api:async route=>route==='/api/orchestration/turn-item'?tool():{relativeUrl:'/api/assets/result',expiresAt:Date.now()+60_000}};},async()=>{this.downloads++;return {status:200,mimeType:'text/html',bytes:new TextEncoder().encode(page).buffer};}));}
   private write(name:string,value:any){fs.writeFileSync(path.join(this.root,name),JSON.stringify(value,null,2));}
   private async capture(name:string){const image=await require('@electron/remote').getCurrentWebContents().capturePage();fs.writeFileSync(path.join(this.root,name),image.toPNG());}
   async run(){
@@ -35,15 +35,35 @@ export default class HtmlResultsLab extends Plugin {
     view.editor.replaceRange('Native edit. ',{line:2,ch:0});await pause(500);
     const stable=frame===view.contentEl.querySelector('iframe.send-to-t3-html-frame');
     await this.capture('live-preview.png');
+    const original=view.editor.getValue(),block=renderHtmlResult(reference);
+    view.editor.setValue('abc\n\n   '+block+'\n\nAfter');await pause(300);
+    const beforeList=!!view.contentEl.querySelector('[data-t3-html-editor-widget]');
+    view.editor.replaceRange('- a',{line:0,ch:0},{line:0,ch:3});await pause(300);
+    const inList=!view.contentEl.querySelector('[data-t3-html-editor-widget]');
+    view.editor.replaceRange('abc',{line:0,ch:0},{line:0,ch:3});await pause(300);
+    const afterList=!!view.contentEl.querySelector('[data-t3-html-editor-widget]');
+    view.editor.setValue('<div>\n\n'+block+'\n\nAfter');await pause(300);
+    view.editor.replaceRange('word',{line:1,ch:0});await pause(300);
+    const inHtml=!view.contentEl.querySelector('[data-t3-html-editor-widget]');
+    view.editor.replaceRange('',{line:1,ch:0},{line:1,ch:4});await pause(300);
+    const afterHtml=!!view.contentEl.querySelector('[data-t3-html-editor-widget]');
+    view.editor.setValue(original);await pause(300);
     await first.setViewState({type:'markdown',state:{file:file.path,mode:'preview'}});await pause(700);
     const reading=(first.view as MarkdownView).contentEl.querySelector<HTMLIFrameElement>('iframe.send-to-t3-html-frame');const readingReport=reading&&this.reports.get(reading.contentWindow!);await this.capture('reading-mode.png');
     await first.setViewState({type:'markdown',state:{file:file.path,mode:'source',source:true}});await pause(500);
     const source=(first.view as MarkdownView).contentEl.querySelectorAll('.markdown-source-view iframe.send-to-t3-html-frame').length===0;await this.capture('source-mode.png');
-    const onlineDownloads=this.downloads;const offline=this.makeViews(true),mounted=offline.mount(reference,document),offlineLeaf=this.app.workspace.getLeaf(true);await offlineLeaf.setViewState({type:'empty'});offlineLeaf.view.containerEl.replaceChildren(mounted.root);await pause(1200);
+    const onlineDownloads=this.downloads;const offline=this.makeViews(()=>false),mounted=offline.mount(reference,document),offlineLeaf=this.app.workspace.getLeaf(true);await offlineLeaf.setViewState({type:'empty'});offlineLeaf.view.containerEl.replaceChildren(mounted.root);await pause(1200);
     const offlineFrame=mounted.root.querySelector<HTMLIFrameElement>('iframe'),offlineReport=offlineFrame&&this.reports.get(offlineFrame.contentWindow!);await this.capture('offline-cache.png');mounted.dispose();offlineLeaf.detach();offline.dispose();
-    const saved=await deviceState('html-lab:'+htmlResultKey(reference));
-    const checks={livePreview:!!liveReport,nativeWidget,readingMode:!!readingReport,sourceMode:source,stableFrameWhileTyping:stable,isolated:liveReport?.isolated===true&&readingReport?.isolated===true,nodeUnavailable:liveReport?.node==='undefined',offline:!!offlineReport,persistentBytes:!!saved?.html,singleDownload:onlineDownloads===1&&this.downloads===1};
-    this.write('RESULT.json',{checks,pass:Object.values(checks).every(Boolean),reports:{liveReport,readingReport,offlineReport}});
+    const saved=await deviceState('html-lab:sender:'+htmlResultKey(reference)),singleSenderDownload=onlineDownloads===1&&this.downloads===1;
+    let receiverOnline=false;const receiver=this.makeViews(()=>receiverOnline,'receiver'),receiverLeaf=this.app.workspace.getLeaf(true);await receiverLeaf.setViewState({type:'empty'});
+    const receiverEmpty=!await deviceState('html-lab:receiver:'+htmlResultKey(reference)),cold=receiver.mount({...reference,height:2000,heights:undefined},document);receiverLeaf.view.containerEl.replaceChildren(cold.root);await pause(500);
+    const failedHeight=cold.root.getBoundingClientRect().height,compactReceiver=failedHeight>0&&failedHeight<=180&&cold.root.dataset.t3HtmlState==='failed'&&cold.root.dataset.t3HtmlError==='connection'&&!cold.root.querySelector('iframe');await this.capture('receiver-failed.png');
+    receiverOnline=true;await Promise.all([receiver.recover(reference.environmentId),receiver.recover(reference.environmentId)]);await pause(500);
+    const receiverFrame=cold.root.querySelector<HTMLIFrameElement>('iframe'),receiverReport=receiverFrame&&this.reports.get(receiverFrame.contentWindow!);await receiver.recover(reference.environmentId);
+    const recoveredReceiver=cold.root.dataset.t3HtmlState==='ready'&&!!receiverReport&&receiverFrame===cold.root.querySelector('iframe')&&this.downloads===onlineDownloads+1;
+    await this.capture('receiver-recovered.png');cold.dispose();receiver.dispose();receiverLeaf.detach();
+    const checks={livePreview:!!liveReport,nativeWidget,readingMode:!!readingReport,sourceMode:source,stableFrameWhileTyping:stable,listContext:beforeList&&inList&&afterList,htmlContext:inHtml&&afterHtml,isolated:liveReport?.isolated===true&&readingReport?.isolated===true,nodeUnavailable:liveReport?.node==='undefined',offline:!!offlineReport,persistentBytes:!!saved?.html,singleSenderDownload,receiverEmpty,compactReceiver,recoveredReceiver};
+    this.write('RESULT.json',{checks,pass:Object.values(checks).every(Boolean),failedHeight,reports:{liveReport,readingReport,offlineReport,receiverReport}});
     await first.setViewState({type:'markdown',state:{file:file.path,mode:'source',source:false}});
   }
 }
