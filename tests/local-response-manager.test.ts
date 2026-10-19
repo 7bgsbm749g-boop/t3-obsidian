@@ -65,6 +65,13 @@ test('a closed response keeps its completion watch and projects only verified su
   assert.equal(h.writes(),1);assert.equal(h.manager.responses()[0].complete,true);assert.equal(h.manager.responses()[0].completionId,identity);
   h.manager.dispose();
 });
+test('a removed attachment cannot keep an unverified terminal preview active in the explorer',async()=>{
+  const h=fixture();await h.manager.register(h.binding);h.emit('Final preview',false);
+  assert.equal(h.manager.responses()[0].active,true);
+  h.write('Final text received from another device');h.manager.resume();await drain();
+  assert.equal(h.manager.responses().length,0,'Only a verified successful completion survives attachment retirement');
+  h.manager.dispose();
+});
 test('explicit Stop saves its frozen local text while completion is waiting for Sync',async()=>{
   const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit('Canonical final');await drain();
   const receipt=await h.manager.stop(h.binding.id,'Frozen visible text');assert.equal(receipt.finalSaved,true);assert.equal(receipt.hostRecorded,true);assert.match(h.read(),/Frozen visible text/);assert.equal(h.writes(),1);h.manager.dispose();
