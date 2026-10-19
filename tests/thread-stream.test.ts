@@ -177,18 +177,18 @@ test('live activity accelerates a quiet poll without overlap or postponing a due
 
 test('a failed canonical poll returns to the fast fallback and stop ignores a late response',async t=>{
   t.mock.timers.enable({apis:['setTimeout','Date']});
-  let socket:Socket,reads=0,fail=false,blocked=false,release:(x:any)=>void=()=>{};const items:any[]=[];
+  let socket:Socket,reads=0,fail=false,blocked=false,release:(x:any)=>void=()=>{};const items:any[]=[],errors:string[]=[];
   class Socket {onopen?:()=>void;onclose?:()=>void;onmessage?:(event:{data:string})=>void;onerror?:()=>void;send(_raw:string){}close(){this.onclose?.();}}
   const watcher=watchThread('failure',async()=>({origin:'https://t3.example',api:async path=>{
     if(path==='/api/auth/websocket-ticket')return {ticket:'test'};
     reads++;if(fail)throw Error('temporary transport error');
     return blocked?await new Promise(resolve=>{release=resolve;}):{thread:{id:'failure',messages:[]}};
-  }}),{item:x=>items.push(x),reconnecting:e=>assert.fail(e.message)},()=>{socket=new Socket();return socket as any;});
+  }}),{item:x=>items.push(x),reconnecting:e=>errors.push(e.message)},()=>{socket=new Socket();return socket as any;});
   const settle=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
   const advance=async(n:number)=>{t.mock.timers.tick(n);await settle();};
   try{
     await settle();socket!.onopen?.();await advance(1200);await advance(1200);
-    fail=true;await advance(2400);assert.equal(reads,3);
+    fail=true;await advance(2400);assert.equal(reads,3);assert.deepEqual(errors,['temporary transport error']);
     fail=false;blocked=true;await advance(1200);assert.equal(reads,4);
     watcher.stop();release({thread:{id:'failure',messages:[]}});await settle();await advance(10000);
     assert.equal(reads,4);assert.equal(items.length,2);

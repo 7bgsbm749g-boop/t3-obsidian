@@ -8,6 +8,7 @@ import type {SteeringInput} from './inline-steering';
 import type {ReplyReference} from './reply-assets';
 import type {T3ConnectionTimeoutError} from './t3-rpc';
 import type {ResponseStopReceipt} from './response-stop-receipt';
+import type {ResponseConnectionIssue} from './sign-in-state';
 export interface DeviceResponseIO {
   localFinalNotes?:LocalFinalNoteIO;
   localBindings?():readonly ResponseRequest[];
@@ -16,6 +17,7 @@ export interface DeviceResponseIO {
   saveLocalNote?(path:string):Promise<void>;
   syncReady?():boolean;
   localCompleted?(id:string,path:string):void;
+  localConnection?(id:string,issue?:ResponseConnectionIssue):void;
   localFinalBody?(update:DirectInlineUpdate):Promise<string>;
   rememberResponse?(request:ResponseRequest,body:string,before:string,after:string,offset:number):Promise<void>;
   localFinalDraft?(document:string,request:ResponseRequest):Promise<string>;
@@ -63,6 +65,7 @@ export class DeviceResponseManager {
   steer(_host:ResponseStorageTarget,id:string,input:SteeringInput){return this.manager().steer(id,input);}
   discardSteering(id:string,messageId:string){return this.local?.discardSteering(id,messageId)??Promise.resolve();}
   resume(){if(!this.stopped)this.manager().resume();}
+  reconnect(){if(!this.stopped)this.manager().reconnect();}
   localBindingsChanged(){if(!this.stopped)this.manager().resume();}
   explorerResponses(){return (this.local?.responses()??[]).filter(response=>!this.stops.has(response.id));}
   stoppableResponses(path:string){return this.explorerResponses().filter(response=>response.notePath===path&&response.active).map(response=>({id:response.id,hostTarget:this.local!.record(response.id)!.request.host}));}

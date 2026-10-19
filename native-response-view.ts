@@ -95,6 +95,7 @@ export class NativeResponseView {
   registerLocalBindings(ids:readonly string[]){for(const id of ids)this.knownLocal.add(id);}
   private localIds(document:string){return new Set([...this.knownLocal,...localResponseBindings(document).map(binding=>binding.id)]);}
   scrollControl(key:string){return !this.blocked&&!this.disposed?this.scroll.control(key):undefined;}
+  responseForFold(key:string){const matches=this.responses.filter(response=>response.body.includes(`data-t3-fold="${key}"`));return matches.length===1?matches[0].id:undefined;}
   toggleScroll(key:string){if(!this.blocked&&!this.disposed)this.scroll.toggle(key);}
   moveControl(key:string):string|undefined {
     if(this.blocked||this.disposed||this.unloading||this.saveFences||this.materialization||this.view.file!==this.file||this.view.getMode()==='preview'||!key.endsWith(':active'))return;

@@ -1,6 +1,7 @@
 import {Buffer} from 'buffer';
 import type {Fetcher} from './direct';
 import type {CloudAccount} from './cloud';
+import {SignInRequiredError} from './sign-in-state';
 
 const ORIGIN='https://clerk.t3.codes';
 export interface NativeAccount {clientToken:string;sessionId:string;userId:string;identity:string}
@@ -23,9 +24,11 @@ async function request(path:string,state:ClientState,body:Record<string,string>|
   let data:any;try{data=JSON.parse(text);}catch{throw new SignInError('T3 sign-in returned an invalid response.');}
   const rotated=response.headers.get('authorization')?.replace(/^Bearer /i,'');
   if(rotated){state.clientToken=rotated;await changed?.();}
-  if(!response.ok){const code=data.errors?.[0]?.code;throw new SignInError(messages[code]??(response.status===429?messages.too_many_requests:`T3 sign-in failed (HTTP ${response.status}). Try again or use advanced pairing.`));}
+  if(!response.ok){const code=data.errors?.[0]?.code;
+   if(response.status===401||['session_expired','session_revoked','session_not_found','client_invalid','client_not_found'].includes(code))throw new SignInRequiredError();
+   throw new SignInError(messages[code]??(response.status===429?messages.too_many_requests:`T3 sign-in failed (HTTP ${response.status}). Try again or use advanced pairing.`));}
   return {data:data.response??data,client:data.client};
- }catch(e){if(e instanceof SignInError)throw e;throw new SignInError('Cannot reach T3 sign-in. Check your internet connection.');}finally{clearTimeout(timer);}
+ }catch(e){if(e instanceof SignInError||e instanceof SignInRequiredError)throw e;throw new SignInError('Cannot reach T3 sign-in. Check your internet connection.');}finally{clearTimeout(timer);}
 }
 export async function beginEmailLogin(email:string,fetcher:Fetcher=fetch):Promise<EmailLogin>{
  email=email.trim();if(email.length>320||!/^\S+@\S+\.\S+$/.test(email))throw new SignInError('Enter the email address you use for T3.');
@@ -52,7 +55,7 @@ export async function verifyEmailLogin(login:EmailLogin,code:string,fetcher:Fetc
 }
 export async function nativeRelayAccount(account:NativeAccount,changed:()=>Promise<void>,fetcher:Fetcher=fetch):Promise<CloudAccount>{
  const client=await request('/v1/client',account,undefined,fetcher,changed);
- if(!client.data.sessions?.some((s:any)=>s.id===account.sessionId&&s.status==='active'&&s.user?.id===account.userId))throw new SignInError(messages.session_expired);
+ if(!client.data.sessions?.some((s:any)=>s.id===account.sessionId&&s.status==='active'&&s.user?.id===account.userId))throw new SignInRequiredError();
  const result=await request('/v1/client/sessions/'+encodeURIComponent(account.sessionId)+'/tokens/t3-relay',account,{},fetcher,changed);
  if(typeof result.data.jwt!=='string')throw new SignInError('T3 did not authorize account connections.');
  let expiresAt=0;try{expiresAt=JSON.parse(Buffer.from(result.data.jwt.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'),'base64').toString()).exp*1000;}catch{}

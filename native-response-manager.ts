@@ -2,6 +2,7 @@ import {contentHash} from './completion';
 import {responseIds,containsResponseBoundary} from './response-container';
 import {stoppedResponseBody} from './response-stop';
 import {failedStreamBody} from './t3-response-limits';
+import {responseConnectionBody,type ResponseConnectionIssue} from './sign-in-state';
 import type {App,MarkdownView} from 'obsidian';
 import type {Transaction} from '@codemirror/state';
 import {NativeResponseView} from './native-response-view';
@@ -38,6 +39,13 @@ export class NativeResponseManager {
   private uninitializedViews=new WeakSet<NativeResponseView>();
   private provisional=new Map<string,{path:string;body:string}>();
   private streams=new Map<string,DirectInlineUpdate>();
+  private connectionIssues=new Map<string,ResponseConnectionIssue>();
+  connectionIssue(id:string){return this.connectionIssues.get(id);}
+  connection(id:string,issue?:ResponseConnectionIssue){
+    if(this.connectionIssues.get(id)?.kind===issue?.kind)return;
+    if(issue)this.connectionIssues.set(id,issue);else this.connectionIssues.delete(id);
+    this.refresh();
+  }
   private records=new Map<string,ResponseRecord>();
   retentionStatus(){return {records:this.records.size,completedIndexes:[...this.records.values()].filter(isCompletedLeaseIndex).length,proofs:this.proofs.size,proofCharacters:[...this.proofs.values()].reduce((total,proof)=>total+proof.document.length,0),deviceProofs:this.deviceCommits.size,deviceProofCharacters:[...this.deviceCommits.values()].reduce((total,item)=>total+item.proof.document.length,0)};}
   private titles=new Map<string,string>();
@@ -248,7 +256,7 @@ export class NativeResponseManager {
     this.streams.set(update.request.id,{...update,request:{...update.request,notePath:path}});this.refresh(new Set([path,previous?.request.notePath??path]));
   }
   title(id:string,title:string){if(!title.trim()||this.titles.get(id)===title)return;this.titles.set(id,title);this.refresh();}
-  localCompleted(id:string,path:string){this.records.delete(id);this.streams.delete(id);this.provisional.delete(id);this.forgetPreview(id);this.refresh(new Set([path]));}
+  localCompleted(id:string,path:string){this.records.delete(id);this.streams.delete(id);this.connectionIssues.delete(id);this.provisional.delete(id);this.forgetPreview(id);this.refresh(new Set([path]));}
   async allowLocalBinding(id:string,path:string){
     const file=this.app.vault.getFileByPath(path);if(!file)return;
     const disk=await this.app.vault.read(file);if(!responseRegion(disk,id))return;
@@ -423,7 +431,8 @@ export class NativeResponseManager {
           const displayed=record.state?.cleanupComplete||record.finalWriter?body:failure?failedStreamBody(this.titled(id,failureBody)):this.titled(id,body);
           if(!restoring)this.rememberPreview(record,displayed);
           const terminal=record.finalWriter||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict||['complete','completed','interrupted','error','cancelled','conflict'].includes(record.state?.status??'')||stream?.completionVerified||['complete','interrupted','error'].includes(stream?.phase??'');
-          responses.push({id,body:restoring&&!failure?this.titled(id,cached.body):displayed,movable:!terminal&&!failure});
+          const connection=this.connectionIssues.get(id),visible=restoring&&!failure?this.titled(id,cached.body):displayed;
+          responses.push({id,body:connection?responseConnectionBody(visible,connection,id):visible,movable:!terminal&&!failure&&!connection});
         }
         for(const stop of this.localStops.values()){
           if(stop.path!==view.file.path||!responseRegion(saved,stop.id)||adapter?.hasMaterialized(stop.id))continue;
@@ -517,5 +526,5 @@ export class NativeResponseManager {
   prepare(path:string,before:string,after:string,ids:string[]){if(this.activeFinalSaves.has(path)&&!this.finalSaveReady(path))throw Error('The native panes changed before final delivery.');for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.prepareMaterialization(before,after,ids);}
   cancel(path:string){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.cancelMaterialization();}
   committed(path:string,saved:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path){if(this.uninitializedViews.has(adapter)){adapter.initializeDiskBaseline(saved,true);this.uninitializedViews.delete(adapter);}if(!adapter.acceptCommitted(saved,ids))throw Error('A native pane did not adopt the saved result.');}}
-  dispose(){this.savedAdoptions.clear();void this.flushPreviewCache();this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.proofs.clear();this.deviceCommits.clear();this.completionIdentities.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
+  dispose(){this.savedAdoptions.clear();void this.flushPreviewCache();this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.connectionIssues.clear();this.proofs.clear();this.deviceCommits.clear();this.completionIdentities.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
 }

@@ -7,9 +7,9 @@ import {installResponseDrag} from './response-drag';
 
 /** Keep Live Preview's source cursor outside generated history, while native
  * browser selection, links, dropdowns and copy controls continue to work. */
-export function installStreamBlockControls(app:App,root:Document,icon:(element:HTMLElement,name:string)=>void,onError:(error:unknown)=>void):()=>void {
+export function installStreamBlockControls(app:App,root:Document,icon:(element:HTMLElement,name:string)=>void,onError:(error:unknown)=>void,onSignIn:()=>void=()=>{}):()=>void {
   const stopDrag=installResponseDrag(app,root,icon,onError);
-  const owned=new Map<HTMLElement,{close:HTMLElement;follow:HTMLElement;reading:boolean}>();
+  const owned=new Map<HTMLElement,{close:HTMLElement;follow:HTMLElement;signIn:HTMLButtonElement;reading:boolean}>();
   const watched=new Set<Element>();
   let queued=false,disposed=false;
   const key=(fold:Element)=>fold.querySelector<HTMLElement>(':scope > .callout-title .send-to-t3-fold-key')?.dataset.t3Fold;
@@ -25,7 +25,7 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
       if(!reading&&(!block||block.querySelector('.callout')!==fold))continue;
       let actions=reading?fold.querySelector<HTMLElement>(':scope > .send-to-t3-reading-actions'):block!.querySelector<HTMLElement>(':scope > .embed-actions');
       if(reading&&!actions){actions=root.createElement('div');actions.className='send-to-t3-reading-actions';fold.appendChild(actions);}
-      const native=actions?.querySelector<HTMLElement>('.edit-block-button:not(.send-to-t3-stream-close):not(.send-to-t3-stream-follow)');
+      const native=actions?.querySelector<HTMLElement>('.edit-block-button:not(.send-to-t3-stream-close):not(.send-to-t3-stream-follow):not(.send-to-t3-stream-sign-in)');
       if(!actions||!reading&&!native)continue;
       live.add(actions);actions.classList.add('send-to-t3-stream-actions');
       let controls=owned.get(actions);
@@ -34,7 +34,9 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
         const button=native?native.cloneNode(false) as HTMLElement:root.createElement('div');button.classList.add('edit-block-button','send-to-t3-stream-close');button.setAttribute('role','button');button.tabIndex=0;
         button.setAttribute('aria-label','Remove streaming block');button.setAttribute('title','Remove streaming block');icon(button,'x');actions.appendChild(button);
         const follow=native?native.cloneNode(false) as HTMLElement:root.createElement('div');follow.classList.add('edit-block-button','send-to-t3-stream-follow');follow.setAttribute('role','button');follow.tabIndex=0;icon(follow,'chevrons-down');actions.appendChild(follow);
-        controls={close:button,follow,reading};owned.set(actions,controls);
+        const signIn=root.createElement('button');signIn.type='button';signIn.className='send-to-t3-stream-sign-in';signIn.textContent='Sign in';signIn.setAttribute('aria-label','Sign in to T3 to resume this response');actions.appendChild(signIn);
+        signIn.addEventListener('click',event=>{event.preventDefault();event.stopImmediatePropagation();onSignIn();});
+        controls={close:button,follow,signIn,reading};owned.set(actions,controls);
         const run=()=>{
           if(button!.getAttribute('aria-disabled')==='true')return;
           try{
@@ -58,9 +60,12 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
       }
       const id=key(fold),view=viewFor(fold);
       let ready=false;try{const found=id&&view?streamBlock(saved(view),id):undefined;ready=!!found?.complete&&!found.tracked;}catch{}
-      controls.close.hidden=!ready||reading;
+      const response=id&&view?nativeResponses(app).view(view)?.responseForFold(id):undefined;
+      const needsSignIn=!!response&&nativeResponses(app).connectionIssue(response)?.kind==='sign-in-required';
+      controls.signIn.hidden=!needsSignIn;actions.classList.toggle('send-to-t3-stream-auth-required',needsSignIn);
+      controls.close.hidden=!ready||reading||needsSignIn;
       const state=id&&view?nativeResponses(app).view(view)?.scrollControl(id):undefined;
-      controls.follow.hidden=!state;
+      controls.follow.hidden=!state||needsSignIn;
       const label=state?.active?'Stop following response':'Follow response';
       controls.follow.setAttribute('aria-label',label);controls.follow.setAttribute('title',label);controls.follow.setAttribute('aria-pressed',String(!!state?.active));
       actions.classList.toggle('send-to-t3-stream-actions-bottom',state?.position==='bottom');
@@ -75,7 +80,7 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
       if(!watched.has(fold)){resize?.observe(fold);watched.add(fold);}
     }
     for(const element of watched)if(!element.isConnected){resize?.unobserve(element);watched.delete(element);}
-    for(const [actions,controls] of owned)if(!live.has(actions)){controls.close.remove();controls.follow.remove();actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving');if(controls.reading)actions.remove();owned.delete(actions);}
+    for(const [actions,controls] of owned)if(!live.has(actions)){controls.close.remove();controls.follow.remove();controls.signIn.remove();actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading)actions.remove();owned.delete(actions);}
   };
   const schedule=()=>{if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
   const resize=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(schedule);
@@ -95,5 +100,5 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
   root.addEventListener(responseScrollChanged,schedule);
   const observer=new MutationObserver(schedule);observer.observe(root.body,{childList:true,subtree:true});
   const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;stopDrag();observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving');if(controls.reading)actions.remove();}owned.clear();};
+  return ()=>{disposed=true;stopDrag();observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();controls.signIn.remove();actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading)actions.remove();}owned.clear();};
 }

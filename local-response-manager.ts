@@ -10,6 +10,7 @@ import type {ResponseStopReceipt} from './response-stop-receipt';
 import {localFinalIdentity} from './local-final-cache';
 import {interruptStoppedResponse} from './response-stop';
 import {completedSelectionDraft,validSteeringInput,type SteeringInput} from './inline-steering';
+import type {ResponseConnectionIssue} from './sign-in-state';
 
 export interface LocalFinalNoteIO {
   read(path:string):Promise<string|undefined>;
@@ -23,7 +24,7 @@ export class LocalResponseManager {
   private migrations=new Map<string,Promise<void>>();
   private documents=new Map<string,{document:string;stored:readonly ResponseRequest[];bindings:ResponseRequest[]}>();
   private closed=false;
-  constructor(private actor:string,private vaultId:string,private io:DeviceResponseIO,private notes:LocalFinalNoteIO,private now=()=>Date.now(),private makePreview=(record:ResponseRecord,access:()=>ReturnType<DeviceResponseIO['access']>,receive:(update:DirectInlineUpdate)=>void)=>new DirectInlinePreview(record,access,receive)){}
+  constructor(private actor:string,private vaultId:string,private io:DeviceResponseIO,private notes:LocalFinalNoteIO,private now=()=>Date.now(),private makePreview=(record:ResponseRecord,access:()=>ReturnType<DeviceResponseIO['access']>,receive:(update:DirectInlineUpdate)=>void,connection:(issue?:ResponseConnectionIssue)=>void)=>new DirectInlinePreview(record,access,receive,undefined,undefined,connection)){}
   has(id:string){return this.jobs.has(id);}
   request(id:string){return this.jobs.get(id)?.request;}
   record(id:string){return this.jobs.get(id)?.record;}
@@ -52,7 +53,7 @@ export class LocalResponseManager {
         if(!same)runtime.retained=this.io.retainLocalFinal?.(update).catch(error=>logFailure('response.local.final-cache',error,{bindingId:request.id}));
         this.finish(runtime);
       }
-    });
+    },issue=>{if(!this.closed&&!runtime.done&&!runtime.stopped)this.io.localConnection?.(request.id,issue);});
     this.jobs.set(request.id,runtime);
     void Promise.resolve(this.io.receiveCoordinated?.(record)).catch(error=>logFailure('response.local.adopt',error,{bindingId:request.id}));
     void this.io.loadLocalFinal?.(request).then(update=>{if(!update||this.closed||runtime.done||runtime.stopped||runtime.update?.completionVerified)return;runtime.update={...update,request:runtime.record.request};this.io.receiveDirect?.(runtime.update);this.finish(runtime);}).catch(error=>logFailure('response.local.final-restore',error,{bindingId:request.id}));
@@ -112,6 +113,7 @@ export class LocalResponseManager {
     }
   }
   tick(){this.resume();}
+  reconnect(){if(this.closed)return;for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped)runtime.preview.reconnect(this.io.isOpen(runtime.request.notePath));this.resume();}
   private finish(runtime:Runtime){
     if(this.closed||runtime.done||runtime.stopped||runtime.work||this.now()<runtime.retryAt||!this.io.isOpen(runtime.request.notePath)||this.io.syncReady?.()===false)return;
     const update=runtime.update;if(!update?.completionVerified)return;

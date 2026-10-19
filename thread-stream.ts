@@ -109,7 +109,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
             pollDelay=beforeActivity===activityVersion&&hash===lastSnapshotHash?Math.min(5000,pollDelay*2):1200;
             lastSnapshotHash=hash;callbacks.item({kind:'snapshot',snapshot});
           }else pollDelay=1200;
-        }catch(error){pollDelay=1200;logFailure('stream.poll.failed',error,{threadId});if(!stopped&&!ended&&access===ready&&responseTooLarge(error)){snapshotBlocked=true;callbacks.failure?.(error as Error);}}
+        }catch(error){pollDelay=1200;logFailure('stream.poll.failed',error,{threadId});if(!stopped&&!ended&&access===ready){if(responseTooLarge(error)){snapshotBlocked=true;callbacks.failure?.(error as Error);}else callbacks.reconnecting(error instanceof Error?error:Error('Cannot read the T3 response.'));}}
         finally{polling=false;schedulePoll(pollDelay);}
       };
       // A browser timer can delay even a zero-delay read after app suspension.

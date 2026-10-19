@@ -18,6 +18,8 @@ import pluginManifest from './manifest.json';
 import {appendSendFailure,sendFailureLog,type SendFailure} from './send-failures';
 import {ConnectionRecovery,type ConnectionReloadState} from './connection-recovery';
 import {hasPluginPermissions} from './environment-permissions';
+import {REAUTHENTICATE_MESSAGE,SignInRequiredError,signInRequired} from './sign-in-state';
+import {T3HttpError} from './thread-access-cache';
 import {mergeSharedSettings} from './shared-settings';
 import {noteThreadTitle,threadTitleGeneration,type ThreadTitleGeneration} from './thread-title';
 import {ResponseLocationModal} from './response-location-ui';
@@ -118,6 +120,8 @@ export default class SendToT3 extends Plugin {
   cloudAccount:CloudAccount|null=null;
   nativeAccount:NativeAccount|null=null;
   emailLogin:EmailLogin|null=null;
+  signInEmail='';
+  signInExpired=false;
   connecting=false;
   connectionSyncComplete=false;
   machineErrors:Record<string,string>={};
@@ -267,6 +271,8 @@ export default class SendToT3 extends Plugin {
     this.pairedSessions=local?.pairedSessions??{};
     this.cloudAccount=local?.cloudAccount??null;
     this.nativeAccount=local?.nativeAccount??null;
+    this.signInEmail=typeof local?.signInEmail==='string'?local.signInEmail:this.nativeAccount?.identity??'';
+    this.signInExpired=local?.signInExpired===true&&!this.nativeAccount;
     this.vaultRegistrations=local?.vaultRegistrations??{};
     this.settings = {noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
     if(!Platform.isMobile){
@@ -366,6 +372,7 @@ export default class SendToT3 extends Plugin {
       openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file&&typeof view.getViewData==='function').map(view=>({path:view.file!.path,document:nativeResponses(this.app).view(view)?.saved()??view.getViewData()})),
       saveLocalNote:async path=>{for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===path&&typeof view.save==='function')await view.save();}},
       localCompleted:(id,path)=>{nativeResponses(this.app).localCompleted(id,path);void deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${id}`,null).catch(error=>logFailure('response.local.final-cache-cleanup',error));this.inlineChat?.flushAvailable();},
+      localConnection:(id,issue)=>nativeResponses(this.app).connection(id,issue),
       localQuestions:update=>{if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);},
       localFinalBody:async update=>rewriteReplyReferences(update.body,async reference=>{try{return await resolveReplyReference(this.app,reference,update.request,await this.inlineThreadAccess(update.request.threadEnvironmentId));}catch{return undefined;}}),
       connectionTimeout:(target,error)=>{if(this.connectionRecovery?.failed(this.connectionRecoveryTarget(target),error))this.recordSendFailure(undefined,error,'connection-timeout',Date.now()-error.elapsedMs);},
@@ -411,7 +418,7 @@ export default class SendToT3 extends Plugin {
       this.registerEvent(this.app.workspace.on('window-open',(_win,window)=>watchShine(window.document)));
       this.registerEvent(this.app.workspace.on('window-close',(_win,window)=>{shineDocuments.get(window.document)?.();shineDocuments.delete(window.document);}));
     }
-    if(typeof document.querySelectorAll==='function')this.register(installStreamBlockControls(this.app,document,setIcon,error=>new Notice(`T3: ${message(error)}`,10000)));
+    if(typeof document.querySelectorAll==='function')this.register(installStreamBlockControls(this.app,document,setIcon,error=>new Notice(`T3: ${message(error)}`,10000),()=>this.openSettings()));
     const questionStorage=`${this.localKey}-questions-${this.settings.vaultId}`;
     this.questions=new QuestionController(environmentId=>this.inlineThreadAccess(environmentId),{load:()=>{const saved=this.app.loadLocalStorage(questionStorage);return Array.isArray(saved)?saved:[];},save:records=>this.app.saveLocalStorage(questionStorage,records)},randomId,()=>new Date().toISOString(),(target,follow)=>continueQuestionAnswer(target,follow,{
       ...deviceNoteIO(this.app),vaultId:this.settings.vaultId,owner:this.inlineActor,
@@ -1075,6 +1082,7 @@ export default class SendToT3 extends Plugin {
     if(this.mode==='desktop')return;
     const hasDeviceSession=this.settings.paired.some(c=>{const session=this.pairedSessions[c.id];return session?.environmentId===c.environmentId&&session.url===c.url&&session.expiresAt>Date.now()+5000;});
     if(hasDeviceSession)return;
+    if(this.signInExpired)return REAUTHENTICATE_MESSAGE;
     if(this.connecting)return 'T3 is still connecting your computers. Wait for connection sync to finish.';
     if(this.nativeAccount&&!this.connectionSyncComplete)return 'Refresh connections in Send to T3 Code settings before sending.';
     if(!this.nativeAccount)return 'Sign in to T3 on this device first. Synced project names do not sign this device in.';
@@ -1598,8 +1606,18 @@ export default class SendToT3 extends Plugin {
     if(!paired&&!Platform.isMobile&&environmentId===await this.localInlineEnvironment())return (await import('./desktop')).desktopThreadAccess({...this.settings.connection,host:'local'});
     if(!paired)throw Error('Connect this device to the thread machine to take over responses.');
     const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
-    const session=await this.sessionFor(paired.id,forceRefresh);
-    return {origin:endpoint(paired.url),expiresAt:session?.expiresAt,api:await environmentApi(connection,session)};
+    let session=await this.sessionFor(paired.id,forceRefresh),api=await environmentApi(connection,session);
+    let renewing:Promise<void>|undefined;
+    return {origin:endpoint(paired.url),get expiresAt(){return session?.expiresAt;},api:async(path,payload,options)=>{
+      try{return await api(path,payload,options);}catch(error){
+        // Retrying reads can recover a revoked environment token. Dispatch is
+        // never replayed; account expiry is handled by nativeCredential.
+        const safe=payload===undefined||['/api/auth/websocket-ticket','/api/orchestration/turn-item','/api/assets/create-url'].includes(path);
+        if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed||!safe)throw error;
+        renewing??=(async()=>{session=await this.sessionFor(paired.id,true);api=await environmentApi(connection,session);})().finally(()=>{renewing=undefined;});
+        await renewing;return api(path,payload,options);
+      }
+    }};
   }
   private localInlineEnvironment():Promise<string>{
     if(Platform.isMobile)return Promise.reject(Error('A phone cannot host vault responses.'));
@@ -1928,6 +1946,7 @@ export default class SendToT3 extends Plugin {
   pairingStatus(c:PairedConnection){const s=this.pairedSessions[c.id];return !s?'Pair on this device':s.expiresAt<=Date.now()?'Pairing expired':`Paired on this device until ${new Date(s.expiresAt).toLocaleDateString()}`;}
   async startEmailSignIn(email:string){
     this.cancelCloudLogin();this.emailLogin=null;this.cloudError='';const generation=this.cloudGeneration;
+    this.signInEmail=email.trim();await this.saveDeviceState();
     const login=await beginEmailLogin(email,nativeAccountFetch);
     if(this.stopped||generation!==this.cloudGeneration)return;
     this.emailLogin=login;this.cloudChanged?.();
@@ -1937,19 +1956,22 @@ export default class SendToT3 extends Plugin {
     const account=await verifyEmailLogin(login,code,nativeAccountFetch);
     if(this.stopped||generation!==this.cloudGeneration){void revokeNativeAccount(account,nativeAccountFetch).catch(()=>{});return;}
     this.nativeAccount=account;this.nativeToken=undefined;this.emailLogin=null;this.cloudAccount=null;
+    this.signInEmail=account.identity;this.signInExpired=false;
     this.mode='direct';await this.save();await this.refreshMachines();
+    if(this.nativeAccount===account){this.deviceInline?.reconnect();}
   }
   async nativeCredential():Promise<CloudAccount>{
-    const account=this.nativeAccount;if(!account)throw Error('Sign in to T3 on this device first.');
+    const account=this.nativeAccount;if(!account)throw new SignInRequiredError(this.signInExpired?REAUTHENTICATE_MESSAGE:'Sign in to T3 on this device to resume replies.');
     if(this.nativeToken&&this.nativeToken.expiresAt>Date.now()+10000)return this.nativeToken;
     if(this.nativeRefreshing)return this.nativeRefreshing;
     const generation=this.cloudGeneration;
     const active=()=>!this.stopped&&this.nativeAccount===account&&generation===this.cloudGeneration;
-    const work=(async()=>{const token=await nativeRelayAccount(account,async()=>{if(!active())throw Error('Sign-in cancelled.');await this.save();},nativeAccountFetch);if(!active())throw Error('Sign-in cancelled.');this.nativeToken=token;return token;})();
+    const work=(async()=>{try{const token=await nativeRelayAccount(account,async()=>{if(!active())throw Error('Sign-in cancelled.');await this.save();},nativeAccountFetch);if(!active())throw Error('Sign-in cancelled.');this.nativeToken=token;return token;}catch(error){if(active()&&signInRequired(error))await this.clearAccount(true);throw error;}})();
     this.nativeRefreshing=work;try{return await work;}finally{if(this.nativeRefreshing===work)this.nativeRefreshing=undefined;}
   }
   async sessionFor(id:string,forceRefresh=false):Promise<PairedSession|undefined>{
     const session=this.pairedSessions[id];const c=this.settings.paired.find(c=>c.id===id);
+    if(c?.managed&&!this.nativeAccount)throw new SignInRequiredError(this.signInExpired?REAUTHENTICATE_MESSAGE:'Sign in to T3 on this device to resume replies.');
     if(session?.accountId&&session.accountId!==this.nativeAccount?.userId)throw Error('Sign in to the T3 account that owns this connection.');
     // Pre-v2 account sessions requested only the two orchestration scopes.
     // Refresh them before any remote vault check; token expiry is not enough.
@@ -2194,10 +2216,16 @@ export default class SendToT3 extends Plugin {
       return {...await remote.ensureProject(registration,newFolder),connectionId:c.id,connectionName:c.name};
     }};
   }
-  async signOutCloud(){
-    const old=this.nativeAccount;this.cancelCloudLogin();this.nativeAccount=null;this.nativeToken=undefined;this.nativeRefreshing=undefined;this.sessionRefreshing.clear();
+  private async clearAccount(expired:boolean){
+    this.signInEmail=this.nativeAccount?.identity??this.signInEmail;this.signInExpired=expired;
+    this.cancelCloudLogin();this.nativeAccount=null;this.nativeToken=undefined;this.nativeRefreshing=undefined;this.sessionRefreshing.clear();
     for(const [id,s] of Object.entries(this.pairedSessions))if(s.accountId)delete this.pairedSessions[id];
-    this.cloudAccount=null;this.cloudMachines=[];this.accountCandidates.clear();this.registryNextAttempt=0;this.cloudError='';this.machineErrors={};this.connectionSyncComplete=false;this.machineRefreshing=undefined;this.cloudRefreshing=undefined;await this.initializeProjectCatalog();await this.save();this.cloudChanged?.();
+    this.cloudAccount=null;this.cloudMachines=[];this.accountCandidates.clear();this.registryNextAttempt=0;this.cloudError='';this.machineErrors={};this.connectionSyncComplete=false;this.machineRefreshing=undefined;this.cloudRefreshing=undefined;
+    // Clear only device credentials. Keep synced links, bindings and choices.
+    await this.saveDeviceState();this.syncProjectSources();this.cloudChanged?.();
+  }
+  async signOutCloud(){
+    const old=this.nativeAccount;await this.clearAccount(false);
     if(old)try{await revokeNativeAccount(old,nativeAccountFetch);}catch{new Notice('Signed out on this device. T3 could not be reached to revoke the account session; you can revoke it in your T3 account.');}
   }
   async forgetPairing(id:string){delete this.pairedSessions[id];this.projectDiscovery?.invalidate();await this.save();this.refreshProjectsInBackground(true);}
@@ -2207,7 +2235,7 @@ export default class SendToT3 extends Plugin {
     this.settings.paired=this.settings.paired.filter(c=>c.id!==id);this.settings.directProjects=this.settings.directProjects.filter(p=>p.connectionId!==id);this.settings.directSelected=this.settings.directSelected.filter(k=>!k.startsWith(id+':'));delete this.pairedSessions[id];if(this.settings.directScanId===id)this.settings.directScanId=this.settings.paired[0]?.id??'';this.syncProjectSources();await this.save();
   }
   private saveDeviceState(state?:unknown) {
-    this.app.saveLocalStorage(this.localKey,JSON.parse(JSON.stringify({deviceId:this.deviceId,mode:this.mode,connection:this.settings.connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,vaultRegistrations:this.vaultRegistrations})));
+    this.app.saveLocalStorage(this.localKey,JSON.parse(JSON.stringify({deviceId:this.deviceId,mode:this.mode,connection:this.settings.connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,signInEmail:this.signInEmail,signInExpired:this.signInExpired,vaultRegistrations:this.vaultRegistrations})));
     return deviceState(this.deviceId,state??JSON.parse(JSON.stringify({pending:this.settings.pending,completionJobs:this.settings.completionJobs,settlementJobs:this.settings.settlementJobs})));
   }
   private async saveResponseBinding(request:ResponseRequest){
@@ -2237,7 +2265,7 @@ export default class SendToT3 extends Plugin {
     const writeShared=forceShared||JSON.stringify(snapshot)!==JSON.stringify(baseline);
     if(writeShared)this.queuedSharedSnapshot=JSON.stringify(snapshot);
     const state=JSON.parse(JSON.stringify({pending,completionJobs,settlementJobs}));
-    this.app.saveLocalStorage(this.localKey,JSON.parse(JSON.stringify({deviceId:this.deviceId,mode:this.mode,connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,vaultRegistrations:this.vaultRegistrations})));
+    this.app.saveLocalStorage(this.localKey,JSON.parse(JSON.stringify({deviceId:this.deviceId,mode:this.mode,connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,signInEmail:this.signInEmail,signInExpired:this.signInExpired,vaultRegistrations:this.vaultRegistrations})));
     this.saving=this.saving.catch(()=>{}).then(async()=>{
       await deviceState(this.deviceId,state);
       if(!writeShared)return;
@@ -2621,13 +2649,13 @@ class FolderLinkModal extends Modal{
   }
 }
 
-class T3Settings extends PluginSettingTab {
+export class T3Settings extends PluginSettingTab {
   constructor(app:App,private plugin:SendToT3){super(app,plugin);}
   private selectedMachine:CloudMachine|null=null;
   cloudUI(el:HTMLElement){
     const p=this.plugin;p.cloudChanged=()=>this.display();
-    el.createEl('h3',{text:p.nativeAccount?'T3 connection on this device':'Sign in on this device'});
-    el.createEl('p',{text:p.nativeAccount?'Your account is stored only on this device. Projects and saved folder links appear after T3 finishes connecting your computers.':'This device is not signed in to T3. Verify your T3 email here, or use advanced manual pairing below.'});
+    el.createEl('h3',{text:p.nativeAccount?'T3 connection on this device':p.signInExpired?'Refresh authentication':'Sign in on this device'});
+    el.createEl('p',{text:p.nativeAccount?'Your account is stored only on this device. Projects and saved folder links appear after T3 finishes connecting your computers.':p.signInExpired?REAUTHENTICATE_MESSAGE:'This device is not signed in to T3. Verify your T3 email here, or use advanced manual pairing below.'});
     if(p.nativeAccount){
       new Setting(el).setName(p.nativeAccount.identity).setDesc(p.connecting?'Connecting computers and discovering projects…':'Signed in. Connections renew automatically.').addButton(b=>b.setButtonText('Refresh connections').setDisabled(p.connecting).onClick(async()=>{try{await p.refreshMachines();}catch(e){p.cloudError=message(e);}this.display();})).addButton(b=>b.setButtonText('Sign out').onClick(async()=>{await p.signOutCloud();this.display();}));
       if(p.connecting)el.createEl('p',{text:'Connecting to T3 and syncing project information…'});
@@ -2645,9 +2673,9 @@ class T3Settings extends PluginSettingTab {
       new Setting(el).addButton(b=>b.setButtonText('Verify and connect').setCta().onClick(async()=>{b.setDisabled(true);try{await p.finishEmailSignIn(code);}catch(e){p.cloudError=message(e);}this.display();})).addButton(b=>b.setButtonText('Cancel').onClick(()=>p.cancelCloudLogin()));
     }else{
       if(p.cloudAccount)el.createEl('p',{text:'Verify your email once to upgrade from address discovery to automatic connections. Existing manual pairings keep working.'});
-      let email=p.cloudAccount?.identity.includes('@')?p.cloudAccount.identity:'';
-      new Setting(el).setName('T3 account email').setDesc('Uses T3’s sign-in service. No password or per-computer pairing code is needed.').addText(t=>{t.inputEl.type='email';t.inputEl.autocomplete='email';t.setPlaceholder('you@example.com').setValue(email).onChange(v=>email=v);});
-      new Setting(el).addButton(b=>b.setButtonText('Send sign-in code').setCta().onClick(async()=>{b.setDisabled(true);try{await p.startEmailSignIn(email);}catch(e){p.cloudError=message(e);}this.display();}));
+      let email=p.signInEmail||(p.cloudAccount?.identity.includes('@')?p.cloudAccount.identity:'');
+      new Setting(el).setName('T3 account email').setDesc(p.signInExpired?'Your saved email is ready. Request a new verification code to resume replies.':'Uses T3’s sign-in service. No password or per-computer pairing code is needed.').addText(t=>{t.inputEl.type='email';t.inputEl.autocomplete='email';t.setPlaceholder('you@example.com').setValue(email).onChange(v=>email=v);});
+      new Setting(el).addButton(b=>b.setButtonText(p.signInExpired?'Refresh authentication':'Send sign-in code').setCta().onClick(async()=>{b.setDisabled(true);try{await p.startEmailSignIn(email);}catch(e){p.cloudError=message(e);}this.display();}));
     }
     if(p.cloudError)el.createEl('p',{text:p.cloudError,cls:'t3-error'});
   }

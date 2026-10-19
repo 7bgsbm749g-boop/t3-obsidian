@@ -8,6 +8,7 @@ import {watchThread,readInlineSnapshot,type ThreadAccess,type ThreadStreamItem} 
 import {logFailure} from './diagnostics';
 import {checkFinalResponse,finalResponseKey} from './final-response';
 import {responseTooLarge,type StreamReadFailure} from './t3-response-limits';
+import {signInRequired,type ResponseConnectionIssue} from './sign-in-state';
 
 export interface DirectInlineUpdate {request:ResponseRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
 type Watch=typeof watchThread;
@@ -38,7 +39,13 @@ export class DirectInlinePreview {
   private verification?:Promise<void>;
   private nextVerification=0;
   private terminal=false;
-  constructor(record:ResponseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
+  private connectionIssue?:ResponseConnectionIssue;
+  constructor(record:ResponseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock,private connectionChanged?:(issue?:ResponseConnectionIssue)=>void){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
+  private connectionFailed(error:unknown){
+    const issue:ResponseConnectionIssue={kind:signInRequired(error)?'sign-in-required':'reconnecting'};
+    if(this.connectionIssue?.kind!==issue.kind){this.connectionIssue=issue;this.connectionChanged?.(issue);}
+    if(issue.kind==='sign-in-required')this.suspend();
+  }
   update(record:ResponseRecord){
     if(record.epoch<this.record.epoch||record.epoch===this.record.epoch&&record.revision<this.record.revision)return;
     this.record=record;
@@ -64,14 +71,14 @@ export class DirectInlinePreview {
     this.schedule(true);
   }
   tick(open:boolean){
-    if(this.stopped)return;
+    if(this.stopped||this.connectionIssue?.kind==='sign-in-required')return;
     const record=this.record;
     if(!open||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.state?.status==='conflict'){this.suspend();return;}
     if(this.monitor){if(this.terminal&&(record.request.deviceCompletion||record.request.localOnly))this.verifyCompletion();return;}
     const generation=++this.generation;
     this.monitor=this.watch(record.request.threadId,this.access,{
       item:item=>{if(!this.stopped&&this.generation===generation)this.item(item);},
-      reconnecting:error=>{if(!this.stopped&&this.generation===generation)logFailure('stream.direct.reconnecting',error,{bindingId:record.request.id});},
+      reconnecting:error=>{if(!this.stopped&&this.generation===generation){logFailure('stream.direct.reconnecting',error,{bindingId:record.request.id});this.connectionFailed(error);}},
       failure:error=>{if(!this.stopped&&this.generation===generation&&responseTooLarge(error)){this.failure??={kind:'response-too-large',operation:'snapshot'};if(!this.render())this.receive({request:this.record.request,messageId:this.messageId(),sequence:this.state.sequence??0,body:this.record.state?.body??'> **T3 · Working**',failure:this.failure,completionVerified:false});}},
     },undefined,()=>({messageIds:[this.messageId(),...this.record.state?.steering?.map(input=>input.messageId)??[]],turnIds:this.turnIds}),{afterSequence:()=>this.state.sequence??0,pollImmediately:true,pollSnapshots:()=>this.state.protocolVersion!==2&&this.failure?.operation!=='snapshot'});
   }
@@ -83,6 +90,7 @@ export class DirectInlinePreview {
     if(!Number.isSafeInteger(sequence)||sequence<0)return;
     if(item.kind==='snapshot'&&(item.snapshot?.thread?.id!==request.threadId||item.snapshot?.thread?.projectId!==request.projectId))return;
     if(item.kind==='event'&&item.event?.aggregateId!==undefined&&item.event.aggregateId!==request.threadId)return;
+    if(this.connectionIssue){this.connectionIssue=undefined;this.connectionChanged?.();}
     const next=applyThreadItem(this.state,item).state;if(next===this.state)return;this.state=next;
     this.schedule(item.kind==='event'&&((item.event?.type==='thread.run-updated'&&['completed','interrupted'].includes(item.event.payload?.status))||(item.event?.type==='thread.session-set'&&item.event.payload?.session?.status!=='running')||(item.event?.type==='thread.message-sent'&&item.event.payload?.streaming===false)));
   }
@@ -152,10 +160,10 @@ export class DirectInlinePreview {
         this.verifiedSequence=result.snapshotSequence;
       }
       this.schedule(true);
-    }).catch(error=>{if(!this.stopped&&generation===this.generation){logFailure('stream.direct.completion-verification',error,{bindingId:request.id});if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:state.protocolVersion===2?'final-reply':'snapshot',key};this.schedule(true);}}}).finally(()=>{this.clock.cancel(timeout);if(this.verification===work){this.verification=undefined;this.nextVerification=this.clock.now()+1000;}});
+    }).catch(error=>{if(!this.stopped&&generation===this.generation){logFailure('stream.direct.completion-verification',error,{bindingId:request.id});if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:state.protocolVersion===2?'final-reply':'snapshot',key};this.schedule(true);}else this.connectionFailed(error);}}).finally(()=>{this.clock.cancel(timeout);if(this.verification===work){this.verification=undefined;this.nextVerification=this.clock.now()+1000;}});
     this.verification=work;
   }
-  reconnect(open:boolean){if(this.stopped)return;this.suspend();this.tick(open);}
+  reconnect(open:boolean){if(this.stopped)return;this.suspend();this.connectionIssue=undefined;this.connectionChanged?.();this.tick(open);}
   suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;this.verification=undefined;this.nextVerification=0;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
   dispose(){this.stopped=true;this.suspend();}
 }

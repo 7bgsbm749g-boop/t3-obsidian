@@ -10,12 +10,13 @@ import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../environment-permissions';
 test('mobile account sign-in connects all machines, preserves selections, survives restart, renews, and signs out without replay',async()=>{
  let local:any={deviceId:'account-mobile-device',mode:'direct',pairedSessions:{manual:{url:'https://manual.example',environmentId:'manual',token:'manual-private',expiresAt:Date.now()+600000}}};
  const initial={paired:[{id:'a-connection',environmentId:'a',url:'https://a.example',name:'Laptop'},{id:'manual',environmentId:'manual',url:'https://manual.example',name:'Manual'}],directSelected:['a-connection:p-a'],directProjects:[{id:'p-a',title:'Project a',workspaceRoot:'/',connectionId:'a-connection',connectionName:'Laptop'}],directScanId:'a-connection'};
- const shared:any[]=[];let verified=false,offline=true,connects=0,revoked=0;const dispatches:any[]=[];
+ const shared:any[]=[];let verified=false,offline=true,connects=0,revoked=0,nativeOffline=false;const dispatches:any[]=[];
  let delayed=false,release:((r:any)=>void)|undefined;
  const session={id:'sess-native',status:'active',user:{id:'user-native'}};
  const jwt='header.'+Buffer.from(JSON.stringify({exp:Math.floor(Date.now()/1000)+600})).toString('base64url')+'.signature';
  const nativeResponse=(value:any,status=200)=>({status,headers:{authorization:'native-client-secret'},text:JSON.stringify(value)});
  const requestUrl=async(o:any)=>{
+  if(nativeOffline)throw Error('Synthetic temporary network failure');
   const u=new URL(o.url);assert.equal(u.origin,'https://clerk.t3.codes');assert.equal(o.headers.origin,undefined);assert.equal(o.throw,false);const f=new URLSearchParams(o.body);
   if(u.pathname.endsWith('/sign_ins'))return nativeResponse({response:{id:'sign-native',supported_first_factors:[{strategy:'email_code',email_address_id:'email-native'}]}});
   if(u.pathname.endsWith('/prepare_first_factor'))return nativeResponse({response:{}});
@@ -44,11 +45,18 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
   dispatches.push(JSON.parse(o.body));return response({});
  };
  class Base{};class File{path='account-test.md';basename='account-test';name='account-test.md';extension='md';stat={ctime:1,size:10};}
- class Plugin{
-  app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,v:any)=>{local=v;},workspace:{onLayoutReady:()=>{},on:()=>{}},vault:{read:async()=> 'Account connection test',getMarkdownFiles:()=>[],getName:()=> 'Notes'},metadataCache:{}};
-  async loadData(){return shared.at(-1)??initial;}async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}
+ let settingsTab:any;const ui:{text:string[];buttons:Array<{text:string;run?:()=>Promise<void>}>;inputs:string[]}={text:[],buttons:[],inputs:[]};
+ const element={createEl:(_tag:string,options:any)=>{ui.text.push(options.text);return element;}};
+ class Setting{
+  constructor(_el:any){}setName(text:string){ui.text.push(text);return this;}setDesc(text:string){ui.text.push(text);return this;}
+  addText(callback:any){callback({inputEl:{},setPlaceholder(){return this;},setValue(text:string){ui.inputs.push(text);return this;},onChange(){return this;}});return this;}
+  addButton(callback:any){const button:any={text:'',setButtonText(text:string){this.text=text;return this;},setCta(){return this;},setDisabled(){return this;},onClick(run:any){this.run=run;return this;}};callback(button);ui.buttons.push(button);return this;}
  }
- const api={Plugin,Platform:{isMobile:true},TFile:File,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,requestUrl};
+ class Plugin{
+  app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,v:any)=>{local=v;},workspace:{getLeavesOfType:()=>[],onLayoutReady:()=>{},on:()=>{}},vault:{read:async()=> 'Account connection test',getMarkdownFiles:()=>[],getName:()=> 'Notes'},metadataCache:{}};
+  async loadData(){return shared.at(-1)??initial;}async saveData(d:any){shared.push(d);}addSettingTab(tab:any){settingsTab=tab;}registerEvent(){}addCommand(){}
+ }
+ const api={Plugin,Setting,Platform:{isMobile:true},TFile:File,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,requestUrl};
  const module={exports:{} as any};
  runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian','Mobile must never load Node APIs');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:settingsSocket(undefined,undefined,(tag,payload)=>{assert.equal(tag,'orchestration.dispatchCommand');dispatches.push(payload);return {}; }),Headers,Response,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console},{timeout:5000});
  const p=new module.exports.default();await p.onload();await p.startEmailSignIn('user@example.com');
@@ -65,6 +73,20 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
  }
  assert.equal((await p.sessionFor('manual')).token,'manual-private','An unmanaged pairing must not use account credentials');assert.equal(dispatches.length,0,'Permission migration must not replay sends');
  const previousConnects=connects;p.pairedSessions[c.id].expiresAt=0;await Promise.all([p.sessionFor(c.id),p.sessionFor(c.id)]);assert.equal(connects,previousConnects+1,'Renewal is coalesced');
+ // A transport failure must not erase a valid device account.
+ p.nativeToken=undefined;nativeOffline=true;await assert.rejects(p.nativeCredential(),/Cannot reach T3 sign-in/);assert.equal(p.nativeAccount.userId,'user-native');nativeOffline=false;
+ settingsTab.display=()=>{ui.text=[];ui.buttons=[];ui.inputs=[];settingsTab.cloudUI(element);};settingsTab.display();
+ // The screenshot's expired account state must become one coherent sign-in UI.
+ verified=false;p.nativeToken=undefined;p.pairedSessions[c.id].expiresAt=0;
+ await assert.rejects(p.sessionFor(c.id),(error:any)=>error.signInRequired===true);
+ assert.equal(p.nativeAccount,null);assert.equal(p.signInExpired,true);assert.equal(p.signInEmail,'user@example.com');
+ assert.equal(p.pairedSessions[c.id],undefined);assert.equal(p.pairedSessions.manual.token,'manual-private');assert.equal(revoked,0,'An already expired login must not invoke remote sign-out');
+ assert.equal(local.nativeAccount,null);assert.equal(local.signInEmail,'user@example.com');assert.equal(local.signInExpired,true);
+ assert.ok(ui.buttons.some(button=>button.text==='Refresh authentication'));assert.ok(!ui.buttons.some(button=>['Sign out','Refresh connections'].includes(button.text)));
+ assert.deepEqual(ui.inputs,['user@example.com']);assert.match(ui.text.join('\n'),/Each client must sign in separately/);assert.doesNotMatch(ui.text.join('\n'),/Connection setup has not completed|Refresh connections/);
+ const manualExpiry=p.pairedSessions.manual.expiresAt;p.pairedSessions.manual.expiresAt=0;assert.match(p.chatReadinessError(),/Refresh authentication/);p.pairedSessions.manual.expiresAt=manualExpiry;
+ await ui.buttons.find(button=>button.text==='Refresh authentication')!.run!();assert.equal(p.emailLogin.email,'user@example.com');
+ await p.finishEmailSignIn('123456');assert.equal(p.nativeAccount.userId,'user-native');assert.equal(p.signInExpired,false);assert.equal(p.directAccountReady(),true);assert.equal(dispatches.length,0,'Reauthentication must not resend any prompt');
  const project=p.settings.directProjects.find((p:any)=>p.id==='p-a');await p.send(new File(),project);assert.equal(dispatches.length,2);assert.ok(dispatches[1].text.startsWith('Account connection test'));assert.doesNotMatch(dispatches[1].text,/T3 EVENT HISTORY CAPABILITY/);assert.equal(p.settings.pending.length,0);p.onunload();
  const q=new module.exports.default();await q.onload();assert.equal(q.nativeAccount.userId,'user-native');assert.equal(q.directAccountReady(),false,'reload stays gated until this device refreshes its connections');assert.equal(dispatches.length,2,'Reload must not send work');
  await q.signOutCloud();assert.equal(q.nativeAccount,null);assert.equal(q.directAccountReady(),false);assert.equal(q.pairedSessions[c.id],undefined);assert.equal(q.pairedSessions.manual.token,'manual-private');assert.equal(revoked,1);
