@@ -2,6 +2,7 @@ import {turnForMessage,turnPhase,type InlineThreadState,type InlineMessage} from
 import {incomingLabel,mergeProse,steeringBoundary,type InlineSteering} from './inline-steering';
 import {pendingQuestions,staleQuestionFailure,type Question} from './questions';
 import {submittedAnswers} from './response-answers';
+import {delegatedTurnIds,delegatedWork} from './inline-delegation';
 
 export interface InlineQuestionFollow {requestId:string;turnId:string|null;answered?:boolean;dismissed?:boolean;detached?:boolean;replyTurnId?:string;completed?:boolean;responseMode?:'message'|'native';input?:InlineSteering;questions?:Question[]}
 /** Exact run ownership wins; timestamps only distinguish answers inside a
@@ -17,7 +18,7 @@ export function lateQuestionAnswer(state:InlineThreadState,sourceTurnId:string|n
 /** Follow only T3's exact async-answer message, never an unrelated latest turn.
  * Keep the request binding durable when recent snapshots omit older activities. */
 export function followInlineQuestions(state:InlineThreadState,turnIds:string[],saved:InlineQuestionFollow[]=[],prose:InlineMessage[]=[],followLate=true):{follows:InlineQuestionFollow[];turnIds:string[];turnId:string|undefined;waiting:boolean;continued:boolean}{
-  const follows=saved.map(item=>({...item,...(item.input?{input:{...item.input}}:{})})),turns=[...turnIds];
+  const follows=saved.map(item=>({...item,...(item.input?{input:{...item.input}}:{})})),turns=delegatedTurnIds(state,turnIds);
   for(const activity of state.activities){
     if(activity.kind!=='user-input.requested'||!activity.payload||typeof activity.payload.requestId!=='string'||activity.turnId!==null&&!turns.includes(activity.turnId))continue;
     if(!follows.some(item=>item.requestId===activity.payload!.requestId))follows.push({requestId:activity.payload.requestId,turnId:activity.turnId,responseMode:activity.payload.responseMode==='message'?'message':'native'});
@@ -81,6 +82,8 @@ function pendingQuestionReply(item:InlineQuestionFollow):boolean {
 }
 export function inlineQuestionPhase(state:InlineThreadState,turnId:string,follows:InlineQuestionFollow[]=[]){
   const observed=turnPhase(state,turnId);
+  const delegated=delegatedWork(state,[turnId]);
+  if(observed==='complete'&&(delegated.waiting||delegated.running))return 'running';
   const phase=observed==='running'&&state.session?.activeTurnId!==turnId&&follows.some(item=>item.turnId===turnId&&item.completed)?'complete':observed;
   // Resolution precedes projection of the new async-answer turn. Show that
   // accepted follow-up as working while retaining the exact-message binding.

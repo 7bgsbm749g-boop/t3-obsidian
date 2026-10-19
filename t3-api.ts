@@ -164,7 +164,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       const p=snapshot.projection,items=new Map<string,any>(),messages=new Map<string,any>();
       for(const row of rows)if(row.sourceThreadId===p.thread.id)items.set(row.item.id,row.item);
       for(const item of p.turnItems??[])if(needed(item))items.set(item.id,item);
-      for(const item of items.values())if(item.type==='user_message'||item.type==='assistant_message')messages.set(item.messageId,{id:item.messageId,threadId:p.thread.id,runId:item.runId,nodeId:item.nodeId,role:item.type==='user_message'?'user':'assistant',text:item.text,streaming:item.streaming===true,createdAt:item.startedAt??item.updatedAt,context:item.context,attachments:item.attachments??[],createdBy:item.createdBy,senderThreadId:item.senderThreadId});
+      for(const item of items.values())if(item.type==='user_message'||item.type==='assistant_message')messages.set(item.messageId,{id:item.messageId,threadId:p.thread.id,runId:item.runId,nodeId:item.nodeId,role:item.type==='user_message'?'user':'assistant',text:item.text,streaming:item.streaming===true,createdAt:item.startedAt??item.updatedAt,context:item.context,attachments:item.attachments??[],createdBy:item.createdBy,senderThreadId:item.senderThreadId,delegatedCompletion:item.delegatedCompletion});
       for(const message of p.messages)messages.set(message.id,message);
       const recovered={...snapshot,hasMoreHistory:false,projection:{...p,turnItems:[...items.values()].sort((a,b)=>a.ordinal-b.ordinal),messages:[...messages.values()].sort((a,b)=>(a.createdAt??'').localeCompare(b.createdAt??''))}};
       return normalizeV2Snapshot(await hydrate(recovered));

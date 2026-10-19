@@ -52,6 +52,16 @@ test('job outcomes use the original turn after newer turns, not latest session e
   assert.equal(jobEvents(job,{...state,turns:{original:{...original.latestTurn!,state:'interrupted'}}},{seen:[]}).at(-1)?.state,'interrupted');
   assert.equal(jobEvents(job,{...state,turns:{original:{...original.latestTurn!,state:'error'}}},{seen:[]}).at(-1)?.state,'failed');
 });
+test('a job waits for its children and reports the resumed parent result under the original job identity',()=>{
+ const state=run();state.latestTurn!.ordinal=1;state.latestTurn!.delegatedCompletion={disposition:'open'};
+ state.subagents={child:{id:'child',runId:'original',origin:'app_owned',completionWake:'always',status:'running'}};
+ assert.equal(jobEvents(job,state,{seen:[]}).some(event=>event.terminal),false);
+ state.subagents.child={...state.subagents.child,status:'completed',completionDelivery:{state:'acknowledged',observedByRunId:'resumed'}};
+ state.turns={original:state.latestTurn!,resumed:{turnId:'resumed',ordinal:2,state:'running'}};
+ assert.equal(jobEvents(job,state,{seen:[]}).some(event=>event.terminal),false);
+ state.turns.resumed={...state.turns.resumed,state:'completed',completedAt:'2026-10-19T01:00:00Z'};
+ const event=jobEvents(job,state,{seen:[]}).at(-1)!;assert.equal(event.state,'completed');assert.equal(event.job.turnId,'original');assert.equal(event.at,'2026-10-19T01:00:00Z');
+});
 test('approval/input identities and resolution are recoverable; unresolved input blocks terminal completion',()=>{
   const state=run(),at='2026-10-02T12:00:00Z';state.activities=[{id:'approval',kind:'approval.requested',summary:'approve',turnId:'original',createdAt:at,payload:{requestId:'approval-1'}},{id:'input',kind:'user-input.requested',summary:'answer',turnId:'original',createdAt:at,payload:{requestId:'question-1'}}];
   let events=jobEvents(job,state,{seen:[]});assert.deepEqual(events.map(e=>[e.state,e.requestId,e.terminal]),[['waiting-approval','approval-1',false],['waiting-input','question-1',false]]);

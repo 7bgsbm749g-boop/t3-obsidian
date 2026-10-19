@@ -1,6 +1,7 @@
 import {commandId} from './direct';
 import {turnForMessage,turnPhase,type InlineThreadState} from './inline-thread';
 import type {EventTarget} from './event-subscriptions';
+import {delegatedWork} from './inline-delegation';
 
 export const JOB_STATES=['running','waiting-approval','waiting-input','completed','failed','interrupted','cancelled'] as const;
 export type JobStatus=typeof JOB_STATES[number];
@@ -38,7 +39,8 @@ export function jobEvents(job:JobWatch,state:InlineThreadState,observation:JobOb
   const startFailure=state.activities.find(a=>a.kind==='provider.turn.start.failed'&&a.payload?.requestId===job.messageId);
   if(startFailure){emit('failed',startFailure.id,startFailure.createdAt??'',job.messageId,String(startFailure.payload?.detail??startFailure.summary));return events;}
   if(!turnId||!state.messages.some(m=>m.role==='user'&&m.id===job.messageId))return events;
-  const activities=state.activities.filter(a=>a.turnId===turnId);
+  const delegated=delegatedWork(state,[turnId]),current=delegated.turnId??turnId;
+  const activities=state.activities.filter(a=>!!a.turnId&&delegated.turnIds.includes(a.turnId));
   for(const activity of activities){
     const requestId=activity.payload?.requestId;
     if(activity.kind==='approval.requested'||activity.kind==='user-input.requested')emit(activity.kind==='approval.requested'?'waiting-approval':'waiting-input',activity.id,activity.createdAt??'',requestId,activity.summary);
@@ -46,7 +48,8 @@ export function jobEvents(job:JobWatch,state:InlineThreadState,observation:JobOb
   }
   // A transport session error is not an execution failure. Use exact turn
   // state/checkpoints; runtime.error alone may be recovered within the turn.
-  const phase=turnPhase(state,turnId),turn=state.turns?.[turnId]??(state.latestTurn?.turnId===turnId?state.latestTurn:undefined);
+  const observed=turnPhase(state,current),phase=observed==='complete'&&(delegated.waiting||delegated.running)?'running':observed;
+  const turn=state.turns?.[current]??(state.latestTurn?.turnId===current?state.latestTurn:undefined);
   const at=turn?.completedAt??state.checkpoints?.find(c=>c.turnId===turnId)?.completedAt??state.messages.filter(m=>m.turnId===turnId).at(-1)?.createdAt??'';
   const pending=new Map<string,string>();
   for(const a of activities){const id=a.payload?.requestId;if(typeof id!=='string')continue;if(['approval.requested','user-input.requested'].includes(a.kind))pending.set(id,a.kind);if(['approval.resolved','user-input.resolved'].includes(a.kind))pending.delete(id);}

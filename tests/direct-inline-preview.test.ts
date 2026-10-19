@@ -6,6 +6,7 @@ import type {ResponseRecord} from '../response-record';
 import type {ThreadStreamCallbacks,ThreadStreamItem,watchThread} from '../thread-stream';
 import {type ResponseStorageFiles} from '../response-record';
 import {T3ResponseTooLargeError} from '../t3-response-limits';
+import {normalizeV2StreamItem} from '../orchestration-v2';
 
 class TestClock implements PreviewClock {
   time=0;next=0;pending=new Map<number,{at:number;callback:()=>void}>();
@@ -33,6 +34,37 @@ const completeV2=(h:ReturnType<typeof fixture>,sequence=2,text='Final reply')=>{
 };
 const finalItem=(text='Final reply')=>({id:'opaque-item',threadId:'thread',runId:'turn',messageId:'answer',type:'assistant_message',text,streaming:false,status:'completed',updatedAt:'2026-10-06T03:01:00.000Z'});
 const settle=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
+test('a local reply follows two exact delegated deliveries and verifies only the last parent result',async()=>{
+ const reads:string[]=[],h=fixture(false,async(_path,payload)=>{reads.push(payload.itemId);return {...finalItem('Combined report'),id:'final-item',runId:'resume-two',messageId:'combined'};});
+ h.record.request.localOnly=true;h.record.request.intermediateMode='collapse';h.preview.tick(true);
+ const source=completeV2(h,2,'Two agents are running') as any,thread=source.snapshot.thread;
+ thread.turns.turn.delegatedCompletion={disposition:'open',delivery:null};
+ const child=(id:string)=>({id,runId:'turn',origin:'app_owned',completionWake:'always',status:'running'});
+ thread.subagents={one:child('one'),two:child('two')};h.item(source);await settle();
+ assert.equal(h.updates.at(-1)!.phase,'running');assert.equal(h.updates.at(-1)!.completionVerified,false);assert.match(h.updates.at(-1)!.body,/Waiting for 2 subagents/);assert.deepEqual(reads,[]);
+ let sequence=2;
+ const event=(type:string,payload:any)=>h.item(normalizeV2StreamItem({kind:'event',sequence:++sequence,event:{type,payload}}));
+ const resume=(id:string,ordinal:number,messageId:string)=>({id,ordinal,userMessageId:messageId,status:'running',requestedAt:'2026-10-06T03:03:00Z',completedAt:null});
+ event('subagent.updated',{...child('one'),status:'completed',completionDelivery:{state:'pending'}});h.clock.advance(80);
+ assert.equal(h.updates.at(-1)!.completionVerified,false);
+ event('run.created',resume('resume-one',2,'delivery-one'));
+ event('message.updated',{id:'delivery-one',role:'user',runId:'resume-one',text:'First child finished',streaming:false,delegatedCompletion:{parentRunId:'turn',generation:1,taskIds:['one']}});
+ event('subagent.updated',{...child('one'),status:'completed',completionDelivery:{state:'acknowledged',observedByRunId:'resume-one'}});
+ event('turn-item.updated',{id:'progress-item',messageId:'progress',runId:'resume-one',type:'assistant_message',text:'One report arrived',streaming:false,updatedAt:'2026-10-06T03:03:30Z'});
+ event('run.updated',{...resume('resume-one',2,'delivery-one'),status:'completed',completedAt:'2026-10-06T03:04:00Z'});await settle();
+ assert.equal(h.updates.at(-1)!.turnId,'resume-one');assert.match(h.updates.at(-1)!.body,/Waiting for 1 subagent</);assert.match(h.updates.at(-1)!.body,/One report arrived/);assert.deepEqual(reads,[]);
+ // A new ordinary prompt is not a delegated result and must not enter this block.
+ event('run.created',resume('other',3,'other-prompt'));
+ event('message.updated',{id:'other-output',runId:'other',role:'assistant',text:'Unrelated answer',streaming:false});h.clock.advance(80);
+ assert.equal(h.updates.at(-1)!.turnId,'resume-one');assert.doesNotMatch(h.updates.at(-1)!.body,/Unrelated answer/);
+ event('message.updated',{id:'delivery-two',role:'user',runId:'resume-two',text:'Second child finished',streaming:false,delegatedCompletion:{parentRunId:'turn',generation:2,taskIds:['two']}});
+ event('run.created',resume('resume-two',4,'delivery-two'));
+ event('subagent.updated',{...child('two'),status:'completed',completionDelivery:{state:'acknowledged',observedByRunId:'resume-two'}});
+ event('turn-item.updated',{id:'final-item',messageId:'combined',threadId:'thread',runId:'resume-two',type:'assistant_message',status:'completed',text:'Combined report',streaming:false,updatedAt:'2026-10-06T03:01:00.000Z'});
+ event('run.updated',{...resume('resume-two',4,'delivery-two'),status:'completed',completedAt:'2026-10-06T03:05:00Z'});await settle();
+ const update=h.updates.at(-1)!;assert.equal(update.turnId,'resume-two');assert.equal(update.phase,'complete');assert.equal(update.completionVerified,true,JSON.stringify({reads,checkpoint:update.checkpoint,body:update.body}));assert.deepEqual(update.turnIds,['turn','resume-one','resume-two']);assert.deepEqual(reads,['final-item']);assert.match(update.body,/· Completed/);assert.match(update.body,/Combined report/);assert.doesNotMatch(update.body,/Waiting for subagents|Unrelated answer/);
+ h.preview.dispose();
+});
 test('a local source awaiting final save cannot adopt a late question answer run',async()=>{
  const h=fixture(false,async()=>finalItem('Source final'));h.record.request.localOnly=true;h.preview.tick(true);h.item(completeV2(h,2,'Source final'));await settle();
  const next=completeV2(h,3,'Source final') as any,thread=next.snapshot.thread;

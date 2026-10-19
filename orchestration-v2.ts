@@ -1,4 +1,4 @@
-import type {InlineActivity,InlineMessage,InlineThreadState,InlineTurn} from './inline-thread';
+import type {InlineActivity,InlineMessage,InlineThreadState,InlineTurn,InlineSubagent} from './inline-thread';
 import {htmlRenderFromToolItem} from './html-results';
 
 export const T3_PROTOCOL_VERSION=2;
@@ -19,9 +19,16 @@ const runState=(status:string)=>status==='failed'?'error':['cancelled','rolled_b
 /** The response model's historical `turnId` field now contains a T3 app run ID.
  * Provider turns and child nodes must never settle an app run. */
 export function responseRun(run:any,messages:InlineMessage[]=[]):InlineTurn {
+  const parent=messages.find(m=>m.id===run.userMessageId)?.delegatedCompletion?.parentRunId;
   return {turnId:run.id,state:runState(run.status),messageId:run.userMessageId,
     requestedAt:run.requestedAt,completedAt:run.completedAt,ordinal:run.ordinal,
+    ...(parent?{delegatedParentRunId:parent}:{}),delegatedCompletion:run.delegatedCompletion,
     assistantMessageId:messages.filter(m=>m.role==='assistant'&&m.turnId===run.id).at(-1)?.id};
+}
+/** Retain lifecycle evidence without copying child prompts or results. */
+export function responseSubagent(item:any):InlineSubagent {
+  return {id:item.id,runId:item.runId,title:item.title,status:item.status,origin:item.origin,completionWake:item.completionWake,
+    ...(item.completionDelivery?{completionDelivery:{state:item.completionDelivery.state,observedByRunId:item.completionDelivery.observedByRunId}}:{})};
 }
 function sessionFor(run:any,runtimeMode?:string,lastError?:string){
   return {status:!run?'ready':active(run.status)?'running':run.status==='failed'?'error':['interrupted','cancelled','rolled_back'].includes(run.status)?'stopped':'ready',
@@ -83,10 +90,11 @@ export function normalizeV2Snapshot(snapshot:any){
   const activities=items.flatMap(i=>itemActivities(i,requests));
   const pending=controls.filter(i=>itemActivities(i,requests).length===1);
   const failure=items.filter(i=>i.type==='error'&&i.runId===current?.id).at(-1)?.failure;
-  const backgroundLiveness=items.some(i=>['subagent','background_task','background_command','monitor'].includes(i.type)&&!terminal(i.status));
+  const subagents:Record<string,InlineSubagent>=Object.fromEntries(array(p.subagents).map(item=>[item.id,responseSubagent(item)]));
+  const backgroundLiveness=items.some(i=>['subagent','background_task','background_command','monitor'].includes(i.type)&&!terminal(i.status))||Object.values(subagents).some(i=>i.completionWake==='always'&&(!terminal(i.status)||i.completionDelivery?.state==='pending'));
   return {snapshotSequence:snapshot.snapshotSequence,page:{hasMore:snapshot.hasMoreHistory===true},
     thread:{...p.thread,protocolVersion:2,messages,activities,
-      turns:Object.fromEntries(runs.map(r=>[r.id,responseRun(r,messages)])),latestTurn:current?responseRun(current,messages):undefined,
+      turns:Object.fromEntries(runs.map(r=>[r.id,responseRun(r,messages)])),subagents,latestTurn:current?responseRun(current,messages):undefined,
       session:sessionFor(running??current,p.thread.runtimeMode,failure?.message),
       hasPendingApprovals:pending.some(i=>i.type==='approval_request'),hasPendingUserInput:pending.some(i=>i.type==='user_input_request'),backgroundLiveness,
       v2Requests:requests,v2Controls:Object.fromEntries(controls.map(i=>[i.id,i])),
@@ -105,7 +113,7 @@ export function normalizeV2StreamItem(item:any):any {
   if(event.type==='message.updated')return {kind:'event',event:{...event,type:'thread.message-sent',payload:{...p,messageId:p.id,turnId:p.runId??null,replace:true}}};
   if(event.type==='run.created'||event.type==='run.updated')return {kind:'event',event:{...event,type:'thread.run-updated'}};
   if(event.type==='turn-item.updated'&&p?.type==='assistant_message')return {kind:'event',event:{...event,type:'thread.message-sent',payload:{...p,id:p.messageId,messageId:p.messageId,itemId:p.id,role:'assistant',turnId:p.runId??null,createdAt:p.startedAt??p.updatedAt,replace:true}}};
-  if(event.type==='turn-item.updated'||event.type==='runtime-request.updated')return {kind:'event',event:{...event,type:`v2.${event.type}`}};
+  if(event.type==='turn-item.updated'||event.type==='runtime-request.updated'||event.type==='subagent.updated')return {kind:'event',event:{...event,type:`v2.${event.type}`}};
   return {kind:'event',event};
 }
 
@@ -128,6 +136,7 @@ export function normalizeV2TitleItem(item:any):any {
 /** Updates requiring both a turn item and its runtime capability are joined by
  * app IDs. Either event may arrive first; closed requests stay closed. */
 export function applyV2ControlEvent(state:InlineThreadState,event:any):InlineThreadState {
+  if(event.type==='v2.subagent.updated')return {...state,subagents:{...state.subagents,[event.payload.id]:responseSubagent(event.payload)}};
   const p=event.payload,requests={...state.v2Requests},controls={...state.v2Controls};
   if(event.type==='v2.runtime-request.updated')requests[p.id]=p;
   else if(['user_input_request','approval_request'].includes(p.type))controls[p.id]=p;

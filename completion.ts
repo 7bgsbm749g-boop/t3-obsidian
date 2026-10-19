@@ -35,7 +35,7 @@ export function initialMessageId(requestId: string): string {
 export function completionState(thread: any, job: CompletionJob): 'wait'|'complete'|'keep' {
   if(thread?.id!==job.threadId || thread.projectId!==job.projectId) return 'wait';
   if(['error','interrupted'].includes(thread.latestTurn?.state) || thread.session?.status==='error' || thread.session?.lastError) return 'keep';
-  if(thread.latestTurn?.state!=='completed' || !['ready','stopped'].includes(thread.session?.status) || thread.session?.activeTurnId || thread.hasPendingApprovals!==false || thread.hasPendingUserInput!==false) return 'wait';
+  if(thread.latestTurn?.state!=='completed' || !['ready','stopped'].includes(thread.session?.status) || thread.session?.activeTurnId || thread.hasPendingApprovals!==false || thread.hasPendingUserInput!==false || thread.backgroundLiveness) return 'wait';
   return 'complete';
 }
 export function isOriginalCompletedTurn(thread: any, job: CompletionJob): boolean {
