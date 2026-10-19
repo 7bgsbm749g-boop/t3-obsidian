@@ -23,6 +23,40 @@
 .send-to-t3-note-input { background: var(--color-blue, #448aff); }
 .send-to-t3-note-complete { background: var(--color-green, #4caf50); }
 
+/* Unread completions follow the theme accent, independently of running shine. */
+[data-t3-completion-glow] > :is(.nav-file-title-content, .nav-folder-title-content) {
+  color: var(--text-accent, var(--interactive-accent, #a882ff));
+  text-shadow: 0 0 0.45em currentColor;
+}
+[data-t3-completion-glow="branch"] > .nav-folder-collapse-indicator {
+  color: var(--text-accent, var(--interactive-accent, #a882ff));
+  filter: drop-shadow(0 0 3px currentColor);
+}
+@keyframes send-to-t3-completion-text {
+  0%, 100% { text-shadow: 0 0 0.12em transparent; }
+  50% { text-shadow: 0 0 0.65em currentColor; }
+}
+@keyframes send-to-t3-completion-chevron {
+  0%, 100% { filter: drop-shadow(0 0 4px currentColor); }
+  50% { filter: drop-shadow(0 0 0 transparent); }
+}
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  [data-t3-completion-glow] > :is(.nav-file-title-content, .nav-folder-title-content):not([data-t3-active-title]) {
+    animation: send-to-t3-completion-text 2.8s ease-in-out infinite;
+  }
+  [data-t3-completion-glow="branch"] > .nav-folder-collapse-indicator {
+    animation: send-to-t3-completion-chevron 2.8s ease-in-out infinite;
+  }
+}
+@media (forced-colors: active) {
+  [data-t3-completion-glow] > :is(.nav-file-title-content, .nav-folder-title-content) {
+    color: LinkText;
+    text-shadow: none;
+    text-decoration: underline;
+  }
+  [data-t3-completion-glow="branch"] > .nav-folder-collapse-indicator { color: LinkText; filter: none; }
+}
+
 .send-to-t3-inline-spinner { display: none; }
 
 /* T3's text shine: a 4.5rem highlight crossing the existing label in 2.2s.

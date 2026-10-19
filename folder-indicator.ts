@@ -1,6 +1,7 @@
 import {type FolderLink} from './folder-link';
 import {type NoteIndicator} from './explorer-responses';
 import {activeResponseFolders,setActiveTitle} from './activity-titles';
+import {unreadCompletionFolders} from './completion-glow';
 
 export const LINKED_FOLDER_BADGE_CLASS='send-to-t3-linked-folder-badge';
 export const NOTE_INDICATOR_CLASS='send-to-t3-note-indicator';
@@ -30,11 +31,16 @@ export function decorateLinkedFolders(root:ParentNode,links:FolderLink[]):void{
 }
 export function decorateNoteIndicators(root:ParentNode,notes:Map<string,NoteIndicator>,folderNote:(title:HTMLElement)=>string|undefined=()=>undefined):void {
   const folders=activeResponseFolders(notes);
+  const unreadFolders=unreadCompletionFolders(notes);
   for(const title of Array.from(root.querySelectorAll('.nav-file-title[data-path], .nav-folder-title[data-path]')) as HTMLElement[]){
     const folder=title.classList.contains('nav-folder-title');
     const path=folder?folderNote(title):title.getAttribute('data-path')??'';
     const note=path?notes.get(path):undefined;
     const active=!!note?.active,input=!!note?.input,complete=!!note&&note.complete===note.total&&!active&&!input;
+    const unread=!!note?.unread,collapsed=folder&&title.parentElement?.classList.contains('is-collapsed');
+    const glow=unread?'note':collapsed&&unreadFolders.has(title.getAttribute('data-path')??'')?'branch':undefined;
+    if(glow){if(title.getAttribute('data-t3-completion-glow')!==glow)title.setAttribute('data-t3-completion-glow',glow);}
+    else if(title.hasAttribute('data-t3-completion-glow'))title.removeAttribute('data-t3-completion-glow');
     setActiveTitle(title.querySelector<HTMLElement>(folder?'.nav-folder-title-content':'.nav-file-title-content'),active||folder&&folders.has(title.getAttribute('data-path')??''));
     let indicator=title.querySelector('.'+NOTE_INDICATOR_CLASS) as HTMLElement|null;
     if(!active&&!input&&!complete){indicator?.remove();continue;}
@@ -69,5 +75,5 @@ export function installFolderIndicators(root:HTMLElement,getLinks:()=>FolderLink
     }
   };
   refresh();
-  return {refresh,dispose(){stopped=true;decorateTabs(new Map());for(const observer of observers.values())observer.disconnect();observers.clear();for(const title of Array.from(root.querySelectorAll<HTMLElement>('.nav-file-title-content[data-t3-active-title], .nav-folder-title-content[data-t3-active-title]')))setActiveTitle(title,false);for(const badge of Array.from(root.querySelectorAll('.'+LINKED_FOLDER_BADGE_CLASS+', .'+NOTE_INDICATOR_CLASS)))badge.remove();}};
+  return {refresh,dispose(){stopped=true;decorateTabs(new Map());for(const observer of observers.values())observer.disconnect();observers.clear();for(const title of Array.from(root.querySelectorAll<HTMLElement>('[data-t3-completion-glow]')))title.removeAttribute('data-t3-completion-glow');for(const title of Array.from(root.querySelectorAll<HTMLElement>('.nav-file-title-content[data-t3-active-title], .nav-folder-title-content[data-t3-active-title]')))setActiveTitle(title,false);for(const badge of Array.from(root.querySelectorAll('.'+LINKED_FOLDER_BADGE_CLASS+', .'+NOTE_INDICATOR_CLASS)))badge.remove();}};
 }

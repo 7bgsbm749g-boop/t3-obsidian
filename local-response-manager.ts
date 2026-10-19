@@ -101,7 +101,10 @@ export class LocalResponseManager {
     for(const runtime of this.jobs.values()){
       const loaded=locations.get(runtime.request.id);
       if(!loaded){
-        runtime.preview.suspend();
+        // Keep an already attached run observable after its tab closes. Final
+        // note writes still require an open editor in finish().
+        if(!runtime.done&&!runtime.stopped&&!runtime.update?.completionVerified)runtime.preview.tick(true);
+        else runtime.preview.suspend();
         if(!runtime.done&&!this.migrations.has(runtime.request.id)&&documents.some(note=>note.path===runtime.request.notePath)){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,runtime.request.notePath);}
         continue;
       }
@@ -177,6 +180,6 @@ export class LocalResponseManager {
   }
   renamed(before:string,after:string){for(const runtime of this.jobs.values())if(runtime.request.notePath===before||runtime.request.notePath.startsWith(before+'/')){runtime.request={...runtime.request,notePath:after+runtime.request.notePath.slice(before.length)};runtime.retryAt=0;}}
   deleted(path:string){for(const runtime of this.jobs.values())if(runtime.request.notePath===path||runtime.request.notePath.startsWith(path+'/'))this.stopLocally(runtime.request.id);}
-  responses(){return [...this.jobs.values()].filter(runtime=>!runtime.done&&!runtime.stopped).map(runtime=>({id:runtime.request.id,notePath:runtime.request.notePath,epoch:1,revision:1,active:!runtime.update?.completionVerified,input:!!runtime.update?.questionActivities?.length,complete:false}));}
+  responses(){return [...this.jobs.values()].filter(runtime=>!runtime.stopped&&(!runtime.done||runtime.update?.phase==='complete')).map(runtime=>({id:runtime.request.id,notePath:runtime.request.notePath,epoch:1,revision:1,completionId:JSON.stringify([runtime.update?.messageId??runtime.request.localMessageId??runtime.request.messageId,runtime.update?.turnId??'']),active:!runtime.update?.completionVerified&&runtime.update?.phase!=='error',input:!runtime.update?.completionVerified&&!!runtime.update?.questionActivities?.length,complete:!!runtime.update?.completionVerified&&runtime.update.phase==='complete'}));}
   dispose(){this.closed=true;for(const runtime of this.jobs.values())runtime.preview.dispose();this.jobs.clear();}
 }

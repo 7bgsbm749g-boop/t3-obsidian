@@ -51,6 +51,20 @@ test('closed notes defer completion until they load again',async()=>{
   const h=fixture();await h.manager.register(h.binding);h.open(false);h.emit();await drain();assert.equal(h.writes(),0);
   h.open(true);h.manager.tick();await drain();assert.equal(h.writes(),1);h.manager.dispose();
 });
+test('a closed response keeps its completion watch and projects only verified success for the explorer',async()=>{
+  const h=fixture();await h.manager.register(h.binding);
+  let ticks=0,suspends=0;
+  const runtime=(h.manager as any).jobs.get(h.binding.id);runtime.preview.tick=()=>ticks++;runtime.preview.suspend=()=>suspends++;
+  h.open(false);h.manager.tick();assert.equal(ticks,1);assert.equal(suspends,0);
+  h.emit('Not verified',false);assert.equal(h.manager.responses()[0].complete,false);
+  h.emit('Final answer');await drain();
+  assert.equal(h.writes(),0);assert.equal(h.manager.responses()[0].complete,true);assert.equal(h.manager.responses()[0].active,false);
+  const identity=h.manager.responses()[0].completionId;
+  h.manager.tick();assert.equal(suspends,1,'Verified runs release their background watch');
+  h.open(true);h.manager.tick();await drain();
+  assert.equal(h.writes(),1);assert.equal(h.manager.responses()[0].complete,true);assert.equal(h.manager.responses()[0].completionId,identity);
+  h.manager.dispose();
+});
 test('explicit Stop saves its frozen local text while completion is waiting for Sync',async()=>{
   const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit('Canonical final');await drain();
   const receipt=await h.manager.stop(h.binding.id,'Frozen visible text');assert.equal(receipt.finalSaved,true);assert.equal(receipt.hostRecorded,true);assert.match(h.read(),/Frozen visible text/);assert.equal(h.writes(),1);h.manager.dispose();

@@ -71,6 +71,7 @@ import {selectionRange} from './inline-steering';
 import {projectThreads,type ThreadChoice} from './thread-target';
 import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,mutateNoteThreads,previousNoteThreads,type NoteThread} from './note-threads';
 import {noteIndicators} from './explorer-responses';
+import {CompletionGlow} from './completion-glow';
 import {folderNotePath,type FolderNotesSettings} from './folder-note-adapter';
 import {installFolderIndicators,type FolderIndicatorController} from './folder-indicator';
 import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,waitForVaultNote,type VaultLocation,type VaultRegistration} from './vault-connection';
@@ -167,6 +168,7 @@ export default class SendToT3 extends Plugin {
   private recentFolderGesture?:{path:string;at:number};
   private paletteChat?:PaletteChatController;
   private folderIndicators?:FolderIndicatorController;
+  private completionGlow?:CompletionGlow;
   private vaultSetup?:Promise<Project>;
   private vaultSetupModal?:VaultSetupModal;
   private vaultRegistrations:Record<string,VaultRegistration>={};
@@ -279,6 +281,8 @@ export default class SendToT3 extends Plugin {
     }
     this.responseBindingReplica=mergeResponseBindingData(data?.responseBindings,await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`));
     this.settings.responseBindings=this.responseBindingReplica;
+    const completionKey=`t3-completion-glow:${this.settings.vaultId}`;
+    this.completionGlow=new CompletionGlow(this.app.loadLocalStorage(completionKey),receipts=>this.app.saveLocalStorage(completionKey,receipts));
     this.smartReplica=mergeSmartSend(data?.smartSend,await deviceState(`smart-send:${this.deviceId}:${this.settings.vaultId}`));this.settings.smartSend=this.smartReplica;
     this.folderLinkReplica=mergeFolderLinkChanges(this.settings.folderLinkChanges,loadFolderLinkChanges(await deviceState(`folder-links:${this.deviceId}:${this.settings.vaultId}`)));
     this.settings.folderLinkChanges=this.folderLinkReplica;
@@ -493,7 +497,13 @@ export default class SendToT3 extends Plugin {
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined'){
         this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>{
           const responses=this.deviceInline?.explorerResponses()??[],known=new Set(responses.map(r=>r.id));
-          return noteIndicators([...responses,...(this.inlineChat?.explorerResponses()??[]).filter(r=>!known.has(r.id))],path=>this.app.vault.getAbstractFileByPath(path) instanceof TFile);
+          const all=[...responses,...(this.inlineChat?.explorerResponses()??[]).filter(r=>!known.has(r.id))];
+          const exists=(path:string)=>this.app.vault.getAbstractFileByPath(path) instanceof TFile;
+          this.completionGlow?.observe(all);
+          const view=this.app.workspace.getActiveViewOfType(MarkdownView),doc=view?.containerEl.ownerDocument;
+          this.completionGlow?.view(view?.file&&doc?.visibilityState==='visible'&&doc.hasFocus()&&view.containerEl.getClientRects().length&&!doc.querySelector('.modal-container')?view.file.path:undefined);
+          const notes=noteIndicators(all,exists);
+          return this.completionGlow?.project(notes,exists)??notes;
         },title=>{
           const plugin=(this.app as App&{plugins?:{plugins?:Record<string,{settings?:FolderNotesSettings}>}}).plugins?.plugins?.['folder-notes'];
           if(!plugin||!title.classList.contains('has-folder-note'))return;
@@ -516,6 +526,11 @@ export default class SendToT3 extends Plugin {
         });
         this.registerInterval(window.setInterval(()=>this.folderIndicators?.refresh(),1000));
         this.registerEvent(this.app.workspace.on('layout-change',()=>this.folderIndicators?.refresh()));
+        this.registerEvent(this.app.workspace.on('file-open',()=>this.folderIndicators?.refresh()));
+        this.registerEvent(this.app.workspace.on('active-leaf-change',()=>this.folderIndicators?.refresh()));
+        this.registerDomEvent(document,'visibilitychange',()=>{this.completionGlow?.view(undefined);this.folderIndicators?.refresh();});
+        this.registerDomEvent(window,'blur',()=>this.completionGlow?.view(undefined));
+        this.registerDomEvent(window,'focus',()=>this.folderIndicators?.refresh());
       }
       this.registerInterval(window.setInterval(()=>void this.checkExternalSettings().catch(error=>new Notice(`T3 settings: ${message(error)}`,12000)),5000));
     });
@@ -559,10 +574,10 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('layout-change',()=>this.inlineChat?.flushAvailable()));
     if(typeof this.app.vault?.on==='function'){
       for(const name of ['create','modify'] as const)this.registerEvent(this.app.vault.on(name as any,(file:TAbstractFile)=>{this.deviceInline?.changed(file.path);void nativeResponses(this.app).changed(file.path).catch(error=>logFailure('note.projection.file-update',error,{notePath:file.path}));}));
-      this.registerEvent(this.app.vault.on('delete',file=>{this.deviceInline?.deleted(file.path);nativeResponses(this.app).deleted(file.path);this.folderIndicators?.refresh();}));
+      this.registerEvent(this.app.vault.on('delete',file=>{this.completionGlow?.relocate(file.path);this.deviceInline?.deleted(file.path);nativeResponses(this.app).deleted(file.path);this.folderIndicators?.refresh();}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.inlineChat?.renamed(oldPath,file.path)));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{if(file instanceof TFolder)void this.renameLinkedFolder(oldPath,file.path).catch(error=>new Notice(`T3 folder links: ${message(error)}`,10000));}));
-      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{nativeResponses(this.app).renamed(oldPath,file.path);this.deviceInline?.renamed(oldPath,file.path);}));
+      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{this.completionGlow?.relocate(oldPath,file.path);nativeResponses(this.app).renamed(oldPath,file.path);this.deviceInline?.renamed(oldPath,file.path);}));
       this.registerEvent(this.app.vault.on('delete',file=>{this.inlineChat?.deleted(file.path);this.questionPaths.delete(file.path);}));
       this.registerEvent(this.app.vault.on('modify',file=>{if(file instanceof TFile&&file.extension==='md')void this.app.vault.read(file).then(text=>{if(questionTargets(text).length||approvalTargets(text).length)this.questionPaths.add(file.path);}).catch(()=>{});}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{for(const path of [...this.questionPaths])if(path===oldPath||path.startsWith(oldPath+'/')){this.questionPaths.delete(path);this.questionPaths.add(file.path+path.slice(oldPath.length));}}));

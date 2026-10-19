@@ -5,6 +5,7 @@ import {decorateLinkedFolders,decorateNoteIndicators} from '../folder-indicator'
 class FakeElement{
   className='';textContent='';title='';parent?:FakeElement;children:FakeElement[]=[];attrs=new Map<string,string>();
   classList={contains:(value:string)=>this.className.split(' ').includes(value)};
+  get parentElement(){return this.parent;}
   ownerDocument={createElement:()=>new FakeElement(),createElementNS:()=>new FakeElement()};
   constructor(path?:string){if(path)this.attrs.set('data-path',path);}
   getAttribute(name:string){return this.attrs.get(name)??null;}
@@ -34,6 +35,24 @@ test('file explorer badges mark exact linked folders, update labels, and never d
   assert.equal(linked.children[0].title,'Linked to T3 Code project: Renamed project');
   decorateLinkedFolders(root as any,[]);assert.equal(linked.children.length,0);
   assert.equal(descendant.children.length,0);
+});
+
+test('completion glow follows collapsed branches and exact folder-note adapters, then clears on viewing',()=>{
+  const file=new FakeElement('App/Nested/Note.md'),folder=new FakeElement('App'),nested=new FakeElement('App/Nested'),sibling=new FakeElement('Application');
+  file.className='nav-file-title';
+  for(const title of [folder,nested,sibling]){title.className='nav-folder-title';title.parent=new FakeElement();title.parent.className='nav-folder is-collapsed';}
+  const root={querySelectorAll:()=>[file,folder,nested,sibling]};
+  const notes=new Map([['App/Nested/Note.md',{active:0,input:0,complete:1,total:1,unread:1}]]);
+  decorateNoteIndicators(root as any,notes);
+  assert.equal(file.getAttribute('data-t3-completion-glow'),'note');
+  for(const title of [folder,nested])assert.equal(title.getAttribute('data-t3-completion-glow'),'branch');
+  assert.equal(sibling.hasAttribute('data-t3-completion-glow'),false);
+  folder.parent!.className='nav-folder';decorateNoteIndicators(root as any,notes);
+  assert.equal(folder.hasAttribute('data-t3-completion-glow'),false,'Expanded ancestors leave the signal on visible descendants');
+  decorateNoteIndicators(root as any,notes,title=>title===folder as any?'App/Nested/Note.md':undefined);
+  assert.equal(folder.getAttribute('data-t3-completion-glow'),'note','Hidden folder notes paint the folder label even when expanded');
+  notes.get('App/Nested/Note.md')!.unread=0;decorateNoteIndicators(root as any,notes);
+  for(const title of [file,folder,nested,sibling])assert.equal(title.hasAttribute('data-t3-completion-glow'),false);
 });
 
 test('badge observers bind only explorer containers and rebind after layout changes',async()=>{

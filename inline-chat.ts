@@ -94,7 +94,7 @@ export class InlineChatManager {
   discardSteering(job:InlineJob,messageId:string){job.steering=job.steering?.filter(input=>input.messageId!==messageId||input.confirmed);this.persist();}
   explorerResponses():ExplorerResponse[]{return this.jobs.filter(job=>!job.hosted||job.phase==='sending'&&!job.finalized).map(job=>{
     const input=!!job.questionFollows?.some(q=>!q.answered&&!q.dismissed);
-    return {id:job.id,notePath:job.path,epoch:0,revision:0,active:['sending','running','reconnecting'].includes(job.phase),input,complete:job.phase==='complete'&&!!job.finalized&&!input};
+    return {id:job.id,notePath:job.path,epoch:0,revision:0,completionId:JSON.stringify([job.messageId,job.turnId??'']),active:['sending','running','reconnecting'].includes(job.phase),input,complete:job.phase==='complete'&&!!job.finalized&&!input};
   });}
   observeLocal(update:DirectInlineUpdate){
     if(!update.request.localOnly)return;
