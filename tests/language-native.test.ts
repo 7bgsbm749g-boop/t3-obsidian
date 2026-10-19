@@ -5,7 +5,7 @@ import {createRequire} from 'node:module';
 import {runInNewContext} from 'node:vm';
 import {EditorState,Facet} from '@codemirror/state';
 import {EditorView} from '@codemirror/view';
-import {language,syntaxTree} from '@codemirror/language';
+import {ensureSyntaxTree,language,syntaxTree} from '@codemirror/language';
 import {javascript} from '@codemirror/lang-javascript';
 const runtime=createRequire(process.cwd()+'/package.json');
 const external=['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight'];
@@ -39,7 +39,11 @@ test('native factory type, late grammar switches, local source mode, raw Reading
   const first={path:'first.ts',extension:'ts',text:'interface A { name: string }'},second={path:'second.tsx',extension:'tsx',text:'const element = <div />;'};
   const firstLoad=view.onLoadFile(first);await tick();assert.equal(view.editMode.cm.state.facet(language).name,'plaintext');assert.equal(pending[0].grammar,'typescript');
   const secondLoad=view.onLoadFile(second);await tick();assert.equal(pending[1].grammar,'tsx');pending[0].resolve(javascript({typescript:true}));await firstLoad;assert.equal(view.editMode.cm.state.facet(language).name,'plaintext');
-  pending[1].resolve(javascript({typescript:true,jsx:true}));await secondLoad;assert.match(syntaxTree(view.editMode.cm.state).toString(),/JSXElement/);
+  pending[1].resolve(javascript({typescript:true,jsx:true}));await secondLoad;
+  const state=view.editMode.cm.state;
+  // CodeMirror's initial background parse can stop at its time budget under
+  // suite load. Verify the complete grammar result, not that partial tree.
+  const parsed=ensureSyntaxTree(state,state.doc.length,1000);assert.ok(parsed);assert.match(parsed.toString(),/JSXElement/);
   await view.setState({source:false},{});assert.equal(view.restored.source,true);
   const raw='const raw = "``````";';view.previewMode.set(raw,true);assert.equal(view.previewMode.get(),raw);assert.ok(view.previewMode.rendered.startsWith('```````tsx\n'));assert.equal(view.previewMode.getFoldInfo().lines,1);
   view.previewMode.applyScroll(8);assert.equal(view.previewMode.readingScroll,9);assert.equal(view.previewMode.getScroll(),8);view.previewMode.setEphemeralState({scroll:4,line:3,match:{content:'raw',matches:[[1,2]]}});assert.equal(view.previewMode.readingState.scroll,5);assert.equal(view.previewMode.readingState.line,4);assert.deepEqual(JSON.parse(JSON.stringify(view.previewMode.readingState.match)),{content:'\nraw',matches:[[2,3]]});

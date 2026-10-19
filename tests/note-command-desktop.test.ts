@@ -78,7 +78,8 @@ test('a second direct command server cannot acquire authority and stop callbacks
   finally{await server.dispose();await cleanup(root);}
 });
 
-test('folder CLI requires exact identities, preserves modes, and replays immutable requests',{timeout:15000},async()=>{
+// This checks eleven real Python CLI processes, not a latency threshold.
+test('folder CLI requires exact identities, preserves modes, and replays immutable requests',{timeout:60000},async()=>{
   const root=await mkdtemp(join(tmpdir(),'t3-folder-command-'));const received:any[]=[];
   const server=await NoteCommandServer.open(root,'.custom',async command=>{received.push(command);return {id:command.id,ok:true};},()=>true);
   const base=['--vault',root,'--config-dir','.custom'];
