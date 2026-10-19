@@ -56,6 +56,13 @@ The retired `scripts/deploy-qlo2.py` must continue to refuse direct use. Never h
 - Capture a screenshot or equivalent durable evidence outside the vault, then record it with `--complete-smoke`. Do not fabricate or record a smoke receipt based only on unit tests.
 - Reloading a client can interrupt active work. Inspect current state first, then use Obsidian's **Reload app without saving** command or a verified plugin disable/enable cycle; `Ctrl+R` alone is not acceptable reload evidence. Do not kill Obsidian blindly.
 
+## Visual changes and evidence
+
+- A request to strengthen an effect preserves the normal appearance between passes unless the user asks to change it. Prefer changing the effect's parameters over replacing text painting or markup.
+- Text fill, clipping, opacity, filters, and compositing can change visible glyph edges even when font, colour, and dimensions match. Treat changes to those properties as rendering changes.
+- Compare rendered pixels against the last accepted version with the effect outside the text, using the same document, position, theme, selection state, and custom colours. Also check that the requested effect is visibly stronger. Computed styles and layout measurements alone do not prove unchanged appearance.
+- Match claims to evidence. A desktop or Chromium check does not prove native iPhone behaviour. Before explaining what changed, inspect the diff; do not claim that normal text is unchanged without a rendered comparison.
+
 ## Worktree and safety
 
 - This repository may contain user changes. Preserve unrelated edits and inspect overlap before patching.

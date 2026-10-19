@@ -102,16 +102,15 @@
   mask-repeat: no-repeat;
   forced-color-adjust: none;
 }
-/* Paint the highlight in the text itself so opaque glyphs cannot hide it.
-   Keep the original colour between passes and the circle's softer highlight. */
-[data-t3-shine="true"] { --send-to-t3-shine-strength: 75%; --send-to-t3-circle-shine-strength: 24%; }
-.theme-light [data-t3-shine="true"] { --send-to-t3-shine-strength: 40%; --send-to-t3-circle-shine-strength: 12%; }
+/* Retain the pre-2.45.9 foreground paint; brighten only the moving highlight. */
+[data-t3-shine="true"] { --send-to-t3-shine-strength: 24%; }
+.theme-light [data-t3-shine="true"] { --send-to-t3-shine-strength: 12%; }
 :is(.nav-file-title, .nav-folder-title, .workspace-tab-header).is-active [data-t3-shine="true"],
 .mtb-title-current[data-t3-shine="true"],
-.mtb-tab-row.is-active [data-t3-shine="true"] { --send-to-t3-shine-strength: 100%; --send-to-t3-circle-shine-strength: 50%; }
+.mtb-tab-row.is-active [data-t3-shine="true"] { --send-to-t3-shine-strength: 50%; }
 .theme-light :is(.nav-file-title, .nav-folder-title, .workspace-tab-header).is-active [data-t3-shine="true"],
 .theme-light .mtb-title-current[data-t3-shine="true"],
-.theme-light .mtb-tab-row.is-active [data-t3-shine="true"] { --send-to-t3-shine-strength: 55%; --send-to-t3-circle-shine-strength: 26%; }
+.theme-light .mtb-tab-row.is-active [data-t3-shine="true"] { --send-to-t3-shine-strength: 26%; }
 @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
   [data-t3-shine="true"],
   [data-t3-circle="true"]::before {
@@ -123,19 +122,19 @@
   }
   @supports ((background-clip: text) or (-webkit-background-clip: text)) and (color: color-mix(in srgb, black, white)) {
     [data-t3-shine="true"] {
-      /* The solid background supplies normal text; the moving layer adds shine.
-         Unsupported browsers retain their ordinary, opaque text. */
+      /* Keep the earlier foreground opacity and glyph painting. A wider white
+         core strengthens the pass without replacing the ordinary text fill. */
       background-image:
-        linear-gradient(to right, transparent, color-mix(in srgb, currentColor, white var(--send-to-t3-shine-strength)), transparent),
+        linear-gradient(to right, transparent, white 40%, white 60%, transparent),
         linear-gradient(currentColor, currentColor);
-      -webkit-text-fill-color: transparent;
+      -webkit-text-fill-color: color-mix(in srgb, currentColor calc(100% - var(--send-to-t3-shine-strength)), transparent);
       -webkit-background-clip: text;
       background-clip: text;
     }
   }
   [data-t3-circle="true"]::before {
     background-image:
-      linear-gradient(to right, transparent, color-mix(in srgb, currentColor, white calc(var(--send-to-t3-circle-shine-strength) * 0.18)), transparent),
+      linear-gradient(to right, transparent, color-mix(in srgb, currentColor, white calc(var(--send-to-t3-shine-strength) * 0.18)), transparent),
       linear-gradient(currentColor, currentColor);
     animation-name: send-to-t3-text-shine, send-to-t3-circle-gap;
     animation-duration: 2.2s, 1.2s;
