@@ -338,7 +338,9 @@ test('removed response drops direct and cached display without restoring a stale
 for(const hidden of [false,true])test(`local native ${hidden?'failure':'stop'} seals all panes before a host reply and survives stale streams and reload`,async()=>{
   const h=fixture(2);h.manager.configurePreviewCache('vault',undefined,async()=>{});await start(h);
   h.manager.stream({request:record().request,messageId:id,sequence:9,body:'**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n\n> Latest partial reply'});
+  h.manager.connection(id,{kind:'sign-in-required'});
   h.manager.stop(id,'Note.md',hidden);
+  assert.equal(h.manager.connectionIssue(id),undefined,'A stopped response must not retain a sign-in action');
   for(let pane=0;pane<2;pane++){
     assert.doesNotMatch(h.visible(pane),/Working|spinner/);
     assert.equal(h.visible(pane).includes('Latest partial reply'),!hidden);

@@ -227,6 +227,7 @@ export class NativeResponseManager {
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
   stoppedBody(id:string){return this.localStops.get(id)?.body;}
   stop(id:string,path?:string,hidden=false,sourceView?:MarkdownView):Promise<void>|void{
+    this.connectionIssues.delete(id);
     const record=this.records.get(id),provisional=this.provisional.get(id),cached=this.cached.get(id);
     const previous=this.localStops.get(id),nextPath=path??previous?.path??provisional?.path??cached?.notePath??record?.state?.notePath??record?.request.notePath??'',nextHidden=hidden||previous?.hidden===true;
     if(previous&&previous.path===nextPath&&previous.hidden===nextHidden){const pending=this.pendingStops.get(id);if(pending)return pending;if(this.stopFailures.has(id)&&this.stoppedStore)return this.retainStop(previous);return;}

@@ -82,6 +82,8 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
  assert.equal(p.nativeAccount,null);assert.equal(p.signInExpired,true);assert.equal(p.signInEmail,'user@example.com');
  assert.equal(p.pairedSessions[c.id],undefined);assert.equal(p.pairedSessions.manual.token,'manual-private');assert.equal(revoked,0,'An already expired login must not invoke remote sign-out');
  assert.equal(local.nativeAccount,null);assert.equal(local.signInEmail,'user@example.com');assert.equal(local.signInExpired,true);
+ const replacementManual={url:c.url,environmentId:c.environmentId,token:'manual-private',expiresAt:Date.now()+600000};p.pairedSessions[c.id]=replacementManual;
+ assert.equal(await p.sessionFor(c.id,true),replacementManual,'A manual session on a shared managed connection works after account expiry');delete p.pairedSessions[c.id];
  assert.ok(ui.buttons.some(button=>button.text==='Refresh authentication'));assert.ok(!ui.buttons.some(button=>['Sign out','Refresh connections'].includes(button.text)));
  assert.deepEqual(ui.inputs,['user@example.com']);assert.match(ui.text.join('\n'),/Each client must sign in separately/);assert.doesNotMatch(ui.text.join('\n'),/Connection setup has not completed|Refresh connections/);
  const manualExpiry=p.pairedSessions.manual.expiresAt;p.pairedSessions.manual.expiresAt=0;assert.match(p.chatReadinessError(),/Refresh authentication/);p.pairedSessions.manual.expiresAt=manualExpiry;
@@ -89,6 +91,7 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
  await p.finishEmailSignIn('123456');assert.equal(p.nativeAccount.userId,'user-native');assert.equal(p.signInExpired,false);assert.equal(p.directAccountReady(),true);assert.equal(dispatches.length,0,'Reauthentication must not resend any prompt');
  const project=p.settings.directProjects.find((p:any)=>p.id==='p-a');await p.send(new File(),project);assert.equal(dispatches.length,2);assert.ok(dispatches[1].text.startsWith('Account connection test'));assert.doesNotMatch(dispatches[1].text,/T3 EVENT HISTORY CAPABILITY/);assert.equal(p.settings.pending.length,0);p.onunload();
  const q=new module.exports.default();await q.onload();assert.equal(q.nativeAccount.userId,'user-native');assert.equal(q.directAccountReady(),false,'reload stays gated until this device refreshes its connections');assert.equal(dispatches.length,2,'Reload must not send work');
+ const sessions=q.pairedSessions;q.pairedSessions={};assert.doesNotMatch(q.chatReadinessError()??'',/Refresh connections/);q.pairedSessions=sessions;
  await q.signOutCloud();assert.equal(q.nativeAccount,null);assert.equal(q.directAccountReady(),false);assert.equal(q.pairedSessions[c.id],undefined);assert.equal(q.pairedSessions.manual.token,'manual-private');assert.equal(revoked,1);
  await q.startEmailSignIn('user@example.com');delayed=true;const verify=q.finishEmailSignIn('123456');await new Promise(r=>setImmediate(r));assert.ok(release);q.cancelCloudLogin();release!({});await verify;assert.equal(q.nativeAccount,null,'Cancelled verification must not restore account');
  for(const s of shared)assert.doesNotMatch(JSON.stringify(s),/native-client-secret|bootstrap-private|environment-private|relay-private|manual-private|123456|privateKey|sessionId/);

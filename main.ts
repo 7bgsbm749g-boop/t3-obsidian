@@ -345,8 +345,9 @@ export default class SendToT3 extends Plugin {
       const store=new HtmlResultStore({read:key=>deviceState(prefix+key),write:async(key,value)=>{await deviceState(prefix+key,value);}},environmentId=>this.inlineThreadAccess(environmentId),async url=>{
         const response=await withTimeout(requestUrl({url,headers:{Accept:'text/html'},throw:false}),30_000);
         return {status:response.status,mimeType:Object.entries(response.headers).find(([key])=>key.toLowerCase()==='content-type')?.[1]??'',bytes:response.arrayBuffer};
-      });
-      this.htmlResults=new HtmlResultViews(this.app,store);this.htmlResults.install(this);
+      },{isSignInError:signInRequired,onDiagnostic:diagnostic=>logEvent('html.result.failure',diagnostic as unknown as Record<string,unknown>,'warning')});
+      this.htmlResults=new HtmlResultViews(this.app,store,{onSignIn:()=>this.openSettings()});this.htmlResults.install(this);
+      this.registerDomEvent(window,'online',()=>{this.deviceInline?.reconnect();void this.htmlResults?.recover();});
     }
     const previewKey=`native-preview:${this.deviceId}:${this.settings.vaultId}`;
     let savedPreviews:unknown;try{savedPreviews=await deviceState(previewKey);}catch(error){logFailure('note.preview.cache-load',error);}
@@ -1084,7 +1085,7 @@ export default class SendToT3 extends Plugin {
     if(hasDeviceSession)return;
     if(this.signInExpired)return REAUTHENTICATE_MESSAGE;
     if(this.connecting)return 'T3 is still connecting your computers. Wait for connection sync to finish.';
-    if(this.nativeAccount&&!this.connectionSyncComplete)return 'Refresh connections in Send to T3 Code settings before sending.';
+    if(this.nativeAccount&&!this.connectionSyncComplete)return 'T3 has not connected on this device. Check the sign-in status in Send to T3 Code settings.';
     if(!this.nativeAccount)return 'Sign in to T3 on this device first. Synced project names do not sign this device in.';
   }
   private chatNote():{path:string;absolutePath?:string}|undefined {
@@ -1609,13 +1610,17 @@ export default class SendToT3 extends Plugin {
     let session=await this.sessionFor(paired.id,forceRefresh),api=await environmentApi(connection,session);
     let renewing:Promise<void>|undefined;
     return {origin:endpoint(paired.url),get expiresAt(){return session?.expiresAt;},api:async(path,payload,options)=>{
-      try{return await api(path,payload,options);}catch(error){
+      const attemptedApi=api;
+      try{return await attemptedApi(path,payload,options);}catch(error){
         // Retrying reads can recover a revoked environment token. Dispatch is
         // never replayed; account expiry is handled by nativeCredential.
         const safe=payload===undefined||['/api/auth/websocket-ticket','/api/orchestration/turn-item','/api/assets/create-url'].includes(path);
         if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed||!safe)throw error;
-        renewing??=(async()=>{session=await this.sessionFor(paired.id,true);api=await environmentApi(connection,session);})().finally(()=>{renewing=undefined;});
-        await renewing;return api(path,payload,options);
+        if(api===attemptedApi){
+          renewing??=(async()=>{session=await this.sessionFor(paired.id,true);api=await environmentApi(connection,session);})().finally(()=>{renewing=undefined;});
+          await renewing;
+        }
+        return api(path,payload,options);
       }
     }};
   }
@@ -1958,7 +1963,7 @@ export default class SendToT3 extends Plugin {
     this.nativeAccount=account;this.nativeToken=undefined;this.emailLogin=null;this.cloudAccount=null;
     this.signInEmail=account.identity;this.signInExpired=false;
     this.mode='direct';await this.save();await this.refreshMachines();
-    if(this.nativeAccount===account){this.deviceInline?.reconnect();}
+    if(this.nativeAccount===account){this.deviceInline?.reconnect();await this.htmlResults?.recover();}
   }
   async nativeCredential():Promise<CloudAccount>{
     const account=this.nativeAccount;if(!account)throw new SignInRequiredError(this.signInExpired?REAUTHENTICATE_MESSAGE:'Sign in to T3 on this device to resume replies.');
@@ -1971,6 +1976,9 @@ export default class SendToT3 extends Plugin {
   }
   async sessionFor(id:string,forceRefresh=false):Promise<PairedSession|undefined>{
     const session=this.pairedSessions[id];const c=this.settings.paired.find(c=>c.id===id);
+    // Managed is shared discovery metadata. A manual credential belongs to
+    // this device and remains usable without an account session.
+    if(session&&!session.accountId&&session.url===c?.url&&session.environmentId===c.environmentId&&session.expiresAt>Date.now()+5000)return session;
     if(c?.managed&&!this.nativeAccount)throw new SignInRequiredError(this.signInExpired?REAUTHENTICATE_MESSAGE:'Sign in to T3 on this device to resume replies.');
     if(session?.accountId&&session.accountId!==this.nativeAccount?.userId)throw Error('Sign in to the T3 account that owns this connection.');
     // Pre-v2 account sessions requested only the two orchestration scopes.
