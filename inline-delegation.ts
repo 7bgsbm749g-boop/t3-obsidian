@@ -41,12 +41,14 @@ export function delegatedTurnIds(state:InlineThreadState,tracked:string[]):strin
  * An open disposition alone is not work: T3 retains it after final completion. */
 export function delegatedWork(state:InlineThreadState,tracked:string[]){
   const turnIds=delegatedTurnIds(state,tracked),turns=turnsFor(state);
-  const sources=new Set(turnIds.filter(id=>turns[id]?.delegatedCompletion?.disposition==='open'));
+  // Run status events can omit delegatedCompletion. Waking app-owned child
+  // records still prove pending work unless the source explicitly closes it.
+  const sources=new Set(turnIds.filter(id=>!turns[id]?.delegatedCompletion||turns[id].delegatedCompletion?.disposition==='open'));
   const children=Object.values(state.subagents??{}).filter(child=>sources.has(child.runId)&&child.origin==='app_owned'&&child.completionWake==='always');
   const active=children.filter(child=>!terminal(child.status));
   const unobserved=children.some(child=>terminal(child.status)&&!['acknowledged','suppressed'].includes(child.completionDelivery?.state??''));
   const delivery=turnIds.some(id=>{
-    const source=turns[id];if(!sources.has(id)||!source.delegatedCompletion?.delivery)return false;
+    const source=turns[id];if(!sources.has(id)||!source?.delegatedCompletion?.delivery)return false;
     const next=Object.values(turns).find(turn=>turn.messageId===source.delegatedCompletion!.delivery!.messageId);
     return !next||next.state==='queued';
   });

@@ -76,3 +76,24 @@ test('terminal run metadata retains the parent link after the delivery message l
  state=event(state,12,'run.updated',{id:'resume',ordinal:2,userMessageId:'delivery',status:'completed',completedAt:at});
  assert.equal(state.turns!.resume.delegatedParentRunId,'source');assert.deepEqual(delegatedTurnIds(state,['source']),['source','resume']);
 });
+
+test('live run status events omit delegation metadata without clearing the source evidence',()=>{
+ let state=initial();
+ state=event(state,11,'run.updated',{id:'source',ordinal:1,status:'completed',userMessageId:'prompt',completedAt:at});
+ assert.equal(state.turns!.source.delegatedCompletion?.disposition,'open');
+ assert.equal(inlineQuestionPhase(state,'source'),'running');assert.equal(finalResponseKey(state,'source'),undefined);
+});
+
+test('a live child is sufficient pending-work evidence before the source delegation record is projected',()=>{
+ const {delegatedCompletion,...withoutDelegation}=run;
+ const state=initial({runs:[withoutDelegation]});
+ assert.equal(state.turns!.source.delegatedCompletion,undefined);
+ assert.equal(inlineQuestionPhase(state,'source'),'running');assert.equal(finalResponseKey(state,'source'),undefined);
+ assert.match(renderInlineTurn(state,'source','thread','running','collapse'),/Waiting for subagents/);
+});
+
+test('partial history can render a tracked response before its run metadata is available',()=>{
+ const state:InlineThreadState={messages:[],activities:[],historyComplete:false};
+ assert.equal(delegatedWork(state,['not-yet-projected']).waiting,false);
+ assert.match(renderInlineTurn(state,'not-yet-projected','thread','running'),/Working/);
+});

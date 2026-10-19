@@ -38,7 +38,8 @@ test('a local reply follows two exact delegated deliveries and verifies only the
  const reads:string[]=[],h=fixture(false,async(_path,payload)=>{reads.push(payload.itemId);return {...finalItem('Combined report'),id:'final-item',runId:'resume-two',messageId:'combined'};});
  h.record.request.localOnly=true;h.record.request.intermediateMode='collapse';h.preview.tick(true);
  const source=completeV2(h,2,'Two agents are running') as any,thread=source.snapshot.thread;
- thread.turns.turn.delegatedCompletion={disposition:'open',delivery:null};
+ // Real live status events can complete the parent before its optional
+ // delegatedCompletion record is present in the reader's state.
  const child=(id:string)=>({id,runId:'turn',origin:'app_owned',completionWake:'always',status:'running'});
  thread.subagents={one:child('one'),two:child('two')};h.item(source);await settle();
  assert.equal(h.updates.at(-1)!.phase,'running');assert.equal(h.updates.at(-1)!.completionVerified,false);assert.match(h.updates.at(-1)!.body,/Waiting for 2 subagents/);assert.deepEqual(reads,[]);

@@ -17,6 +17,10 @@ while waking app-owned children are active, terminal results await observation,
 or a delivery has not yet acquired its run. After a delivery, the same response
 shows the resumed parent's output. A later delivery can return it to waiting.
 Only the final parent result becomes eligible for the exact-item final check.
+Live run-status updates can omit the delegation record. They must not clear
+previously observed delegation metadata. An active waking app-owned child
+also proves pending work before that source record is available. An explicit
+closed disposition still ends the source's delegation lifecycle.
 
 Between parent runs, the active block says **Waiting for subagents** and shows
 the number still running. Its response anchor and subscription remain active.

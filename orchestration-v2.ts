@@ -22,7 +22,7 @@ export function responseRun(run:any,messages:InlineMessage[]=[]):InlineTurn {
   const parent=messages.find(m=>m.id===run.userMessageId)?.delegatedCompletion?.parentRunId;
   return {turnId:run.id,state:runState(run.status),messageId:run.userMessageId,
     requestedAt:run.requestedAt,completedAt:run.completedAt,ordinal:run.ordinal,
-    ...(parent?{delegatedParentRunId:parent}:{}),delegatedCompletion:run.delegatedCompletion,
+    ...(parent?{delegatedParentRunId:parent}:{}),...(Object.hasOwn(run,'delegatedCompletion')?{delegatedCompletion:run.delegatedCompletion}:{}),
     assistantMessageId:messages.filter(m=>m.role==='assistant'&&m.turnId===run.id).at(-1)?.id};
 }
 /** Retain lifecycle evidence without copying child prompts or results. */
