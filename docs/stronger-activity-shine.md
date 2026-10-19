@@ -22,9 +22,11 @@ Check selected, unselected and custom-coloured labels in both themes. Compare
 highlight frames separately to verify increased brightness. Check that
 reduced motion shows ordinary text and that completion removes the effect.
 
-The release also requires a real QLO2 client reload, a visible text-shine check,
-temporary-note cleanup, and immutable smoke evidence. Browser and VPS desktop
-checks do not establish native iPhone rendering. The reported phone was running
+The release also requires a real QLO2 client reload and immutable smoke evidence.
+QLO2 checks use existing content only; synthetic display fixtures belong in a
+separate test vault and must be removed after use. Record test-vault checks
+separately. Browser and VPS desktop checks do not establish native iPhone
+rendering. The reported phone was running
 iOS 26.6.2 with Reduce Motion off and a moving circle; that report establishes
 that its animation was active, but does not establish the original drawing
 fault's exact cause.
