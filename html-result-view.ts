@@ -1,7 +1,8 @@
 import {App,MarkdownRenderChild,Modal,Plugin,editorLivePreviewField,setIcon} from 'obsidian';
 import type {Extension,EditorState} from '@codemirror/state';
 import {HtmlResultError,HtmlResultStore} from './html-result-store';
-import {HTML_RESULT_LANGUAGE,htmlResultBlocks,htmlResultFrameHeight,htmlResultKey,parseHtmlResult,type HtmlResultReference} from './html-results';
+import {HTML_RESULT_LANGUAGE,htmlResultFrameHeight,htmlResultKey,parseHtmlResult,type HtmlResultReference} from './html-results';
+import {HtmlResultIndex} from './html-result-index';
 
 interface Theme {appearance:'dark'|'light';variables:Record<string,string>}
 interface Mounted {root:HTMLElement;reference:HtmlResultReference;refreshTheme():void;recover():Promise<void>;dispose():void}
@@ -55,8 +56,8 @@ export class HtmlResultViews {
     plugin.register(()=>this.dispose());
   }
   refreshTheme(){for(const mounted of this.mounted)mounted.refreshTheme();}
-  /** One attempt per failed mounted result after a successful host access
-   * transition. No timers, polling, or retries of already loaded pages. */
+  /** One attempt per recoverable failure after a successful host access
+   * transition, including a pending request that subsequently fails. */
   async recover(environmentId?:string):Promise<void>{
     if(this.stopped)return;
     await Promise.all([...this.mounted].filter(mounted=>!environmentId||mounted.reference.environmentId===environmentId).map(mounted=>mounted.recover()));
@@ -65,7 +66,7 @@ export class HtmlResultViews {
     const win=doc.defaultView! as Window&typeof globalThis,root=doc.createElement('div');root.className='send-to-t3-html-result';root.dataset.t3HtmlKey=htmlResultKey(reference);root.setAttribute('aria-label',reference.title);
     const surface=root.createDiv({cls:'send-to-t3-html-surface'}),controls=root.createDiv({cls:'send-to-t3-html-controls'});
     let disposed=false,generation=0,frame:HTMLIFrameElement|undefined,blob:string|undefined,reported:number|undefined;
-    let state:'loading'|'ready'|'failed'='loading',failure:HtmlResultError|undefined,loading:Promise<void>|undefined;
+    let state:'loading'|'ready'|'failed'='loading',failure:HtmlResultError|undefined,loading:Promise<void>|undefined,recovery:Promise<void>|undefined;
     const height=()=>{root.style.height=state!=='ready'?'auto':expanded?'100%':htmlResultFrameHeight(reference,root.clientWidth||728,reported)+'px';};
     const showState=(next:typeof state)=>{state=next;root.dataset.t3HtmlState=next;root.setAttribute('aria-busy',String(next==='loading'));controls.hidden=next!=='ready';height();};showState('loading');
     if(!expanded){const expand=controls.createEl('button',{attr:{'aria-label':'Expand HTML','title':'Expand HTML'}});setIcon(expand,'maximize-2');expand.addEventListener('click',()=>new HtmlResultModal(this.app,this,reference).open());}
@@ -109,7 +110,15 @@ export class HtmlResultViews {
       }
       })().finally(()=>{loading=undefined;});return loading;
     };
-    const mounted:Mounted={root,reference,refreshTheme:postTheme,recover:()=>failure?.recoverable?load():Promise.resolve(),dispose:()=>{if(disposed)return;disposed=true;generation++;resize.disconnect();win.removeEventListener('message',receive);frame?.remove();if(blob)win.URL.revokeObjectURL(blob);this.mounted.delete(mounted);}};
+    const recover=():Promise<void>=>{
+      if(disposed||this.stopped||state==='ready')return Promise.resolve();
+      if(recovery)return recovery;
+      // Keep a transition received before the old request fails. Consume it
+      // once, after that request settles; duplicate calls share the same work.
+      recovery=(loading?loading.then(()=>{if(failure?.recoverable)return load();}):failure?.recoverable?load():Promise.resolve()).finally(()=>{recovery=undefined;});
+      return recovery;
+    };
+    const mounted:Mounted={root,reference,refreshTheme:postTheme,recover,dispose:()=>{if(disposed)return;disposed=true;generation++;resize.disconnect();win.removeEventListener('message',receive);frame?.remove();if(blob)win.URL.revokeObjectURL(blob);this.mounted.delete(mounted);}};
     this.mounted.add(mounted);if(!this.stopped)void load();else mounted.dispose();return mounted;
   }
   private extension():Extension {
@@ -125,16 +134,15 @@ export class HtmlResultViews {
       get estimatedHeight(){return 80;}
     }
     const live=(state:EditorState)=>state.field(editorLivePreviewField,false)===true;
-    const decorations=(state:EditorState)=>!live(state)?Decoration.none:Decoration.set(htmlResultBlocks(state.doc.toString()).map(block=>Decoration.replace({widget:new HtmlWidget(block.reference),block:true}).range(block.from,block.to)),true);
-    const field=StateField.define<import('@codemirror/view').DecorationSet>({create:decorations,update:(value,tr)=>{
-      if(live(tr.startState)!==live(tr.state))return decorations(tr.state);
+    const decorations=(index?:HtmlResultIndex)=>!index?Decoration.none:Decoration.set(index.blocks.map(block=>Decoration.replace({widget:new HtmlWidget(block.reference),block:true}).range(block.from,block.to)),true);
+    const create=(state:EditorState)=>{const index=live(state)?HtmlResultIndex.create(state.doc):undefined;return {index,decorations:decorations(index)};};
+    const field=StateField.define<{index?:HtmlResultIndex;decorations:import('@codemirror/view').DecorationSet}>({create,update:(value,tr)=>{
+      if(live(tr.startState)!==live(tr.state))return create(tr.state);
       if(!tr.docChanged||!live(tr.state))return value;
-      // List markers, indentation and plain letters can change the surrounding
-      // Markdown context without touching a fence. Parse once per transaction;
-      // equal HtmlWidgets let CodeMirror retain the existing interactive frame.
-      return decorations(tr.state);
-    },provide:field=>EditorView.decorations.from(field)});
-    return [Prec.highest(field),EditorView.atomicRanges.of(view=>view.state.field(field))];
+      const index=value.index!.update(tr.changes,tr.state.doc);
+      return {index,decorations:decorations(index)};
+    },provide:field=>EditorView.decorations.from(field,value=>value.decorations)});
+    return [Prec.highest(field),EditorView.atomicRanges.of(view=>view.state.field(field).decorations)];
   }
   dispose(){this.stopped=true;for(const mounted of [...this.mounted])mounted.dispose();this.store.dispose();}
 }

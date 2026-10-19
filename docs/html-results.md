@@ -52,12 +52,15 @@ callback opens the host's account UI. After successful sign-in or a successful
 connection recovery transition, the host calls
 `await views.recover(environmentId)`; omit the argument only for an account-wide
 transition. Call this once per successful transition, not on every stream item,
-access request, or diagnostic. Calling it from the access factory before the
-pending viewer has failed does not recover that viewer.
+access request, or diagnostic. If a viewer request is still pending, recovery
+waits for that request and retries once if it fails recoverably. This covers
+sign-in completion before an older request reports its expired access.
 
 Each call makes one attempt for failed connection/sign-in/HTTP cards in that
-environment. Concurrent calls and duplicate mounts share pending work. Loaded
-frames, disposed views, and failed identity/content verification do not retry.
+environment. Concurrent calls and duplicate mounts share pending work. A queued
+transition is consumed by that one retry, including when the retry also fails;
+it never starts a retry loop. Loaded frames, disposed views, and failed
+identity/content verification do not retry.
 Manual **Retry** remains available for all failures. There are no background
 retry timers or automatic download loops. The optional callbacks default to no
 action, so existing callers remain compatible; the host must wire the recovery
@@ -68,11 +71,14 @@ transition to enable automatic recovery.
 Reading mode uses a registered Markdown code-block processor. Live Preview uses
 direct CodeMirror block decorations and atomic ranges. The source fence stays
 visible in Source mode. Widget identities survive ordinary edits and streaming
-updates through widget equality. Each Live Preview document change reparses
-Markdown once so that list markers, indentation, or plain letters which change
-an HTML block's context also remove or restore the correct widget. Non-document
-transactions keep the current decoration set. Each viewer uses its own owner
-document, including popouts.
+updates through widget equality. A Live Preview index scans changed lines for
+candidate fences and reuses unchanged Markdown syntax fragments. Full context
+is retained so list markers, indentation, or plain letters which change an HTML
+block's context still remove or restore the correct widget. Remark validates
+only individual candidate fences, with unchanged reference values reused on
+later edits. Notes without candidate fences do not start the Markdown parser.
+Non-document transactions keep the current decoration set. Each viewer uses its
+own owner document, including popouts.
 
 The viewer loads the prepared T3 document from a local blob URL in an iframe with
 `sandbox="allow-scripts allow-forms"`. It never allows same-origin access.
@@ -102,7 +108,13 @@ tests cover compact state transitions, explicit sign-in, scoped one-shot
 recovery, unchanged sandbox flags, coalesced loads and disposal. Editor probes
 load the production extension and run real CodeMirror transactions for list and
 HTML-block context edits, normal typing, newlines, mode changes, replacement and
-restoration. The asset adapter has a focused RPC check.
+restoration. Differential tests compare incremental references with the full
+Markdown parser through structural edits. Pending-load tests cover late auth
+failures, shared recovery, one retry, successful loads, verification failures
+and disposal. The asset adapter has a focused RPC check. Run the synthetic edit
+benchmark with `npx tsx validation/html-result-edit-benchmark.ts LABEL OUTPUT.json`;
+it records transactions at three positions in a 52 KiB note, with and without
+one reference, and checks widget retention throughout.
 
 Build an isolated real-client fixture outside all source and synced vaults:
 

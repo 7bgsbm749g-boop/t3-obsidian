@@ -100,6 +100,43 @@ test('disposed viewers cannot publish a pending download or respond to recovery'
  mounted.dispose();finish(page);await flush();await views.recover();assert.equal(gets,1);assert.equal(document.blobs.size,0);assert.equal(mounted.root.find('iframe'),undefined);views.dispose();
 });
 
+test('access recovery during a pending cold load retries its later auth failure once across mounts',async()=>{
+ const module=await production(),document=documentFixture();let reject!:(error:unknown)=>void,attempts=0,downloads=0;
+ const oldAccess=new Promise<never>((_,fail)=>{reject=fail;});
+ const store=new module.HtmlResultStore({read:async()=>undefined,write:async()=>{}},async()=>{
+  if(++attempts===1)return oldAccess;
+  return {origin:'https://fixture.test',api:async(route:string)=>route==='/api/orchestration/turn-item'?tool():{relativeUrl:'/api/assets/page',expiresAt:Date.now()+60_000}};
+ },async()=>{downloads++;return {status:200,mimeType:'text/html',bytes};});
+ const views=new module.HtmlResultViews({},store),mounts=[views.mount(reference,document.doc),views.mount(reference,document.doc)];
+ await flush();assert.equal(attempts,1);
+ const recoveries=[views.recover(reference.environmentId),views.recover(reference.environmentId)];
+ await flush();assert.equal(attempts,1,'recovery waits for the old pending request');
+ reject(new module.HtmlResultError('sign-in','access'));await Promise.all(recoveries);await flush();
+ assert.equal(attempts,2);assert.equal(downloads,1);assert.ok(mounts.every(mounted=>mounted.root.dataset.t3HtmlState==='ready'));
+ const frames=mounts.map(mounted=>mounted.root.find('iframe'));await views.recover();assert.equal(attempts,2);
+ assert.deepEqual(mounts.map(mounted=>mounted.root.find('iframe')),frames);views.dispose();
+});
+
+test('pending recovery is bounded and cannot retry a success, a verification failure, or a disposed view',async()=>{
+ const module=await production();
+ for(const outcome of ['ready','sign-in','connection','http','verification','disposed']){
+  const document=documentFixture();let resolve!:(html:string)=>void,reject!:(error:unknown)=>void,gets=0;
+  const pending=new Promise<string>((pass,fail)=>{resolve=pass;reject=fail;});
+  const views=new module.HtmlResultViews({},{get:()=>{gets++;return gets===1?pending:gets===2?Promise.reject(new module.HtmlResultError('sign-in','access')):Promise.resolve(page);},dispose(){}});
+  const mounted=views.mount(reference,document.doc),recoveries=[views.recover(),views.recover()];
+  if(outcome==='disposed')mounted.dispose();
+  if(outcome==='ready')resolve(page);else reject(new module.HtmlResultError(outcome==='disposed'?'sign-in':outcome,'access'));
+  await Promise.all(recoveries);for(let i=0;i<3;i++)await flush();
+  const retries=['sign-in','connection','http'].includes(outcome);
+  assert.equal(gets,retries?2:1,outcome+' must consume at most one queued recovery');
+  if(retries){
+   assert.equal(mounted.root.dataset.t3HtmlState,'failed');assert.equal(mounted.root.dataset.t3HtmlError,'sign-in');assert.ok(mounted.root.button('Retry'));
+   await views.recover();assert.equal(gets,3,'a later access transition can recover a failed one-shot retry');assert.equal(mounted.root.dataset.t3HtmlState,'ready');
+  }
+  views.dispose();assert.equal(document.blobs.size,0);
+ }
+});
+
 async function editorFixture(){
  const module=await production(),views=new module.HtmlResultViews({workspace:{on:()=>({})}},{dispose(){}});let extension:any;
  views.install({registerMarkdownCodeBlockProcessor(){},registerEditorExtension:(value:any)=>{extension=value;},registerEvent(){},register(){}});
