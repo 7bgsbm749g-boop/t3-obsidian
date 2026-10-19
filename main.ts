@@ -1946,7 +1946,8 @@ export default class SendToT3 extends Plugin {
     const c:PairedConnection=existing??{id:randomId(),name:name.trim()||result.descriptor.label,url:result.session.url,environmentId:result.descriptor.environmentId};
     if(!existing)this.settings.paired.push(c);
     this.pairedSessions[c.id]=result.session;this.settings.directScanId=c.id;this.mode='direct';await this.save();
-    this.syncProjectSources();await this.projectDiscovery?.refresh(true);
+    this.syncProjectSources();this.deviceInline?.reconnect();await this.htmlResults?.recover(c.environmentId);
+    await this.projectDiscovery?.refresh(true);
   }
   pairingStatus(c:PairedConnection){const s=this.pairedSessions[c.id];return !s?'Pair on this device':s.expiresAt<=Date.now()?'Pairing expired':`Paired on this device until ${new Date(s.expiresAt).toLocaleDateString()}`;}
   async startEmailSignIn(email:string){

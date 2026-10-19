@@ -51,5 +51,7 @@ Windows, or two-machine Sync behavior.
 Independent review also exposed a valid manual session on a shared managed
 connection being blocked by an expired account. Device-local manual sessions
 now remain usable when their exact URL, environment and expiry are valid.
-The account regression test covers this case. HTML pending-load and edit-cost
+Successful manual pairing also wakes paused responses and retries failed HTML
+for that environment. Rejected pairing does not trigger recovery. The account
+regression test covers these cases. HTML pending-load and edit-cost
 review fixes are described in `html-review-fixes-20261019.md`.

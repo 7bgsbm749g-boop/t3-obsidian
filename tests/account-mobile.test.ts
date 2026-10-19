@@ -38,8 +38,8 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
   if(url.startsWith('https://manual.example')){if(url.endsWith('/environment'))return response({environmentId:'manual',label:'Manual',orchestrationProtocolVersion:2});assert.equal(o.headers.Authorization,'Bearer manual-private');return response({projects:[],threads:[]});}
   const id=new URL(url).hostname[0];
   if(url.endsWith('/environment'))return response({environmentId:id,label:id,orchestrationProtocolVersion:2});
-  if(url.endsWith('/oauth/token')){assert.equal(new URLSearchParams(o.body).get('scope'),PLUGIN_SCOPE);return response({token_type:'DPoP',access_token:'environment-private-'+id,expires_in:600,scope:PLUGIN_SCOPE});}
-  assert.equal(o.headers.Authorization,'DPoP environment-private-'+id);assert.ok(o.headers.DPoP);
+  if(url.endsWith('/oauth/token')){const form=new URLSearchParams(o.body);assert.equal(form.get('scope'),PLUGIN_SCOPE);const manual=form.get('subject_token')==='synthetic-code';return response({token_type:manual?'Bearer':'DPoP',access_token:manual?'manual-private-'+id:'environment-private-'+id,expires_in:600,scope:PLUGIN_SCOPE});}
+  if(o.headers.Authorization!=='Bearer manual-private-'+id){assert.equal(o.headers.Authorization,'DPoP environment-private-'+id);assert.ok(o.headers.DPoP);}
   if(url.endsWith('/websocket-ticket'))return response({ticket:'ephemeral'});
   if(url.endsWith('/shell'))return response({projects:[{id:'p-'+id,title:'Project '+id,workspaceRoot:'/',defaultModelSelection:{instanceId:'codex',model:'default'}}],threads:[]});
   dispatches.push(JSON.parse(o.body));return response({});
@@ -87,6 +87,14 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
  assert.ok(ui.buttons.some(button=>button.text==='Refresh authentication'));assert.ok(!ui.buttons.some(button=>['Sign out','Refresh connections'].includes(button.text)));
  assert.deepEqual(ui.inputs,['user@example.com']);assert.match(ui.text.join('\n'),/Each client must sign in separately/);assert.doesNotMatch(ui.text.join('\n'),/Connection setup has not completed|Refresh connections/);
  const manualExpiry=p.pairedSessions.manual.expiresAt;p.pairedSessions.manual.expiresAt=0;assert.match(p.chatReadinessError(),/Refresh authentication/);p.pairedSessions.manual.expiresAt=manualExpiry;
+ const deviceInline=p.deviceInline,htmlResults=p.htmlResults;let reconnects=0;const recoveredEnvironments:string[]=[];
+ p.deviceInline={reconnect:()=>{reconnects++;}};p.htmlResults={recover:async(environmentId:string)=>{recoveredEnvironments.push(environmentId);}};
+ await assert.rejects(p.pairConnection('Manual laptop','https://a.example/pair#token=synthetic-code','','other-environment'),/no longer matches the selected T3 machine/);
+ assert.equal(reconnects,0);assert.deepEqual(recoveredEnvironments,[],'Rejected pairing cannot trigger recovery');
+ await p.pairConnection('Manual laptop','https://a.example/pair#token=synthetic-code','','a');
+ assert.equal(p.nativeAccount,null);assert.equal((await p.sessionFor(c.id,true)).accountId,undefined);
+ assert.equal(reconnects,1);assert.deepEqual(recoveredEnvironments,['a'],'Successful manual pairing wakes paused replies and failed HTML on that environment');assert.equal(dispatches.length,0);
+ p.deviceInline=deviceInline;p.htmlResults=htmlResults;delete p.pairedSessions[c.id];
  await ui.buttons.find(button=>button.text==='Refresh authentication')!.run!();assert.equal(p.emailLogin.email,'user@example.com');
  await p.finishEmailSignIn('123456');assert.equal(p.nativeAccount.userId,'user-native');assert.equal(p.signInExpired,false);assert.equal(p.directAccountReady(),true);assert.equal(dispatches.length,0,'Reauthentication must not resend any prompt');
  const project=p.settings.directProjects.find((p:any)=>p.id==='p-a');await p.send(new File(),project);assert.equal(dispatches.length,2);assert.ok(dispatches[1].text.startsWith('Account connection test'));assert.doesNotMatch(dispatches[1].text,/T3 EVENT HISTORY CAPABILITY/);assert.equal(p.settings.pending.length,0);p.onunload();
