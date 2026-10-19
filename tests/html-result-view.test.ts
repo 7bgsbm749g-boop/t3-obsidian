@@ -158,6 +158,19 @@ test('production state field handles plain letters changing an HTML block separa
  state=state.update({changes:{from:6,to:10,insert:''}}).state;assert.equal(f.ranges(state).length,1);
 });
 
+test('production state field matches Remark around definitions and empty block quotes',async()=>{
+ const f=await editorFixture(),block=renderHtmlResult(reference);
+ for(const [before,after,count] of [['[a]: /x\ntext\n','[a]: /x\n<span>\n',1],['>\ntext\n','>\n<span>\n',0]] as const){
+  assert.equal(f.ranges(f.state(after+block)).length,count,'initial creation');
+  let state=f.state(before+block);assert.equal(f.ranges(state).length,1);
+  for(const prefix of [after,before,after,before]){
+   state=state.update({changes:{from:0,to:state.doc.length-block.length,insert:prefix}}).state;
+   const ranges=f.ranges(state);assert.equal(ranges.length,prefix===after?count:1,'context replacement or reverse edit');
+   for(const range of ranges)assert.equal(state.doc.sliceString(range.from,range.to),block);
+  }
+ }
+});
+
 test('production state field preserves equivalent widgets through normal typing, newline, mode changes and restoration',async()=>{
  const f=await editorFixture(),text='Before\n\n'+renderHtmlResult(reference)+'\n\nAfter';let state=f.state(text);
  const original=f.ranges(state)[0];assert.equal(original.widget.estimatedHeight,80);
