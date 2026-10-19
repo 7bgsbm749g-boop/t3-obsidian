@@ -27,3 +27,29 @@ the wait and prove that the verified final save keeps it. These tests do not
 establish native iPhone, Android, or Windows behavior. Release smoke evidence must
 name the real client and distinguish synthetic authentication from a real account
 renewal.
+
+## Native validation, 2026-10-19
+
+The isolated native Obsidian fixture uses the production response manager,
+stream controls and settings form with synthetic account and T3 APIs. Native
+clicks opened **Refresh authentication** from the rectangular response action,
+reused `synthetic@example.invalid`, submitted a synthetic verification code and
+resumed the completed response. The canonical final item was saved once; the
+ordinary line entered during the wait remained, and the anchor and Sign in
+action disappeared. No real account was signed out or renewed in this fixture.
+
+Screenshots, all five successful checks and cleanup proof are retained outside
+the vault at
+`/home/ubuntu/backups/send-to-t3-code/sign-in-recovery-lab-20261019-a/`.
+The three temporary fixture notes were deleted through Obsidian's file explorer.
+The HTML cold-receiver fixture and its cleanup proof are retained at
+`/home/ubuntu/backups/send-to-t3-code/html-phone-switch-20261019-5096443c-1/`.
+Its fifteen native checks include a 64-pixel failed card and recovery with an
+independent empty receiving cache. Neither fixture establishes native mobile,
+Windows, or two-machine Sync behavior.
+
+Independent review also exposed a valid manual session on a shared managed
+connection being blocked by an expired account. Device-local manual sessions
+now remain usable when their exact URL, environment and expiry are valid.
+The account regression test covers this case. HTML pending-load and edit-cost
+review fixes are described in `html-review-fixes-20261019.md`.
