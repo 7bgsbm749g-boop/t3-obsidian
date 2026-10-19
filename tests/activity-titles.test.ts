@@ -36,7 +36,7 @@ test('active notes shine through ancestors without matching sibling folder prefi
   const badge=file.row.children[1];assert.equal(badge.children.length,1);assert.equal(badge.children[0].className,'send-to-t3-note-input');
   notes.set('App/Nested/Note.md',note(0));decorateNoteIndicators(root as any,notes);
   for(const item of [file,parent,nested])assert.equal(item.label.hasAttribute('data-t3-active-title'),false);
-  assert.equal(file.row.children[1].children[0].className,'send-to-t3-note-complete');
+  assert.equal(file.row.children.length,1,'Completed responses keep no persistent badge beside the existing label');
 });
 
 test('tabs follow exact note paths across duplicate names, multiple panes, rename and completion',()=>{

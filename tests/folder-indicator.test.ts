@@ -98,7 +98,8 @@ test('note decorations follow transitions, coexist with links, and project folde
   notes.set('App/App.md',{active:0,input:1,complete:2,total:3});decorateNoteIndicators(root as any,notes,resolve);
   assert.equal(folder.children[0].getAttribute('data-t3-state'),'input');
   notes.set('App/App.md',{active:0,input:0,complete:3,total:3});decorateNoteIndicators(root as any,notes,resolve);
-  assert.equal(file.children[0].getAttribute('data-t3-state'),'complete');
+  assert.equal(file.children.length,0,'Completion removes the old badge; unread attention uses only the title glow');
+  assert.equal(folder.children.length,0,'Folder notes do not retain a completed badge');
   decorateNoteIndicators(root as any,notes);assert.equal(folder.children.length,0,'Optional integration can disappear');
   notes.clear();decorateNoteIndicators(root as any,notes,resolve);assert.equal(file.children.length,0);
 });

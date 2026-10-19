@@ -36,23 +36,23 @@ export function decorateNoteIndicators(root:ParentNode,notes:Map<string,NoteIndi
     const folder=title.classList.contains('nav-folder-title');
     const path=folder?folderNote(title):title.getAttribute('data-path')??'';
     const note=path?notes.get(path):undefined;
-    const active=!!note?.active,input=!!note?.input,complete=!!note&&note.complete===note.total&&!active&&!input;
+    const active=!!note?.active,input=!!note?.input;
     const unread=!!note?.unread,collapsed=folder&&title.parentElement?.classList.contains('is-collapsed');
     const glow=unread?'note':collapsed&&unreadFolders.has(title.getAttribute('data-path')??'')?'branch':undefined;
     if(glow){if(title.getAttribute('data-t3-completion-glow')!==glow)title.setAttribute('data-t3-completion-glow',glow);}
     else if(title.hasAttribute('data-t3-completion-glow'))title.removeAttribute('data-t3-completion-glow');
     setActiveTitle(title.querySelector<HTMLElement>(folder?'.nav-folder-title-content':'.nav-file-title-content'),active||folder&&folders.has(title.getAttribute('data-path')??''));
     let indicator=title.querySelector('.'+NOTE_INDICATOR_CLASS) as HTMLElement|null;
-    if(!active&&!input&&!complete){indicator?.remove();continue;}
+    if(!active&&!input){indicator?.remove();continue;}
     if(!indicator){indicator=title.ownerDocument.createElement('span');indicator.className=NOTE_INDICATOR_CLASS;indicator.setAttribute('role','img');title.appendChild(indicator);}
-    const mode=[active?'active':'',input?'input':complete?'complete':''].filter(Boolean).join(' ');
+    const mode=[active?'active':'',input?'input':''].filter(Boolean).join(' ');
     if(indicator.getAttribute('data-t3-state')!==mode){
       indicator.setAttribute('data-t3-state',mode);
       const children:HTMLElement[]=[];
       for(const state of mode.split(' ').filter(state=>state!=='active')){const dot=title.ownerDocument.createElement('span');dot.className=`send-to-t3-note-${state}`;dot.setAttribute('aria-hidden','true');children.push(dot);}
       indicator.replaceChildren(...children);
     }
-    const label=[active?`${note!.active} active T3 ${note!.active===1?'response':'responses'}`:'',input?`${note!.input} T3 ${note!.input===1?'response needs':'responses need'} input`:complete?`${note!.complete} completed T3 ${note!.complete===1?'response':'responses'}`:''].filter(Boolean).join('; ');
+    const label=[active?`${note!.active} active T3 ${note!.active===1?'response':'responses'}`:'',input?`${note!.input} T3 ${note!.input===1?'response needs':'responses need'} input`:''].filter(Boolean).join('; ');
     if(indicator.title!==label)indicator.title=label;
     if(indicator.getAttribute('aria-label')!==label)indicator.setAttribute('aria-label',label);
   }

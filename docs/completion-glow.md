@@ -7,6 +7,8 @@ its descendants. Folder Notes uses the existing installed-plugin adapter,
 including inside-folder and parent-folder storage, configured names, supported
 extensions, exclusions and detached folders. A hidden folder note therefore
 lights its folder label, including when that folder is expanded.
+Completion does not add a green dot or a persistent status badge. The glow
+is its only explorer completion signal.
 
 A focused, visible Markdown note acknowledges its completions after at least
 750 ms. Background tabs, a hidden document, an unfocused window and modal
@@ -27,6 +29,8 @@ colour and an underline. Running-response shine and linked-folder badges keep
 their existing functions.
 
 Verification: `npm run build`, `npm test`, then the supported QLO2 release,
-fresh Sync scan, real client reload, visible file/folder/folder-note checks,
-view acknowledgement and an immutable smoke receipt. Desktop rendering does
-not establish native iOS or Android coverage.
+fresh Sync scan and real client reload. File/folder/folder-note fixtures and
+view acknowledgement checks belong in a separate test vault. QLO2 release
+checks create no test content. Keep evidence outside every vault and record
+an immutable smoke receipt. Desktop rendering does not establish native iOS
+or Android coverage.

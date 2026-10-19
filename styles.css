@@ -18,17 +18,15 @@
   overflow: hidden;
   clip-path: inset(50%);
 }
-.send-to-t3-note-input,
-.send-to-t3-note-complete { width: 7px; height: 7px; border-radius: 50%; }
+.send-to-t3-note-input { width: 7px; height: 7px; border-radius: 50%; }
 .send-to-t3-note-input { background: var(--color-blue, #448aff); }
-.send-to-t3-note-complete { background: var(--color-green, #4caf50); }
 
 /* Unread completions follow the theme accent, independently of running shine. */
 [data-t3-completion-glow] > :is(.nav-file-title-content, .nav-folder-title-content) {
   color: var(--text-accent, var(--interactive-accent, #a882ff));
   text-shadow: 0 0 0.45em currentColor;
 }
-[data-t3-completion-glow="branch"] > .nav-folder-collapse-indicator {
+[data-t3-completion-glow="branch"] > :is(.nav-folder-collapse-indicator, .collapse-icon) {
   color: var(--text-accent, var(--interactive-accent, #a882ff));
   filter: drop-shadow(0 0 3px currentColor);
 }
@@ -44,7 +42,7 @@
   [data-t3-completion-glow] > :is(.nav-file-title-content, .nav-folder-title-content):not([data-t3-active-title]) {
     animation: send-to-t3-completion-text 2.8s ease-in-out infinite;
   }
-  [data-t3-completion-glow="branch"] > .nav-folder-collapse-indicator {
+  [data-t3-completion-glow="branch"] > :is(.nav-folder-collapse-indicator, .collapse-icon) {
     animation: send-to-t3-completion-chevron 2.8s ease-in-out infinite;
   }
 }
@@ -54,7 +52,7 @@
     text-shadow: none;
     text-decoration: underline;
   }
-  [data-t3-completion-glow="branch"] > .nav-folder-collapse-indicator { color: LinkText; filter: none; }
+  [data-t3-completion-glow="branch"] > :is(.nav-folder-collapse-indicator, .collapse-icon) { color: LinkText; filter: none; }
 }
 
 .send-to-t3-inline-spinner { display: none; }
