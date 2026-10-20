@@ -29,6 +29,19 @@ test('established vault startup and device-only saves do not rewrite synced sett
   assert.equal(h.saves(),1,'an actual shared setting change is persisted');
 });
 
+test('project creation locations sync as complete machine/path choices and persist through restart',async()=>{
+  const h=await harness({vaultId:'vault'});
+  const locations=[{connectionId:'laptop',environmentId:'windows',parentPath:'C:\\Projects',selectedAt:'2026-10-20T12:00:00Z'}];
+  h.setCurrent({...h.current(),projectCreationLocations:locations});await h.plugin.onExternalSettingsChange();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.projectCreationLocations)),locations);
+  h.plugin.settings.completion.archiveFolder='Local';await h.plugin.save();
+  const restarted=await harness(h.current());assert.deepEqual(JSON.parse(JSON.stringify(restarted.plugin.settings.projectCreationLocations)),locations);
+  h.plugin.settings.projectCreationLocations=[{connectionId:'vps',environmentId:'linux',parentPath:'/work',selectedAt:'2026-10-20T13:00:00Z'}];
+  const newer=[{connectionId:'laptop',environmentId:'windows',parentPath:'D:\\Projects',selectedAt:'2026-10-20T14:00:00Z'}];
+  h.setCurrent({...h.current(),projectCreationLocations:newer});await h.plugin.save();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.projectCreationLocations)),newer);
+});
+
 test('shared saves preserve a disk folder link not edited in the local snapshot',async()=>{
   const h=await harness({vaultId:'vault'});
   const link={id:'link',folderPath:'Remote',projectId:'project',projectTitle:'Repository',connectionId:'c',workspaceRoot:'/repo',self:false};

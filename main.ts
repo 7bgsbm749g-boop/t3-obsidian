@@ -78,8 +78,8 @@ import {CompletionGlow} from './completion-glow';
 import {folderNotePath,type FolderNotesSettings} from './folder-note-adapter';
 import {installFolderIndicators,type FolderIndicatorController} from './folder-indicator';
 import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,waitForVaultNote,type VaultLocation,type VaultRegistration} from './vault-connection';
+import {loadProjectCreationLocations,rememberProjectCreationLocation,projectCreationDefaults,workspaceParentPath,workspaceChildPath,type ProjectCreationLocation} from './workspace-picker';
 import {ProjectCreateModal,ProjectCreationCancelled,workspaceInsideVault,type ProjectLocation} from './project-create-ui';
-import {workspaceChildPath} from './workspace-picker';
 import {VaultSetupModal,VaultSetupCancelled,type VaultMachine} from './vault-setup-ui';
 import {EventSubscriptions,type EventTarget,type NoteEventSnapshot,notificationPrompt,inEventScope,observedPropertyEquals} from './event-subscriptions';
 import {existingThreadTurn,threadIsActive,responseOwnsActiveTurn} from './thread-target';
@@ -109,7 +109,7 @@ const NEW_FOLDER_PROJECT='folder:new';
 const VAULT_PROJECT='vault:root';
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
 type PreparedNote={content:string;images:Awaited<ReturnType<typeof collectImages>>};
-interface Settings {noteContexts?:NoteContextRecord[];smartSend?:SmartSendData;responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
+interface Settings {projectCreationLocations:ProjectCreationLocation[];noteContexts?:NoteContextRecord[];smartSend?:SmartSendData;responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; orchestration: OrchestrationSettings; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
 export default class SendToT3 extends Plugin {
   declare settings: Settings;
   mode: 'desktop'|'direct' = 'desktop';
@@ -275,7 +275,7 @@ export default class SendToT3 extends Plugin {
     this.signInEmail=typeof local?.signInEmail==='string'?local.signInEmail:this.nativeAccount?.identity??'';
     this.signInExpired=local?.signInExpired===true&&!this.nativeAccount;
     this.vaultRegistrations=local?.vaultRegistrations??{};
-    this.settings = {noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
+    this.settings = {projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads === true},inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder ?? 'Archive/T3 Code'},completionJobs:state?.completionJobs??(!Platform.isMobile?data?.completionJobs:[])??[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
     if(!Platform.isMobile){
       const key=`t3-connection-recovery-v1:${this.settings.vaultId}`;
       this.connectionRecovery=new ConnectionRecovery({
@@ -1042,7 +1042,7 @@ export default class SendToT3 extends Plugin {
     const restoreNoteContexts=JSON.stringify(mergeNoteContexts(data.noteContexts))!==JSON.stringify(this.settings.noteContexts);
     const restoreResponseBindings=JSON.stringify(incomingBindings)!==JSON.stringify(this.responseBindingReplica);
     await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`,this.responseBindingReplica);
-    for(const key of ['inlineStreaming','orchestration','completion','threadTitleGeneration','replyFolders','codebase'] as const)this.settings[key]=adopted[key];
+    for(const key of ['inlineStreaming','orchestration','completion','threadTitleGeneration','replyFolders','codebase','projectCreationLocations'] as const)this.settings[key]=adopted[key];
     const diskLinks=loadFolderLinks(data),diskChanges=loadFolderLinkChanges(data.folderLinkChanges);
     this.folderLinkReplica=mergeFolderLinkChanges(this.folderLinkReplica,diskChanges);
     this.settings.folderLinkChanges=this.folderLinkReplica;
@@ -1780,9 +1780,9 @@ export default class SendToT3 extends Plugin {
     return this.chatTarget(notePath,undefined,true,overrideKey);
   }
   vaultMachines():VaultMachine[]{
-    const remote=this.settings.paired.filter((c,index,list)=>list.findIndex(other=>other.environmentId===c.environmentId)===index).map(c=>({id:c.id,name:c.name,detail:this.machineErrors[c.environmentId]?'Unavailable — retry connection':undefined}));
-    const discovered=this.cloudMachines.filter(m=>!this.settings.paired.some(c=>c.environmentId===m.environmentId)).map(m=>({id:'environment:'+m.environmentId,name:m.name,detail:this.machineErrors[m.environmentId]?'Unavailable — retry connection':undefined}));
-    return [...(!Platform.isMobile?[{id:'local',name:'This computer',local:true}]:[]),...remote,...discovered];
+    const remote=this.settings.paired.filter((c,index,list)=>list.findIndex(other=>other.environmentId===c.environmentId)===index).map(c=>({id:c.id,name:c.name,environmentId:c.environmentId,detail:this.machineErrors[c.environmentId]?'Unavailable — retry connection':undefined}));
+    const discovered=this.cloudMachines.filter(m=>!this.settings.paired.some(c=>c.environmentId===m.environmentId)).map(m=>({id:'environment:'+m.environmentId,name:m.name,environmentId:m.environmentId,detail:this.machineErrors[m.environmentId]?'Unavailable — retry connection':undefined}));
+    return [...(!Platform.isMobile?[{id:'local',name:'This computer',local:true,environmentId:this.eventLocalEnvironmentId}]:[]),...remote,...discovered];
   }
   async configureVaultRoot():Promise<Project>{
     if(this.vaultSetup)return this.vaultSetup;
@@ -2151,10 +2151,11 @@ export default class SendToT3 extends Plugin {
   }
   async saveFolderLink(folder:TFolder,project:Project,self:boolean,verified?:FolderLink){
     if((folder.path==='/'?this.app.vault.getRoot():this.app.vault.getAbstractFileByPath(folder.path))!==folder)throw Error('This folder no longer exists. Choose a folder again.');
-    const previous=this.settings.folderLinks;
+    const previous=this.settings.folderLinks,previousLocations=this.settings.projectCreationLocations;
     const existing=previous.find(link=>link.folderPath===folder.path&&link.projectId===project.id&&link.connectionId===(project.connectionId??''));
     this.settings.folderLinks=upsertFolderLink(previous,verified??{id:existing?.id??randomId(),folderPath:folder.path,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self,environmentId:this.connection(project).environmentId??await this.localInlineEnvironment(),vaultId:this.settings.vaultId,...(existing?.replyFolders?{replyFolders:existing.replyFolders}:{})});
-    try{await this.save();this.refreshFolderIndicators();}catch(error){this.settings.folderLinks=previous;this.refreshFolderIndicators();throw error;}
+    if(!self)this.rememberProjectLocation(project,this.settings.folderLinks.find(link=>link.folderPath===folder.path)?.environmentId);
+    try{await this.save();this.refreshFolderIndicators();}catch(error){this.settings.folderLinks=previous;this.settings.projectCreationLocations=previousLocations;this.refreshFolderIndicators();throw error;}
     new Notice(`${folder.path} linked to ${projectLabel(project)}.`);
   }
   private async updateCodebaseProjectLinks(scope:import('./codebase-core').CodebaseScope,change:{title?:string;deleted?:boolean}){
@@ -2187,13 +2188,41 @@ export default class SendToT3 extends Plugin {
     if(!this.settings.selected.includes(project.id))this.settings.selected.push(project.id);
     return project;
   }
+  private rememberProjectLocation(project:Project,environmentId?:string){
+    const c=this.settings.paired.find(c=>c.id===project.connectionId);
+    this.settings.projectCreationLocations=rememberProjectCreationLocation(this.settings.projectCreationLocations,{
+      connectionId:project.connectionId??'',environmentId:environmentId??c?.environmentId??(!project.connectionId?this.eventLocalEnvironmentId:undefined),
+      ...(!project.connectionId?{deviceId:this.deviceId}:{}),parentPath:workspaceParentPath(project.workspaceRoot),selectedAt:new Date().toISOString(),
+    });
+  }
+  private projectWorkspaceDefaults(machineId?:string){
+    const locations=[...this.settings.projectCreationLocations];
+    // Existing installations can start from their latest external link without a migration write.
+    for(const link of [...this.settings.folderLinks].reverse()){
+      if(link.self||link.folderPath==='/')continue;
+      const c=this.settings.paired.find(c=>c.id===link.connectionId);
+      const change=this.settings.folderLinkChanges.find(change=>change.folderPath===link.folderPath&&change.link?.id===link.id);
+      const environmentId=link.environmentId??c?.environmentId;
+      locations.push({connectionId:link.connectionId,environmentId,...(!link.connectionId&&(!environmentId||environmentId===this.eventLocalEnvironmentId)?{deviceId:this.deviceId}:{}),parentPath:workspaceParentPath(link.workspaceRoot),selectedAt:change?.at??'1970-01-01T00:00:00.000Z'});
+    }
+    return projectCreationDefaults(locations,this.vaultMachines(),this.deviceId,machineId);
+  }
   private pickFolderProject(folderPath:string,name:string,onChosen?:(project:Project)=>Promise<void>):Promise<Project|undefined>{
     if(this.projectCreateModal)throw Error('Choose or cancel the open project workspace first.');
     return new Promise(resolve=>{
       this.projectCreateModal=new ProjectCreateModal(this.app,name,{
-        machines:()=>this.vaultMachines(),connect:machine=>this.projectLocation(machine),
+        machines:()=>this.vaultMachines(),defaults:machineId=>this.projectWorkspaceDefaults(machineId),connect:machine=>this.projectLocation(machine),
         configure:el=>{el.createEl('p',{text:'Project files remain in the T3 workspace and appear in Codebase view.'});},
-        link:async project=>{if(this.stopped)throw Error('The plugin was disabled before creating the project.');await onChosen?.(project);resolve(project);},
+        link:async project=>{
+          if(this.stopped)throw Error('The plugin was disabled before creating the project.');
+          if(onChosen)await onChosen(project);
+          else {
+            const previous=this.settings.projectCreationLocations;
+            this.rememberProjectLocation(project);
+            try{await this.save();}catch(error){this.settings.projectCreationLocations=previous;throw error;}
+          }
+          resolve(project);
+        },
         closed:()=>{this.projectCreateModal=undefined;resolve(undefined);},
       });
       this.projectCreateModal.open();
@@ -2281,7 +2310,7 @@ export default class SendToT3 extends Plugin {
   }
   private sharedSnapshot(){const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,...shared}=this.settings;return JSON.parse(JSON.stringify(shared));}
   private sharedData(data:any){
-    return {...this.sharedSnapshot(),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads!==false,
+    return {...this.sharedSnapshot(),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads!==false,
       orchestration:{waitForOtherThreads:data?.orchestration?.waitForOtherThreads===true},
       inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},
       completion:{action:['archive','delete'].includes(data?.completion?.action)?data.completion.action:'keep',archiveFolder:data?.completion?.archiveFolder??'Archive/T3 Code'}};
@@ -2323,7 +2352,7 @@ export default class SendToT3 extends Plugin {
       this.refreshFolderIndicators();
       this.lastDiskSnapshot=JSON.stringify(snapshot);
       if(JSON.stringify(this.settings.noteThreads)===intendedThreads)this.settings.noteThreads=snapshot.noteThreads;
-      for(const key of ['inlineStreaming','orchestration','completion','threadTitleGeneration','autoSettleThreads','paired','vaultLocations','codebase'] as const)if(JSON.stringify(this.settings[key])===JSON.stringify(intended[key]))(this.settings as any)[key]=snapshot[key];
+      for(const key of ['inlineStreaming','orchestration','completion','threadTitleGeneration','autoSettleThreads','paired','vaultLocations','codebase','projectCreationLocations'] as const)if(JSON.stringify(this.settings[key])===JSON.stringify(intended[key]))(this.settings as any)[key]=snapshot[key];
       this.codebase?.adopt(this.settings.codebase);
       this.sharedBaseline=JSON.stringify(snapshot);
     });

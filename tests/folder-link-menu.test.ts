@@ -8,24 +8,27 @@ import {runInNewContext} from 'node:vm';
 import {webcrypto,randomUUID} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 
-async function folderMenuHarness(){
+async function folderMenuHarness(initial?:any){
   const deviceId=randomUUID();let local:any={deviceId,mode:'direct',pairedSessions:{c:{url:'https://folder.example',environmentId:'env',token:'test',expiresAt:Date.now()+600000}}};
   const project={id:'project',title:'Writing',workspaceRoot:'/writing',connectionId:'c',connectionName:'Laptop'};
-  const shared:any[]=[],modals:any[]=[],notices:string[]=[];
+  const shared:any[]=initial?[initial]:[],modals:any[]=[],notices:string[]=[];
   let shownMenu:any,threadsReply:any[]|undefined,projectsReply:any[]|undefined;
   let fileMenu:(...args:any[])=>void=()=>{},failSave=false,networkRequests=0;
   class Element {
-    text='';cls='';settings:any[]=[];children:Element[]=[];
+    text='';cls='';tag='';settings:any[]=[];children:Element[]=[];disabled=false;onclick?:()=>any;oninput?:()=>any;value='';
+    addClass(){}setAttribute(){}
+    createDiv(options?:any){return this.createEl('div',options);}
+    querySelector(tag:string):Element|undefined{return this.children.find(child=>child.tag===tag)??this.children.map(child=>child.querySelector(tag)).find(Boolean);}
     empty(){this.settings=[];this.children=[];}
     setText(value:string){this.text=value;}
     events:Record<string,Function>={};
     addEventListener(name:string,callback:Function){this.events[name]=callback;}
-    click(){return this.events.click?.();}
-    createEl(_tag:string,options?:{text?:string;cls?:string}){const child=new Element();child.text=options?.text??'';child.cls=options?.cls??'';this.children.push(child);return child;}
+    click(){if(!this.disabled)return this.onclick?.()??this.events.click?.();}
+    createEl(_tag:string,options?:{text?:string;cls?:string}){const child=new Element();child.tag=_tag;child.text=options?.text??'';child.cls=options?.cls??'';this.children.push(child);return child;}
   }
   class Control {
     value:any;disabled=false;text='';handler:(value?:any)=>any=()=>{};
-    inputEl:any={rows:0};buttonEl={isConnected:true,focus:()=>{}};
+    inputEl:any={rows:0,addEventListener:()=>{}};buttonEl={isConnected:true,focus:()=>{}};
     setValue(value:any){this.value=value;return this;}
     setPlaceholder(_value:string){return this;}
     addOptions(_value:Record<string,string>){return this;}
@@ -53,7 +56,7 @@ async function folderMenuHarness(){
     addButton(callback:(control:Control)=>void){return this.add(callback);}
   }
   class Modal {
-    contentEl=new Element();titleEl=new Element();closed=false;
+    contentEl=new Element();titleEl=new Element();modalEl=new Element();closed=false;
     constructor(public app:any){}
     open(){modals.push(this);(this as any).onOpen?.();}
     close(){this.closed=true;(this as any).onClose?.();}
@@ -86,7 +89,7 @@ async function folderMenuHarness(){
     addSeparator(){return this;}
     showAtPosition(){shownMenu=this;return this;}
   }
-  const api={Plugin,Menu,Platform:{isMobile:true},TFolder:Folder,TFile:File,Modal,FuzzySuggestModal:Modal,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Setting,Notice:class{constructor(text:string){notices.push(text);}}};
+  const api={setIcon:()=>{},Plugin,Menu,Platform:{isMobile:true},TFolder:Folder,TFile:File,Modal,FuzzySuggestModal:Modal,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Setting,Notice:class{constructor(text:string){notices.push(text);}}};
   const module={exports:{} as any};
   runInNewContext(await readFile('dist/main.js','utf8'),{
     module,exports:module.exports,window:{innerWidth:1000,innerHeight:700},require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,
@@ -101,8 +104,8 @@ async function folderMenuHarness(){
     const target=entry.submenu.items.find(item=>item.title.startsWith('Link to Writing · Laptop'));assert.ok(target);
     await target.callback();return modals.at(-1);
   };
-  const setting=(modal:Modal,name:string)=>{const item=modal.contentEl.settings.find(item=>item.name===name);assert.ok(item);return item as Setting;};
-  const button=(modal:Modal,text:string)=>{const item=modal.contentEl.settings.flatMap(setting=>setting.controls).find(control=>control.text===text);assert.ok(item);return item as Control;};
+  const setting=(modal:Modal,name:string)=>{const all=(el:Element):Setting[]=>[...el.settings,...el.children.flatMap(all)];const item=all(modal.contentEl).find(item=>item.name===name);assert.ok(item);return item as Setting;};
+  const button=(modal:Modal,text:string)=>{const all=(el:Element):any[]=>[el,...el.settings.flatMap(setting=>setting.controls),...el.children.flatMap(all)];const item=all(modal.contentEl).find(control=>control.text===text);assert.ok(item);return item as Control;};
   return {plugin,open,setting,button,shared,notices,deviceId,project,modals,shownMenu:()=>shownMenu,setProjects:(value:any[])=>{projectsReply=value;},setThreads:(value:any[])=>{threadsReply=value;},folderMenu:(root=false)=>{const menu=new Menu();const selected=new Folder();if(root){selected.path='/';selected.name='QLO2';}fileMenu(menu,selected,'file-explorer-context-menu');return menu;},fileMenu:(path:string,mobile:boolean)=>{api.Platform.isMobile=mobile;const menu=new Menu();const file=new File(path);fileMenu(menu,file,'file-explorer-context-menu');return {menu,file};},networkRequests:()=>networkRequests,setFailSave:(value:boolean)=>{failSave=value;}};
 }
 
@@ -248,12 +251,12 @@ test('Create T3 project browses outside the vault and only links on confirmation
     });
     const entry=h.folderMenu().items.find(item=>item.title==='Link to T3 Code')!.submenu!.items.find(item=>item.title==='Create T3 project…')!;
     await entry.callback();let modal=h.modals.at(-1);
-    assert.equal(modal.titleEl.text,'Create T3 project');assert.equal(calls.length,0);
+    assert.equal(modal.titleEl.text,'Create T3 project');await new Promise(resolve=>setImmediate(resolve));assert.equal(calls.filter(c=>c[0]==='create').length,0);
     assert.equal(h.setting(modal,'Project name').controls[0].value,'Notes');
     await h.button(modal,'Home').click();assert.equal(calls.filter(c=>c[0]==='create').length,0);
     await h.button(modal,'Cancel').click();assert.equal(h.plugin.settings.folderLinks.length,0);
     h.plugin.createFolderProject(h.plugin.app.vault.getAbstractFileByPath('Notes'));modal=h.modals.at(-1);
-    h.setting(modal,'Workspace location').controls[0].change('/workspaces/app');
+    await new Promise(resolve=>setImmediate(resolve));await h.button(modal,'Existing folder').click();h.setting(modal,'Workspace folder').controls[0].change('/workspaces/app');
     await h.button(modal,'Create and link').click();
     assert.equal(modal.closed,true);
     assert.deepEqual(calls.find(c=>c[0]==='create'),['create','/workspaces/app','Notes']);
@@ -269,7 +272,7 @@ test('project location errors leave the dialog open without linking',async()=>{
     let creates=0;
     h.plugin.projectLocation=async()=>({browse:async()=>{throw Error('Folder does not exist');},create:async()=>{creates++;},close:()=>{}});
     h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);
-    h.setting(modal,'Workspace location').controls[0].change('/missing');
+    await new Promise(resolve=>setImmediate(resolve));await h.button(modal,'Existing folder').click();h.setting(modal,'Workspace folder').controls[0].change('/missing');
     await h.button(modal,'Create and link').click();
     assert.equal(modal.closed,false);assert.equal(creates,0);assert.equal(h.plugin.settings.folderLinks.length,0);
     assert.ok(modal.contentEl.children.some((el:any)=>el.text==='Cannot create this project. Try again.'));
@@ -283,7 +286,7 @@ test('project creation refuses a browser result that falls back to a parent fold
     let creates=0;
     h.plugin.projectLocation=async()=>({browse:async()=>({parentPath:'/workspaces',entries:[]}),create:async()=>{creates++;},close:()=>{}});
     h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);
-    h.setting(modal,'Workspace location').controls[0].change('/workspaces/missing');
+    await new Promise(resolve=>setImmediate(resolve));await h.button(modal,'Existing folder').click();h.setting(modal,'Workspace folder').controls[0].change('/workspaces/missing');
     await h.button(modal,'Create and link').click();
     assert.equal(creates,0);assert.equal(modal.closed,false);assert.equal(h.plugin.settings.folderLinks.length,0);
     await h.button(modal,'Cancel').click();
@@ -296,10 +299,9 @@ test('closing project creation during connection never creates or links',async()
     let connect!:(value:any)=>void,creates=0,closes=0;
     h.plugin.projectLocation=()=>new Promise(resolve=>{connect=resolve;});
     h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);
-    h.setting(modal,'Workspace location').controls[0].change('/workspaces/app');
     const pending=h.button(modal,'Create and link').click();
     modal.close();connect({browse:async()=>({parentPath:'/workspaces/app',entries:[]}),create:async()=>{creates++;},close:()=>{closes++;}});
-    await pending;assert.equal(creates,0);assert.equal(closes,1);assert.equal(h.plugin.settings.folderLinks.length,0);
+    await pending;await new Promise(resolve=>setImmediate(resolve));assert.equal(creates,0);assert.equal(closes,1);assert.equal(h.plugin.settings.folderLinks.length,0);
   }finally{h.plugin.onunload();}
 });
 
@@ -317,7 +319,7 @@ for(const cancelled of [true,false])test(`automatic new-project routing ${cancel
       await h.button(modal,'Cancel').click();await rejected;
       assert.equal(creates.length,0);assert.equal(h.plugin.settings.folderLinks.length,0);
     }else{
-      h.setting(modal,'Workspace location').controls[0].change('/workspaces/chosen');
+      await new Promise(resolve=>setImmediate(resolve));await h.button(modal,'Existing folder').click();h.setting(modal,'Workspace folder').controls[0].change('/workspaces/chosen');
       await h.button(modal,'Create and link').click();const target=await pending;
       assert.deepEqual(creates,['/workspaces/chosen']);assert.equal(target.link.self,false);assert.equal(target.project.workspaceRoot,external.workspaceRoot);
       assert.equal(h.plugin.settings.folderLinks.length,0,'The send link is saved only after delivery');
@@ -349,23 +351,68 @@ test('workspace exclusion respects Windows case, separators and directory bounda
   }finally{h.plugin.onunload();}
 });
 
-test('workspace folder search updates only the list and resets on navigation',async()=>{
+const descendants=(el:any):any[]=>[el,...el.children.flatMap(descendants)];
+const idle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('linking remembers the parent and machine across restart, browsing and cancellation',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const project={...h.project,workspaceRoot:'C:\\Projects\\Writing'};
+    await h.plugin.saveFolderLink(h.plugin.app.vault.getAbstractFileByPath('Notes'),project,false);
+    assert.equal(h.shared.at(-1).projectCreationLocations[0].parentPath,'C:\\Projects');
+    const restarted=await folderMenuHarness(h.shared.at(-1));
+    try{
+      const browsed:any[]=[];
+      restarted.plugin.projectLocation=async(machine:any)=>({browse:async(path:string)=>{browsed.push([machine.id,path]);return {parentPath:path,entries:[]};},close:()=>{}});
+      restarted.plugin.createFolderProject({path:'Notes',name:'Notes'});let modal=restarted.modals.at(-1);await idle();
+      assert.deepEqual(browsed,[['c','C:\\Projects']]);
+      const before=JSON.stringify(restarted.plugin.settings.projectCreationLocations);
+      await modal.browse('C:\\Elsewhere');modal.close();
+      assert.equal(JSON.stringify(restarted.plugin.settings.projectCreationLocations),before);
+      restarted.plugin.createFolderProject({path:'Notes',name:'Notes'});modal=restarted.modals.at(-1);await idle();
+      assert.equal(restarted.setting(modal,'Parent folder').controls[0].value,'C:\\Projects');modal.close();
+    }finally{restarted.plugin.onunload();}
+    const previous=JSON.stringify(h.plugin.settings.projectCreationLocations);h.setFailSave(true);
+    await assert.rejects(h.plugin.saveFolderLink(h.plugin.app.vault.getAbstractFileByPath('Notes'),{...project,workspaceRoot:'D:\\Other\\Writing'},false),/storage failure/);
+    assert.equal(JSON.stringify(h.plugin.settings.projectCreationLocations),previous);
+  }finally{h.plugin.onunload();}
+});
+
+test('existing external links supply the first default without migration writes',async()=>{
+  const h=await folderMenuHarness({vaultId:'existing',folderLinks:[{id:'old',folderPath:'Notes',projectId:'project',projectTitle:'Writing',workspaceRoot:'/projects/writing',connectionId:'c',environmentId:'env',self:false}]});
+  try{
+    assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.projectWorkspaceDefaults())),{machineId:'c',parentPath:'/projects'});
+    assert.equal(h.plugin.settings.projectCreationLocations.length,0);
+  }finally{h.plugin.onunload();}
+});
+
+test('a failed link retries the created project without making another folder',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    let creates=0;
+    h.plugin.projectLocation=async()=>({browse:async()=>({parentPath:'/work',entries:creates?[{name:'Notes',fullPath:'/work/Notes'}]:[]}),create:async(path:string)=>{creates++;return {...h.project,workspaceRoot:path};},close:()=>{}});
+    h.plugin.createFolderProject(h.plugin.app.vault.getAbstractFileByPath('Notes'));const modal=h.modals.at(-1);await idle();
+    h.setFailSave(true);await h.button(modal,'Create and link').click();
+    assert.equal(creates,1);assert.equal(modal.closed,false);assert.equal(h.plugin.settings.projectCreationLocations.length,0);
+    h.setFailSave(false);await h.button(modal,'Create and link').click();assert.equal(creates,1);assert.equal(modal.closed,true);
+  }finally{h.plugin.onunload();}
+});
+
+test('folder search filters compact rows without requests or replacing the search input',async()=>{
   const h=await folderMenuHarness();
   try{
     let browses=0;
-    h.plugin.projectLocation=async()=>({browse:async(path:string)=>{browses++;return {parentPath:path==='~'?'/work':path,entries:['Alpha','beta','alphabet'].map(name=>({name,fullPath:'/work/'+name}))};},close:()=>{}});
-    h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);
-    await h.button(modal,'Home').click();
-    const search=h.setting(modal,'Search folders').controls[0];
-    const list=modal.contentEl.children.find((el:any)=>el.cls==='send-to-t3-workspace-folders');
-    assert.deepEqual(list.settings.map((row:any)=>row.name),['Alpha','beta','alphabet']);
-    search.change('ALP');
-    assert.equal(h.setting(modal,'Search folders').controls[0],search,'Keep the input and its focus while typing');
-    assert.deepEqual(list.settings.map((row:any)=>row.name),['Alpha','alphabet']);
-    search.change('missing');assert.equal(list.settings.length,0);assert.equal(list.children[0].text,'No matching folders');
-    search.change('');assert.equal(list.settings.length,3);assert.equal(browses,1,'Filtering must not make remote requests');
-    search.change('beta');await list.settings[0].controls[0].click();
-    assert.equal(h.setting(modal,'Search folders').controls[0].value,'');assert.equal(h.setting(modal,'Workspace location').controls[0].value,'/work/beta');
+    h.plugin.projectLocation=async()=>({browse:async(path:string)=>{browses++;return {parentPath:path==='~'?'/work':path,entries:['Alpha','beta','alphabet','.hidden'].map(name=>({name,fullPath:'/work/'+name}))};},close:()=>{}});
+    h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);await idle();
+    const search=descendants(modal.contentEl).find(el=>el.tag==='input'&&el.value==='');
+    const list=descendants(modal.contentEl).find(el=>el.cls==='send-to-t3-workspace-folders');
+    const names=()=>list.children.map((row:any)=>row.children[1]?.text).filter(Boolean);
+    assert.deepEqual(names(),['Alpha','alphabet','beta']);
+    search.value='ALP';search.oninput();assert.deepEqual(names(),['Alpha','alphabet']);
+    assert.ok(descendants(modal.contentEl).includes(search));
+    search.value='missing';search.oninput();assert.equal(list.children[0].text,'No matching folders');
+    search.value='';search.oninput();assert.equal(browses,1);
+    await h.button(modal,'Show hidden').click();assert.ok(names().includes('.hidden'));
     modal.close();
   }finally{h.plugin.onunload();}
 });
@@ -375,33 +422,35 @@ for(const cancel of [true,false])test(`new workspace folder is ${cancel?'cancell
   try{
     const creates:any[]=[];
     h.plugin.projectLocation=async()=>({browse:async()=>({parentPath:'/work',entries:[{name:'existing',fullPath:'/work/existing'}]}),create:async(path:string,title:string,newFolder:any)=>{creates.push({path,title,newFolder});return {...h.project,workspaceRoot:path};},close:()=>{}});
-    h.plugin.createFolderProject(h.plugin.app.vault.getAbstractFileByPath('Notes'));const modal=h.modals.at(-1);
+    h.plugin.createFolderProject(h.plugin.app.vault.getAbstractFileByPath('Notes'));const modal=h.modals.at(-1);await idle();
     h.setting(modal,'Project name').controls[0].change('My project');
-    await h.button(modal,'New folder').click();
-    h.setting(modal,'New folder name').controls[0].change('../escape');await h.button(modal,'Use new folder').click();
-    assert.equal(h.setting(modal,'Workspace location').controls[0].value,'/work');assert.equal(creates.length,0);
-    h.setting(modal,'New folder name').controls[0].change('existing');await h.button(modal,'Use new folder').click();
-    assert.ok(modal.contentEl.children.some((el:any)=>el.text==='A folder with this name already exists.'));
-    h.setting(modal,'New folder name').controls[0].change('New workspace');await h.button(modal,'Use new folder').click();
-    assert.equal(h.setting(modal,'Workspace location').controls[0].value,'/work/New workspace');assert.equal(creates.length,0);
-    if(cancel){await h.button(modal,'Cancel').click();assert.equal(creates.length,0);assert.equal(h.plugin.settings.folderLinks.length,0);}
-    else{await h.button(modal,'Create and link').click();assert.deepEqual(JSON.parse(JSON.stringify(creates)),[{path:'/work/New workspace',title:'My project',newFolder:{parentPath:'/work',name:'New workspace'}}]);assert.equal(modal.closed,true);assert.equal(h.plugin.settings.folderLinks[0].workspaceRoot,'/work/New workspace');}
+    const folderInput=()=>descendants(modal.contentEl).find(el=>el.tag==='input'&&el.value==='My project');
+    assert.ok(folderInput(),'Folder name follows the project name');
+    const firstInput=folderInput();firstInput.value='../escape';firstInput.oninput();await h.button(modal,'Create and link').click();assert.equal(creates.length,0);
+    let input=descendants(modal.contentEl).find(el=>el.tag==='input'&&el.value==='../escape');input.value='existing';input.oninput();await h.button(modal,'Create and link').click();assert.equal(creates.length,0);
+    assert.ok(modal.contentEl.children.some((el:any)=>el.text.includes('already exists')));
+    input=descendants(modal.contentEl).find(el=>el.tag==='input'&&el.value==='existing');input.value='New workspace';input.oninput();
+    assert.equal(creates.length,0);
+    if(cancel){await h.button(modal,'Cancel').click();assert.equal(creates.length,0);assert.equal(h.plugin.settings.folderLinks.length,0);assert.equal(h.plugin.settings.projectCreationLocations.length,0);}
+    else{await h.button(modal,'Create and link').click();assert.deepEqual(JSON.parse(JSON.stringify(creates)),[{path:'/work/New workspace',title:'My project',newFolder:{parentPath:'/work',name:'New workspace'}}]);assert.equal(modal.closed,true);assert.equal(h.plugin.settings.folderLinks[0].workspaceRoot,'/work/New workspace');assert.equal(h.plugin.settings.projectCreationLocations[0].parentPath,'/work');}
   }finally{h.plugin.onunload();}
 });
 
-test('switching machines clears a prepared new folder and search',async()=>{
+test('switching machines restores that machine’s parent and clears the search',async()=>{
   const h=await folderMenuHarness();
   try{
-    h.plugin.vaultMachines=()=>[{id:'c',name:'Laptop'},{id:'other',name:'Other'}];
-    h.plugin.projectLocation=async()=>({browse:async()=>({parentPath:'/work',entries:[]}),close:()=>{}});
-    h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);
-    await h.button(modal,'New folder').click();await h.button(modal,'Use new folder').click();
-    h.setting(modal,'Search folders').controls[0].change('test');h.setting(modal,'Machine').controls[0].change('other');
-    assert.equal(h.setting(modal,'Workspace location').controls[0].value,'~');assert.equal(h.setting(modal,'Search folders').controls[0].value,'');
-    assert.ok(!modal.contentEl.children.some((el:any)=>el.text==='This folder will be created when you select Create and link.'));modal.close();
+    h.plugin.vaultMachines=()=>[{id:'c',name:'Laptop',environmentId:'env'},{id:'other',name:'Other',environmentId:'other-env'}];
+    h.plugin.settings.projectCreationLocations=[{connectionId:'c',environmentId:'env',parentPath:'C:\\Projects',selectedAt:'2026-10-20T12:00:00Z'},{connectionId:'other',environmentId:'other-env',parentPath:'/work',selectedAt:'2026-10-20T11:00:00Z'}];
+    const browsed:any[]=[];
+    h.plugin.projectLocation=async(machine:any)=>({browse:async(path:string)=>{browsed.push([machine.id,path]);return {parentPath:path,entries:[]};},close:()=>{}});
+    h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);await idle();
+    assert.equal(h.setting(modal,'Machine').controls[0].value,'c');assert.equal(h.setting(modal,'Parent folder').controls[0].value,'C:\\Projects');
+    const search=descendants(modal.contentEl).find(el=>el.tag==='input'&&el.value==='');search.value='test';search.oninput();
+    h.setting(modal,'Machine').controls[0].change('other');await idle();
+    assert.equal(h.setting(modal,'Parent folder').controls[0].value,'/work');assert.equal(modal.query,'');
+    assert.deepEqual(browsed,[['c','C:\\Projects'],['other','/work']]);modal.close();
   }finally{h.plugin.onunload();}
 });
-
 
 test('whole-note sends, command-bar asks and confirmed receipts use one Smart Send history',async()=>{
  const h=await folderMenuHarness();

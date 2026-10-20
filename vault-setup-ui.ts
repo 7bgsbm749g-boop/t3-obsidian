@@ -3,7 +3,7 @@ import type {Project} from './bridge';
 import type {VaultRemote} from './vault-connection';
 import {discoverVaultRoots} from './vault-connection';
 
-export interface VaultMachine {id:string;name:string;detail?:string;local?:boolean}
+export interface VaultMachine {id:string;name:string;detail?:string;local?:boolean;environmentId?:string}
 export interface VaultSetupHost {
   vaultId:string;vaultName:string;settingsPath:string;
   machines():VaultMachine[];
