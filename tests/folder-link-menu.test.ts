@@ -275,7 +275,7 @@ test('project location errors leave the dialog open without linking',async()=>{
     await new Promise(resolve=>setImmediate(resolve));await h.button(modal,'Existing folder').click();h.setting(modal,'Workspace folder').controls[0].change('/missing');
     await h.button(modal,'Create and link').click();
     assert.equal(modal.closed,false);assert.equal(creates,0);assert.equal(h.plugin.settings.folderLinks.length,0);
-    assert.ok(modal.contentEl.children.some((el:any)=>el.text==='Cannot create this project. Try again.'));
+    assert.ok(descendants(modal.contentEl).some((el:any)=>el.text==='Cannot create this project. Try again.'));
     await h.button(modal,'Cancel').click();
   }finally{h.plugin.onunload();}
 });
@@ -428,7 +428,7 @@ for(const cancel of [true,false])test(`new workspace folder is ${cancel?'cancell
     assert.ok(folderInput(),'Folder name follows the project name');
     const firstInput=folderInput();firstInput.value='../escape';firstInput.oninput();await h.button(modal,'Create and link').click();assert.equal(creates.length,0);
     let input=descendants(modal.contentEl).find(el=>el.tag==='input'&&el.value==='../escape');input.value='existing';input.oninput();await h.button(modal,'Create and link').click();assert.equal(creates.length,0);
-    assert.ok(modal.contentEl.children.some((el:any)=>el.text.includes('already exists')));
+    assert.ok(descendants(modal.contentEl).some((el:any)=>el.text.includes('already exists')));
     input=descendants(modal.contentEl).find(el=>el.tag==='input'&&el.value==='existing');input.value='New workspace';input.oninput();
     assert.equal(creates.length,0);
     if(cancel){await h.button(modal,'Cancel').click();assert.equal(creates.length,0);assert.equal(h.plugin.settings.folderLinks.length,0);assert.equal(h.plugin.settings.projectCreationLocations.length,0);}
@@ -449,6 +449,20 @@ test('switching machines restores that machine’s parent and clears the search'
     h.setting(modal,'Machine').controls[0].change('other');await idle();
     assert.equal(h.setting(modal,'Parent folder').controls[0].value,'/work');assert.equal(modal.query,'');
     assert.deepEqual(browsed,[['c','C:\\Projects'],['other','/work']]);modal.close();
+  }finally{h.plugin.onunload();}
+});
+
+test('newly paired machines keep their selection when their discovery ID becomes a connection ID',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    let paired=false;
+    h.plugin.vaultMachines=()=>[{id:paired?'new-connection':'environment:new-env',environmentId:'new-env',name:'New machine'}];
+    h.plugin.projectLocation=async()=>{paired=true;return {browse:async()=>({parentPath:'/projects',entries:[]}),close:()=>{}};};
+    h.plugin.createFolderProject({path:'Notes',name:'Notes'});const modal=h.modals.at(-1);await idle();
+    assert.equal(h.setting(modal,'Machine').controls[0].value,'new-connection');
+    assert.ok(modal.contentEl.children.some((el:any)=>el.cls==='send-to-t3-project-body'));
+    assert.ok(modal.contentEl.settings.some((setting:any)=>setting.controls.some((control:any)=>control.text==='Create and link')),'Actions stay outside the scrolling form');
+    modal.close();
   }finally{h.plugin.onunload();}
 });
 

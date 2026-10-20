@@ -48,9 +48,12 @@ export class ProjectCreateModal extends Modal {
   private draw(){
     if(this.ended)return;
     this.modalEl.addClass('send-to-t3-project-create');this.titleEl.setText('Create T3 project');this.contentEl.empty();
-    this.contentEl.createEl('p',{cls:'send-to-t3-project-intro',text:'Choose where the project files will live, then link this Obsidian folder.'});
+    const body=this.contentEl.createDiv({cls:'send-to-t3-project-body'});
+    body.createEl('p',{cls:'send-to-t3-project-intro',text:'Choose where the project files will live, then link this Obsidian folder.'});
     const machines=this.host.machines();
-    const fields=this.contentEl.createDiv({cls:'send-to-t3-project-fields'});
+    const paired=machines.find(machine=>machine.environmentId&&'environment:'+machine.environmentId===this.machineId);
+    if(paired)this.machineId=paired.id;
+    const fields=body.createDiv({cls:'send-to-t3-project-fields'});
     new Setting(fields).setName('Machine').addDropdown(d=>{
       if(!machines.length)d.addOption('','No connected machines');
       for(const machine of machines)d.addOption(machine.id,machine.name+(machine.detail?` · ${machine.detail}`:''));
@@ -61,7 +64,7 @@ export class ProjectCreateModal extends Modal {
     new Setting(fields).setName('Project name').addText(t=>t.setValue(this.name).setDisabled(this.working).onChange(value=>{
       this.name=value;if(!this.customFolderName)this.folderName=value;this.updatePreview();
     }));
-    const workspace=this.contentEl.createDiv({cls:'send-to-t3-project-workspace'});
+    const workspace=body.createDiv({cls:'send-to-t3-project-workspace'});
     const modes=workspace.createDiv({cls:'send-to-t3-workspace-modes',attr:{role:'group','aria-label':'Workspace folder'}});
     for(const [isNew,label] of [[true,'New folder'],[false,'Existing folder']] as const){
       const button=modes.createEl('button',{text:label,cls:this.useNewFolder===isNew?'is-active':'',attr:{'aria-pressed':String(this.useNewFolder===isNew)}});
@@ -80,14 +83,14 @@ export class ProjectCreateModal extends Modal {
     const hidden=toolbar.createEl('button',{text:this.showHidden?'Hide hidden':'Show hidden',attr:{'aria-pressed':String(this.showHidden),'aria-label':'Show hidden folders'}});
     hidden.disabled=this.working;hidden.onclick=()=>{this.showHidden=!this.showHidden;hidden.setText(this.showHidden?'Hide hidden':'Show hidden');hidden.setAttribute('aria-pressed',String(this.showHidden));this.drawFolders(list);};
     list=workspace.createDiv({cls:'send-to-t3-workspace-folders',attr:{'aria-label':'Folders'}});this.drawFolders(list);
-    this.preview=this.contentEl.createDiv({cls:'send-to-t3-workspace-preview',attr:{'aria-live':'polite'}});this.updatePreview();
-    this.host.configure?.(this.contentEl);
-    const status=this.contentEl.createEl('p',{cls:'send-to-t3-project-status',text:this.status,attr:{role:'status'}});
+    this.preview=body.createDiv({cls:'send-to-t3-workspace-preview',attr:{'aria-live':'polite'}});this.updatePreview();
+    this.host.configure?.(body);
+    const status=body.createEl('p',{cls:'send-to-t3-project-status',text:this.status,attr:{role:'status'}});
     status.hidden=!this.status;
     new Setting(this.contentEl).setClass('send-to-t3-project-actions')
       .addButton(b=>b.setButtonText('Cancel').setDisabled(this.creating).onClick(()=>this.close()))
       .addButton(b=>b.setButtonText(this.creating?'Creating…':'Create and link').setCta().setDisabled(this.working||!this.machineId).onClick(()=>this.create()));
-    if(!machines.length)this.contentEl.createEl('p',{text:'Sign in or pair a machine in connection settings first.'});
+    if(!machines.length)body.createEl('p',{text:'Sign in or pair a machine in connection settings first.'});
   }
   private updatePreview(){
     if(!this.preview)return;this.preview.empty();

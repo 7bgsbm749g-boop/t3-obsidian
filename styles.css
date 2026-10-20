@@ -339,13 +339,15 @@
 }
  .send-to-t3-location-conflict { margin: 8px 16px; padding: 12px; border: 1px solid var(--text-warning); border-radius: 6px; background: var(--background-secondary); overflow-wrap: anywhere; }
 .send-to-t3-project-create { width: min(640px, 94vw); }
-.send-to-t3-project-create .modal-content { display: flex; flex-direction: column; gap: 16px; }
+.send-to-t3-project-create .modal-content { display: flex; flex-direction: column; gap: 12px; overflow: hidden; max-height: calc(100dvh - 160px); }
+.send-to-t3-project-body { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+.send-to-t3-project-body > p { margin: 0; font-size: var(--font-ui-small); }
 .send-to-t3-project-intro { margin: 0; color: var(--text-muted); font-size: var(--font-ui-small); }
 .send-to-t3-project-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
-.send-to-t3-project-create .setting-item { padding: 0; border: 0; }
-.send-to-t3-project-fields .setting-item, .send-to-t3-workspace-path { flex-direction: column; align-items: stretch; gap: 8px; }
+.send-to-t3-project-create .modal-content .setting-item { padding: 0; border: 0; }
+.send-to-t3-project-create .send-to-t3-project-fields .setting-item, .send-to-t3-project-create .send-to-t3-workspace-path { flex-direction: column; align-items: stretch; gap: 8px; }
 .send-to-t3-project-create .setting-item-info { margin: 0; }
-.send-to-t3-project-create .setting-item-control { min-width: 0; }
+.send-to-t3-project-create .setting-item-control { min-width: 0; width: 100%; }
 .send-to-t3-project-fields input, .send-to-t3-project-fields select, .send-to-t3-workspace-path input { width: 100%; min-width: 0; }
 .send-to-t3-project-workspace { display: flex; flex-direction: column; gap: 12px; }
 .send-to-t3-workspace-modes { display: flex; gap: 4px; padding: 4px; background: var(--background-secondary); border-radius: var(--radius-m); }
@@ -356,7 +358,7 @@
 .send-to-t3-workspace-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .send-to-t3-workspace-toolbar input { flex: 1; width: 120px; min-width: 80px; }
 .send-to-t3-workspace-toolbar button { box-shadow: none; font-size: var(--font-ui-small); }
-.send-to-t3-workspace-folders { height: clamp(100px, 23vh, 220px); overflow-y: auto; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); padding: 4px; }
+.send-to-t3-workspace-folders { height: clamp(90px, 18vh, 160px); flex-shrink: 0; overflow-y: auto; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); padding: 4px; }
 .send-to-t3-workspace-folders p { padding: 8px; color: var(--text-muted); font-size: var(--font-ui-small); }
 .send-to-t3-workspace-folder { display: flex; align-items: center; gap: 10px; width: 100%; height: 34px; text-align: start; padding: 6px 10px; background: transparent; box-shadow: none; }
 .send-to-t3-workspace-folder > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -369,6 +371,7 @@
 .send-to-t3-workspace-folder-name { display: flex; align-items: center; gap: 12px; color: var(--text-muted); font-size: var(--font-ui-small); margin-top: 6px; }
 .send-to-t3-workspace-folder-name input { flex: 1; min-width: 0; }
 .send-to-t3-project-status { margin: 0; color: var(--text-muted); font-size: var(--font-ui-small); }
+.send-to-t3-project-create .send-to-t3-project-actions { flex-shrink: 0; }
 .send-to-t3-project-actions .setting-item-control { width: 100%; }
 @media (max-width: 480px) {
   .send-to-t3-project-fields { grid-template-columns: minmax(0, 1fr); }
