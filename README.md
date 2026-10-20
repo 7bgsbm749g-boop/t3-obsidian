@@ -327,6 +327,8 @@ If the previous thread has no new source and there is no typed question, normal 
 
 Smart Send is the normal send flow; there is no beta switch. Tracking and compressed response text live in the plugin’s synced `data.json`, with a device-local replica. Completed notes receive no new hidden boundaries. Each response body is stored once by its content hash; large bodies and current source snapshots use gzip when that reduces size. Confirmed records merge independently, so concurrent device records are retained. Sync does not serialize simultaneous sends on different devices.
 
+Smart Send excludes valid hidden run-import receipts from outgoing text. The receipts stay in the note for duplicate detection. Literal receipt examples inside code remain ordinary source text.
+
 ### Previous thread
 
 After every confirmed manual Send or Ask, the plugin remembers that thread as the note’s default for its next send. **Previous thread** means the last thread used from this note. This happens automatically, including when choosing a new or existing thread; there is no remembering toggle in the dialog or settings. An unconfirmed send does not change the default. Use **Existing thread…** to choose another conversation from the selected project.

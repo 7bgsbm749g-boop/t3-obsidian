@@ -2,6 +2,8 @@ import {Buffer} from 'buffer';
 import {contentHash} from './completion';
 import {responseIds,responseFrame} from './response-container';
 import {streamBlocks} from './stream-block';
+import {runImportReceipts} from './run-import-receipt';
+import {markdownCodeRanges} from './reply-html';
 
 export type Span=[number,number];
 export interface PackedText {hash:string;encoding:'text'|'gzip';data:string}
@@ -122,6 +124,8 @@ export async function rememberResponse(data:SmartSendData,path:string,id:string,
 }
 export async function sourceProjection(data:SmartSendData,noteId:string,document:string){
   const removed:Span[]=[],known:Span[]=[],identities=noteIdentities(data,noteId);
+  const receipts=[...runImportReceipts(document)],code=receipts.length?markdownCodeRanges(document):[];
+  for(const {from,to} of receipts)if(!code.some(([start,end])=>from<end&&to>start))removed.push([from,to]);
   for(const id of responseIds(document)){const frame=responseFrame(document,id);if(frame)removed.push([frame.from,frame.to]);}
   for(const record of Object.values(data.responses).filter(r=>identities.has(r.noteId))){
     const body=await unpackText(data.bodies[record.body]??(()=>{throw Error('The saved agent response is missing.');})());

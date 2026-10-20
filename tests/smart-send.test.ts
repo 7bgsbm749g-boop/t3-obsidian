@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {loadSmartSend,mergeSmartSend,prepareSmartSend,confirmSmartSend,rememberResponse,smartNote,sourceProjection,moveSmartNotes,recoverSmartNote,packText,unpackText} from '../smart-send';
 import {responseAnchor} from '../native-response-projection';
+import {findRunImport,runImportReceipt} from '../run-import-receipt';
 const path='Jobs/Smart.md',destination='machine/project/thread';
 const fresh=()=>loadSmartSend(undefined);
+const importSource={environmentId:'machine',projectId:'project',threadId:'thread'};
+const importReceipt=runImportReceipt({version:1,...importSource,bindingId:'11111111-1111-4111-8111-111111111111',messageId:'prompt',runId:'run'});
 async function send(data= fresh(),text='First request.',scope?:[number,number],id='one',target=destination){const plan=await prepareSmartSend(data,path,target,text,scope);if(plan.text.trim())confirmSmartSend(data,id,target,plan.capture);return {data,...plan};}
 
 test('first send includes the requested source and confirmed repeats have no payload',async()=>{
@@ -39,6 +42,42 @@ test('response records exclude all threads, generated history and final prose wi
   const plan=await prepareSmartSend(data,path,destination,document);assert.equal(plan.text,'User request.\n\n\n\nUser addition.');assert.equal(document.includes('<!--'),false);
   assert.equal(Object.keys(data.bodies).length,1);
   await rememberResponse(data,'Other.md','mirror',body,'','',0);assert.equal(Object.keys(data.bodies).length,1);
+});
+test('imported replies and their tracking receipts stay out of Smart Send without changing the saved note',async()=>{
+  const data=fresh(),body='Imported prompt and progress.\n\nImported final answer.',later='Later imported answer.';
+  const before='My note.\n\n',between='\n'+importReceipt+'\n\n',after='\n\nMy new question.';
+  const document=before+body+between+later+after;
+  await rememberResponse(data,path,'imported',body,before,between+later+after,before.length);
+  await rememberResponse(data,path,'followed',later,before+body+between,after,before.length+body.length+between.length);
+  const plan=await prepareSmartSend(data,path,destination,document);
+  assert.equal(plan.text.replace(/\n+/g,'\n').trim(),'My note.\nMy new question.');
+  assert.doesNotMatch(plan.text,/Imported|imported|t3-run-import/);
+  assert.equal(findRunImport(document,importSource,'prompt')?.runId,'run');
+  confirmSmartSend(data,'sent',destination,plan.capture);
+  assert.equal((await prepareSmartSend(data,path,destination,document)).text,'');
+  assert.equal((await prepareSmartSend(data,path,destination,document+'\nOnly this addition.')).text.trim(),'Only this addition.');
+});
+test('import receipts alone cannot enable a send, and scoped sends retain raw note offsets around receipts',async()=>{
+  const data=fresh();
+  assert.equal((await prepareSmartSend(data,path,destination,importReceipt+'\n'+importReceipt)).text,'');
+  const document='Before'+importReceipt+'After\n'+importReceipt+'\nTail';
+  assert.equal((await prepareSmartSend(data,path,destination,document)).text,'BeforeAfter\n\nTail');
+  const at=document.indexOf('After');
+  assert.equal((await prepareSmartSend(data,path,destination,document,[at,at+5])).text,'After');
+  assert.equal((await prepareSmartSend(data,path,destination,document,[6,at])).text,'');
+  assert.equal((await prepareSmartSend(data,path,destination,document,[document.indexOf('Tail'),document.length])).text,'Tail');
+});
+test('literal import-comment examples and invalid comments remain ordinary Smart Send source',async()=>{
+  const invalid=[
+    '<!-- t3-run-import:%zz -->',
+    '<!-- t3-run-import:'+encodeURIComponent(JSON.stringify({version:2,...importSource,bindingId:'11111111-1111-4111-8111-111111111111',messageId:'prompt',runId:'run'}))+' -->',
+    '<!-- t3-run-import:'+encodeURIComponent(JSON.stringify({version:1,...importSource,bindingId:'wrong',messageId:'prompt',runId:'run'}))+' -->',
+    '<!-- t3-run-import:'+encodeURIComponent(JSON.stringify({version:1,bindingId:'11111111-1111-4111-8111-111111111111',messageId:'prompt',runId:'run'}))+' -->',
+  ];
+  const examples='`'+importReceipt+'`\n\n```md\n'+importReceipt+'\n```\n\n    '+importReceipt+'\n\n'+invalid.join('\n')+'\n\n';
+  const document=examples+importReceipt;
+  const data=fresh(),projection=await sourceProjection(data,smartNote(data,path),document);
+  assert.equal(projection.text,examples);
 });
 test('ordinary quotes and fenced examples remain source; active response bodies are excluded',async()=>{
   const data=fresh(),id='11111111-1111-4111-8111-111111111111',anchor=responseAnchor(id),document=`> My quote\n\n${anchor}\n\n\`\`\`md\n${anchor}\n\`\`\``;
