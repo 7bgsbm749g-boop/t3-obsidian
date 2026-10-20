@@ -2,7 +2,7 @@ import {startMarker,endMarker} from './inline-thread';
 import {containerBody,containerStart,containerEnd,containsResponseBoundary,responseFrame,responseBoundaries} from './response-container';
 import type {Transaction} from '@codemirror/state';
 
-export interface LocalResponse {id:string;body:string;movable?:boolean}
+export interface LocalResponse {id:string;body:string;movable?:boolean;stoppable?:boolean}
 export interface ProjectionRange {id:string;savedFrom:number;savedTo:number;displayFrom:number;displayTo:number;anchor:string}
 export interface ResponseProjection {saved:string;display:string;ranges:ProjectionRange[]}
 export class ProjectionConflict extends Error {}

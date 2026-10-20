@@ -96,6 +96,11 @@ export class NativeResponseView {
   private localIds(document:string){return new Set([...this.knownLocal,...localResponseBindings(document).map(binding=>binding.id)]);}
   scrollControl(key:string){return !this.blocked&&!this.disposed?this.scroll.control(key):undefined;}
   responseForFold(key:string){const matches=this.responses.filter(response=>response.body.includes(`data-t3-fold="${key}"`));return matches.length===1?matches[0].id:undefined;}
+  stopControl(key:string):string|undefined {
+    if(this.blocked||this.disposed||this.unloading||this.view.file!==this.file||!key.endsWith(':active'))return;
+    const matches=this.responses.filter(response=>response.body.includes(`data-t3-fold="${key}"`));
+    return matches.length===1&&matches[0].stoppable?matches[0].id:undefined;
+  }
   toggleScroll(key:string){if(!this.blocked&&!this.disposed)this.scroll.toggle(key);}
   moveControl(key:string):string|undefined {
     if(this.blocked||this.disposed||this.unloading||this.saveFences||this.materialization||this.view.file!==this.file||this.view.getMode()==='preview'||!key.endsWith(':active'))return;
@@ -230,7 +235,7 @@ export class NativeResponseView {
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
     const cm=(this.view.editor as any)?.cm;
     if(cm?.dispatch&&cm!==this.moveEditor){this.releaseMoveHistory?.();this.moveEditor=cm;this.releaseMoveHistory=guardResponseMoveHistory(cm,(transaction,move)=>this.moveTransaction(transaction,move));}
-    if(this.compactTools===((this.view as any).getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable)&&this.displayed()===this.projection.display)return;
+    if(this.compactTools===((this.view as any).getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable&&response.stoppable===this.responses[index].stoppable)&&this.displayed()===this.projection.display)return;
     const saved=this.saved(),projection=this.buildProjection(saved,responses);
     this.responses=responses.map(response=>({...response}));this.projection=projection;
     for(const response of responses)this.materialized.delete(response.id);
