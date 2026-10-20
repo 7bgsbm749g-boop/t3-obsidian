@@ -6,7 +6,8 @@ import type {ResponseRecord} from '../response-record';
 import type {ThreadStreamCallbacks,ThreadStreamItem,watchThread} from '../thread-stream';
 import {type ResponseStorageFiles} from '../response-record';
 import {T3ResponseTooLargeError} from '../t3-response-limits';
-import {normalizeV2StreamItem} from '../orchestration-v2';
+import {normalizeV2StreamItem,normalizeV2Snapshot} from '../orchestration-v2';
+import {handoffProjection,handoffSource,handoffRun,handoffMessage,handoffItem} from './fixtures/worktree-handoff';
 
 class TestClock implements PreviewClock {
   time=0;next=0;pending=new Map<number,{at:number;callback:()=>void}>();
@@ -34,6 +35,39 @@ const completeV2=(h:ReturnType<typeof fixture>,sequence=2,text='Final reply')=>{
 };
 const finalItem=(text='Final reply')=>({id:'opaque-item',threadId:'thread',runId:'turn',messageId:'answer',type:'assistant_message',text,streaming:false,status:'completed',updatedAt:'2026-10-06T03:01:00.000Z'});
 const settle=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
+test('an interrupt arriving before handoff evidence cannot finalize; canonical recovery follows the replacement',async()=>{
+ const canonical=normalizeV2Snapshot({...handoffProjection({runs:[{...handoffSource,id:'turn'},handoffRun],messages:[{id:'prompt',role:'user',runId:'turn',text:'Question',streaming:false},handoffMessage],turnItems:[{...handoffItem,runId:'turn'}]}),snapshotSequence:12});
+ const reads:string[]=[],h=fixture(false,async(path)=>{reads.push(path);return canonical;});
+ h.record.request.localOnly=true;h.preview.tick(true);
+ const first=normalizeV2Snapshot(handoffProjection({runs:[{...handoffSource,id:'turn',status:'running',completedAt:null}],messages:[{id:'prompt',role:'user',runId:'turn',text:'Question',streaming:false}],turnItems:[]}));
+ h.item({kind:'snapshot',snapshot:first});
+ h.item(normalizeV2StreamItem({kind:'event',sequence:11,event:{type:'run.updated',payload:{...handoffSource,id:'turn'}}}));
+ assert.ok(h.updates.every(update=>!update.completionVerified));
+ await settle();assert.equal(h.updates.at(-1)!.turnId,'resume');assert.equal(h.updates.at(-1)!.phase,'running');assert.ok(h.updates.every(update=>!update.completionVerified));assert.equal(reads.length,1);
+ h.preview.dispose();
+});
+
+test('a real handoff chain keeps one response and verifies only the final replacement output',async()=>{
+ const calls:string[]=[],h=fixture(false,async(path,payload)=>{
+  calls.push(path);if(path==='/api/orchestration/turn-item')return {...finalItem('HANDOFF_READY'),id:'handoff-final',runId:'resume',messageId:'handoff-answer'};
+  return normalizeV2Snapshot({...handoffProjection(),snapshotSequence:11});
+ });
+ h.record.request.localOnly=true;h.record.request.intermediateMode='collapse';h.preview.tick(true);
+ h.item({kind:'snapshot',snapshot:normalizeV2Snapshot(handoffProjection({runs:[handoffSource],messages:[{id:'prompt',role:'user',runId:'source',text:'Question',streaming:false}],turnItems:[handoffItem]}))});
+ assert.equal(h.updates.at(-1)!.completionVerified,false);assert.match(h.updates.at(-1)!.body,/Moving to worktree/);
+ await settle();assert.equal(h.updates.at(-1)!.turnId,'resume');assert.equal(h.updates.at(-1)!.phase,'running');
+ h.item(normalizeV2StreamItem({kind:'event',sequence:12,event:{type:'turn-item.updated',payload:{...finalItem('HANDOFF_READY'),id:'handoff-final',runId:'resume',messageId:'handoff-answer'}}}));
+ h.item(normalizeV2StreamItem({kind:'event',sequence:13,event:{type:'run.updated',payload:{...handoffRun,status:'completed',completedAt:'2026-10-20T20:00:10Z'}}}));
+ await settle();const final=h.updates.at(-1)!;
+ assert.equal(final.completionVerified,true);assert.equal(final.phase,'complete');assert.deepEqual(final.turnIds,['source','resume']);assert.match(final.body,/HANDOFF_READY/);
+ assert.doesNotMatch(final.body,/Moving to worktree|Continue the bounded synthetic task/);assert.equal(calls.filter(path=>path==='/api/orchestration/turn-item').length,1);h.preview.dispose();
+});
+
+test('a genuine interruption finalizes after canonical confirmation even when an unrelated run is active',async()=>{
+ const canonical=normalizeV2Snapshot(handoffProjection({runs:[handoffSource,{id:'unrelated',ordinal:2,status:'running',userMessageId:'other'}],messages:[{id:'prompt',role:'user',runId:'source',text:'Question',streaming:false}],turnItems:[]}));
+ const h=fixture(false,async()=>canonical);h.record.request.localOnly=true;h.preview.tick(true);h.item({kind:'snapshot',snapshot:canonical});
+ assert.equal(h.updates.at(-1)!.completionVerified,false);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.updates.at(-1)!.phase,'interrupted');assert.equal(h.updates.at(-1)!.turnId,'source');h.preview.dispose();
+});
 test('a local reply follows two exact delegated deliveries and verifies only the last parent result',async()=>{
  const reads:string[]=[],h=fixture(false,async(_path,payload)=>{reads.push(payload.itemId);return {...finalItem('Combined report'),id:'final-item',runId:'resume-two',messageId:'combined'};});
  h.record.request.localOnly=true;h.record.request.intermediateMode='collapse';h.preview.tick(true);

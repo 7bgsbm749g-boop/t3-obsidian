@@ -7,6 +7,7 @@ import {parseQuestionToken} from './questions';
 import {clearApprovalControls} from './approvals';
 import {commandId} from './direct';
 import type {ThreadAccess} from './thread-stream';
+import {delegatedWork} from './inline-delegation';
 
 /** Seal the visible transcript, without rebuilding it from a possibly stale stream. */
 export function stoppedResponseBody(body:string):string {
@@ -31,8 +32,8 @@ export function stoppedResponseBody(body:string):string {
       const summary=/data-t3-tool-summary="([^"]+)"/.exec(line)?.[1]??`Used ${count} ${count===1?'tool':'tools'}`;
       line=line.replace('class="send-to-t3-response-activity"','class="send-to-t3-tool-group"').replace(' data-t3-live-tool="true"','').replace(/<summary>[\s\S]*?<\/summary>/,`<summary><span data-t3-tool-icon="hammer" aria-hidden="true"></span><span>${summary} · stopped</span></summary>`);
     }
-    if(!/^> \[!t3-progress\][+-] \*\*[^\n]+ · (?:Working|Reconnecting|Error)\*\*/.test(line))return line;
-    return line.replace(/ · (?:Working|Reconnecting|Error)\*\*/, ' · Interrupted**').replace(/ <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>/,'').replace(/<span class="send-to-t3-run-timer" data-t3-start="(\d+)"(?: data-t3-end="\d+")? aria-label="Elapsed run time">[^<]*<\/span>/,(_match,start)=>{
+    if(!/^> \[!t3-progress\][+-] \*\*[^\n]+ · (?:Working|Reconnecting|Moving to worktree|Waiting for subagents|Error)\*\*/.test(line))return line;
+    return line.replace(/ · (?:Working|Reconnecting|Moving to worktree|Waiting for subagents|Error)\*\*/, ' · Interrupted**').replace(/ <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>/,'').replace(/<span class="send-to-t3-run-timer" data-t3-start="(\d+)"(?: data-t3-end="\d+")? aria-label="Elapsed run time">[^<]*<\/span>/,(_match,start)=>{
       const end=Date.now(),timing={startedAt:new Date(Number(start)).toISOString(),finishedAt:new Date(end).toISOString()};
       return `<span class="send-to-t3-run-timer" data-t3-start="${start}" data-t3-end="${end}" aria-label="Elapsed run time">${elapsedRun(timing)}</span>`;
     });
@@ -41,7 +42,7 @@ export function stoppedResponseBody(body:string):string {
   let offset=0;
   const lines=body.split('\n').filter(line=>{
     const position=offset;offset+=line.length+1;
-    return code.some(([from,to])=>position>=from&&position<to)||!(/^(?:> )?<span class="send-to-t3-response-activity" role="status" aria-live="polite">.*<\/span>$/.test(line)||/^\*\*[^\n]+ · (?:Sending…|Working|Reconnecting|Stopped|Interrupted|Error)\*\*(?: <span class="send-to-t3-run-timer"[^>]*>[^<]*<\/span>)?(?: <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>)?\s*$/.test(line));
+    return code.some(([from,to])=>position>=from&&position<to)||!(/^(?:> )?<span class="send-to-t3-response-activity" role="status" aria-live="polite">.*<\/span>$/.test(line)||/^\*\*[^\n]+ · (?:Sending…|Working|Reconnecting|Moving to worktree|Waiting for subagents|Stopped|Interrupted|Error)\*\*(?: <span class="send-to-t3-run-timer"[^>]*>[^<]*<\/span>)?(?: <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>)?\s*$/.test(line));
   });
   // Rendered replies normally already close fences; also repair old/broken output.
   let fence:{mark:string;prefix:string}|undefined;
@@ -81,11 +82,24 @@ export async function interruptStoppedResponse(accessFor:()=>Promise<ThreadAcces
       const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
       turnId??=turnForMessage(state,messageId!);
       if(!turnId)throw Error('T3 has not identified the stopped response turn.');
-      const turn=state.turns?.[turnId]??(state.latestTurn?.turnId===turnId?state.latestTurn:undefined);
+      const continuation=delegatedWork(state,[turnId]);
+      turnId=continuation.turnId??turnId;
+      let turn=state.turns?.[turnId]??(state.latestTurn?.turnId===turnId?state.latestTurn:undefined);
+      if(continuation.moving&&turn?.state==='interrupted')throw Error('T3 has not identified the worktree continuation to stop. Retry Stop.');
+      if(turn?.state==='queued'){
+        if(expired)return;
+        // Cancel only this verified continuation. If it starts concurrently,
+        // re-read its exact identity and interrupt that run instead.
+        try{await access.api('/api/orchestration/dispatch',{type:'queued-run.cancel',commandId:commandId(requestId,'cancel:'+turnId),threadId,runId:turnId});}catch(error){if(expired)throw error;}
+        const latest=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:await readInlineSnapshot(access,threadId,projectId,{messageIds:messageId?[messageId]:[],turnIds:[turnId]})}).state;
+        turn=latest.turns?.[turnId]??(latest.latestTurn?.turnId===turnId?latest.latestTurn:undefined);
+        if(!turn||turn.state==='queued')throw Error('T3 did not confirm cancellation of the worktree continuation. Retry Stop.');
+      }
       if(turn&&['completed','interrupted','cancelled','error'].includes(turn.state)||state.checkpoints?.some(checkpoint=>checkpoint.turnId===turnId&&checkpoint.status==='ready'&&!!checkpoint.completedAt))return;
-      if(state.session?.activeTurnId&&state.session.activeTurnId!==turnId)throw Error('The response turn is no longer active; its final state is waiting for confirmation.');
+      if(turn?.state!=='running'&&state.session?.activeTurnId&&state.session.activeTurnId!==turnId)throw Error('The response turn is no longer active; its final state is waiting for confirmation.');
       if(expired)return;
-      await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(requestId,'interrupt'),threadId,turnId,createdAt});
+      const handedOff=Object.values(state.worktreeHandoffs??{}).some(handoff=>handoff.turnId===turnId);
+      await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(requestId,handedOff?'interrupt:'+turnId:'interrupt'),threadId,turnId,createdAt});
     }finally{close('stop-complete');}
   })();
   try{await Promise.race([work,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{expired=true;close('stop-timeout');reject(Error('The response was finished in the note, but T3 did not acknowledge the interrupt.'));},timeoutMs);})]);}

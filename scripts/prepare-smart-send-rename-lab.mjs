@@ -9,6 +9,27 @@ const evidence=resolve(process.argv[2]||'');
 if(!evidence.startsWith('/home/ubuntu/backups/send-to-t3-code/'))throw Error('Private evidence directory required.');
 await mkdir(evidence,{recursive:true});
 const record=join(evidence,'SETUP.json');
+// Refresh only the reviewed runtime in an already prepared synthetic lab.
+// This also permits checking the final immutable release without replacing
+// device credentials, settings, or the original restoration backups.
+if(process.argv.includes('--refresh')){
+  await access(record);
+  const {createHash}=await import('node:crypto'),hash=bytes=>createHash('sha256').update(bytes).digest('hex');
+  const artifacts=await Promise.all([['main.js','dist/main.js'],['manifest.json','manifest.json'],['styles.css','styles.css']].map(async([name,path])=>[name,await readFile(path)]));
+  const settings={};
+  for(const role of ['a','b']){
+    const plugin=`/home/ubuntu/vaults/Sync Test ${role.toUpperCase()}/.obsidian/plugins/send-to-t3-code`;
+    const before=hash(await readFile(join(plugin,'data.json')));
+    for(const [name,bytes] of artifacts)await writeFile(join(plugin,name),bytes);
+    if(before!==hash(await readFile(join(plugin,'data.json'))))throw Error('Synthetic settings changed during runtime refresh.');
+    settings[role]=before;
+  }
+  const hashes=Object.fromEntries(artifacts.map(([name,bytes])=>[name,hash(bytes)]));
+  const version=JSON.parse(artifacts.find(([name])=>name==='manifest.json')[1].toString()).version;
+  const receipt=join(evidence,`RUNTIME-${version}-${hashes['main.js'].slice(0,12)}.json`);
+  try{await writeFile(receipt,JSON.stringify({version,hashes,settings},null,2)+'\n',{flag:'wx'});}catch(error){if(error.code!=='EEXIST')throw error;}
+  console.log('Refreshed synthetic runtime; settings unchanged. Reload the lab clients.');process.exit(0);
+}
 if(process.argv.includes('--restore')){
   const setup=JSON.parse(await readFile(record,'utf8'));
   for(const role of ['a','b']){

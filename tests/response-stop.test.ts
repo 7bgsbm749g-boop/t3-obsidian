@@ -3,6 +3,35 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {interruptStoppedResponse,stopResponseEdit,stoppedResponseBody} from '../response-stop';
 import {initialRegion,replaceRegion} from '../inline-thread';
+import {normalizeV2Snapshot} from '../orchestration-v2';
+import {handoffProjection,handoffSource,handoffRun} from './fixtures/worktree-handoff';
+
+test('Stop resolves the verified replacement run instead of accepting the interrupted source as finished',async()=>{
+ const commands:any[]=[];
+ await interruptStoppedResponse(async()=>({origin:'https://test',api:async(_path,payload)=>{if(payload){commands.push(payload);return {};}return normalizeV2Snapshot(handoffProjection());}}),randomUUID(),'thread','source');
+ assert.equal(commands.length,1);assert.equal(commands[0].turnId,'resume');
+});
+
+test('Stop cancels a queued continuation and handles its concurrent start without stopping unrelated work',async()=>{
+ for(const race of [false,true]){
+  const commands:any[]=[];let reads=0;
+  await interruptStoppedResponse(async()=>({origin:'https://test',api:async(_path,payload)=>{
+   if(payload){commands.push(payload);if(race&&payload.type==='queued-run.cancel')throw Error('Started concurrently');return {};}
+   return normalizeV2Snapshot(handoffProjection({runs:[handoffSource,{...handoffRun,status:++reads===1?'queued':race?'running':'cancelled'}]}));
+  }}),randomUUID(),'thread','source');
+  assert.equal(commands[0].type,'queued-run.cancel');assert.equal(commands[0].runId,'resume');
+  assert.equal(commands.length,race?2:1);if(race){assert.equal(commands[1].turnId,'resume');assert.notEqual(commands[0].commandId,commands[1].commandId);}
+ }
+});
+
+test('Stop does not report success while an identified handoff still lacks its continuation run',async()=>{
+ await assert.rejects(interruptStoppedResponse(async()=>({origin:'https://test',api:async()=>normalizeV2Snapshot(handoffProjection({runs:[handoffSource],messages:[]}))}),randomUUID(),'thread','source'),/has not identified the worktree continuation/);
+});
+
+test('Stop freezes a Moving to worktree header and removes its spinner',()=>{
+ const body=stoppedResponseBody('> [!t3-progress]+ **Test · Moving to worktree** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n> Previous progress');
+ assert.match(body,/Test · Interrupted/);assert.doesNotMatch(body,/Moving to worktree|inline-spinner/);assert.match(body,/Previous progress/);
+});
 
 test('stop cleanup preserves the displayed transcript and status/tag examples inside code',()=>{
   const id=randomUUID(),initial=initialRegion(id);

@@ -1,5 +1,6 @@
 import type {InlineActivity,InlineMessage,InlineThreadState,InlineTurn,InlineSubagent} from './inline-thread';
 import {htmlRenderFromToolItem} from './html-results';
+import {worktreeHandoff,mergeWorktreeHandoffs} from './inline-worktree';
 
 export const T3_PROTOCOL_VERSION=2;
 export const T3_PROTOCOL_HEADER='x-t3-orchestration-protocol';
@@ -94,7 +95,8 @@ export function normalizeV2Snapshot(snapshot:any){
   const backgroundLiveness=items.some(i=>['subagent','background_task','background_command','monitor'].includes(i.type)&&!terminal(i.status))||Object.values(subagents).some(i=>i.completionWake==='always'&&(!terminal(i.status)||i.completionDelivery?.state==='pending'));
   return {snapshotSequence:snapshot.snapshotSequence,page:{hasMore:snapshot.hasMoreHistory===true},
     thread:{...p.thread,protocolVersion:2,messages,activities,
-      turns:Object.fromEntries(runs.map(r=>[r.id,responseRun(r,messages)])),subagents,latestTurn:current?responseRun(current,messages):undefined,
+      turns:Object.fromEntries(runs.map(r=>[r.id,responseRun(r,messages)])),subagents,
+      worktreeHandoffs:Object.fromEntries(items.flatMap(item=>{const handoff=worktreeHandoff(item);return handoff?[[handoff.id,handoff]]:[];})),latestTurn:current?responseRun(current,messages):undefined,
       session:sessionFor(running??current,p.thread.runtimeMode,failure?.message),
       hasPendingApprovals:pending.some(i=>i.type==='approval_request'),hasPendingUserInput:pending.some(i=>i.type==='user_input_request'),backgroundLiveness,
       v2Requests:requests,v2Controls:Object.fromEntries(controls.map(i=>[i.id,i])),
@@ -138,6 +140,8 @@ export function normalizeV2TitleItem(item:any):any {
 export function applyV2ControlEvent(state:InlineThreadState,event:any):InlineThreadState {
   if(event.type==='v2.subagent.updated')return {...state,subagents:{...state.subagents,[event.payload.id]:responseSubagent(event.payload)}};
   const p=event.payload,requests={...state.v2Requests},controls={...state.v2Controls};
+  const handoff=event.type==='v2.turn-item.updated'?worktreeHandoff(p):undefined;
+  if(handoff)state={...state,worktreeHandoffs:mergeWorktreeHandoffs(state.worktreeHandoffs,{[handoff.id]:handoff})};
   if(event.type==='v2.runtime-request.updated')requests[p.id]=p;
   else if(['user_input_request','approval_request'].includes(p.type))controls[p.id]=p;
   if(event.type==='v2.turn-item.updated'&&p.type==='reasoning'){

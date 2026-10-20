@@ -1,4 +1,5 @@
 import type {InlineThreadState,InlineTurn} from './inline-thread';
+import {worktreeWork} from './inline-worktree';
 
 const terminal=(status:string)=>['completed','failed','interrupted','cancelled','rolled_back','expired'].includes(status);
 const turnsFor=(state:InlineThreadState):Record<string,InlineTurn>=>({...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})});
@@ -18,6 +19,11 @@ export function delegatedTurnIds(state:InlineThreadState,tracked:string[]):strin
         const messageId=turn.delegatedCompletion?.delivery?.messageId;
         if(messageId)for(const target of Object.values(turns))if(target.messageId===messageId)add(target.turnId);
       }
+    }
+    for(const handoff of Object.values(state.worktreeHandoffs??{})){
+      if(handoff.status!=='scheduled'||!handoff.turnId)continue;
+      if(ids.has(handoff.sourceTurnId))add(handoff.turnId);
+      if(ids.has(handoff.turnId))add(handoff.sourceTurnId);
     }
     for(const child of Object.values(state.subagents??{})){
       if(child.origin!=='app_owned'||child.completionWake!=='always')continue;
@@ -53,8 +59,9 @@ export function delegatedWork(state:InlineThreadState,tracked:string[]){
     return !next||next.state==='queued';
   });
   const running=turnIds.some(id=>turns[id]?.state==='running'||turns[id]?.state==='queued');
-  const waiting=active.length>0||unobserved||delivery;
+  const worktree=worktreeWork(state,turnIds);
+  const waiting=active.length>0||unobserved||delivery||worktree.waiting;
   const turnId=turnIds.at(-1);
-  return {turnIds,turnId,waiting,running,label:active.length?`Waiting for ${active.length} subagent${active.length===1?'':'s'}`:'Waiting for subagent results',
-    paused:waiting&&!running&&!!turnId&&turns[turnId]?.state==='completed'};
+  return {turnIds,turnId,waiting,running,moving:worktree.waiting,handoffFailed:worktree.failed,label:worktree.waiting?'Moving to worktree':active.length?`Waiting for ${active.length} subagent${active.length===1?'':'s'}`:'Waiting for subagent results',
+    paused:waiting&&!running&&!!turnId&&['completed','interrupted'].includes(turns[turnId]?.state)};
 }

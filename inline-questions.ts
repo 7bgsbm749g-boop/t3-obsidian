@@ -83,6 +83,8 @@ function pendingQuestionReply(item:InlineQuestionFollow):boolean {
 export function inlineQuestionPhase(state:InlineThreadState,turnId:string,follows:InlineQuestionFollow[]=[]){
   const observed=turnPhase(state,turnId);
   const delegated=delegatedWork(state,[turnId]);
+  if(delegated.handoffFailed)return 'error';
+  if(observed==='interrupted'&&delegated.moving)return 'running';
   if(observed==='complete'&&(delegated.waiting||delegated.running))return 'running';
   const phase=observed==='running'&&state.session?.activeTurnId!==turnId&&follows.some(item=>item.turnId===turnId&&item.completed)?'complete':observed;
   // Resolution precedes projection of the new async-answer turn. Show that

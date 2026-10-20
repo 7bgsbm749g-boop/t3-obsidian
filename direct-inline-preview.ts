@@ -9,6 +9,7 @@ import {logFailure} from './diagnostics';
 import {checkFinalResponse,finalResponseKey} from './final-response';
 import {responseTooLarge,type StreamReadFailure} from './t3-response-limits';
 import {signInRequired,type ResponseConnectionIssue} from './sign-in-state';
+import {delegatedWork} from './inline-delegation';
 
 export interface DirectInlineUpdate {request:ResponseRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
 type Watch=typeof watchThread;
@@ -39,6 +40,10 @@ export class DirectInlinePreview {
   private verification?:Promise<void>;
   private nextVerification=0;
   private terminal=false;
+  private interruptedTurnId?:string;
+  private verifiedInterruptions=new Set<string>();
+  private interruptionVerification?:Promise<void>;
+  private nextInterruptionVerification=0;
   private connectionIssue?:ResponseConnectionIssue;
   constructor(record:ResponseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock,private connectionChanged?:(issue?:ResponseConnectionIssue)=>void){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
   private connectionFailed(error:unknown){
@@ -74,7 +79,7 @@ export class DirectInlinePreview {
     if(this.stopped||this.connectionIssue?.kind==='sign-in-required')return;
     const record=this.record;
     if(!open||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.state?.status==='conflict'){this.suspend();return;}
-    if(this.monitor){if(this.terminal&&(record.request.deviceCompletion||record.request.localOnly))this.verifyCompletion();return;}
+    if(this.monitor){if(this.interruptedTurnId)this.verifyInterruption();if(this.terminal&&(record.request.deviceCompletion||record.request.localOnly))this.verifyCompletion();return;}
     const generation=++this.generation;
     this.monitor=this.watch(record.request.threadId,this.access,{
       item:item=>{if(!this.stopped&&this.generation===generation)this.item(item);},
@@ -117,6 +122,12 @@ export class DirectInlinePreview {
     const inputs=questionConversationInputs(this.state,this.incoming??[],this.follows,this.prose);
     const conversation=this.turnIds.length>1||inputs.length?{messages:this.prose,steering:inputs,preserveHistory:questions.continued}:undefined;
     let phase=inlineQuestionPhase(this.state,turnId,this.follows);
+    const work=delegatedWork(this.state,this.turnIds);
+    const interrupted=this.state.protocolVersion===2&&phase==='interrupted';
+    this.interruptedTurnId=interrupted?turnId:work.moving?Object.values(this.state.worktreeHandoffs??{}).find(handoff=>this.turnIds.includes(handoff.sourceTurnId)&&this.state.turns?.[handoff.sourceTurnId]?.state==='interrupted')?.sourceTurnId:undefined;
+    // An interrupt can arrive ahead of the tool result and continuation
+    // message. A canonical read must settle that gap before a final save.
+    if(interrupted&&!this.verifiedInterruptions.has(turnId))phase='running';
     if(steering.some(input=>!input.confirmed||!turnForMessage(this.state,input.messageId)))phase='running';
     // Session-ready can precede the final assistant message. Display can
     // update immediately, but completion requires non-streaming final prose.
@@ -133,7 +144,32 @@ export class DirectInlinePreview {
     const questionActivities=this.state.activities.filter(activity=>activity.kind.startsWith('user-input.')||activity.kind==='provider.user-input.respond.failed');
     this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,turnId,turnIds:this.turnIds.slice(),phase:this.failure&&!completionVerified?'error':phase,completionVerified,failure:completionVerified?undefined:this.failure,checkpoint:inlineBindingCheckpoint(this.state),...(questionActivities.length?{questionActivities}:{})});
     if((request.deviceCompletion||request.localOnly)&&terminal&&!completionVerified)this.verifyCompletion();
+    if(this.interruptedTurnId)this.verifyInterruption();
     return true;
+  }
+  private verifyInterruption(){
+    if(this.interruptionVerification||this.clock.now()<this.nextInterruptionVerification||this.stopped||this.failure?.operation==='snapshot')return;
+    const turnId=this.interruptedTurnId;if(!turnId)return;
+    if(this.verifiedInterruptions.has(turnId)&&!delegatedWork(this.state,this.turnIds).moving)return;
+    const generation=this.generation,request=this.record.request;
+    let timeout:unknown;
+    const work=Promise.race([
+      this.access().then(async access=>{try{return await readInlineSnapshot(access,request.threadId,request.projectId,{messageIds:[this.messageId()],turnIds:this.turnIds});}finally{await access.close?.();}}),
+      new Promise<never>((_resolve,reject)=>{timeout=this.clock.later(()=>reject(Error('T3 interruption verification timed out.')),10_000);}),
+    ]).then(snapshot=>{
+      if(this.stopped||generation!==this.generation)return;
+      const checked=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+      if(checked.turns?.[turnId]?.state!=='interrupted')return;
+      this.verifiedInterruptions.add(turnId);
+      // Preserve live prose/cursors when the canonical read raced newer
+      // events, while retaining its exact durable continuation identities.
+      this.state=restoreInlineBindings(this.state,inlineBindingCheckpoint(checked));
+      const next=applyThreadItem(this.state,{kind:'snapshot',snapshot}).state;this.state=next;
+      this.nextInterruptionVerification=this.clock.now()+1200;
+      this.schedule(true);
+    }).catch(error=>{if(!this.stopped&&generation===this.generation){logFailure('stream.direct.interruption-verification',error,{bindingId:request.id});if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:'snapshot'};this.schedule(true);}else this.connectionFailed(error);}})
+      .finally(()=>{this.clock.cancel(timeout);if(this.interruptionVerification===work){this.interruptionVerification=undefined;this.nextInterruptionVerification=this.clock.now()+1200;}});
+    this.interruptionVerification=work;
   }
   private verifyCompletion(){
     if(this.verification||this.clock.now()<this.nextVerification||this.stopped)return;
@@ -164,6 +200,6 @@ export class DirectInlinePreview {
     this.verification=work;
   }
   reconnect(open:boolean){if(this.stopped)return;this.suspend();this.connectionIssue=undefined;this.connectionChanged?.();this.tick(open);}
-  suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;this.verification=undefined;this.nextVerification=0;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
+  suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;this.verification=undefined;this.interruptionVerification=undefined;this.nextInterruptionVerification=0;this.nextVerification=0;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
   dispose(){this.stopped=true;this.suspend();}
 }

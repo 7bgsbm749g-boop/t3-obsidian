@@ -6,7 +6,7 @@ import {delegatedWork} from './inline-delegation';
 /** Completion is an exact persisted run, not a ready connection or replay end. */
 export function finalResponseKey(state:InlineThreadState,turnId:string):string|undefined {
   const delegated=delegatedWork(state,[turnId]);
-  if(delegated.waiting||delegated.running||delegated.turnId!==turnId)return;
+  if(delegated.waiting||delegated.running||delegated.handoffFailed||delegated.turnId!==turnId)return;
   const turn=state.turns?.[turnId]??(state.latestTurn?.turnId===turnId?state.latestTurn:undefined);
   if(turn?.state!=='completed'||!turn.completedAt)return;
   const message=inlineTurnMessages(state,turnId).at(-1);
