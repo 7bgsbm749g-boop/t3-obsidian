@@ -33,7 +33,7 @@ test('active notes shine through ancestors without matching sibling folder prefi
   for(const item of [file,parent,nested])assert.equal(item.label.getAttribute('data-t3-active-title'),'true');
   assert.equal(sibling.label.hasAttribute('data-t3-active-title'),false);
   assert.equal(parent.row.children.length,1,'Ancestor activity uses only its original label');
-  const badge=file.row.children[1];assert.equal(badge.children.length,1);assert.equal(badge.children[0].className,'send-to-t3-note-input');
+  const badge=file.row.children[1];assert.equal(badge.children.length,0);assert.equal(badge.getAttribute('aria-label'),'1 active T3 response; 1 T3 response needs input');
   notes.set('App/Nested/Note.md',note(0));decorateNoteIndicators(root as any,notes);
   for(const item of [file,parent,nested])assert.equal(item.label.hasAttribute('data-t3-active-title'),false);
   assert.equal(file.row.children.length,1,'Completed responses keep no persistent badge beside the existing label');

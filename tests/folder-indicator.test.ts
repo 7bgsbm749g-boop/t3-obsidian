@@ -93,10 +93,13 @@ test('note decorations follow transitions, coexist with links, and project folde
   for(const title of [file,folder]){
     assert.equal(title.children.length,1);assert.equal(title.children[0].getAttribute('data-t3-state'),'active input');
     assert.equal(title.children[0].getAttribute('aria-label'),'2 active T3 responses; 1 T3 response needs input');
+    assert.equal(title.children[0].children.length,0,'Pending input adds no visible dot');
   }
   assert.equal(other.children.length,0);
   notes.set('App/App.md',{active:0,input:1,complete:2,total:3});decorateNoteIndicators(root as any,notes,resolve);
   assert.equal(folder.children[0].getAttribute('data-t3-state'),'input');
+  assert.equal(folder.children[0].getAttribute('aria-label'),'1 T3 response needs input');
+  for(const title of [file,folder])assert.equal(title.children[0].children.length,0,'Input-only responses add no visible dot');
   notes.set('App/App.md',{active:0,input:0,complete:3,total:3});decorateNoteIndicators(root as any,notes,resolve);
   assert.equal(file.children.length,0,'Completion removes the old badge; unread attention uses only the title glow');
   assert.equal(folder.children.length,0,'Folder notes do not retain a completed badge');
