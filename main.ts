@@ -1,9 +1,10 @@
-import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,rememberResponse,confirmSmartSend,moveSmartNotes,sourceProjection,smartNote,type SmartSendData,type SmartCapture,type Span} from './smart-send';
+import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,rememberResponse,confirmSmartSend,moveSmartNotes,recoverSmartNote,sourceProjection,smartNote,type SmartSendData,type SmartCapture,type Span} from './smart-send';
+import {DuplicateResponseLocation} from './response-location';
 import {retainedLocalFinal,restoredLocalFinal} from './local-final-cache';
 import {HtmlResultStore} from './html-result-store';
 import {HtmlResultViews} from './html-result-view';
 import {hasResponseMarkers} from './inline-thread';
-import {responseIds} from './response-container';
+import {responseIds,responseFrame} from './response-container';
 import {noteSteeringTarget} from './note-steering';
 import {interruptStoppedResponse} from './response-stop';
 import {localResponseBindings,localResponseRange} from './local-response-binding';
@@ -1118,6 +1119,7 @@ export default class SendToT3 extends Plugin {
     return !!(await prepareSmartSend(this.smartData(),file.path,await this.smartKey(project,this.connection(project),destination.threadId??''),document,context?.smartScope)).text.trim();
   }
   private async recoverSmartReplies(path:string,document:string){
+    await this.recoverSmartSource(path,document);
     const data=this.smartData(),bindings=responseBindingRequests(this.settings.responseBindings??{}).filter(request=>request.notePath===path&&!hasResponseMarkers(document,request.id)&&!Object.keys(data.responses).some(id=>id.startsWith(request.id+':')));
     const sources=new Map<string,{environment:string;project:string;thread:string}>();
     for(const request of bindings)sources.set(JSON.stringify([request.threadEnvironmentId,request.projectId,request.threadId]),{environment:request.threadEnvironmentId,project:request.projectId,thread:request.threadId});
@@ -1151,6 +1153,28 @@ export default class SendToT3 extends Plugin {
       })();this.smartRecovering.set(key,work);void work.finally(()=>this.smartRecovering.delete(key)).catch(()=>{});}
       await work;
     }
+  }
+  private async recoverSmartSource(path:string,document:string){
+    const data=this.smartData(),visible=new Set(responseIds(document).filter(id=>!!responseFrame(document,id))),candidates=new Set<string>();
+    if(!visible.size)return;
+    for(const [id,head] of Object.entries(data.heads)){
+      const note=data.notes[head.noteId];
+      if(!note||note.path===path||this.app.vault.getAbstractFileByPath(note.path))continue;
+      const bindings=new Set(head.bindings??[]);
+      // Releases before binding provenance was retained can still prove the
+      // original source's deterministic stream ID from its send receipt.
+      if(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)){
+        bindings.add(commandId(id,`binding:${note.path}`));
+        for(const record of this.settings.noteContexts??[])if(record.notePath&&record.messageId===commandId(id,'message')&&head.destination===smartDestination(record.environmentId,record.projectId,record.threadId))bindings.add(commandId(id,`binding:${record.notePath}`));
+      }
+      for(const binding of bindings)if(visible.has(binding)){
+        // Start at the absent old path so the existing locator performs its
+        // shared recovery scan and refuses duplicate/copied response blocks.
+        try{if(await deviceNoteIO(this.app).locateNote(binding,note.path)===path)candidates.add(head.noteId);}
+        catch(error){if(!(error instanceof DuplicateResponseLocation))throw error;}
+      }
+    }
+    if(recoverSmartNote(data,path,[...candidates],old=>!!this.app.vault.getAbstractFileByPath(old)))await this.save(true);
   }
   private openAsk(file:TFile,selection='',captured?:EditorChatContext,choose=false){
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -2456,7 +2480,13 @@ export default class SendToT3 extends Plugin {
       ...(request.inlineHost?.localOnly?{inlineLocal:true as const,inlineNotePath:request.inlineHost.notePath}:{}),...(inlineJobId?{inlineJobId:request.inlineHost?.id??inlineJobId}:{}),...(request.inlineBindings?{inlineBindings:request.inlineBindings.map(binding=>({id:binding.id,host:binding.host,notePath:binding.notePath}))}:{}),...(inlineHost?{inlineHost,inlineVersion:(request.inlineHost?.version??2) as 1|2|3}:{})});
   }
   rememberStarted(request:Request,threadId:string) {
-    if(request.smartSend)confirmSmartSend(this.smartData(),request.id,smartDestination(request.connection.environmentId??request.connection.connectionId??'local',request.project.id,threadId),request.smartSend);
+    if(request.smartSend){
+      const path=request.noteThread?.notePath??request.completion?.notePath;
+      const bindings=[...(request.inlineBindings??(request.inlineHost?[request.inlineHost]:[])).filter(binding=>binding.notePath===path).map(binding=>binding.id),
+        ...(request.inlineSteering?.targets??(request.inlineSteering?[{jobId:request.inlineSteering.jobId,notePath:path}]:[])).filter(target=>target.notePath===path).map(target=>target.jobId),
+        ...(request.inlineFollow&&(!request.inlineFollow.notePath||request.inlineFollow.notePath===path)?[request.inlineFollow.jobId]:[])];
+      confirmSmartSend(this.smartData(),request.id,smartDestination(request.connection.environmentId??request.connection.connectionId??'local',request.project.id,threadId),request.smartSend,bindings);
+    }
     if(request.folderLinkIntent&&!this.settings.folderLinks.some(link=>link.folderPath===request.folderLinkIntent!.folderPath))this.settings.folderLinks=upsertFolderLink(this.settings.folderLinks,request.folderLinkIntent);
     const remembered=request.noteThread??request.noteLink; // Resume requests saved before the terminology change.
     if(remembered){

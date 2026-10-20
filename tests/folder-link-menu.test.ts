@@ -1,4 +1,6 @@
 import {rememberResponse} from '../smart-send';
+import {moveSmartNotes} from '../smart-send';
+import {commandId} from '../direct';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -427,6 +429,34 @@ test('whole-note sends, command-bar asks and confirmed receipts use one Smart Se
   const start=document.indexOf(response),replyAnchor={text:response,start,end:start+response.length,before:document.slice(Math.max(0,start-80),start),after:document.slice(start+response.length,start+response.length+80)};
   await h.plugin.openManualAction(file,'Explain this reply.',response,{editor,view,anchor:replyAnchor,canonicalAnchor:replyAnchor,snapshot:document},false);
   assert.equal(sent.length,5);assert.match(sent[4].prompt,/Selected text:\nAgent final answer\./);assert.doesNotMatch(sent[4].prompt,/First instruction|Second instruction/);
+ }finally{h.plugin.onunload();}
+});
+
+test('bundled Send and Ask recover a source renamed through delete/create before dispatch',async()=>{
+ const h=await folderMenuHarness();
+ try{
+  const original='Notes/Untitled.md',renamed='Notes/Named.md',requestId=randomUUID(),binding=commandId(requestId,`binding:${original}`);
+  const {file}=h.fileMenu(original,false);Object.assign(file,{basename:'Untitled',stat:{ctime:123}});
+  let document='First instruction.';const sent:any[]=[];
+  h.plugin.app.vault.read=async()=>document;h.plugin.app.vault.getFileByPath=(path:string)=>path===file.path?file:undefined;
+  h.plugin.app.vault.getAbstractFileByPath=h.plugin.app.vault.getFileByPath;h.plugin.app.vault.getMarkdownFiles=()=>[file];
+  h.plugin.app.workspace.getLeavesOfType=()=>[];
+  h.plugin.settings.autoSettleThreads=false;h.plugin.settings.inlineStreaming.enabled=false;
+  h.plugin.settings.folderLinks=[{id:'link',folderPath:'Notes',connectionId:'c',environmentId:'env',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot}];
+  h.plugin.requestTitle=async()=> 'Named';h.plugin.dispatch=async(request:any)=>{sent.push(request);h.plugin.rememberStarted(request,'smart-thread');await h.plugin.save();return 'smart-thread';};
+  await h.plugin.send(file,h.project,{id:requestId,streamReply:false,throwOnError:true});
+  const oldId=sent[0].smartSend.noteId;
+  moveSmartNotes(h.plugin.smartData(),original);file.path=renamed;
+  document+=` Added detail.\n:::send-to-t3-response data-t3-response="${binding}"\n\n\n\n:::/send-to-t3-response`;
+  // Model discovery on the receiving device before settings catch up.
+  await rememberResponse(h.plugin.smartData(),renamed,'unrelated-reply','Other response.','','',0);
+  await h.plugin.send(file,h.project,{threadId:'smart-thread',streamReply:false,throwOnError:true});
+  assert.equal(sent.length,2);assert.match(sent[1].prompt,/Added detail/);assert.doesNotMatch(sent[1].prompt,/First instruction/);
+  assert.equal(h.plugin.smartData().notes[oldId].path,renamed);assert.ok(!h.plugin.smartData().notes[oldId].deleted);
+  const editor={getValue:()=>document,getSelection:()=>'',getCursor:()=>({line:0,ch:0}),posToOffset:()=>0},view={file,editor};
+  document=document.replace('Added detail.','Added detail. Another detail.');
+  await h.plugin.sendChat(document,{path:renamed},{threadId:'smart-thread',sourceContext:{editor,view,smartDocument:document,smartQuestion:'Why?'}});
+  assert.match(sent[2].prompt,/Another detail/);assert.match(sent[2].prompt,/Question:\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Added detail/);
  }finally{h.plugin.onunload();}
 });
 

@@ -5,9 +5,9 @@ import {streamBlocks} from './stream-block';
 
 export type Span=[number,number];
 export interface PackedText {hash:string;encoding:'text'|'gzip';data:string}
-interface NoteIdentity {path:string;revision:number;deleted?:boolean}
+interface NoteIdentity {path:string;revision:number;deleted?:boolean;renamedAt?:number}
 interface ResponseText {noteId:string;body:string;before:string;after:string;offset:number}
-export interface SmartCapture {noteId:string;source:PackedText;covered:Span[];parents:string[]}
+export interface SmartCapture {noteId:string;source:PackedText;covered:Span[];parents:string[];bindings?:string[]}
 interface SentText extends SmartCapture {destination:string}
 export interface SmartSendData {version:1;notes:Record<string,NoteIdentity>;responses:Record<string,ResponseText>;bodies:Record<string,PackedText>;heads:Record<string,SentText>;retired:string[]}
 const empty=():SmartSendData=>({version:1,notes:{},responses:{},bodies:{},heads:{},retired:[]});
@@ -40,10 +40,10 @@ const packed=(p:any):p is PackedText=>p&&/^[0-9a-f]{64}$/.test(p.hash)&&['text',
 const spans=(s:any):s is Span[]=>Array.isArray(s)&&s.every(v=>Array.isArray(v)&&v.length===2&&Number.isSafeInteger(v[0])&&Number.isSafeInteger(v[1])&&v[0]>=0&&v[1]>=v[0]);
 export function loadSmartSend(value:any):SmartSendData{
   const out=empty();if(value?.version!==1)return out;
-  for(const [id,n] of Object.entries(value.notes??{}) as [string,any][])if(typeof n?.path==='string'&&Number.isSafeInteger(n.revision))out.notes[id]=n;
+  for(const [id,n] of Object.entries(value.notes??{}) as [string,any][])if(typeof n?.path==='string'&&Number.isSafeInteger(n.revision)&&(n.renamedAt===undefined||Number.isSafeInteger(n.renamedAt)&&n.renamedAt<=n.revision))out.notes[id]=n;
   for(const [id,b] of Object.entries(value.bodies??{}))if(packed(b)&&b.hash===id)out.bodies[id]=b;
   for(const [id,r] of Object.entries(value.responses??{}) as [string,any][])if(typeof r?.noteId==='string'&&typeof r.body==='string'&&typeof r.before==='string'&&typeof r.after==='string'&&Number.isSafeInteger(r.offset))out.responses[id]=r;
-  for(const [id,h] of Object.entries(value.heads??{}) as [string,any][])if(typeof h?.noteId==='string'&&typeof h.destination==='string'&&packed(h.source)&&spans(h.covered)&&Array.isArray(h.parents)&&h.parents.every((p:any)=>typeof p==='string'))out.heads[id]=h;
+  for(const [id,h] of Object.entries(value.heads??{}) as [string,any][])if(typeof h?.noteId==='string'&&typeof h.destination==='string'&&packed(h.source)&&spans(h.covered)&&Array.isArray(h.parents)&&h.parents.every((p:any)=>typeof p==='string')&&(h.bindings===undefined||Array.isArray(h.bindings)&&h.bindings.every((id:any)=>typeof id==='string')))out.heads[id]=h;
   out.retired=Array.isArray(value.retired)?value.retired.filter((id:any)=>typeof id==='string'):[];return out;
 }
 /** Immutable receipts merge by union. A confirmed successor retires only the
@@ -51,7 +51,11 @@ export function loadSmartSend(value:any):SmartSendData{
 export function mergeSmartSend(...values:unknown[]):SmartSendData{
   const out=empty(),retired=new Set<string>();
   for(const value of values){const data=loadSmartSend(value);Object.assign(out.bodies,data.bodies);Object.assign(out.responses,data.responses);Object.assign(out.heads,data.heads);for(const id of data.retired)retired.add(id);
-    for(const [id,n] of Object.entries(data.notes)){const old=out.notes[id];if(!old||n.revision>old.revision||n.revision===old.revision&&JSON.stringify(n)>JSON.stringify(old))out.notes[id]=n;}}
+    for(const [id,n] of Object.entries(data.notes)){const old=out.notes[id];
+      // A client can see a remote rename as delete/create before settings
+      // arrive. Its deletion of the old location cannot erase a known move.
+      const move=n.renamedAt??0,previous=old?.renamedAt??0;
+      if(!old||move>previous||move===previous&&(n.revision>old.revision||n.revision===old.revision&&JSON.stringify(n)>JSON.stringify(old)))out.notes[id]=n;}}
   for(const h of Object.values(out.heads))for(const id of h.parents)retired.add(id);
   for(const id of retired)delete out.heads[id];out.retired=[...retired].sort();return out;
 }
@@ -62,7 +66,19 @@ export function smartNote(data:SmartSendData,path:string){
 }
 export function moveSmartNotes(data:SmartSendData,before:string,after?:string,folder=false){
   const revision=Math.max(Date.now(),...Object.values(data.notes).map(n=>n.revision+1));
-  for(const [id,n] of Object.entries(data.notes))if(!n.deleted&&(n.path===before||folder&&n.path.startsWith(before+'/')))data.notes[id]={path:after===undefined?n.path:after+n.path.slice(before.length),revision,...(after===undefined?{deleted:true}:{})};
+  for(const [id,n] of Object.entries(data.notes))if(!n.deleted&&(n.path===before||folder&&n.path.startsWith(before+'/')))data.notes[id]={...n,path:after===undefined?n.path:after+n.path.slice(before.length),revision,...(after===undefined?{deleted:true}:{renamedAt:revision})};
+}
+/** Call only with source IDs proven by a uniquely located response binding.
+ * A copy whose original is still present keeps independent source coverage. */
+export function recoverSmartNote(data:SmartSendData,path:string,ids:string[],exists:(path:string)=>boolean){
+  const candidates=[...new Set(ids)].filter(id=>data.notes[id]&&data.notes[id].path!==path);
+  if(!candidates.length||new Set(candidates.map(id=>data.notes[id].path)).size!==1||candidates.some(id=>exists(data.notes[id].path)))return false;
+  const revision=Math.max(Date.now(),...Object.values(data.notes).map(n=>n.revision+1));
+  for(const id of candidates)data.notes[id]={path,revision,renamedAt:revision};
+  return true;
+}
+function noteIdentities(data:SmartSendData,id:string){
+  const note=data.notes[id];return new Set([id,...Object.entries(data.notes).filter(([,n])=>!n.deleted&&n.path===note?.path).map(([id])=>id)]);
 }
 export const smartDestination=(environment:string,project:string,thread:string)=>JSON.stringify([environment,project,thread]);
 function union(items:Span[]):Span[]{const out:Span[]=[];for(const [from,to] of items.filter(([a,b])=>b>a).sort((a,b)=>a[0]-b[0])){const last=out.at(-1);if(last&&from<=last[1])last[1]=Math.max(to,last[1]);else out.push([from,to]);}return out;}
@@ -105,9 +121,9 @@ export async function rememberResponse(data:SmartSendData,path:string,id:string,
   data.responses[key]=next;return true;
 }
 export async function sourceProjection(data:SmartSendData,noteId:string,document:string){
-  const removed:Span[]=[],known:Span[]=[];
+  const removed:Span[]=[],known:Span[]=[],identities=noteIdentities(data,noteId);
   for(const id of responseIds(document)){const frame=responseFrame(document,id);if(frame)removed.push([frame.from,frame.to]);}
-  for(const record of Object.values(data.responses).filter(r=>r.noteId===noteId)){
+  for(const record of Object.values(data.responses).filter(r=>identities.has(r.noteId))){
     const body=await unpackText(data.bodies[record.body]??(()=>{throw Error('The saved agent response is missing.');})());
     const matches:number[]=[];let at=document.indexOf(body);while(at>=0){matches.push(at);at=document.indexOf(body,at+Math.max(1,body.length));}
     if(matches.length){
@@ -134,15 +150,15 @@ export async function sourceProjection(data:SmartSendData,noteId:string,document
 }
 export async function prepareSmartSend(data:SmartSendData,path:string,destination:string,document:string,scope?:Span){
   const noteId=smartNote(data,path),projection=await sourceProjection(data,noteId,document),current=projection.text;
-  const heads=Object.entries(data.heads).filter(([,h])=>h.noteId===noteId&&h.destination===destination);
+  const identities=noteIdentities(data,noteId),heads=Object.entries(data.heads).filter(([,h])=>identities.has(h.noteId)&&h.destination===destination);
   let covered:Span[]=[];for(const [,head] of heads)covered.push(...mappedCoverage(await unpackText(head.source),current,head.covered));covered=union(covered);
   const requested:Span[]=scope?projection.segments.flatMap(segment=>{const from=Math.max(scope[0],segment.rawFrom),to=Math.min(scope[1],segment.rawTo);return to>from?[[segment.from+from-segment.rawFrom,segment.from+to-segment.rawFrom] as Span]:[];}):[[0,current.length]];
   const added:Span[]=[];for(const [from,to] of requested){let cursor=from;for(const [l,r] of covered){if(r<=cursor||l>=to)continue;if(l>cursor)added.push([cursor,l]);cursor=Math.max(cursor,r);}if(cursor<to)added.push([cursor,to]);}
   const text=added.map(([from,to])=>current.slice(from,to)).filter(text=>text.trim()).join('\n');
-  const capture:SmartCapture={noteId,source:await packText(current),covered:union([...covered,...added]),parents:heads.map(([id])=>id)};
+  const capture:SmartCapture={noteId,source:await packText(current),covered:union([...covered,...added]),parents:heads.map(([id])=>id),bindings:[...new Set(heads.flatMap(([,h])=>h.bindings??[]))]};
   return {text,capture};
 }
-export function confirmSmartSend(data:SmartSendData,id:string,destination:string,capture:SmartCapture){
+export function confirmSmartSend(data:SmartSendData,id:string,destination:string,capture:SmartCapture,bindings:string[]=[]){
   if(data.heads[id]||data.retired.includes(id))return;
-  data.heads[id]={...capture,destination};data.retired=[...new Set([...data.retired,...capture.parents])].sort();for(const parent of data.retired)delete data.heads[parent];
+  data.heads[id]={...capture,destination,bindings:[...new Set([...(capture.bindings??[]),...bindings])]};data.retired=[...new Set([...data.retired,...capture.parents])].sort();for(const parent of data.retired)delete data.heads[parent];
 }

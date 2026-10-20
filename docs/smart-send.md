@@ -41,6 +41,15 @@ successor retires only the heads it observed. Merge retains independent
 confirmed branches and unions their coverage on the next send. Retirement IDs
 prevent stale settings from restoring superseded heads. A local replica repairs
 stale whole-settings replacements. Note identities follow rename and deletion.
+Rename records retain a separate move revision, so a receiving client's later
+deletion of the old Sync path cannot overwrite the rename. If a client missed
+the move, a uniquely located response binding can reconnect its confirmed
+source history when the old note no longer exists. Accepted source receipts
+retain these binding IDs across later sends. Older receipts can use their
+deterministic source binding ID. Copies with an existing original and ambiguous
+response locations do not inherit the original's coverage. Independently
+discovered identities at the verified new path share coverage and saved reply
+exclusions; new threads still start with no coverage.
 This is not a cross-device delivery lock: simultaneous unsynced sends can both
 be accepted before either device receives the other's receipt.
 
@@ -64,3 +73,22 @@ branch merging, stale settings, note lifecycle, selector behavior, composer
 drafts, and the actual bundled Send/Ask preparation. Release smoke evidence is
 recorded through the supported QLO2 release receipt. VPS desktop results do not
 establish native iPhone or Android keyboard and selection behavior.
+
+Rename regression evidence (2026-10-20) is retained under
+`/home/ubuntu/backups/send-to-t3-code/smart-send-rename-20261020`.
+The desktop check sent a real bounded prompt, renamed its note locally, and
+verified the next T3 message contained only its addition. A second desktop
+renamed the note through official Headless Sync; the next real delivery again
+contained only the addition. Configuration Sync carried the synthetic source
+records separately from the note. This covers desktop file propagation and
+actual plugin delivery, not desktop core Sync or native mobile behavior.
+
+The reusable fixture is `scripts/prepare-smart-send-rename-lab.mjs EVIDENCE_DIR
+SYNTHETIC_PROJECT_ID`, with the two lab desktop clients closed during setup.
+It backs up their existing plugin files and enablement, installs only in those
+synthetic vaults, and gives its observer a private command directory outside
+Sync. Use `--restore` with the same evidence directory after deleting all
+fixture notes through Obsidian, checking Sync deletion, closing the lab clients,
+and deleting the bounded T3 test thread. Restore the lab's original Sync
+configuration after any configuration-Sync check. Never use this fixture in
+QLO2.

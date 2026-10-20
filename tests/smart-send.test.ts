@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {loadSmartSend,mergeSmartSend,prepareSmartSend,confirmSmartSend,rememberResponse,smartNote,sourceProjection,moveSmartNotes,packText,unpackText} from '../smart-send';
+import {loadSmartSend,mergeSmartSend,prepareSmartSend,confirmSmartSend,rememberResponse,smartNote,sourceProjection,moveSmartNotes,recoverSmartNote,packText,unpackText} from '../smart-send';
 import {responseAnchor} from '../native-response-projection';
 const path='Jobs/Smart.md',destination='machine/project/thread';
 const fresh=()=>loadSmartSend(undefined);
@@ -71,6 +71,45 @@ test('stable note identity follows rename, move back, deletion and recreation',a
 });
 test('independent note discovery gives the same identity regardless of other notes',()=>{
   const a=fresh(),b=fresh();smartNote(a,'Unrelated.md');assert.equal(smartNote(a,path),smartNote(b,path));
+});
+test('a synced old-path deletion cannot overwrite a rename, including a rename back',async()=>{
+  const base=(await send()).data,id=smartNote(base,path),renamed=mergeSmartSend(base),deleted=mergeSmartSend(base);
+  moveSmartNotes(renamed,path,'Moved.md');moveSmartNotes(deleted,path);
+  deleted.notes[id].revision=renamed.notes[id].revision+100;
+  for(const merged of [mergeSmartSend(deleted,renamed),mergeSmartSend(renamed,deleted)]){
+    assert.equal(merged.notes[id].path,'Moved.md');assert.ok(!merged.notes[id].deleted);
+    assert.equal((await prepareSmartSend(merged,'Moved.md',destination,'First request. Added.')).text,' Added.');
+  }
+  moveSmartNotes(renamed,'Moved.md',path);
+  const back=mergeSmartSend(renamed,deleted);assert.equal(back.notes[id].path,path);assert.ok(!back.notes[id].deleted);
+  moveSmartNotes(back,path);assert.ok(mergeSmartSend(renamed,back).notes[id].deleted);
+});
+test('verified rename recovery joins independently discovered coverage and reply records',async()=>{
+  const {data}=await send(),old=smartNote(data,path);
+  await rememberResponse(data,path,'reply','Agent reply.','','',0);moveSmartNotes(data,path);
+  const next='Moved.md',newId=smartNote(data,next);
+  const branch=await prepareSmartSend(data,next,destination,'First request. Added.');confirmSmartSend(data,'branch',destination,branch.capture);
+  assert.ok(recoverSmartNote(data,next,[old],()=>false));assert.notEqual(old,newId);
+  const plan=await prepareSmartSend(data,next,destination,'First request. Added.\nAgent reply.\nMore.');
+  assert.equal(plan.text.trim(),'More.');assert.deepEqual(new Set(plan.capture.parents),new Set(['one','branch']));
+  confirmSmartSend(data,'successor',destination,plan.capture);
+  assert.deepEqual(Object.keys(data.heads),['successor']);
+});
+test('recovery requires an absent original and unambiguous source identity',async()=>{
+  const {data}=await send(),id=smartNote(data,path);
+  assert.equal(recoverSmartNote(data,'Copy.md',[id],()=>true),false);
+  assert.equal((await prepareSmartSend(data,'Copy.md',destination,'First request.')).text,'First request.');
+  const other=smartNote(data,'Other.md');
+  assert.equal(recoverSmartNote(data,'Moved.md',[id,other],()=>false),false);
+  moveSmartNotes(data,path);assert.equal(recoverSmartNote(data,path,[id],()=>false),false);
+  assert.notEqual(smartNote(data,path),id);
+});
+test('binding provenance survives accepted successors and settings reloads',async()=>{
+  const data=fresh(),first=await prepareSmartSend(data,path,destination,'First request.');
+  confirmSmartSend(data,'one',destination,first.capture,['source-response']);
+  const next=await prepareSmartSend(data,path,destination,'First request. Added.');
+  confirmSmartSend(data,'two',destination,next.capture,['next-response']);
+  assert.deepEqual(loadSmartSend(JSON.parse(JSON.stringify(data))).heads.two.bindings,['source-response','next-response']);
 });
 test('large repeated response text is compressed and round-trips without extra note files',async()=>{
   const text='Large agent response 🦉\n'.repeat(1000),packed=await packText(text);assert.equal(packed.encoding,'gzip');assert.ok(packed.data.length<text.length/5);assert.equal(await unpackText(packed),text);
