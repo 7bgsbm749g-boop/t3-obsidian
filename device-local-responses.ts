@@ -16,7 +16,7 @@ export interface DeviceResponseIO {
   saveLocalBinding?(request:ResponseRequest):Promise<void>;
   openedNotes?():Array<{path:string;document:string}>;
   saveLocalNote?(path:string):Promise<void>;
-  syncReady?():boolean;
+  syncReady?(path:string):boolean;
   localCompleted?(id:string,path:string):void;
   localConnection?(id:string,issue?:ResponseConnectionIssue):void;
   localFinalBody?(update:DirectInlineUpdate):Promise<string>;

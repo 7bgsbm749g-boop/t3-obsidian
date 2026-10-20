@@ -43,6 +43,23 @@ test('completion waits for core Sync and resumes while the note remains loaded',
   const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit();await drain();assert.equal(h.writes(),0);
   h.ready(true);h.manager.tick();await drain();assert.equal(h.writes(),1);h.manager.dispose();
 });
+test('final-save status, preparation, and the atomic write check the exact destination path',async()=>{
+  const h=fixture();await h.manager.register(h.binding);const paths:string[]=[];
+  h.io.syncReady=(path:string)=>{paths.push(path);return path===h.binding.notePath;};
+  h.emit();await drain();assert.equal(h.writes(),1);assert.ok(paths.length>=4);assert.ok(paths.every(path=>path===h.binding.notePath));h.manager.dispose();
+});
+test('a note Sync update arriving at the write boundary prevents the old final save',async()=>{
+  const h=fixture();await h.manager.register(h.binding);const compare=h.notes.compareAndSet;
+  h.notes.compareAndSet=async(...args)=>{h.ready(false);return compare(...args);};
+  h.emit();await drain();assert.equal(h.writes(),0);assert.equal(h.manager.status(h.binding.id)?.pendingSaveReason,'sync');
+  h.notes.compareAndSet=compare;h.write(h.read().replace('Before','Incoming ordinary edit'));h.ready(true);h.advance();h.manager.tick();await drain();
+  assert.equal(h.writes(),1);assert.match(h.read(),/^Incoming ordinary edit/);h.manager.dispose();
+});
+test('renaming a destination while a final write waits invalidates its old path guard',async()=>{
+  const h=fixture();await h.manager.register(h.binding);const compare=h.notes.compareAndSet;
+  h.notes.compareAndSet=async(...args)=>{h.manager.renamed(h.binding.notePath,'Renamed.md');return compare(...args);};
+  h.emit();await drain();assert.equal(h.writes(),0);h.manager.dispose();
+});
 test('unverified output and another message cannot replace this response',async()=>{
   const h=fixture();await h.manager.register(h.binding);h.emit('Preview',false);await drain();assert.equal(h.writes(),0);
   h.emit('Other turn',true,randomUUID());await drain();assert.equal(h.writes(),0);h.manager.dispose();

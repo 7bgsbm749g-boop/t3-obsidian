@@ -123,7 +123,7 @@ export class LocalResponseManager {
     if(runtime.done)return {saved:false,reason:'note-changed'};
     if(runtime.stopped)return {saved:false,reason:'stopped'};
     if(!runtime.update?.completionVerified)return {saved:false,reason:'verification'};
-    if(this.io.syncReady?.()===false)return {saved:false,reason:'sync'};
+    if(this.io.syncReady?.(runtime.request.notePath)===false)return {saved:false,reason:'sync'};
     if(!this.canFinishClosed(runtime)&&!this.io.isOpen(runtime.request.notePath))return {saved:false,reason:'note-closed'};
     return {saved:false,reason:runtime.pendingSave??'saving'};
   }
@@ -139,14 +139,14 @@ export class LocalResponseManager {
     }
   }
   private finish(runtime:Runtime){
-    if(this.closed||runtime.done||runtime.stopped||runtime.work||this.now()<runtime.retryAt||!this.canFinishClosed(runtime)&&!this.io.isOpen(runtime.request.notePath)||this.io.syncReady?.()===false)return;
+    if(this.closed||runtime.done||runtime.stopped||runtime.work||this.now()<runtime.retryAt||!this.canFinishClosed(runtime)&&!this.io.isOpen(runtime.request.notePath)||this.io.syncReady?.(runtime.request.notePath)===false)return;
     const update=runtime.update;if(!update?.completionVerified)return;
     runtime.pendingSave='saving';
     runtime.work=(async()=>{
       await runtime.retained;
       const path=runtime.request.notePath,current=await this.notes.read(path);
       if(current===undefined){runtime.pendingSave='note-unavailable';return;}
-      if(this.closed||runtime.stopped||!this.canFinishClosed(runtime)&&!this.io.isOpen(path)||this.io.syncReady?.()===false)return;
+      if(this.closed||runtime.stopped||!this.canFinishClosed(runtime)&&!this.io.isOpen(path)||this.io.syncReady?.(path)===false)return;
       if(!this.range(current,runtime.request.id)){runtime.done=true;runtime.saved=!!update.body&&current.includes(update.body);runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);return;}
       let document=await this.io.localFinalDraft?.(current,this.range(current,runtime.request.id)!.request)??current;
       const confirmed=(runtime.request.localSteering??[]).map(input=>({...input,confirmed:!!update.checkpoint?.bindings?.[input.messageId]}));
@@ -157,9 +157,9 @@ export class LocalResponseManager {
       if(range.request.threadId!==runtime.request.threadId||(range.request.localMessageId??range.request.messageId)!==update.messageId){runtime.pendingSave='note-changed';return;}
       const body=await this.io.localFinalBody?.(update)??update.body;
       await this.io.rememberResponse?.(runtime.request,body,document.slice(0,range.from),document.slice(range.to),range.from);
-      if(this.closed||runtime.stopped||runtime.update!==update||runtime.request.notePath!==path||this.io.syncReady?.()===false||JSON.stringify(this.range(document,runtime.request.id)?.request)!==JSON.stringify(range.request)){runtime.pendingSave='note-changed';return;}
+      if(this.closed||runtime.stopped||runtime.update!==update||runtime.request.notePath!==path||this.io.syncReady?.(path)===false||JSON.stringify(this.range(document,runtime.request.id)?.request)!==JSON.stringify(range.request)){runtime.pendingSave='note-changed';return;}
       const after=document.slice(0,range.from)+body+document.slice(range.to);
-      const expected=JSON.stringify(range.request),guard=()=>!this.closed&&!runtime.stopped&&runtime.update===update&&this.io.syncReady?.()!==false&&JSON.stringify(this.range(document,runtime.request.id)?.request)===expected;
+      const expected=JSON.stringify(range.request),guard=()=>!this.closed&&!runtime.stopped&&runtime.update===update&&runtime.request.notePath===path&&this.io.syncReady?.(path)!==false&&JSON.stringify(this.range(document,runtime.request.id)?.request)===expected;
       if(!await this.notes.compareAndSet(path,current,after,guard)){runtime.pendingSave='note-changed';return;}
       runtime.done=true;runtime.saved=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);
     })().catch(error=>{runtime.pendingSave='save-error';logFailure('response.local.final-save',error,{bindingId:runtime.request.id});this.io.completionFailed?.(error,runtime.request.id);}).finally(()=>{runtime.work=undefined;runtime.retryAt=this.now()+1000;});
