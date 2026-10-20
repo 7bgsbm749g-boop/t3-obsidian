@@ -4,10 +4,11 @@ import {streamBlock} from './stream-block';
 import {removeStreamBlockFromEditor} from './stream-block-edit';
 import {responseScrollChanged} from './response-scroll';
 import {installResponseDrag} from './response-drag';
+import {installStreamStopControls} from './stream-stop-control';
 
 /** Keep Live Preview's source cursor outside generated history, while native
  * browser selection, links, dropdowns and copy controls continue to work. */
-export function installStreamBlockControls(app:App,root:Document,icon:(element:HTMLElement,name:string)=>void,onError:(error:unknown)=>void,onSignIn:()=>void=()=>{}):()=>void {
+export function installStreamBlockControls(app:App,root:Document,icon:(element:HTMLElement,name:string)=>void,onError:(error:unknown)=>void,onSignIn:()=>void=()=>{},onStop?:(id:string,view:MarkdownView)=>Promise<void>):()=>void {
   const stopDrag=installResponseDrag(app,root,icon,onError);
   const owned=new Map<HTMLElement,{close:HTMLElement;follow:HTMLElement;signIn:HTMLButtonElement;reading:boolean}>();
   const watched=new Set<Element>();
@@ -16,6 +17,12 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
   const generated=(fold:Element)=>!!key(fold)||!!fold.querySelector(':scope > .callout-title .send-to-t3-inline-spinner');
   const viewFor=(fold:Element)=>app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file&&view.contentEl?.contains(fold));
   const saved=(view:MarkdownView)=>nativeResponses(app).view(view)?.saved()??view.getViewData();
+  const stopControls=onStop?installStreamStopControls(root,fold=>{
+    const block=fold.closest('.cm-embed-block'),reading=!!fold.closest('.markdown-preview-view');
+    if(!reading&&(!block||block.querySelector('.callout')!==fold))return;
+    const foldKey=key(fold),view=viewFor(fold),id=foldKey&&view&&nativeResponses(app).view(view)?.stopControl(foldKey);
+    return id&&view&&foldKey?{id,key:foldKey,view}:undefined;
+  },target=>onStop(target.id,target.view),icon,onError):()=>{};
   const refresh=()=>{
     queued=false;if(disposed)return;
     const live=new Set<HTMLElement>();
@@ -100,5 +107,5 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
   root.addEventListener(responseScrollChanged,schedule);
   const observer=new MutationObserver(schedule);observer.observe(root.body,{childList:true,subtree:true});
   const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;stopDrag();observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();controls.signIn.remove();actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading)actions.remove();}owned.clear();};
+  return ()=>{disposed=true;stopControls();stopDrag();observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();controls.signIn.remove();actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading)actions.remove();}owned.clear();};
 }

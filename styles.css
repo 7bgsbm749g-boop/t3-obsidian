@@ -249,6 +249,15 @@
 .send-to-t3-response-drop { position: fixed; z-index: 10000; height: 3px; background: var(--interactive-accent); border-radius: 2px; pointer-events: none; }
 .send-to-t3-response-drop[hidden] { display: none; }
 .send-to-t3-response-drag-ghost { position: fixed; z-index: 10001; pointer-events: none; padding: 5px 9px; border-radius: 5px; background: var(--background-primary); border: 1px solid var(--interactive-accent); color: var(--text-normal); font-size: var(--font-ui-small); box-shadow: var(--shadow-s); }
+.callout[data-callout="t3-progress"].send-to-t3-stream-stoppable { position: relative; }
+.send-to-t3-stream-stoppable > .callout-title { padding-inline-end: 80px; min-height: 44px; }
+.send-to-t3-stream-stop { position: absolute; top: 4px; right: 4px; z-index: 3; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; color: var(--text-normal); background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 6px; cursor: pointer; touch-action: manipulation; }
+.send-to-t3-stream-stop[hidden] { display: none !important; }
+.send-to-t3-stream-stop svg { width: 18px; height: 18px; fill: currentColor; }
+.send-to-t3-stream-stop:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.send-to-t3-stream-stop:disabled { cursor: wait; opacity: 0.5; }
+.cm-embed-block:has(.send-to-t3-stream-stoppable) > .embed-actions.send-to-t3-stream-actions:not(.send-to-t3-stream-actions-bottom),
+.send-to-t3-stream-stoppable > .send-to-t3-reading-actions:not(.send-to-t3-stream-actions-bottom) { right: 52px; }
 /* Align the native editor action with the header, including wrapped titles. */
 .markdown-source-view.mod-cm6 .embed-actions.send-to-t3-progress-actions {
   top: var(--send-to-t3-header-center);

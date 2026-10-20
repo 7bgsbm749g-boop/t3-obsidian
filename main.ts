@@ -420,7 +420,11 @@ export default class SendToT3 extends Plugin {
       this.registerEvent(this.app.workspace.on('window-open',(_win,window)=>watchShine(window.document)));
       this.registerEvent(this.app.workspace.on('window-close',(_win,window)=>{shineDocuments.get(window.document)?.();shineDocuments.delete(window.document);}));
     }
-    if(typeof document.querySelectorAll==='function')this.register(installStreamBlockControls(this.app,document,setIcon,error=>new Notice(`T3: ${message(error)}`,10000),()=>this.openSettings()));
+    if(typeof document.querySelectorAll==='function')this.register(installStreamBlockControls(this.app,document,setIcon,error=>new Notice(`T3: ${message(error)}`,10000),()=>this.openSettings(),async(id,view)=>{
+      if(this.stopped||!view.file||this.deviceInline?.responseStatus(id)?.runTerminal)return;
+      const hosted=this.deviceInline?.stoppableResponses(view.file.path).find(response=>response.id===id);
+      await this.inlineChat!.stopAt(id,view.editor,view,hosted?.hostTarget);
+    }));
     const questionStorage=`${this.localKey}-questions-${this.settings.vaultId}`;
     this.questions=new QuestionController(environmentId=>this.inlineThreadAccess(environmentId),{load:()=>{const saved=this.app.loadLocalStorage(questionStorage);return Array.isArray(saved)?saved:[];},save:records=>this.app.saveLocalStorage(questionStorage,records)},randomId,()=>new Date().toISOString(),(target,follow)=>continueQuestionAnswer(target,follow,{
       ...deviceNoteIO(this.app),vaultId:this.settings.vaultId,owner:this.inlineActor,

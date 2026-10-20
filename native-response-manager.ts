@@ -433,7 +433,7 @@ export class NativeResponseManager {
           if(!restoring)this.rememberPreview(record,displayed);
           const terminal=record.finalWriter||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict||['complete','completed','interrupted','error','cancelled','conflict'].includes(record.state?.status??'')||stream?.completionVerified||['complete','interrupted','error'].includes(stream?.phase??'');
           const connection=this.connectionIssues.get(id),visible=restoring&&!failure?this.titled(id,cached.body):displayed;
-          responses.push({id,body:connection?responseConnectionBody(visible,connection,id):visible,movable:!terminal&&!failure&&!connection});
+          responses.push({id,body:connection?responseConnectionBody(visible,connection,id):visible,movable:!terminal&&!failure&&!connection,stoppable:!terminal});
         }
         for(const stop of this.localStops.values()){
           if(stop.path!==view.file.path||!responseRegion(saved,stop.id)||adapter?.hasMaterialized(stop.id))continue;
