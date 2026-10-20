@@ -1,11 +1,13 @@
 import {contentHash} from './completion';
 import type {ResponseRecord} from './response-record';
+import type {LocalSavePendingReason} from './local-response-save';
 
 export interface StoppedBodyReference {hash:string;length:number}
 export interface ResponseStopReceipt {
   version:1;bindingId:string;commandId:string;epoch:number;revision:number;
   hostRecorded:boolean;runTerminal:boolean;finalSaved:boolean;finalWriterPending:boolean;
   stopRequestedAt?:number;
+  pendingSaveReason?:LocalSavePendingReason;
 }
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export function stoppedBodyPath(directory:string,id:string,reference:StoppedBodyReference){

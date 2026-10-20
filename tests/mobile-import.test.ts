@@ -8,6 +8,7 @@ import {applyThreadItem} from '../inline-thread';
 import {eventRequest} from '../event-host';
 import {findRunImport} from '../run-import-receipt';
 import {responseAnchor} from '../native-response-projection';
+import {updateResponseBindingData} from '../response-binding-data';
 
 for(const phase of ['completed','running'])test(`mobile ${phase} import follows future runs after a delayed host reply without loading Node`,async()=>{
   class Base{}
@@ -26,8 +27,9 @@ for(const phase of ['completed','running'])test(`mobile ${phase} import follows 
   });
   const plugin=new module.exports.default();
   plugin.app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:(path:string)=>path===file.path?file:undefined,read:async()=>document,process:async(_file:any,change:(value:string)=>string)=>document=change(document)}};
-  plugin.settings={vaultId:host.vaultId,inlineStreaming:{enabled:true}};
-  plugin.deviceInline={register:async(request:any)=>{registered.push(request);}};
+  plugin.settings={vaultId:host.vaultId,inlineStreaming:{enabled:true},responseBindings:{}};
+  let finalSaveWaits=0;
+  plugin.deviceInline={register:async(request:any)=>{registered.push(request);plugin.settings.responseBindings=updateResponseBindingData(plugin.settings.responseBindings,request,'synthetic');},waitForSave:async()=>{finalSaveWaits++;return {saved:true};}};
   plugin.connection=()=>({environmentId:source.environmentId});
   plugin.localResponseTarget=async()=>({environmentId:host.environmentId,workspaceRoot:host.workspaceRoot,directory:'.obsidian/inline'});
   const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:{messages:[
@@ -44,12 +46,12 @@ for(const phase of ['completed','running'])test(`mobile ${phase} import follows 
     pending={result:request.result,body:JSON.stringify({version:1,host,request:request.name,result:{id:command.id,ok:true,displays}})};
   }}});
 
-  assert.deepEqual(JSON.parse(JSON.stringify(await plugin.importRun(file.path,{id:source.projectId},source.threadId,messageId,true))),{duplicate:false,following:true});
+  assert.deepEqual(JSON.parse(JSON.stringify(await plugin.importRun(file.path,{id:source.projectId},source.threadId,messageId,true))),{duplicate:false,following:true,saveState:phase==='completed'?'saved':'streaming'});
   assert.equal(registered.length,1);assert.equal(pauses,2);assert.equal(closed,2);assert.equal(plugin.busy,false);
   assert.deepEqual(commands.map(command=>command.kind),['thread-streams','stream-thread']);
   assert.equal(commands[1].start,'after');assert.equal(commands[1].afterMessageId,messageId);assert.deepEqual(commands[1].destinations,[file.path]);assert.deepEqual(commands[1].source,source);
   const receipt=findRunImport(document,source,messageId);assert.equal(receipt?.bindingId,registered[0].id);assert.ok(document.includes(responseAnchor(registered[0].id)));
   const once=document;
   assert.equal((await plugin.importRun(file.path,{id:source.projectId},source.threadId,messageId,true)).duplicate,true);
-  assert.equal(document,once);assert.equal(registered.length,1);assert.equal(displays.length,1);assert.equal(pauses,3);assert.equal(closed,3);
+  assert.equal(document,once);assert.equal(registered.length,2);assert.equal(registered[0].id,registered[1].id);assert.equal(finalSaveWaits,phase==='completed'?2:0);assert.equal(displays.length,1);assert.equal(pauses,3);assert.equal(closed,3);
 });

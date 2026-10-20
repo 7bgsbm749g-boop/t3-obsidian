@@ -11,12 +11,13 @@ import {localFinalIdentity} from './local-final-cache';
 import {interruptStoppedResponse} from './response-stop';
 import {completedSelectionDraft,validSteeringInput,type SteeringInput} from './inline-steering';
 import type {ResponseConnectionIssue} from './sign-in-state';
+import type {LocalResponseSaveResult,LocalSavePendingReason} from './local-response-save';
 
 export interface LocalFinalNoteIO {
   read(path:string):Promise<string|undefined>;
   compareAndSet(path:string,before:string,after:string,guard?:()=>boolean):Promise<boolean>;
 }
-type Runtime={request:ResponseRequest;record:ResponseRecord;preview:DirectInlinePreview;update?:DirectInlineUpdate;retained?:Promise<void>;work?:Promise<void>;stopped?:boolean;stopAcknowledged?:boolean;done?:boolean;retryAt:number};
+type Runtime={request:ResponseRequest;record:ResponseRecord;preview:DirectInlinePreview;update?:DirectInlineUpdate;retained?:Promise<void>;work?:Promise<void>;stopped?:boolean;stopAcknowledged?:boolean;done?:boolean;saved?:boolean;pendingSave?:LocalSavePendingReason;retryAt:number};
 /** A loaded anchor and its synced settings record reconnect independently of
  * any remote writer. Identical device final writes converge through Sync. */
 export class LocalResponseManager {
@@ -73,7 +74,7 @@ export class LocalResponseManager {
       if(saved!==after)throw Error('Save the response note before sending.');
       await this.io.saveLocalNote?.(request.notePath);
     }
-    const runtime=this.adopt(request);runtime.preview.tick(this.io.isOpen(request.notePath));
+    const runtime=this.adopt(request);runtime.preview.tick(this.canFinishClosed(runtime)||this.io.isOpen(request.notePath));
   }
   delivered(id:string,delivery:InlineStartRequest){this.jobs.get(id)?.preview.delivery(delivery);}
   resume(){
@@ -102,11 +103,12 @@ export class LocalResponseManager {
     for(const runtime of this.jobs.values()){
       const loaded=locations.get(runtime.request.id);
       if(!loaded){
-        // Keep an already attached run observable after its tab closes. Final
-        // note writes still require an open editor in finish().
+        // Imported runs may complete through checked file IO after their tab
+        // closes. Ordinary replies keep their existing open-editor boundary.
         if(!runtime.done&&!runtime.stopped&&!runtime.update?.completionVerified)runtime.preview.tick(true);
         else runtime.preview.suspend();
         if(!runtime.done&&!this.migrations.has(runtime.request.id)&&documents.some(note=>note.path===runtime.request.notePath)){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,runtime.request.notePath);}
+        if(!runtime.done&&this.canFinishClosed(runtime)&&runtime.update?.completionVerified)this.finish(runtime);
         continue;
       }
       if(loaded.length===1&&runtime.update?.completionVerified)this.finish(runtime);
@@ -114,33 +116,58 @@ export class LocalResponseManager {
   }
   tick(){this.resume();}
   reconnect(){if(this.closed)return;for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped)runtime.preview.reconnect(this.io.isOpen(runtime.request.notePath));this.resume();}
+  private canFinishClosed(runtime:Runtime){return !!runtime.request.importTurn;}
+  private saveResult(runtime?:Runtime):LocalResponseSaveResult {
+    if(this.closed||!runtime)return {saved:false,reason:'plugin-unavailable'};
+    if(runtime.saved)return {saved:true};
+    if(runtime.done)return {saved:false,reason:'note-changed'};
+    if(runtime.stopped)return {saved:false,reason:'stopped'};
+    if(!runtime.update?.completionVerified)return {saved:false,reason:'verification'};
+    if(this.io.syncReady?.()===false)return {saved:false,reason:'sync'};
+    if(!this.canFinishClosed(runtime)&&!this.io.isOpen(runtime.request.notePath))return {saved:false,reason:'note-closed'};
+    return {saved:false,reason:runtime.pendingSave??'saving'};
+  }
+  /** Imports report success only after the checked note write. The bounded
+   * wait leaves the registered response running when Sync or verification waits. */
+  async waitForSave(id:string,timeoutMs=15_000):Promise<LocalResponseSaveResult>{
+    const deadline=Date.now()+Math.max(0,timeoutMs);
+    for(;;){
+      const runtime=this.jobs.get(id);if(runtime)this.finish(runtime);
+      const result=this.saveResult(runtime);
+      if(result.saved||!runtime||runtime.done||runtime.stopped||this.closed||Date.now()>=deadline)return result;
+      await new Promise<void>(resolve=>setTimeout(resolve,Math.min(100,Math.max(1,deadline-Date.now()))));
+    }
+  }
   private finish(runtime:Runtime){
-    if(this.closed||runtime.done||runtime.stopped||runtime.work||this.now()<runtime.retryAt||!this.io.isOpen(runtime.request.notePath)||this.io.syncReady?.()===false)return;
+    if(this.closed||runtime.done||runtime.stopped||runtime.work||this.now()<runtime.retryAt||!this.canFinishClosed(runtime)&&!this.io.isOpen(runtime.request.notePath)||this.io.syncReady?.()===false)return;
     const update=runtime.update;if(!update?.completionVerified)return;
+    runtime.pendingSave='saving';
     runtime.work=(async()=>{
       await runtime.retained;
       const path=runtime.request.notePath,current=await this.notes.read(path);
-      if(current===undefined||this.closed||runtime.stopped||!this.io.isOpen(path)||this.io.syncReady?.()===false)return;
-      if(!this.range(current,runtime.request.id)){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);return;}
+      if(current===undefined){runtime.pendingSave='note-unavailable';return;}
+      if(this.closed||runtime.stopped||!this.canFinishClosed(runtime)&&!this.io.isOpen(path)||this.io.syncReady?.()===false)return;
+      if(!this.range(current,runtime.request.id)){runtime.done=true;runtime.saved=!!update.body&&current.includes(update.body);runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);return;}
       let document=await this.io.localFinalDraft?.(current,this.range(current,runtime.request.id)!.request)??current;
       const confirmed=(runtime.request.localSteering??[]).map(input=>({...input,confirmed:!!update.checkpoint?.bindings?.[input.messageId]}));
       document=completedSelectionDraft(document,runtime.request.id,confirmed);
       const range=this.range(document,runtime.request.id);
       // Incoming final text or explicit deletion ends this local attachment.
       if(!range){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);return;}
-      if(range.request.threadId!==runtime.request.threadId||(range.request.localMessageId??range.request.messageId)!==update.messageId)return;
+      if(range.request.threadId!==runtime.request.threadId||(range.request.localMessageId??range.request.messageId)!==update.messageId){runtime.pendingSave='note-changed';return;}
       const body=await this.io.localFinalBody?.(update)??update.body;
       await this.io.rememberResponse?.(runtime.request,body,document.slice(0,range.from),document.slice(range.to),range.from);
-      if(this.closed||runtime.stopped||runtime.update!==update||runtime.request.notePath!==path||this.io.syncReady?.()===false||JSON.stringify(this.range(document,runtime.request.id)?.request)!==JSON.stringify(range.request))return;
+      if(this.closed||runtime.stopped||runtime.update!==update||runtime.request.notePath!==path||this.io.syncReady?.()===false||JSON.stringify(this.range(document,runtime.request.id)?.request)!==JSON.stringify(range.request)){runtime.pendingSave='note-changed';return;}
       const after=document.slice(0,range.from)+body+document.slice(range.to);
       const expected=JSON.stringify(range.request),guard=()=>!this.closed&&!runtime.stopped&&runtime.update===update&&this.io.syncReady?.()!==false&&JSON.stringify(this.range(document,runtime.request.id)?.request)===expected;
-      if(!await this.notes.compareAndSet(path,current,after,guard))return;
-      runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);
-    })().catch(error=>{logFailure('response.local.final-save',error,{bindingId:runtime.request.id});this.io.completionFailed?.(error,runtime.request.id);}).finally(()=>{runtime.work=undefined;runtime.retryAt=this.now()+1000;});
+      if(!await this.notes.compareAndSet(path,current,after,guard)){runtime.pendingSave='note-changed';return;}
+      runtime.done=true;runtime.saved=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);
+    })().catch(error=>{runtime.pendingSave='save-error';logFailure('response.local.final-save',error,{bindingId:runtime.request.id});this.io.completionFailed?.(error,runtime.request.id);}).finally(()=>{runtime.work=undefined;runtime.retryAt=this.now()+1000;});
   }
   status(id:string):ResponseStopReceipt|undefined{
     const runtime=this.jobs.get(id);if(!runtime)return;
-    return {version:1,bindingId:id,commandId:'',epoch:1,revision:1,hostRecorded:!!runtime.stopAcknowledged,runTerminal:!!runtime.update?.completionVerified&&['complete','interrupted'].includes(runtime.update.phase??''),finalSaved:!!runtime.done,finalWriterPending:!!runtime.update?.completionVerified&&!runtime.done};
+    const save=this.saveResult(runtime);
+    return {version:1,bindingId:id,commandId:'',epoch:1,revision:1,hostRecorded:!!runtime.stopAcknowledged,runTerminal:!!runtime.update?.completionVerified&&['complete','interrupted'].includes(runtime.update.phase??''),finalSaved:!!runtime.done,finalWriterPending:!!runtime.update?.completionVerified&&!runtime.done,...(!save.saved&&!runtime.done?{pendingSaveReason:save.reason}:{})};
   }
   stopLocally(id:string){const runtime=this.jobs.get(id);if(runtime){runtime.stopped=true;runtime.preview.dispose();}}
   async stop(id:string,body?:string){

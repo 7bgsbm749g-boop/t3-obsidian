@@ -3,6 +3,15 @@ import {turnForMessage,turnPhase,type InlineThreadState,type InlineTurn} from '.
 import {visibleInlineInput} from './input-presentation';
 import type {ResponseRecord} from './response-record';
 import type {ResponseState} from './response-model';
+import {localSavePendingMessage,type LocalSavePendingReason} from './local-response-save';
+
+export interface RunImportResult {duplicate:boolean;following:boolean;saveState:'saved'|'pending'|'streaming';pendingReason?:LocalSavePendingReason}
+export function runImportResultMessage(result:RunImportResult){
+  const message=result.saveState==='saved'?(result.duplicate?'This response is already saved in the note.':'Response imported and saved.'):
+    result.saveState==='pending'?`Response is not saved yet. ${localSavePendingMessage(result.pendingReason??'saving')}`:
+      result.duplicate?'Existing response reattached; waiting for T3 to finish.':'Response attached; catching up with T3.';
+  return message+(result.following?' Later responses are also attached, including completed runs.':'');
+}
 
 export interface ImportRecord {request:ResponseRecord['request'];state?:Pick<ResponseState,'status'|'notePath'|'finalSaved'|'messageId'|'turnId'|'turnIds'|'bindingCheckpoint'>&{steering?:Array<{messageId:string}>;questionFollows?:Array<{requestId:string;input?:{messageId:string}}>}}
 /** Read-only import evidence excludes prose, save documents and steering text. */

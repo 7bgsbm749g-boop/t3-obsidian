@@ -51,6 +51,35 @@ test('closed notes defer completion until they load again',async()=>{
   const h=fixture();await h.manager.register(h.binding);h.open(false);h.emit();await drain();assert.equal(h.writes(),0);
   h.open(true);h.manager.tick();await drain();assert.equal(h.writes(),1);h.manager.dispose();
 });
+test('an imported completed run saves through checked note IO after its tab closes',async()=>{
+  const h=fixture();h.binding.importTurn={turnId:'exact-turn',messageId:h.binding.messageId,state:'completed',requestedAt:h.binding.createdAt,completedAt:h.binding.createdAt};
+  await h.manager.register(h.binding);h.open(false);h.emit('Imported final');await drain();
+  assert.equal(h.writes(),1);assert.match(h.read(),/Imported final/);assert.doesNotMatch(h.read(),/:::send-to-t3-response/);
+  assert.deepEqual(await h.manager.waitForSave(h.binding.id,0),{saved:true});h.manager.dispose();
+});
+test('a closed imported response retries its save when Sync becomes ready',async()=>{
+  const h=fixture();h.binding.importTurn={turnId:'exact-turn',messageId:h.binding.messageId,state:'completed',requestedAt:h.binding.createdAt,completedAt:h.binding.createdAt};
+  await h.manager.register(h.binding);h.open(false);h.ready(false);h.emit();await drain();
+  assert.deepEqual(await h.manager.waitForSave(h.binding.id,0),{saved:false,reason:'sync'});assert.equal(h.writes(),0);
+  assert.equal(h.manager.status(h.binding.id)?.pendingSaveReason,'sync');
+  h.ready(true);h.manager.tick();await drain();assert.equal(h.writes(),1);assert.deepEqual(await h.manager.waitForSave(h.binding.id,0),{saved:true});h.manager.dispose();
+});
+test('import completion waits for the verified note write and bounds a pending verification',async()=>{
+  const h=fixture();await h.manager.register(h.binding);
+  const start=Date.now(),unverified=await h.manager.waitForSave(h.binding.id,20);
+  assert.deepEqual(unverified,{saved:false,reason:'verification'});assert.ok(Date.now()-start<1000);assert.equal(h.writes(),0);
+  const compare=h.notes.compareAndSet;let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+  h.notes.compareAndSet=async(...args)=>{await gate;return compare(...args);};
+  h.emit();await drain();let completed=false;const wait=h.manager.waitForSave(h.binding.id,1000).then(result=>{completed=true;return result;});
+  await drain();assert.equal(completed,false);assert.equal(h.writes(),0);release();
+  assert.deepEqual(await wait,{saved:true});assert.equal(h.writes(),1);h.manager.dispose();
+});
+test('a refused final write reports a pending note change and a deleted response is not certified as saved',async()=>{
+  const h=fixture();await h.manager.register(h.binding);h.notes.compareAndSet=async()=>false;
+  h.emit();await drain();assert.deepEqual(await h.manager.waitForSave(h.binding.id,0),{saved:false,reason:'note-changed'});assert.equal(h.writes(),0);h.manager.dispose();
+  const removed=fixture();await removed.manager.register(removed.binding);removed.write('The response was removed.');removed.emit();await drain();
+  assert.deepEqual(await removed.manager.waitForSave(removed.binding.id,0),{saved:false,reason:'note-changed'});assert.equal(removed.writes(),0);removed.manager.dispose();
+});
 test('a closed response keeps its completion watch and projects only verified success for the explorer',async()=>{
   const h=fixture();await h.manager.register(h.binding);
   let ticks=0,suspends=0;

@@ -1,14 +1,14 @@
 import {FuzzySuggestModal,Modal,Notice,Setting,type App} from 'obsidian';
 import type {Project} from './bridge';
 import type {ThreadChoice} from './thread-target';
-import type {ImportRun} from './run-import';
+import {runImportResultMessage,type ImportRun,type RunImportResult} from './run-import';
 import type {ThreadDisplay} from './thread-display';
 
 export interface RunImportHost {
   projects():Project[];projectLabel(project:Project):string;
   threads(project:Project):Promise<ThreadChoice[]>;
   runs(project:Project,thread:ThreadChoice):Promise<ImportRun[]>;
-  attach(project:Project,thread:ThreadChoice,run:ImportRun,follow:boolean):Promise<{duplicate:boolean;following:boolean}>;
+  attach(project:Project,thread:ThreadChoice,run:ImportRun,follow:boolean):Promise<RunImportResult>;
 }
 class ImportPicker<T> extends FuzzySuggestModal<T>{
   constructor(app:App,private items:T[],private label:(item:T)=>string,private choose:(item:T)=>Promise<void>,placeholder:string){super(app);this.setPlaceholder(placeholder);this.emptyStateText='No available items. Check the T3 connection.';}
@@ -31,7 +31,7 @@ export function openRunImport(app:App,notePath:string,host:RunImportHost){
 }
 export class ImportRunModal extends Modal {
   private follow=false;
-  constructor(app:App,private notePath:string,private thread:ThreadChoice,private run:ImportRun,private attach:(follow:boolean)=>Promise<{duplicate:boolean;following:boolean}>){super(app);}
+  constructor(app:App,private notePath:string,private thread:ThreadChoice,private run:ImportRun,private attach:(follow:boolean)=>Promise<RunImportResult>){super(app);}
   onOpen(){
     this.titleEl.setText('Import T3 run into this note');
     this.contentEl.createEl('p',{text:`${this.thread.title} · ${this.run.status} · ${this.run.createdAt||'Unknown date'}`});
@@ -42,7 +42,7 @@ export class ImportRunModal extends Modal {
     new Setting(this.contentEl).setName('Follow future runs in this thread').setDesc('Also import every response after the selected run, including responses that have already finished, then stream new responses. Earlier runs are not imported. Use “Manage T3 streams in this note…” to pause or remove this.').addToggle(toggle=>toggle.setValue(false).onChange(value=>{this.follow=value;}));
     new Setting(this.contentEl).addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>button.setButtonText('Import response').setCta().onClick(()=>{
       button.setDisabled(true);
-      void this.attach(this.follow).then(result=>{new Notice(`${result.duplicate?'This response is already in the note.':'Response attached; catching up with T3.'}${result.following?' Later responses are also attached, including completed runs.':''}`);this.close();}).catch(error=>{button.setDisabled(false);new Notice(`Import T3 run: ${error instanceof Error?error.message:String(error)}`,10000);});
+      void this.attach(this.follow).then(result=>{new Notice(runImportResultMessage(result),result.saveState==='pending'?10000:5000);this.close();}).catch(error=>{button.setDisabled(false);new Notice(`Import T3 run: ${error instanceof Error?error.message:String(error)}`,10000);});
     }));
   }
   onClose(){this.contentEl.empty();}

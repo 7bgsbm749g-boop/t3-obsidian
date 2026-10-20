@@ -40,7 +40,7 @@ import {readInlineSnapshot,watchThread,type ThreadAccess} from './thread-stream'
 import {isRecoveryCommand} from './recovery-command';
 import {abortableRead,requestAborted} from './t3-api';
 import {mountToolGroups} from './response-tool-presentation';
-import {importRuns,importBindingId,importFollowId,type ImportRun} from './run-import';
+import {importRuns,importBindingId,importFollowId,type ImportRun,type RunImportResult} from './run-import';
 import {findRunImport,runImportReceipt} from './run-import-receipt';
 import {openRunImport,ImportStreamsModal} from './run-import-ui';
 import {type InlineThreadState} from './inline-thread';
@@ -1303,7 +1303,7 @@ export default class SendToT3 extends Plugin {
     return {source,state,title:String(snapshot.thread.title??'T3 response').slice(0,200)};
   }
   /** Import is independent of note routing. The selected source never receives input. */
-  async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false,insertion?:CursorInsertion|null):Promise<{duplicate:boolean;following:boolean}>{
+  async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false,insertion?:CursorInsertion|null):Promise<RunImportResult>{
     if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
     this.busy=true;
     try{
@@ -1311,20 +1311,27 @@ export default class SendToT3 extends Plugin {
       if(!run||run.unavailable||!run.turnId||!run.turn)throw Error(run?.unavailable??'This response is no longer in the T3 history.');
       const document=await deviceNoteIO(this.app).readNote(notePath);if(document===undefined)throw Error('Destination note not found.');
       const previous=findRunImport(document,history.source,messageId);
-      const binding=previous&&localResponseBindings(document).find(request=>request.id===previous.bindingId&&request.vaultId===this.settings.vaultId);
-      let duplicate=!!previous;
+      const binding=previous&&localResponseBindings(document,responseBindingRequests(this.settings.responseBindings??{})).find(request=>request.id===previous.bindingId&&request.vaultId===this.settings.vaultId);
+      const duplicate=!!previous,pending=!previous||!!responseFrame(document,previous.bindingId);
+      let bindingId=binding?.id;
       if(binding)await this.deviceInline.register({...binding,notePath});
-      if(!duplicate){
-        const id=importBindingId(history.source,messageId,notePath),host=await this.localResponseTarget({project,connection:this.connection(project)} as Request);
+      if(pending&&!binding){
+        const id=previous?.bindingId??importBindingId(history.source,messageId,notePath),host=await this.localResponseTarget({project,connection:this.connection(project)} as Request);
         const policy=resolveJobOptions(this.settings.inlineStreaming).inline;
         const prompt=history.state.messages.find(message=>message.id===messageId)!;
         const request:ResponseRequest={version:4,id,localOnly:true,nativeProjection:true,responseContainer:true,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath,threadId,messageId,projectId:project.id,threadEnvironmentId:history.source.environmentId,createdAt:run.createdAt,threadTitle:history.title,independent:true,importTurn:run.turn,initialInput:/^[0-9a-f-]{36}$/i.test(messageId)?{messageId,text:prompt.text,label:incomingLabel(prompt)}:undefined,initialHash:initialRegion(id).bodyHash,keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode,finalAnswerFormat:policy.finalAnswerFormat};
         const io=deviceNoteIO(this.app),receipt=runImportReceipt({version:1,bindingId:id,...history.source,messageId,runId:run.turnId});
         const inserted=await editorStream(request,notePath,{...io,updateNote:(path,change,allowed)=>io.updateNote(path,current=>{const next=change(current);return findRunImport(next,history.source,messageId)?next:next+(next.endsWith('\n')?'':'\n')+receipt+'\n';},allowed)},()=>!this.stopped,id,insertion??undefined);
         await this.deviceInline.register(inserted);
+        bindingId=id;
+      }
+      let save:Pick<RunImportResult,'saveState'|'pendingReason'>={saveState:pending?'streaming':'saved'};
+      if(pending&&bindingId&&run.status!=='Running'){
+        const result=await this.deviceInline.waitForSave(bindingId);
+        save=result.saved?{saveState:'saved'}:{saveState:'pending',pendingReason:result.reason};
       }
       if(follow)await this.followImportedThread(history.source,notePath,messageId,history.state);
-      return {duplicate,following:follow};
+      return {duplicate,following:follow,...save};
     }finally{this.busy=false;}
   }
   async sendNote(file:TFile,threadId?:string,expectedProjectKey?:string,newThread=false,overrideKey?:string,jobOptions?:ResolvedJobOptions,insertion=this.noteSendInsertion(file)){

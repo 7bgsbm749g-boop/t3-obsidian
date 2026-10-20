@@ -74,7 +74,7 @@ for(const state of ['completed','running'])for(const cursor of [3,'First paragra
   h.cursor(cursor);const captured=h.plugin.noteSendInsertion(h.file);h.cursor(original.length);
   let ready!:()=>void;const gate=new Promise<void>(resolve=>{ready=resolve;});
   const history=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:{messages:[{id:messageId,role:'user',text:'Synthetic prompt',createdAt:'2026-10-16T00:00:00Z',turnId:null,streaming:false},{id:'answer',role:'assistant',text:'Imported answer',createdAt:'2026-10-16T00:00:00Z',turnId:'turn',streaming:state==='running'}],activities:[],latestTurn:{turnId:'turn',requestedAt:'2026-10-16T00:00:00Z',state},session:{status:state==='running'?'running':'ready',activeTurnId:state==='running'?'turn':null}}}}).state;
-  h.plugin.settings.vaultId='synthetic';h.plugin.deviceInline={register:async(request:any)=>{registered.push(request);}};
+  h.plugin.settings.vaultId='synthetic';h.plugin.deviceInline={register:async(request:any)=>{registered.push(request);},waitForSave:async()=>({saved:true})};
   h.plugin.readImportHistory=async()=>{await gate;return {source:{threadId,projectId:project.id,environmentId:'machine'},state:history,title:'Imported run'};};
   h.plugin.connection=()=>({environmentId:'machine'});h.plugin.localResponseTarget=async()=>({environmentId:'machine',workspaceRoot:'/vault',directory:'.obsidian/inline'});
   const importing=h.plugin.importRun(h.file.path,project,threadId,messageId,false,captured);h.cursor(0);ready();
@@ -82,5 +82,5 @@ for(const state of ['completed','running'])for(const cursor of [3,'First paragra
   const anchor=responseAnchor(registered[0].id),at=h.value().indexOf(anchor);
   assert.ok(at>h.value().indexOf('First paragraph.'));assert.ok(at<h.value().indexOf('Later paragraph.'));
   const once=h.value();assert.equal((await h.plugin.importRun(h.file.path,project,threadId,messageId,false,insertion)).duplicate,true);
-  assert.equal(h.value(),once);assert.equal(registered.length,1);
+  assert.equal(h.value(),once);assert.equal(registered.length,2);assert.equal(registered[0].id,registered[1].id);
 });

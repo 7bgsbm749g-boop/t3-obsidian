@@ -9,6 +9,7 @@ import type {ReplyReference} from './reply-assets';
 import type {T3ConnectionTimeoutError} from './t3-rpc';
 import type {ResponseStopReceipt} from './response-stop-receipt';
 import type {ResponseConnectionIssue} from './sign-in-state';
+import type {LocalResponseSaveResult} from './local-response-save';
 export interface DeviceResponseIO {
   localFinalNotes?:LocalFinalNoteIO;
   localBindings?():readonly ResponseRequest[];
@@ -58,6 +59,7 @@ export class DeviceResponseManager {
   failResponse(_host:ResponseStorageTarget,id:string){return this.local?.cancel(id)??Promise.resolve();}
   stopResponse(_host:ResponseStorageTarget,id:string,body?:string,_operationId?:string):Promise<ResponseStopReceipt>{return this.manager().stop(id,body);}
   responseStatus(id:string){return this.local?.status(id);}
+  waitForSave(id:string,timeoutMs?:number):Promise<LocalResponseSaveResult>{return this.stopped||!this.local?Promise.resolve({saved:false,reason:'plugin-unavailable'}):this.local.waitForSave(id,timeoutMs);}
   localResponse(id:string){const record=this.local?.record(id);return record?{record,host:record.request.host}:undefined;}
   cachedResponse(id:string){return this.localResponse(id);}
   async relocateResponse(_host:ResponseStorageTarget,record:ResponseRecord,path:string){await this.register({...record.request,notePath:path});return this.local!.record(record.request.id)!;}
