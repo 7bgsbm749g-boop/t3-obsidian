@@ -39,10 +39,10 @@ export class ImportRunModal extends Modal {
     this.contentEl.createEl('pre',{text:this.run.prompt.slice(0,4000),cls:'send-to-t3-import-prompt'});
     if(this.run.unavailable){this.contentEl.createEl('p',{text:this.run.unavailable});new Setting(this.contentEl).addButton(button=>button.setButtonText('Close').onClick(()=>this.close()));return;}
     this.contentEl.createEl('p',{text:'Copy this response into the note. A running response catches up and streams until it finishes. No new prompt is sent.'});
-    new Setting(this.contentEl).setName('Follow future runs in this thread').setDesc('Also attach later responses started in T3. Earlier runs are not imported. Use “Manage T3 streams in this note…” to pause or remove this.').addToggle(toggle=>toggle.setValue(false).onChange(value=>{this.follow=value;}));
+    new Setting(this.contentEl).setName('Follow future runs in this thread').setDesc('Also import every response after the selected run, including responses that have already finished, then stream new responses. Earlier runs are not imported. Use “Manage T3 streams in this note…” to pause or remove this.').addToggle(toggle=>toggle.setValue(false).onChange(value=>{this.follow=value;}));
     new Setting(this.contentEl).addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>button.setButtonText('Import response').setCta().onClick(()=>{
       button.setDisabled(true);
-      void this.attach(this.follow).then(result=>{new Notice(`${result.duplicate?'This response is already in the note.':'Response attached; catching up with T3.'}${result.following?' Future runs are also attached.':''}`);this.close();}).catch(error=>{button.setDisabled(false);new Notice(`Import T3 run: ${error instanceof Error?error.message:String(error)}`,10000);});
+      void this.attach(this.follow).then(result=>{new Notice(`${result.duplicate?'This response is already in the note.':'Response attached; catching up with T3.'}${result.following?' Later responses are also attached, including completed runs.':''}`);this.close();}).catch(error=>{button.setDisabled(false);new Notice(`Import T3 run: ${error instanceof Error?error.message:String(error)}`,10000);});
     }));
   }
   onClose(){this.contentEl.empty();}

@@ -5,7 +5,7 @@ import {turnForMessage,type InlineMessage,type InlineThreadState} from './inline
 import type {EventTarget} from './event-subscriptions';
 
 export const STREAM_COMMANDS=['stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination'] as const;
-export interface ThreadDisplayCommand {version:1;id:string;kind:typeof STREAM_COMMANDS[number];source?:EventTarget;destinationSection?:string;destinations?:string[];subscriptionId?:string;destination?:string;scope?:'thread';start?:'future'|'history'}
+export interface ThreadDisplayCommand {version:1;id:string;kind:typeof STREAM_COMMANDS[number];source?:EventTarget;destinationSection?:string;destinations?:string[];subscriptionId?:string;destination?:string;scope?:'thread';start?:'future'|'history'|'after';afterMessageId?:string}
 export interface DisplayDestination {id:string;path:string;section?:string;removed?:boolean}
 export interface DisplayBinding {messageId:string;turnId?:string;destinationId:string;request?:ResponseRequest;bindingId?:string;status:'planned'|'attached'|'skipped';error?:string}
 export interface ThreadDisplay extends EventTarget {id:string;scope:'thread';enabled:boolean;cancelled?:boolean;createdAt:string;boundary:string[];destinations:DisplayDestination[];bindings:DisplayBinding[];error?:string}
@@ -24,10 +24,12 @@ export function validateDisplayCommand(value:any):ThreadDisplayCommand {
   if(value.kind==='stream-thread'){
     if(value.scope!=='thread'||!value.source||![value.source.threadId,value.source.projectId,value.source.environmentId].every(v=>typeof v==='string'&&v.length>0&&v.length<=200))throw Error('Thread streaming requires an explicit thread scope and source thread, project, and environment.');
     if(!Array.isArray(value.destinations)||!value.destinations.length||value.destinations.length>32||value.destinations.some((p:unknown)=>!safeNotePath(p))||new Set(value.destinations).size!==value.destinations.length)throw Error('Choose 1–32 unique destination notes.');
-    if(value.start!==undefined&&!['future','history'].includes(value.start))throw Error('Choose a future or history start boundary.');
+    if(value.start!==undefined&&!['future','history','after'].includes(value.start))throw Error('Choose a future, history, or selected-prompt start boundary.');
+    if(value.start==='after'&&(typeof value.afterMessageId!=='string'||!value.afterMessageId||value.afterMessageId.length>200))throw Error('Choose the prompt after which streaming starts.');
+    if(value.start!=='after'&&value.afterMessageId!==undefined)throw Error('A selected prompt requires an after start boundary.');
   }else if(value.kind!=='thread-streams'&&!/^[0-9a-f-]{36}$/i.test(value.subscriptionId??''))throw Error('A thread streaming subscription ID is required.');
   if(value.kind==='remove-stream-destination'&&!safeNotePath(value.destination))throw Error('Choose the destination to remove.');
-  if(value.kind!=='stream-thread'&&(value.source!==undefined||value.destinations!==undefined||value.scope!==undefined||value.start!==undefined))throw Error('Management cannot change a streaming source or boundary.');
+  if(value.kind!=='stream-thread'&&(value.source!==undefined||value.destinations!==undefined||value.scope!==undefined||value.start!==undefined||value.afterMessageId!==undefined))throw Error('Management cannot change a streaming source or boundary.');
   return value;
 }
 export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisplayCommand,host:DisplayHost,now:number){
@@ -37,7 +39,10 @@ export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisp
     for(const path of command.destinations!)await host.validateDestination(path);
     const state=await host.readThread(command.source!);
     if(!state.historyComplete)throw Error('A complete canonical history is required to establish the streaming boundary.');
-    const display:ThreadDisplay={...command.source!,id:command.id,scope:'thread',enabled:true,createdAt:new Date(now).toISOString(),boundary:command.start==='history'?[]:state.messages.filter(m=>m.role==='user').map(m=>m.id),destinations:command.destinations!.map(path=>({id:commandId(command.id,`destination:${path}`),path,...(command.destinationSection?{section:command.destinationSection}:{})})),bindings:[]};
+    const prompts=state.messages.filter(m=>m.role==='user'),selected=prompts.findIndex(m=>m.id===command.afterMessageId);
+    if(command.start==='after'&&selected<0)throw Error('The selected prompt is no longer in the T3 history.');
+    const boundary=command.start==='history'?[]:(command.start==='after'?prompts.slice(0,selected+1):prompts).map(m=>m.id);
+    const display:ThreadDisplay={...command.source!,id:command.id,scope:'thread',enabled:true,createdAt:new Date(now).toISOString(),boundary,destinations:command.destinations!.map(path=>({id:commandId(command.id,`destination:${path}`),path,...(command.destinationSection?{section:command.destinationSection}:{})})),bindings:[]};
     displays.push(display);return {subscriptionId:display.id,display};
   }
   const display=displays.find(d=>d.id===command.subscriptionId);if(!display)throw Error('Thread streaming registration not found.');

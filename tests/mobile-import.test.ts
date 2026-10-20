@@ -39,7 +39,7 @@ for(const phase of ['completed','running'])test(`mobile ${phase} import follows 
   plugin.eventHostFiles=async()=>({close:()=>{closed++;},files:{read:async(path:string)=>store.get(path),remove:async(path:string)=>{store.delete(path);},write:async(path:string,body:string)=>{
     store.set(path,body);const command=JSON.parse(body).command;commands.push(command);
     assert.ok(['thread-streams','stream-thread'].includes(command.kind),'import must not dispatch a prompt');
-    if(command.kind==='stream-thread')displays.push({id:command.id,...source,enabled:true,destinations:[{path:file.path}]});
+    if(command.kind==='stream-thread')displays.push({id:command.id,...source,enabled:true,boundary:[messageId],destinations:[{path:file.path}]});
     const request=eventRequest(host,command);
     pending={result:request.result,body:JSON.stringify({version:1,host,request:request.name,result:{id:command.id,ok:true,displays}})};
   }}});
@@ -47,7 +47,7 @@ for(const phase of ['completed','running'])test(`mobile ${phase} import follows 
   assert.deepEqual(JSON.parse(JSON.stringify(await plugin.importRun(file.path,{id:source.projectId},source.threadId,messageId,true))),{duplicate:false,following:true});
   assert.equal(registered.length,1);assert.equal(pauses,2);assert.equal(closed,2);assert.equal(plugin.busy,false);
   assert.deepEqual(commands.map(command=>command.kind),['thread-streams','stream-thread']);
-  assert.equal(commands[1].start,'future');assert.deepEqual(commands[1].destinations,[file.path]);assert.deepEqual(commands[1].source,source);
+  assert.equal(commands[1].start,'after');assert.equal(commands[1].afterMessageId,messageId);assert.deepEqual(commands[1].destinations,[file.path]);assert.deepEqual(commands[1].source,source);
   const receipt=findRunImport(document,source,messageId);assert.equal(receipt?.bindingId,registered[0].id);assert.ok(document.includes(responseAnchor(registered[0].id)));
   const once=document;
   assert.equal((await plugin.importRun(file.path,{id:source.projectId},source.threadId,messageId,true)).duplicate,true);

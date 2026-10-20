@@ -1276,14 +1276,19 @@ export default class SendToT3 extends Plugin {
       return changed.display!;
     }).open();
   }
-  private async followImportedThread(source:{threadId:string;projectId:string;environmentId:string},notePath:string){
+  private async followImportedThread(source:{threadId:string;projectId:string;environmentId:string},notePath:string,messageId:string,state:InlineThreadState){
     const result=await this.executeAgentCommand({version:1,id:randomId(),kind:'thread-streams'}) as import('./event-subscriptions').EventCommandResult;
     const history=(result.displays??[]).filter(display=>display.threadId===source.threadId&&display.projectId===source.projectId&&display.environmentId===source.environmentId&&display.destinations.some(destination=>destination.path===notePath));
     const matches=history.filter(display=>display.destinations.some(destination=>destination.path===notePath&&!destination.removed));
-    if(matches.some(display=>display.enabled&&!display.cancelled))return;
-    const paused=matches.find(display=>!display.cancelled);
-    if(paused)await this.executeAgentCommand({version:1,id:randomId(),kind:'resume-thread-stream',subscriptionId:paused.id});
-    else await this.executeAgentCommand({version:1,id:history.length?randomId():importFollowId(source,notePath),kind:'stream-thread',scope:'thread',source,destinations:[notePath],start:'future'});
+    const prompts=state.messages.filter(message=>message.role==='user'),selected=prompts.findIndex(message=>message.id===messageId);
+    const earlier=new Set(prompts.slice(0,selected+1).map(message=>message.id));
+    if(matches.some(display=>display.enabled&&!display.cancelled&&display.boundary.every(id=>earlier.has(id))))return;
+    // The host establishes this boundary from fresh history, including responses
+    // that finish while the selected response is being attached.
+    await this.executeAgentCommand({version:1,id:history.length?randomId():importFollowId(source,notePath),kind:'stream-thread',scope:'thread',source,destinations:[notePath],start:'after',afterMessageId:messageId});
+    // Replace only this note's old registration. Existing response bindings keep
+    // running and other destination notes keep their original boundaries.
+    for(const display of matches.filter(display=>!display.cancelled))await this.executeAgentCommand({version:1,id:randomId(),kind:display.destinations.filter(destination=>!destination.removed).length===1?'cancel-thread-stream':'remove-stream-destination',subscriptionId:display.id,destination:notePath});
   }
 
   private async executeImportRead(_command:import('./response-command').ResponseCommand,_target:ResponseStorageTarget){throw Error('Legacy lease imports were retired. Imports read T3 directly.');}
@@ -1318,7 +1323,7 @@ export default class SendToT3 extends Plugin {
         const inserted=await editorStream(request,notePath,{...io,updateNote:(path,change,allowed)=>io.updateNote(path,current=>{const next=change(current);return findRunImport(next,history.source,messageId)?next:next+(next.endsWith('\n')?'':'\n')+receipt+'\n';},allowed)},()=>!this.stopped,id,insertion??undefined);
         await this.deviceInline.register(inserted);
       }
-      if(follow)await this.followImportedThread(history.source,notePath);
+      if(follow)await this.followImportedThread(history.source,notePath,messageId,history.state);
       return {duplicate,following:follow};
     }finally{this.busy=false;}
   }

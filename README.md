@@ -502,9 +502,12 @@ note's project routing. A running response catches up with output already in T3
 and streams until completion. Repeating the import reuses its existing binding,
 including after completion, reload and later note edits.
 
-**Follow future runs in this thread** is off by default. Enable it to attach
-later responses started in T3 to this note. It does not import other earlier
-runs. **Manage T3 streams in this note…** lists these registrations and supports
+**Follow future runs in this thread** is off by default. Enable it to import
+every response after the selected run, including responses that have already
+finished, and continue streaming new responses to this note. Runs before the
+selected run are excluded. Reimporting with follow enabled also catches up
+responses skipped by an older or paused registration without duplicating
+existing responses. **Manage T3 streams in this note…** lists these registrations and supports
 pause, resume and removal from this note. Already attached responses finish
 normally. Resume skips runs started while paused. For a registration shared by
 several notes, pause/resume affects all its destinations; removal affects only

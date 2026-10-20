@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {EventSubscriptions,type EventState,type EventNotification,type EventSubscriptionCommand} from '../event-subscriptions';
 import {jobEvents,type JobWatch,type JobObservation} from '../job-lifecycle';
-import {validateDisplayCommand,type ThreadDisplay} from '../thread-display';
+import {validateDisplayCommand,type ThreadDisplay,type ThreadDisplayCommand} from '../thread-display';
 import {commandId} from '../direct';
 import {initialRegion,type InlineThreadState} from '../inline-thread';
 import type {ResponseRequest} from '../response-model';
@@ -30,7 +30,7 @@ async function harness(initial?:EventState){
   return {service,delivered,requests,existing,monitors,setThread:(value:InlineThreadState)=>{thread=value;},advance:()=>{now+=3000;},busy:(value:boolean)=>{busy=value;},fail:(value:boolean)=>{fail=value;},attachFail:(value:boolean)=>{attachFail=value;},get saved(){return saved!;},get bindingReads(){return bindingReads;}};
 }
 const subscribeJob=():EventSubscriptionCommand=>({version:1,id:randomUUID(),kind:'subscribe-job',target,job});
-const stream=(source=worker,destinations=['A.md','B.md']):EventSubscriptionCommand=>({version:1,id:randomUUID(),kind:'stream-thread',scope:'thread',source,destinations});
+const stream=(source=worker,destinations=['A.md','B.md']):ThreadDisplayCommand=>({version:1,id:randomUUID(),kind:'stream-thread',scope:'thread',source,destinations});
 const manage=(kind:EventSubscriptionCommand['kind'],subscriptionId:string,extra={})=>({version:1,id:randomUUID(),kind,subscriptionId,...extra}) as EventSubscriptionCommand;
 
 test('idle streaming skips binding discovery; new runs and failed attachments read fresh bindings once per pass',async()=>{
@@ -85,6 +85,44 @@ test('thread opt-in captures fast, direct and event-triggered responses in many-
 test('missed canonical runs recover beyond recent history and future boundary excludes earlier runs',async()=>{
   const h=await harness();await h.service.command(stream(worker,['A.md']));const runs=Array.from({length:25},(_,i)=>run(randomUUID(),'turn-'+i));
   h.setThread({...runs.at(-1)!,messages:[...run().messages,...runs.flatMap(s=>s.messages)],turns:Object.fromEntries(runs.map(s=>[s.latestTurn!.turnId,s.latestTurn!]))});await h.service.tick();assert.equal(h.requests.length,25);await h.service.tick();assert.equal(h.requests.length,25);
+});
+test('selected-prompt streaming imports all later completed and running responses in order, then future runs, once across restart',async()=>{
+  const h=await harness(),runs=Array.from({length:28},(_,i)=>run(randomUUID(),'turn-'+i,i===27?'running':'completed'));
+  // Timestamps need not distinguish prompts: the canonical prompt order owns the boundary.
+  for(const state of runs){state.messages[0].turnId=state.latestTurn!.turnId;state.messages[0].createdAt='2026-10-02T12:00:00Z';}
+  const state={...runs.at(-1)!,messages:runs.flatMap(s=>s.messages),turns:Object.fromEntries(runs.map(s=>[s.latestTurn!.turnId,s.latestTurn!]))};
+  const selected=runs[1].messages[0].id;
+  h.setThread(state);
+  const command:ThreadDisplayCommand={...stream(worker,['A.md']),start:'after',afterMessageId:selected};
+  try{
+    const result=await h.service.command(command);assert.deepEqual(result.display!.boundary,runs.slice(0,2).map(s=>s.messages[0].id));
+    // A later response was separately imported already; steering stays with its original run.
+    h.existing.push({id:randomUUID(),path:'A.md',messageIds:[runs[3].messages[0].id],turnIds:['turn-3']});
+    state.messages.push({id:randomUUID(),role:'user',turnId:'turn-27',text:'Steer the running response',streaming:false});
+    h.setThread(state);await h.service.tick();
+    assert.deepEqual(h.requests.map(r=>r.messageId),runs.slice(2).filter((_,i)=>i!==1).map(s=>s.messages[0].id));
+    await h.service.tick();assert.equal(h.requests.length,25);assert.equal(h.delivered.length,0);
+    const restarted=await harness(h.saved);h.service.stop();
+    try{
+      restarted.setThread(state);await restarted.service.tick();assert.equal(restarted.requests.length,0);
+      const future=run(randomUUID(),'future');future.messages[0].turnId='future';
+      restarted.setThread({...future,messages:[...state.messages,...future.messages],turns:{...state.turns,future:future.latestTurn!}});
+      restarted.advance();await restarted.service.tick();assert.deepEqual(restarted.requests.map(r=>r.messageId),[future.messages[0].id]);
+    }finally{restarted.service.stop();}
+  }finally{h.service.stop();}
+});
+test('selected-prompt boundaries require complete history and the exact selected user message',async()=>{
+  const h=await harness(),state=run(),command:ThreadDisplayCommand={...stream(),start:'after',afterMessageId:state.messages[0].id};
+  try{
+    for(const afterMessageId of [undefined,'',42])assert.throws(()=>validateDisplayCommand({...command,afterMessageId}),/prompt/);
+    assert.throws(()=>validateDisplayCommand({...command,start:'future'}),/after start/);
+    assert.throws(()=>validateDisplayCommand({...manage('resume-thread-stream',randomUUID()),afterMessageId:command.afterMessageId}),/boundary/);
+    h.setThread({...state,historyComplete:false});await assert.rejects(h.service.command(command),/complete canonical/);
+    h.setThread(state);
+    await assert.rejects(h.service.command({...command,afterMessageId:'missing'}),/no longer/);
+    await assert.rejects(h.service.command({...command,afterMessageId:state.messages[1].id}),/no longer/);
+    assert.equal(h.service.snapshot.displays?.length??0,0);assert.equal(h.requests.length,0);
+  }finally{h.service.stop();}
 });
 test('steering, explicit continuation and late question answers already attached to a response are not duplicated',async()=>{
   const h=await harness();await h.service.command(stream());
