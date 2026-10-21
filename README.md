@@ -410,7 +410,11 @@ If an immutable archive was created but installation or Sync failed, resume thos
 
 Only when the user explicitly requests skipping the full test suite, add `--skip-tests-reason "EXACT USER INSTRUCTION"` to a new release command. The build still runs, and immutable provenance plus the deployment receipt record the skipped suite and reason. This option does not apply to resumes or smoke completion.
 
-The deployment receipt is intentionally marked `awaiting-live-smoke`. After a real QLO2 client receives Sync, reload the plugin and exercise the changed behavior. Capture durable evidence and complete the release with:
+The deployment receipt is intentionally marked `awaiting-live-smoke`. After a real QLO2 client receives Sync, reload the plugin and verify it without creating test content. Do not create or store smoke-test notes, folders, attachments, screenshots, logs, reports, or other evidence in QLO2, even temporarily. Exercise behavior that needs test fixtures in a separate test vault and report those checks separately. Keep all evidence under `/home/ubuntu/backups/send-to-t3-code`, outside synced vaults.
+
+Always delete all temporary smoke-test T3 threads and notes after use, including failed, cancelled, and interrupted tests. Track their exact thread IDs and note paths, save durable evidence outside the vault, stop active test work, and delete through native T3 controls and Obsidian's normal vault operations. Archiving threads or closing tabs is not deletion. Verify deletion before reporting the test complete or completing the smoke receipt; report any cleanup blocker and remaining IDs/paths. Preserve pre-existing user threads and notes, and immutable evidence.
+
+After this cleanup, complete the release with:
 
 ```sh
 npm run release:qlo2 -- --complete-smoke VERSION \

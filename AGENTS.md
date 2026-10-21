@@ -23,7 +23,7 @@ If the current working directory is an installed-plugin directory, stop and move
   6. back up and install QLO2 while preserving `data.json`;
   7. force and verify a fresh Obsidian Sync scan;
   8. reload a real QLO2 Obsidian client and smoke-test the changed behavior;
-  9. record immutable smoke evidence.
+  9. record immutable smoke evidence and verify deletion of all temporary smoke threads and notes.
 - Do not say a product change is deployed, live, complete, or ready merely because `npm run build` passed. A release receipt with status `awaiting-live-smoke` is intentionally incomplete.
 
 ## Required commands
@@ -51,8 +51,11 @@ The retired `scripts/deploy-qlo2.py` must continue to refuse direct use. Never h
 ## Live smoke testing
 
 - Smoke-test on a real QLO2 client after it has received Sync and reloaded the plugin. Use the local VPS Obsidian client by default; test another affected device when the change is platform-specific.
-- Preserve the user's current note and settings. Prefer a uniquely named temporary note, cancel before dispatching external work when delivery itself is not under test, then remove the temporary note.
-- For editor-menu changes, verify in the actual editor that the menu appears only for the intended selection and that the expected destination UI opens. For delivery changes, complete one bounded real delivery and verify the observable T3 result.
+- Do not create or store smoke-test notes, folders, attachments, screenshots, logs, reports, or other evidence in QLO2, even temporarily. Keep test fixtures in a separate test vault and all evidence under `/home/ubuntu/backups/send-to-t3-code`, outside synced vaults.
+- Preserve the user's current note and settings. Keep QLO2 verification limited to checks that create no test content. Run fixture-based checks in a separate test vault and report that distinction. Cancel before dispatching external work when delivery itself is not under test.
+- Always delete every temporary T3 smoke-test thread and smoke-test note after use, including failed, cancelled, and interrupted tests. Save diagnostic evidence outside the vault first, stop any active test work, then delete the threads through native T3 controls and the notes through Obsidian's normal vault operations. Archiving a thread or closing a tab does not count as deletion. Preserve pre-existing user threads and notes, and immutable evidence.
+- Track the exact test thread IDs and note paths. Verify that all are deleted before reporting the test complete or recording a completed smoke receipt. If cleanup fails, report the remaining IDs/paths and the blocker; cleanup remains required.
+- For editor-menu changes, verify in the actual editor that the menu appears only for the intended selection and that the expected destination UI opens. For delivery changes, complete one bounded real delivery from the separate test vault and verify the observable T3 result.
 - Capture a screenshot or equivalent durable evidence outside the vault, then record it with `--complete-smoke`. Do not fabricate or record a smoke receipt based only on unit tests.
 - Reloading a client can interrupt active work. Inspect current state first, then use Obsidian's **Reload app without saving** command or a verified plugin disable/enable cycle; `Ctrl+R` alone is not acceptable reload evidence. Do not kill Obsidian blindly.
 
