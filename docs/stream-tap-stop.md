@@ -59,15 +59,29 @@ Evidence is outside every synced vault:
 - The same directory contains native screenshots, source hashes, exact synthetic
   interrupt payloads, selection observations, and cleanup receipts.
 
-## Delivery state
+## Delivery on 2026-10-21
 
-Source is committed in the task worktree. Integration and release require the
-canonical checkout to be clean. Its unrelated edits to `AGENTS.md`, `README.md`,
-`docs/obsidian-sync-test-lab.md` and `skills/obsidian-t3/SKILL.md` remain intact.
-This task does not stash, discard or commit them and does not use `--allow-dirty`.
-The release preflight observation is retained with the external evidence.
+The initial release pause ended when the user authorized committing the four
+existing documentation edits. Commit `9c5a47b` preserved those edits, and
+`d17a149` integrated the reviewed Stop button source. No dirty override was used.
 
-No release version is assigned to this change. The development/QLO2 install,
-fresh Sync scan, real QLO2 reload, and immutable completed smoke receipt remain
-pending until the release checkout is available. The isolated fixture evidence
-must not be used as a completed QLO2 release receipt.
+The supported release command built and tested immutable **2.45.25**, installed
+it in the development vault and QLO2, and required a fresh `Fully synced` scan.
+Both installations matched the archive hashes; both `data.json` files remained
+byte-identical. Commit `98c988b` records the version files.
+
+QLO2 Obsidian 1.14.4 loaded plugin instance
+`b8680dc5-3033-4be7-bfeb-a4ed0c03e5f9` at version 2.45.25 after the supported
+native reload command. A native click in the existing interrupted response
+showed no Stop control. The existing note bytes, all 43 pane IDs, active pane,
+and plugin settings were preserved. The General settings window was restored;
+the temporarily enabled native command interface was restored off.
+
+The positive active-stream checks remain the separate test-vault checks above.
+QLO2 received no test content. No real T3 test threads were created, and all
+isolated fixture notes were removed. Native mobile remains untested.
+
+Completed immutable receipt:
+`/home/ubuntu/backups/send-to-t3-code/releases/2.45.25/smoke-vps-qlo2.json`.
+Deployment/reload/native evidence:
+`/home/ubuntu/backups/send-to-t3-code/stream-stop-delivery-20261021T012041Z/smoke.json`.
