@@ -600,7 +600,20 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
         const folder=this.folderForMenu(file);
-        menu.addItem(item=>{item.setTitle('Link to T3 Code').setIcon('link');const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,folder).open());return;}const projects=this.projects();for(const project of projects)submenu.addItem(i=>i.setTitle(`Link to ${this.projectChoiceLabel(project)}`).onClick(()=>void this.linkFolder(folder,project,false)));submenu.addSeparator();submenu.addItem(i=>i.setTitle('Create T3 project…').onClick(()=>void this.createFolderProject(folder)));if(!projects.length)submenu.addItem(i=>i.setTitle(this.connecting?'Discovering projects…':'No projects found. Connect T3 to discover projects.').setDisabled(true));});
+        menu.addItem(item=>{
+          item.setTitle('Link to T3 Code').setIcon('link');
+          const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();
+          if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,folder).open());return;}
+          const projects=this.projects();
+          for(const project of projects)submenu.addItem(i=>i.setTitle(`Link to ${this.projectChoiceLabel(project)}`).onClick(()=>void this.linkFolder(folder,project,false)));
+          submenu.addSeparator();
+          submenu.addItem(i=>i.setTitle('Create T3 project…').onClick(()=>void this.createFolderProject(folder)));
+          submenu.addItem(i=>i.setTitle('Unlink').setIcon('unlink').setDisabled(!this.settings.folderLinks.some(link=>link.folderPath===folder.path)).onClick(async()=>{
+            try{await this.unlinkFolder(folder.path);new Notice(`${folder.path} unlinked from T3 Code.`);}
+            catch(error){new Notice(`T3 folder links: ${message(error)}`,10000);}
+          }));
+          if(!projects.length)submenu.addItem(i=>i.setTitle(this.connecting?'Discovering projects…':'No projects found. Connect T3 to discover projects.').setDisabled(true));
+        });
         return;
       }
       if (!(file instanceof TFile) || file.extension.toLowerCase() !== 'md' || (!Platform.isMobile && source !== 'file-explorer-context-menu')) return;
