@@ -19,6 +19,46 @@ SPEC.loader.exec_module(release)
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    def test_prepared_publication_uses_validated_bundle_without_repeating_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'dist').mkdir()
+            (root / 'package.json').write_text('{"version":"3.4.5"}')
+            (root / 'package-lock.json').write_text('{"version":"3.4.5","packages":{"":{"version":"3.4.5"}}}')
+            (root / 'manifest.json').write_text('{"version":"3.4.5","minAppVersion":"1"}')
+            (root / 'versions.json').write_text('{"3.4.5":"1"}')
+            for name in ('styles.css', 'README.md', 'LICENSE'): (root / name).write_text(name)
+            plugin = root / 'installed'; plugin.mkdir()
+            (plugin / 'manifest.json').write_text('{"version":"3.4.4"}')
+            bundle = root / 'validated-main.js'; bundle.write_bytes(b'exact tested bundle')
+            (root / 'dist/main.js').write_bytes(b'old untested build')
+            proof = root / 'validation.json'; proof.write_text('{}')
+            validation = {'bundle': str(bundle), 'testSuite': {'status': 'passed', 'scope': 'affected', 'baseCommit': 'installed'}}
+            with patch.object(release, 'ROOT', root), patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'RECEIPTS', root / 'receipts'), patch.object(release, 'canonical_root_required'), patch.object(release, 'git_state', return_value=('reviewed', [])), patch.object(release.change_checks, 'verify_validation', return_value=validation), patch.object(release.change_checks, 'default_base', return_value='installed'), patch.object(release, 'release_checks') as checks, patch.object(release, 'publish_release') as publish:
+                release.publish_prepared('3.4.5', proof)
+                checks.assert_not_called()
+                self.assertEqual((root / 'dist/main.js').read_bytes(), b'exact tested bundle')
+                self.assertTrue(release.archive_path('3.4.5').is_file())
+                self.assertTrue(json.loads(release.archive_path('3.4.5').with_suffix('.provenance.json').read_bytes())['testSuite']['reusedPreparedValidation'])
+                publish.assert_called_once()
+
+    def test_common_client_check_requires_a_new_loaded_instance_and_preserves_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); plugin = root / 'plugin'; plugin.mkdir()
+            for name in release.RELEASE_FILES: (plugin / name).write_bytes(name.encode())
+            (plugin / 'data.json').write_bytes(b'{"kept":true}')
+            receipts = root / 'receipts'; deployed = receipts / '3.4.5'; deployed.mkdir(parents=True)
+            (deployed / 'deployment.json').write_text(json.dumps({'releaseFileSha256': {name: release.sha256_file(plugin / name) for name in release.RELEASE_FILES}}))
+            old = {'ok': True, 'client': {'instanceId': 'old', 'loadedVersion': '3.4.5'}}
+            new = {'ok': True, 'client': {'instanceId': 'new', 'loadedVersion': '3.4.5'}}
+            with patch.object(release, 'canonical_root_required'), patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'DEV_PLUGIN', plugin), patch.object(release, 'RECEIPTS', receipts), patch.object(release.time, 'sleep'), patch.object(release, 'client_command', side_effect=[old, {'ok': True, 'reloadScheduled': True}, old, new]) as command:
+                evidence = release.check_client('3.4.5')
+                self.assertEqual(command.call_count, 4)
+                self.assertEqual(json.loads(evidence.read_bytes())['after']['client']['instanceId'], 'new')
+                command.reset_mock()
+                release.check_client('3.4.5')
+                command.assert_not_called()
+                self.assertEqual((plugin / 'data.json').read_bytes(), b'{"kept":true}')
+
     def test_plugin_only_release_disables_the_existing_external_writer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             unit = Path(directory) / 'old.service'
@@ -31,10 +71,15 @@ class ReleasePipelineTests(unittest.TestCase):
 
 
     def test_explicit_user_test_skip_preserves_build_and_audit_reason(self) -> None:
-        with patch.object(release, 'run') as command:
-            self.assertEqual(release.release_checks(), {'status': 'passed'})
-            self.assertEqual([call.args[0] for call in command.call_args_list], [['npm', 'run', 'build'], ['npm', 'test']])
-            command.reset_mock()
+        with tempfile.TemporaryDirectory() as directory, patch.object(release, 'run') as command:
+            proof = Path(directory) / 'proof.json'
+            proof.write_text(json.dumps({'testSuite': {'status': 'passed', 'scope': 'affected'}}))
+            with patch.object(release.change_checks, 'default_base', return_value='installed'), patch.object(release.change_checks, 'run_validation', return_value=proof) as validate:
+                result = release.release_checks()
+                self.assertEqual(result['scope'], 'affected')
+                self.assertEqual(result['validationSha256'], release.sha256_file(proof))
+                validate.assert_called_once_with(release.ROOT, base='installed', require_build=True)
+            command.assert_not_called()
             self.assertEqual(release.release_checks(' forget the full tests '), {'status': 'skipped', 'reason': 'forget the full tests'})
             command.assert_called_once_with(['npm', 'run', 'build'])
             command.reset_mock()
@@ -109,7 +154,7 @@ class ReleasePipelineTests(unittest.TestCase):
             subprocess.run(['git','-C',str(root),'add','.'],check=True)
             subprocess.run(['git','-C',str(root),'-c','user.name=Test','-c','user.email=test@example.com','commit','-qm','Original'],check=True)
             commit = subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
-            with patch.object(release,'ROOT',root), patch.object(release,'RECEIPTS',root/'receipts'), patch.object(release,'QLO2_PLUGIN',root/'missing-plugin'), patch.object(release,'canonical_root_required'), patch.object(release,'run'), patch.object(release,'git_state',return_value=(commit,[])), patch.object(release,'publish_release',side_effect=RuntimeError('Sync failure')):
+            with patch.object(release,'ROOT',root), patch.object(release,'RECEIPTS',root/'receipts'), patch.object(release,'QLO2_PLUGIN',root/'missing-plugin'), patch.object(release,'canonical_root_required'), patch.object(release,'release_checks',return_value={'status':'passed','scope':'affected'}), patch.object(release,'git_state',return_value=(commit,[])), patch.object(release,'publish_release',side_effect=RuntimeError('Sync failure')):
                 with self.assertRaisesRegex(RuntimeError,'Sync failure'): release.new_release('patch',False)
             dirty = [' M '+name for name in ('package.json','package-lock.json','manifest.json','versions.json')]
             with patch.object(release,'ROOT',root), patch.object(release,'RECEIPTS',root/'receipts'), patch.object(release,'canonical_root_required'), patch.object(release,'git_state',return_value=(commit,dirty)), patch.object(release,'publish_release') as publish:

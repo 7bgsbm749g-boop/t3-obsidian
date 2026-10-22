@@ -16,7 +16,7 @@ If the current working directory is an installed-plugin directory, stop and move
 - `source-only`, `prototype`, or `do not deploy` means edit and test the current source worktree without installing or releasing it.
 - For an ordinary user-requested product change, “implement”, “fix”, “add”, or “build” means the full QLO2 delivery path unless the user explicitly narrows the scope:
   1. implement in the task's source worktree;
-  2. run the build and complete test suite;
+  2. prepare the final release version and run only tests for changed systems and their transitive consumers, once for each distinct set of test inputs;
   3. commit the reviewed source, documentation, and test changes in that worktree;
   4. integrate the reviewed commits into the clean canonical release checkout and create a strictly newer immutable release;
   5. install runtime artifacts into the development vault;
@@ -28,14 +28,17 @@ If the current working directory is an installed-plugin directory, stop and move
 
 ## Required commands
 
-- Build: `npm run build` (writes `dist/main.js`, never into a vault).
-- Test: `npm test`.
-- Release: `npm run release:qlo2 -- --bump patch` (or `minor`/`major`). This is the only supported packaging/deployment entry point.
+- Build: `npm run build` (writes `dist/main.js`, never into a vault). The check runner builds when needed and reuses an exact matching build; do not separately repeat it.
+- Test: `npm test` selects changed systems and transitive consumers against the installed release, including staged, unstaged, untracked, and deleted source. `npm run test:plan` shows the selection. `npm test -- --base COMMIT` selects against an explicit development baseline. Successful checks are reused only for identical source dependencies, installed dependency bytes, runtime, and bundle inputs. Do not run the full suite by default; `npm run test:all` is an explicit diagnostic command. Shared test-runner, build, or dependency changes can affect the whole suite.
+- Preferred release: in the task worktree, run `npm run release:qlo2 -- --prepare --bump patch` (or `minor`/`major`). This prepares the final version, builds, and runs affected tests once, without installing or packaging. For an already prepared version use `--prepare --version VERSION`. Commit and integrate those exact reviewed bytes, then run the printed `npm run release:qlo2 -- --publish VERSION --validation PATH` command in the canonical checkout. Publishing verifies source, installed dependencies, runtime, baseline, cached bundle, and test evidence; it does not rebuild or rerun successful checks. If inputs change, prepare again; unchanged affected test inputs remain cached.
+- One-step release from a clean canonical checkout remains `npm run release:qlo2 -- --bump patch`. It uses the same affected-test runner. `release:qlo2` is the only supported packaging/deployment entry point.
+- Documentation-only and release-tool-only changes need their affected checks and reviewed source integration, not a plugin version or deployment, unless a release is needed to verify the delivery tooling itself.
 - Run packaging and QLO2 delivery from the canonical release checkout, one release at a time. Other source worktrees can remain active and need not be clean.
 - If packaging succeeded but installation or Sync failed, retry the exact immutable bytes with `npm run release:qlo2 -- --resume VERSION`; never delete/rebuild that version with different bytes.
 - Commit the reviewed release changes before running the release command. Do not include unrelated user edits in that commit. The release command refuses a dirty worktree by default; `--allow-dirty` remains an exceptional path only when the user explicitly requests deployment of reviewed dirty bytes.
 - After a real client reload and smoke test, record evidence with:
   `npm run release:qlo2 -- --complete-smoke VERSION --device DEVICE --evidence PATH --notes "WHAT WAS VERIFIED"`.
+- Publication automatically checks the real QLO2 client, invokes its native reload command, and records a new instance at the released version in `client-check.json`. Retry a failed common check with `--check-client VERSION`; this does not reinstall. The laptop reload service runs asynchronously and does not delay the VPS release.
 
 The retired `scripts/deploy-qlo2.py` must continue to refuse direct use. Never hand-copy files into either vault and never overwrite an existing versioned archive or receipt.
 
@@ -50,7 +53,7 @@ The retired `scripts/deploy-qlo2.py` must continue to refuse direct use. Never h
 
 ## Live smoke testing
 
-- Smoke-test on a real QLO2 client after it has received Sync and reloaded the plugin. Use the local VPS Obsidian client by default; test another affected device when the change is platform-specific.
+- Check changed behavior once per validated candidate, in the relevant test vault/client. Reuse that evidence after publication when the tested behavior inputs are identical. QLO2 still needs fresh Sync, exact installed bytes, and a real loaded-client check; do not repeat fixture setup or unrelated manual checks there. Use the local VPS Obsidian client by default; test another affected device when the change is platform-specific. Common automatic reload evidence does not establish changed UI or delivery behavior.
 - Do not create or store smoke-test notes, folders, attachments, screenshots, logs, reports, or other evidence in QLO2, even temporarily. Keep test fixtures in a separate test vault and all evidence under `/home/ubuntu/backups/send-to-t3-code`, outside synced vaults.
 - Preserve the user's current note and settings. Keep QLO2 verification limited to checks that create no test content. Run fixture-based checks in a separate test vault and report that distinction. Cancel before dispatching external work when delivery itself is not under test.
 - Always delete every temporary T3 smoke-test thread and smoke-test note after use, including failed, cancelled, and interrupted tests. Save diagnostic evidence outside the vault first, stop any active test work, then delete the threads through native T3 controls and the notes through Obsidian's normal vault operations. Archiving a thread or closing a tab does not count as deletion. Preserve pre-existing user threads and notes, and immutable evidence.

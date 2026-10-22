@@ -18,9 +18,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
 import zipfile
 import re
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import change_checks
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -361,22 +364,80 @@ def publish_release(
         **deployment,
         **({'backgroundResponseHost': background_host} if background_host else {}),
         'nextAction': (
-            'Reload a real QLO2 Obsidian client, smoke-test the changed behavior, capture evidence, then run '
+            'Publication runs the native QLO2 reload check; retry --check-client if client-check.json is absent. '
+            'Reuse changed-behavior evidence for this exact candidate, then run '
             f'npm run release:qlo2 -- --complete-smoke {version} --device <device> --evidence <path> --notes <text>'
         ),
     }
     receipt_path = write_release_receipt(version, receipt)
     print(json.dumps({**receipt, 'receipt': str(receipt_path)}, indent=2))
-    # Publishing remains on the VPS. A private laptop mailbox performs the
-    # native reload only after matching Sync files, with a timer for offline
-    # recovery. This is loaded-version verification, not laptop smoke testing.
+    # The existing laptop timer owns retries. Do not wait for SSH/offline devices.
     if skip_laptop_reload:
         print('Laptop reload omitted by explicit release option.')
-        return
+    else:
+        try:
+            run(['systemctl', '--user', 'start', '--no-block', 'send-to-t3-native-laptop-reload.service'], timeout=10)
+        except (subprocess.SubprocessError, OSError):
+            print('Laptop reload deferred; configure the existing laptop reload timer.', file=sys.stderr)
     try:
-        run([sys.executable, str(ROOT / 'scripts/laptop-reload.py'), '--retry'], timeout=55)
-    except (subprocess.SubprocessError, OSError):
-        print('Laptop reload deferred to the retry timer.', file=sys.stderr)
+        check_client(version)
+    except (subprocess.SubprocessError, OSError, ValueError, SystemExit) as error:
+        print(f'QLO2 client verification pending: {error}. Retry with --check-client {version}.', file=sys.stderr)
+
+
+def client_command(*arguments: str) -> dict:
+    result = run([sys.executable, str(ROOT / 'scripts/obsidian-command.py'), '--vault',
+                  str(QLO2_PLUGIN.parents[2]), '--timeout', '5', *arguments], capture=True, timeout=8)
+    value = json.loads(result.stdout)
+    if not value.get('ok'):
+        raise SystemExit('The real QLO2 client did not acknowledge the command.')
+    return value
+
+
+def check_client(version: str) -> Path:
+    """Record real native reload proof; changed behavior still needs its own smoke."""
+    canonical_root_required()
+    directory = release_receipt_dir(version)
+    deployment = read_json(directory / 'deployment.json')
+    for name, checksum in deployment['releaseFileSha256'].items():
+        if sha256_file(QLO2_PLUGIN / name) != checksum:
+            raise SystemExit(f'QLO2 {name} no longer matches release {version}.')
+    evidence = directory / 'client-check.json'
+    if evidence.exists():
+        print(f'Existing immutable client check: {evidence}')
+        return evidence
+    before = client_command('client-status')
+    if before.get('connectionRecovery', {}).get('pending') or before.get('connectionRecovery', {}).get('reloading'):
+        raise SystemExit('QLO2 is recovering a connection; retry the client check when it is idle.')
+    settings = {str(plugin): sha256_file(plugin / 'data.json') for plugin in (DEV_PLUGIN, QLO2_PLUGIN)}
+    runtime = {name: deployment['releaseFileSha256'][name] for name in RUNTIME_FILES}
+    acknowledgement = client_command('reload-client', '--release-version', version, '--runtime-hashes', json.dumps(runtime))
+    if not acknowledgement.get('reloadScheduled'):
+        raise SystemExit('QLO2 did not schedule its native reload.')
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        try:
+            after = client_command('client-status')
+        except (subprocess.SubprocessError, ValueError):
+            continue
+        if after['client']['loadedVersion'] == version and after['client']['instanceId'] != before['client']['instanceId']:
+            break
+    else:
+        raise SystemExit('No new QLO2 client instance loaded the release within 45 seconds.')
+    if settings != {str(plugin): sha256_file(plugin / 'data.json') for plugin in (DEV_PLUGIN, QLO2_PLUGIN)}:
+        raise SystemExit('Plugin settings changed during the client check; inspect before completing smoke.')
+    if any(sha256_file(QLO2_PLUGIN / name) != checksum for name, checksum in deployment['releaseFileSha256'].items()):
+        raise SystemExit('QLO2 release bytes changed during the client check.')
+    value = {'version': version, 'verifiedAt': utc_now(), 'device': 'vps-qlo2',
+             'nativeReloadCommand': 'app:reload', 'before': before, 'acknowledgement': acknowledgement,
+             'after': after, 'settingsSha256': settings, 'runtimeSha256': runtime,
+             'testNotesCreated': [], 'testThreadsCreated': [],
+             'scope': 'Real QLO2 reload and loaded version. Changed behavior requires separate evidence.'}
+    with evidence.open('xb') as output:
+        output.write((json.dumps(value, indent=2) + '\n').encode())
+    print(f'Real QLO2 client verified: {evidence}')
+    return evidence
 
 
 def complete_smoke(version: str, device: str, evidence: Path, notes: str) -> None:
@@ -423,18 +484,71 @@ def complete_smoke(version: str, device: str, evidence: Path, notes: str) -> Non
     print(json.dumps(receipt, indent=2))
 
 
-def release_checks(skip_tests_reason: str | None = None) -> dict:
+def release_checks(skip_tests_reason: str | None = None, *, base: str | None = None) -> dict:
     if skip_tests_reason is not None and not skip_tests_reason.strip():
         raise SystemExit('--skip-tests-reason requires the explicit user instruction.')
-    run(['npm', 'run', 'build'])
     if skip_tests_reason is not None:
+        run(['npm', 'run', 'build'])
         return {'status': 'skipped', 'reason': skip_tests_reason.strip()}
-    # The full suite must also finish under a bounded, single-CPU release scope.
-    run(['npm', 'test'], timeout=900)
-    return {'status': 'passed'}
+    installed_base = change_checks.default_base(ROOT)
+    if base is not None and change_checks.git(ROOT, 'rev-parse', base + '^{commit}').decode().strip() != installed_base:
+        raise SystemExit('Release checks must compare against the installed release source.')
+    proof = change_checks.run_validation(ROOT, base=installed_base, require_build=True)
+    return {**read_json(proof)['testSuite'], 'validation': str(proof), 'validationSha256': sha256_file(proof)}
 
 
-def new_release(bump: str | None, allow_dirty: bool, requested_version: str | None = None, *, skip_laptop_reload: bool = False, skip_tests_reason: str | None = None) -> None:
+def prepare_release(bump: str | None, requested_version: str | None, *, base: str | None = None) -> Path:
+    """Prepare final version bytes in the task worktree; never install or package."""
+    current = read_json(ROOT / 'manifest.json')['version']
+    version = requested_version or bump_version(current, bump)
+    if parse_version(version) < parse_version(current):
+        raise SystemExit('The prepared version cannot be older than the source version.')
+    if parse_version(version) <= parse_version(read_json(QLO2_PLUGIN / 'manifest.json')['version']):
+        raise SystemExit('Prepare a version strictly newer than QLO2.')
+    originals = version_documents()
+    try:
+        if version != current:
+            set_version(version)
+        validate_version_alignment(version)
+        suite = release_checks(base=base)
+        proof = Path(suite['validation'])
+    except BaseException:
+        for path, value in originals.items():
+            atomic_write(path, value)
+        raise
+    print(f'Commit and integrate these reviewed bytes, then run in {CANONICAL_ROOT}:\n'
+          f'npm run release:qlo2 -- --publish {version} --validation {proof}')
+    return proof
+
+
+def publish_prepared(version: str, proof: Path, *, skip_laptop_reload: bool = False) -> None:
+    canonical_root_required()
+    commit, dirty = git_state()
+    if dirty:
+        raise SystemExit('Commit and integrate the prepared candidate before publishing.')
+    validate_version_alignment(version)
+    if parse_version(version) <= parse_version(read_json(QLO2_PLUGIN / 'manifest.json')['version']):
+        raise SystemExit('The prepared release must be strictly newer than QLO2.')
+    if release_receipt_dir(version).exists() or archive_path(version).exists():
+        raise SystemExit(f'Immutable release {version} already exists; use --resume for an interrupted publication.')
+    validation = change_checks.verify_validation(proof, ROOT, require_build=True)
+    # Check the installed-release baseline has not moved since preparation.
+    if validation['testSuite']['baseCommit'] != change_checks.default_base(ROOT):
+        raise SystemExit('The installed release changed after preparation. Prepare against its source again.')
+    (ROOT / 'dist').mkdir(exist_ok=True)
+    atomic_write(ROOT / 'dist/main.js', Path(validation['bundle']).read_bytes())
+    archive = create_archive(version)
+    versions = {str(path.relative_to(ROOT)): sha256_file(path) for path in version_documents()}
+    suite = {**validation['testSuite'], 'validation': str(proof), 'validationSha256': sha256_file(proof), 'reusedPreparedValidation': True}
+    provenance = {'version': version, 'gitCommit': commit, 'archiveSha256': sha256_file(archive),
+                  'versionFileSha256': versions, 'originalVersionFileSha256': versions,
+                  'dirtySourceAuthorized': False, 'testSuite': suite}
+    with archive.with_suffix('.provenance.json').open('xb') as output:
+        output.write((json.dumps(provenance, indent=2) + '\n').encode())
+    publish_release(version, archive, commit, [], resumed=False, skip_laptop_reload=skip_laptop_reload)
+
+
+def new_release(bump: str | None, allow_dirty: bool, requested_version: str | None = None, *, skip_laptop_reload: bool = False, skip_tests_reason: str | None = None, base: str | None = None) -> None:
     canonical_root_required()
     commit, dirty = git_state()
     if dirty and not allow_dirty:
@@ -456,7 +570,7 @@ def new_release(bump: str | None, allow_dirty: bool, requested_version: str | No
     try:
         set_version(version)
         validate_version_alignment(version)
-        test_suite = release_checks(skip_tests_reason)
+        test_suite = release_checks(skip_tests_reason, base=base)
         archive = create_archive(version)
         provenance = {
             'version': version, 'gitCommit': commit,
@@ -516,17 +630,40 @@ def parser() -> argparse.ArgumentParser:
     action.add_argument('--version', metavar='VERSION', help='Create a strictly newer exact version.')
     action.add_argument('--resume', metavar='VERSION')
     action.add_argument('--complete-smoke', metavar='VERSION')
+    action.add_argument('--publish', metavar='VERSION', help='Publish exact prepared bytes without repeating checks.')
+    action.add_argument('--check-client', metavar='VERSION', help='Retry the real QLO2 reload/loaded-version check.')
+    result.add_argument('--prepare', action='store_true', help='With --bump/--version: prepare and check a task-worktree candidate without deployment.')
+    result.add_argument('--validation', type=Path, help='Exact successful validation proof for --publish.')
+    result.add_argument('--base', help='Affected-test baseline; default: installed release source.')
     result.add_argument('--allow-dirty', action='store_true')
     result.add_argument('--skip-laptop-reload', action='store_true', help='Publish on the VPS without contacting the laptop reload helper.')
-    result.add_argument('--skip-tests-reason', help='Skip the full suite only at explicit user request; record that instruction in immutable provenance and the deployment receipt.')
+    result.add_argument('--skip-tests-reason', help='Skip affected tests only at explicit user request; record that instruction in immutable provenance and the deployment receipt.')
     result.add_argument('--device')
     result.add_argument('--evidence', type=Path)
     result.add_argument('--notes', default='')
     return result
 
 
-def main() -> None:
-    args = parser().parse_args()
+def dispatch(args: argparse.Namespace) -> None:
+    if args.prepare:
+        if not (args.bump or args.version) or args.allow_dirty or args.skip_tests_reason or args.skip_laptop_reload or args.validation or args.device or args.evidence or args.notes:
+            raise SystemExit('--prepare requires --bump/--version and cannot authorize deployment or skip checks.')
+        prepare_release(args.bump, args.version, base=args.base)
+        return
+    if args.publish:
+        if not args.validation or args.allow_dirty or args.skip_tests_reason or args.base or args.device or args.evidence or args.notes:
+            raise SystemExit('--publish requires only VERSION and --validation PATH.')
+        publish_prepared(args.publish, args.validation.resolve(), skip_laptop_reload=args.skip_laptop_reload)
+        return
+    if args.validation:
+        raise SystemExit('--validation is valid only with --publish.')
+    if args.check_client:
+        if args.allow_dirty or args.skip_tests_reason or args.skip_laptop_reload or args.base or args.device or args.evidence or args.notes:
+            raise SystemExit('--check-client accepts only its version.')
+        check_client(args.check_client)
+        return
+    if args.base and (args.complete_smoke or args.resume):
+        raise SystemExit('--base is valid only for a new candidate.')
     if args.skip_tests_reason is not None and (args.complete_smoke or args.resume):
         raise SystemExit('--skip-tests-reason is valid only when creating a new release.')
     if args.complete_smoke:
@@ -541,7 +678,16 @@ def main() -> None:
     if args.resume:
         resume_release(args.resume, args.allow_dirty, skip_laptop_reload=args.skip_laptop_reload)
         return
-    new_release(args.bump, args.allow_dirty, args.version, skip_laptop_reload=args.skip_laptop_reload, skip_tests_reason=args.skip_tests_reason)
+    new_release(args.bump, args.allow_dirty, args.version, skip_laptop_reload=args.skip_laptop_reload, skip_tests_reason=args.skip_tests_reason, base=args.base)
+
+
+def main() -> None:
+    args = parser().parse_args()
+    if args.prepare:
+        dispatch(args)
+    else:
+        with change_checks.lock(BACKUPS / 'release.lock'):
+            dispatch(args)
 
 
 if __name__ == '__main__':

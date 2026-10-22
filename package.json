@@ -1,10 +1,12 @@
 {
   "name": "send-to-t3-code",
-  "version": "2.45.25",
+  "version": "2.45.26",
   "private": true,
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
-    "test": "tsx --test tests/*.test.ts && python3 -m unittest discover -s scripts -p 'test_*.py'",
+    "test": "python3 scripts/change_checks.py",
+    "test:plan": "python3 scripts/change_checks.py --plan",
+    "test:all": "python3 scripts/change_checks.py --all",
     "validate:native:prepare": "node scripts/build-native-response-lab.mjs",
     "release:qlo2": "python3 scripts/release-qlo2.py"
   },
