@@ -240,6 +240,64 @@ test('mobile folder menu enables Create T3 project',async()=>{
 });
 
 
+for(const mobile of [false,true])test(`folder Unlink follows Create T3 project and removes only the direct link on ${mobile?'mobile':'desktop'}`,async()=>{
+  const h=await folderMenuHarness();
+  try{
+    h.fileMenu('Notes/note.md',mobile);
+    const modal=await h.open();await h.button(modal,'Link').click();
+    const direct=h.plugin.settings.folderLinks[0];
+    const parent={...direct,id:'parent',folderPath:'/'};
+    const nested={...direct,id:'nested',folderPath:'Notes/Inner'};
+    const unrelated={...direct,id:'unrelated',folderPath:'Other'};
+    h.plugin.settings.folderLinks=[parent,direct,nested,unrelated];
+    const remembered={notePath:'Notes/note.md',projectId:'project',threadId:'remembered',connectionId:'c',workspaceRoot:'/writing',selectedAt:new Date().toISOString()};
+    h.plugin.settings.noteThreads=[remembered];await h.plugin.save();
+    let refreshes=0;h.plugin.folderIndicators={refresh:()=>{refreshes++;},dispose:()=>{}};
+    h.plugin.projects=()=>[]; // A saved link remains removable while T3 is unavailable.
+    const submenu=h.folderMenu().items[0].submenu!;
+    const createIndex=submenu.items.findIndex(item=>item.title==='Create T3 project…');
+    const unlink=submenu.items[createIndex+1];assert.equal(unlink.title,'Unlink');assert.equal(unlink.disabled,false);
+    const requests=h.networkRequests(),modalCount=h.modals.length;
+    await unlink.callback();
+    assert.equal(h.plugin.settings.folderLinks.map((link:any)=>link.folderPath).join(','),'/,Notes/Inner,Other');
+    assert.equal(h.shared.at(-1).folderLinks.map((link:any)=>link.folderPath).join(','),'/,Notes/Inner,Other');
+    assert.equal(h.shared.at(-1).folderLinkChanges.find((change:any)=>change.folderPath==='Notes').link,null);
+    assert.equal(h.plugin.settings.noteThreads[0].threadId,remembered.threadId);
+    assert.equal(h.networkRequests(),requests);assert.equal(h.modals.length,modalCount);assert.ok(refreshes>0);
+    assert.equal(h.plugin.settings.pending.length,0);assert.equal(h.notices.at(-1),'Notes unlinked from T3 Code.');
+    assert.equal(h.folderMenu().items[0].submenu!.items.find(item=>item.title==='Unlink')!.disabled,true,'An inherited link is not a direct link');
+  }finally{h.plugin.onunload();}
+});
+
+test('folder Unlink is disabled without a direct link and supports the vault root',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const unlink=(root=false)=>h.folderMenu(root).items[0].submenu!.items.find(item=>item.title==='Unlink')!;
+    assert.equal(unlink().disabled,true);assert.equal(unlink(true).disabled,true);
+    const modal=await h.open();await h.button(modal,'Link').click();
+    const direct=h.plugin.settings.folderLinks[0];
+    h.plugin.settings.folderLinks=[{...direct,id:'root',folderPath:'/'},direct];await h.plugin.save();
+    assert.equal(unlink(true).disabled,false);await unlink(true).callback();
+    assert.equal(h.plugin.settings.folderLinks.length,1);assert.equal(h.plugin.settings.folderLinks[0].folderPath,'Notes');
+    assert.equal(unlink(true).disabled,true);assert.equal(unlink().disabled,false);
+    assert.equal(h.networkRequests(),0);
+  }finally{h.plugin.onunload();}
+});
+
+test('folder Unlink reports a save failure and preserves the link',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const modal=await h.open();await h.button(modal,'Link').click();
+    const before=JSON.stringify(h.plugin.settings.folderLinks),saves=h.shared.length;
+    h.setFailSave(true);
+    await h.folderMenu().items[0].submenu!.items.find(item=>item.title==='Unlink')!.callback();
+    assert.equal(JSON.stringify(h.plugin.settings.folderLinks),before);assert.equal(h.shared.length,saves);
+    assert.match(h.notices.at(-1)!,/T3 folder links:.*storage failure/);
+    assert.equal(h.folderMenu().items[0].submenu!.items.find(item=>item.title==='Unlink')!.disabled,false);
+    assert.equal(h.networkRequests(),0);
+  }finally{h.plugin.onunload();}
+});
+
 test('Create T3 project browses outside the vault and only links on confirmation',async()=>{
   const h=await folderMenuHarness();
   try{
