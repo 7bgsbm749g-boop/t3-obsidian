@@ -19,6 +19,15 @@ SPEC.loader.exec_module(release)
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    def test_installed_queue_prevents_a_direct_publication_from_bypassing_its_slots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); units = root / '.config/systemd/user'; units.mkdir(parents=True)
+            (units / (release.release_queue.UNIT + '.service')).write_text('installed')
+            with patch.object(release.Path, 'home', return_value=root), patch.object(release, 'new_release') as publish:
+                with self.assertRaisesRegex(SystemExit, 'queue owns publication'):
+                    release.dispatch(release.parser().parse_args(['--bump', 'patch']))
+                publish.assert_not_called()
+
     def test_prepared_publication_uses_validated_bundle_without_repeating_checks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / 'dist').mkdir()

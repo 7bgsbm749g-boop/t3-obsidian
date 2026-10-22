@@ -24,6 +24,7 @@ import zipfile
 import re
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import change_checks
+import release_queue
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -72,6 +73,8 @@ def run(command: list[str], *, cwd: Path = ROOT, capture: bool = False, timeout:
         check=True,
         text=True,
         capture_output=capture,
+        stdout=None if capture else sys.stdout,
+        stderr=None if capture else sys.stderr,
         timeout=timeout,
     )
 
@@ -516,8 +519,8 @@ def prepare_release(bump: str | None, requested_version: str | None, *, base: st
         for path, value in originals.items():
             atomic_write(path, value)
         raise
-    print(f'Commit and integrate these reviewed bytes, then run in {CANONICAL_ROOT}:\n'
-          f'npm run release:qlo2 -- --publish {version} --validation {proof}')
+    print('Commit these reviewed bytes, then submit from this task worktree:\n'
+          f'npm run release:qlo2 -- --enqueue HEAD --validation {proof}')
     return proof
 
 
@@ -530,7 +533,7 @@ def publish_prepared(version: str, proof: Path, *, skip_laptop_reload: bool = Fa
     if parse_version(version) <= parse_version(read_json(QLO2_PLUGIN / 'manifest.json')['version']):
         raise SystemExit('The prepared release must be strictly newer than QLO2.')
     if release_receipt_dir(version).exists() or archive_path(version).exists():
-        raise SystemExit(f'Immutable release {version} already exists; use --resume for an interrupted publication.')
+        raise SystemExit(f'Immutable release {version} already exists; retry its queue job to resume publication.')
     validation = change_checks.verify_validation(proof, ROOT, require_build=True)
     # Check the installed-release baseline has not moved since preparation.
     if validation['testSuite']['baseCommit'] != change_checks.default_base(ROOT):
@@ -632,9 +635,15 @@ def parser() -> argparse.ArgumentParser:
     action.add_argument('--complete-smoke', metavar='VERSION')
     action.add_argument('--publish', metavar='VERSION', help='Publish exact prepared bytes without repeating checks.')
     action.add_argument('--check-client', metavar='VERSION', help='Retry the real QLO2 reload/loaded-version check.')
+    action.add_argument('--enqueue', metavar='COMMIT', help='Submit reviewed committed work to the FIFO publisher.')
+    action.add_argument('--queue-status', nargs='?', const='all', metavar='JOB_ID', help='Read queue state without contacting other threads.')
+    action.add_argument('--drain-queue', action='store_true', help='Run the single queue worker in the canonical checkout.')
+    action.add_argument('--install-queue', action='store_true', help='Install the event-driven local queue worker once.')
+    action.add_argument('--retry-queued', metavar='JOB_ID', help='Retry the same blocked job and immutable release.')
     result.add_argument('--prepare', action='store_true', help='With --bump/--version: prepare and check a task-worktree candidate without deployment.')
     result.add_argument('--validation', type=Path, help='Exact successful validation proof for --publish.')
     result.add_argument('--base', help='Affected-test baseline; default: installed release source.')
+    result.add_argument('--replacement', metavar='COMMIT', help='With --retry-queued: replace an uninstalled failed candidate with a corrected reviewed commit.')
     result.add_argument('--allow-dirty', action='store_true')
     result.add_argument('--skip-laptop-reload', action='store_true', help='Publish on the VPS without contacting the laptop reload helper.')
     result.add_argument('--skip-tests-reason', help='Skip affected tests only at explicit user request; record that instruction in immutable provenance and the deployment receipt.')
@@ -645,6 +654,48 @@ def parser() -> argparse.ArgumentParser:
 
 
 def dispatch(args: argparse.Namespace) -> None:
+    if args.replacement and not args.retry_queued:
+        raise SystemExit('--replacement is valid only with --retry-queued.')
+    if args.enqueue:
+        if args.prepare or args.allow_dirty or args.skip_tests_reason or args.skip_laptop_reload or args.base or args.device:
+            raise SystemExit('--enqueue accepts a commit, optional --validation, and optional --evidence/--notes.')
+        if bool(args.evidence) != bool(args.notes):
+            raise SystemExit('Supply --evidence and --notes together, or verify changed behavior when the job owns its release slot.')
+        if git_state()[1]:
+            raise SystemExit('Commit the reviewed task changes before enqueueing; uncommitted edits are not submitted.')
+        result = release_queue.enqueue(ROOT, CANONICAL_ROOT, args.enqueue,
+                                       validation=args.validation.resolve() if args.validation else None,
+                                       evidence=args.evidence.resolve() if args.evidence else None, notes=args.notes)
+        print(json.dumps(result, indent=2))
+        release_queue.kick()
+        return
+    if args.queue_status or args.install_queue or args.drain_queue or args.retry_queued:
+        if args.prepare or args.allow_dirty or args.skip_tests_reason or args.skip_laptop_reload or args.base or args.device:
+            raise SystemExit('Queue management accepts only its action and job ID.')
+        if (args.validation or args.evidence or args.notes) and not (args.retry_queued and args.replacement):
+            raise SystemExit('Replacement evidence is valid only with --retry-queued and --replacement.')
+        if args.queue_status:
+            print(json.dumps(release_queue.status(None if args.queue_status == 'all' else args.queue_status), indent=2))
+        elif args.install_queue:
+            canonical_root_required()
+            release_queue.install(CANONICAL_ROOT)
+        elif args.retry_queued:
+            replacement = None
+            if args.replacement:
+                if git_state()[1] or bool(args.evidence) != bool(args.notes):
+                    raise SystemExit('Commit replacement source first; supply evidence and notes together.')
+                replacement = release_queue.submission(ROOT, CANONICAL_ROOT, args.replacement,
+                    validation=args.validation.resolve() if args.validation else None,
+                    evidence=args.evidence.resolve() if args.evidence else None, notes=args.notes)
+            print(json.dumps(release_queue.retry(args.retry_queued, replacement=replacement), indent=2))
+            release_queue.kick()
+        else:
+            print(json.dumps(release_queue.drain(sys.modules[__name__]), indent=2))
+        return
+    if (not args.prepare and (args.bump or args.version or args.publish or args.resume)
+            and (Path.home() / '.config/systemd/user' / (release_queue.UNIT + '.service')).is_file()):
+        raise SystemExit('The release queue owns publication. Submit reviewed work with --enqueue COMMIT; '
+                         'retry an interrupted job with --retry-queued JOB_ID.')
     if args.prepare:
         if not (args.bump or args.version) or args.allow_dirty or args.skip_tests_reason or args.skip_laptop_reload or args.validation or args.device or args.evidence or args.notes:
             raise SystemExit('--prepare requires --bump/--version and cannot authorize deployment or skip checks.')
@@ -672,6 +723,8 @@ def dispatch(args: argparse.Namespace) -> None:
         if not args.device or not args.evidence or not args.notes:
             raise SystemExit('--complete-smoke requires --device, --evidence, and --notes.')
         complete_smoke(args.complete_smoke, args.device, args.evidence.resolve(), args.notes)
+        if (release_queue.QUEUE / 'jobs').exists():
+            release_queue.kick()
         return
     if args.device or args.evidence or args.notes:
         raise SystemExit('--device, --evidence, and --notes are valid only with --complete-smoke.')
@@ -683,7 +736,7 @@ def dispatch(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = parser().parse_args()
-    if args.prepare:
+    if args.prepare or args.enqueue or args.queue_status or args.install_queue or args.drain_queue or args.retry_queued:
         dispatch(args)
     else:
         with change_checks.lock(BACKUPS / 'release.lock'):
