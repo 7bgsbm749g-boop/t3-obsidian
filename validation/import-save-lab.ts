@@ -8,7 +8,8 @@ import {hiddenInlineMarkerExtension} from '../inline-markers';
 import {installResponsePresentation} from '../response-presentation';
 import {applyThreadItem} from '../inline-thread';
 import {updateResponseBindingData,responseBindingRequests} from '../response-binding-data';
-import {runImportResultMessage} from '../run-import';
+import {importRuns,runImportResultMessage,type RunImportResult} from '../run-import';
+import {ImportRunModal} from '../run-import-ui';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 
@@ -45,10 +46,37 @@ export default class ImportSaveLab extends Plugin {
       access:async()=>({origin:'https://synthetic.invalid',api:async(route,payload)=>{completionReads.push({route,itemId:payload?.itemId});if(route!=='/api/orchestration/turn-item')throw Error('Unexpected synthetic request.');return {id:'synthetic-final-item',threadId:source.threadId,runId:turnId,messageId:'synthetic-answer',type:'assistant_message',text:marker,streaming:false,status:'completed',updatedAt:at};}}),
     },deviceFinalNoteIO(this.app,()=>true),Date.now,(record,access,receive)=>new DirectInlinePreview(record,access,receive,(_thread,_access,callbacks)=>{queueMicrotask(()=>callbacks.item({kind:'snapshot',snapshot}));return {stop:()=>{}};}));
     this.register(()=>local.dispose());this.registerInterval(window.setInterval(()=>{native.refresh();local.tick();},100));
-    subject.deviceInline={register:(request:any)=>local.register(request),waitForSave:(id:string)=>local.waitForSave(id,500)};
+    let dialog:ImportRunModal|undefined,dialogSaveChecked=false,followChecked=false;
+    subject.deviceInline={register:(request:any)=>local.register(request),waitForSave:async(id:string)=>{
+      if(!dialogSaveChecked){
+        for(let n=0;n<50&&!this.app.workspace.getLeavesOfType('markdown').some(pane=>(pane.view as MarkdownView).editor?.getValue().includes(marker));n++)await pause(100);
+        const finalVisible=this.app.workspace.getLeavesOfType('markdown').some(pane=>(pane.view as MarkdownView).editor?.getValue().includes(marker));
+        const dialogClosed=!!dialog&&!dialog.modalEl.isConnected;
+        write('DIALOG-WAITING-SAVE.json',{finalVisible,dialogClosed,saveStillPending:true});await capture('dialog-waiting-save.png');
+        if(!finalVisible||!dialogClosed)throw Error('The import dialog did not close while its final save was pending.');
+        dialogSaveChecked=true;await pause(1500);
+      }
+      return local.waitForSave(id,500);
+    }};
+    subject.followImportedThread=async()=>{
+      const dialogClosed=!!dialog&&!dialog.modalEl.isConnected;
+      write('DIALOG-WAITING-FOLLOW.json',{dialogClosed,syntheticFollowAcknowledgementPending:true});await capture('dialog-waiting-follow.png');
+      if(!dialogClosed)throw Error('The import dialog stayed open while following waited.');
+      followChecked=true;await pause(1500);
+    };
     const imported=await this.app.vault.create('Imported.md','# Imported run\n\nOrdinary text before.\n\n');
     const leaf=this.app.workspace.getLeaf(false);await leaf.openFile(imported);await leaf.setViewState({type:'markdown',state:{file:imported.path,mode:'source',source:false}});
-    const pending=await subject.importRun(imported.path,{id:source.projectId},source.threadId,messageId,false);
+    let importedResult!:(result:RunImportResult)=>void,importFailed!:(error:unknown)=>void;
+    const importing=new Promise<RunImportResult>((resolve,reject)=>{importedResult=resolve;importFailed=reject;});
+    const selected=importRuns(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state)[0];
+    dialog=new ImportRunModal(this.app,imported.path,{id:source.threadId,title:snapshot.thread.title} as any,selected,async follow=>{
+      try{const result=await subject.importRun(imported.path,{id:source.projectId},source.threadId,messageId,follow);importedResult(result);return result;}
+      catch(error){importFailed(error);throw error;}
+    });
+    dialog.open();await capture('dialog-ready.png');
+    write('DIALOG-READY.json',{instruction:'Enable Follow future runs, then press Import response. The fixture delays saving and a synthetic follow acknowledgement. No T3 prompt or subscription is dispatched.'});
+    const pending=await importing;
+    if(!followChecked)throw Error('Enable Follow future runs to check the delayed follow acknowledgement.');
     const request=responseBindingRequests(subject.settings.responseBindings)[0],pendingDisk=await this.app.vault.read(imported),pendingVisible=(leaf.view as MarkdownView).editor.getValue();
     write('PENDING.json',{pending,diskHasPlaceholder:pendingDisk.includes(':::send-to-t3-response'),editorHasFinal:pendingVisible.includes(marker)});
     await capture('pending.png');
@@ -73,7 +101,7 @@ export default class ImportSaveLab extends Plugin {
     write('HOVER.json',{hoverContentLoaded,hoverVisible,bounds:bounds&&{x:bounds.x,y:bounds.y,width:bounds.width,height:bounds.height},display:style?.display,visibility:style?.visibility,opacity:style?.opacity});await capture('saved-hover.png');
     const show=this.app.workspace.getLeaf(false);await show.openFile(imported);await show.setViewState({type:'markdown',state:{file:imported.path,mode:'preview'}});await pause(300);
     const readingVisible=(show.view as MarkdownView).contentEl.textContent?.includes(marker)??false;await capture('saved-reading.png');
-    write('RESULT.json',{scope:'Synthetic T3 final item; real native Obsidian editors and checked file IO. The optional core hover observation does not perform a physical pointer gesture. No real Sync or native mobile claim.',pending,pendingNotice:runImportResultMessage(pending),saved,retry,completionReads,checks:{pendingShowsFinalWithoutSaving:true,closedTabFinalSaved:true,ordinaryTextPreserved:true,repeatLeavesSavedBytes:true,readingVisible},hoverObservation:{hoverContentLoaded,hoverVisible,physicalGesture:false},testThreads:[]});
+    write('RESULT.json',{scope:'Synthetic T3 final item and follow acknowledgement; real native Obsidian import dialog, editors and checked file IO. The optional core hover observation does not perform a physical pointer gesture. No real delivery, Sync or native mobile claim.',pending,pendingNotice:runImportResultMessage(pending),saved,retry,completionReads,checks:{dialogClosedDuringFinalSave:dialogSaveChecked,dialogClosedDuringFollow:followChecked,pendingShowsFinalWithoutSaving:true,closedTabFinalSaved:true,ordinaryTextPreserved:true,repeatLeavesSavedBytes:true,readingVisible},hoverObservation:{hoverContentLoaded,hoverVisible,physicalGesture:false},testThreads:[]});
   }
   private async cleanup(write:(name:string,value:any)=>void){
     for(const pane of this.app.workspace.getLeavesOfType('markdown'))if(['Imported.md','Reference.md','Virtual.md'].includes((pane.view as MarkdownView).file?.path??''))pane.detach();

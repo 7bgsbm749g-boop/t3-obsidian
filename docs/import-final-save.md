@@ -7,6 +7,11 @@ result includes the current save reason, such as verification, Sync, an
 unavailable note, or a changed note. The UI does not report a pending response
 as saved. The registered response continues after the bounded wait.
 
+The confirmation dialog closes immediately when **Import response** is pressed.
+Import, final saving and optional follow acknowledgements continue after it
+closes. Progress and result notices keep pending saves and errors visible. A
+second queued activation cannot start another import from the same dialog.
+
 Imported responses can finish through the existing checked native note IO after
 their destination tab closes. Core Sync readiness, current-note comparison,
 binding identity, native pane fences, and final readback remain required.
@@ -31,7 +36,9 @@ tests do not establish native iPhone or Android behavior.
 The native lab can be prepared with
 `node scripts/build-native-response-lab.mjs NEW_PRIVATE_DIRECTORY --import-save`.
 It uses a synthetic exact final item with real native editor and vault IO. It
-checks the pending Sync message, final persistence after the destination tab
+opens the real confirmation: enable **Follow future runs**, then press **Import
+response**. Delayed saving and a synthetic follow acknowledgement must leave the
+dialog closed. It also checks the pending Sync message, final persistence after the destination tab
 closes, unchanged bytes on repeat import, and visible Reading view content.
 It deletes its notes through Obsidian before writing its cleanup receipt.
 The optional programmatic hover observation is not a physical hover test.

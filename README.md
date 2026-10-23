@@ -518,7 +518,10 @@ With a Markdown note open, choose **Import T3 run into this note…** from the
 command palette or editor menu. Select the source project and machine, thread,
 then response. The preview shows its prompt, date, status and destination.
 Confirming imports that response without sending a prompt or changing the
-note's project routing. A running response catches up with output already in T3
+note's project routing. The confirmation closes immediately while importing,
+final saving and optional thread following continue. Notices report the result,
+including pending saves or errors. A running response catches up with output
+already in T3
 and streams until completion. Repeating the import reuses its existing binding,
 including after completion, reload and later note edits.
 
