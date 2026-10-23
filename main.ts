@@ -1214,6 +1214,10 @@ export default class SendToT3 extends Plugin {
   private noteThreadIntent(path:string,project:Project,connection:Connection):NonNullable<Request['noteThread']>{
     return {notePath:path,projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId??'',...(connection.environmentId?{environmentId:connection.environmentId}:{})};
   }
+  private rememberNoteThread(remembered:NonNullable<Request['noteThread']>,threadId:string){
+    const selectedAt=new Date().toISOString(),updatedAt=new Date(Math.max(Date.now(),...this.settings.noteThreads.map(entry=>Date.parse(entry.updatedAt??entry.deletedAt??entry.selectedAt)+1).filter(Number.isFinite))).toISOString();
+    this.settings.noteThreads=mergeNoteThreads(this.settings.noteThreads,[{...remembered,threadId,selectedAt,updatedAt}]);
+  }
   private async editorForNoteSend(file:TFile):Promise<MarkdownView|undefined> {
     if(typeof this.app.workspace.getLeaf!=='function')return;
     const existing=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view).find(view=>view instanceof MarkdownView && view.file?.path===file.path);
@@ -1319,7 +1323,7 @@ export default class SendToT3 extends Plugin {
     const state:InlineThreadState=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
     return {source,state,title:String(snapshot.thread.title??'T3 response').slice(0,200)};
   }
-  /** Import is independent of note routing. The selected source never receives input. */
+  /** Attach without sending input, then use the imported thread for later sends. */
   async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false,insertion?:CursorInsertion|null):Promise<RunImportResult>{
     if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
     this.busy=true;
@@ -1342,6 +1346,8 @@ export default class SendToT3 extends Plugin {
         await this.deviceInline.register(inserted);
         bindingId=id;
       }
+      this.rememberNoteThread(this.noteThreadIntent(notePath,project,{...this.connection(project),environmentId:history.source.environmentId}),threadId);
+      await this.save(true);
       let save:Pick<RunImportResult,'saveState'|'pendingReason'>={saveState:pending?'streaming':'saved'};
       if(pending&&bindingId&&run.status!=='Running'){
         const result=await this.deviceInline.waitForSave(bindingId);
@@ -2547,11 +2553,7 @@ export default class SendToT3 extends Plugin {
     }
     if(request.folderLinkIntent&&!this.settings.folderLinks.some(link=>link.folderPath===request.folderLinkIntent!.folderPath))this.settings.folderLinks=upsertFolderLink(this.settings.folderLinks,request.folderLinkIntent);
     const remembered=request.noteThread??request.noteLink; // Resume requests saved before the terminology change.
-    if(remembered){
-      const selectedAt=new Date().toISOString(),updatedAt=new Date(Math.max(Date.now(),...this.settings.noteThreads.map(entry=>Date.parse(entry.updatedAt??entry.deletedAt??entry.selectedAt)+1).filter(Number.isFinite))).toISOString();
-      const entry:NoteThread={...remembered,threadId,selectedAt,updatedAt};
-      this.settings.noteThreads=mergeNoteThreads(this.settings.noteThreads,[entry]);
-    }
+    if(remembered)this.rememberNoteThread(remembered,threadId);
     if(request.completion){
       this.settings.completionJobs=this.settings.completionJobs.filter(j=>j.notePath!==request.completion!.notePath);
       if(request.completion.action!=='keep')this.settings.completionJobs.push({...request.completion,requestId:request.id,threadId,projectId:request.project.id,connection:{...request.connection},status:'watching'});

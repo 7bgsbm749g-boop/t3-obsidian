@@ -1,4 +1,4 @@
-/** A thread used by a confirmed send from a note. Records live in synced plugin data. */
+/** A thread used by a confirmed send or attached run import. Records live in synced plugin data. */
 export interface NoteThread {
   notePath:string;
   threadId:string;

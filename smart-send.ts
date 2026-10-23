@@ -113,14 +113,36 @@ function mappedCoverage(before:string,after:string,covered:Span[]){
   for(const [start,end,target] of unchanged)for(const [from,to] of covered){const l=Math.max(start,from),r=Math.min(end,to);if(r>l)out.push([target+l-start,target+r-start]);}
   return out;
 }
-/** Keep exact rendered output once, compressed and addressed by content. The
- * surrounding text locates later edits without adding anything to Markdown. */
+/** Keep exact rendered output once, compressed and addressed by content. */
 export async function rememberResponse(data:SmartSendData,path:string,id:string,body:string,before:string,after:string,offset:number){
   if(!body.trim())return;
   const noteId=smartNote(data,path),packedBody=await packText(body);data.bodies[packedBody.hash]=packedBody;
   const key=`${id}:${packedBody.hash}`,next={noteId,body:packedBody.hash,before:before.slice(-160),after:after.slice(0,160),offset};
   if(JSON.stringify(data.responses[key])===JSON.stringify(next))return false;
   data.responses[key]=next;return true;
+}
+function uniqueTextOffset(document:string,text:string){
+  if(!text.trim())return -1;
+  const at=document.indexOf(text);return at>=0&&document.lastIndexOf(text)===at?at:-1;
+}
+function storedReplyEdge(document:string,body:string,end=false){
+  // Shorter edges retain inline additions near the beginning or end. Each
+  // candidate must still identify exactly one occurrence in this note.
+  for(const length of [160,80,40,20]){
+    const text=end?body.slice(-length):body.slice(0,length),at=uniqueTextOffset(document,text);
+    if(at>=0)return at+(end?text.length:0);
+  }
+  return -1;
+}
+/** Locate edited output from the stored reply itself. Substantive surrounding
+ * text can recover a changed edge; whitespace separators never prove a match. */
+function editedResponseRange(document:string,body:string,record:ResponseText):Span|undefined{
+  const start=storedReplyEdge(document,body),end=storedReplyEdge(document,body.trimEnd(),true);
+  const before=uniqueTextOffset(document,record.before),after=uniqueTextOffset(document,record.after);
+  const left=start>=0?start:before>=0?before+record.before.length:!record.before?0:-1;
+  const right=end>=0?end:after>=0?after:!record.after?document.length:-1;
+  if(left<0||right<left)return;
+  return [left,right];
 }
 export async function sourceProjection(data:SmartSendData,noteId:string,document:string){
   const removed:Span[]=[],known:Span[]=[],identities=noteIdentities(data,noteId);
@@ -135,11 +157,8 @@ export async function sourceProjection(data:SmartSendData,noteId:string,document
       const chosen=matching.length===1?matching[0]:matches.length===1?matches[0]:undefined;
       if(chosen!==undefined){removed.push([chosen,chosen+body.length]);known.push([chosen,chosen+body.length]);}continue;
     }
-    // Only unchanged, unique surrounding text may bound an edited response.
-    const from=record.before?document.indexOf(record.before):0;
-    const left=from>=0?from+record.before.length:-1;
-    const right=record.after&&left>=0?document.indexOf(record.after,left):record.after?-1:document.length;
-    if(left<0||right<left||record.before&&document.lastIndexOf(record.before)!==from||record.after&&document.lastIndexOf(record.after)!==right)continue;
+    const range=editedResponseRange(document,body,record);if(!range)continue;
+    const [left,right]=range;
     const current=document.slice(left,right);
     known.push([left,right]);
     for(const [from,to] of mappedCoverage(body,current,[[0,body.length]]))removed.push([left+from,left+to]);

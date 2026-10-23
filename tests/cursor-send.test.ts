@@ -20,7 +20,7 @@ async function fixture(document='First paragraph.\n\nLater paragraph.'){
   const editor={getValue:()=>value,getCursor:()=>cursor,getSelection:()=>'',posToOffset:(position:number)=>position,offsetToPos:(offset:number)=>offset,replaceRange:(text:string,from:number,to=from)=>{value=value.slice(0,from)+text+value.slice(to);}};
   const view={file,editor,getViewData:()=>value,setViewData:(text:string)=>{value=text;},getMode:()=>mode,requestSave:()=>{},save:async()=>{disk=view.getViewData();}};
   const app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},workspace:{getActiveViewOfType:()=>active?view:undefined,getLeavesOfType:()=>[{view}]},vault:{adapter:{getFullPath:(path:string)=>'/vault/'+path},getName:()=> 'Synthetic',getFileByPath:()=>file,read:async()=>disk}};
-  const plugin=new module.exports.default();plugin.app=app;plugin.settings={inlineStreaming:{enabled:true}};
+  const plugin=new module.exports.default();plugin.app=app;plugin.settings={inlineStreaming:{enabled:true},noteThreads:[]};plugin.save=async()=>{};
   return {plugin,app,view,editor,file,exports:module.exports,value:()=>value,cursor:(offset:number)=>{cursor=offset;},active:(yes:boolean)=>{active=yes;},mode:(next:string)=>{mode=next;}};
 }
 

@@ -23,6 +23,12 @@ No new source for the default destination opens the selector and
 hides its previous/continue action; an explicit empty submission shows the
 short no-content notice.
 
+Attaching an imported run sets that source as the note's previous thread, even
+when following future runs is off. The normal Smart Send projection excludes
+the imported response and input echo. Import and reimport preserve confirmed
+coverage for that destination; unsent user text is still eligible. Failed
+history reads or attachment registration do not change the previous thread.
+
 Before allocating an editor stream, every Send and Ask checks the selected
 machine, project, thread, and active provider turn against the responses still
 attached to the destination note. A matching response is steered in place and
@@ -58,7 +64,10 @@ write. Rendered output, including progress and input echoes, is stored once by
 SHA-256; gzip is used when its base64 form is smaller than the original text.
 Current source snapshots use the same encoding. No new markers, comments or
 boundaries are written to Markdown. Full body matches exclude saved responses;
-unique surrounding text can locate edited responses and retain user additions.
+unique spans of the stored reply locate edited responses and retain user
+additions. Substantive surrounding text can recover a changed reply edge;
+blank-line separators do not establish a response boundary. Ambiguous copies
+remain source rather than suppressing text without a proven location.
 Active response containers and recognized generated progress callouts are also
 excluded. Ordinary quotes and literal marker examples remain source.
 

@@ -20,7 +20,8 @@ async function fixture(){
   runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(id:string)=>{assert.equal(id,'obsidian');return api;},crypto:webcrypto,URL,TextEncoder,TextDecoder,console,setTimeout,clearTimeout,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})}});
   const plugin=new module.exports.default();
   plugin.app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:(path:string)=>path===file.path?file:undefined,read:async()=>document,process:async(_file:any,change:(value:string)=>string)=>document=change(document)}};
-  plugin.settings={vaultId:randomUUID(),inlineStreaming:{enabled:true},responseBindings:{}};
+  plugin.settings={vaultId:randomUUID(),inlineStreaming:{enabled:true},responseBindings:{},noteThreads:[]};
+  plugin.save=async()=>{};
   let saveResult:any={saved:false,reason:'sync'};
   plugin.deviceInline={register:async(request:any)=>{assert.ok(localResponseRange(document,request.id,[request]));registered.push(request);plugin.settings.responseBindings=updateResponseBindingData(plugin.settings.responseBindings,request,'synthetic');},waitForSave:async(id:string)=>{waits.push(id);return typeof saveResult==='function'?saveResult(id):saveResult;}};
   plugin.connection=()=>({environmentId:source.environmentId});
@@ -52,4 +53,14 @@ test('reimport preserves an already saved response and its user edits without re
   const h=await fixture();await h.import();const id=h.registered[0].id;
   h.write(h.read().replace(responseAnchor(id),'Synthetic final with a user edit.'));const original=h.read(),result=await h.import();
   assert.equal(result.duplicate,true);assert.equal(result.saveState,'saved');assert.equal(h.registered.length,1);assert.equal(h.waits.length,1);assert.equal(h.read(),original);
+});
+test('history and attachment failures preserve the previous thread',async()=>{
+  for(const stage of ['history','register']){
+    const h=await fixture(),previous={notePath:'Import.md',threadId:'previous',projectId:'other-project',workspaceRoot:'/other',connectionId:'',selectedAt:'2026-10-19T00:00:00Z'};
+    h.plugin.settings.noteThreads=[previous];
+    if(stage==='history')h.plugin.readImportHistory=async()=>{throw Error('History unavailable');};
+    else h.plugin.deviceInline.register=async()=>{throw Error('Registration failed');};
+    await assert.rejects(h.import(),stage==='history'?/History unavailable/:/Registration failed/);
+    assert.deepEqual(h.plugin.settings.noteThreads,[previous]);assert.equal(h.plugin.busy,false);
+  }
 });

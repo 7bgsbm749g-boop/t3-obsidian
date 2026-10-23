@@ -27,7 +27,8 @@ for(const phase of ['completed','running'])test(`mobile ${phase} import follows 
   });
   const plugin=new module.exports.default();
   plugin.app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:(path:string)=>path===file.path?file:undefined,read:async()=>document,process:async(_file:any,change:(value:string)=>string)=>document=change(document)}};
-  plugin.settings={vaultId:host.vaultId,inlineStreaming:{enabled:true},responseBindings:{}};
+  plugin.settings={vaultId:host.vaultId,inlineStreaming:{enabled:true},responseBindings:{},noteThreads:[]};
+  plugin.save=async()=>{};
   let finalSaveWaits=0;
   plugin.deviceInline={register:async(request:any)=>{registered.push(request);plugin.settings.responseBindings=updateResponseBindingData(plugin.settings.responseBindings,request,'synthetic');},waitForSave:async()=>{finalSaveWaits++;return {saved:true};}};
   plugin.connection=()=>({environmentId:source.environmentId});
@@ -48,6 +49,7 @@ for(const phase of ['completed','running'])test(`mobile ${phase} import follows 
 
   assert.deepEqual(JSON.parse(JSON.stringify(await plugin.importRun(file.path,{id:source.projectId},source.threadId,messageId,true))),{duplicate:false,following:true,saveState:phase==='completed'?'saved':'streaming'});
   assert.equal(registered.length,1);assert.equal(pauses,2);assert.equal(closed,2);assert.equal(plugin.busy,false);
+  assert.equal(plugin.noteThread(file.path).threadId,source.threadId);assert.equal(plugin.noteThread(file.path).environmentId,source.environmentId);
   assert.deepEqual(commands.map(command=>command.kind),['thread-streams','stream-thread']);
   assert.equal(commands[1].start,'after');assert.equal(commands[1].afterMessageId,messageId);assert.deepEqual(commands[1].destinations,[file.path]);assert.deepEqual(commands[1].source,source);
   const receipt=findRunImport(document,source,messageId);assert.equal(receipt?.bindingId,registered[0].id);assert.ok(document.includes(responseAnchor(registered[0].id)));

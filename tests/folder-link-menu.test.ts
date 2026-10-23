@@ -1,6 +1,8 @@
 import {rememberResponse} from '../smart-send';
 import {moveSmartNotes} from '../smart-send';
 import {commandId} from '../direct';
+import {applyThreadItem} from '../inline-thread';
+import {responseAnchor} from '../native-response-projection';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -550,6 +552,47 @@ test('whole-note sends, command-bar asks and confirmed receipts use one Smart Se
   const start=document.indexOf(response),replyAnchor={text:response,start,end:start+response.length,before:document.slice(Math.max(0,start-80),start),after:document.slice(start+response.length,start+response.length+80)};
   await h.plugin.openManualAction(file,'Explain this reply.',response,{editor,view,anchor:replyAnchor,canonicalAnchor:replyAnchor,snapshot:document},false);
   assert.equal(sent.length,5);assert.match(sent[4].prompt,/Selected text:\nAgent final answer\./);assert.doesNotMatch(sent[4].prompt,/First instruction|Second instruction/);
+ }finally{h.plugin.onunload();}
+});
+
+for(const confirmed of [false,true])test(`import selects its source for automatic Smart Send (existing coverage=${confirmed})`,async()=>{
+ const h=await folderMenuHarness();
+ try{
+  const {file}=h.fileMenu('Notes/Import.md',false);Object.assign(file,{basename:'Import',stat:{ctime:123}});
+  let document=confirmed?'Earlier instruction.':'';const sent:any[]=[],registered:any[]=[];
+  h.plugin.app.vault.read=async()=>document;h.plugin.app.vault.getFileByPath=(path:string)=>path===file.path?file:undefined;
+  h.plugin.app.vault.process=async(_file:any,change:(text:string)=>string)=>document=change(document);
+  h.plugin.app.workspace.getLeavesOfType=()=>[];
+  h.plugin.settings.autoSettleThreads=false;h.plugin.settings.inlineStreaming.enabled=false;
+  h.plugin.requestTitle=async()=> 'Import';
+  const threadId=randomUUID(),messageId=randomUUID(),source={environmentId:'env',projectId:h.project.id,threadId};
+  h.plugin.readChatThread=async()=>({id:threadId,projectId:h.project.id,title:'Imported thread',session:{status:'ready',activeTurnId:null},latestTurn:{state:'completed'}});
+  h.plugin.dispatch=async(request:any)=>{sent.push(request);h.plugin.rememberStarted(request,threadId);await h.plugin.save();return threadId;};
+  if(confirmed)await h.plugin.send(file,h.project,{threadId,streamReply:false,throwOnError:true});
+  h.plugin.rememberNoteThread(h.plugin.noteThreadIntent(file.path,h.project,{environmentId:'env'}),'other-thread');
+  const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:{messages:[{id:messageId,role:'user',text:'Imported prompt',createdAt:'2026-10-20T00:00:00Z',turnId:'run',streaming:false},{id:'answer',role:'assistant',text:'Imported answer',createdAt:'2026-10-20T00:01:00Z',turnId:'run',streaming:false}],activities:[],latestTurn:{turnId:'run',messageId,requestedAt:'2026-10-20T00:00:00Z',state:'completed'},session:{status:'ready',activeTurnId:null}}}}).state;
+  h.plugin.readImportHistory=async()=>({source,state,title:'Imported thread'});
+  h.plugin.localResponseTarget=async()=>({environmentId:'env',workspaceRoot:'/vault',directory:'.obsidian/inline'});
+  const originalInline=h.plugin.deviceInline;
+  h.plugin.deviceInline={register:async(request:any)=>{registered.push(request);},waitForSave:async(id:string)=>{
+   const body='Imported prompt\n\nImported answer',at=document.indexOf(responseAnchor(id));
+   await rememberResponse(h.plugin.smartData(),file.path,id,body,document.slice(0,at),document.slice(at+responseAnchor(id).length),at);
+   document=document.replace(responseAnchor(id),body);return {saved:true};
+  },dispose:()=>originalInline?.dispose()};
+  const before=sent.length;await h.plugin.importRun(file.path,h.project,threadId,messageId,false);
+  assert.equal(sent.length,before,'import must not send input');assert.equal(registered.length,1);
+  assert.equal(h.plugin.noteThread(file.path).threadId,threadId);assert.equal(h.plugin.noteThread(file.path).connectionId,'c');
+  assert.equal(h.shared.at(-1).noteThreads.find((entry:any)=>entry.threadId===threadId).environmentId,'env');
+  document+='\nFresh follow-up.';const modalCount=h.modals.length;
+  await h.plugin.openNoteSend(file);
+  assert.equal(h.modals.length,modalCount,'automatic continuation must not open the selector');assert.equal(sent.length,before+1);
+  assert.equal(sent.at(-1).threadId,threadId);assert.equal(sent.at(-1).project.id,h.project.id);
+  assert.match(sent.at(-1).prompt,/Fresh follow-up/);assert.doesNotMatch(sent.at(-1).prompt,/Earlier instruction|Imported prompt|Imported answer|t3-run-import/);
+  const heads=JSON.stringify(h.plugin.smartData().heads);
+  await h.plugin.importRun(file.path,h.project,threadId,messageId,false);
+  assert.equal(JSON.stringify(h.plugin.smartData().heads),heads,'reimport must preserve confirmed coverage');
+  document+='\nSecond follow-up.';await h.plugin.openNoteSend(file);
+  assert.match(sent.at(-1).prompt,/Second follow-up/);assert.doesNotMatch(sent.at(-1).prompt,/Fresh follow-up|Earlier instruction|Imported prompt|Imported answer/);
  }finally{h.plugin.onunload();}
 });
 

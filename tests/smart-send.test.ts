@@ -95,6 +95,31 @@ test('typing inside a completed recorded progress box remains new source',async(
   const result=await prepareSmartSend(data,path,destination,'Before\n'+body.replace('> Agent work.','> Agent work.\n> User addition.')+'\nAfter');
   assert.match(result.text,/User addition/);assert.doesNotMatch(result.text,/Agent work|Completed|Final\./);
 });
+test('editing a saved answer excludes its original text when its saved separator repeats',async()=>{
+  const before='My original question.\n\n',opening='The saved answer starts with these explicit rules.\n\n',ending='The final paragraph explains the remaining behavior in enough detail to identify the end of this saved response.\n';
+  const body=opening+['First generated rule.','Second generated rule.','Third generated rule.'].join('\n\n')+'\n\n'+ending;
+  const {data}=await send(fresh(),before);
+  await rememberResponse(data,path,'reply',body,before,'\n\n',before.length);
+  const addition='My question about the second rule.',anchor=responseAnchor('11111111-1111-4111-8111-111111111111');
+  const document=before+body.replace('Second generated rule.','Second generated rule.\n\n'+addition+'\n\n'+anchor)+'\n\n';
+  const plan=await prepareSmartSend(data,path,destination,document);
+  assert.equal(plan.text.trim(),addition);assert.doesNotMatch(plan.text,/generated rule|saved answer|final paragraph|send-to-t3-response/);
+  confirmSmartSend(data,'followup',destination,plan.capture);
+  assert.equal((await prepareSmartSend(data,path,destination,document)).text,'');
+});
+test('stored reply text locates edits after surrounding prose changes and keeps later source',async()=>{
+  const data=fresh(),before='Original context.\n\n',body='A distinctive opening paragraph from the agent, with sufficient detail to identify its beginning.\n\nMiddle generated paragraph.\n\nA distinctive final paragraph from the agent, with sufficient detail to identify its ending.\n';
+  await rememberResponse(data,path,'reply',body,before,'\n\n',before.length);
+  const document='Edited context.\n\n'+body.replace('Middle generated paragraph.','Middle generated paragraph.\n\nMy inserted question.')+'\n\nLater source.\n\n';
+  const plan=await prepareSmartSend(data,path,destination,document);
+  assert.equal(plan.text.replace(/\n+/g,'\n').trim(),'Edited context.\nMy inserted question.\nLater source.');
+});
+test('ambiguous copies of an edited reply are not classified by whitespace or old offsets',async()=>{
+  const data=fresh(),body='Distinctive original opening.\n\n'+ 'Generated middle.\n\n'.repeat(15)+'Distinctive original ending.\n';
+  await rememberResponse(data,path,'reply',body,'\n\n','\n\n',2);
+  const edited=body.replace('Distinctive original ending.','User edit.\nDistinctive original ending.'),document='\n\n'+edited+'\n\n'+edited+'\n\n';
+  assert.equal((await prepareSmartSend(data,path,destination,document)).text,document);
+});
 test('parallel confirmed branches merge, and a successor retires only observed branches',async()=>{
   const root=(await send(fresh(),'Base')).data,a=mergeSmartSend(root),b=mergeSmartSend(root);
   await send(a,'Base\nFrom A',undefined,'a');await send(b,'Base\nFrom B',undefined,'b');
