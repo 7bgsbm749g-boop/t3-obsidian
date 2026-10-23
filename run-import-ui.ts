@@ -31,6 +31,7 @@ export function openRunImport(app:App,notePath:string,host:RunImportHost){
 }
 export class ImportRunModal extends Modal {
   private follow=false;
+  private submitted=false;
   constructor(app:App,private notePath:string,private thread:ThreadChoice,private run:ImportRun,private attach:(follow:boolean)=>Promise<RunImportResult>){super(app);}
   onOpen(){
     this.titleEl.setText('Import T3 run into this note');
@@ -41,8 +42,16 @@ export class ImportRunModal extends Modal {
     this.contentEl.createEl('p',{text:'Copy this response into the note. A running response catches up and streams until it finishes. No new prompt is sent.'});
     new Setting(this.contentEl).setName('Follow future runs in this thread').setDesc('Also import every response after the selected run, including responses that have already finished, then stream new responses. Earlier runs are not imported. Use “Manage T3 streams in this note…” to pause or remove this.').addToggle(toggle=>toggle.setValue(false).onChange(value=>{this.follow=value;}));
     new Setting(this.contentEl).addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>button.setButtonText('Import response').setCta().onClick(()=>{
+      if(this.submitted)return;
+      this.submitted=true;
+      const follow=this.follow;
       button.setDisabled(true);
-      void this.attach(this.follow).then(result=>{new Notice(runImportResultMessage(result),result.saveState==='pending'?10000:5000);this.close();}).catch(error=>{button.setDisabled(false);new Notice(`Import T3 run: ${error instanceof Error?error.message:String(error)}`,10000);});
+      this.close();
+      new Notice('Importing T3 response…',2000);
+      void (async()=>{
+        try{const result=await this.attach(follow);new Notice(runImportResultMessage(result),result.saveState==='pending'?10000:5000);}
+        catch(error){new Notice(`Import T3 run: ${error instanceof Error?error.message:String(error)}`,10000);}
+      })();
     }));
   }
   onClose(){this.contentEl.empty();}
