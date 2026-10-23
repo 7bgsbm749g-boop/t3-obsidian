@@ -3,6 +3,7 @@ import {commandId} from './direct';
 import {safeNotePath,type ResponseRequest} from './response-model';
 import {turnForMessage,type InlineMessage,type InlineThreadState} from './inline-thread';
 import type {EventTarget} from './event-subscriptions';
+import {isRunInput} from './run-input';
 
 export const STREAM_COMMANDS=['stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination'] as const;
 export interface ThreadDisplayCommand {version:1;id:string;kind:typeof STREAM_COMMANDS[number];source?:EventTarget;destinationSection?:string;destinations?:string[];subscriptionId?:string;destination?:string;scope?:'thread';start?:'future'|'history'|'after';afterMessageId?:string}
@@ -39,7 +40,7 @@ export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisp
     for(const path of command.destinations!)await host.validateDestination(path);
     const state=await host.readThread(command.source!);
     if(!state.historyComplete)throw Error('A complete canonical history is required to establish the streaming boundary.');
-    const prompts=state.messages.filter(m=>m.role==='user'),selected=prompts.findIndex(m=>m.id===command.afterMessageId);
+    const prompts=state.messages.filter(isRunInput),selected=prompts.findIndex(m=>m.id===command.afterMessageId);
     if(command.start==='after'&&selected<0)throw Error('The selected prompt is no longer in the T3 history.');
     const boundary=command.start==='history'?[]:(command.start==='after'?prompts.slice(0,selected+1):prompts).map(m=>m.id);
     const display:ThreadDisplay={...command.source!,id:command.id,scope:'thread',enabled:true,createdAt:new Date(now).toISOString(),boundary,destinations:command.destinations!.map(path=>({id:commandId(command.id,`destination:${path}`),path,...(command.destinationSection?{section:command.destinationSection}:{})})),bindings:[]};
@@ -52,7 +53,7 @@ export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisp
   if(command.kind==='resume-thread-stream'){
     const state=await host.readThread(display);if(!state.historyComplete)throw Error('A complete canonical history is required to resume.');
     // Paused runs are skipped. Active child bindings continue independently.
-    display.boundary=[...new Set([...display.boundary,...state.messages.filter(m=>m.role==='user').map(m=>m.id)])];display.enabled=true;
+    display.boundary=[...new Set([...display.boundary,...state.messages.filter(isRunInput).map(m=>m.id)])];display.enabled=true;
   }
   if(command.kind==='remove-stream-destination'){
     const destination=display.destinations.find(d=>d.path===command.destination&&!d.removed);if(!destination)throw Error('Streaming destination not found.');destination.removed=true;
@@ -69,10 +70,10 @@ export async function tickDisplay(display:ThreadDisplay,host:DisplayHost){
   let existing:Awaited<ReturnType<DisplayHost['responseBindings']>>|undefined;
   const roots=new Map<string,string>();
   // First prompt owns a provider turn; subsequent same-turn prompts are steering.
-  for(const message of state.messages.filter(m=>m.role==='user')){
+  for(const message of state.messages.filter(isRunInput)){
     const turnId=turnForMessage(state,message.id);if(turnId&&!roots.has(turnId))roots.set(turnId,message.id);
   }
-  for(const message of state.messages.filter(m=>m.role==='user'&&!display.boundary.includes(m.id))){
+  for(const message of state.messages.filter(m=>isRunInput(m)&&!display.boundary.includes(m.id))){
     const turnId=turnForMessage(state,message.id);
     if(!turnId)continue; // Fast replies catch up; never guess the latest turn.
     for(const destination of display.destinations.filter(d=>!d.removed)){

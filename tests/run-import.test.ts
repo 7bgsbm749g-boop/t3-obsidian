@@ -2,12 +2,34 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {importRuns,importBindingId,importFollowId} from '../run-import';
 import {applyThreadItem,restoreInlineBindings,type InlineThreadState} from '../inline-thread';
+import {normalizeV2Snapshot,normalizeV2StreamItem} from '../orchestration-v2';
 const old='2026-10-06T10:00:00Z',recent='2026-10-06T11:00:00Z';
 function history():InlineThreadState{return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:{messages:[
   {id:'old',role:'user',text:'Old prompt',createdAt:old,turnId:null,streaming:false},
   {id:'old-answer',role:'assistant',text:'Old answer',createdAt:old,turnId:'old-turn',streaming:false},
   {id:'new',role:'user',text:'New prompt',createdAt:recent,turnId:null,streaming:false},
   {id:'new-answer',role:'assistant',text:'Live answer',createdAt:recent,turnId:'new-turn',streaming:true}],activities:[],latestTurn:{turnId:'new-turn',requestedAt:recent,state:'running'},session:{status:'running',activeTurnId:'new-turn'}}}}).state;}
+test('system and provider notices never become import choices, even with completed run associations',()=>{
+  const text='Background command completed (exit 1): /bin/bash -lc synthetic-command';
+  const messages=[
+    {id:'system',createdBy:'system',creationSource:'server'},
+    {id:'provider',creationSource:'provider'},
+    {id:'user',createdBy:'user',creationSource:'mobile'},
+    {id:'agent',createdBy:'agent',creationSource:'mcp'},
+    {id:'legacy'},
+  ].map(message=>({...message,role:'user',runId:message.id,text,createdAt:recent,streaming:false}));
+  const snapshot={snapshotSequence:1,projection:{thread:{id:'thread',projectId:'project'},messages,runs:messages.map((message,ordinal)=>({id:message.id,userMessageId:message.id,ordinal,status:'completed',requestedAt:recent,completedAt:recent})),turnItems:[]}};
+  let state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:normalizeV2Snapshot(snapshot)}).state;
+  assert.deepEqual(importRuns(state).map(run=>run.messageId),['legacy','agent','user']);
+  for(const run of importRuns(state))assert.equal(run.status,'Completed');
+  state=applyThreadItem(state,normalizeV2StreamItem({kind:'event',sequence:2,event:{type:'message.updated',payload:{...messages[0],id:'live-notice',runId:'user'}}})).state;
+  assert.deepEqual(importRuns(state).map(run=>run.messageId),['legacy','agent','user']);
+});
+test('an excluded notice cannot take ownership of a real prompt in the same run',()=>{
+  const state=history();state.messages.unshift({id:'notice',role:'user',createdBy:'system',creationSource:'provider',text:'Background command completed (exit 0)',createdAt:recent,turnId:'new-turn',streaming:false});
+  assert.equal(importRuns(state).find(run=>run.messageId==='notice'),undefined);
+  assert.equal(importRuns(state).find(run=>run.messageId==='new')!.status,'Running');
+});
 test('complete transcript exposes missing old associations while the exact active run is importable',()=>{
   const runs=importRuns(history());assert.equal(runs[0].messageId,'new');assert.equal(runs[0].status,'Running');assert.equal(runs[0].turn?.messageId,'new');assert.equal(runs[1].status,'Unavailable');assert.match(runs[1].unavailable!,/prompt-to-run/);
 });
