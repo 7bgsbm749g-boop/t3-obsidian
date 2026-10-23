@@ -522,6 +522,11 @@ note's project routing. A running response catches up with output already in T3
 and streams until completion. Repeating the import reuses its existing binding,
 including after completion, reload and later note edits.
 
+System messages and provider notices, such as background-command completion
+notifications, are excluded from the run list and thread following. This uses
+T3 origin metadata; a real user or agent prompt can quote the same notice text
+without being hidden.
+
 **Follow future runs in this thread** is off by default. Enable it to import
 every response after the selected run, including responses that have already
 finished, and continue streaming new responses to this note. Runs before the
