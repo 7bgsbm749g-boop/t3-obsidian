@@ -14,6 +14,11 @@ Typing during delivery is not included in that capture.
 
 Unchanged lines map coverage to the current note, with common prefixes and
 suffixes inside changed intervals. Repeated lines retain occurrence counts.
+Comparison ignores parsed emphasis, strikethrough, quote prefixes, and callout
+type/folding markers for both sent source and saved replies. New text retains
+its Markdown wrappers. Custom callout titles, code, escapes, link destinations,
+numbers, and task states remain meaningful; changing a task state sends its
+complete checkbox marker. Existing receipts keep their original source offsets.
 Explicit selections cover only their requested intervals. New destinations
 start with no coverage. Typed questions always send independently of source
 coverage. An Ask about already delivered selected source includes a bounded
