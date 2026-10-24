@@ -105,6 +105,7 @@ import {approvalButton,approvalEditorExtension} from './approval-ui';
 import {approvalTargets,parseApprovalUrl,clearApprovalControls,type ApprovalTarget} from './approvals';
 import {settlementState,type ThreadSettlementJob} from './thread-settlement';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;insertion?:CursorInsertion;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
+type PaletteActionContext={file:TFile;editor?:EditorChatContext;insertion:CursorInsertion|null};
 const NEW_FOLDER_PROJECT='folder:new';
 const VAULT_PROJECT='vault:root';
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
@@ -505,7 +506,7 @@ export default class SendToT3 extends Plugin {
         this.registerDomEvent(document,'pointerdown',remember,true);
         this.registerDomEvent(document,'touchstart',remember,true);
       }
-      this.paletteChat=installPaletteChat(this.app,(prompt,selection,showSelector)=>this.openPaletteAction(prompt,selection,showSelector),{onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),getSelection:()=>this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getSelection()??''});
+      this.paletteChat=installPaletteChat(this.app,(prompt,selection,showSelector,source)=>this.openPaletteAction(prompt,selection,showSelector,source),{onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),captureSource:()=>this.capturePaletteSource()});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined'){
         this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>{
@@ -1377,10 +1378,22 @@ export default class SendToT3 extends Plugin {
     if(view?.file&&view.editor){if(prompt===undefined)return this.openAsk(view.file,view.editor.getSelection(),{view,editor:view.editor},showSelector);return this.openManualAction(view.file,prompt,view.editor.getSelection(),{view,editor:view.editor},showSelector);}
     return this.openChatWithNote(this.chatNote(),prompt,view?.file&&view.editor?{view,editor:view.editor}:undefined,false,showSelector);
   }
-  private async openPaletteAction(prompt:string,selection:string,showSelector=false){
+  private capturePaletteSource(){
     const file=this.app.workspace.getActiveFile();
+    if(!file||file.extension.toLowerCase()!=='md')return;
+    const view=this.app.workspace.getActiveViewOfType(MarkdownView);
+    let selection='',editor:EditorChatContext|undefined;
+    if(view?.file?.path===file.path&&view.editor&&view.getMode()!=='preview'){
+      selection=view.editor.getSelection();
+      editor=this.canonicalChatContext({view,editor:view.editor,...(selection.trim()?{anchor:captureEditorSelection(view.editor)}:{insertion:captureCursorInsertion(view.editor.getValue(),view.editor.posToOffset(view.editor.getCursor()))})});
+    }
+    return {selection,context:{file,editor,insertion:this.noteSendInsertion(file)} satisfies PaletteActionContext};
+  }
+  private async openPaletteAction(prompt:string,selection:string,showSelector=false,source?:PaletteActionContext){
+    const file=source?.file??this.app.workspace.getActiveFile();
     if(!file||file.extension.toLowerCase()!=='md')throw Error('Open a Markdown note before using T3 Code from the command palette.');
-    return this.openManualAction(file,prompt,selection,undefined,showSelector);
+    if(source&&!prompt.trim()&&!selection.trim())return this.openNoteSend(file,showSelector,source.insertion);
+    return this.openManualAction(file,prompt,selection,source?.editor,showSelector);
   }
   private async openManualAction(file:TFile,prompt:string,selection:string,captured?:EditorChatContext,showSelector=false){
     if(!prompt.trim()&&!selection.trim()){
@@ -1394,7 +1407,10 @@ export default class SendToT3 extends Plugin {
     if(view?.file?.path===file.path&&editor){
       context={...captured,editor,view,...(prompt.trim()?{initialQuestion:prompt}:{})};
       if(!selected)context.insertion??=captureCursorInsertion(editor.getValue(),editor.posToOffset(editor.getCursor()));
-      if(selected&&!context.anchor&&editor.getSelection()===selection){try{context.anchor=captureEditorSelection(editor);}catch(error){if(captured)throw error;/* Append when selection changed while palette was open. */}}
+      if(selected&&!context.anchor){
+        if(editor.getSelection()!==selection)throw Error('The selected text changed. Select it again before sending.');
+        context.anchor=captureEditorSelection(editor);
+      }
     }
     if(context?.anchor)context=this.canonicalChatContext(context);
     const canonicalSelected=context?.canonicalAnchor?.text??selection;
@@ -1424,7 +1440,7 @@ export default class SendToT3 extends Plugin {
     const adapter=nativeResponses(this.app).view(context.view as MarkdownView),mapped=adapter?.canonicalSelection(range.from,range.to);
     const snapshot=mapped?.document??context.snapshot??display;
     const canonicalAnchor=mapped?selectionAnchor(snapshot,mapped.text,mapped.start,mapped.end):context.anchor;
-    return {...context,snapshot,canonicalAnchor,referenceSelection:Boolean(context.referenceSelection||mapped?.reference||selectionOverlapsInlineResponse(display,context.anchor))};
+    return {...context,snapshot,canonicalAnchor,insertion:context.insertion??captureCursorInsertion(display,range.to),referenceSelection:Boolean(context.referenceSelection||mapped?.reference||selectionOverlapsInlineResponse(display,context.anchor))};
   }
   private needsFolderProject(notePath?:string):boolean {
     return Boolean(notePath?.includes('/')&&!folderLinkForPath(this.settings.folderLinks.filter(link=>link.folderPath!=='/'),notePath));

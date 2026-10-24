@@ -52,6 +52,38 @@ test('the first palette row follows selection and typed input in all four states
   hook.dispose();
 });
 
+test('palette focus and close cannot change the source selection or position captured on opening',()=>{
+  const {app,modal,prototype}=fixture();
+  let selection='Repeated passage',context={note:'Original.md',start:40,end:56},captures=0;
+  const sent:unknown[]=[];
+  prototype.onOpen=function(){selection='';context={note:'Other.md',start:0,end:0};return 'opened';};
+  const hook=installPaletteChat(app,(query,selected,choose,source)=>{sent.push({query,selected,choose,source});},{captureSource:()=>{captures++;return {selection,context};}});
+  modal.onOpen();
+  assert.equal(suggest(modal,'Why')[0].item.name,'Ask T3 Code: “Why”');
+  const row=suggest(modal,'Why?')[0];
+  modal.selectSuggestion(row,{ctrlKey:true});
+  assert.equal(captures,1);
+  assert.deepEqual(sent,[{query:'Why?',selected:'Repeated passage',choose:true,source:{note:'Original.md',start:40,end:56}}]);
+  selection='New passage';context={note:'New.md',start:3,end:14};
+  modal.onOpen();modal.selectSuggestion(suggest(modal,'Again?')[0],{});
+  assert.equal(captures,2);
+  assert.deepEqual(sent[1],{query:'Again?',selected:'New passage',choose:false,source:{note:'New.md',start:3,end:14}});
+  hook.dispose();
+});
+
+test('source capture errors affect only the T3 row and never reuse the preceding source',()=>{
+  const {app,modal,command}=fixture(),errors:unknown[]=[];
+  let fail=false;
+  const failure=Error('The selection changed.');
+  const hook=installPaletteChat(app,()=>assert.fail('a failed capture must not send'),{captureSource:()=>{if(fail)throw failure;return {selection:'First',context:'first'};},onError:error=>errors.push(error)});
+  modal.onOpen();fail=true;modal.onOpen();
+  modal.selectSuggestion(command,{});
+  assert.deepEqual(errors,[]);
+  modal.selectSuggestion(suggest(modal,'Why?')[0],{});
+  assert.deepEqual(errors,[failure]);
+  hook.dispose();
+});
+
 test('ordinary commands keep their identity, this, all arguments, and selection behavior', () => {
   const { app, modal, calls, command } = fixture();
   const hook = installPaletteChat(app, () => assert.fail('ordinary command must not submit'));

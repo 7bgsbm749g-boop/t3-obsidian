@@ -4,12 +4,14 @@
  */
 export type PaletteChatStatus = 'active' | 'unavailable' | 'incompatible' | 'disposed';
 
-export interface PaletteChatOptions {
+export interface PaletteChatOptions<Context = unknown> {
   onStatus?: (status: PaletteChatStatus) => void;
   onError?: (error: unknown) => void;
   getDraft?: () => string;
   saveDraft?: (draft: string) => void;
   getSelection?: () => string;
+  /** Capture the source before the core modal takes focus or clears selection. */
+  captureSource?: () => {selection:string;context:Context} | undefined;
 }
 
 export interface PaletteChatController {
@@ -47,10 +49,10 @@ function compatible(value: unknown): value is PaletteModal {
     typeof modal.inputEl?.dispatchEvent === 'function';
 }
 
-export function installPaletteChat(
+export function installPaletteChat<Context = unknown>(
   app: unknown,
-  onSubmit: (query: string, selectedText: string, showSelector:boolean) => void | Promise<void>,
-  options: PaletteChatOptions = {},
+  onSubmit: (query: string, selectedText: string, showSelector:boolean, context:Context|undefined) => void | Promise<void>,
+  options: PaletteChatOptions<Context> = {},
 ): PaletteChatController {
   let status: PaletteChatStatus = 'unavailable';
   let disposed = false;
@@ -65,7 +67,9 @@ export function installPaletteChat(
     let composing = false;
     let epoch = 0;
     let submitted = false;
-    const rows = new WeakMap<object, { query: string; selection: string; epoch: number }>();
+    let source:ReturnType<NonNullable<PaletteChatOptions<Context>['captureSource']>>;
+    let sourceError:unknown;
+    const rows = new WeakMap<object, { query: string; selection: string; epoch: number; context:Context|undefined; error:unknown }>();
     const originals = Object.fromEntries(methodNames.map(name => [name, modal[name]])) as Record<MethodName, Method>;
     const descriptors = new Map<MethodName, PropertyDescriptor | undefined>();
     const wrappers: Record<MethodName, Method> = {
@@ -78,7 +82,7 @@ export function installPaletteChat(
         // Current core versions return an array. Leave a changed contract alone.
         if (!Array.isArray(suggestions)) { setStatus('incompatible'); return suggestions; }
         if (typeof args[0] !== 'string') return suggestions;
-        const selection=options.getSelection?.()??'';
+        const selection=options.captureSource?source?.selection??'':options.getSelection?.()??'';
         const name=query.trim()
           ? `${selection.trim()?'Ask T3 Code':'T3 Code'}: “${query}”`
           : selection.trim()?'Ask T3 Code':'Send to T3 Code';
@@ -86,7 +90,7 @@ export function installPaletteChat(
           item: { id: 'send-to-t3-code:palette-query', name },
           match: { score: 0, matches: [] },
         };
-        rows.set(row, { query, selection, epoch });
+        rows.set(row, { query, selection, epoch, context:source?.context, error:sourceError });
         // Insert after core filtering/sorting, before its display limit is applied.
         // The registered command is the hotkey/fallback surface. While this
         // dynamic row is available, show only one manual T3 action.
@@ -117,11 +121,14 @@ export function installPaletteChat(
         if (!own) return originals.onChooseSuggestion.apply(this, args);
         if (!active || own.epoch !== epoch || own.query !== modal.inputEl.value || submitted || composing || args[1]?.isComposing) return;
         submitted = true;
-        try { Promise.resolve(onSubmit(own.query,own.selection,Boolean(args[1]?.ctrlKey))).catch(error => options.onError?.(error)); }
+        try { if(own.error)throw own.error;Promise.resolve(onSubmit(own.query,own.selection,Boolean(args[1]?.ctrlKey),own.context)).catch(error => options.onError?.(error)); }
         catch (error) { options.onError?.(error); }
       },
       onOpen(...args) {
-        if (active) { epoch++; submitted = false; composing = false; }
+        if (active) {
+          epoch++; submitted = false; composing = false; source=undefined; sourceError=undefined;
+          try{source=options.captureSource?.();}catch(error){sourceError=error;}
+        }
         const result = originals.onOpen.apply(this, args);
         const draft = options.getDraft?.();
         if (active && draft && !modal.inputEl.value) {
