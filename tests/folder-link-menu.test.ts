@@ -1,6 +1,8 @@
 import {rememberResponse} from '../smart-send';
 import {moveSmartNotes} from '../smart-send';
 import {commandId} from '../direct';
+import {applyThreadItem} from '../inline-thread';
+import {responseAnchor} from '../native-response-projection';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -239,6 +241,64 @@ test('mobile folder menu enables Create T3 project',async()=>{
   }finally{h.plugin.onunload();}
 });
 
+
+for(const mobile of [false,true])test(`folder Unlink follows Create T3 project and removes only the direct link on ${mobile?'mobile':'desktop'}`,async()=>{
+  const h=await folderMenuHarness();
+  try{
+    h.fileMenu('Notes/note.md',mobile);
+    const modal=await h.open();await h.button(modal,'Link').click();
+    const direct=h.plugin.settings.folderLinks[0];
+    const parent={...direct,id:'parent',folderPath:'/'};
+    const nested={...direct,id:'nested',folderPath:'Notes/Inner'};
+    const unrelated={...direct,id:'unrelated',folderPath:'Other'};
+    h.plugin.settings.folderLinks=[parent,direct,nested,unrelated];
+    const remembered={notePath:'Notes/note.md',projectId:'project',threadId:'remembered',connectionId:'c',workspaceRoot:'/writing',selectedAt:new Date().toISOString()};
+    h.plugin.settings.noteThreads=[remembered];await h.plugin.save();
+    let refreshes=0;h.plugin.folderIndicators={refresh:()=>{refreshes++;},dispose:()=>{}};
+    h.plugin.projects=()=>[]; // A saved link remains removable while T3 is unavailable.
+    const submenu=h.folderMenu().items[0].submenu!;
+    const createIndex=submenu.items.findIndex(item=>item.title==='Create T3 project…');
+    const unlink=submenu.items[createIndex+1];assert.equal(unlink.title,'Unlink');assert.equal(unlink.disabled,false);
+    const requests=h.networkRequests(),modalCount=h.modals.length;
+    await unlink.callback();
+    assert.equal(h.plugin.settings.folderLinks.map((link:any)=>link.folderPath).join(','),'/,Notes/Inner,Other');
+    assert.equal(h.shared.at(-1).folderLinks.map((link:any)=>link.folderPath).join(','),'/,Notes/Inner,Other');
+    assert.equal(h.shared.at(-1).folderLinkChanges.find((change:any)=>change.folderPath==='Notes').link,null);
+    assert.equal(h.plugin.settings.noteThreads[0].threadId,remembered.threadId);
+    assert.equal(h.networkRequests(),requests);assert.equal(h.modals.length,modalCount);assert.ok(refreshes>0);
+    assert.equal(h.plugin.settings.pending.length,0);assert.equal(h.notices.at(-1),'Notes unlinked from T3 Code.');
+    assert.equal(h.folderMenu().items[0].submenu!.items.find(item=>item.title==='Unlink')!.disabled,true,'An inherited link is not a direct link');
+  }finally{h.plugin.onunload();}
+});
+
+test('folder Unlink is disabled without a direct link and supports the vault root',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const unlink=(root=false)=>h.folderMenu(root).items[0].submenu!.items.find(item=>item.title==='Unlink')!;
+    assert.equal(unlink().disabled,true);assert.equal(unlink(true).disabled,true);
+    const modal=await h.open();await h.button(modal,'Link').click();
+    const direct=h.plugin.settings.folderLinks[0];
+    h.plugin.settings.folderLinks=[{...direct,id:'root',folderPath:'/'},direct];await h.plugin.save();
+    assert.equal(unlink(true).disabled,false);await unlink(true).callback();
+    assert.equal(h.plugin.settings.folderLinks.length,1);assert.equal(h.plugin.settings.folderLinks[0].folderPath,'Notes');
+    assert.equal(unlink(true).disabled,true);assert.equal(unlink().disabled,false);
+    assert.equal(h.networkRequests(),0);
+  }finally{h.plugin.onunload();}
+});
+
+test('folder Unlink reports a save failure and preserves the link',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const modal=await h.open();await h.button(modal,'Link').click();
+    const before=JSON.stringify(h.plugin.settings.folderLinks),saves=h.shared.length;
+    h.setFailSave(true);
+    await h.folderMenu().items[0].submenu!.items.find(item=>item.title==='Unlink')!.callback();
+    assert.equal(JSON.stringify(h.plugin.settings.folderLinks),before);assert.equal(h.shared.length,saves);
+    assert.match(h.notices.at(-1)!,/T3 folder links:.*storage failure/);
+    assert.equal(h.folderMenu().items[0].submenu!.items.find(item=>item.title==='Unlink')!.disabled,false);
+    assert.equal(h.networkRequests(),0);
+  }finally{h.plugin.onunload();}
+});
 
 test('Create T3 project browses outside the vault and only links on confirmation',async()=>{
   const h=await folderMenuHarness();
@@ -485,13 +545,54 @@ test('whole-note sends, command-bar asks and confirmed receipts use one Smart Se
   const editor={getValue:()=>document,getSelection:()=>'',getCursor:()=>({line:0,ch:0}),posToOffset:()=>0},view={file,editor};
   h.plugin.app.workspace.getActiveViewOfType=()=>view;
   await h.plugin.openManualAction(file,'Why?', '',{editor,view},false);
-  assert.equal(sent.length,3);assert.match(sent[2].prompt,/Question:\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Second instruction|Agent final/);
+  assert.equal(sent.length,3);assert.match(sent[2].prompt,/\*\*USER ASKS:\*\*\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Second instruction|Agent final/);
   const selected='First instruction.',firstAnchor={text:selected,start:0,end:selected.length,before:'',after:document.slice(selected.length,selected.length+80)};
   await h.plugin.openManualAction(file,'Which passage?',selected,{editor,view,anchor:firstAnchor,canonicalAnchor:firstAnchor,snapshot:document},false);
   assert.equal(sent.length,4);assert.match(sent[3].prompt,/Selection reference: First instruction\./);assert.doesNotMatch(sent[3].prompt,/Second instruction|Agent final/);
   const start=document.indexOf(response),replyAnchor={text:response,start,end:start+response.length,before:document.slice(Math.max(0,start-80),start),after:document.slice(start+response.length,start+response.length+80)};
   await h.plugin.openManualAction(file,'Explain this reply.',response,{editor,view,anchor:replyAnchor,canonicalAnchor:replyAnchor,snapshot:document},false);
   assert.equal(sent.length,5);assert.match(sent[4].prompt,/Selected text:\nAgent final answer\./);assert.doesNotMatch(sent[4].prompt,/First instruction|Second instruction/);
+ }finally{h.plugin.onunload();}
+});
+
+for(const confirmed of [false,true])test(`import selects its source for automatic Smart Send (existing coverage=${confirmed})`,async()=>{
+ const h=await folderMenuHarness();
+ try{
+  const {file}=h.fileMenu('Notes/Import.md',false);Object.assign(file,{basename:'Import',stat:{ctime:123}});
+  let document=confirmed?'Earlier instruction.':'';const sent:any[]=[],registered:any[]=[];
+  h.plugin.app.vault.read=async()=>document;h.plugin.app.vault.getFileByPath=(path:string)=>path===file.path?file:undefined;
+  h.plugin.app.vault.process=async(_file:any,change:(text:string)=>string)=>document=change(document);
+  h.plugin.app.workspace.getLeavesOfType=()=>[];
+  h.plugin.settings.autoSettleThreads=false;h.plugin.settings.inlineStreaming.enabled=false;
+  h.plugin.requestTitle=async()=> 'Import';
+  const threadId=randomUUID(),messageId=randomUUID(),source={environmentId:'env',projectId:h.project.id,threadId};
+  h.plugin.readChatThread=async()=>({id:threadId,projectId:h.project.id,title:'Imported thread',session:{status:'ready',activeTurnId:null},latestTurn:{state:'completed'}});
+  h.plugin.dispatch=async(request:any)=>{sent.push(request);h.plugin.rememberStarted(request,threadId);await h.plugin.save();return threadId;};
+  if(confirmed)await h.plugin.send(file,h.project,{threadId,streamReply:false,throwOnError:true});
+  h.plugin.rememberNoteThread(h.plugin.noteThreadIntent(file.path,h.project,{environmentId:'env'}),'other-thread');
+  const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:{messages:[{id:messageId,role:'user',text:'Imported prompt',createdAt:'2026-10-20T00:00:00Z',turnId:'run',streaming:false},{id:'answer',role:'assistant',text:'Imported answer',createdAt:'2026-10-20T00:01:00Z',turnId:'run',streaming:false}],activities:[],latestTurn:{turnId:'run',messageId,requestedAt:'2026-10-20T00:00:00Z',state:'completed'},session:{status:'ready',activeTurnId:null}}}}).state;
+  h.plugin.readImportHistory=async()=>({source,state,title:'Imported thread'});
+  h.plugin.localResponseTarget=async()=>({environmentId:'env',workspaceRoot:'/vault',directory:'.obsidian/inline'});
+  const originalInline=h.plugin.deviceInline;
+  h.plugin.deviceInline={register:async(request:any)=>{registered.push(request);},waitForSave:async(id:string)=>{
+   const body='Imported prompt\n\nImported answer',at=document.indexOf(responseAnchor(id));
+   await rememberResponse(h.plugin.smartData(),file.path,id,body,document.slice(0,at),document.slice(at+responseAnchor(id).length),at);
+   document=document.replace(responseAnchor(id),body);return {saved:true};
+  },dispose:()=>originalInline?.dispose()};
+  const before=sent.length;await h.plugin.importRun(file.path,h.project,threadId,messageId,false);
+  assert.equal(sent.length,before,'import must not send input');assert.equal(registered.length,1);
+  assert.equal(h.plugin.noteThread(file.path).threadId,threadId);assert.equal(h.plugin.noteThread(file.path).connectionId,'c');
+  assert.equal(h.shared.at(-1).noteThreads.find((entry:any)=>entry.threadId===threadId).environmentId,'env');
+  document+='\nFresh follow-up.';const modalCount=h.modals.length;
+  await h.plugin.openNoteSend(file);
+  assert.equal(h.modals.length,modalCount,'automatic continuation must not open the selector');assert.equal(sent.length,before+1);
+  assert.equal(sent.at(-1).threadId,threadId);assert.equal(sent.at(-1).project.id,h.project.id);
+  assert.match(sent.at(-1).prompt,/Fresh follow-up/);assert.doesNotMatch(sent.at(-1).prompt,/Earlier instruction|Imported prompt|Imported answer|t3-run-import/);
+  const heads=JSON.stringify(h.plugin.smartData().heads);
+  await h.plugin.importRun(file.path,h.project,threadId,messageId,false);
+  assert.equal(JSON.stringify(h.plugin.smartData().heads),heads,'reimport must preserve confirmed coverage');
+  document+='\nSecond follow-up.';await h.plugin.openNoteSend(file);
+  assert.match(sent.at(-1).prompt,/Second follow-up/);assert.doesNotMatch(sent.at(-1).prompt,/Fresh follow-up|Earlier instruction|Imported prompt|Imported answer/);
  }finally{h.plugin.onunload();}
 });
 
@@ -519,7 +620,7 @@ test('bundled Send and Ask recover a source renamed through delete/create before
   const editor={getValue:()=>document,getSelection:()=>'',getCursor:()=>({line:0,ch:0}),posToOffset:()=>0},view={file,editor};
   document=document.replace('Added detail.','Added detail. Another detail.');
   await h.plugin.sendChat(document,{path:renamed},{threadId:'smart-thread',sourceContext:{editor,view,smartDocument:document,smartQuestion:'Why?'}});
-  assert.match(sent[2].prompt,/Another detail/);assert.match(sent[2].prompt,/Question:\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Added detail/);
+  assert.match(sent[2].prompt,/Another detail/);assert.match(sent[2].prompt,/\*\*USER ASKS:\*\*\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Added detail/);
  }finally{h.plugin.onunload();}
 });
 
@@ -574,7 +675,7 @@ for(const enabled of [true,false])test(`explicit existing-thread Ask reuses the 
   await h.plugin.sendResolvedChat('outdated unfiltered draft',{path:h.file.path},context,true,{threadId:'smart-thread',expectedProjectKey:'c:project',jobOptions:{inline:{enabled,intermediateMode:'remove',keepIntermediate:false,finalAnswerFormat:'formatted'}}});
   const request=h.sent.at(-1);assert.equal(h.sent.length,2);assert.equal(h.newBlocks(),0);
   assert.equal(request.inlineSteering.jobId,h.id);assert.equal(request.jobOptions.inline.enabled,true);
-  assert.match(request.inlineSteering.input.text,/Second instruction/);assert.match(request.inlineSteering.input.text,/Question:\nWhy this change\?/);
+  assert.match(request.inlineSteering.input.text,/Second instruction/);assert.match(request.inlineSteering.input.text,/\*\*USER ASKS:\*\*\nWhy this change\?/);
   assert.doesNotMatch(request.inlineSteering.input.text,/First instruction|outdated unfiltered draft/);
  }finally{h.plugin.onunload();}
 });

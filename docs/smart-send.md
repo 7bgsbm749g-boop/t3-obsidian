@@ -14,6 +14,11 @@ Typing during delivery is not included in that capture.
 
 Unchanged lines map coverage to the current note, with common prefixes and
 suffixes inside changed intervals. Repeated lines retain occurrence counts.
+Comparison ignores parsed emphasis, strikethrough, quote prefixes, and callout
+type/folding markers for both sent source and saved replies. New text retains
+its Markdown wrappers. Custom callout titles, code, escapes, link destinations,
+numbers, and task states remain meaningful; changing a task state sends its
+complete checkbox marker. Existing receipts keep their original source offsets.
 Explicit selections cover only their requested intervals. New destinations
 start with no coverage. Typed questions always send independently of source
 coverage. An Ask about already delivered selected source includes a bounded
@@ -22,6 +27,12 @@ available as quoted Ask context, including when choosing another thread.
 No new source for the default destination opens the selector and
 hides its previous/continue action; an explicit empty submission shows the
 short no-content notice.
+
+Attaching an imported run sets that source as the note's previous thread, even
+when following future runs is off. The normal Smart Send projection excludes
+the imported response and input echo. Import and reimport preserve confirmed
+coverage for that destination; unsent user text is still eligible. Failed
+history reads or attachment registration do not change the previous thread.
 
 Before allocating an editor stream, every Send and Ask checks the selected
 machine, project, thread, and active provider turn against the responses still
@@ -58,7 +69,10 @@ write. Rendered output, including progress and input echoes, is stored once by
 SHA-256; gzip is used when its base64 form is smaller than the original text.
 Current source snapshots use the same encoding. No new markers, comments or
 boundaries are written to Markdown. Full body matches exclude saved responses;
-unique surrounding text can locate edited responses and retain user additions.
+unique spans of the stored reply locate edited responses and retain user
+additions. Substantive surrounding text can recover a changed reply edge;
+blank-line separators do not establish a response boundary. Ambiguous copies
+remain source rather than suppressing text without a proven location.
 Active response containers and recognized generated progress callouts are also
 excluded. Ordinary quotes and literal marker examples remain source.
 

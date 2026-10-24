@@ -45,6 +45,20 @@ test('idle streaming skips binding discovery; new runs and failed attachments re
   for(let i=0;i<20;i++)await h.service.tick();assert.equal(h.bindingReads,3);
  }finally{h.service.stop();}
 });
+test('history and future following exclude system/provider notices and retain real prompts with the same text',async()=>{
+  const h=await harness(),command={...stream(worker,['A.md']),start:'history' as const};
+  const state=run('real','real-run'),text='Background command completed (exit 0): synthetic-command';
+  state.messages[0].text=text;state.messages[0].createdBy='user';state.messages[0].turnId='real-run';
+  const notices=[{id:'system',createdBy:'system',creationSource:'server'},{id:'provider',creationSource:'provider'}].map(message=>({...message,role:'user',text,turnId:message.id,createdAt:state.messages[0].createdAt,streaming:false}));
+  state.messages.unshift(...notices);
+  try{
+    h.setThread(state);await h.service.command(command);await h.service.tick();
+    assert.deepEqual(h.requests.map(request=>request.messageId),['real']);
+    state.messages.push({...notices[0],id:'future-system',turnId:'future-system'},{...notices[1],id:'future-provider',turnId:'future-provider'});
+    h.setThread(state);await h.service.tick();assert.equal(h.requests.length,1);
+    await assert.rejects(h.service.command({...stream(),start:'after',afterMessageId:'system'}),/no longer/);
+  }finally{h.service.stop();}
+});
 
 test('job outcomes use the original turn after newer turns, not latest session error',()=>{
   const original=run(),state={...run(randomUUID(),'newer','error'),turns:{original:original.latestTurn!},messages:[...original.messages,...run(randomUUID(),'newer').messages]};

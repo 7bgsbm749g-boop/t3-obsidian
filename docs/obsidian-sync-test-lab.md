@@ -56,9 +56,19 @@ python3 /home/ubuntu/projects/send-to-t3-code/scripts/obsidian-sync-lab.py start
 The services have a 512 MiB memory limit, zero swap allowance, and a 50% CPU
 quota each. They are available on demand and deliberately not enabled at boot.
 Do not stop `obsidian-qlo2-sync.service` for lab testing. Stop the lab services
-when they are not needed; keep each desktop vault's files for subsequent tests.
+when they are not needed; preserve the reusable lab configuration and permanent
+overview note for subsequent tests.
 The helper serializes mutation commands through a local advisory lock. Coordinate
 native GUI experiments too: one thread should own a lab reproduction at a time.
+
+Always delete temporary smoke-test notes and any T3 threads created for the test
+after use, including failed, cancelled, and interrupted tests. Save evidence
+outside the vaults first and stop active test work. Delete threads through native
+T3 controls and notes through Obsidian's normal vault operations; verify note
+deletion reaches both lab vaults through Sync. Archiving or closing is not
+deletion. Preserve pre-existing user content and immutable evidence. Do not report
+the test complete until cleanup is verified; report any blocker with the exact
+remaining thread IDs and note paths.
 
 To reopen a closed lab editor, use the Cua Driver `launch_app` operation with
 `launch_path: /opt/Obsidian/obsidian` and the matching argument:

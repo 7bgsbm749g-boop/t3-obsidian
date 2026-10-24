@@ -48,9 +48,7 @@ export function decorateNoteIndicators(root:ParentNode,notes:Map<string,NoteIndi
     const mode=[active?'active':'',input?'input':''].filter(Boolean).join(' ');
     if(indicator.getAttribute('data-t3-state')!==mode){
       indicator.setAttribute('data-t3-state',mode);
-      const children:HTMLElement[]=[];
-      for(const state of mode.split(' ').filter(state=>state!=='active')){const dot=title.ownerDocument.createElement('span');dot.className=`send-to-t3-note-${state}`;dot.setAttribute('aria-hidden','true');children.push(dot);}
-      indicator.replaceChildren(...children);
+      indicator.replaceChildren();
     }
     const label=[active?`${note!.active} active T3 ${note!.active===1?'response':'responses'}`:'',input?`${note!.input} T3 ${note!.input===1?'response needs':'responses need'} input`:''].filter(Boolean).join('; ');
     if(indicator.title!==label)indicator.title=label;

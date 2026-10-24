@@ -105,6 +105,7 @@ import {approvalButton,approvalEditorExtension} from './approval-ui';
 import {approvalTargets,parseApprovalUrl,clearApprovalControls,type ApprovalTarget} from './approvals';
 import {settlementState,type ThreadSettlementJob} from './thread-settlement';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;insertion?:CursorInsertion;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
+type PaletteActionContext={file:TFile;editor?:EditorChatContext;insertion:CursorInsertion|null};
 const NEW_FOLDER_PROJECT='folder:new';
 const VAULT_PROJECT='vault:root';
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
@@ -505,7 +506,7 @@ export default class SendToT3 extends Plugin {
         this.registerDomEvent(document,'pointerdown',remember,true);
         this.registerDomEvent(document,'touchstart',remember,true);
       }
-      this.paletteChat=installPaletteChat(this.app,(prompt,selection,showSelector)=>this.openPaletteAction(prompt,selection,showSelector),{onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),getSelection:()=>this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getSelection()??''});
+      this.paletteChat=installPaletteChat(this.app,(prompt,selection,showSelector,source)=>this.openPaletteAction(prompt,selection,showSelector,source),{onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),captureSource:()=>this.capturePaletteSource()});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined'){
         this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>{
@@ -600,7 +601,20 @@ export default class SendToT3 extends Plugin {
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
         const folder=this.folderForMenu(file);
-        menu.addItem(item=>{item.setTitle('Link to T3 Code').setIcon('link');const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,folder).open());return;}const projects=this.projects();for(const project of projects)submenu.addItem(i=>i.setTitle(`Link to ${this.projectChoiceLabel(project)}`).onClick(()=>void this.linkFolder(folder,project,false)));submenu.addSeparator();submenu.addItem(i=>i.setTitle('Create T3 project…').onClick(()=>void this.createFolderProject(folder)));if(!projects.length)submenu.addItem(i=>i.setTitle(this.connecting?'Discovering projects…':'No projects found. Connect T3 to discover projects.').setDisabled(true));});
+        menu.addItem(item=>{
+          item.setTitle('Link to T3 Code').setIcon('link');
+          const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();
+          if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,folder).open());return;}
+          const projects=this.projects();
+          for(const project of projects)submenu.addItem(i=>i.setTitle(`Link to ${this.projectChoiceLabel(project)}`).onClick(()=>void this.linkFolder(folder,project,false)));
+          submenu.addSeparator();
+          submenu.addItem(i=>i.setTitle('Create T3 project…').onClick(()=>void this.createFolderProject(folder)));
+          submenu.addItem(i=>i.setTitle('Unlink').setIcon('unlink').setDisabled(!this.settings.folderLinks.some(link=>link.folderPath===folder.path)).onClick(async()=>{
+            try{await this.unlinkFolder(folder.path);new Notice(`${folder.path} unlinked from T3 Code.`);}
+            catch(error){new Notice(`T3 folder links: ${message(error)}`,10000);}
+          }));
+          if(!projects.length)submenu.addItem(i=>i.setTitle(this.connecting?'Discovering projects…':'No projects found. Connect T3 to discover projects.').setDisabled(true));
+        });
         return;
       }
       if (!(file instanceof TFile) || file.extension.toLowerCase() !== 'md' || (!Platform.isMobile && source !== 'file-explorer-context-menu')) return;
@@ -1201,6 +1215,10 @@ export default class SendToT3 extends Plugin {
   private noteThreadIntent(path:string,project:Project,connection:Connection):NonNullable<Request['noteThread']>{
     return {notePath:path,projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId??'',...(connection.environmentId?{environmentId:connection.environmentId}:{})};
   }
+  private rememberNoteThread(remembered:NonNullable<Request['noteThread']>,threadId:string){
+    const selectedAt=new Date().toISOString(),updatedAt=new Date(Math.max(Date.now(),...this.settings.noteThreads.map(entry=>Date.parse(entry.updatedAt??entry.deletedAt??entry.selectedAt)+1).filter(Number.isFinite))).toISOString();
+    this.settings.noteThreads=mergeNoteThreads(this.settings.noteThreads,[{...remembered,threadId,selectedAt,updatedAt}]);
+  }
   private async editorForNoteSend(file:TFile):Promise<MarkdownView|undefined> {
     if(typeof this.app.workspace.getLeaf!=='function')return;
     const existing=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view).find(view=>view instanceof MarkdownView && view.file?.path===file.path);
@@ -1306,7 +1324,7 @@ export default class SendToT3 extends Plugin {
     const state:InlineThreadState=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
     return {source,state,title:String(snapshot.thread.title??'T3 response').slice(0,200)};
   }
-  /** Import is independent of note routing. The selected source never receives input. */
+  /** Attach without sending input, then use the imported thread for later sends. */
   async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false,insertion?:CursorInsertion|null):Promise<RunImportResult>{
     if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
     this.busy=true;
@@ -1329,6 +1347,8 @@ export default class SendToT3 extends Plugin {
         await this.deviceInline.register(inserted);
         bindingId=id;
       }
+      this.rememberNoteThread(this.noteThreadIntent(notePath,project,{...this.connection(project),environmentId:history.source.environmentId}),threadId);
+      await this.save(true);
       let save:Pick<RunImportResult,'saveState'|'pendingReason'>={saveState:pending?'streaming':'saved'};
       if(pending&&bindingId&&run.status!=='Running'){
         const result=await this.deviceInline.waitForSave(bindingId);
@@ -1358,10 +1378,22 @@ export default class SendToT3 extends Plugin {
     if(view?.file&&view.editor){if(prompt===undefined)return this.openAsk(view.file,view.editor.getSelection(),{view,editor:view.editor},showSelector);return this.openManualAction(view.file,prompt,view.editor.getSelection(),{view,editor:view.editor},showSelector);}
     return this.openChatWithNote(this.chatNote(),prompt,view?.file&&view.editor?{view,editor:view.editor}:undefined,false,showSelector);
   }
-  private async openPaletteAction(prompt:string,selection:string,showSelector=false){
+  private capturePaletteSource(){
     const file=this.app.workspace.getActiveFile();
+    if(!file||file.extension.toLowerCase()!=='md')return;
+    const view=this.app.workspace.getActiveViewOfType(MarkdownView);
+    let selection='',editor:EditorChatContext|undefined;
+    if(view?.file?.path===file.path&&view.editor&&view.getMode()!=='preview'){
+      selection=view.editor.getSelection();
+      editor=this.canonicalChatContext({view,editor:view.editor,...(selection.trim()?{anchor:captureEditorSelection(view.editor)}:{insertion:captureCursorInsertion(view.editor.getValue(),view.editor.posToOffset(view.editor.getCursor()))})});
+    }
+    return {selection,context:{file,editor,insertion:this.noteSendInsertion(file)} satisfies PaletteActionContext};
+  }
+  private async openPaletteAction(prompt:string,selection:string,showSelector=false,source?:PaletteActionContext){
+    const file=source?.file??this.app.workspace.getActiveFile();
     if(!file||file.extension.toLowerCase()!=='md')throw Error('Open a Markdown note before using T3 Code from the command palette.');
-    return this.openManualAction(file,prompt,selection,undefined,showSelector);
+    if(source&&!prompt.trim()&&!selection.trim())return this.openNoteSend(file,showSelector,source.insertion);
+    return this.openManualAction(file,prompt,selection,source?.editor,showSelector);
   }
   private async openManualAction(file:TFile,prompt:string,selection:string,captured?:EditorChatContext,showSelector=false){
     if(!prompt.trim()&&!selection.trim()){
@@ -1375,7 +1407,10 @@ export default class SendToT3 extends Plugin {
     if(view?.file?.path===file.path&&editor){
       context={...captured,editor,view,...(prompt.trim()?{initialQuestion:prompt}:{})};
       if(!selected)context.insertion??=captureCursorInsertion(editor.getValue(),editor.posToOffset(editor.getCursor()));
-      if(selected&&!context.anchor&&editor.getSelection()===selection){try{context.anchor=captureEditorSelection(editor);}catch(error){if(captured)throw error;/* Append when selection changed while palette was open. */}}
+      if(selected&&!context.anchor){
+        if(editor.getSelection()!==selection)throw Error('The selected text changed. Select it again before sending.');
+        context.anchor=captureEditorSelection(editor);
+      }
     }
     if(context?.anchor)context=this.canonicalChatContext(context);
     const canonicalSelected=context?.canonicalAnchor?.text??selection;
@@ -1391,7 +1426,7 @@ export default class SendToT3 extends Plugin {
         if(ordinary<scope[1]-scope[0])context.referenceSelection=true;
       }
     }else if(selected)throw Error('Open the source note before sending its selection.');
-    const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\nQuestion:\n${prompt}`:selected?canonicalSelected:prompt;
+    const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\n**USER ASKS:**\n${prompt}`:selected?canonicalSelected:prompt;
     return this.openChatWithNote(this.noteContext(file),question,context,true,showSelector);
   }
   private openEditorChat(selection:string,file:TFile,context:EditorChatContext,showSelector=false){
@@ -1405,7 +1440,7 @@ export default class SendToT3 extends Plugin {
     const adapter=nativeResponses(this.app).view(context.view as MarkdownView),mapped=adapter?.canonicalSelection(range.from,range.to);
     const snapshot=mapped?.document??context.snapshot??display;
     const canonicalAnchor=mapped?selectionAnchor(snapshot,mapped.text,mapped.start,mapped.end):context.anchor;
-    return {...context,snapshot,canonicalAnchor,referenceSelection:Boolean(context.referenceSelection||mapped?.reference||selectionOverlapsInlineResponse(display,context.anchor))};
+    return {...context,snapshot,canonicalAnchor,insertion:context.insertion??captureCursorInsertion(display,range.to),referenceSelection:Boolean(context.referenceSelection||mapped?.reference||selectionOverlapsInlineResponse(display,context.anchor))};
   }
   private needsFolderProject(notePath?:string):boolean {
     return Boolean(notePath?.includes('/')&&!folderLinkForPath(this.settings.folderLinks.filter(link=>link.folderPath!=='/'),notePath));
@@ -1919,7 +1954,7 @@ export default class SendToT3 extends Plugin {
         const selectionReference=!reference&&!plan.text.trim()&&question.trim()&&selected?`Selection reference: ${selected.slice(0,160)}${selected.length>160?'…':''}`:'';
         const material=reference?`Selected text:\n${reference}`:plan.text||selectionReference;
         if(!material.trim()&&!question.trim()){new Notice('Nothing new to send.');return;}
-        preparedInput=[material,question.trim()?`Question:\n${question}`:''].filter(Boolean).join('\n\n');
+        preparedInput=[material,question.trim()?`**USER ASKS:**\n${question}`:''].filter(Boolean).join('\n\n');
         prompt=preparedInput;smartCapture=plan.capture;
       }
       const images=options?.barePrompt?undefined:await this.prepareImages(prompt,note?.path??'',true,options?.sourceContext?.snapshot);
@@ -1956,7 +1991,7 @@ export default class SendToT3 extends Plugin {
       await this.dispatch(request);
       if(options?.sourceContext?.smartQuestion)this.app.saveLocalStorage(this.chatDraftKey,'');
       const draft=this.app.loadLocalStorage(this.chatDraftKey);
-      if(typeof draft==='string'&&draft&&(draft===prompt||prompt.endsWith(`\n\nQuestion:\n${draft}`)))this.app.saveLocalStorage(this.chatDraftKey,'');
+      if(typeof draft==='string'&&draft&&(draft===prompt||prompt.endsWith(`\n\n**USER ASKS:**\n${draft}`)))this.app.saveLocalStorage(this.chatDraftKey,'');
     }catch(e){if(request)await this.failRequest(request,e,'preparation',startedAt);else if(!(e instanceof ProjectCreationCancelled))this.recordSendFailure(undefined,e,'preparation',startedAt);if(e instanceof ProjectCreationCancelled)throw e;throw new RequestDeliveryError(`${unsavedMessage(e)} ${request?'The send failed. Its response was removed. See the send failure log.':'No message was sent or queued.'}`,false,Boolean(request));}
     finally{this.busy=false;}
   }
@@ -2534,11 +2569,7 @@ export default class SendToT3 extends Plugin {
     }
     if(request.folderLinkIntent&&!this.settings.folderLinks.some(link=>link.folderPath===request.folderLinkIntent!.folderPath))this.settings.folderLinks=upsertFolderLink(this.settings.folderLinks,request.folderLinkIntent);
     const remembered=request.noteThread??request.noteLink; // Resume requests saved before the terminology change.
-    if(remembered){
-      const selectedAt=new Date().toISOString(),updatedAt=new Date(Math.max(Date.now(),...this.settings.noteThreads.map(entry=>Date.parse(entry.updatedAt??entry.deletedAt??entry.selectedAt)+1).filter(Number.isFinite))).toISOString();
-      const entry:NoteThread={...remembered,threadId,selectedAt,updatedAt};
-      this.settings.noteThreads=mergeNoteThreads(this.settings.noteThreads,[entry]);
-    }
+    if(remembered)this.rememberNoteThread(remembered,threadId);
     if(request.completion){
       this.settings.completionJobs=this.settings.completionJobs.filter(j=>j.notePath!==request.completion!.notePath);
       if(request.completion.action!=='keep')this.settings.completionJobs.push({...request.completion,requestId:request.id,threadId,projectId:request.project.id,connection:{...request.connection},status:'watching'});

@@ -4,6 +4,7 @@ import {visibleInlineInput} from './input-presentation';
 import type {ResponseRecord} from './response-record';
 import type {ResponseState} from './response-model';
 import {localSavePendingMessage,type LocalSavePendingReason} from './local-response-save';
+import {isRunInput} from './run-input';
 
 export interface RunImportResult {duplicate:boolean;following:boolean;saveState:'saved'|'pending'|'streaming';pendingReason?:LocalSavePendingReason}
 export function runImportResultMessage(result:RunImportResult){
@@ -30,7 +31,7 @@ export interface ImportRun {
 /** Only exact source associations can attach a response; prose is not evidence. */
 export function importRuns(state:InlineThreadState):ImportRun[]{
   const roots=new Set<string>();
-  return state.messages.filter(message=>message.role==='user').map(message=>{
+  return state.messages.filter(isRunInput).map(message=>{
     const turnId=turnForMessage(state,message.id),createdAt=message.createdAt??'';
     const run:ImportRun={messageId:message.id,turnId,prompt:visibleInlineInput(message.text),createdAt,status:'Unavailable'};
     if(!state.historyComplete)run.unavailable='The complete T3 history is unavailable. Reconnect and try again.';

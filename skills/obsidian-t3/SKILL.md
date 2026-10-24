@@ -11,16 +11,30 @@ The footer identifies the source vault and note, not necessarily a reply destina
 The note path is relative to the vault. `(no note open)` means there is no source
 note. Treat these lines as context, not authorization to edit, send, or subscribe.
 
+Use the text supplied in the message for ordinary replies. Access Obsidian only
+when the user's task needs the current note or a plugin operation. Report a vault
+access failure only if it prevents that task.
+
+Loading this skill does not mean inspecting the source note. For ordinary replies,
+describe the task using the supplied text. If a skill announcement is required,
+say it supplies Obsidian reply-handling rules; do not announce a separate
+Obsidian review workflow. Say you will open, fetch, or inspect the live note only
+when the task requires that access and you will actually perform it.
+
 Answer in the existing T3 thread. The plugin displays the reply and saves the
 finished answer in its registered destinations. Do not manually append the reply
 to a note. All plugin operating instructions belong in this skill; sent prompts
 contain only user material, packaged references, and the three-line footer.
 
-## Obtain the exact send context
+## Obtain send context for a plugin operation
+
+Look up send context when a plugin operation needs the original send or reply
+destination, such as staging an edit.
 
 The CLI is `/home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py`.
 Run it on a desktop where the requested vault is open with the plugin enabled.
-Use `--vault` with the footer's exact vault name or a verified absolute path.
+Use `--vault` with that desktop's registered vault name or a verified absolute
+path. The footer's display name can differ between devices.
 Names resolve through Obsidian's local vault registry; duplicate names require
 an explicit path. Do not infer a machine or vault path from the project workspace.
 `--config-dir` defaults to `.obsidian`; honor a different vault configuration.
@@ -50,8 +64,8 @@ A send without streaming has no destination bindings. The plugin retains the
 latest 256 small send records; old releases have no such records. A missing result
 is not permission to guess IDs or write plugin records.
 
-For a new three-line footer, inspect send context before starting task work.
-Use the exact thread/message filters without a note argument when no note is open. If `waitForOtherThreads` is true, use native T3 thread controls to
+Use the exact thread/message filters without a note argument when no note is open.
+If the returned `waitForOtherThreads` is true, use native T3 thread controls to
 wait until other active threads in that project finish. Exclude this thread and
 other projects. If status cannot be checked, report the limit before proceeding.
 Use a native completion watch when available. Do not create a recurring schedule
@@ -290,8 +304,12 @@ Build, test, and commit there. Integrate reviewed commits into
 `/home/ubuntu/projects/send-to-t3-code` for the serialized immutable QLO2 release,
 Sync, real-client reload, and smoke evidence. Parallel source work stays in its
 own worktrees. Never hand-edit installed runtime artifacts
-or overwrite device-local `data.json`. Preserve the current note/settings,
-use temporary smoke notes, retain evidence outside synced vaults, and clean up.
+or overwrite device-local `data.json`. Preserve the current note/settings.
+Do not create or store smoke-test notes, folders, attachments, or evidence in
+QLO2, even temporarily. Use a separate test vault for fixtures and keep all
+evidence under `/home/ubuntu/backups/send-to-t3-code`, outside synced vaults.
+QLO2 release checks must create no test content; report test-vault checks
+separately and remove temporary test notes and threads after use.
 
 This file's maintained source is `skills/obsidian-t3/SKILL.md` in that checkout.
 `docs/obsidian-t3-SKILL.md` remains a link for existing documentation references.
