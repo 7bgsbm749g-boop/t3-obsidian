@@ -2,14 +2,20 @@
 
 Click or tap an active response callout to reveal a square Stop button at its
 top right. Keyboard focus inside the callout also reveals it. The native button
-has a `Stop T3 response` accessible name, a visible focus outline and a 44 × 44
-CSS pixel target. It stays at the top while the separate follow action can move
-to the bottom. Header space prevents the controls from covering the title.
+has a `Stop T3 response` accessible name, a visible focus outline and a compact
+24 × 24 CSS pixel target with a 14 × 14 square icon. It uses Obsidian's native
+icon-button styling with a transparent resting background. It stays centered
+on the natural header while the separate follow action can move to the bottom.
+The header has no forced minimum height.
 
-The controller stores reveal state per response, fold and Markdown pane. It
-does not write note content or intercept ordinary selection, links, folding or
-touch scrolling. Reveal happens on click, after the first tap has its target,
-so a tap where the button will appear cannot accidentally press Stop.
+Only the currently selected response in its Markdown pane reveals Stop.
+Clicking or tapping outside it, selecting another response, or moving keyboard
+focus outside it dismisses Stop. Internal focus transitions, including focus
+into Stop, keep it usable. There is no dismissal timeout or saved reveal state.
+Follow moves aside and title space is reserved only while Stop is visible;
+both return immediately when it is dismissed. The controller does not write
+note content or intercept ordinary selection, links, folding or touch scrolling.
+The first reveal click does not activate Stop.
 
 Activation rechecks the current response identity and uses the existing
 `InlineChatManager.stopAt` path. This retains the visible transcript and uses
@@ -19,7 +25,38 @@ completed/saved responses, stopped responses and ambiguous or blocked views.
 Terminal eligibility is separate from the displayed fold key: a completion
 can arrive before its rendered text changes.
 
-## Verification on 2026-10-20
+## Compact-button correction verified on 2026-10-24
+
+- `npm test` passed the affected-system checks and required build. The final
+  validation selected 160 test files, executed 16 and reused 144 matching checks.
+  Seven controller regressions include immediate outside click/pointer/focus
+  dismissal, response and pane switching, internal focus transitions, activation
+  followed by blur, header centering, single-flight stopping and stale identity.
+- An isolated Obsidian 1.13.7 editor compared the old and corrected controller
+  and CSS using the same synthetic document, pane, dark theme and native input.
+  Before: Stop was 44 × 44, with a forced 44px header and permanently shifted
+  Follow. After: Stop is 24 × 24, its SVG is 14 × 14, and the short header is
+  naturally 22px tall both hidden and revealed. Stop and Follow share its center.
+- Native clicks verified initial hidden/normal Follow, reveal, click-away and
+  restored Follow, switching between two independent response boxes, expanded
+  and collapsed boxes, and wrapped titles in a 480px-wide desktop window.
+- Native Tab and Shift+Tab verified focus into Stop, internal transitions and
+  dismissal outside. Enter sent exactly one synthetic `thread.turn.interrupt`
+  for `thread-0` / `run-0`. The other stream accepted new tokens independently;
+  terminal state removed its control. Drag selection and reference navigation
+  remained usable. Saved Markdown and response anchors were retained.
+- All three fixture notes were deleted through Obsidian vault operations and
+  their absence was verified. No real T3 threads were created. QLO2 received no
+  fixtures or evidence. Narrow desktop coverage does not establish native
+  iPhone or Android behavior; those platforms were not tested. The recording
+  transport tests exact-run dispatch, not authenticated provider delivery.
+
+Evidence, rendered comparisons and the cleanup receipt are outside synced
+vaults under
+`/home/ubuntu/backups/send-to-t3-code/compact-stop-20261024T035223Z/`.
+`behavior-evidence.json` records the tested source hashes and individual files.
+
+## Original verification on 2026-10-20 (historical)
 
 - `npm run build` passed, including the final control spacing and fixture.
 - `npm test` passed: 1,203 JavaScript tests and 19 Python tests.
