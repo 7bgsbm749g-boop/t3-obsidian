@@ -5,10 +5,13 @@ history callouts. The replacement copies the native element's tag, classes and
 inline style, and retains the existing header alignment. Active history now offers the explicit **Follow response** button described in
 [click-response-scroll.md](click-response-scroll.md), while the edit and close
 actions stay hidden. A terminal preview is insufficient: the unique completed
-fold must exist in the saved document outside tracking markers.
+or interrupted fold must exist in the saved document outside tracking markers.
+Interrupted history retains its existing `:active` fold identity and expansion
+choice. Its exact generated **Interrupted** heading identifies it as terminal,
+including history saved by older versions.
 
 After the final save, the history and final answer are ordinary Markdown.
-The close button checks the unique completed fold in the current saved and
+The close button checks the unique terminal fold in the current saved and
 displayed editor documents, then deletes only its displayed Markdown range
 through Obsidian's normal editor transaction. Native autosave and Sync carry
 the change. Native Undo and Redo retain their normal behavior. No response host,
@@ -40,22 +43,33 @@ node scripts/build-native-response-lab.mjs /absolute/new/evidence --stream-close
 ```
 
 The command builds an unsynced synthetic vault and outputs its private profile.
-It does not launch a window. Observe project GUI coordination before launching.
-Its `control.json` mailbox accepts lifecycle setup and observation only:
+It does not launch a window. The current fixture presents saved interrupted and
+completed history, an independent active stream, and an unsaved interrupted
+preview. Only the saved terminal blocks can offer close. Its `action.json`
+mailbox accepts observation and cleanup only:
 
-- `{"kind":"snapshot"}` records current state in `stream-close.json`.
-- `{"kind":"complete-preview"}` presents completed history while the saved
-  response anchor remains empty. The close action must remain hidden.
-- `{"kind":"finish"}` runs the production coordinated writer to save and adopt
-  the final response. The close action must then appear.
+- `{"kind":"capture","name":"before-close"}` records editor, disk, control
+  state and trusted input events in `before-close.json`, with a native screenshot.
+- `{"kind":"cleanup"}` deletes all synthetic notes through the vault API and
+  records their absence. No T3 threads are created.
 
-Use real native input to click history text, drag-select and copy it, toggle
-history and tool summaries, follow the reference link, and click close. Record
-snapshots and screenshots outside the vault. Verify saved and displayed note
-text after close, including the final answer and ordinary before/after text.
-Check that an ordinary callout keeps its native edit action. This fixture has
+Use real native input to click close on the interrupted history and exercise
+Undo and Redo. Record snapshots and screenshots outside the vault. Verify saved
+and displayed note text after close, including the completed answer, independent
+active response, unsaved interrupted preview and ordinary before/after text.
+Verify that active output and the unsaved preview have no close action. This fixture has
 no live Sync, native mobile or authenticated T3 dispatch coverage. The release
 still requires a real QLO2 reload and smoke test with immutable evidence.
+
+Native verification on 2026-10-24 used the isolated Obsidian 1.13.7 editor.
+Saved interrupted and completed history showed the same X button; active output
+and the unsaved interrupted preview kept it hidden. A trusted native click
+removed exactly the interrupted history, autosave wrote the expected bytes,
+and native Undo and Redo restored and removed it. Independent responses and
+ordinary text remained. All synthetic notes were deleted through the vault API;
+no T3 threads were created. Evidence is retained at
+`/home/ubuntu/backups/send-to-t3-code/interrupted-close-native-20261024-ca3100d7-verified/verified.json`.
+This fixture does not establish native mobile behavior or real Sync propagation.
 
 Native fixture review on 2026-10-06 used Obsidian 1.13.7 and actual Cua input.
 Clicking kept history rendered; drag selection and Ctrl+C copied the selected

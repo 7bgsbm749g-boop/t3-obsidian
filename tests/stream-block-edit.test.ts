@@ -8,7 +8,7 @@ import {streamBlock,removeStreamBlock} from '../stream-block';
 import {responseAnchor} from '../native-response-projection';
 import {renderInlineTurn} from '../inline-thread';
 import {renderResponseToolGroup} from '../response-tools';
-import {historyFixture} from './fixtures/stream-history';
+import {historyFixture,interruptedHistoryFixture} from './fixtures/stream-history';
 
 function editor(document:string){
   let disk=document,saves=0;
@@ -38,6 +38,25 @@ test('completed history closes locally without a host, including unsaved text an
   h.adapter.setResponses([]);
   assert.equal(redo(h.cm),true);assert.equal(h.adapter.saved(),after);
   await h.view.save();assert.equal(h.disk(),after);h.adapter.dispose();
+});
+test('interrupted history closes through native undo and autosave while other responses remain',async()=>{
+  const {body,key}=interruptedHistoryFixture(),completed=withTools(),id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const document='Unsaved before\n\n'+body+'\n\n'+completed.body+'\n\n'+responseAnchor(id)+'\n\nAfter\n',h=editor(document);
+  h.adapter.setResponses([{id,body:'> Independent stream.'}]);
+  assert.equal(removeStreamBlockFromEditor(h.view,key,h.adapter.saved()),true);
+  const after=removeStreamBlock(document,key).text;
+  assert.equal(h.adapter.saved(),after);assert.ok(h.view.editor.getValue().includes('Independent stream.'));
+  assert.ok(after.includes(completed.body));assert.ok(after.includes(responseAnchor(id)));
+  await h.view.save();assert.equal(h.disk(),after);
+  assert.equal(undo(h.cm),true);assert.equal(h.adapter.saved(),document);
+  assert.equal(redo(h.cm),true);assert.equal(h.adapter.saved(),after);h.adapter.dispose();
+});
+test('an interrupted display that is not saved cannot be closed',()=>{
+  const {body,key}=interruptedHistoryFixture(),id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',h=editor(responseAnchor(id));
+  h.adapter.setResponses([{id,body}]);
+  const before=h.view.editor.getValue();
+  assert.equal(removeStreamBlockFromEditor(h.view,key,h.adapter.saved()),false);
+  assert.equal(h.view.editor.getValue(),before);assert.equal(h.saves(),0);h.adapter.dispose();
 });
 test('local close preserves another completed history and an independent active response',()=>{
   const first=withTools(),second=historyFixture(),otherBody=second.body.replaceAll(second.key,'independent:complete'),id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';

@@ -4,7 +4,28 @@ import {streamBlocks,streamBlock,removeStreamBlock} from '../stream-block';
 import {initialRegion} from '../inline-thread';
 import {contentHash} from '../completion';
 import {validateResponseCommand} from '../response-command';
-import {historyFixture} from './fixtures/stream-history';
+import {historyFixture,interruptedHistoryFixture} from './fixtures/stream-history';
+test('saved interrupted history can close with its existing active fold identity',()=>{
+  for(const title of ['New thread','A *marked* title · Interrupted','Title with \\ slashes']){
+    const {body,key}=interruptedHistoryFixture(title),note='Before\n\n'+body+'\n\nAfter';
+    assert.ok(key.endsWith(':active'));assert.equal(streamBlock(note,key)?.complete,true);
+    assert.equal(streamBlock(note,key)?.tracked,false);
+    const removed=removeStreamBlock(note,key,contentHash(streamBlock(note,key)!.text));
+    assert.equal(removed.text,note.slice(0,removed.from)+note.slice(removed.to));
+    assert.ok(removed.text.startsWith('Before\n\n'));assert.ok(removed.text.endsWith('\n\nAfter'));
+    assert.ok(!removed.text.includes('Retained interrupted output.'));
+  }
+});
+test('interrupted previews, duplicate identities and stale interrupted blocks stay protected',()=>{
+  const {body,key}=interruptedHistoryFixture(),id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const tracked=initialRegion(id).text.replace(/\*\*T3 · Working\*\*[\s\S]*?(?=<!-- t3-inline:end:)/,body);
+  assert.equal(streamBlock(tracked,key)?.tracked,true);assert.throws(()=>removeStreamBlock(tracked,key),/changed/);
+  assert.equal(streamBlock(body+'\n\n'+body,key),undefined);assert.throws(()=>removeStreamBlock(body+'\n\n'+body,key),/changed/);
+  assert.throws(()=>removeStreamBlock(body,key,'0'.repeat(64)),/changed/);
+  // A title or progress paragraph mentioning Interrupted is not terminal.
+  const active=body.replace(' · Interrupted**',' · Working**').replace('Retained interrupted output.',' · Interrupted**');
+  assert.equal(streamBlock(active,key)?.complete,false);assert.throws(()=>removeStreamBlock(active,key),/changed/);
+});
 test('exact Markdown history removal keeps the final answer and surrounding note bytes',()=>{
   const {body,key}=historyFixture(),note='Before\n\n'+body+'\n\nAfter';
   const block=streamBlock(note,key)!;assert.ok(block.complete);assert.ok(block.text.includes('Checking.'));assert.ok(!block.text.includes('Final answer stays.'));

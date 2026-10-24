@@ -4,3 +4,8 @@ export function historyFixture(streaming=false){
   const body=renderInlineTurn(state,'turn','thread','complete','collapse',undefined,undefined,undefined,undefined,{startedAt:'2026-10-06T10:00:00Z'});
   const key=/data-t3-fold="([^"]+)"/.exec(body)![1];return {body,key};
 }
+export function interruptedHistoryFixture(title='Interrupted history'){
+  const state:any={title,messages:[{id:'partial',role:'assistant',turnId:'interrupted-turn',text:'Retained interrupted output.',streaming:false}],activities:[],latestTurn:{turnId:'interrupted-turn',state:'interrupted'}};
+  const body=renderInlineTurn(state,'interrupted-turn','interrupted-thread','interrupted','collapse',undefined,undefined,undefined,undefined,{startedAt:'2026-10-24T10:00:00Z',finishedAt:'2026-10-24T10:00:27Z'});
+  const key=/data-t3-fold="([^"]+)"/.exec(body)![1];return {body,key};
+}
