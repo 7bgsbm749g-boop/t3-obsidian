@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "tests/response-emissions.test.ts": ["validation/thought-stream-lab.ts"],
     "tests/native-save-barrier.test.ts": ["validation/autosave-recovery-lab.ts"],
     "tests/cursor-send.test.ts": ["validation/palette-selection-lab.ts"],
     "tests/import-save.test.ts": ["validation/import-save-lab.ts"],

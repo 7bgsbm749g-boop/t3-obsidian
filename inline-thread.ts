@@ -16,7 +16,7 @@ import {delegatedWork} from './inline-delegation';
 import {mergeWorktreeHandoffs,resolveWorktreeHandoffs,type InlineWorktreeHandoff} from './inline-worktree';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
-export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;itemId?:string;updatedAt?:string;createdAt?:string;context?:unknown;createdBy?:string;creationSource?:string;senderThreadId?:string|null;senderThreadTitle?:string;delegatedCompletion?:{parentRunId:string;generation:number;taskIds:string[]}}
+export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;itemId?:string;sequence?:number;updatedAt?:string;createdAt?:string;context?:unknown;createdBy?:string;creationSource?:string;senderThreadId?:string|null;senderThreadTitle?:string;delegatedCompletion?:{parentRunId:string;generation:number;taskIds:string[]}}
 export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null;createdAt?:string;sequence?:number;payload?:Record<string,any>}
 export interface InlineTurn {turnId:string;state:string;messageId?:string;requestedAt?:string;completedAt?:string|null;assistantMessageId?:string|null;ordinal?:number;delegatedParentRunId?:string;delegatedCompletion?:{disposition:string;delivery?:{messageId:string;generation:number;taskIds:string[]}|null}}
 export interface InlineSubagent {id:string;runId:string;title?:string;status:string;origin?:string;completionWake?:string;completionDelivery?:{state:string;observedByRunId?:string}}

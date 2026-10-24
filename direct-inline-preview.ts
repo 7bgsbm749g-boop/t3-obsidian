@@ -132,7 +132,9 @@ export class DirectInlinePreview {
     // Session-ready can precede the final assistant message. Display can
     // update immediately, but completion requires non-streaming final prose.
     if(phase==='complete'&&(!inlineTurnMessages(this.state,turnId).length||inlineTurnMessages(this.state,turnId).at(-1)!.streaming))phase='running';
-    const current={...this.state,messages:mergeProse(this.prose,this.state.messages,this.turnIds),turns:{...this.record.state?.presentationTurns,...this.state.turns}};
+    // Prose retention is assistant-only. Keep public thought items and input
+    // boundaries in the display state as well, without treating them as prose.
+    const current={...this.state,messages:[...this.prose,...this.state.messages.filter(message=>message.role!=='assistant'&&this.turnIds.includes(message.turnId??''))],turns:{...this.record.state?.presentationTurns,...this.state.turns}};
     if(request.finalAnswerFormat==='raw-markdown')current.turns=rememberInlineTurns(current,this.turnIds,current.turns);
     const title=request.localOnly&&(phase==='complete'||phase==='interrupted')?request.threadTitle:this.state.title??request.threadTitle;
     const body=renderInlineTurn(current,turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,title,{startedAt:request.createdAt,finishedAt:phase==='complete'||phase==='interrupted'?completionTime(this.state,turnId):undefined},finalAnswerFormat(request.finalAnswerFormat));

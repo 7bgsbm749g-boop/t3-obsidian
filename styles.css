@@ -329,6 +329,9 @@
 .callout[data-callout="t3-thought"] { --callout-icon: lucide-brain; }
 .callout[data-callout="t3-plan"] { --callout-icon: lucide-list-checks; }
 .callout[data-callout="t3-thought"] > .callout-title, .callout[data-callout="t3-plan"] > .callout-title { font-size: var(--font-smaller); font-weight: normal; color: var(--text-muted); }
+.callout[data-callout="t3-thought"] > .callout-title > .callout-title-inner { display: flex; align-items: baseline; flex: 1; gap: .35em; font-weight: inherit; }
+.send-to-t3-thought-time { margin-inline-start: auto; font-size: var(--font-ui-smaller); font-weight: normal; font-variant-numeric: tabular-nums; }
+.callout[data-callout="t3-thought"] > .callout-content { padding-inline-start: 1.7em; }
 
 .send-to-t3-destination-top {
   display: flex;
