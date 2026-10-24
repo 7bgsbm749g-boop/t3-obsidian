@@ -43,7 +43,8 @@ export class NativeResponseView {
   private materialized=new Set<string>();
   private localMaterialized=new Set<string>();
   private knownLocal=new Set<string>();
-  private ownSave?:{text:string};
+  private ownSave?:{text:string;native?:boolean};
+  private incomingRevision=0;
   private materialization?:{before:string;after:string;ids:string[]};
   private scroll:ResponseScroll;
   private moveEditor?:object;
@@ -55,7 +56,7 @@ export class NativeResponseView {
     this.originalSave=view.save;
     this.originalRequestSave=view.requestSave;
     this.requestSaveWrapper=()=>{if(this.unloading&&this.blocked)return;if(this.saveFences){this.deferredSave=true;return;}return this.originalRequestSave.call(view);};
-    this.getWrapper=()=>this.saved();
+    this.getWrapper=()=>{const text=this.saved();this.observeNativeSave(text);return text;};
     this.setWrapper=(incoming,clear)=>this.incoming(incoming,clear);
     this.saveWrapper=async clear=>{
       if(this.unloading&&this.blocked)return;
@@ -67,7 +68,7 @@ export class NativeResponseView {
       // Obsidian's save can return before its debounce reaches disk. Recognize
       // that exact own intent on the next read before merging a later edit or
       // undo against the older baseline. The actual disk bytes remain proof.
-      if(this.ownSave&&previousDisk===this.ownSave.text){this.base=previousDisk;this.diskBase=previousDisk;this.ownSave=undefined;}
+      if(previousDisk!==undefined)this.acknowledgeOwnSave(previousDisk);
       // A completed file can arrive before its native notification or lease.
       // Check only previously saved response anchors here. Ordinary autosave
       // can bypass view.save, and cross-pane echoes can be ahead of disk; an
@@ -173,10 +174,41 @@ export class NativeResponseView {
   }
   private restoreSaved(display:string){return this.restoreSavedTools(savedProjection(display,this.projection));}
   private displayed(){return this.originalGet.call(this.view);}
+  private nativeCheckpoint(){return this.saveBaseline?this.saveBaseline.value:(this.view as any).lastSavedData;}
+  /** TextFileView's debounce retains its original save function. Its call to
+   * getViewData is followed synchronously by lastSavedData and saving=true.
+   * Observe that capture on the next microtask; ordinary reads and incoming
+   * pane updates alone are not evidence of a native save. Disk readback still
+   * has to match before this checkpoint advances the merge baseline. */
+  private observeNativeSave(text:string){
+    const native=this.view as any;
+    if(this.saveFences||native.saving!==false||native.lastSavedData===text)return;
+    const revision=this.incomingRevision;
+    void Promise.resolve().then(()=>{
+      if(this.disposed||this.view.file!==this.file||revision!==this.incomingRevision||native.saving!==true)return;
+      if(this.nativeCheckpoint()===text)this.ownSave={text,native:true};
+    });
+  }
+  private acknowledgeOwnSave(document:string){
+    if(this.ownSave?.text!==document)return;
+    if(this.ownSave.native){
+      const native=this.view as any,checkpoint=this.nativeCheckpoint();
+      if(native.saving!==false)return;
+      if(checkpoint!==document){this.ownSave=undefined;return;}
+    }
+    // A conflict may have been recorded before the captured autosave was
+    // observed. Rebase only on this proven own write, never on arbitrary disk
+    // text or a common prefix. Keep current local typing for the retry.
+    if(this.blocked&&!this.blocked.unsafeIncoming)this.blocked={...this.blocked,base:document};
+    this.base=document;this.diskBase=document;this.ownSave=undefined;
+  }
   saved():string {
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
     return this.localSaved();
   }
+  /** Discovery can schedule recovery for a blocked pane. This is a read-only
+   * projection; all file writes continue to use saved() and the save fence. */
+  recoveryDocument():string {return this.conflictLocal();}
   private localSaved():string {
     const display=this.displayed();
     if(!this.projection.ranges.length&&display===this.projection.saved)return display;
@@ -255,6 +287,7 @@ export class NativeResponseView {
   }
   private incoming(incoming:string,clear:boolean){
     if(this.disposed)return this.originalSet.call(this.view,incoming,clear);
+    this.incomingRevision++;
     if(this.view.file!==this.file){this.unwrap();return this.originalSet.call(this.view,incoming,clear);}
     const attemptedIncoming=incoming;
     // Another pane can echo the committed file with remaining local response
@@ -286,7 +319,7 @@ export class NativeResponseView {
     const localIds=this.localIds(this.base);
     for(const id of localIds)this.localMaterialized.add(id);
     this.responses=this.responses.filter(response=>!localIds.has(response.id)||!!responseRegion(incoming,response.id));
-    if(this.ownSave?.text===incoming)this.base=incoming;
+    if(this.ownSave?.text===incoming&&(!this.ownSave.native||this.nativeCheckpoint()===incoming))this.base=incoming;
     const edits=changedEdits(this.base,local);
     if([...this.materialized].some(id=>!this.localMaterialized.has(id)&&responseRegion(incoming,id))){this.block({base:this.base,local,incoming,reason:'An incoming note resurrected an already materialized response anchor.'});return;}
     // Obsidian may load our own just-saved projection during a mode switch or
@@ -327,7 +360,11 @@ export class NativeResponseView {
     this.base=disk;this.diskBase=disk;this.blocked=undefined;this.unloading=false;this.ownSave=undefined;this.projection=projection;this.render(projection.display,false);
   }
   confirmPendingConflict(reason:string){if(this.blocked?.awaitingCompletion)this.block({...this.blocked,reason,awaitingCompletion:false});}
-  reconcileDisk(document:string){if(document!==this.diskBase){this.incoming(document,false);if(!this.blocked)this.diskBase=document;}}
+  reconcileDisk(document:string){
+    this.acknowledgeOwnSave(document);
+    if(this.blocked){if(!this.blocked.unsafeIncoming)this.adoptSaved(document);this.saved();return;}
+    if(document!==this.diskBase){this.incoming(document,false);if(!this.blocked)this.diskBase=document;}
+  }
   /** A newly attached pane can already contain unsaved ordinary text. Use
    * the native saved baseline and a fenced full disk read before treating its
    * creation bytes as a final-write snapshot. Compact summaries never supply
@@ -435,7 +472,7 @@ export class NativeResponseView {
     }};
     try{
       (this.originalRequestSave as any)?.cancel?.();
-      if(!review)this.saved();
+      if(!review&&!this.blocked)this.saved();
       if(this.saveFences===1){
         // TextFileView's requestSave closes over its constructor-bound save.
         // That debounce cannot be cancelled through requestSave. While held,
@@ -452,8 +489,13 @@ export class NativeResponseView {
       const deadline=Date.now()+5000;
       const drain=async()=>{while((this.view as any).saving){if(Date.now()>=deadline)throw Error('Waiting for a native save before final delivery.');await new Promise(resolve=>setTimeout(resolve,10));}};
       await drain();
-      await this.readSaved();
-      if(this.disposed)throw Error('The native view closed before final delivery.');
+      const disk=await this.readSaved();
+      if(this.disposed||this.view.file!==this.file)throw Error('The native view closed before final delivery.');
+      if(disk!==undefined){
+        this.acknowledgeOwnSave(disk);
+        if(!review&&this.blocked&&!this.blocked.unsafeIncoming)this.adoptSaved(disk);
+      }
+      if(!review)this.saved();
       return release;
     }catch(error){release();throw error;}
   }

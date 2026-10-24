@@ -5,7 +5,7 @@ import {NativeResponseManager} from '../native-response-manager';
 import {responseAnchor} from '../native-response-projection';
 import type {ResponseRecord} from '../response-record';
 import type {NativeStoppedResponse,NativeStoppedStore} from '../native-stop-store';
-import {deviceFinalNoteIO} from '../inline-note-io';
+import {deviceFinalNoteIO,deviceNoteIO} from '../inline-note-io';
 import {nativeResponses} from '../native-response-manager';
 import {renderResponseToolGroup} from '../response-tools';
 import {presentToolGroups} from '../response-tool-presentation';
@@ -70,6 +70,72 @@ test('final save drains a constructor-bound native save that already captured th
   const final=saved.replace(responseAnchor(id),body);h.adapter.prepareMaterialization(saved,final,[id]);h.setDisk(final);assert.equal(h.adapter.acceptCommitted(final,[id]),true);release();
   if(h.panes[0].queued())await h.panes[0].fire();await nextTurn();
   assert.equal(h.disk(),final);assert.doesNotMatch(h.disk(),/t3-response:start/);assert.equal(h.disk().split('Earlier ordinary edit').length-1,1);h.adapter.dispose();
+});
+
+test('a constructor-bound autosave is recognized before final delivery and the next note send',async()=>{
+  const h=nativeFixture();h.view.getMode=()=> 'source';h.view.editor={getValue:()=>h.visible()};
+  const manager=nativeResponses(h.app);await manager.receive(record());const io=deviceFinalNoteIO(h.app,()=>true);
+  assert.equal(await io.read('Note.md'),before); // Initialize this pane before the later autosave.
+  h.edit(h.visible().replace('Ordinary text','Ordinary text a'));h.view.requestSave();await h.panes[0].fire();
+  h.edit(h.visible().replace('Ordinary text a','Ordinary text ab'));
+  const latest=(await io.read('Note.md'))!;assert.equal(latest,before.replace('Ordinary text','Ordinary text ab'));
+  h.app.vault.process=async(_file:unknown,change:(text:string)=>string)=>{h.setDisk(change(h.disk()));h.view.setViewData(h.disk(),false);return h.disk();};
+  const final=latest.replace(responseAnchor(id),body);assert.equal(await io.compareAndSet('Note.md',latest,final),true);
+  assert.equal(manager.view(h.view)!.conflictRecord(),undefined);assert.equal(manager.view(h.view)!.canonicalDisplayed(),final);
+  const next='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',notes=deviceNoteIO(h.app);
+  assert.equal(await notes.readNote('Note.md'),final);
+  const registered=await notes.updateNote('Note.md',text=>text+'\n\n'+responseAnchor(next),()=>true);
+  assert.equal(registered,final+'\n\n'+responseAnchor(next));assert.equal(h.disk(),registered);manager.dispose();
+});
+
+test('a captured autosave draining behind the final fence retains the next keystroke at the same position',async()=>{
+  const h=nativeFixture();h.view.getMode=()=> 'source';h.view.editor={getValue:()=>h.visible()};
+  const manager=nativeResponses(h.app);await manager.receive(record());const io=deviceFinalNoteIO(h.app,()=>true);await io.read('Note.md');
+  const gate=deferred();h.blockAdapter(gate.promise);h.edit(h.visible().replace('Ordinary text','Ordinary text a'));h.view.requestSave();
+  const native=h.panes[0].fire();h.edit(h.visible().replace('Ordinary text a','Ordinary text ab'));
+  const reading=io.read('Note.md');await nextTurn();gate.resolve();await native;
+  assert.equal(await reading,before.replace('Ordinary text','Ordinary text ab'));assert.equal(manager.view(h.view)!.conflictRecord(),undefined);manager.dispose();
+});
+
+test('a blocked final save can confirm a previously captured own autosave and keep current typing',async()=>{
+  const h=nativeFixture(),adapter=new NativeResponseView(h.view,before,()=>{},async()=>h.disk());adapter.setResponses([{id,body}]);
+  const older=before.replace('Ordinary text','Ordinary text a'),local=before.replace('Ordinary text','Ordinary text ab');
+  h.edit(h.visible().replace('Ordinary text','Ordinary text a'));h.view.requestSave();const native=h.panes[0].fire();
+  h.edit(h.visible().replace('Ordinary text a','Ordinary text ab'));
+  adapter.preserveConflict({base:before,local,incoming:older,reason:'Generated and ordinary edits overlap or touch. Both versions are preserved.'});
+  assert.throws(()=>adapter.saved(),/overlap/);assert.equal(adapter.recoveryDocument(),local);await native;
+  const release=await adapter.beginFinalSave();assert.equal(adapter.conflictRecord(),undefined);assert.equal(adapter.saved(),local);
+  release();adapter.dispose();
+});
+
+test('a quiet blocked retry reads fresh disk and clears an obsolete conflict without a write',async()=>{
+  const h=nativeFixture(),adapter=new NativeResponseView(h.view,before,()=>{},async()=>h.disk());adapter.setResponses([{id,body}]);
+  const local=before.replace('Ordinary text','Local ordinary text');h.edit(h.visible().replace('Ordinary text','Local ordinary text'));
+  adapter.preserveConflict({base:before,local,incoming:before.replace('Ordinary text','Competing text'),reason:'Generated and ordinary edits overlap or touch. Both versions are preserved.'});
+  h.setDisk(local);const release=await adapter.beginFinalSave();
+  assert.equal(adapter.conflictRecord(),undefined);assert.equal(adapter.saved(),local);assert.deepEqual(h.writes,[]);release();adapter.dispose();
+});
+
+test('ordinary reads and a matching text prefix do not prove an own autosave or clear a real conflict',async()=>{
+  const h=nativeFixture(),adapter=new NativeResponseView(h.view,before,()=>{},async()=>h.disk());adapter.setResponses([{id,body}]);
+  h.edit(h.visible().replace('Ordinary text','Ordinary text a'));h.view.getViewData();await nextTurn();
+  h.edit(h.visible().replace('Ordinary text a','Ordinary text ab'));h.setDisk(before.replace('Ordinary text','Ordinary text a'));
+  adapter.reconcileDisk(h.disk());assert.ok(adapter.conflictRecord());
+  await assert.rejects(adapter.beginFinalSave(),/overlap/);assert.throws(()=>adapter.saved(),/overlap/);
+  h.edit(h.visible().replace('Ordinary text ab','Ordinary text abc'));
+  assert.equal(adapter.recoveryDocument(),before.replace('Ordinary text','Ordinary text abc'));
+  assert.deepEqual(h.writes,[]);adapter.dispose();
+});
+
+test('failed native autosave capture cannot certify a later foreign file with the same bytes',async()=>{
+  for(const incoming of [false,true]){
+    const h=nativeFixture(),adapter=new NativeResponseView(h.view,before,()=>{},async()=>h.disk());adapter.setResponses([{id,body}]);
+    h.app.vault.modify=async()=>{throw Error('Synthetic failed write');};
+    h.edit(h.visible().replace('Ordinary text','Ordinary text a'));h.view.requestSave();await assert.rejects(h.panes[0].fire(),/failed write/);
+    h.edit(h.visible().replace('Ordinary text a','Ordinary text ab'));h.setDisk(before.replace('Ordinary text','Ordinary text a'));
+    if(incoming)h.view.setViewData(h.disk(),false);else adapter.reconcileDisk(h.disk());
+    assert.ok(adapter.conflictRecord());await assert.rejects(adapter.beginFinalSave(),/overlap/);adapter.dispose();
+  }
 });
 
 test('a late constructor-bound debounce cannot write during final delivery, including an edit made while held',async()=>{
