@@ -35,10 +35,13 @@ test('Stop requires one explicitly active response; completion, conflicts and a 
 class Element {
   parentElement:Element|null=null;children:Element[]=[];hidden=false;disabled=false;type='';className='';attrs=new Map<string,string>();
   classes=new Set<string>();classList={add:(name:string)=>this.classes.add(name),remove:(name:string)=>this.classes.delete(name)};
+  styles=new Map<string,string>();style={setProperty:(name:string,value:string)=>this.styles.set(name,value),removeProperty:(name:string)=>this.styles.delete(name)};clientTop=0;
+  rect={top:10,height:20};getBoundingClientRect(){return this.rect;}
   constructor(readonly kind='text'){}
   appendChild(child:Element){child.remove();this.children.push(child);child.parentElement=this;return child;}
   remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(child=>child!==this);this.parentElement=null;}
-  closest(selector:string):Element|null {return selector.startsWith('.callout')?this.kind==='fold'?this:this.parentElement?.closest(selector)??null:this.className==='send-to-t3-stream-stop'?this:this.parentElement?.closest(selector)??null;}
+  closest(selector:string):Element|null {const match=selector.startsWith('.callout')?this.kind==='fold':selector==='.cm-embed-block'?this.kind==='widget':this.className.split(' ').includes('send-to-t3-stream-stop');return match?this:this.parentElement?.closest(selector)??null;}
+  querySelector(selector:string):Element|undefined {return selector.includes('callout-title')?this.children.find(child=>child.kind==='heading'):this.children.find(child=>child.kind==='fold')??this.children.map(child=>child.querySelector(selector)).find(Boolean);}
   setAttribute(name:string,value:string){this.attrs.set(name,value);}
 }
 function fixture(stop:(target:StreamStopTarget)=>Promise<void>=async()=>{}){
@@ -49,9 +52,9 @@ function fixture(stop:(target:StreamStopTarget)=>Promise<void>=async()=>{}){
   for(const fold of folds)root.body.appendChild(fold);
   const errors:unknown[]=[],calls:StreamStopTarget[]=[];
   const dispose=installStreamStopControls(root,fold=>targets.get(fold as any),async target=>{calls.push(target);await stop(target);},(button,name)=>{assert.equal(name,'square');button.setAttribute('data-icon',name);},error=>errors.push(error));
-  const fire=(type:string,target:Element)=>{const event=new Event(type,{cancelable:true});Object.defineProperty(event,'target',{value:target});root.dispatchEvent(event);return event;};
+  const fire=(type:string,target:Element,relatedTarget:Element|null=null)=>{const event=new Event(type,{cancelable:true});Object.defineProperty(event,'target',{value:target});Object.defineProperty(event,'relatedTarget',{value:relatedTarget});if(type==='focusin')root.activeElement=target;if(type==='focusout')root.activeElement=relatedTarget;root.dispatchEvent(event);return event;};
   const flush=async()=>{mutated();await new Promise(resolve=>setImmediate(resolve));};
-  return {root,folds,targets,view,errors,calls,fire,flush,button:(i=0)=>folds[i].children.find(child=>child.className==='send-to-t3-stream-stop')!,dispose:()=>{dispose();globalThis.MutationObserver=savedObserver;}};
+  return {root,folds,targets,view,errors,calls,fire,flush,button:(i=0)=>folds[i].children.find(child=>child.className.split(' ').includes('send-to-t3-stream-stop'))!,dispose:()=>{dispose();globalThis.MutationObserver=savedObserver;}};
 }
 test('click, touch-generated click and keyboard focus reveal only their box without cancelling links or selection',async()=>{
   const h=fixture();try{
@@ -63,10 +66,44 @@ test('click, touch-generated click and keyboard focus reveal only their box with
     assert.equal(h.fire('click',link).defaultPrevented,false);assert.equal(otherListener,1,'Link/title handlers still receive the click');
     assert.equal(h.calls.length,0);assert.equal(h.button().hidden,false);assert.equal(h.button(1).hidden,true);
     assert.equal(h.button().attrs.get('aria-label'),'Stop T3 response');
-    h.fire('focusin',h.folds[1]);assert.equal(h.button(1).hidden,false);
+    assert.ok(h.button().className.split(' ').includes('clickable-icon'),'Use Obsidian icon styling instead of its filled text-button styling');
+    h.fire('focusin',h.folds[1]);assert.equal(h.button(1).hidden,false);assert.equal(h.button().hidden,true,'Focus in another response dismisses the previous Stop');
+    h.fire('click',h.folds[0]);assert.equal(h.button(1).hidden,true);
     const replacement=new Element('fold');h.root.body.appendChild(replacement);h.targets.set(replacement,h.targets.get(h.folds[0])!);h.targets.delete(h.folds[0]);h.folds[0]=replacement;await h.flush();
     assert.equal(h.button().hidden,false,'Token replacement preserves revealed state in the same pane');
     h.targets.set(replacement,{id,key:'different-run:active',view:h.view});await h.flush();assert.equal(h.button().hidden,true);
+  }finally{h.dispose();}
+});
+test('outside clicks, taps and focus dismiss immediately; entering another pane cannot revive an old reveal',async()=>{
+  const h=fixture();try{
+    const outside=new Element();h.root.body.appendChild(outside);
+    h.fire('click',h.folds[0]);assert.equal(h.button().hidden,false);
+    assert.equal(h.fire('pointerdown',outside).defaultPrevented,false);assert.equal(h.button().hidden,true);
+    h.fire('click',h.folds[0]);h.fire('click',outside);assert.equal(h.button().hidden,true);
+    h.fire('focusin',h.folds[0]);h.fire('focusout',h.folds[0],outside);assert.equal(h.button().hidden,true);
+    h.fire('focusin',h.folds[0]);h.fire('focusout',h.folds[0]);await h.flush();assert.equal(h.button().hidden,true,'Null focus destination settles outside');
+    h.fire('click',h.folds[0]);const original=h.targets.get(h.folds[0])!;
+    h.targets.set(h.folds[0],{...original,view:{} as any});await h.flush();assert.equal(h.button().hidden,true);
+    h.targets.set(h.folds[0],original);await h.flush();assert.equal(h.button().hidden,true,'Returning to the old pane does not restore stale visibility');
+    h.fire('click',h.folds[1]);assert.equal(h.button(1).hidden,false);assert.equal(h.button().hidden,true);
+  }finally{h.dispose();}
+});
+test('focus within the native widget and into Stop remains usable; dismissal cannot swallow an activated stop',async()=>{
+  const h=fixture();try{
+    const widget=new Element('widget');h.root.body.appendChild(widget);widget.appendChild(h.folds[0]);
+    h.fire('click',h.folds[0]);h.fire('focusin',widget);assert.equal(h.button().hidden,false);
+    h.fire('focusout',widget,h.button());assert.equal(h.button().hidden,false);
+    h.fire('focusin',h.button());h.fire('focusout',h.button(),h.folds[0]);assert.equal(h.button().hidden,false);
+    h.fire('click',h.button());h.fire('focusin',h.root.body);await h.flush();
+    assert.equal(h.calls.length,1);assert.equal(h.calls[0].id,id);assert.equal(h.button().hidden,true);
+  }finally{h.dispose();}
+});
+test('Stop follows the natural header center when its title wraps, without setting header dimensions',async()=>{
+  const h=fixture();try{
+    const heading=new Element('heading');h.folds[0].appendChild(heading);h.folds[0].rect={top:100,height:200};h.folds[0].clientTop=1;heading.rect={top:112,height:22};
+    h.fire('click',h.folds[0]);assert.equal(h.folds[0].styles.get('--send-to-t3-stop-center'),'22px');
+    heading.rect.height=44;await h.flush();assert.equal(h.folds[0].styles.get('--send-to-t3-stop-center'),'33px');
+    assert.equal(heading.styles.size,0);assert.equal(h.calls.length,0);
   }finally{h.dispose();}
 });
 test('Stop is single-flight and selects the exact box; terminal and stale controls cannot stop another run',async()=>{
