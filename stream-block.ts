@@ -3,7 +3,7 @@ import remarkParse from 'remark-parse';
 import {contentHash} from './completion';
 import {responseBoundaries} from './response-container';
 
-export interface StreamBlock {key:string;from:number;to:number;text:string;complete:boolean;tracked:boolean}
+export interface StreamBlock {key:string;from:number;to:number;text:string;/** Terminal history, including an interrupted run. */complete:boolean;tracked:boolean}
 const parser=unified().use(remarkParse);
 const cache=new Map<string,StreamBlock[]>();
 let cachedCharacters=0;
@@ -23,7 +23,11 @@ export function streamBlocks(document:string):StreamBlock[] {
     // Tracking lines disappear only after the saved result is adopted. A
     // terminal-looking direct preview must never offer a destructive action.
     const open=new Set<string>();for(const boundary of boundaries){if(boundary.from>=from)break;if(boundary.kind==='start')open.add(boundary.id);else open.delete(boundary.id);}
-    blocks.push({key,from,to,text,complete:key.endsWith(':complete'),tracked:open.size>0});
+    // Interrupted runs keep their live fold identity so the user's expansion
+    // choice survives Stop. Their generated heading still identifies terminal
+    // history, including notes saved by older plugin versions.
+    const interrupted=key.endsWith(':active')&&/^> \[!t3-progress\][+-] \*\*(?:\\.|[^*\\])* · Interrupted\*\*(?: |$)/.test(header);
+    blocks.push({key,from,to,text,complete:key.endsWith(':complete')||interrupted,tracked:open.size>0});
   }
   if(document.length<=maxCachedCharacters){
     cache.set(document,blocks);cachedCharacters+=document.length;
