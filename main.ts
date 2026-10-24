@@ -1426,7 +1426,7 @@ export default class SendToT3 extends Plugin {
         if(ordinary<scope[1]-scope[0])context.referenceSelection=true;
       }
     }else if(selected)throw Error('Open the source note before sending its selection.');
-    const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\nQuestion:\n${prompt}`:selected?canonicalSelected:prompt;
+    const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\n**USER ASKS:**\n${prompt}`:selected?canonicalSelected:prompt;
     return this.openChatWithNote(this.noteContext(file),question,context,true,showSelector);
   }
   private openEditorChat(selection:string,file:TFile,context:EditorChatContext,showSelector=false){
@@ -1954,7 +1954,7 @@ export default class SendToT3 extends Plugin {
         const selectionReference=!reference&&!plan.text.trim()&&question.trim()&&selected?`Selection reference: ${selected.slice(0,160)}${selected.length>160?'…':''}`:'';
         const material=reference?`Selected text:\n${reference}`:plan.text||selectionReference;
         if(!material.trim()&&!question.trim()){new Notice('Nothing new to send.');return;}
-        preparedInput=[material,question.trim()?`Question:\n${question}`:''].filter(Boolean).join('\n\n');
+        preparedInput=[material,question.trim()?`**USER ASKS:**\n${question}`:''].filter(Boolean).join('\n\n');
         prompt=preparedInput;smartCapture=plan.capture;
       }
       const images=options?.barePrompt?undefined:await this.prepareImages(prompt,note?.path??'',true,options?.sourceContext?.snapshot);
@@ -1991,7 +1991,7 @@ export default class SendToT3 extends Plugin {
       await this.dispatch(request);
       if(options?.sourceContext?.smartQuestion)this.app.saveLocalStorage(this.chatDraftKey,'');
       const draft=this.app.loadLocalStorage(this.chatDraftKey);
-      if(typeof draft==='string'&&draft&&(draft===prompt||prompt.endsWith(`\n\nQuestion:\n${draft}`)))this.app.saveLocalStorage(this.chatDraftKey,'');
+      if(typeof draft==='string'&&draft&&(draft===prompt||prompt.endsWith(`\n\n**USER ASKS:**\n${draft}`)))this.app.saveLocalStorage(this.chatDraftKey,'');
     }catch(e){if(request)await this.failRequest(request,e,'preparation',startedAt);else if(!(e instanceof ProjectCreationCancelled))this.recordSendFailure(undefined,e,'preparation',startedAt);if(e instanceof ProjectCreationCancelled)throw e;throw new RequestDeliveryError(`${unsavedMessage(e)} ${request?'The send failed. Its response was removed. See the send failure log.':'No message was sent or queued.'}`,false,Boolean(request));}
     finally{this.busy=false;}
   }

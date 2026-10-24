@@ -545,7 +545,7 @@ test('whole-note sends, command-bar asks and confirmed receipts use one Smart Se
   const editor={getValue:()=>document,getSelection:()=>'',getCursor:()=>({line:0,ch:0}),posToOffset:()=>0},view={file,editor};
   h.plugin.app.workspace.getActiveViewOfType=()=>view;
   await h.plugin.openManualAction(file,'Why?', '',{editor,view},false);
-  assert.equal(sent.length,3);assert.match(sent[2].prompt,/Question:\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Second instruction|Agent final/);
+  assert.equal(sent.length,3);assert.match(sent[2].prompt,/\*\*USER ASKS:\*\*\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Second instruction|Agent final/);
   const selected='First instruction.',firstAnchor={text:selected,start:0,end:selected.length,before:'',after:document.slice(selected.length,selected.length+80)};
   await h.plugin.openManualAction(file,'Which passage?',selected,{editor,view,anchor:firstAnchor,canonicalAnchor:firstAnchor,snapshot:document},false);
   assert.equal(sent.length,4);assert.match(sent[3].prompt,/Selection reference: First instruction\./);assert.doesNotMatch(sent[3].prompt,/Second instruction|Agent final/);
@@ -620,7 +620,7 @@ test('bundled Send and Ask recover a source renamed through delete/create before
   const editor={getValue:()=>document,getSelection:()=>'',getCursor:()=>({line:0,ch:0}),posToOffset:()=>0},view={file,editor};
   document=document.replace('Added detail.','Added detail. Another detail.');
   await h.plugin.sendChat(document,{path:renamed},{threadId:'smart-thread',sourceContext:{editor,view,smartDocument:document,smartQuestion:'Why?'}});
-  assert.match(sent[2].prompt,/Another detail/);assert.match(sent[2].prompt,/Question:\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Added detail/);
+  assert.match(sent[2].prompt,/Another detail/);assert.match(sent[2].prompt,/\*\*USER ASKS:\*\*\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Added detail/);
  }finally{h.plugin.onunload();}
 });
 
@@ -675,7 +675,7 @@ for(const enabled of [true,false])test(`explicit existing-thread Ask reuses the 
   await h.plugin.sendResolvedChat('outdated unfiltered draft',{path:h.file.path},context,true,{threadId:'smart-thread',expectedProjectKey:'c:project',jobOptions:{inline:{enabled,intermediateMode:'remove',keepIntermediate:false,finalAnswerFormat:'formatted'}}});
   const request=h.sent.at(-1);assert.equal(h.sent.length,2);assert.equal(h.newBlocks(),0);
   assert.equal(request.inlineSteering.jobId,h.id);assert.equal(request.jobOptions.inline.enabled,true);
-  assert.match(request.inlineSteering.input.text,/Second instruction/);assert.match(request.inlineSteering.input.text,/Question:\nWhy this change\?/);
+  assert.match(request.inlineSteering.input.text,/Second instruction/);assert.match(request.inlineSteering.input.text,/\*\*USER ASKS:\*\*\nWhy this change\?/);
   assert.doesNotMatch(request.inlineSteering.input.text,/First instruction|outdated unfiltered draft/);
  }finally{h.plugin.onunload();}
 });
