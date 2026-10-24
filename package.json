@@ -30,6 +30,7 @@
     "@noble/hashes": "^1.8.0",
     "buffer": "^6.0.3",
     "micromark": "4.0.2",
+    "micromark-extension-gfm-strikethrough": "2.1.0",
     "micromark-util-subtokenize": "2.1.0",
     "proper-lockfile": "^4.1.2",
     "remark-parse": "^11.0.0",

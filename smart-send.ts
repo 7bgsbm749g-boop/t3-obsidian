@@ -4,6 +4,7 @@ import {responseIds,responseFrame} from './response-container';
 import {streamBlocks} from './stream-block';
 import {runImportReceipts} from './run-import-receipt';
 import {markdownCodeRanges} from './reply-html';
+import {markdownText,mergeSpans as union,subtractSpans} from './smart-markdown';
 
 export type Span=[number,number];
 export interface PackedText {hash:string;encoding:'text'|'gzip';data:string}
@@ -83,7 +84,6 @@ function noteIdentities(data:SmartSendData,id:string){
   const note=data.notes[id];return new Set([id,...Object.entries(data.notes).filter(([,n])=>!n.deleted&&n.path===note?.path).map(([id])=>id)]);
 }
 export const smartDestination=(environment:string,project:string,thread:string)=>JSON.stringify([environment,project,thread]);
-function union(items:Span[]):Span[]{const out:Span[]=[];for(const [from,to] of items.filter(([a,b])=>b>a).sort((a,b)=>a[0]-b[0])){const last=out.at(-1);if(last&&from<=last[1])last[1]=Math.max(to,last[1]);else out.push([from,to]);}return out;}
 function lines(text:string){let offset=0;return text.split('\n').map(value=>{const item={text:value,from:offset,to:offset+value.length};offset+=value.length+1;return item;});}
 /** Hunt–Szymanski line matching, with bounded work for pathological repeated
  * lines. Blank separators carry no delivery information. */
@@ -98,7 +98,7 @@ function matchingLines(before:string,after:string):Array<[number,number]>{
   }
   const out:Array<[number,number]>=[];let at=ends.at(-1);while(at!==undefined){const node=nodes[at];out.push([node.a,node.b]);at=node.prev;}return out.reverse();
 }
-function mappedCoverage(before:string,after:string,covered:Span[]){
+function textCoverage(before:string,after:string,covered:Span[]){
   if(before===after)return covered;
   const a=lines(before),b=lines(after),out:Span[]=[],unchanged:Array<[number,number,number]>=[];
   let l=0,r=0;
@@ -112,6 +112,11 @@ function mappedCoverage(before:string,after:string,covered:Span[]){
   }
   for(const [start,end,target] of unchanged)for(const [from,to] of covered){const l=Math.max(start,from),r=Math.min(end,to);if(r>l)out.push([target+l-start,target+r-start]);}
   return out;
+}
+function mappedCoverage(before:string,after:string,covered:Span[]){
+  if(before===after)return covered;
+  const a=markdownText(before),b=markdownText(after);
+  return b.map(textCoverage(a.text,b.text,a.map(covered)),true);
 }
 /** Keep exact rendered output once, compressed and addressed by content. */
 export async function rememberResponse(data:SmartSendData,path:string,id:string,body:string,before:string,after:string,offset:number){
@@ -146,6 +151,7 @@ function editedResponseRange(document:string,body:string,record:ResponseText):Sp
 }
 export async function sourceProjection(data:SmartSendData,noteId:string,document:string){
   const removed:Span[]=[],known:Span[]=[],identities=noteIdentities(data,noteId);
+  let comparison:ReturnType<typeof markdownText>|undefined;
   const receipts=[...runImportReceipts(document)],code=receipts.length?markdownCodeRanges(document):[];
   for(const {from,to} of receipts)if(!code.some(([start,end])=>from<end&&to>start))removed.push([from,to]);
   for(const id of responseIds(document)){const frame=responseFrame(document,id);if(frame)removed.push([frame.from,frame.to]);}
@@ -157,16 +163,31 @@ export async function sourceProjection(data:SmartSendData,noteId:string,document
       const chosen=matching.length===1?matching[0]:matches.length===1?matches[0]:undefined;
       if(chosen!==undefined){removed.push([chosen,chosen+body.length]);known.push([chosen,chosen+body.length]);}continue;
     }
-    const range=editedResponseRange(document,body,record);if(!range)continue;
+    const current=comparison??=markdownText(document),original=markdownText(body);
+    const found=uniqueTextOffset(current.text,original.text),range=found>=0?[found,found+original.text.length] as Span:
+      editedResponseRange(current.text,original.text,{...record,before:markdownText(record.before).text,after:markdownText(record.after).text});
+    if(!range)continue;
     const [left,right]=range;
-    const current=document.slice(left,right);
-    known.push([left,right]);
-    for(const [from,to] of mappedCoverage(body,current,[[0,body.length]]))removed.push([left+from,left+to]);
+    const raw=current.map([range],true);if(!raw.length)continue;
+    known.push([raw[0][0],raw.at(-1)![1]]);
+    const matched=current.map(textCoverage(original.text,current.text.slice(left,right),[[0,original.text.length]]).map(([from,to])=>[left+from,left+to] as Span),true);
+    // Keep container line endings when removing text from a reformatted reply.
+    for(const [from,to] of matched)for(const match of document.slice(from,to).matchAll(/[^\r\n]+/g))removed.push([from+match.index!,from+match.index!+match[0].length]);
   }
   // A known edited response is handled by its recorded text, so additions
   // inside its completed history remain ordinary source. Legacy histories
   // without a rendered response record retain their generated-callout rule.
   for(const block of streamBlocks(document))if(!known.some(([from,to])=>from<block.to&&to>block.from))removed.push([block.from,block.to]);
+  // Removing generated prose must not leave empty emphasis or callout syntax
+  // that a later comparison would interpret as newly typed literal text.
+  if(removed.length){
+    const view=comparison??markdownText(document),coverage=view.map(union(removed)),retained=new Map<string,boolean>();
+    for(const mark of view.marks){
+      const scope=mark.container??mark.content,key=scope.join(':');
+      if(!retained.has(key))retained.set(key,subtractSpans(view.map([scope]),coverage).some(([from,to])=>!!view.text.slice(from,to).trim()));
+      if(!retained.get(key))removed.push(...mark.syntax);
+    }
+  }
   const ranges=union(removed),segments:Array<{rawFrom:number;rawTo:number;from:number}>=[];let text='',cursor=0;
   for(const [from,to] of [...ranges,[document.length,document.length] as Span]){if(from>cursor){segments.push({rawFrom:cursor,rawTo:from,from:text.length});text+=document.slice(cursor,from);}cursor=Math.max(cursor,to);}
   return {text,segments};
@@ -176,8 +197,8 @@ export async function prepareSmartSend(data:SmartSendData,path:string,destinatio
   const identities=noteIdentities(data,noteId),heads=Object.entries(data.heads).filter(([,h])=>identities.has(h.noteId)&&h.destination===destination);
   let covered:Span[]=[];for(const [,head] of heads)covered.push(...mappedCoverage(await unpackText(head.source),current,head.covered));covered=union(covered);
   const requested:Span[]=scope?projection.segments.flatMap(segment=>{const from=Math.max(scope[0],segment.rawFrom),to=Math.min(scope[1],segment.rawTo);return to>from?[[segment.from+from-segment.rawFrom,segment.from+to-segment.rawFrom] as Span]:[];}):[[0,current.length]];
-  const added:Span[]=[];for(const [from,to] of requested){let cursor=from;for(const [l,r] of covered){if(r<=cursor||l>=to)continue;if(l>cursor)added.push([cursor,l]);cursor=Math.max(cursor,r);}if(cursor<to)added.push([cursor,to]);}
-  const text=added.map(([from,to])=>current.slice(from,to)).filter(text=>text.trim()).join('\n');
+  const added=subtractSpans(requested,covered),view=markdownText(current);
+  const text=view.render(view.map(added));
   const capture:SmartCapture={noteId,source:await packText(current),covered:union([...covered,...added]),parents:heads.map(([id])=>id),bindings:[...new Set(heads.flatMap(([,h])=>h.bindings??[]))]};
   return {text,capture};
 }
