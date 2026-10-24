@@ -7,6 +7,8 @@ import {webcrypto,randomUUID} from 'node:crypto';
 import {captureCursorInsertion,resolveCursorInsertion} from '../cursor-insertion';
 import {responseAnchor} from '../native-response-projection';
 import {applyThreadItem} from '../inline-thread';
+import {installPaletteChat} from '../palette-chat';
+import {loadSmartSend} from '../smart-send';
 
 const require=createRequire(import.meta.url);
 const compiled=build({stdin:{contents:"export {default} from './main'; export {nativeResponses} from './native-response-manager'; export {InlineChatManager} from './inline-chat';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
@@ -15,14 +17,76 @@ async function fixture(document='First paragraph.\n\nLater paragraph.'){
   const api={Plugin:Base,MarkdownView:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,Platform:{isMobile:false}};
   const module={exports:{} as any};
   runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?api:require(id),process,Buffer,Uint8Array,console,TextEncoder,TextDecoder,crypto:webcrypto,URL,setTimeout,clearTimeout,setInterval,clearInterval,performance,AbortController});
-  let value=document,disk=document,cursor=document.indexOf('Later')-1,mode='source',active=true;
+  let value=document,disk=document,cursor=document.indexOf('Later')-1,mode='source',active=true,selection: [number,number]|undefined;
   const file={path:'Note.md',extension:'md'};
-  const editor={getValue:()=>value,getCursor:()=>cursor,getSelection:()=>'',posToOffset:(position:number)=>position,offsetToPos:(offset:number)=>offset,replaceRange:(text:string,from:number,to=from)=>{value=value.slice(0,from)+text+value.slice(to);}};
+  const editor={getValue:()=>value,getCursor:(which?:string)=>selection?(which==='from'?selection[0]:selection[1]):cursor,getSelection:()=>selection?value.slice(...selection):'',posToOffset:(position:number)=>position,offsetToPos:(offset:number)=>offset,replaceRange:(text:string,from:number,to=from)=>{value=value.slice(0,from)+text+value.slice(to);}};
   const view={file,editor,getViewData:()=>value,setViewData:(text:string)=>{value=text;},getMode:()=>mode,requestSave:()=>{},save:async()=>{disk=view.getViewData();}};
-  const app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},workspace:{getActiveViewOfType:()=>active?view:undefined,getLeavesOfType:()=>[{view}]},vault:{adapter:{getFullPath:(path:string)=>'/vault/'+path},getName:()=> 'Synthetic',getFileByPath:()=>file,read:async()=>disk}};
+  const app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},workspace:{getActiveFile:()=>file,getActiveViewOfType:()=>active?view:undefined,getLeavesOfType:()=>[{view}]},vault:{adapter:{getFullPath:(path:string)=>'/vault/'+path},getName:()=> 'Synthetic',getFileByPath:()=>file,read:async()=>disk}};
   const plugin=new module.exports.default();plugin.app=app;plugin.settings={inlineStreaming:{enabled:true},noteThreads:[]};plugin.save=async()=>{};
-  return {plugin,app,view,editor,file,exports:module.exports,value:()=>value,cursor:(offset:number)=>{cursor=offset;},active:(yes:boolean)=>{active=yes;},mode:(next:string)=>{mode=next;}};
+  return {plugin,app,view,editor,file,exports:module.exports,value:()=>value,cursor:(offset:number)=>{cursor=offset;selection=undefined;},select:(from:number,to:number)=>{selection=[from,to];},active:(yes:boolean)=>{active=yes;},mode:(next:string)=>{mode=next;}};
 }
+
+for(const question of ['', 'Why this passage?'])test(`palette selection ${question?'questions':'sends'} stay below the selected occurrence after focus clears it`,async()=>{
+  const passage='Repeated passage.',document=passage+'\n\nBetween paragraphs.\n\n'+passage+'\n\nLater paragraph.',h=await fixture(document),start=document.lastIndexOf(passage);
+  const manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined),errors:unknown[]=[];
+  manager.prepare=async()=>{};manager.start=()=>{};h.plugin.inlineChat=manager;
+  h.plugin.recoverSmartReplies=async()=>{};h.plugin.smartData=()=>loadSmartSend(undefined);
+  h.plugin.sendChat=async(_prompt:any,_note:any,options:any)=>options.onPrepared({id:randomUUID(),title:'Synthetic'});
+  let sending:Promise<void>|undefined;
+  h.plugin.openChatWithNote=(note:any,prompt:any,context:any)=>h.plugin.sendInlineChat(prompt,note,context,{newThread:true});
+  const modal={inputEl:Object.assign(new EventTarget(),{value:question}),getSuggestions:()=>[],renderSuggestion:()=>{},selectSuggestion(row:any,event:any){h.cursor(document.length);return this.onChooseSuggestion(row,event);},onChooseSuggestion:(_row:any,_event:any)=>{},onOpen:()=>{h.cursor(document.length);}};
+  h.select(start,start+passage.length);
+  const hook=installPaletteChat({internalPlugins:{getPluginById:()=>({instance:{modal}})}},(prompt,selection,choose,source)=>sending=h.plugin.openPaletteAction(prompt,selection,choose,source),{captureSource:()=>h.plugin.capturePaletteSource(),onError:error=>errors.push(error)});
+  modal.onOpen();const row=(modal.getSuggestions as any)(question)[0];modal.selectSuggestion(row,{});
+  await sending;
+  assert.deepEqual(errors,[]);assert.ok(sending);
+  const marker=h.value().indexOf('<!-- t3-inline:start:');
+  assert.ok(marker>start+passage.length);assert.ok(marker<h.value().indexOf('Later paragraph.'));
+  assert.equal(h.value().slice(0,start+passage.length),document.slice(0,start+passage.length));
+  hook.dispose();manager.dispose();
+});
+
+test('a changed selection without a captured anchor cannot silently append a response',async()=>{
+  const h=await fixture();h.cursor(h.value().length);
+  h.plugin.openChatWithNote=()=>assert.fail('a stale selection must not send');
+  await assert.rejects(h.plugin.openManualAction(h.file,'Why?','First paragraph.'),/selected text changed/);
+});
+
+test('a selection used as reference keeps its position instead of falling back to the note end',async()=>{
+  const h=await fixture(),original=h.value(),manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined);
+  h.select(0,'First paragraph.'.length);
+  const context=h.plugin.capturePaletteSource().context.editor;context.referenceSelection=true;
+  manager.prepare=async()=>{};manager.start=()=>{};h.plugin.inlineChat=manager;
+  h.plugin.sendChat=async(_prompt:any,_note:any,options:any)=>options.onPrepared({id:randomUUID(),title:'Synthetic'});
+  h.cursor(original.length);await h.plugin.sendInlineChat('Explain',{path:h.file.path},context,{newThread:true});
+  assert.ok(h.value().indexOf('t3-inline:end:')<h.value().indexOf('Later paragraph.'));
+  manager.dispose();
+});
+
+test('selecting a projected response places a new answer outside that response and above later prose',async()=>{
+  const oldId=randomUUID(),document='Before\n\n'+responseAnchor(oldId)+'\n\nLater paragraph.',h=await fixture(document);
+  const adapter=h.exports.nativeResponses(h.app).wrap(h.view,document);
+  adapter.setResponses([{id:oldId,body:'Selected generated passage.\n\nMore generated text.'}]);
+  const start=h.value().indexOf('Selected generated');h.select(start,start+'Selected generated passage.'.length);
+  const context=h.plugin.capturePaletteSource().context.editor;
+  assert.equal(context.referenceSelection,true);
+  const manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined);
+  manager.prepare=async()=>{};manager.start=()=>{};h.plugin.inlineChat=manager;
+  h.plugin.sendChat=async(_prompt:any,_note:any,options:any)=>options.onPrepared({id:randomUUID(),title:'Synthetic'});
+  await h.plugin.sendInlineChat('Explain',{path:h.file.path},context,{newThread:true});
+  const at=h.value().indexOf('<!-- t3-inline:start:');
+  assert.ok(at>h.value().indexOf('More generated text.'));
+  assert.ok(h.value().indexOf('t3-inline:end:')<h.value().indexOf('Later paragraph.'));
+  manager.dispose();h.exports.nativeResponses(h.app).dispose();
+});
+
+for(const question of ['', 'Explain'])test(`palette ${question?'questions without selection':'whole-note sends'} keep the captured cursor after activation`,async()=>{
+  const h=await fixture(),document=h.value(),source=h.plugin.capturePaletteSource(),sent:any[]=[];
+  h.plugin.openNoteSend=(_file:any,_choose:any,insertion:any)=>{sent.push(insertion);};
+  h.plugin.openChatWithNote=(_note:any,_prompt:any,context:any)=>{sent.push(context.insertion);};
+  h.cursor(document.length);await h.plugin.openPaletteAction(question,'',false,source.context);
+  assert.equal(sent.length,1);assert.equal(resolveCursorInsertion(document,sent[0]),document.indexOf('Later')-1);
+});
 
 for(const remembered of [false,true])test(`whole-note ${remembered?'continued':'new'} sends retain the cursor from activation across async routing`,async()=>{
   const h=await fixture(),initial=h.value(),offset=initial.indexOf('Later')-1;

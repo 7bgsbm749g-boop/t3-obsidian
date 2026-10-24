@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "tests/cursor-send.test.ts": ["validation/palette-selection-lab.ts"],
     "tests/import-save.test.ts": ["validation/import-save-lab.ts"],
     "tests/stream-block-edit.test.ts": ["validation/interrupted-stream-close-lab.ts"],
     "tests/run-import.test.ts": ["validation/run-import-lab.ts", "scripts/build-native-response-lab.mjs"],
