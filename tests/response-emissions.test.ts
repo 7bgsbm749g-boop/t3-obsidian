@@ -27,6 +27,42 @@ test('public reasoning and plans appear in native folds in timeline order and st
   assert.doesNotMatch(renderInlineTurn(state,'run','thread','complete','remove'),/Public summary|t3-thought|t3-plan/);
 });
 
+test('consecutive public thoughts share one closed group, timestamp and stable streaming identity',()=>{
+  let state=fixture([{id:'one',type:'reasoning',text:'**First summary**',streaming:false,startedAt:at(2)},
+    {id:'two',type:'reasoning',text:'**Second summary**',streaming:true,startedAt:at(3)}]);
+  const read=()=>responseEmissions(state,['run'],text=>text).filter(item=>item.kind==='reasoning');
+  const [group]=read();assert.equal(read().length,1);
+  assert.match(group.body,/\[!t3-thought\]- Thought \(×2\)/);
+  assert.match(group.body,/data-t3-thought-at="2000"/);
+  assert.ok(group.body.indexOf('First summary')<group.body.indexOf('Second summary'));
+  const identity=/data-t3-fold="([^"]+)"/.exec(group.body)![1];
+  state=applyThreadItem(state,normalizeV2StreamItem({kind:'event',sequence:2,event:{type:'turn-item.updated',payload:{id:'two',runId:'run',ordinal:2,type:'reasoning',text:'**Second summary extended**',streaming:false,startedAt:at(3),updatedAt:at(5)}}})).state;
+  assert.equal(read().length,1);assert.match(read()[0].body,/Second summary extended/);
+  assert.equal(/data-t3-fold="([^"]+)"/.exec(read()[0].body)![1],identity);
+  for(const mode of ['keep','collapse','remove'] as const)assert.match(renderInlineTurn(state,'run','thread','running',mode),/Thought \(×2\)/);
+  assert.equal(turnPhase(state,'run'),'running');
+});
+
+test('tools, prose, input, plans and different runs split thought groups',()=>{
+  for(const boundary of ['tool','prose','user','plan','run']){
+    const items:any[]=[{id:'one',type:'reasoning',text:'Before',streaming:false,startedAt:at(2)},
+      {id:'two',type:'reasoning',text:'After',streaming:false,startedAt:at(6),...(boundary==='run'?{runId:'next'}:{})}];
+    if(boundary==='tool')items.push({id:'tool',type:'command_execution',input:'pwd',startedAt:at(3)});
+    if(boundary==='plan')items.push({id:'plan',type:'proposed_plan',text:'Plan',startedAt:at(3)});
+    const state=fixture(items);state.messages=state.messages.filter(message=>message.id!=='prose');
+    if(boundary==='prose'||boundary==='user')state.messages.push({id:'boundary',role:boundary==='prose'?'assistant':'user',turnId:'run',text:'Boundary',streaming:false,createdAt:at(3)});
+    assert.equal(responseEmissions(state,['run','next'],text=>text).filter(item=>item.kind==='reasoning').length,2,boundary);
+  }
+});
+
+test('canonical ordinals order same-time thought and tool boundaries',()=>{
+  const state=fixture([{id:'two',type:'reasoning',text:'Second',streaming:false,ordinal:3,startedAt:at(2)},
+    {id:'one',type:'reasoning',text:'First',streaming:false,ordinal:1,startedAt:at(2)},
+    {id:'tool',type:'command_execution',input:'pwd',ordinal:2,startedAt:at(2)}]);
+  const groups=responseEmissions(state,['run'],text=>text).filter(item=>item.kind==='reasoning');
+  assert.equal(groups.length,2);assert.match(groups[0].body,/First/);assert.match(groups[1].body,/Second/);
+});
+
 test('compaction replaces its own display row and cannot complete an app run',()=>{
   let state=fixture([{id:'compact',type:'compaction',status:'running',startedAt:at(5)}]);
   const live=renderInlineTurn(state,'run','thread','running','collapse');

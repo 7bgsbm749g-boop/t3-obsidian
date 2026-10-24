@@ -83,7 +83,7 @@ export function normalizeV2Snapshot(snapshot:any){
   if(!p.thread?.id||!Array.isArray(p.messages)||!Array.isArray(p.runs))throw Error('T3 returned an invalid v2 thread projection.');
   const messageItems=new Map<string,any>(array(p.turnItems).filter(item=>item.type==='assistant_message').map(item=>[item.messageId,item]));
   const messages:InlineMessage[]=p.messages.map((m:any)=>{const item=messageItems.get(m.id);return {...m,turnId:m.runId??null,...(item?{itemId:item.id,updatedAt:item.updatedAt}:{})};});
-  for(const item of array(p.turnItems))if(item.type==='reasoning')messages.push({id:`reasoning:${item.id}`,role:'reasoning',turnId:item.runId??null,text:item.text,streaming:item.streaming,createdAt:item.startedAt??item.updatedAt});
+  for(const item of array(p.turnItems))if(item.type==='reasoning')messages.push({id:`reasoning:${item.id}`,role:'reasoning',turnId:item.runId??null,text:item.text,streaming:item.streaming,sequence:item.ordinal,createdAt:item.startedAt??item.updatedAt});
   const runs=[...p.runs].sort((a,b)=>a.ordinal-b.ordinal),current=runs.filter(r=>r.status!=='queued').at(-1)??runs.at(-1);
   const running=runs.filter(r=>active(r.status)).at(-1);
   const requests=Object.fromEntries(array(p.runtimeRequests).map(r=>[r.id,r]));
@@ -145,7 +145,7 @@ export function applyV2ControlEvent(state:InlineThreadState,event:any):InlineThr
   if(event.type==='v2.runtime-request.updated')requests[p.id]=p;
   else if(['user_input_request','approval_request'].includes(p.type))controls[p.id]=p;
   if(event.type==='v2.turn-item.updated'&&p.type==='reasoning'){
-    const message:InlineMessage={id:`reasoning:${p.id}`,role:'reasoning',turnId:p.runId??null,text:p.text,streaming:p.streaming,createdAt:p.startedAt??p.updatedAt};
+    const message:InlineMessage={id:`reasoning:${p.id}`,role:'reasoning',turnId:p.runId??null,text:p.text,streaming:p.streaming,sequence:p.ordinal,createdAt:p.startedAt??p.updatedAt};
     return {...state,messages:state.messages.some(m=>m.id===message.id)?state.messages.map(m=>m.id===message.id?message:m):[...state.messages,message]};
   }
   const items=event.type==='v2.runtime-request.updated'?Object.values(controls).filter(i=>i.requestId===p.id):[p];

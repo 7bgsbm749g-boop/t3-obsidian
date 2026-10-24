@@ -56,8 +56,16 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
       const text=elapsedRun({startedAt:new Date(start).toISOString(),...(end&&Number.isFinite(Number(end))?{finishedAt:new Date(Number(end)).toISOString()}:{})});
       if(timer.textContent!==text)timer.textContent=text;
     }
-    for(let fold of Array.from(root.querySelectorAll<HTMLElement>('.callout[data-callout="t3-progress"]'))){
+    for(const time of Array.from(root.querySelectorAll<HTMLElement>('.send-to-t3-thought-time[data-t3-thought-at]'))){
+      const at=Number(time.dataset.t3ThoughtAt);if(!Number.isFinite(at))continue;
+      const date=new Date(at),text=date.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+      if(time.textContent!==text)time.textContent=text;
+      time.title=date.toLocaleString();
+    }
+    // Reconcile the outer history before finding its nested thought folds.
+    for(const selector of ['.callout[data-callout="t3-progress"]','.callout[data-callout="t3-thought"]'])for(let fold of Array.from(root.querySelectorAll<HTMLElement>(selector))){
       const id=key(fold),container=owner(fold);
+      const thought=id?.startsWith('thought:');
       // Reconcile before the next paint. Only active responses retain ordinary
       // Markdown nodes; native embeds keep their fresh render children.
       if(id?.endsWith(':active')&&fold.isConnected&&typeof fold.replaceWith==='function'){
@@ -74,10 +82,11 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
         cache.set(id,fold);if(cache.size>64)cache.delete(cache.keys().next().value!);
       }
       const heading=title(fold);if(!heading)continue;
+      if(thought&&icon){const glyph=heading.querySelector<HTMLElement>(':scope > .callout-icon');if(glyph&&!glyph.querySelector('.lucide-brain'))icon(glyph,'brain');}
       heading.setAttribute('role','heading');heading.setAttribute('aria-level','6');
       heading.setAttribute('aria-expanded',String(!fold.classList.contains('is-collapsed')));
-      if(id?.endsWith(':active')){
-        const choice=choices.get(container)?.get(id);
+      if(id?.endsWith(':active')||thought){
+        const choice=id?choices.get(container)?.get(id):undefined;
         if(choice!==undefined)fold.classList.toggle('is-collapsed',!choice);
         const collapsed=fold.classList.contains('is-collapsed');
         heading.setAttribute('aria-expanded',String(!collapsed));
@@ -104,7 +113,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
       }
       const previous=seen.get(fold),fresh=previous?.heading!==heading||previous?.key!==id;
       seen.set(fold,{heading,key:id});
-      const expanded=id?(choices.get(owner(fold))?.get(id)??(id.endsWith(':complete')?false:id.endsWith(':active')?true:undefined)):undefined;
+      const expanded=id?(choices.get(owner(fold))?.get(id)??(thought||id.endsWith(':complete')?false:id.endsWith(':active')?true:undefined)):undefined;
       // Restore only newly rendered titles. Native transitions mutate their
       // own DOM; repeatedly clicking a retained/hidden clone can starve both
       // the transition and the editor. Mark it before dispatching the click.
@@ -143,11 +152,11 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   const remember=(event:Event)=>{
     if(restoring)return;
     const target=event.target instanceof Element?event.target.closest('.callout-title'):null;
-    const fold=target?.closest('.callout[data-callout="t3-progress"]');if(!fold||target!==title(fold))return;
+    const fold=target?.closest('.callout[data-callout="t3-thought"]')??target?.closest('.callout[data-callout="t3-progress"]');if(!fold||target!==title(fold))return;
     const id=key(fold);if(!id)return;
     const container=owner(fold);let saved=choices.get(container);if(!saved){saved=new Map();choices.set(container,saved);}
     const expanded=fold.classList.contains('is-collapsed');saved.set(id,expanded);
-    if(id.endsWith(':active')&&typeof fold.classList.toggle==='function'){
+    if((id.endsWith(':active')||id.startsWith('thought:'))&&typeof fold.classList.toggle==='function'){
       // A retained title no longer belongs to the discarded native render
       // child. Handle its toggle directly, without a transient close animation.
       event.preventDefault();event.stopImmediatePropagation();
@@ -161,7 +170,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   const keyboard=(event:KeyboardEvent)=>{
     if(event.key!=='Enter'&&event.key!==' ')return;
     const target=event.target as HTMLElement;
-    if(target.matches('.callout[data-callout="t3-progress"] > .callout-title')){event.preventDefault();target.click();}
+    if(target.matches('.callout[data-callout="t3-progress"] > .callout-title, .callout[data-callout="t3-thought"] > .callout-title')){event.preventDefault();target.click();}
   };
   const rememberTool=(event:Event)=>{
     const detail=event.target as HTMLElement;
