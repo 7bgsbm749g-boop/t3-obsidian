@@ -14,7 +14,7 @@ import uuid
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = Path.home() / '.config/send-to-t3-code/laptop-reload.json'
 STATE = Path.home() / '.local/state/send-to-t3-code/native-laptop-reload'
-RECEIPTS = Path('/home/ubuntu/backups/send-to-t3-code/releases')
+RECEIPTS = Path('/home/ubuntu/projects/send-to-t3-code/evidence/releases')
 RUNTIME = ('main.js', 'manifest.json', 'styles.css')
 
 

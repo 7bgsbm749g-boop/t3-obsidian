@@ -307,7 +307,7 @@ own worktrees. Never hand-edit installed runtime artifacts
 or overwrite device-local `data.json`. Preserve the current note/settings.
 Do not create or store smoke-test notes, folders, attachments, or evidence in
 QLO2, even temporarily. Use a separate test vault for fixtures and keep all
-evidence under `/home/ubuntu/backups/send-to-t3-code`, outside synced vaults.
+evidence under `/home/ubuntu/projects/send-to-t3-code/evidence`, outside synced vaults.
 QLO2 release checks must create no test content; report test-vault checks
 separately and remove temporary test notes and threads after use.
 

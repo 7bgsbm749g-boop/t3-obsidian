@@ -7,7 +7,7 @@ import {connectT3Rpc,T3ConnectionTimeoutError} from '../t3-rpc';
 import {environmentApi} from '../direct';
 
 async function main(){
- const evidence=resolve(process.argv[2]??'');if(!evidence.startsWith('/home/ubuntu/backups/send-to-t3-code/'))throw Error('Private evidence directory required.');await mkdir(evidence,{recursive:true});
+ const evidence=resolve(process.argv[2]??'');if(!evidence.startsWith('/home/ubuntu/projects/send-to-t3-code/evidence/'))throw Error('Private evidence directory required.');await mkdir(evidence,{recursive:true});
  const settings=JSON.parse(await readFile('/home/ubuntu/vaults/QLO2/.obsidian/plugins/send-to-t3-code/data.json','utf8')),paired=settings.paired.find((c:any)=>c.environmentId==='3630e7fa-f1df-4631-b5a2-6086ddaf28a1');
  const cli='/home/ubuntu/.local/bin/t3',base='/home/ubuntu/.t3',issued=JSON.parse(execFileSync(cli,['auth','session','issue','--base-dir',base,'--ttl','5m','--label','connection-health-read-only-validation','--json','--scope','filesystem:read'],{encoding:'utf8'}));
  let drop=false,pongs=0;

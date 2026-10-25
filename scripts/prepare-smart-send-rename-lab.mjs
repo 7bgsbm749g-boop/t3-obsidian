@@ -6,7 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {join,resolve} from 'node:path';
 const evidence=resolve(process.argv[2]||'');
-if(!evidence.startsWith('/home/ubuntu/backups/send-to-t3-code/'))throw Error('Private evidence directory required.');
+if(!evidence.startsWith('/home/ubuntu/projects/send-to-t3-code/evidence/'))throw Error('Private evidence directory required.');
 await mkdir(evidence,{recursive:true});
 const record=join(evidence,'SETUP.json');
 // Refresh only the reviewed runtime in an already prepared synthetic lab.

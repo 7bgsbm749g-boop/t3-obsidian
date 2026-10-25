@@ -5,7 +5,7 @@ import {execFileSync} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
 import {resolve,join} from 'node:path';
 const evidence=resolve(process.argv[2]||'');
-if(!evidence.startsWith('/home/ubuntu/backups/send-to-t3-code/'))throw Error('Private evidence directory required.');
+if(!evidence.startsWith('/home/ubuntu/projects/send-to-t3-code/evidence/'))throw Error('Private evidence directory required.');
 await mkdir(evidence,{recursive:true});
 if(process.argv.includes('--revoke-session')){
   const lab=JSON.parse(await readFile(join(evidence,'LAB.json'),'utf8'));

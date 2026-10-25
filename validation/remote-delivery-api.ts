@@ -10,7 +10,7 @@ import {identityPathForSettings} from '../vault-identity';
 
 async function main(){
   const evidence=resolve(process.argv[2]??''),phase=process.argv[3];
-  if(!evidence.startsWith('/home/ubuntu/backups/send-to-t3-code/')||!['before','after'].includes(phase))throw Error('Supply a private lab directory and before/after phase.');
+  if(!evidence.startsWith('/home/ubuntu/projects/send-to-t3-code/evidence/')||!['before','after'].includes(phase))throw Error('Supply a private lab directory and before/after phase.');
   const lab=JSON.parse(await readFile(join(evidence,'LAB.json'),'utf8')),local=JSON.parse(await readFile(join(evidence,'credential-b.json'),'utf8'));
   const session=local.pairedSessions[lab.connectionId],connection={transport:'direct' as const,host:'direct',executable:'',url:session.url,environmentId:lab.environmentId};
   const settingsPath='.obsidian/plugins/send-to-t3-code/data.json',rpc=await connectT3Rpc(await environmentApi(connection,session),session.url),remote=await connectVaultRemote(connection,session);

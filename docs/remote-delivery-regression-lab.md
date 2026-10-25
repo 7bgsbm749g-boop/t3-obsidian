@@ -24,7 +24,7 @@ node scripts/prepare-remote-delivery-lab.mjs /path/under/the/private/backups \
   --archive release/send-to-t3-code-2.36.2.zip
 ```
 
-Use a real evidence directory under `/home/ubuntu/backups/send-to-t3-code/`.
+Use a real evidence directory in the project's gitignored `/home/ubuntu/projects/send-to-t3-code/evidence/` folder.
 Launch each desktop with its recorded separate profile through Cua. Start the
 two lab Sync services if necessary. Read `LAB.json` for the generated connection,
 environment and project IDs. Use `scripts/obsidian-command.py link-folder` in

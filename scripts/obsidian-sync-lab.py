@@ -20,7 +20,7 @@ LAB = Path('/home/ubuntu/.local/share/obsidian-sync-test-lab')
 MANIFEST = LAB / 'lab.json'
 OB = '/home/ubuntu/.local/bin/ob'
 AUTH = Path('/home/ubuntu/.config/obsidian-headless/auth_token')
-EVIDENCE = Path('/home/ubuntu/backups/send-to-t3-code/sync-test-lab')
+EVIDENCE = Path('/home/ubuntu/projects/send-to-t3-code/evidence/sync-test-lab')
 
 
 def stamp():

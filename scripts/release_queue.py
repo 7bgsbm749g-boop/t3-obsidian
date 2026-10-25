@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import tempfile
 
-QUEUE = Path('/home/ubuntu/backups/send-to-t3-code/release-queue')
+QUEUE = Path('/home/ubuntu/projects/send-to-t3-code/evidence/release-queue')
 UNIT = 'send-to-t3-release-queue'
 JOB_ID = re.compile(r'^\d{12}-[0-9a-f]{16}$')
 VERSION_FILES = {'package.json', 'package-lock.json', 'manifest.json', 'versions.json'}

@@ -1,21 +1,67 @@
 {
   "dependencies": {
-    "tests/response-emissions.test.ts": ["validation/thought-stream-lab.ts"],
-    "tests/native-save-barrier.test.ts": ["validation/autosave-recovery-lab.ts"],
-    "tests/cursor-send.test.ts": ["validation/palette-selection-lab.ts"],
-    "tests/import-save.test.ts": ["validation/import-save-lab.ts"],
-    "tests/stream-block-edit.test.ts": ["validation/interrupted-stream-close-lab.ts"],
-    "tests/run-import.test.ts": ["validation/run-import-lab.ts", "scripts/build-native-response-lab.mjs"],
-    "dist/main.js": ["main.ts", "esbuild.config.mjs", "manifest.json"],
-    "main.ts": ["styles.css"],
-    "native-response-view.ts": ["styles.css"],
-    "activity-shine.ts": ["styles.css"],
-    "folder-indicator.ts": ["styles.css"],
-    "codebase-view.ts": ["styles.css"],
-    "approval-ui.ts": ["styles.css"],
-    "question-ui.ts": ["styles.css"],
-    "html-result-view.ts": ["styles.css"],
-    "scripts/release-qlo2.py": ["scripts/laptop-reload.py", "scripts/obsidian-command.py"],
-    "scripts/test_release_qlo2.py": ["scripts/release-qlo2.py"]
+    "tests/response-emissions.test.ts": [
+      "validation/thought-stream-lab.ts"
+    ],
+    "tests/native-save-barrier.test.ts": [
+      "validation/autosave-recovery-lab.ts"
+    ],
+    "tests/cursor-send.test.ts": [
+      "validation/palette-selection-lab.ts"
+    ],
+    "tests/import-save.test.ts": [
+      "validation/import-save-lab.ts"
+    ],
+    "tests/stream-block-edit.test.ts": [
+      "validation/interrupted-stream-close-lab.ts"
+    ],
+    "tests/run-import.test.ts": [
+      "validation/run-import-lab.ts",
+      "scripts/build-native-response-lab.mjs"
+    ],
+    "dist/main.js": [
+      "main.ts",
+      "esbuild.config.mjs",
+      "manifest.json"
+    ],
+    "main.ts": [
+      "styles.css"
+    ],
+    "native-response-view.ts": [
+      "styles.css"
+    ],
+    "activity-shine.ts": [
+      "styles.css"
+    ],
+    "folder-indicator.ts": [
+      "styles.css"
+    ],
+    "codebase-view.ts": [
+      "styles.css"
+    ],
+    "approval-ui.ts": [
+      "styles.css"
+    ],
+    "question-ui.ts": [
+      "styles.css"
+    ],
+    "html-result-view.ts": [
+      "styles.css"
+    ],
+    "scripts/release-qlo2.py": [
+      "scripts/laptop-reload.py",
+      "scripts/obsidian-command.py"
+    ],
+    "scripts/test_release_qlo2.py": [
+      "scripts/release-qlo2.py"
+    ],
+    "scripts/test_evidence_paths.py": [
+      "scripts/obsidian-sync-lab.py",
+      "scripts/prepare-remote-delivery-lab.mjs",
+      "scripts/prepare-smart-send-rename-lab.mjs",
+      "validation/connection-health-live.ts",
+      "validation/remote-delivery-api.ts",
+      "validation/remote-delivery-results.ts"
+    ]
   }
 }

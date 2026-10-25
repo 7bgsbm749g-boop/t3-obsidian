@@ -150,7 +150,7 @@ Primary references:
 `node --import tsx scripts/build-device-completion-sync-lab.mjs PRIVATE_EVIDENCE_DIRECTORY`
 installs a synthetic fixture only in these two lab vaults, backs up their app and
 community-plugin configuration outside Sync, and records a unique note/binding.
-Use a new directory under `/home/ubuntu/backups/send-to-t3-code/`. Launch the two
+Use a new directory in the project's gitignored `/home/ubuntu/projects/send-to-t3-code/evidence/` folder. Launch the two
 profiles separately with Cua Driver. Wait for both `a-ready.json` and
 `b-ready.json`; the fixture checks native editor adoption of the original before
 registration. Stop only B's Sync, then create `finish.json` in the evidence

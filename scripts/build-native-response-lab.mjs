@@ -10,10 +10,12 @@ if(!process.argv[2])throw Error('Specify a new private evidence directory.');
 if(!['--thoughts','--autosave-recovery','--stream-close','--palette-selection','--run-import','--stream-stop','--per-note-sync','--import-save','--sign-in','--response-drag','--scroll-follow','--megapatch-typing','--languages','--dense','--direct','--codebase','--interaction','--html'].some(flag=>process.argv.includes(flag)))throw Error('Choose an existing local response validation mode; the lease-host lab is retired.');
 async function canonical(path){try{return await realpath(path);}catch(error){if(error.code!=='ENOENT')throw error;return resolve(await canonical(dirname(path)),basename(path));}}
 const root=await canonical(resolve(process.argv[2]));
-for(const vault of ['/home/ubuntu/vaults/QLO2','/home/ubuntu/Obsidian Vault',process.cwd()]){
+for(const vault of ['/home/ubuntu/vaults/QLO2','/home/ubuntu/Obsidian Vault']){
   const rel=relative(await realpath(vault),root);
-  if(!rel||!isAbsolute(rel)&&rel!=='..'&&!rel.startsWith('../'))throw Error('The lab must be outside source and synced vaults.');
+  if(!rel||!isAbsolute(rel)&&rel!=='..'&&!rel.startsWith('../'))throw Error('The lab must be outside synced vaults.');
 }
+const evidenceRoot=await canonical(resolve('evidence')),evidenceRelative=relative(evidenceRoot,root);
+if(!evidenceRelative||isAbsolute(evidenceRelative)||evidenceRelative==='..'||evidenceRelative.startsWith('../'))throw Error('Use a task directory inside this project’s gitignored evidence/ folder.');
 try{await access(root);throw Error('Use a new evidence directory; previous evidence is immutable.');}catch(error){if(error.code!=='ENOENT')throw error;}
 const vault=join(root,'vault'),plugin=join(vault,'.obsidian/plugins/coordinated-response-lab'),profile=join(root,'profile');
 await mkdir(plugin,{recursive:true});await mkdir(profile);

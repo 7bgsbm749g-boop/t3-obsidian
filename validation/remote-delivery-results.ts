@@ -7,7 +7,7 @@ import {readInlineSnapshot} from '../thread-stream';
 import {applyThreadItem,turnForMessage,turnPhase} from '../inline-thread';
 
 async function main(){
-  const evidence=resolve(process.argv[2]??'');if(!evidence.startsWith('/home/ubuntu/backups/send-to-t3-code/'))throw Error('Private lab evidence directory required.');
+  const evidence=resolve(process.argv[2]??'');if(!evidence.startsWith('/home/ubuntu/projects/send-to-t3-code/evidence/'))throw Error('Private lab evidence directory required.');
   const json=async(name:string)=>JSON.parse(await readFile(join(evidence,name),'utf8'));
   const lab=await json('LAB.json'),local=await json('credential-b.json'),session=local.pairedSessions[lab.connectionId];
   const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:session.url,environmentId:lab.environmentId},session),access={origin:session.url,api};

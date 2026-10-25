@@ -43,7 +43,7 @@ def install(home, source=SOURCE, backups=None, check=False):
             try:
                 temporary.symlink_to(source, target_is_directory=True)
                 if target.exists():
-                    directory = backups or home / 'backups' / 'send-to-t3-code' / 'skills'
+                    directory = backups or ROOT / 'evidence' / 'skills'
                     directory.mkdir(parents=True, exist_ok=True)
                     backup = directory / (dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex)
                     shutil.move(str(target), str(backup))
