@@ -65,7 +65,7 @@ export default class CompletionReadLab extends Plugin {
       this.glow?.dispose();this.indicators?.dispose();
       await this.app.workspace.getLeaf(false).setViewState({type:'empty',state:{}});
       for(const notePath of fixtures){const file=this.app.vault.getAbstractFileByPath(notePath);if(file)await this.app.vault.delete(file);}
-      const directory=this.app.vault.getAbstractFileByPath(folder);if(directory)await this.app.vault.delete(directory);
+      const directory=this.app.vault.getAbstractFileByPath(folder);if(directory)await this.app.vault.delete(directory,true);
       checks.temporaryNotesDeleted=fixtures.every(value=>this.app.vault.getAbstractFileByPath(value)===null);
       checks.temporaryFolderDeleted=this.app.vault.getAbstractFileByPath(folder)===null;
       this.write('RESULT.json',{scope:'Real desktop Obsidian editor/explorer, synthetic T3 read state. No Sync, provider delivery, or native mobile coverage.',checks,pass:Object.values(checks).every(Boolean)&&Object.keys(checks).length>=13,visits,testThreads:[],testNotes:fixtures,cleanupVerified:checks.temporaryNotesDeleted&&checks.temporaryFolderDeleted});
