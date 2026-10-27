@@ -23,7 +23,7 @@ export function normalizeFolderPath(value:string){
 
 /** The nearest saved association owns a note. */
 export function folderLinkForPath(links:FolderLink[],path:string):FolderLink|undefined{
-  return links.filter(link=>link.folderPath==='/'||path.startsWith(link.folderPath+'/'))
+  return links.filter(link=>link.folderPath!=='/'&&path.startsWith(link.folderPath+'/'))
     .sort((a,b)=>(b.folderPath==='/'?0:b.folderPath.length)-(a.folderPath==='/'?0:a.folderPath.length))[0];
 }
 

@@ -83,6 +83,10 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
   return async(path,payload,options)=>{
     requestAborted(options?.signal);
     const request:T3Api=(target,body)=>raw(target,body,options);
+    if(path==='/api/orchestration/no-project'){
+      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      try{return await rpc.call('projects.ensureScratch',{});}finally{rpc.close();}
+    }
     if(path==='/api/assets/create-url'){
       const rpc=await connectT3Rpc(raw,origin,makeSocket);
       try{return await rpc.call('assets.createUrl',payload);}finally{rpc.close();}

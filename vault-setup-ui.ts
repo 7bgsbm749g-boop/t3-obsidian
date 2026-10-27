@@ -1,5 +1,5 @@
 import {App,Modal,Setting} from 'obsidian';
-import type {Project} from './bridge';
+import type {VaultHost} from './vault-host';
 import type {VaultRemote} from './vault-connection';
 import {discoverVaultRoots} from './vault-connection';
 
@@ -10,7 +10,7 @@ export interface VaultSetupHost {
   refresh():Promise<void>;
   connect(machine:VaultMachine):Promise<VaultRemote>;
   roots(machine:VaultMachine):string[];
-  link(machine:VaultMachine,root?:string,remote?:VaultRemote):Promise<Project>;
+  link(machine:VaultMachine,root?:string,remote?:VaultRemote):Promise<VaultHost>;
 }
 export class VaultSetupCancelled extends Error {constructor(){super('Vault setup closed. Your message is still ready to send.');}}
 
@@ -18,8 +18,8 @@ export class VaultSetupModal extends Modal {
   private machineId='';private machine?:VaultMachine;private remote?:VaultRemote;
   private roots:string[]=[];private folder='~';private entries:{name:string;fullPath:string}[]=[];
   private status='';private working=false;private ended=false;private generation=0;private completed=false;
-  private resolve!:(project:Project)=>void;private reject!:(error:Error)=>void;
-  private readonly result=new Promise<Project>((resolve,reject)=>{this.resolve=resolve;this.reject=reject;});
+  private resolve!:(host:VaultHost)=>void;private reject!:(error:Error)=>void;
+  private readonly result=new Promise<VaultHost>((resolve,reject)=>{this.resolve=resolve;this.reject=reject;});
   constructor(app:App,private host:VaultSetupHost){super(app);}
   wait(){this.open();return this.result;}
   get isClosed(){return this.ended;}
@@ -28,7 +28,7 @@ export class VaultSetupModal extends Modal {
   private draw(){
     if(this.ended)return;
     this.titleEl.setText(`Connect ${this.host.vaultName}`);this.contentEl.empty();
-    this.contentEl.createEl('p',{text:'Choose the computer that has a synced copy of this vault. Its T3 project will become the default for chat outside linked folders.'});
+    this.contentEl.createEl('p',{text:'Choose the computer that has a synced copy of this vault. It hosts subscriptions and staged note edits. New unlinked conversations use No project on this computer.'});
     const machines=this.host.machines();
     if(!machines.some(m=>m.id===this.machineId))this.machineId=machines[0]?.id??'';
     new Setting(this.contentEl).setName('Machine').addDropdown(d=>{
@@ -78,5 +78,5 @@ export class VaultSetupModal extends Modal {
     if(this.ended)return;
     const project=await this.host.link(machine,folder,remote);if(!this.ended)this.finish(project);
   });}
-  private finish(project:Project){this.completed=true;this.resolve(project);this.close();}
+  private finish(host:VaultHost){this.completed=true;this.resolve(host);this.close();}
 }

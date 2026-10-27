@@ -12,6 +12,7 @@ import {t3Api,abortableRead,requestAborted,type AbortableT3Api,type T3RequestOpt
 import {T3_PROTOCOL_VERSION,T3_PROTOCOL_HEADER} from './orchestration-v2';
 import type {SocketFactory} from './t3-rpc';
 import {PLUGIN_SCOPE,hasPluginPermissions} from './environment-permissions';
+import {ensureNoProject} from './no-project';
 import {AUTO_THREAD_TITLE} from './thread-title';
 export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean}
 export interface PairedSession {token:string;expiresAt:number;environmentId:string;url:string;dpopKeyId?:string;accountId?:string;permissions?:string[]}
@@ -99,6 +100,7 @@ export interface DirectReadOptions extends T3RequestOptions {control?:boolean}
 export async function readDirect(c:Connection,args:string[],s?:PairedSession,fetcher:Fetcher=fetch,options:DirectReadOptions={}){
  const access=await readApi(c,s,fetcher,options.signal),api=(path:string)=>access.api('/api/orchestration/'+path,undefined,options);
  try{
+ if(args[0]==='no-project'&&args.length===1)return await ensureNoProject(access.api);
  if(args[0]==='projects'&&args.length===1)return {projects:(await api('shell')).projects};
  if(args[0]==='threads'&&args[1]==='--project'&&args.length===3)return {threads:(await api('shell')).threads.filter((t:any)=>t.projectId===args[2])};
  if(args[0]==='read'&&args.length===2)return (await api('threads/'+encodeURIComponent(args[1])+(options.control?'?controlOnly=true':'?turnLimit=10'))).thread;

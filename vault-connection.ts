@@ -47,7 +47,7 @@ export async function connectVaultRemote(c:Connection,s:PairedSession|undefined,
       }
       // Older hosts remain compatible only when the complete settings can be
       // read. Never infer a vault identity from a truncated JSON prefix.
-      try{const result=await rpc('projects.readFile',{cwd:root,relativePath:settingsPath});if(result.truncated)throw Error('Update and reload Send to T3 Code on the vault project machine to verify its large settings file.');if(typeof result.contents!=='string')return false;let data;try{data=JSON.parse(result.contents);}catch{return false;}return vaultIdentity(data)===id;}
+      try{const result=await rpc('projects.readFile',{cwd:root,relativePath:settingsPath});if(result.truncated)throw Error('Update and reload Send to T3 Code on the vault connection machine to verify its large settings file.');if(typeof result.contents!=='string')return false;let data;try{data=JSON.parse(result.contents);}catch{return false;}return vaultIdentity(data)===id;}
       catch(error){if(error instanceof VaultRpcError&&error.kind==='ProjectReadFileError')return false;throw error;}
     },
     hasNote:async(root,path)=>{

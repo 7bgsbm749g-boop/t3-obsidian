@@ -29,16 +29,16 @@ test('link commands save file destinations and subsequent project relinks preser
 });
 test('strict agent folder paths and explicit identities reject unsafe or ambiguous input',()=>{
   for(const path of ['','..','Notes/../Secret','/Notes','Notes/','Notes//A','.obsidian','Notes/.hidden','C:\\vault','Notes\\A','Notes\nA','Notes\x7fA',' Notes'])assert.throws(()=>validateAgentCommand(command(path)));
-  for(const path of ['/','Notes','Projects/Side/handoff'])assert.equal(validateFolderCommand(command(path,{mode:path==='/'?'self':'project'})).folderPath,path);
+  for(const path of ['Notes','Projects/Side/handoff'])assert.equal(validateFolderCommand(command(path,{mode:path==='/'?'self':'project'})).folderPath,path);
   for(const extra of [{projectId:''},{connectionId:''},{environmentId:''},{mode:'create'},{relink:undefined},{projectTitle:'Forged'},{kind:'unlink-folder',projectId:'project'}])assert.throws(()=>validateAgentCommand(command('Notes',extra)));
-  assert.throws(()=>validateFolderCommand(command('/')),/root requires self/);
+  assert.throws(()=>validateFolderCommand(command('/')),/root is not a project link/);
 });
 test('inspection reports direct and nearest inherited links and root-only automatic project routing',()=>{
   const links=[link('/'),link('Notes'),link('Notes/Inner')];
   const result=inspectFolderLinks('request','vault','Notes/Inner/Child',links);
   assert.equal(result.directLink,null);assert.equal(result.effectiveLink?.folderPath,'Notes/Inner');assert.equal(result.routing,'linked-project');
-  const rootOnly=inspectFolderLinks('request','vault','Other',[links[0]]);assert.equal(rootOnly.effectiveLink?.folderPath,'/');assert.equal(rootOnly.routing,'new-folder-project');
-  assert.equal(inspectFolderLinks('r','v','/',[]).routing,'vault-project-setup');
+  const rootOnly=inspectFolderLinks('request','vault','Other',[links[0]]);assert.equal(rootOnly.effectiveLink,null);assert.equal(rootOnly.routing,'no-project');
+  assert.equal(inspectFolderLinks('r','v','/',[]).routing,'no-project');
 });
 test('commands link, require deliberate relinking, preserve nested links, and unlink to inheritance',async()=>{
   const h=harness([link('Notes/Inner')]);const request=command();
