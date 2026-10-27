@@ -8,6 +8,7 @@ import type {InlineQuestionFollow} from './inline-questions';
 import type {IntermediateMode,FinalAnswerFormat} from './response-presentation';
 import type {StreamReadFailure} from './t3-response-limits';
 import {submittedAnswers} from './response-answers';
+import {isT3MessageId} from './t3-message-id';
 /** Shared reply data and validation only. Remote lease writers are retired. */
 export interface ResponseStorageTarget {environmentId:string;workspaceRoot:string;directory:string;connectionId?:string}
 export interface ResponseRequest {
@@ -85,7 +86,7 @@ export function validateResponseRequest(value:any):ResponseRequest {
   if(value?.initialInput!==undefined){
     const input=value.initialInput,answer=input?.answer;
     const asyncAnswer=answer&&typeof answer.requestId==='string'&&answer.requestId.length>0&&input.messageId===`async-answer:${answer.requestId}`&&Array.isArray(answer.questions)&&answer.questions.every((question:any)=>question&&typeof question.id==='string'&&typeof question.question==='string')&&(!answer.answers||JSON.stringify(submittedAnswers(answer.answers))===JSON.stringify(answer.answers));
-    if(!uuid.test(input?.messageId??'')&&!asyncAnswer||answer&&!asyncAnswer||input.messageId!==value.messageId||typeof input.text!=='string'||!input.text.trim()||input.text.length>120_000||input.label!==undefined&&(typeof input.label!=='string'||input.label.length>200))throw Error('Invalid initial response input.');
+    if(!isT3MessageId(input?.messageId)&&!asyncAnswer||answer&&!asyncAnswer||input.messageId!==value.messageId||typeof input.text!=='string'||!input.text.trim()||input.text.length>120_000||input.label!==undefined&&(typeof input.label!=='string'||input.label.length>200))throw Error('Invalid initial response input.');
   }
   if(value?.threadTitle!==undefined&&(typeof value.threadTitle!=='string'||value.threadTitle.length>200))throw Error('Invalid thread title.');
   if(value?.independent!==undefined&&typeof value.independent!=='boolean')throw Error('Invalid binding preference.');
@@ -93,7 +94,7 @@ export function validateResponseRequest(value:any):ResponseRequest {
   if(value?.finalAnswerFormat==='raw-markdown'&&![3,4].includes(value.version))throw Error('Raw Markdown requires an updated response writer.');
   if(value?.intermediateMode!==undefined&&!['remove','keep','collapse'].includes(value.intermediateMode))throw Error('Invalid hosted response preference.');
   if(value?.keepIntermediate!==undefined&&typeof value.keepIntermediate!=='boolean')throw Error('Invalid hosted response preference.');
-  if(![1,2,3,4].includes(value?.version)||(value.version!==1&&!uuid.test(value.initialOwner??''))||!uuid.test(value.id??'')||!(typeof value.messageId==='string'&&(uuid.test(value.messageId)||/^async-answer:[^\s\x00-\x1f]{1,2000}$/.test(value.messageId)))||!safeNotePath(value.notePath)||
+  if(![1,2,3,4].includes(value?.version)||(value.version!==1&&!uuid.test(value.initialOwner??''))||!uuid.test(value.id??'')||!(isT3MessageId(value.messageId)||typeof value.messageId==='string'&&/^async-answer:[^\s\x00-\x1f]{1,2000}$/.test(value.messageId))||!safeNotePath(value.notePath)||
     ![value.threadId,value.vaultId,value.projectId,value.threadEnvironmentId,value.createdAt,value.host?.environmentId,value.host?.workspaceRoot,value.host?.directory].every(x=>typeof x==='string'&&x.length>0)||
     !/^[0-9a-f]{64}$/.test(value.initialHash))throw Error('Invalid hosted response job.');
   return value;

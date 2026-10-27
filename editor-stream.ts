@@ -3,7 +3,7 @@ import {responseAnchor} from './native-response-projection';
 import {intermediateMode} from './response-presentation';
 import {commandId} from './direct';
 import {initialRegion,endInsertionOffset,regionBody,startMarker} from './inline-thread';
-import {safeNotePath,type ResponseRequest} from './response-model';
+import {safeNotePath,validateResponseRequest,type ResponseRequest} from './response-model';
 import {resolveCursorInsertion,type CursorInsertion} from './cursor-insertion';
 
 export interface StreamNoteIO {
@@ -17,6 +17,9 @@ export async function editorStream(source:ResponseRequest,notePath:string,io:Str
   if(!safeNotePath(notePath))throw Error('Choose a vault-relative Markdown note path.');
   const id=bindingId??commandId(source.id,`binding:${notePath}`),region=initialRegion(id,source.initialInput,source.threadTitle,intermediateMode(source.intermediateMode,source.keepIntermediate),{startedAt:source.createdAt});
   const request:ResponseRequest={...source,id,notePath,initialHash:region.bodyHash,independent:true};
+  // Registration persists this contract after insertion. Reject invalid data
+  // before invoking note IO, so a failed request cannot leave an empty slot.
+  validateResponseRequest(request);
   if(await io.completed?.(id))return request;
   await io.beforeInsert?.(request);
   const document=await io.updateNote(notePath,current=>{

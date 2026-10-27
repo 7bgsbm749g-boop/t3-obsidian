@@ -1,4 +1,5 @@
 import {safeNotePath,type ResponseRequest} from './response-model';
+import {isT3MessageId} from './t3-message-id';
 
 export interface NoteContextCommand {version:1;id:string;kind:'note-context';notePath?:string;threadId?:string;messageId?:string;environmentId?:string}
 /** Small, immutable send identities. No prompt, response body, or credentials. */
@@ -11,13 +12,13 @@ export function contextBindingIds(request:{inlineBindings?:{id:string}[];inlineH
 }
 export function isNoteContextCommand(value:{kind?:string}):value is NoteContextCommand{return value.kind==='note-context';}
 export function validateNoteContextCommand(value:any):NoteContextCommand {
-  if(value?.version!==1||!uuid(value.id)||!isNoteContextCommand(value)||value.notePath!==undefined&&!safeNotePath(value.notePath)||value.threadId!==undefined&&!identity(value.threadId)||value.messageId!==undefined&&!uuid(value.messageId)||value.environmentId!==undefined&&!identity(value.environmentId)||!value.notePath&&!value.threadId&&!value.messageId)throw Error('Choose a note or exact T3 message for context lookup.');
+  if(value?.version!==1||!uuid(value.id)||!isNoteContextCommand(value)||value.notePath!==undefined&&!safeNotePath(value.notePath)||value.threadId!==undefined&&!identity(value.threadId)||value.messageId!==undefined&&!isT3MessageId(value.messageId)||value.environmentId!==undefined&&!identity(value.environmentId)||!value.notePath&&!value.threadId&&!value.messageId)throw Error('Choose a note or exact T3 message for context lookup.');
   return value;
 }
 export function mergeNoteContexts(...sources:unknown[]):NoteContextRecord[] {
   const records=new Map<string,NoteContextRecord>();
   for(const source of sources)if(Array.isArray(source))for(const item of source){
-    if(!uuid(item?.messageId)||![item.threadId,item.projectId,item.environmentId].every(identity)||item.notePath!==undefined&&!safeNotePath(item.notePath)||!Array.isArray(item.bindingIds)||item.bindingIds.length>32||!item.bindingIds.every(uuid)||new Set(item.bindingIds).size!==item.bindingIds.length||typeof item.createdAt!=='string'||!Number.isFinite(Date.parse(item.createdAt)))continue;
+    if(!isT3MessageId(item?.messageId)||![item.threadId,item.projectId,item.environmentId].every(identity)||item.notePath!==undefined&&!safeNotePath(item.notePath)||!Array.isArray(item.bindingIds)||item.bindingIds.length>32||!item.bindingIds.every(uuid)||new Set(item.bindingIds).size!==item.bindingIds.length||typeof item.createdAt!=='string'||!Number.isFinite(Date.parse(item.createdAt)))continue;
     const record:NoteContextRecord={messageId:item.messageId,threadId:item.threadId,projectId:item.projectId,environmentId:item.environmentId,...(item.notePath?{notePath:item.notePath}:{}),bindingIds:[...item.bindingIds],createdAt:item.createdAt};
     const key=JSON.stringify([record.environmentId,record.threadId,record.messageId]),old=records.get(key);
     if(!old||JSON.stringify(record)>JSON.stringify(old))records.set(key,record);
