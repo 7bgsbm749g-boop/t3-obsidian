@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {continueQuestionAnswer,questionAnswerBindingId,type QuestionContinuationIO} from '../question-continuation';
+import {continueQuestionAnswer,type QuestionContinuationIO} from '../question-continuation';
 import {QuestionController,type QuestionAnswerFollow} from '../question-controller';
 import {renderQuestion,type QuestionTarget} from '../questions';
 import {contentHash} from '../completion';
@@ -19,24 +19,24 @@ function fixture(){
  const follow:QuestionAnswerFollow={request,command:{type:'thread.user-input.respond',commandId:randomUUID(),threadId:target.threadId,requestId:target.requestId,answers:{choice:'Yes'},createdAt:at(20)},notePath:path,accepted:true};
  const source:ResponseRequest={version:4,localOnly:true,nativeProjection:true,responseContainer:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'environment',workspaceRoot:'/synthetic',directory:'.obsidian/inline'},notePath:path,threadId:target.threadId,messageId:randomUUID(),projectId:randomUUID(),threadEnvironmentId:'environment',initialHash:contentHash(''),createdAt:at(0),intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'};
  let records:ResponseBindingData=updateResponseBindingData({},source,'test'),registrations=0,closed=0;
- const saved='Original saved final.\n\n'+renderQuestion(request,target)+'\n\nOutside user text.\n';
+ const body='Original saved final.\n\n'+renderQuestion(request,target),saved=body+'\n\nOutside user text.\n';
  const documents=new Map([[path,saved]]),registered:ResponseRequest[]=[];
- const thread:any={id:target.threadId,projectId:source.projectId,title:'Late question',messages:[{id:'before',role:'assistant',turnId:'source',text:'Original saved final.',streaming:false,createdAt:at(5)},{id:`async-answer:${target.requestId}`,role:'user',turnId:'answer-run',text:'Continue? Yes',streaming:false,createdAt:at(20)}],activities:[{id:'requested',kind:'user-input.requested',summary:'Question',turnId:'source',createdAt:at(1),payload:request},{id:'resolved',kind:'user-input.resolved',summary:'Resolved',turnId:'source',createdAt:at(20),payload:{requestId:target.requestId,responseMode:'message',answers:{choice:'Yes'}}}],turns:{source:{turnId:'source',state:'completed',requestedAt:at(0),completedAt:at(10),assistantMessageId:'before'}},latestTurn:{turnId:'answer-run',state:'running',messageId:`async-answer:${target.requestId}`,requestedAt:at(20)},session:{status:'running',activeTurnId:'answer-run'}};
- const io:QuestionContinuationIO={vaultId:'vault',owner:randomUUID(),allowed:()=>true,access:async()=>({origin:'https://synthetic.invalid',api:async()=>({snapshotSequence:10,thread}),close:()=>{closed++;}}),bindings:()=>responseBindingRequests(records),notePaths:()=>[...documents.keys()],readNote:async path=>documents.get(path),updateNote:async(path,change,allowed)=>{if(!allowed())return;const current=documents.get(path);if(current===undefined)return;const next=change(current);documents.set(path,next);return next;},host:async()=>{throw Error('Use the original host');},policy:()=>({intermediateMode:'keep',finalAnswerFormat:'formatted'}),register:async value=>{registrations++;records=updateResponseBindingData(records,value,'test');registered.push(value);}};
+ const thread:any={id:target.threadId,projectId:source.projectId,title:'Late question',messages:[{id:'before',role:'assistant',turnId:'source',text:'Original saved final.',streaming:false,createdAt:at(5)},{id:`async-answer:${target.requestId}`,role:'user',turnId:'answer-run',text:'Continue? Yes',streaming:false,createdAt:at(20)}],activities:[{id:'requested',kind:'user-input.requested',summary:'Question',turnId:'source',createdAt:at(1),payload:request},{id:'resolved',kind:'user-input.resolved',summary:'Resolved',turnId:'source',createdAt:at(20),payload:{requestId:target.requestId,responseMode:'message',answers:{choice:'Yes'}}}],turns:{source:{turnId:'source',messageId:source.messageId,state:'completed',requestedAt:at(0),completedAt:at(10),assistantMessageId:'before'}},latestTurn:{turnId:'answer-run',state:'running',messageId:`async-answer:${target.requestId}`,requestedAt:at(20)},session:{status:'running',activeTurnId:'answer-run'}};
+ const io:QuestionContinuationIO={vaultId:'vault',owner:randomUUID(),allowed:()=>true,access:async()=>({origin:'https://synthetic.invalid',api:async()=>({snapshotSequence:10,thread}),close:()=>{closed++;}}),bindings:()=>responseBindingRequests(records),notePaths:()=>[...documents.keys()],readNote:async path=>documents.get(path),updateNote:async(path,change,allowed)=>{if(!allowed())return;const current=documents.get(path);if(current===undefined)return;const next=change(current);documents.set(path,next);return next;},host:async()=>{throw Error('Use the original host');},policy:()=>({intermediateMode:'keep',finalAnswerFormat:'formatted'}),savedBodies:async()=>[body],register:async value=>{registrations++;records=updateResponseBindingData(records,value,'test');registered.push(value);}};
  return {target,path,source,follow,thread,saved,documents,io,registered,registrations:()=>registrations,closed:()=>closed,records:()=>records};
 }
 
-test('a late answer gets one new binding for its exact message while saved prose and user edits remain intact',async()=>{
+test('a late answer reopens the exact saved original response and preserves outside edits',async()=>{
  const h=fixture();assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),true);
  const binding=h.registered[0],note=h.documents.get(h.path)!;
- assert.equal(binding.id,questionAnswerBindingId(h.target,h.path));assert.equal(binding.messageId,`async-answer:${h.target.requestId}`);
- assert.equal(binding.initialInput?.answer?.questions[0].question,'Continue?');assert.equal(binding.initialInput?.answer?.answers?.choice,'Yes');
- assert.equal(binding.finalAnswerFormat,'raw-markdown');assert.equal(binding.intermediateMode,'collapse');assert.ok(note.startsWith(h.saved));
- assert.equal(h.closed(),1);assert.equal(responseBindingRequests(h.records()).length,2);
+ assert.equal(binding.id,h.source.id);assert.equal(binding.messageId,h.source.messageId);assert.equal(binding.localResume?.questionFollows?.[0].requestId,h.target.requestId);
+ assert.deepEqual(binding.localResume?.questionFollows?.[0].questions,h.follow.request.questions);
+ assert.equal(binding.finalAnswerFormat,'raw-markdown');assert.equal(binding.intermediateMode,'collapse');assert.ok(note.endsWith('Outside user text.\n'));assert.doesNotMatch(note,/Original saved final/);
+ assert.equal(h.closed(),1);assert.equal(responseBindingRequests(h.records()).length,1);
  await continueQuestionAnswer(h.target,h.follow,h.io);assert.equal(h.documents.get(h.path),note);assert.equal(note.split(responseAnchor(binding.id)).length-1,1);
- // A completed or removed continuation must never be resurrected by a retry.
+ // Changed or removed saved prose cannot be guessed at during a retry.
  h.documents.set(h.path,note.replace(responseAnchor(binding.id),'Saved follow-up final.'));
- const complete=h.documents.get(h.path);await continueQuestionAnswer(h.target,h.follow,h.io);assert.equal(h.documents.get(h.path),complete);
+ const complete=h.documents.get(h.path);assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),false);assert.equal(h.documents.get(h.path),complete);
 });
 
 test('active-run answers use their current stream; unrelated output cannot stand in for an unprojected answer',async()=>{
@@ -49,7 +49,7 @@ test('native runtime request identities longer than 200 characters retain their 
  const h=fixture(),id='runtime-request:provider:codex:'+('native-request:async%3Acall_'.repeat(12));
  h.target.requestId=id;h.follow.request.requestId=id;h.follow.command.requestId=id;
  h.thread.messages[1].id=`async-answer:${id}`;h.thread.latestTurn.messageId=`async-answer:${id}`;h.thread.activities[1].payload.requestId=id;
- assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),true);assert.equal(h.registered[0].messageId,`async-answer:${id}`);
+ assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),true);assert.equal(h.registered[0].id,h.source.id);assert.equal(h.registered[0].localResume?.questionFollows?.[0].requestId,id);
 });
 
 test('failed registration after insertion retries the same container without another answer or duplicate block',async()=>{
@@ -72,7 +72,7 @@ test('native answers and dismissals never create answer-stream recovery intents'
 
 test('null-turn late answers use the source terminal boundary and do not adopt an unrelated latest run',async()=>{
  const h=fixture();h.thread.messages[1].turnId=null;h.thread.latestTurn={turnId:'unrelated',state:'running'};h.thread.session.activeTurnId='unrelated';
- assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),true);assert.equal(h.registered[0].messageId,`async-answer:${h.target.requestId}`);assert.equal(h.registered[0].importTurn,undefined);
+ assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),true);assert.equal(h.registered[0].id,h.source.id);assert.equal(h.registered[0].importTurn,undefined);
 });
 
 test('a renamed origin is found from its generated question, without adding streams to unrelated notes',async()=>{
@@ -96,12 +96,36 @@ test('an accepted answer remains recoverable through missing projection, reload,
  await Promise.all([controller.recoverAnswerStreams(),controller.recoverAnswerStreams()]);assert.equal(h.registrations(),1);assert.equal(dispatches,1);assert.equal(stored[0].answerFollow,undefined);controller.dispose();
 });
 
-test('local final saving of the follow-up replaces only the new container',async()=>{
+test('local final saving of the follow-up replaces the original container once',async()=>{
  const h=fixture(),callbacks=new Map<string,(update:DirectInlineUpdate)=>void>(),register=h.io.register;
  const managerIO:any={...h.io,localBindings:h.io.bindings,saveLocalBinding:register,openedNotes:()=>[...h.documents].map(([path,document])=>({path,document})),isOpen:()=>true,syncReady:()=>true};
  const manager=new LocalResponseManager(h.io.owner,'vault',managerIO,{read:h.io.readNote,compareAndSet:async(path,before,after,guard)=>{if(h.documents.get(path)!==before||guard?.()===false)return false;h.documents.set(path,after);return true;}},()=>0,(record,_access,receive)=>{callbacks.set(record.request.id,receive);return {tick(){},update(){},delivery(){},reconnect(){},suspend(){},dispose(){}} as any;});
  h.io.register=request=>manager.register(request);
  await continueQuestionAnswer(h.target,h.follow,h.io);const binding=h.registered[0];
  callbacks.get(binding.id)!({request:binding,messageId:binding.messageId,sequence:20,body:'New follow-up final.',turnId:'answer-run',phase:'complete',completionVerified:true});await drain();
- assert.equal(h.documents.get(h.path),h.saved+'New follow-up final.\n');manager.dispose();h.io.register=register;
+ assert.equal(h.documents.get(h.path),'New follow-up final.\n\nOutside user text.\n');manager.dispose();h.io.register=register;
+});
+
+test('a retained original anchor resumes without adding a binding or changing saved note bytes',async()=>{
+ const h=fixture(),document='Before\n\n'+responseAnchor(h.source.id)+'\n\nOutside edit';h.documents.set(h.path,document);
+ assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),true);assert.equal(h.documents.get(h.path),document);assert.equal(h.registered[0].id,h.source.id);assert.equal(responseBindingRequests(h.records()).length,1);
+});
+
+for(const changed of ['edited','copied','fenced'] as const)test(`an ${changed} saved response cannot be reopened by guessing`,async()=>{
+ const h=fixture(),body=(await h.io.savedBodies!(h.source))[0];
+ h.documents.set(h.path,changed==='edited'?h.saved.replace('Original saved final.','Edited saved final.'):changed==='copied'?h.saved+'\n'+body:'```md\n'+h.saved+'\n```');
+ const before=h.documents.get(h.path);let warning='';h.io.blocked=(_target,detail)=>{warning=detail;};
+ assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),false);assert.equal(h.documents.get(h.path),before);assert.equal(h.registered.length,0);assert.match(warning,/answer was sent/);
+});
+
+test('the accepted recovery intent stays pending until the original reader observes the exact answer turn',async()=>{
+ const h=fixture();h.io.followed=()=>false;
+ assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),false);const document=h.documents.get(h.path);h.io.followed=()=>true;
+ assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),true);assert.equal(h.documents.get(h.path),document);assert.equal(h.registered.every(binding=>binding.id===h.source.id),true);
+});
+
+test('a question asked by a follow-up turn retains the original root response identity',async()=>{
+ const h=fixture();h.thread.turns.source.messageId='follow-up-prompt';h.documents.set(h.path,responseAnchor(h.source.id));
+ h.io.ownsQuestion=(request,requestId,turnId)=>request.id===h.source.id&&requestId===h.target.requestId&&turnId==='source';
+ assert.equal(await continueQuestionAnswer(h.target,h.follow,h.io),true);assert.equal(h.registered[0].id,h.source.id);
 });

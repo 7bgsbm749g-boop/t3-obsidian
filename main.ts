@@ -1,4 +1,4 @@
-import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,rememberResponse,confirmSmartSend,moveSmartNotes,recoverSmartNote,sourceProjection,smartNote,type SmartSendData,type SmartCapture,type Span} from './smart-send';
+import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,rememberResponse,confirmSmartSend,moveSmartNotes,recoverSmartNote,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from './smart-send';
 import {DuplicateResponseLocation} from './response-location';
 import {retainedLocalFinal,restoredLocalFinal} from './local-final-cache';
 import {HtmlResultStore} from './html-result-store';
@@ -99,7 +99,7 @@ import {hiddenInlineMarkerExtension,hideResponseContainerBoundaries} from './inl
 import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,selectionOverlapsInlineResponse,selectionAnchor,initialRegion,endInsertionOffset,endMarker,failedInlineIds,regionBody,finalizeRegion,startMarker,type SelectionAnchor} from './inline-thread';
 import {QuestionController} from './question-controller';
 import {closeNoteTabPanel} from './note-tab-panel';
-import {QuestionModal,questionButton,questionEditorExtension} from './question-ui';
+import {QuestionModal,questionButton,questionEditorExtension,installQuestionLinks} from './question-ui';
 import {questionTargets,parseQuestionToken,clearResolvedQuestion,removeDismissedQuestions,type QuestionTarget} from './questions';
 import {ApprovalController} from './approval-controller';
 import {approvalButton,approvalEditorExtension} from './approval-ui';
@@ -431,11 +431,16 @@ export default class SendToT3 extends Plugin {
       await this.inlineChat!.stopAt(id,view.editor,view,hosted?.hostTarget);
     }));
     const questionStorage=`${this.localKey}-questions-${this.settings.vaultId}`;
+    const questionResumeWarnings=new Set<string>();
     this.questions=new QuestionController(environmentId=>this.inlineThreadAccess(environmentId),{load:()=>{const saved=this.app.loadLocalStorage(questionStorage);return Array.isArray(saved)?saved:[];},save:records=>this.app.saveLocalStorage(questionStorage,records)},randomId,()=>new Date().toISOString(),(target,follow)=>continueQuestionAnswer(target,follow,{
       ...deviceNoteIO(this.app),vaultId:this.settings.vaultId,owner:this.inlineActor,
       access:environmentId=>this.inlineThreadAccess(environmentId),bindings:()=>responseBindingRequests(this.settings.responseBindings??{}),
       notePaths:()=>[...this.questionPaths,...this.app.workspace.getLeavesOfType('markdown').map(leaf=>(leaf.view as MarkdownView).file?.path).filter((path):path is string=>!!path)],
       host:()=>this.inlineHostTarget(),policy:()=>resolveJobOptions(this.settings.inlineStreaming).inline,
+      savedBodies:async request=>{const data=this.smartData(),bodies:string[]=[];for(const [id,record] of Object.entries(data.responses))if(id.startsWith(request.id+':')&&data.notes[record.noteId]?.path===request.notePath&&data.bodies[record.body])bodies.push(await unpackText(data.bodies[record.body]));return bodies;},
+      followed:(request,requestId)=>!!this.deviceInline?.localResponse(request.id)?.record.state?.questionFollows?.some(item=>item.requestId===requestId&&item.replyTurnId),
+      ownsQuestion:(request,requestId,turnId)=>!!this.deviceInline?.localResponse(request.id)?.record.state?.questionFollows?.some(item=>item.requestId===requestId&&item.turnId===turnId),
+      blocked:(target,detail)=>{const key=JSON.stringify(target);if(!questionResumeWarnings.has(key)){questionResumeWarnings.add(key);new Notice(detail,12000);}},
       register:async request=>{if(!this.deviceInline||this.stopped)throw Error('Question streaming is unavailable.');await this.deviceInline.register(request);},allowed:()=>!this.stopped,
     }));
     const approvalStorage=`${this.localKey}-approvals-${this.settings.vaultId}`;
@@ -443,6 +448,10 @@ export default class SendToT3 extends Plugin {
     const questionPaths=this.app.loadLocalStorage(`${questionStorage}-paths`);if(Array.isArray(questionPaths))for(const path of questionPaths)if(typeof path==='string')this.questionPaths.add(path);
     let dismissalRevision=this.questions.dismissalRevision;
     this.questions.subscribe(()=>{if(dismissalRevision===this.questions!.dismissalRevision)return;dismissalRevision=this.questions!.dismissalRevision;void this.cleanDismissedQuestions();});
+    if(typeof MutationObserver!=='undefined'){
+      const documents=new Map<Document,()=>void>(),watch=(root:Document)=>{if(!documents.has(root))documents.set(root,installQuestionLinks(root,this.questions!,(target,button)=>{const view=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.containerEl.contains(button));this.openQuestion(target,view?.file?.path);}));};
+      watch(document);this.registerEvent(this.app.workspace.on('window-open',(_win,window)=>watch(window.document)));this.registerEvent(this.app.workspace.on('window-close',(_win,window)=>{documents.get(window.document)?.();documents.delete(window.document);}));this.register(()=>{for(const dispose of documents.values())dispose();documents.clear();});
+    }
     if(typeof window!=='undefined'&&typeof window.addEventListener==='function')this.registerDomEvent(window,'pagehide',()=>{try{this.questions?.flushDrafts();}catch(error){logFailure('question.draft.flush',error);}});
     if(typeof this.registerEditorExtension==='function'){this.registerEditorExtension(hiddenInlineMarkerExtension());this.registerEditorExtension(questionEditorExtension(this.questions,(target,path)=>this.openQuestion(target,path)));this.registerEditorExtension(approvalEditorExtension(this.approvals));}
     if(typeof this.registerMarkdownPostProcessor==='function')this.registerMarkdownPostProcessor((element,ctx)=>{
@@ -450,7 +459,7 @@ export default class SendToT3 extends Plugin {
       for(const link of Array.from(element.querySelectorAll<HTMLAnchorElement>('a[href^="t3-question:"]'))){
         const target=parseQuestionToken((link.getAttribute('href')??'').slice('t3-question:'.length));if(!target)continue;
         const control=questionButton(this.questions!,target,value=>this.openQuestion(value,ctx.sourcePath));link.replaceWith(control.button);
-        const quote=control.button.closest('blockquote');if(quote)quote.hidden=this.questions!.isDismissed(target);
+        const row=control.button.closest<HTMLElement>('[data-t3-question], blockquote');if(row)row.hidden=this.questions!.isHidden(target);
         const child=new MarkdownRenderChild(control.button);child.register(control.unsubscribe);ctx.addChild(child);
         this.questionPaths.add(ctx.sourcePath);
       }
@@ -710,7 +719,7 @@ export default class SendToT3 extends Plugin {
       this.questions.retryDismissals();
       await this.questions.recoverAnswerStreams();
       for(const [path,targets] of notes){
-        const resolved=targets.filter(target=>this.questions!.view(target).status==='resolved'&&!this.questions!.isDismissed(target));
+        const resolved=targets.filter(target=>this.questions!.view(target).status==='resolved'&&!this.questions!.isDismissed(target)&&!this.questions!.record(target).answerFollow);
         if(resolved.length)await io.updateNote(path,current=>resolved.reduce((text,target)=>clearResolvedQuestion(text,target),current),()=>!this.stopped);
       }
       for(const [path,targets] of approvalNotes){

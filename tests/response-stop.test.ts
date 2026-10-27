@@ -86,9 +86,9 @@ test('stopping removes pending question controls while preserving the prompt and
   const {renderQuestion}=await import('../questions');
   const question=renderQuestion({requestId:'q',turnId:'turn',createdAt:'',questions:[{id:'choice',header:'Choice',question:'Which approach?',options:[],multiSelect:false}]},{environmentId:'env',threadId:'thread',requestId:'q'});
   const stopped=stoppedResponseBody('**T3 · Working**\n\n'+question+'\n\n```text\n'+question+'\n```');
-  assert.match(stopped,/> Which approach\?/);assert.ok(stopped.startsWith('>\n> **Choice**'));
+  assert.match(stopped,/<p class="send-to-t3-question-prompt">Which approach\?<\/p>/);assert.ok(stopped.startsWith('<p'));
   assert.equal(stopped.split('<!-- t3-question:start:').length-1,1,'The code example remains literal');
-  assert.equal(stopped.split('> [Answer]').length-1,1);
+  assert.equal(stopped.split('href="t3-question:').length-1,1);
 });
 
 test('an unbound stop resolves the completed original turn and does not interrupt a newer turn',async()=>{

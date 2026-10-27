@@ -4,7 +4,7 @@ import {pendingQuestions,staleQuestionFailure,type Question} from './questions';
 import {submittedAnswers} from './response-answers';
 import {delegatedTurnIds,delegatedWork} from './inline-delegation';
 
-export interface InlineQuestionFollow {requestId:string;turnId:string|null;answered?:boolean;dismissed?:boolean;detached?:boolean;replyTurnId?:string;completed?:boolean;responseMode?:'message'|'native';input?:InlineSteering;questions?:Question[]}
+export interface InlineQuestionFollow {requestId:string;turnId:string|null;createdAt?:string;answered?:boolean;dismissed?:boolean;detached?:boolean;replyTurnId?:string;completed?:boolean;responseMode?:'message'|'native';input?:InlineSteering;questions?:Question[]}
 /** Exact run ownership wins; timestamps only distinguish answers inside a
  * known source lifecycle from answers submitted after its terminal boundary. */
 export function lateQuestionAnswer(state:InlineThreadState,sourceTurnId:string|null,reply:InlineMessage):boolean|undefined {
@@ -23,11 +23,14 @@ export function followInlineQuestions(state:InlineThreadState,turnIds:string[],s
     if(activity.kind!=='user-input.requested'||!activity.payload||typeof activity.payload.requestId!=='string'||activity.turnId!==null&&!turns.includes(activity.turnId))continue;
     if(!follows.some(item=>item.requestId===activity.payload!.requestId))follows.push({requestId:activity.payload.requestId,turnId:activity.turnId,responseMode:activity.payload.responseMode==='message'?'message':'native'});
     const item=follows.find(item=>item.requestId===activity.payload!.requestId)!;
+    item.createdAt??=activity.createdAt;
     item.questions??=pendingQuestions([activity])[0]?.questions;
   }
   for(const item of follows){
+    if(followLate)delete item.detached;
     if(item.turnId&&turnPhase(state,item.turnId)==='complete')item.completed=true;
-    const resolution=state.activities.find(a=>a.kind==='user-input.resolved'&&a.payload?.requestId===item.requestId);
+    const remote=state.v2Requests?.[item.requestId];
+    const resolution=state.activities.find(a=>a.kind==='user-input.resolved'&&a.payload?.requestId===item.requestId)??(remote&&typeof remote.status==='string'&&(remote.status!=='pending'||remote.responseCapability?.type==='not_resumable')?{createdAt:remote.resolvedAt,payload:{answers:remote.answers}}:undefined);
     if(resolution){if(resolution.payload?.answers)item.answered=true;else item.dismissed=true;}
     if(state.activities.some(a=>a.payload?.requestId===item.requestId&&staleQuestionFailure(a)))item.dismissed=true;
     if(item.dismissed)continue;

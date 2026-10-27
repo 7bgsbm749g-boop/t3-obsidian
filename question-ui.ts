@@ -9,9 +9,26 @@ function buttonLabel(controller:QuestionController,target:QuestionTarget){const 
 export function questionButton(controller:QuestionController,target:QuestionTarget,open:(target:QuestionTarget)=>void){
   const untrack=controller.track(target);
   const button=document.createElement('button');button.className='send-to-t3-question-answer';
-  const update=()=>{button.textContent=buttonLabel(controller,target);button.disabled=controller.view(target).status==='resolved';const quote=button.closest('blockquote');if(quote)quote.hidden=controller.isDismissed(target);};
+  const update=()=>{button.textContent=buttonLabel(controller,target);button.disabled=controller.view(target).status==='resolved';const row=button.closest<HTMLElement>('[data-t3-question], blockquote');if(row)row.hidden=controller.isHidden(target);};
   update();button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();open(target);});
   const stop=controller.subscribe(update);return {button,unsubscribe:()=>{stop();untrack();}};
+}
+
+/** Live Preview's native HTML embeds do not run Markdown postprocessors.
+ * Bind their generated links after attachment, and release removed controls. */
+export function installQuestionLinks(root:Document,controller:QuestionController,open:(target:QuestionTarget,button:HTMLElement)=>void){
+  const controls=new Map<HTMLElement,()=>void>();
+  const scan=()=>{
+    for(const [button,dispose] of controls)if(!button.isConnected){dispose();controls.delete(button);}
+    for(const link of Array.from(root.querySelectorAll<HTMLAnchorElement>('[data-t3-question] a[href^="t3-question:"]'))){
+      const target=parseQuestionToken((link.getAttribute('href')??'').slice('t3-question:'.length)),row=link.closest<HTMLElement>('[data-t3-question]'),owner=parseQuestionToken(row?.getAttribute('data-t3-question')??'');
+      if(!target||!owner||questionKey(target)!==questionKey(owner))continue;
+      const control=questionButton(controller,target,target=>open(target,control.button));link.replaceWith(control.button);controls.set(control.button,control.unsubscribe);
+      row!.hidden=controller.isHidden(target);
+    }
+  };
+  const observer=new MutationObserver(scan);observer.observe(root,{childList:true,subtree:true});scan();
+  return ()=>{observer.disconnect();for(const dispose of controls.values())dispose();controls.clear();};
 }
 
 export class QuestionModal extends NoteTabPanel {
@@ -98,7 +115,7 @@ export function questionEditorExtension(controller:QuestionController,open:(targ
   const {Decoration,EditorView,ViewPlugin,WidgetType}=require('@codemirror/view') as typeof import('@codemirror/view');
   const {StateEffect,StateField}=require('@codemirror/state') as typeof import('@codemirror/state');
   const refreshDismissed=StateEffect.define<void>();
-  const hidden=(document:string)=>controller.hasDismissals()?Decoration.set(questionSections(document).filter(section=>controller.isDismissed(section.target)).map(section=>Decoration.replace({block:true}).range(section.from,section.to))):Decoration.none;
+  const hidden=(document:string)=>controller.hasHiddenQuestions()?Decoration.set(questionSections(document).filter(section=>controller.isHidden(section.target)).map(section=>Decoration.replace({block:true}).range(section.from,section.to))):Decoration.none;
   // Direct StateField decorations can hide complete multiline sections. The
   // underlying live response remains untouched, preserving its writer hash.
   const dismissed=StateField.define<DecorationSet>({
@@ -121,7 +138,7 @@ export function questionEditorExtension(controller:QuestionController,open:(targ
   });
   const dismissalUpdates=ViewPlugin.fromClass(class {
     private unsubscribe:()=>void;
-    constructor(view:EditorView){let revision=controller.dismissalRevision;this.unsubscribe=controller.subscribe(()=>{if(revision===controller.dismissalRevision)return;revision=controller.dismissalRevision;view.dispatch({effects:refreshDismissed.of(undefined)});});}
+    constructor(view:EditorView){let revision=controller.visibilityRevision;this.unsubscribe=controller.subscribe(()=>{if(revision===controller.visibilityRevision)return;revision=controller.visibilityRevision;view.dispatch({effects:refreshDismissed.of(undefined)});});}
     destroy(){this.unsubscribe();}
   });
   class AnswerWidget extends WidgetType {

@@ -110,14 +110,14 @@ test('a local reply follows two exact delegated deliveries and verifies only the
  const update=h.updates.at(-1)!;assert.equal(update.turnId,'resume-two');assert.equal(update.phase,'complete');assert.equal(update.completionVerified,true,JSON.stringify({reads,checkpoint:update.checkpoint,body:update.body}));assert.deepEqual(update.turnIds,['turn','resume-one','resume-two']);assert.deepEqual(reads,['final-item']);assert.match(update.body,/· Completed/);assert.match(update.body,/Combined report/);assert.doesNotMatch(update.body,/Waiting for subagents|Unrelated answer/);
  h.preview.dispose();
 });
-test('a local source awaiting final save cannot adopt a late question answer run',async()=>{
+test('a local source awaiting final save follows its exact late question answer in the same response',async()=>{
  const h=fixture(false,async()=>finalItem('Source final'));h.record.request.localOnly=true;h.preview.tick(true);h.item(completeV2(h,2,'Source final'));await settle();
  const next=completeV2(h,3,'Source final') as any,thread=next.snapshot.thread;
- thread.messages.push({id:'async-answer:late',role:'user',turnId:'next-run',text:'Yes',streaming:false,createdAt:'2026-10-06T03:03:00Z'},{id:'next-answer',role:'assistant',turnId:'next-run',text:'New run must have its own stream',streaming:true,createdAt:'2026-10-06T03:03:01Z'});
+ thread.messages.push({id:'async-answer:late',role:'user',turnId:'next-run',text:'Yes',streaming:false,createdAt:'2026-10-06T03:03:00Z'},{id:'next-answer',role:'assistant',turnId:'next-run',text:'Follow-up in the original stream',streaming:true,createdAt:'2026-10-06T03:03:01Z'});
  thread.activities=[{id:'asked',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'late',responseMode:'message',questions:[]}},{id:'resolved',kind:'user-input.resolved',summary:'Resolved',turnId:'turn',payload:{requestId:'late',answers:{choice:'Yes'}}}];
  thread.latestTurn={turnId:'next-run',state:'running',messageId:'async-answer:late',requestedAt:'2026-10-06T03:03:00Z'};thread.turns['next-run']=thread.latestTurn;thread.session={status:'running',activeTurnId:'next-run'};
- h.item(next);await settle();const update=h.updates.at(-1)!;
- assert.equal(update.turnId,'turn');assert.equal(update.phase,'complete');assert.match(update.body,/Source final/);assert.doesNotMatch(update.body,/New run must|data-t3-answer-id/);h.preview.dispose();
+ h.item(next);h.clock.advance(80);await settle();const update=h.updates.at(-1)!;
+ assert.equal(update.request.id,h.record.request.id);assert.equal(update.turnId,'next-run');assert.equal(update.phase,'running');assert.match(update.body,/Source final/);assert.match(update.body,/Follow-up in the original stream|data-t3-answer-id/);assert.equal(update.completionVerified,false);h.preview.dispose();
 });
 test('live native question resolution produces a compact answer row and keeps it through subsequent stream text',()=>{
  const h=fixture();h.preview.tick(true);h.item(h.snapshot(2,'Before input.\n\n'));
@@ -246,4 +246,20 @@ test('removed delivery disposes a direct preview immediately and rejects queued 
  h.preview.update({...h.record,responseRemovedAt:100,revision:1});
  assert.equal(h.streams[0].stopped,true);h.event(3,' late');h.clock.advance(1000);h.preview.tick(true);
  assert.equal(h.streams.length,1);assert.equal(h.updates.length,n);assert.equal(h.clock.pending.size,0);
+});
+
+test('a completed local turn waits without a spinner and restores its pending question from a checkpoint',async()=>{
+ const h=fixture(false,async()=>finalItem('Source final'));h.record.request.localOnly=true;h.record.request.intermediateMode='collapse';h.preview.tick(true);
+ const item=completeV2(h,2,'Source final') as any;item.snapshot.thread.activities=[{id:'asked',kind:'user-input.requested',turnId:'turn',summary:'Question',createdAt:'2026-10-06T03:00:10Z',payload:{requestId:'pending',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Continue here?',options:[]}]}}];
+ h.item(item);await settle();const waiting=h.updates.at(-1)!;
+ assert.equal(waiting.phase,'complete');assert.equal(waiting.completionVerified,true);assert.equal(waiting.questionsPending,true);assert.match(waiting.body,/Waiting for answer/);assert.match(waiting.body,/Source final/);assert.doesNotMatch(waiting.body,/send-to-t3-inline-spinner/);assert.match(waiting.body,/class="send-to-t3-question"/);
+ const next=fixture(false,async()=>finalItem('Source final'));next.record.request.localOnly=true;next.record.request.intermediateMode='collapse';next.preview.restore(waiting.resume);next.preview.tick(true);next.item(completeV2(next,3,'Source final'));await settle();
+ const restored=next.updates.at(-1)!;assert.equal(restored.questionsPending,true);assert.match(restored.body,/Continue here\?/);assert.match(restored.body,/Waiting for answer/);h.preview.dispose();next.preview.dispose();
+});
+
+test('an omitted question control resolves from its explicit runtime request after reload',async()=>{
+ const h=fixture(false,async()=>finalItem('Source final'));h.record.request.localOnly=true;h.record.request.intermediateMode='collapse';
+ h.preview.restore({prose:[],turnIds:['turn'],questionFollows:[{requestId:'old',turnId:'turn',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Old question?',options:[],multiSelect:false}]}]});h.preview.tick(true);
+ const item=completeV2(h,3,'Source final') as any;item.snapshot.thread.v2Requests={old:{id:'old',status:'dismissed',resolvedAt:'2026-10-06T03:03:00Z'}};h.item(item);await settle();
+ const update=h.updates.at(-1)!;assert.equal(update.questionsPending,false);assert.equal(update.completionVerified,true);assert.doesNotMatch(update.body,/Old question|t3-question:/);assert.ok(update.questionActivities?.some(activity=>activity.kind==='user-input.resolved'));h.preview.dispose();
 });

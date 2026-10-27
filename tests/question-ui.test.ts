@@ -10,6 +10,7 @@ import {projectResponses,responseAnchor} from '../native-response-projection';
 class Element {
   children:Element[]=[];textContent='';value='';checked=false;disabled=false;hidden=false;name='';type='';selectionStart=0;dataset:Record<string,string>={};onclick?:()=>void;oninput?:()=>void;onchange?:()=>void;onfocus?:()=>void;
   constructor(public tag='div',public options:any={}){this.textContent=options.text??'';this.type=options.type??'';}
+  closest(){return null;}
   addClass(){} addEventListener(){} empty(){this.children=[];}replaceChildren(){this.children=[];}
   createEl(tag:string,options?:any){const child=new Element(tag,options);this.children.push(child);return child;}
   createDiv(options?:any){return this.createEl('div',options);}
@@ -20,7 +21,7 @@ async function harness(){
   const result=await build({stdin:{contents:"export * from './question-ui'; export * from './question-controller';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian','@codemirror/state','@codemirror/view']});
   const module={exports:{} as any},realRequire=createRequire(import.meta.url),notices:string[]=[];
   class Modal {contentEl=new Element();isOpen=false;closeCount=0;constructor(public app:any){}open(){this.isOpen=true;(this as any).onOpen();}close(){this.app.restoreFocus?.();this.isOpen=false;this.closeCount++;(this as any).onClose();}}
-  runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal,Notice:class{constructor(text:string){notices.push(text);}}}:realRequire(id),document:{createElement:(tag:string)=>new Element(tag)},console,setTimeout,clearTimeout,AbortController,DOMException});
+  runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal,Notice:class{constructor(text:string){notices.push(text);}}}:realRequire(id),document:{createElement:(tag:string)=>new Element(tag)},console,setTimeout,clearTimeout,AbortController,DOMException,MutationObserver:class{constructor(_callback:any){}observe(){}disconnect(){}}});
   const activities:any[]=[{id:'opened',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'request',responseMode:'message',questions:[
     {id:'choice',header:'Choice',question:'Which one?',options:[{label:'First',description:'First description',value:'native-first'},{label:'Second',description:'Second description'}]},
     {id:'multi',header:'Multiple',question:'Which ones?',multiSelect:true,options:[{label:'A',description:'A description'},{label:'B',description:'B description'}]},
@@ -120,4 +121,23 @@ test('ordinary typing maps dismissed ranges and status updates do not send edito
   const ranges:string[]=[];state.field<any>(field).between(0,state.doc.length,(from:number,to:number)=>ranges.push(state.doc.sliceString(from,to)));assert.deepEqual(ranges,[section]);
   await h.controller.refresh([target]);assert.equal(updates,1,'no dismissal changes, no editor transaction');
   subscription.destroy();h.modal.close();h.controller.dispose();
+});
+
+test('confirmed answers hide the complete generated question while an acknowledgement keeps it visible',async()=>{
+  const h=await harness(),section=renderQuestion(pendingQuestions(h.activities)[0],target),extension=h.module.exports.questionEditorExtension(h.controller,()=>{}),field=extension[2];
+  let state=EditorState.create({doc:'Before\n\n'+section+'\n\nAfter',extensions:[field]});const subscription=extension[3].create({dispatch:(spec:any)=>{state=state.update(spec).state;}});
+  for(const question of h.controller.view(target).request.questions)h.controller.draft(target,question.id,{text:'Yes'});await h.controller.submit(target);assert.equal(state.field<any>(field).size,0);
+  h.activities.push({id:'answered',kind:'user-input.resolved',payload:{requestId:'request',answers:{text:'Yes'}}});await h.controller.refresh([target]);
+  assert.equal(state.field<any>(field).size,1);assert.equal(state.doc.toString().includes(section),true);subscription.destroy();h.controller.dispose();
+});
+
+test('native HTML question links become tracked controls and mismatched targets stay untouched',async()=>{
+ const h=await harness();let bound:any,opens=0;
+ const token=questionUrl(target).slice('t3-question:'.length),row={hidden:false,getAttribute:()=>token};
+ const link={getAttribute:()=>questionUrl(target),closest:()=>row,replaceWith:(button:any)=>{bound=button;bound.isConnected=true;bound.closest=()=>row;}};
+ const other={...link,closest:()=>({getAttribute:()=>encodeURIComponent(JSON.stringify({...target,requestId:'other'}))}),replaceWith:()=>{throw Error('A mismatched row must not be bound');}};
+ const dispose=h.module.exports.installQuestionLinks({querySelectorAll:()=>[link,other]},h.controller,()=>opens++);
+ assert.ok(bound);assert.equal(bound.disabled,false);assert.equal(h.controller.watchedTargets().filter((item:any)=>item.requestId==='request').length,1);
+ h.activities.push({id:'answered',kind:'user-input.resolved',payload:{requestId:'request',answers:{text:'Yes'}}});await h.controller.refresh([target]);assert.equal(row.hidden,true);assert.equal(bound.disabled,true);assert.equal(opens,0);
+ dispose();h.modal.close();h.controller.dispose();
 });

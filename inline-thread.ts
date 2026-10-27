@@ -508,6 +508,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // Transport retries keep the normal live display and its last known activity.
   if(phase==='reconnecting')phase='running';
   const mode=intermediateMode(keepIntermediate),retain=mode!=='remove';
+  const pending=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null||conversation?.messages.some(m=>m.turnId===request.turnId)):[];
   // Completion and final-message delivery can arrive separately. Keep terminal
   // controls terminal, but close history only after the final text is present.
   const completedFinal=phase==='complete'?inlineTurnMessages(state,turnId).at(-1):undefined;
@@ -581,12 +582,12 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   }
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
-  const questions=environmentId?pendingQuestions(state.activities).filter(request=>request.turnId===turnId||request.turnId===null||conversation?.messages.some(m=>m.turnId===request.turnId)).map(request=>renderQuestion(request,{environmentId,threadId,requestId:request.requestId})).join('\n\n'):'';
+  const questions=pending.map(request=>renderQuestion(request,{environmentId:environmentId!,threadId,requestId:request.requestId})).join('\n\n');
   const approvals=!['complete','interrupted','cancelled'].includes(phase)?pendingApprovals(state.activities).filter(request=>request.turnId===turnId).map(request=>environmentId&&request.kind==='command'?renderApproval(request,{environmentId,threadId,requestId:request.requestId}):'Action needed in T3: '+safeStatus(request.summary)).join('\n\n'):'';
   const input=initialInput?`${renderInitialInput(initialInput,timing?.startedAt)}\n\n`:'';
   if(mode==='collapse'){
     const pieces=steeringSegments(all,conversation?.steering.filter(item=>item.confirmed)??[]);
-    const title=phase==='complete'?`**${label} · ${finalReady?'Completed':'Working'}**`:heading;
+    const title=phase==='complete'?`**${label} · ${pending.length?'Waiting for answer':finalReady?'Completed':'Working'}**`:heading;
     // One native callout owns the entire chronological history, including
     // steering and earlier completed turns. Only the current completed turn's
     // last final-message piece stays outside. Frozen prefixes of that same

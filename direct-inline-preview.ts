@@ -11,7 +11,7 @@ import {responseTooLarge,type StreamReadFailure} from './t3-response-limits';
 import {signInRequired,type ResponseConnectionIssue} from './sign-in-state';
 import {delegatedWork} from './inline-delegation';
 
-export interface DirectInlineUpdate {request:ResponseRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
+export interface DirectInlineUpdate {request:ResponseRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;questionsPending?:boolean;resume?:NonNullable<ResponseRequest['localResume']>&{prose:InlineThreadState['messages']};failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
 type Watch=typeof watchThread;
 export interface PreviewClock {now():number;later(callback:()=>void,ms:number):unknown;cancel(handle:unknown):void}
 const displayClock:PreviewClock={now:()=>performance.now(),later:(callback,ms)=>setTimeout(callback,ms),cancel:handle=>clearTimeout(handle as ReturnType<typeof setTimeout>)};
@@ -65,9 +65,10 @@ export class DirectInlinePreview {
     if(checkpoint)this.state=restoreInlineBindings(this.state,{...checkpoint,sequence:undefined});
     this.prose=mergeProse(record.state?.prose??[],this.prose,[...new Set([...record.state?.turnIds??[],...this.turnIds])]);
     this.turnIds=[...new Set([...this.turnIds,...record.state?.turnIds??[],...(imported?[imported.turnId]:[])])];
-    this.follows??=record.state?.questionFollows;
-    this.incoming??=record.state?.incoming;
+    if(record.state?.questionFollows)this.follows=[...new Map([...record.state.questionFollows,...this.follows??[]].map(item=>[item.requestId,item])).values()];
+    if(record.state?.incoming)this.incoming=[...new Map([...record.state.incoming,...this.incoming??[]].map(item=>[item.messageId,item])).values()];
   }
+  restore(resume:DirectInlineUpdate['resume']){if(this.stopped||!resume)return;this.update({...this.record,state:{...this.record.state!,...resume}});if(this.state.messages.length)this.schedule(true);}
   get notePath(){return this.record.state?.notePath??this.record.request.notePath;}
   steeringProse(){return steeringBoundary(this.prose);}
   delivery(delivery:InlineStartRequest){
@@ -85,7 +86,7 @@ export class DirectInlinePreview {
       item:item=>{if(!this.stopped&&this.generation===generation)this.item(item);},
       reconnecting:error=>{if(!this.stopped&&this.generation===generation){logFailure('stream.direct.reconnecting',error,{bindingId:record.request.id});this.connectionFailed(error);}},
       failure:error=>{if(!this.stopped&&this.generation===generation&&responseTooLarge(error)){this.failure??={kind:'response-too-large',operation:'snapshot'};if(!this.render())this.receive({request:this.record.request,messageId:this.messageId(),sequence:this.state.sequence??0,body:this.record.state?.body??'> **T3 · Working**',failure:this.failure,completionVerified:false});}},
-    },undefined,()=>({messageIds:[this.messageId(),...this.record.state?.steering?.map(input=>input.messageId)??[]],turnIds:this.turnIds}),{afterSequence:()=>this.state.sequence??0,pollImmediately:true,pollSnapshots:()=>this.state.protocolVersion!==2&&this.failure?.operation!=='snapshot'});
+    },undefined,()=>({messageIds:[this.messageId(),...this.record.state?.steering?.map(input=>input.messageId)??[],...this.follows?.filter(item=>!item.dismissed).map(item=>`async-answer:${item.requestId}`)??[]],turnIds:this.turnIds}),{afterSequence:()=>this.state.sequence??0,pollImmediately:true,pollSnapshots:()=>this.state.protocolVersion!==2&&this.failure?.operation!=='snapshot'});
   }
   private messageId(){return this.record.state?.pendingMessageId??this.record.state?.messageId??this.record.request.messageId;}
   private item(item:ThreadStreamItem){
@@ -115,7 +116,7 @@ export class DirectInlinePreview {
     this.turnIds=[...new Set([...this.turnIds,turnId])];
     const steering=(this.record.state?.steering??[]).map(input=>({...input}));
     for(const input of steering){const turn=turnForMessage(this.state,input.messageId);if(!turn)continue;input.confirmed=true;turnId=turn;if(!this.turnIds.includes(turn))this.turnIds.push(turn);}
-    const questions=followInlineQuestions(this.state,this.turnIds,this.follows,this.prose,!request.localOnly);
+    const questions=followInlineQuestions(this.state,this.turnIds,this.follows,this.prose);
     this.follows=questions.follows;this.turnIds=questions.turnIds;turnId=questions.turnId??turnId;
     this.incoming=observeIncoming(this.state,this.turnIds,this.incoming,steering,[request.messageId,request.initialInput?.messageId??'',...Object.values(this.state.turns??{}).filter(turn=>this.turnIds.includes(turn.turnId)).map(turn=>turn.messageId??''),...this.follows.flatMap(follow=>follow.input?[follow.input.messageId]:[])]);
     this.prose=mergeProse(this.prose,this.state.messages,this.turnIds);
@@ -134,7 +135,9 @@ export class DirectInlinePreview {
     if(phase==='complete'&&(!inlineTurnMessages(this.state,turnId).length||inlineTurnMessages(this.state,turnId).at(-1)!.streaming))phase='running';
     // Prose retention is assistant-only. Keep public thought items and input
     // boundaries in the display state as well, without treating them as prose.
-    const current={...this.state,messages:[...this.prose,...this.state.messages.filter(message=>message.role!=='assistant'&&this.turnIds.includes(message.turnId??''))],turns:{...this.record.state?.presentationTurns,...this.state.turns}};
+    const restoredQuestions=this.follows.filter(item=>!item.answered&&!item.dismissed&&item.questions?.length&&!this.state.activities.some(activity=>activity.payload?.requestId===item.requestId&&activity.kind==='user-input.requested')).map(item=>({id:`restored-question:${item.requestId}`,kind:'user-input.requested',summary:'Question',turnId:item.turnId,createdAt:item.createdAt,payload:{requestId:item.requestId,questions:item.questions,responseMode:item.responseMode}}));
+    const resolvedQuestions=this.follows.flatMap(item=>{const remote=this.state.v2Requests?.[item.requestId];return remote&&typeof remote.status==='string'&&(remote.status!=='pending'||remote.responseCapability?.type==='not_resumable')&&!this.state.activities.some(activity=>activity.kind==='user-input.resolved'&&activity.payload?.requestId===item.requestId)?[{id:`resolved-question:${item.requestId}`,kind:'user-input.resolved',summary:'Question resolved',turnId:item.turnId,createdAt:remote.resolvedAt,payload:{requestId:item.requestId,answers:remote.answers}}]:[];});
+    const current={...this.state,activities:[...this.state.activities,...restoredQuestions,...resolvedQuestions],messages:[...this.prose,...this.state.messages.filter(message=>message.role!=='assistant'&&this.turnIds.includes(message.turnId??''))],turns:{...this.record.state?.presentationTurns,...this.state.turns}};
     if(request.finalAnswerFormat==='raw-markdown')current.turns=rememberInlineTurns(current,this.turnIds,current.turns);
     const title=request.localOnly&&(phase==='complete'||phase==='interrupted')?request.threadTitle:this.state.title??request.threadTitle;
     const body=renderInlineTurn(current,turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,title,{startedAt:request.createdAt,finishedAt:phase==='complete'||phase==='interrupted'?completionTime(this.state,turnId):undefined},finalAnswerFormat(request.finalAnswerFormat));
@@ -143,8 +146,9 @@ export class DirectInlinePreview {
     const exactStopped=this.state.protocolVersion===2&&phase==='interrupted'&&this.state.turns?.[turnId]?.state==='interrupted';
     const terminal=phase==='complete'||phase==='interrupted',completionVerified=terminal&&(exactStopped||(this.state.protocolVersion===2?!!key&&key===this.verifiedKey:this.verifiedSequence>=(this.state.sequence??0)));
     this.terminal=terminal;
-    const questionActivities=this.state.activities.filter(activity=>activity.kind.startsWith('user-input.')||activity.kind==='provider.user-input.respond.failed');
-    this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,turnId,turnIds:this.turnIds.slice(),phase:this.failure&&!completionVerified?'error':phase,completionVerified,failure:completionVerified?undefined:this.failure,checkpoint:inlineBindingCheckpoint(this.state),...(questionActivities.length?{questionActivities}:{})});
+    const questionActivities=current.activities.filter(activity=>activity.kind.startsWith('user-input.')||activity.kind==='provider.user-input.respond.failed');
+    const checkpoint=inlineBindingCheckpoint(this.state);
+    this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,turnId,turnIds:this.turnIds.slice(),phase:this.failure&&!completionVerified?'error':phase,completionVerified,questionsPending:questions.waiting,resume:{bindingCheckpoint:checkpoint,turnIds:this.turnIds.slice(),questionFollows:this.follows,prose:this.prose,incoming:this.incoming,presentationTurns:current.turns},failure:completionVerified?undefined:this.failure,checkpoint,...(questionActivities.length?{questionActivities}:{})});
     if((request.deviceCompletion||request.localOnly)&&terminal&&!completionVerified)this.verifyCompletion();
     if(this.interruptedTurnId)this.verifyInterruption();
     return true;

@@ -1,10 +1,11 @@
 import {commandId} from './direct';
-import {editorStream,type StreamNoteIO} from './editor-stream';
-import {applyThreadItem,initialRegion} from './inline-thread';
+import type {StreamNoteIO} from './editor-stream';
+import {applyThreadItem,inlineBindingCheckpoint,turnForMessage} from './inline-thread';
+import {responseAnchor} from './native-response-projection';
+import {markdownCodeRanges} from './reply-html';
 import {lateQuestionAnswer} from './inline-questions';
 import {questionKey,questionSections,type QuestionTarget} from './questions';
 import type {QuestionAnswerFollow} from './question-controller';
-import {submittedAnswers} from './response-answers';
 import {localResponseRange} from './local-response-binding';
 import {safeNotePath,type ResponseRequest,type ResponseStorageTarget} from './response-model';
 import {readInlineSnapshot,type ThreadAccess} from './thread-stream';
@@ -19,6 +20,10 @@ export interface QuestionContinuationIO extends StreamNoteIO {
   host():Promise<ResponseStorageTarget>;
   policy():{intermediateMode:IntermediateMode;finalAnswerFormat:FinalAnswerFormat};
   register(request:ResponseRequest):Promise<void>;
+  savedBodies?(request:ResponseRequest):Promise<string[]>;
+  followed?(request:ResponseRequest,requestId:string):boolean;
+  ownsQuestion?(request:ResponseRequest,requestId:string,turnId:string):boolean;
+  blocked?(target:QuestionTarget,detail:string):void;
   allowed():boolean;
 }
 export const questionAnswerBindingId=(target:QuestionTarget,path:string)=>commandId(target.threadId,JSON.stringify(['question-answer',target.environmentId,target.requestId,path]));
@@ -29,16 +34,16 @@ export async function continueQuestionAnswer(target:QuestionTarget,follow:Questi
   if(!io.allowed())return false;
   const {request,command}=follow;
   if(request.responseMode!=='message'||request.requestId!==target.requestId||command.type!=='thread.user-input.respond'||command.requestId!==target.requestId||command.threadId!==target.threadId)throw Error('The saved question answer target changed.');
+  const related=io.bindings().filter(binding=>binding.threadEnvironmentId===target.environmentId&&binding.threadId===target.threadId);
   const messageId=`async-answer:${target.requestId}`,access=await io.access(target.environmentId);
   let snapshot:any;
-  try{snapshot=await readInlineSnapshot(access,target.threadId,undefined,{messageIds:[messageId],turnIds:request.turnId?[request.turnId]:[]});}finally{await access.close?.();}
+  try{snapshot=await readInlineSnapshot(access,target.threadId,undefined,{messageIds:[messageId,...related.map(binding=>binding.localMessageId??binding.messageId)],turnIds:request.turnId?[request.turnId]:[]});}finally{await access.close?.();}
   if(!io.allowed())return false;
   const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
   const reply=state.messages.find(message=>message.id===messageId&&message.role==='user');
   if(!reply)return false; // Acceptance can precede projection of the answer/run.
   const late=lateQuestionAnswer(state,request.turnId,reply);
   if(late===false)return true;
-  const related=io.bindings().filter(binding=>binding.threadEnvironmentId===target.environmentId&&binding.threadId===target.threadId);
   const candidates=[...new Set([...(follow.notePath?[follow.notePath]:[]),...io.notePaths(),...related.map(binding=>binding.notePath)])].filter(safeNotePath);
   const destinations:Array<{path:string;document:string}>=[];
   for(const path of candidates){
@@ -51,18 +56,38 @@ export async function continueQuestionAnswer(target:QuestionTarget,follow:Questi
   if(!destinations.length)return false;
   if(late===undefined)return false;
   const projectId=snapshot.thread.projectId;if(typeof projectId!=='string'||!projectId)throw Error('The answered question has no T3 project.');
-  const answers=submittedAnswers(state.activities.find(activity=>activity.kind==='user-input.resolved'&&activity.payload?.requestId===target.requestId)?.payload?.answers)??command.answers;
-  const text=answers?Object.values(answers).map(value=>Array.isArray(value)?value.join(', '):value).join('\n\n'):reply.text;
   for(const {path,document} of destinations){
     if(!io.allowed())return false;
-    const id=questionAnswerBindingId(target,path);
-    const known=related.find(binding=>binding.id===id||binding.notePath===path&&(binding.localMessageId??binding.messageId)===messageId);
+    // Preserve already delivered continuations from older releases. Recovery
+    // must not resurrect them or create another response for the same answer.
+    const known=related.find(binding=>binding.notePath===path&&(binding.localMessageId??binding.messageId)===messageId);
     if(known){if(localResponseRange(document,known.id,[known]))await io.register({...known,notePath:path});continue;}
-    const source=related.filter(binding=>(binding.notePath===path||binding.notePath===follow.notePath)&&binding.projectId===projectId).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0],policy=io.policy();
-    const initialInput={messageId,text:text.trim()?text:reply.text,answer:{requestId:target.requestId,questions:request.questions,answers}};
-    const next:ResponseRequest={version:4,localOnly:true,nativeProjection:true,responseContainer:true,independent:true,id,initialOwner:io.owner,vaultId:io.vaultId,host:source?.host??await io.host(),notePath:path,threadId:target.threadId,projectId,threadEnvironmentId:target.environmentId,messageId,initialInput,initialHash:initialRegion(id).bodyHash,createdAt:reply.createdAt??command.createdAt,threadTitle:(state.title??source?.threadTitle)?.slice(0,200),intermediateMode:source?.intermediateMode??policy.intermediateMode,finalAnswerFormat:source?.finalAnswerFormat??policy.finalAnswerFormat,replyFolders:source?.replyFolders};
-    const inserted=await editorStream(next,path,io,io.allowed,id);
-    await io.register(inserted);
+    const sources:ResponseRequest[]=[];
+    for(const binding of related.filter(binding=>(binding.notePath===path||binding.notePath===follow.notePath)&&binding.projectId===projectId)){
+      if(!request.turnId)continue;
+      const bound=turnForMessage(state,binding.localMessageId??binding.messageId)===request.turnId||state.turns?.[request.turnId]?.messageId===(binding.localMessageId??binding.messageId)||binding.importTurn?.turnId===request.turnId||io.ownsQuestion?.(binding,target.requestId,request.turnId);
+      const retained=bound?false:(await io.savedBodies?.(binding)??[]).some(body=>questionSections(body).some(section=>questionKey(section.target)===questionKey(target)));
+      if(bound||retained)sources.push(binding);
+    }
+    if(sources.length!==1)return false;
+    const source=sources[0],next:ResponseRequest={...source,notePath:path,localResume:{bindingCheckpoint:inlineBindingCheckpoint(state),turnIds:[request.turnId!],questionFollows:[{requestId:request.requestId,turnId:request.turnId,responseMode:'message',questions:request.questions,completed:true,answered:true}],prose:state.messages.filter(message=>message.role==='assistant'&&message.turnId===request.turnId)}};
+    if(!localResponseRange(document,source.id,[source])){
+      const matches:Array<{from:number;to:number}>=[],code=markdownCodeRanges(document);
+      for(const body of new Set(await io.savedBodies?.(source)??[])){
+        if(!body.trim())continue;
+        const at=document.indexOf(body),end=at+body.length;
+        if(at<0||document.indexOf(body,at+1)>=0||at>0&&document[at-1]!=='\n'||end<document.length&&document[end]!=='\n'||code.some(([from,to])=>at>=from&&at<to))continue;
+        if(!matches.some(match=>match.from===at&&match.to===end))matches.push({from:at,to:end});
+      }
+      // Never guess at edited, copied or missing saved prose. The durable
+      // accepted intent remains available; no second stream is spawned.
+      if(matches.length!==1){io.blocked?.(target,'Your answer was sent. The saved response changed or cannot be identified safely, so its stream could not resume.');return false;}
+      const range=matches[0];
+      const inserted=await io.updateNote(path,current=>{if(current!==document)throw Error('The original response changed before it could resume.');return current.slice(0,range.from)+responseAnchor(source.id)+current.slice(range.to);},io.allowed);
+      if(inserted===undefined)return false;
+    }
+    await io.register(next);
+    if(io.followed&&!io.followed(next,target.requestId))return false;
   }
   return true;
 }
