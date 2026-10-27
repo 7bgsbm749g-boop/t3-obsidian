@@ -32,7 +32,7 @@ test('nonstream sends keep context without creating a destination and histories 
 test('context command validation rejects traversal, missing selectors and malformed message IDs',()=>{
   const command={version:1,id:randomUUID(),kind:'note-context',notePath:'Task.md'};
   assert.deepEqual(validateAgentCommand(command),command);
-  for(const change of [{notePath:'../outside.md'},{notePath:undefined},{messageId:'wrong'},{threadId:'bad\nidentity'}])assert.throws(()=>validateAgentCommand({...command,...change}),/context lookup/);
+  for(const change of [{notePath:'../outside.md'},{notePath:undefined},{messageId:'bad\nidentity'},{threadId:'bad\nidentity'}])assert.throws(()=>validateAgentCommand({...command,...change}),/context lookup/);
 });
 
 test('old send contexts remain readable while their retired wait setting is ignored',()=>{

@@ -2,6 +2,7 @@ import {turnForMessage,type InlineMessage,type InlineThreadState,type SelectionA
 import {responseRegion} from './native-response-projection';
 import {responseIds} from './response-container';
 import type {SubmittedAnswer} from './response-answers';
+import {isT3MessageId} from './t3-message-id';
 
 export function completedSelectionDraft(document:string,id:string,steering:InlineSteering[]=[]){
   steering=steering.filter(input=>input.confirmed&&(!input.sourceResponseId||input.sourceResponseId===id)&&(input.selections??(input.selection?[input.selection]:[])).some(anchor=>document.includes(anchor.text)));
@@ -34,7 +35,7 @@ export interface SteeringInput {messageId:string;text:string;selection?:Selectio
 
 export function validSteeringInput(value:any):value is SteeringInput {
   const validAnchor=(a:any)=>a&&typeof a.text==='string'&&!!a.text&&Number.isSafeInteger(a.start)&&a.start>=0&&Number.isSafeInteger(a.end)&&a.end===a.start+a.text.length&&typeof a.before==='string'&&typeof a.after==='string';
-  return !!value&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.messageId??'')&&typeof value.text==='string'&&!!value.text.trim()&&value.text.length<=120_000&&
+  return !!value&&isT3MessageId(value.messageId)&&typeof value.text==='string'&&!!value.text.trim()&&value.text.length<=120_000&&
     (!value.selection||validAnchor(value.selection))&&(!value.selections||Array.isArray(value.selections)&&value.selections.length<=120_000&&value.selections.every(validAnchor)&&value.selections.reduce((size:number,a:SelectionAnchor)=>size+a.text.length,0)<=120_000)&&
     (!value.sourceResponseId||/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.sourceResponseId));
 }
