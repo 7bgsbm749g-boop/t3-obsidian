@@ -200,7 +200,13 @@ export async function prepareSmartSend(data:SmartSendData,path:string,destinatio
   const added=subtractSpans(requested,covered),view=markdownText(current);
   const text=view.render(view.map(added));
   const capture:SmartCapture={noteId,source:await packText(current),covered:union([...covered,...added]),parents:heads.map(([id])=>id),bindings:[...new Set(heads.flatMap(([,h])=>h.bindings??[]))]};
-  return {text,capture};
+  // Retain exact source coordinates before the generated-response projection
+  // is discarded. Steering consumes only this newly sent source.
+  const ranges:Span[]=projection.segments.flatMap(segment=>added.flatMap(([from,to])=>{
+    const left=Math.max(from,segment.from),right=Math.min(to,segment.from+segment.rawTo-segment.rawFrom);
+    return right>left&&view.map([[left,right]]).some(range=>view.text.slice(...range).trim())?[[segment.rawFrom+left-segment.from,segment.rawFrom+right-segment.from] as Span]:[];
+  }));
+  return {text,capture,ranges};
 }
 export function confirmSmartSend(data:SmartSendData,id:string,destination:string,capture:SmartCapture,bindings:string[]=[]){
   if(data.heads[id]||data.retired.includes(id))return;

@@ -694,6 +694,7 @@ test('whole-note Smart Send steers the running response without a new stream',as
   assert.equal(h.newBlocks(),0);assert.equal(request.inlineHost,undefined);assert.equal(request.inlineBindings.length,0);
   assert.match(request.prompt,/Second instruction/);assert.doesNotMatch(request.prompt,/First instruction/);
   assert.match(request.inlineSteering.input.text,/Second instruction/);assert.doesNotMatch(request.inlineSteering.input.text,/First instruction|Sent from Obsidian/);
+  assert.equal(request.inlineSteering.input.selection.text.trim(),'Second instruction.');assert.equal(request.inlineSteering.input.sourceResponseId,h.id);
   assert.equal(request.jobOptions.inline.intermediateMode,'collapse');assert.equal(request.jobOptions.inline.finalAnswerFormat,'raw-markdown');
   assert.deepEqual(Array.from(h.plugin.requestBindingIds(request)),[h.id]);
  }finally{h.plugin.onunload();}
@@ -747,7 +748,7 @@ test('a completed response permits a new stream and explicit New remains indepen
  }
 });
 
-test('mirrored destinations reuse each active stream and only add genuinely new destinations',async()=>{
+for(const sourceFirst of [true,false])test(`mirrored destinations retain the source removal receipt with source ${sourceFirst?'first':'last'}`,async()=>{
  const h=await runningSmartSendHarness();
  try{
   const mirror={...h.record.request,id:randomUUID(),notePath:'Notes/Mirror.md'},fresh={path:'Notes/Fresh.md'};
@@ -758,10 +759,12 @@ test('mirrored destinations reuse each active stream and only add genuinely new 
   h.plugin.app.vault.getFileByPath=(path:string)=>path===h.file.path?h.file:path===mirror.notePath?mirrorFile:path===fresh.path?fresh:undefined;
   h.plugin.app.vault.read=async(file:any)=>file.path===h.file.path?h.document():docs.get(file.path);
   h.plugin.app.vault.process=async(file:any,change:Function)=>{const next=change(docs.get(file.path));docs.set(file.path,next);return next;};
-  await h.plugin.send(h.file,h.project,{threadId:'smart-thread',destinations:[h.file.path,mirror.notePath,fresh.path],throwOnError:true});
+  await h.plugin.send(h.file,h.project,{threadId:'smart-thread',destinations:sourceFirst?[h.file.path,mirror.notePath,fresh.path]:[mirror.notePath,fresh.path,h.file.path],throwOnError:true});
   const request=h.sent.at(-1);assert.equal(h.newBlocks(),1);assert.equal(request.inlineBindings[0].notePath,fresh.path);
-  assert.deepEqual(Array.from(request.inlineSteering.targets,(target:any)=>target.jobId),[h.id,mirror.id]);
-  assert.deepEqual(Array.from(h.plugin.requestBindingIds(request)),[request.inlineBindings[0].id,h.id,mirror.id]);
+  const targets=sourceFirst?[h.id,mirror.id]:[mirror.id,h.id];
+  assert.deepEqual(Array.from(request.inlineSteering.targets,(target:any)=>target.jobId),targets);
+  assert.deepEqual(Array.from(h.plugin.requestBindingIds(request)),[request.inlineBindings[0].id,...targets]);
+  assert.equal(request.inlineSteering.input.sourceResponseId,h.id);assert.equal(request.inlineSteering.input.selection.text.trim(),'Second instruction.');
   assert.equal((docs.get(mirror.notePath)!.match(/data-t3-response=/g)??[]).length,1);
  }finally{h.plugin.onunload();}
 });

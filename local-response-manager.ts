@@ -150,7 +150,7 @@ export class LocalResponseManager {
       if(this.closed||runtime.stopped||!this.canFinishClosed(runtime)&&!this.io.isOpen(path)||this.io.syncReady?.(path)===false)return;
       if(!this.range(current,runtime.request.id)){runtime.done=true;runtime.saved=!!update.body&&current.includes(update.body);runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);return;}
       let document=await this.io.localFinalDraft?.(current,this.range(current,runtime.request.id)!.request)??current;
-      const confirmed=(runtime.request.localSteering??[]).map(input=>({...input,confirmed:!!update.checkpoint?.bindings?.[input.messageId]}));
+      const confirmed=(runtime.request.localSteering??[]).map(input=>({...input,confirmed:!!update.checkpoint?.bindings?.[input.messageId]&&!!update.displayedInputIds?.includes(input.messageId)}));
       document=completedSelectionDraft(document,runtime.request.id,confirmed);
       const range=this.range(document,runtime.request.id);
       // Incoming final text or explicit deletion ends this local attachment.
@@ -200,7 +200,7 @@ export class LocalResponseManager {
   steer(id:string,input:SteeringInput){
     if(!validSteeringInput(input))throw Error('Invalid response steering input.');
     const existing=this.jobs.get(id)?.request.localSteering?.find(item=>item.messageId===input.messageId);
-    if(existing){if(existing.text!==input.text||JSON.stringify(existing.selection)!==JSON.stringify(input.selection))throw Error('This steering ID already belongs to another message.');return Promise.resolve();}
+    if(existing){if(existing.text!==input.text||JSON.stringify([existing.selection,existing.selections,existing.sourceResponseId])!==JSON.stringify([input.selection,input.selections,input.sourceResponseId]))throw Error('This steering ID already belongs to another message.');return Promise.resolve();}
     return this.changeBinding(id,request=>({...request,localSteering:[...request.localSteering??[],{...input,confirmed:false,before:this.jobs.get(id)?.preview.steeringProse?.()??[]}]}));
   }
   discardSteering(id:string,messageId:string){
