@@ -26,6 +26,16 @@ function fixture(binding=request(),initial?:string,records:ResponseBindingData={
 }
 const drain=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
 
+test('completion indicators retain the exact canonical run and time after the final save',async()=>{
+  const h=fixture();await h.manager.register(h.binding);
+  const turn={turnId:'exact-turn',state:'completed',completedAt:'2026-10-14T00:01:00Z'};
+  h.callbacks.get(h.binding.id)!({request:h.binding,messageId:h.binding.messageId,sequence:5,body:'Final answer',turnId:turn.turnId,phase:'complete',completionVerified:true,checkpoint:{turns:{[turn.turnId]:turn}}});
+  await drain();
+  assert.equal(h.writes(),1);
+  assert.deepEqual(h.manager.responses()[0].completion,{environmentId:'env',projectId:h.binding.projectId,threadId:h.binding.threadId,runId:turn.turnId,completedAt:turn.completedAt});
+  h.manager.dispose();
+});
+
 test('fresh devices reconnect from a synced binding and save final text without a host grant',async()=>{
   const first=fixture();await first.manager.register(first.binding);
   const saved=first.read();assert.equal(localResponseBindings(saved,responseBindingRequests(first.records())).length,1);assert.doesNotMatch(saved,/t3-response-binding/);assert.equal(saved.includes('Final answer'),false);
