@@ -2453,7 +2453,6 @@ export default class SendToT3 extends Plugin {
       if(options?.streamReply===true&&!inlineView)throw Error('A Markdown editor is required to prepare this streaming send.');
       const content = inlineView?this.notePromptDocument(inlineView):await this.app.vault.read(file);
       if (!content.trim()) {if(options?.throwOnError)throw Error('This note is empty. Add Markdown before sending.');new Notice('This note is empty. Add Markdown before sending.'); return;}
-      if(!options?.quiet)new Notice('Preparing note and embedded images…');
       if(options?.prepared&&options.prepared.content!==content)throw Error('The note changed while preparing its project. Try again with the current text.');
       await this.recoverSmartReplies(file.path,content);
       const smart=await prepareSmartSend(this.smartData(),file.path,await this.smartKey(project,connection,threadId??''),content);
@@ -2635,7 +2634,6 @@ export default class SendToT3 extends Plugin {
       if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');
       for(const binding of request.inlineBindings??[request.inlineHost])await this.deviceInline.register(binding);
     }else if(request.inlineHost)throw Error('This legacy reply was cancelled. Create a new local reply.');
-    if(!quiet)new Notice(`Working in ${projectLabel(request.project)}…`);
     stage='dispatch';const result=await sendRequest(request);
     for(const binding of request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]))await this.responseGuard(binding,'accepted');
     stage='delivery-evidence';
@@ -2654,7 +2652,7 @@ export default class SendToT3 extends Plugin {
     this.rememberStarted(request,result.threadId);
     this.settings.pending=this.settings.pending.filter(r=>r.id!==request.id);
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;this.settings.settlementJobs=before.settlementJobs;this.settings.noteThreads=before.noteThreads;this.settings.folderLinks=before.folderLinks;throw e;}
-    if(!quiet)new Notice(`${request.threadId?'Sent to thread':'Thread created'} in ${projectLabel(request.project)}: ${result.threadId}`,12000);return result.threadId;
+    if(!quiet)new Notice('Sent successfully.');return result.threadId;
     }catch(error){
       logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});await this.failRequest(request,error,stage,startedAt);
       const accepted=acceptedRequestThread(request);
