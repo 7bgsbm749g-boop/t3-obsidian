@@ -49,6 +49,37 @@ def git(root: Path, *args: str) -> str:
     return subprocess.check_output(['git', *args], cwd=root, text=True).strip()
 
 
+def dependency_inputs(root: Path, commit: str | None = None) -> str:
+    """Ignore release versions while retaining all package and lockfile inputs."""
+    documents = {}
+    for name in ('package.json', 'package-lock.json'):
+        value = json.loads(git(root, 'show', f'{commit}:{name}')) if commit else read(root / name)
+        value.pop('version', None)
+        if name == 'package-lock.json':
+            value.get('packages', {}).get('', {}).pop('version', None)
+        documents[name] = value
+    return hashlib.sha256(json.dumps(documents, sort_keys=True).encode()).hexdigest()
+
+
+def ensure_dependencies(root: Path) -> None:
+    """The worker owns dependency installation, just as it owns integration."""
+    package = read(root / 'package.json')
+    if not package.get('dependencies') and not package.get('devDependencies'):
+        return
+    expected = dependency_inputs(root)
+    marker = root / 'evidence' / 'release-dependencies.json'
+    try:
+        if (root / 'node_modules').is_dir() and read(marker).get('inputsSha256') == expected:
+            return
+    except (FileNotFoundError, ValueError):
+        pass
+    marker.unlink(missing_ok=True)
+    subprocess.run(['npm', 'ci', '--no-audit', '--no-fund'], cwd=root, check=True, timeout=300)
+    if dependency_inputs(root) != expected:
+        raise SystemExit('Package inputs changed during dependency installation; release stopped.')
+    write(marker, {'inputsSha256': expected, 'installedAt': now()})
+
+
 def jobs(queue: Path) -> list[Path]:
     return sorted(path for path in (queue / 'jobs').glob('*') if JOB_ID.fullmatch(path.name))
 
@@ -81,6 +112,7 @@ def submission(root: Path, canonical: Path, commit: str, *, bump: str = 'patch',
         item = subprocess.run(['git', 'show', f'{commit}:{name}'], cwd=root, capture_output=True)
         inputs[name] = hashlib.sha256(item.stdout).hexdigest() if item.returncode == 0 else None
     return {**identity, 'createdAt': now(), 'sourceRoot': str(root), 'mergeBase': base,
+            'dependencyInputsSha256': dependency_inputs(root, commit),
             'sourceInputsSha256': inputs, 'validation': str(validation) if validation else None,
             'evidence': str(evidence) if evidence else None}
 
@@ -219,6 +251,7 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
             # so a tooling change is checked by its newly integrated runner.
             update(directory, state, status='queued', nextAction='Restarting the updated release worker.')
             return True
+        ensure_dependencies(root)
         source_version = release.read_json(root / 'manifest.json')['version']
         version = version or (source_version if request.get('validation') else release.bump_version(source_version, request['bump']))
         update(directory, state, version=version, status='releasing',
@@ -250,6 +283,8 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
         return False
     matches = all((release.sha256_file(root / name) if (root / name).is_file() else None) == checksum
                   for name, checksum in request['sourceInputsSha256'].items())
+    matches = matches and (not request.get('dependencyInputsSha256') or
+                           dependency_inputs(root) == request['dependencyInputsSha256'])
     if request.get('evidence') and matches:
         original = Path(request['evidence'])
         if release.sha256_file(original) != request['evidenceSha256']:

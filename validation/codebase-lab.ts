@@ -1,12 +1,26 @@
 import {Plugin,MarkdownView} from 'obsidian';
 import {CodebaseBridge} from '../codebase-native';
 import type {CodebaseIO} from '../codebase-core';
+import {languageFixtures} from '../tests/fixtures/languages';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 export default class CodebaseLab extends Plugin {
-  async onload(){this.app.workspace.onLayoutReady(()=>void this.run().catch(error=>this.evidence('error.json',{message:error.message,stack:error.stack})));}
+  private bridge?:CodebaseBridge;
+  async onload(){this.app.workspace.onLayoutReady(()=>void this.run().catch(async error=>{this.evidence('error.json',{message:error.message,stack:error.stack});try{await this.cleanup();}catch(cleanup){this.evidence('cleanup-error.json',{error:String(cleanup)});}}));}
   private root(){return path.dirname((this.app.vault.adapter as any).getFullPath(''));}
   private evidence(name:string,data:unknown){fs.writeFileSync(path.join(this.root(),name),JSON.stringify(data,null,2));}
+  private async cleanup(){
+    if(!fs.existsSync(path.join(this.root(),'ISOLATED-NATIVE-LAB')))throw Error('An isolated lab is required for cleanup');
+    this.bridge?.dispose();this.bridge=undefined;
+    const leaves:any[]=[];this.app.workspace.iterateAllLeaves(leaf=>leaves.push(leaf));for(const leaf of leaves)leaf.detach();
+    const ownedNotes=this.app.vault.getFiles().map(file=>file.path);
+    for(const name of ownedNotes){const file=this.app.vault.getFileByPath(name);if(file)await this.app.vault.delete(file);}
+    const external=path.join(this.root(),'external'),ownedProjectFiles:string[]=fs.existsSync(external)?fs.readdirSync(external):[];
+    for(const name of ownedProjectFiles)fs.unlinkSync(path.join(external,name));if(fs.existsSync(external))fs.rmdirSync(external);
+    const remainingNotes=ownedNotes.filter(name=>this.app.vault.getFileByPath(name)||fs.existsSync(path.join(this.root(),'vault',name)));
+    this.evidence('cleanup.json',{ownedNotes,ownedProjectFiles,remainingNotes,remainingProjectFiles:fs.existsSync(external)?fs.readdirSync(external):[],temporaryThreads:[],pass:remainingNotes.length===0&&!fs.existsSync(external)});
+    if(remainingNotes.length||fs.existsSync(external))throw Error('Codebase lab cleanup incomplete');
+  }
   async run(){
     await pause(1000);const root=this.root();if(!fs.existsSync(path.join(root,'ISOLATED-NATIVE-LAB')))throw Error('An isolated lab is required.');
     const external=path.join(root,'external');fs.mkdirSync(external);fs.writeFileSync(path.join(external,'report.md'),'# External report\n\nOriginal text.\n');fs.writeFileSync(path.join(external,'sample.ts'),'const value = 1;\n');
@@ -16,7 +30,7 @@ export default class CodebaseLab extends Plugin {
     const png=new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jYb0AAAAASUVORK5CYII=','base64'));const mediaUrl=URL.createObjectURL(new Blob([png],{type:'image/png'}));
     const objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>','<< /Length 0 >>\nstream\n\nendstream','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>'];let pdf='%PDF-1.4\n';const offsets=[0];for(const [index,object] of objects.entries()){offsets.push(pdf.length);pdf+=`${index+1} 0 obj\n${object}\nendobj\n`;}const xref=pdf.length;pdf+=`xref\n0 6\n0000000000 65535 f \n${offsets.slice(1).map(offset=>String(offset).padStart(10,'0')+' 00000 n ').join('\n')}\ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;const pdfUrl=URL.createObjectURL(new Blob([pdf],{type:'application/pdf'}));
     const io:CodebaseIO={list:async()=>({entries:[{path:'report.md',kind:'file'},{path:'sample.ts',kind:'file'}],truncated:false}),search:async()=>[{path:'report.md',kind:'file'}],read:async(_scope,file)=>fs.readFileSync(path.join(external,file),'utf8'),write:async(_scope,file,text)=>{if(writeGate?.text===text){writeGate.started();await writeGate.wait;}remoteWrites++;fs.writeFileSync(path.join(external,file),text);},resource:async(_scope,file)=>({url:file.endsWith('.pdf')?pdfUrl:mediaUrl,expiresAt:Date.now()+300000})};
-    const bridge=new CodebaseBridge(this.app,this,io,()=>[{id:'link',folderPath:'/',connectionId:'local',environmentId:'lab',projectId:'project',workspaceRoot:external,projectTitle:'External project',self:false}],'lab');await bridge.install();this.register(()=>bridge.dispose());
+    const bridge=this.bridge=new CodebaseBridge(this.app,this,io,()=>[{id:'link',folderPath:'/',connectionId:'local',environmentId:'lab',projectId:'project',workspaceRoot:external,projectTitle:'External project',self:false}],'lab');await bridge.install();this.register(()=>bridge.dispose());
     // Exercise unchanged absolute agent references through native Obsidian dispatch.
     const timings:number[]=[];for(let run=0;run<10;run++){const start=performance.now();await this.app.workspace.openLinkText(external+'/report.md','Reference.md',false);timings.push(performance.now()-start);}
     if(this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.name!=='report.md')throw Error('Absolute agent path did not open natively');
@@ -31,6 +45,18 @@ export default class CodebaseLab extends Plugin {
     fs.writeFileSync(path.join(external,'jump.md'),'# First\n\nBody\n\n## Target heading\n\nLast body\n');await this.app.workspace.openLinkText(external+'/jump.md#Target heading','Reference.md',false);await pause(300);const headingCursor=this.app.workspace.getActiveViewOfType(MarkdownView)!.editor.getCursor();if(headingCursor.line!==4){this.evidence('heading-error.json',{headingCursor});throw Error('Native heading navigation failed');}
     timings.sort((a,b)=>a-b);this.evidence('native-path-routing.json',{absolutePath:true,nativeClick:true,fileUri:true,nativeImage:true,missingDoesNotCreate:true,originalTextUnchanged:true,nonzeroLineColumn:codeCursor,headingCursor,warmOpenMedianMs:timings[5],warmOpenMaxMs:timings.at(-1)});
     await bridge.show();const sidebar=this.app.workspace.getLeavesOfType('t3-codebase')[0].view as any;const {folderKey}=await import('../codebase-cache');sidebar.expanded.add(folderKey(scope,''));sidebar.invalidate();await sidebar.refresh();const row=sidebar.contentEl.querySelector('.nav-folder-title'),cachedRows=[...sidebar.contentEl.querySelectorAll('.tree-item-self')],scroll=sidebar.contentEl.scrollTop;const reveal:number[]=[];for(let i=0;i<40;i++){const start=performance.now();row.click();reveal.push(performance.now()-start);}await sidebar.refresh();if(cachedRows.some(el=>!sidebar.contentEl.contains(el))||sidebar.contentEl.scrollTop!==scroll)throw Error('The native sidebar lost rows or scroll state');reveal.sort((a,b)=>a-b);this.evidence('native-sidebar-metrics.json',{runs:40,p95RevealMs:reveal[37],retainedRows:cachedRows.length,nativeClasses:true,timings:sidebar.timings});
+    const physicalBefore=this.app.vault.getFiles().map(file=>file.path).sort(),matrix:any[]=[];
+    for(const fixture of languageFixtures){
+      const file='language-'+fixture.grammar+'.'+fixture.extension;fs.writeFileSync(path.join(external,file),fixture.raw);
+      const item=bridge.register(scope,file);await bridge.open(item);await pause(100);
+      const view=this.app.workspace.getActiveViewOfType(MarkdownView)!;
+      if(view.getViewType()!==fixture.type||view.editor.getValue()!==fixture.raw)throw Error(fixture.name+' external routing or raw load failed');
+      const raw=fixture.raw+'\n    \t';view.editor.replaceRange('\n    \t',view.editor.offsetToPos(view.editor.getValue().length));await view.save();
+      if(fs.readFileSync(path.join(external,file),'utf8')!==raw||item.document.base!==raw||item.document.uncertain||item.document.draft!==undefined)throw Error(fixture.name+' checked external save failed');
+      matrix.push({name:fixture.name,type:fixture.type,file,exactCheckedSave:true,sha256:require('node:crypto').createHash('sha256').update(raw).digest('hex')});
+    }
+    const physicalAfter=this.app.vault.getFiles().map(file=>file.path).sort();if(JSON.stringify(physicalBefore)!==JSON.stringify(physicalAfter))throw Error('Language project files entered the physical vault');
+    this.evidence('language-project-matrix.json',{formats:26,grammars:languageFixtures.length,results:matrix,physicalInventoryUnchanged:true});
     const browseWritesBefore=remoteWrites,browseLeaves:Array<MarkdownView|null>=[];
     for(let run=0;run<3;run++)for(const file of ['data.json','main.js','manifest.json','styles.css']){
       const item=bridge.register(scope,file);await bridge.open(item);await pause(100);const codeView=this.app.workspace.getActiveViewOfType(MarkdownView);if(codeView?.getViewType()!==({json:'json',js:'javascript',css:'css'} as Record<string,string>)[item.file.extension])throw Error('Browse did not choose its named language view');browseLeaves.push(codeView);
@@ -66,6 +92,7 @@ export default class CodebaseLab extends Plugin {
     const review=await (bridge as any).review(code);await pause(100);const saveButton=Array.from(review.contentEl.querySelectorAll('button')) as HTMLButtonElement[];const save=saveButton.find(button=>button.textContent==='Save local edit');if(!save){this.evidence('review-missing.json',{draft:(bridge as any).drafts,base:code.document.base,documentDraft:code.document.draft,editor:codeView.editor.getValue(),buttons:Array.from(document.querySelectorAll('button')).map(button=>button.textContent),html:document.querySelector('.modal-container')?.outerHTML});try{const shot=await require('@electron/remote').getCurrentWebContents().capturePage();fs.writeFileSync(path.join(root,'review-missing.png'),shot.toPNG());}catch{}throw Error('Conflict review save action missing');}save.click();await pause(1000);codeView.editor.setValue('// second edit after review\n');await pause(3500);if(fs.readFileSync(path.join(external,'sample.ts'),'utf8')!=='// second edit after review\n')throw Error('Native edit after conflict review could not save');
     this.evidence('native-codebase.json',{nativeMarkdownView:view instanceof MarkdownView,nativeCodeView:codeView instanceof MarkdownView,bareLinkOpened:true,nativeImageView:true,nativeImageEmbed:true,nativePdfView:true,markdownAutosave:saved,codeAutosave:true,conflictPreserved:true,editAfterConflictReview:true,twoNativeTabsRefreshed:true,physicalInventoryUnchanged:true,virtualFile:item.file.path,before,after});
     try{const image=await require('@electron/remote').getCurrentWebContents().capturePage();fs.writeFileSync(path.join(root,'native-codebase.png'),image.toPNG());}catch{}
-    this.evidence('complete.json',{complete:true,version:require('obsidian').apiVersion});
+    await this.cleanup();URL.revokeObjectURL(mediaUrl);URL.revokeObjectURL(pdfUrl);
+    this.evidence('complete.json',{complete:true,version:require('obsidian').apiVersion,formats:26,grammars:languageFixtures.length,cleanup:true});
   }
 }

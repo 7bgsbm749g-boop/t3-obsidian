@@ -1,6 +1,39 @@
 # Isolated native language views
 
-Project `.ts`, `.mts`, and `.cts` files open in a view named `typescript`. `.tsx` uses that same view with its JSX grammar. JavaScript (`.js`, `.mjs`, `.cjs`, `.jsx`), JSON, CSS, and Python (`.py`, `.pyw`, `.pyi`) use `javascript`, `json`, `css`, and `python`. Other text files use `plaintext`. Markdown and native media retain their usual views. No vault-wide extension mapping is changed. An existing extension handler remains under its current owner's control.
+The Codebase view supports the following 26 languages and formats. TSX and JSX use their own syntax grammars within the TypeScript and JavaScript views.
+
+| Language / format | Extensions |
+| --- | --- |
+| TypeScript / TSX | `.ts`, `.mts`, `.cts`, `.tsx` |
+| JavaScript / JSX | `.js`, `.mjs`, `.cjs`, `.jsx` |
+| JSON | `.json` |
+| CSS | `.css` |
+| Python | `.py`, `.pyw`, `.pyi` |
+| C | `.c`, `.h` |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`, `.hh`, `.hxx`, `.h++` |
+| Java | `.java` |
+| C# | `.cs`, `.csx` |
+| Visual Basic | `.vb`, `.bas`, `.cls`, `.frm` |
+| SQL | `.sql` |
+| R | `.r`, `.R`, `.rscript` |
+| Rust | `.rs` |
+| Go | `.go` |
+| PHP | `.php`, `.phtml` |
+| Ruby | `.rb`, `.rake`, `.gemspec` |
+| Kotlin | `.kt`, `.kts` |
+| Swift | `.swift` |
+| Dart | `.dart` |
+| Bash | `.sh`, `.bash` |
+| PowerShell | `.ps1`, `.psm1`, `.psd1` |
+| Lua | `.lua` |
+| HTML | `.html`, `.htm` |
+| YAML | `.yaml`, `.yml` |
+| TOML | `.toml` |
+| XML | `.xml`, `.xsd`, `.xsl`, `.xslt` |
+
+Extension matching is case-insensitive. Shared `.h` headers continue to default to C. Other text files use `plaintext`. Markdown and native media retain their usual views. No vault-wide extension mapping is changed. An existing extension handler remains under its current owner's control. These are syntax highlighting and native editing/viewing features, not compilers or language servers. SQL uses the generic SQL grammar; dialect-specific validation is outside this feature.
+
+Java, SQL, Rust, Go, PHP, HTML, YAML, and XML use their pinned CodeMirror language packages. The other new languages use the official `@codemirror/legacy-modes` stream grammars. C++ uses its stream grammar because the LR parser reports a false preprocessor error when the byte-preserving editor retains CRLF carriage returns. YAML's source grammar colors plain scalars as strings without resolving a schema. Source and Reading use separate syntax engines and can assign different token colors.
 
 The language views inherit Obsidian's native editor and save lifecycle. They retain native search, undo, autosave, tabs, Reading controls, and saved workspace state. CodebaseBridge includes these named views in its checked save, clean refresh, peer update, and local draft recovery paths. Project bytes remain outside the physical vault. The checked reload guard also checks every owned code view and rechecks saved bytes after its durable acknowledgement, before dispatching Reload app without saving.
 
@@ -38,9 +71,11 @@ Full delivery also requires a clean-source immutable QLO2 release, fresh Sync sc
 
 The installed native test found that core's incremental editor setter splits on `\r?\n` and removes carriage returns when returning from Reading. Initial load and the first real checked project save remained exact. The affected file was a unique synthetic fixture; its raw host/buffer comparison, failed smoke, retained synthetic draft, and cleanup are recorded outside the vault in `language-views-implementation-20261006/qlo2-23410-failed-live-smoke.json`. All 19 original Markdown leaf IDs and the original active note were preserved. This release has no complete smoke receipt and must not be described as complete. The source correction changes only the named code instance's setter.
 
-### Ordered language expansion
+### Original ordered language expansion (superseded)
 
 After the corrected TypeScript release completes native QLO2 smoke, each requested programming language gets a separate reviewed source commit, newer immutable release, fresh Sync, checked reload, and complete native smoke. The selection is the latest published TIOBE index available on 2026-10-06 (September 2026): Python, C, C++, Java, C#, JavaScript, Visual Basic, SQL, R, and Rust. Source: https://www.tiobe.com/tiobe-index/ . Existing Python and JavaScript support will receive a distinct language-specific validation/integration commit and release. The user also approved all fifteen additional formats: Go, PHP, Ruby, Kotlin, Swift, Dart, Bash, PowerShell, Lua, HTML, CSS, JSON, YAML, TOML, and XML. This gives 26 named formats including TypeScript. Each addition receives its own commit and tested immutable release. The path-routing owner's pending bounded native slot follows the completed TypeScript release and precedes these language releases. GUI slots and test workloads remain serialized with the path-routing owner.
+
+On 2026-10-27 the user approved replacing the per-language release sequence with one tested batch of the remaining 20 formats. The batch extends the existing routing table and lazy grammar loader without replacing the native editor adapter. `tests/fixtures/languages.ts` supplies 28 grammar fixtures (26 formats plus TSX and JSX) to both parser tests and the native desktop labs. The language lab checks each fixture's real Source and Reading syntax colors, exact native edits/saves and Reading/Source round trips, then performs one native app reload, verifies restored highlighted Reading and exact Source bytes, and deletes its synthetic files through the vault API. The Codebase lab checks exact external-project saves for every fixture, retains physical-vault isolation, and removes its temporary files. Evidence stays under this worktree's gitignored `evidence/`. Release, Sync, and QLO2 loaded-client checks run once through the FIFO release queue after review.
 
 ### Source validation, 2026-10-06
 
@@ -127,3 +162,17 @@ Evidence SHA-256: `d57bea4e2f0ffa96ec5ba5a7d159bfeae10773f9eedcbc8d1081486fc72e4
 (100 retained artifacts). This is native VPS proof; no Windows C or mobile
 rendering claim. The memory issue remains unresolved and the other 23 formats
 remain paused. No new format or release was started to finish these tests.
+
+### Batch verification, 2026-10-27
+
+The paused expansion is implemented as one batch. The shared native editor adapter is unchanged. Actual Obsidian 1.13.7 and 1.14.5 clients each passed all 28 grammar fixtures: 26 formats plus TSX and JSX. Every fixture showed visible syntax colors in Source and Reading, retained mixed line endings and existing whitespace through native edits/saves and Reading/Source round trips, and saved exact host-file bytes. Both clients passed the shared native editing checks, large-file fallback, 720 Markdown edit pairs with unchanged editor configuration and no code callbacks/grammar loads, and a real `app:reload` that restored highlighted Rust Reading and exact Source bytes. Each run recorded screenshots and deleted all owned files through the vault API.
+
+A separate 1.14.5 CodebaseBridge lab passed checked external-project saves for all 28 fixtures without adding project files to the physical vault. The same run passed existing native navigation, image/PDF, clean browsing, peer/Reading refresh, overlapping saves, and conflict-review checks. Its temporary notes and external project files were removed, and all owned lab clients were closed. No T3 threads were created. Earlier failed lab attempts and their verified cleanup are retained alongside the successful runs. These checks cover VPS desktop clients; Windows and native iPhone/Android rendering were not tested.
+
+The native lab now selects Source explicitly, waits for deferred editors and asynchronous grammars, and checks rendered syntax colors. Obsidian's stream modes can use native `cm-*` token classes without Lezer highlight tags, so their real DOM colors and screenshots are checked separately from the bundled parser token assertions. A new test vault also requires Obsidian's native **Trust author and enable plugins** step; setting `safeMode:false` in its initial config does not replace the per-vault trust setting.
+
+The unminified bundle grew from 1,985,497 to 2,477,863 bytes (+492,366). Nine fresh-process V8 compilation samples had local medians of 69.9 ms before and 83.7 ms after. This is a compile-only measurement under local server load, not a whole-app startup benchmark. Grammar initialization remains lazy inside the single offline bundle.
+
+The release queue now runs `npm ci` before validation when its committed package/lockfile inputs change. Its cache marker lives under `evidence/`, outside installed dependency bytes. Release-only version changes reuse that installation. Failed installs do not record success, and package/lockfile changes during installation stop publication. Queued native behavior evidence also requires matching package/lockfile inputs after ignoring generated release versions. The worker still owns canonical integration, version assignment, installation, fresh Sync and QLO2 reload.
+
+Native evidence is under `evidence/language-expansion-20261027/native-1137-final/`, `native-1145-colors/`, and `codebase-1145/` in the task worktree. The batch's hashed evidence summary is `evidence/language-expansion-20261027/behavior.json`. Final automated validation and the queue's release/client receipt are separate from these synthetic native checks.

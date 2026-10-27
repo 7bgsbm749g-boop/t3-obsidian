@@ -59,7 +59,10 @@ class ReleaseQueueTests(unittest.TestCase):
         self.published.append(version)
         self.release.archive_path(version).write_text('immutable bytes')
         for name in queue.VERSION_FILES:
-            (self.root / name).write_text(json.dumps({'version': version}))
+            value = queue.read(self.root / name); value['version'] = version
+            if name == 'package-lock.json':
+                value.get('packages', {}).get('', {}).update(version=version)
+            (self.root / name).write_text(json.dumps(value))
         path = self.release.release_receipt_dir(version); path.mkdir(parents=True)
         queue.write(path / 'deployment.json', {'version': version})
         self.client(version)
@@ -72,6 +75,66 @@ class ReleaseQueueTests(unittest.TestCase):
     def smoke(self, version, device, evidence, notes):
         queue.write(self.release.release_receipt_dir(version) / ('smoke-' + device + '.json'),
                     {'version': version, 'status': 'complete', 'installedMainSha256': 'bundle', 'evidenceSha256': 'evidence'})
+
+    def dependency_fixture(self):
+        package = {'name': 'fixture', 'version': '1.0.0', 'dependencies': {'grammar': '1.0.0'}}
+        lock = {'name': 'fixture', 'version': '1.0.0', 'lockfileVersion': 3,
+                'packages': {'': package.copy(), 'node_modules/grammar': {'version': '1.0.0'}}}
+        queue.write(self.root / 'package.json', package)
+        queue.write(self.root / 'package-lock.json', lock)
+
+    def test_dependency_install_is_cached_but_lock_changes_require_a_new_install(self):
+        self.dependency_fixture()
+        with patch.object(queue.subprocess, 'run', side_effect=lambda *args, **kwargs: (self.root / 'node_modules').mkdir(exist_ok=True)) as install:
+            queue.ensure_dependencies(self.root)
+            queue.ensure_dependencies(self.root)
+            install.assert_called_once_with(['npm', 'ci', '--no-audit', '--no-fund'], cwd=self.root, check=True, timeout=300)
+            for name in ('package.json', 'package-lock.json'):
+                value = queue.read(self.root / name); value['version'] = '1.0.1'
+                if name == 'package-lock.json':
+                    value['packages']['']['version'] = '1.0.1'
+                queue.write(self.root / name, value)
+            queue.ensure_dependencies(self.root)
+            self.assertEqual(install.call_count, 1)
+            value = queue.read(self.root / 'package-lock.json')
+            value['packages']['node_modules/grammar']['version'] = '1.0.1'
+            queue.write(self.root / 'package-lock.json', value)
+            queue.ensure_dependencies(self.root)
+            self.assertEqual(install.call_count, 2)
+
+    def test_failed_or_changed_dependency_install_never_records_success(self):
+        self.dependency_fixture()
+        marker = self.root / 'evidence/release-dependencies.json'
+        with patch.object(queue.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, ['npm', 'ci'])):
+            with self.assertRaises(subprocess.CalledProcessError):
+                queue.ensure_dependencies(self.root)
+        self.assertFalse(marker.exists())
+        def change_inputs(*args, **kwargs):
+            value = queue.read(self.root / 'package.json'); value['dependencies']['grammar'] = '2.0.0'
+            queue.write(self.root / 'package.json', value)
+        with patch.object(queue.subprocess, 'run', side_effect=change_inputs):
+            with self.assertRaisesRegex(SystemExit, 'inputs changed'):
+                queue.ensure_dependencies(self.root)
+        self.assertFalse(marker.exists())
+
+    def test_worker_installs_dependencies_before_publication(self):
+        source = self.source('first'); self.submit(source)
+        events = []
+        def publish(*args):
+            events.append('publish'); self.publish(*args)
+        with patch.object(queue, 'ensure_dependencies', side_effect=lambda root: events.append('dependencies')), patch.object(self.release, 'new_release', side_effect=publish):
+            queue.drain(self.release, queue=self.store)
+        self.assertEqual(events, ['dependencies', 'publish'])
+
+    def test_behavior_evidence_is_not_reused_after_integrated_dependency_changes(self):
+        source = self.source('first'); job = self.submit(source)
+        value = queue.read(self.root / 'package.json'); value['description'] = 'Different package input'
+        queue.write(self.root / 'package.json', value)
+        self.git('add', 'package.json'); self.git('commit', '-qm', 'package update')
+        result = queue.drain(self.release, queue=self.store)
+        self.assertEqual(result['status'], 'awaiting-smoke')
+        self.assertEqual(self.published, ['1.0.1'])
+        self.assertFalse(queue.status(job['jobId'], queue=self.store)['jobs'][0]['suppliedBehaviorInputsMatch'])
 
     def test_fifo_integrates_independent_worktrees_and_assigns_distinct_versions(self):
         first = self.source('first'); second = self.source('second')
