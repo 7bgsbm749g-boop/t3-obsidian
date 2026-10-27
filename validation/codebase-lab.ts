@@ -2,6 +2,7 @@ import {Plugin,MarkdownView} from 'obsidian';
 import {CodebaseBridge} from '../codebase-native';
 import type {CodebaseIO} from '../codebase-core';
 import {languageFixtures} from '../tests/fixtures/languages';
+import {runFileOpeningLab} from './file-opening-lab';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 export default class CodebaseLab extends Plugin {
@@ -23,6 +24,7 @@ export default class CodebaseLab extends Plugin {
   }
   async run(){
     await pause(1000);const root=this.root();if(!fs.existsSync(path.join(root,'ISOLATED-NATIVE-LAB')))throw Error('An isolated lab is required.');
+    if(fs.existsSync(path.join(root,'FILE-OPENING-LAB')))return runFileOpeningLab(this,root);
     const external=path.join(root,'external');fs.mkdirSync(external);fs.writeFileSync(path.join(external,'report.md'),'# External report\n\nOriginal text.\n');fs.writeFileSync(path.join(external,'sample.ts'),'const value = 1;\n');
     for(const [file,text] of [['data.json','{\"synthetic\":true}\n'],['main.js','const synthetic = true;\n'],['manifest.json','{\"id\":\"synthetic\"}\n'],['styles.css','.synthetic { color: blue; }\n']])fs.writeFileSync(path.join(external,file),text);
     let remoteWrites=0,writeGate:undefined|{text:string;wait:Promise<void>;started:()=>void};

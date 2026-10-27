@@ -59,6 +59,7 @@ export class CodebaseBridge {
   private sourceOrigins=new Map<string,Map<string,{environmentId:string;projectId:string}>>();
   private knownScopes=new Map<string,CodebaseScope>();
   private workspaceScopes=new Map<string,{at:number;value:CodebaseScope[];error?:boolean;pending?:Promise<void>}>();
+  private openingFiles=new Map<string,{notice:Notice;users:number}>();
   constructor(readonly app:App,private plugin:Plugin,readonly io:CodebaseIO,readonly links:()=>FolderLink[],vaultId:string,private storage?:CodebaseStorage){
     this.languageViews=new NativeLanguageViews(app,plugin);
     this.draftsKey=`t3-codebase-drafts:${vaultId}`;this.metadataPath=`${app.vault.configDir}/t3-code/codebase-v1.json`;
@@ -117,22 +118,26 @@ export class CodebaseBridge {
     this.patch(workspace,'openLinkText',(original:any)=>async(link:string,source:string,newLeaf:any,state:any)=>{
       if(this.vaultWikiLink(link,source))return original(link,source,newLeaf,state);
       let route=this.pathRoute(link,source);
-      if(!route.owned&&this.absoluteReference(link)){const discovered=await this.discoverWorkspaces();route=this.pathRoute(link,source);if(!route.owned&&!discovered){new Notice('Project locations are unavailable. No vault note was created.');return;}}
-      if(route.owned){const item=route.items.length===1?route.items[0]:route.items.length?await this.choose(route.items,link,source):undefined;if(!item){new Notice('The project file is unavailable or its location is ambiguous.');return;}try{this.choices[JSON.stringify([source,link.split('#')[0]])]=item.file.path;this.pin(item,source);const parsed=projectLink(link)!;return await this.open(item,workspace.getLeaf(newLeaf),{...state,eState:{...state?.eState,...(parsed.line===undefined?{}:{line:parsed.line,startLoc:{line:parsed.line,col:parsed.column??0},endLoc:{line:parsed.line,col:parsed.column??0},cursor:{from:{line:parsed.line,ch:parsed.column??0},to:{line:parsed.line,ch:parsed.column??0}}})}},parsed.subpath);}catch(error){new Notice(`The project file is unavailable: ${error instanceof Error?error.message:String(error)}`,10000);return;}}
-      if(physicalLink(link.split('#')[0],source))return original(link,source,newLeaf,state);
-      if(this.absoluteReference(link)&&(this.environmentIds().length||this.sourceOrigins.has(source))){new Notice('This path is not available in a linked project workspace.');return;}
-      const sourceItem=this.files.get(source);if(sourceItem&&link.split('#')[0].includes('/')&&!this.resolve(link,source)){const parts=sourceItem.path.split('/').slice(0,-1);for(const part of link.split('#')[0].split('/')){if(part==='.')continue;if(part==='..'){if(!parts.length)throw Error('The link leaves the project workspace.');parts.pop();}else parts.push(part);}this.register(sourceItem.scope,parts.join('/'));}
-      let candidates=this.candidates(link,source);
-      // Unclaimed vault links belong to Obsidian, including newly typed wiki
-      // links that have not reached the metadata cache yet. No network lookup
-      // may delay or prevent native missing-note creation.
-      if(!candidates.length&&!this.resolve(link,source)&&!sourceItem){if(link.startsWith(CODEBASE_PREFIX))return;return original(link,source,newLeaf,state);}
-      if(!candidates.length&&!this.resolve(link,source)&&this.scopes().length){await this.search(link.split('#')[0],source);candidates=this.candidates(link,source);}
-      const resolved=this.resolve(link,source);
-      const item=resolved??(candidates.length===1?candidates[0]:candidates.length?await this.choose(candidates,link,source):undefined);
-      if(item){this.choices[JSON.stringify([source,link.split('#')[0]])]=item.file.path;this.pin(item,source);await this.prepare(item);if(MEDIA.test(item.path))return original(link,source,newLeaf,state);const leaf=workspace.getLeaf(newLeaf);const parsed=projectLink(link);return this.open(item,leaf,parsed?.line===undefined?state:{...state,eState:{...state?.eState,line:parsed.line,startLoc:{line:parsed.line,col:parsed.column??0},endLoc:{line:parsed.line,col:parsed.column??0},cursor:{from:{line:parsed.line,ch:parsed.column??0},to:{line:parsed.line,ch:parsed.column??0}}}},parsed?.subpath);}
-      if(candidates.length||link.startsWith(CODEBASE_PREFIX))return;
-      return original(link,source,newLeaf,state);
+      const tracked=route.owned||!physicalLink(link.split('#')[0],source)&&(this.absoluteReference(link)||this.files.has(source)||!!this.resolve(link,source)||this.candidates(link,source).length>0);
+      const open=async()=>{
+        if(!route.owned&&this.absoluteReference(link)){const discovered=await this.discoverWorkspaces();route=this.pathRoute(link,source);if(!route.owned&&!discovered){new Notice('Project locations are unavailable. No vault note was created.');return;}}
+        if(route.owned){const item=route.items.length===1?route.items[0]:route.items.length?await this.choose(route.items,link,source):undefined;if(!item){new Notice('The project file is unavailable or its location is ambiguous.');return;}try{this.choices[JSON.stringify([source,link.split('#')[0]])]=item.file.path;this.pin(item,source);const parsed=projectLink(link)!;return await this.open(item,workspace.getLeaf(newLeaf),{...state,eState:{...state?.eState,...(parsed.line===undefined?{}:{line:parsed.line,startLoc:{line:parsed.line,col:parsed.column??0},endLoc:{line:parsed.line,col:parsed.column??0},cursor:{from:{line:parsed.line,ch:parsed.column??0},to:{line:parsed.line,ch:parsed.column??0}}})}},parsed.subpath);}catch(error){new Notice(`The project file is unavailable: ${error instanceof Error?error.message:String(error)}`,10000);return;}}
+        if(physicalLink(link.split('#')[0],source))return original(link,source,newLeaf,state);
+        if(this.absoluteReference(link)&&(this.environmentIds().length||this.sourceOrigins.has(source))){new Notice('This path is not available in a linked project workspace.');return;}
+        const sourceItem=this.files.get(source);if(sourceItem&&link.split('#')[0].includes('/')&&!this.resolve(link,source)){const parts=sourceItem.path.split('/').slice(0,-1);for(const part of link.split('#')[0].split('/')){if(part==='.')continue;if(part==='..'){if(!parts.length)throw Error('The link leaves the project workspace.');parts.pop();}else parts.push(part);}this.register(sourceItem.scope,parts.join('/'));}
+        let candidates=this.candidates(link,source);
+        // Unclaimed vault links belong to Obsidian, including newly typed wiki
+        // links that have not reached the metadata cache yet. No network lookup
+        // may delay or prevent native missing-note creation.
+        if(!candidates.length&&!this.resolve(link,source)&&!sourceItem){if(link.startsWith(CODEBASE_PREFIX))return;return original(link,source,newLeaf,state);}
+        if(!candidates.length&&!this.resolve(link,source)&&this.scopes().length){await this.search(link.split('#')[0],source);candidates=this.candidates(link,source);}
+        const resolved=this.resolve(link,source);
+        const item=resolved??(candidates.length===1?candidates[0]:candidates.length?await this.choose(candidates,link,source):undefined);
+        if(item){this.choices[JSON.stringify([source,link.split('#')[0]])]=item.file.path;this.pin(item,source);await this.prepare(item);if(MEDIA.test(item.path))return original(link,source,newLeaf,state);const leaf=workspace.getLeaf(newLeaf);const parsed=projectLink(link);return this.open(item,leaf,parsed?.line===undefined?state:{...state,eState:{...state?.eState,line:parsed.line,startLoc:{line:parsed.line,col:parsed.column??0},endLoc:{line:parsed.line,col:parsed.column??0},cursor:{from:{line:parsed.line,ch:parsed.column??0},to:{line:parsed.line,ch:parsed.column??0}}}},parsed?.subpath);}
+        if(candidates.length||link.startsWith(CODEBASE_PREFIX))return;
+        return original(link,source,newLeaf,state);
+      };
+      return tracked?this.withFileOpeningNotice(link,source,open):open();
     });
     this.plugin.registerEvent(workspace.on('editor-change',(editor,view)=>{const file=view.file,item=file?this.files.get(file.path):undefined;if(!item||item.document.base===undefined||(view as MarkdownView).getMode?.()==='preview')return;const text=editor.getValue(),basis=this.viewBase(view as MarkdownView,item);if(!basis)return;if(text!==item.document.base){if(basis.text!==item.document.base)item.document.uncertain=true;item.document.draft=text;this.retain(item.file.path,text);}}));
     this.plugin.registerEvent(workspace.on('file-open',file=>{this.app.workspace.iterateAllLeaves?.(leaf=>this.nativeChrome(leaf.view));const item=file?this.files.get(file.path):undefined;if(!item)return;this.captureBases(item);}));
@@ -278,6 +283,19 @@ export class CodebaseBridge {
 
   async list(scope:CodebaseScope,directory:string){await this.browse.load(scope,directory);const result=this.browse.get(scope,directory);if(!result)throw Error(this.browse.errors.get(JSON.stringify([scopeKey(scope),scope.root,directory]))??'The project folder is unavailable.');return result.entries;}
   private resource(item:RegisteredFile){if(this.stopped||!this.allowed(item.scope))return '';if(!item.resource||item.resource.expiresAt<Date.now()+5000){void this.prepare(item,true).catch(()=>{});return '';}return item.resource.url;}
+  private async withFileOpeningNotice<T>(link:string,source:string,open:()=>Promise<T>):Promise<T>{
+    const path=projectLink(link)?.path??link,key=JSON.stringify([source,path]);
+    let progress=this.openingFiles.get(key);
+    if(!progress){
+      const notice=new Notice(`Opening ${path.split('/').at(-1)||'project file'}…`,0);
+      notice.messageEl.classList.add('send-to-t3-file-opening');
+      notice.messageEl.setAttribute('role','status');notice.messageEl.setAttribute('aria-live','polite');
+      progress={notice,users:0};this.openingFiles.set(key,progress);
+    }
+    progress.users++;
+    try{return await open();}
+    finally{if(--progress.users===0&&this.openingFiles.get(key)===progress){this.openingFiles.delete(key);progress.notice.hide();}}
+  }
   async prepare(item:RegisteredFile,binary=false){if(this.stopped)throw Error('The project file bridge is stopped.');if(!this.allowed(item.scope))throw Error(this.storage?.environments?'The project environment is disconnected or unavailable.':'This project is no longer linked to the vault.');if((binary||MEDIA.test(item.path))&&(!item.resource||item.resource.expiresAt<Date.now()+60000)){if(!item.preparing){item.preparing=this.io.resource(item.scope,item.path).then(resource=>{if(this.stopped||!this.allowed(item.scope))throw Error('The project file is no longer available.');item.resource=resource;});void item.preparing.finally(()=>{item.preparing=undefined;}).catch(()=>{});}await item.preparing;}}
   /** Only rendered media needs discovery or a signed resource. Vault reads
    * remain free of Markdown parsing and background project searches. */
@@ -340,7 +358,7 @@ export class CodebaseBridge {
       if(!route.owned&&(!absolute||!this.io.workspaces&&!this.io.catalog||!this.environmentIds().length))return;
       event.preventDefault();event.stopImmediatePropagation();
       const open=async()=>{const discovered=route.owned||await this.discoverWorkspaces();if(this.stopped)return;if(this.pathRoute(link,source).owned)await this.app.workspace.openLinkText(link,source,event.ctrlKey||event.metaKey);else if(!discovered||this.sourceOrigins.has(source)||this.files.has(source)){new Notice('Project locations are unavailable.');}else{replay.add(anchor);anchor.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:event.ctrlKey,metaKey:event.metaKey,shiftKey:event.shiftKey,altKey:event.altKey}));}};
-      void open().catch(error=>new Notice(String(error),10000));
+      void this.withFileOpeningNotice(link,source,open).catch(error=>new Notice(String(error),10000));
     },{capture:true});
     this.plugin.registerMarkdownPostProcessor?.((el,context)=>this.renderMedia(el,context.sourcePath,image=>{const section=context.getSectionInfo?.(el);return section?originalMediaSource(section.text,image.getAttribute('alt'),section):undefined;}));
   }
@@ -497,7 +515,7 @@ export class CodebaseBridge {
       }));
     })();this.refreshing=work;void work.finally(()=>{if(this.refreshing===work)this.refreshing=undefined;}).catch(()=>{});return work;
   }
-  dispose(){this.stopped=true;this.languageViews.dispose();for(const observer of this.chrome.values())observer.disconnect();this.chrome.clear();clearTimeout(this.browseTimer);if(this.persistTimer){clearTimeout(this.persistTimer);void this.persist().catch(()=>{});}this.browse.flush();this.browse.dispose();void this.io.dispose?.();this.app.workspace.iterateAllLeaves?.(leaf=>{const view=leaf.view as MarkdownView,item=view.file?this.files.get(view.file.path):undefined;if(item){const text=this.viewText(view);if(text!==undefined&&text!==item.document.base&&text!==this.viewBase(view,item)?.text)this.retain(item.file.path,text);leaf.detach();}});for(const undo of this.undo.reverse())undo();}
+  dispose(){this.stopped=true;for(const progress of this.openingFiles.values())progress.notice.hide();this.openingFiles.clear();this.languageViews.dispose();for(const observer of this.chrome.values())observer.disconnect();this.chrome.clear();clearTimeout(this.browseTimer);if(this.persistTimer){clearTimeout(this.persistTimer);void this.persist().catch(()=>{});}this.browse.flush();this.browse.dispose();void this.io.dispose?.();this.app.workspace.iterateAllLeaves?.(leaf=>{const view=leaf.view as MarkdownView,item=view.file?this.files.get(view.file.path):undefined;if(item){const text=this.viewText(view);if(text!==undefined&&text!==item.document.base&&text!==this.viewBase(view,item)?.text)this.retain(item.file.path,text);leaf.detach();}});for(const undo of this.undo.reverse())undo();}
 }
 
 class CodebaseLinkSuggest extends EditorSuggest<TFile> {
