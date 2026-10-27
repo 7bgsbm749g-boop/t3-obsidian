@@ -1,5 +1,8 @@
 {
   "dependencies": {
+    "tests/inline-worktree.test.ts": [
+      "validation/worktree-continuation-lab.ts"
+    ],
     "tests/response-emissions.test.ts": [
       "validation/thought-stream-lab.ts"
     ],

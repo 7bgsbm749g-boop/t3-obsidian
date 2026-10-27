@@ -4,11 +4,20 @@ import {randomUUID} from 'node:crypto';
 import {interruptStoppedResponse,stopResponseEdit,stoppedResponseBody} from '../response-stop';
 import {initialRegion,replaceRegion} from '../inline-thread';
 import {normalizeV2Snapshot} from '../orchestration-v2';
-import {handoffProjection,handoffSource,handoffRun} from './fixtures/worktree-handoff';
+import {handoffProjection,handoffSource,handoffRun,interruptedHandoffItem} from './fixtures/worktree-handoff';
 
 test('Stop resolves the verified replacement run instead of accepting the interrupted source as finished',async()=>{
  const commands:any[]=[];
  await interruptStoppedResponse(async()=>({origin:'https://test',api:async(_path,payload)=>{if(payload){commands.push(payload);return {};}return normalizeV2Snapshot(handoffProjection());}}),randomUUID(),'thread','source');
+ assert.equal(commands.length,1);assert.equal(commands[0].turnId,'resume');
+});
+
+test('Stop targets the proven continuation when workspace detachment interrupted the handoff tool',async()=>{
+ const commands:any[]=[];
+ await interruptStoppedResponse(async()=>({origin:'https://test',api:async(_path,payload)=>{
+  if(payload){commands.push(payload);return {};}
+  return normalizeV2Snapshot(handoffProjection({turnItems:[interruptedHandoffItem]}));
+ }}),randomUUID(),'thread','source');
  assert.equal(commands.length,1);assert.equal(commands[0].turnId,'resume');
 });
 
