@@ -25,7 +25,7 @@ test('established vault startup and device-only saves do not rewrite synced sett
   assert.equal(h.saves(),0,'startup must not save an established shared file');
   h.plugin.settings.pending.push({id:'device-only'});await h.plugin.save();
   assert.equal(h.saves(),0,'device-local request state must not touch data.json');
-  h.plugin.settings.orchestration.waitForOtherThreads=true;await h.plugin.save();
+  h.plugin.settings.threadTitleGeneration='always';await h.plugin.save();
   assert.equal(h.saves(),1,'an actual shared setting change is persisted');
 });
 
@@ -46,7 +46,7 @@ test('shared saves preserve a disk folder link not edited in the local snapshot'
   const h=await harness({vaultId:'vault'});
   const link={id:'link',folderPath:'Remote',projectId:'project',projectTitle:'Repository',connectionId:'c',workspaceRoot:'/repo',self:false};
   h.setCurrent({...h.current(),folderLinks:[link]});
-  h.plugin.settings.orchestration.waitForOtherThreads=true;await h.plugin.save();
+  h.plugin.settings.threadTitleGeneration='always';await h.plugin.save();
   assert.deepEqual(JSON.parse(JSON.stringify(h.current().folderLinks)),[link]);
   assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.folderLinks)),[link]);
 });
@@ -69,9 +69,9 @@ test('rapid folder move and reverse move survive queued saves, a stale Sync file
 
 test('external refresh adopts all shared preferences and unrelated saves preserve them',async()=>{
   const h=await harness({vaultId:'vault'});
-  h.setCurrent({...h.current(),inlineStreaming:{enabled:false,keepIntermediate:true,intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'},orchestration:{waitForOtherThreads:true},completion:{action:'archive',archiveFolder:'Remote'}});
+  h.setCurrent({...h.current(),inlineStreaming:{enabled:false,keepIntermediate:true,intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'},vaultHost:{connectionId:'c',environmentId:'env',workspaceRoot:'/vault'},completion:{action:'archive',archiveFolder:'Remote'}});
   await h.plugin.onExternalSettingsChange();
-  assert.equal(h.plugin.settings.inlineStreaming.enabled,false);assert.equal(h.plugin.settings.orchestration.waitForOtherThreads,true);
+  assert.equal(h.plugin.settings.inlineStreaming.enabled,false);assert.equal(h.plugin.settings.vaultHost.workspaceRoot,'/vault');
   h.plugin.settings.completion.archiveFolder='Local';await h.plugin.save();
   assert.equal(h.current().inlineStreaming.enabled,false);assert.equal(h.current().inlineStreaming.finalAnswerFormat,'raw-markdown');assert.equal(h.current().completion.action,'archive');
 });

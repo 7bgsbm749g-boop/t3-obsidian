@@ -57,20 +57,13 @@ against the current request before an edit. An ambiguous lookup fails; obtain
 the exact IDs instead of choosing a destination by age or title.
 
 The read-only result provides `context.vault` (name, ID, local workspace root),
-`context.send` (source, exact thread/message/project/environment, binding IDs,
-`waitForOtherThreads`), and `context.destinations` (binding ID, destination path,
+`context.send` (source, exact thread/message/project/environment, binding IDs), and `context.destinations` (binding ID, destination path,
 host location, `stagingSupported`). Several destinations can belong to one send.
 A send without streaming has no destination bindings. The plugin retains the
 latest 256 small send records; old releases have no such records. A missing result
 is not permission to guess IDs or write plugin records.
 
 Use the exact thread/message filters without a note argument when no note is open.
-If the returned `waitForOtherThreads` is true, use native T3 thread controls to
-wait until other active threads in that project finish. Exclude this thread and
-other projects. If status cannot be checked, report the limit before proceeding.
-Use a native completion watch when available. Do not create a recurring schedule
-merely to check completion.
-
 For an event notification, use its subscription and observed event data instead
 of treating it as a new note send. `Note: (event notification)` can cover several
 notes or a job event. Continue only the task already agreed for that subscription.
@@ -214,7 +207,7 @@ python3 /home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py \
 Use exact existing project/connection/environment identities from authenticated
 T3 discovery. `local` selects this desktop T3 server. Default `--mode project`
 links a repository. `--mode self` requires a project rooted at that exact vault
-folder; the vault root supports only self mode. Commands create no projects.
+folder. The vault root is not a project link; its connection is configured in plugin settings. Commands create no projects.
 Agent sends from an unlinked non-root folder require a link first; interactive
 sends can open the workspace picker. Replacing a different direct link requires
 `--relink`. `unlink-folder PATH` removes only that folder's direct association;
@@ -227,7 +220,7 @@ Never edit installed `data.json` to change settings or routing.
 Subscribe only when the user requests future event-driven work. Creating a
 subscription authorizes later messages to its originating thread. Keep task
 instructions in that thread. Use the real receiving thread/project/environment.
-The designated vault-project machine hosts subscriptions while its desktop vault
+The designated vault connection machine hosts subscriptions while its desktop vault
 is open. Edits on other devices reach it through Sync; offline intermediate
 changes are not replayed. Changing the designated host does not transfer watches.
 

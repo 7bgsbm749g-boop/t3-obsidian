@@ -1,9 +1,18 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {leaseExplorerResponse,noteIndicators,relocateExplorerResponses,loadExplorerResponses} from '../explorer-responses';
+import {completionSource,leaseExplorerResponse,noteIndicators,relocateExplorerResponses,loadExplorerResponses} from '../explorer-responses';
 import {folderNotePath} from '../folder-note-adapter';
 import type {ResponseRecord} from '../response-record';
 const record=(state?:any):ResponseRecord=>({request:{id:'binding',notePath:'Note.md'} as any,epoch:1,revision:2,owner:'writer',expiresAt:0,state});
+test('completion sources require exact successful run evidence and never invent a timestamp',()=>{
+  const request={threadEnvironmentId:'machine',projectId:'project',threadId:'thread'};
+  assert.equal(completionSource(request,undefined),undefined);
+  assert.equal(completionSource(request,{turnId:'failed',state:'error',completedAt:'2026-10-20T10:01:00Z'}),undefined);
+  assert.deepEqual(completionSource(request,{turnId:'run',state:'completed',completedAt:'invalid'}),{environmentId:'machine',projectId:'project',threadId:'thread',runId:'run'});
+  const result=record({status:'complete',turnId:'run',bindingCheckpoint:{turns:{run:{turnId:'run',state:'completed',completedAt:'2026-10-20T10:01:00Z'}}}});
+  Object.assign(result.request,request);
+  assert.deepEqual(leaseExplorerResponse(result).completion,{environmentId:'machine',projectId:'project',threadId:'thread',runId:'run',completedAt:'2026-10-20T10:01:00Z'});
+});
 test('terminal exact runs and permanent final grants stop the spinner while their save is pending',()=>{
   for(const status of ['running','waiting']){
     const pending=record({status});pending.finalWriter={actor:'device',token:'token',messageId:'message',turnId:'run',sequence:1,body:'Reply',phase:'complete'};

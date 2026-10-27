@@ -142,7 +142,7 @@ test('agent failures preserve UI-created links and do not create missing self pr
     const make=(extra:any={})=>({version:1,id:randomUUID(),kind:'link-folder',folderPath:'Notes',projectId:'project',connectionId:'c',environmentId:'env',mode:'project',relink:true,...extra});
     await assert.rejects(h.plugin.executeAgentCommand(make({environmentId:'wrong'})),/connection and environment/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);
     h.setProjects([]);await assert.rejects(h.plugin.executeAgentCommand(make()),/project is unavailable/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);
-    h.setProjects([h.project]);await assert.rejects(h.plugin.executeAgentCommand(make({mode:'self'})),/verified vault project machine/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);
+    h.setProjects([h.project]);await assert.rejects(h.plugin.executeAgentCommand(make({mode:'self'})),/verified vault connection machine/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);
     h.setProjects([{...h.project,id:'other'}]);h.setFailSave(true);
     const request=make({projectId:'other'});await assert.rejects(h.plugin.executeAgentCommand(request),/storage failure/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);assert.equal(h.plugin.settings.directProjects[0].id,'project');
     h.setFailSave(false);const result=await h.plugin.executeAgentCommand(request);assert.equal(result.directLink.projectId,'other');
@@ -222,12 +222,12 @@ test('unlinked and root notes open the project-name destination dialog on deskto
   try{
     await h.fileMenu('Unlinked/note.md',false).menu.items[0].callback({ctrlKey:true});
     let modal=h.modals.at(-1);
-    assert.equal(modal.host.getProjectName(),'QLO2');
-    assert.equal(modal.host.getProjectChoices().slice(0,2).map((item:any)=>item.key).join(','),'folder:new,vault:root');
+    assert.equal(modal.host.getProjectName(),'No project');
+    assert.equal(modal.host.getProjectChoices().slice(0,2).map((item:any)=>item.key).join(','),'folder:new,thread:no-project');
     modal.close();
     h.plugin.settings.folderLinks=[{id:'root',folderPath:'/',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot,connectionId:'c',self:false}];
     await h.fileMenu('note.md',false).menu.items[0].callback({ctrlKey:true});
-    modal=h.modals.at(-1);assert.equal(modal.host.getProjectName(),h.project.title);
+    modal=h.modals.at(-1);assert.equal(modal.host.getProjectName(),'No project');
     h.plugin.busy=true;assert.equal(h.fileMenu('note.md',false).menu.items[0].disabled,true);
   }finally{h.plugin.onunload();}
 });
@@ -271,18 +271,42 @@ for(const mobile of [false,true])test(`folder Unlink follows Create T3 project a
   }finally{h.plugin.onunload();}
 });
 
-test('folder Unlink is disabled without a direct link and supports the vault root',async()=>{
+test('folder Unlink affects direct child links while the legacy vault connection stays out of the menu',async()=>{
   const h=await folderMenuHarness();
   try{
     const unlink=(root=false)=>h.folderMenu(root).items[0].submenu!.items.find(item=>item.title==='Unlink')!;
-    assert.equal(unlink().disabled,true);assert.equal(unlink(true).disabled,true);
+    assert.equal(unlink().disabled,true);assert.equal(h.folderMenu(true).items.length,0);
     const modal=await h.open();await h.button(modal,'Link').click();
     const direct=h.plugin.settings.folderLinks[0];
     h.plugin.settings.folderLinks=[{...direct,id:'root',folderPath:'/'},direct];await h.plugin.save();
-    assert.equal(unlink(true).disabled,false);await unlink(true).callback();
-    assert.equal(h.plugin.settings.folderLinks.length,1);assert.equal(h.plugin.settings.folderLinks[0].folderPath,'Notes');
-    assert.equal(unlink(true).disabled,true);assert.equal(unlink().disabled,false);
+    assert.equal(h.folderMenu(true).items.length,0);await unlink().callback();
+    assert.equal(h.plugin.settings.folderLinks.length,1);assert.equal(h.plugin.settings.folderLinks[0].folderPath,'/');
+    assert.equal(h.folderMenu(true).items.length,0);assert.equal(unlink().disabled,true);
     assert.equal(h.networkRequests(),0);
+  }finally{h.plugin.onunload();}
+});
+
+test('mobile resolves a legacy local vault location through its exact discovered project and authenticated machine',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    h.plugin.settings.folderLinks=[{id:'root',folderPath:'/',projectId:h.project.id,projectTitle:'Old vault',workspaceRoot:h.project.workspaceRoot,connectionId:'',self:true}];
+    assert.equal(h.plugin.vaultConnection().connectionId,'c');assert.equal(h.plugin.defaultNoProjectMachine(),'c');
+    h.plugin.settings.vaultHost={connectionId:'offline',environmentId:'offline-env',workspaceRoot:h.project.workspaceRoot};
+    assert.equal(h.plugin.defaultNoProjectMachine(),'offline','An explicit unknown host must not be replaced by a same-path project on a different machine');
+  }finally{h.plugin.onunload();}
+});
+
+test('vault connection setup saves the verified path without registering or linking a T3 project',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const pending=h.plugin.configureVaultConnection(),modal=h.modals.at(-1);
+    modal.machine={id:'c',name:'Laptop',environmentId:'env'};
+    modal.remote={closed:false,browse:async()=>({parentPath:'/synced/vault',entries:[]}),matches:async()=>true,ensureProject:()=>assert.fail('Vault connection must not register a project'),close:()=>{}};
+    await modal.use('/synced/vault');
+    const host=await pending;
+    assert.deepEqual(JSON.parse(JSON.stringify(host)),{connectionId:'c',environmentId:'env',workspaceRoot:'/synced/vault'});
+    assert.equal(h.plugin.settings.folderLinks.length,0);assert.equal(h.networkRequests(),0);
+    assert.equal(h.shared.at(-1).vaultHost.workspaceRoot,'/synced/vault');
   }finally{h.plugin.onunload();}
 });
 
@@ -365,13 +389,13 @@ test('closing project creation during connection never creates or links',async()
   }finally{h.plugin.onunload();}
 });
 
-for(const cancelled of [true,false])test(`automatic new-project routing ${cancelled?'cancels without sending':'waits for external workspace confirmation'}`,async()=>{
+for(const cancelled of [true,false])test(`explicit new-project routing ${cancelled?'cancels without sending':'waits for external workspace confirmation'}`,async()=>{
   const h=await folderMenuHarness();
   try{
     const external={...h.project,title:'Chosen workspace',workspaceRoot:'/workspaces/chosen'};
     const creates:any[]=[];
     h.plugin.projectLocation=async()=>({browse:async(path:string)=>({parentPath:path,entries:[]}),create:async(path:string)=>{creates.push(path);return external;},close:()=>{}});
-    const pending=h.plugin.chatTarget('Unlinked/note.md',undefined,true);
+    const pending=h.plugin.chatTarget('Unlinked/note.md',undefined,true,'folder:new');
     const modal=h.modals.at(-1);assert.equal(modal.constructor.name,'ProjectCreateModal');
     assert.equal(h.plugin.settings.pending.length,0);assert.equal(creates.length,0);assert.equal(h.plugin.settings.folderLinks.length,0);
     if(cancelled){
@@ -389,14 +413,21 @@ for(const cancelled of [true,false])test(`automatic new-project routing ${cancel
   }finally{h.plugin.onunload();}
 });
 
-test('agent sends from unlinked folders fail with linking guidance and never open a picker',async()=>{
+test('agent sends from unlinked folders use No project without opening a picker or adding a folder link',async()=>{
   const h=await folderMenuHarness();
   try{
     h.plugin.app.vault.getFileByPath=()=>({path:'Unlinked/note.md'});
-    await assert.rejects(h.plugin.executeNoteCommand({version:1,id:randomUUID(),kind:'send-note',notePath:'Unlinked/note.md',destinations:[],streamReply:false}),/link-folder.*workspace picker/);
-    assert.equal(h.modals.length,0);assert.equal(h.plugin.settings.pending.length,0);
-    await assert.rejects(h.plugin.executeNoteCommand({version:1,id:randomUUID(),kind:'attach-response',notePath:'Unlinked/note.md',destinations:[],streamReply:true,threadId:randomUUID(),messageId:randomUUID()}),/link-folder/);
-    assert.equal(h.modals.length,0);
+    const project={...h.project,id:'scratch',title:'No project',workspaceRoot:'/scratch'},link={id:'no-project',folderPath:'/',connectionId:'c',projectId:'scratch',projectTitle:'No project',workspaceRoot:'/scratch',self:false};
+    h.plugin.noProjectTarget=async(_key:string,interactive:boolean)=>{assert.equal(interactive,false);return {project,link};};
+    let sends=0;
+    h.plugin.send=async(_file:any,target:any,options:any)=>{
+      sends++;assert.equal(target.id,'scratch');assert.equal(options.folderLink.id,'no-project');
+      const request={id:options.id,project,connection:h.plugin.connection(project),title:'Note',prompt:'Source'};
+      await options.onPrepared(request);return {threadId:'new-thread',request};
+    };
+    const result=await h.plugin.executeNoteCommand({version:1,id:randomUUID(),kind:'send-note',notePath:'Unlinked/note.md',destinations:[],streamReply:false});
+    assert.equal(result.threadId,'new-thread');assert.equal(sends,1);
+    assert.equal(h.modals.length,0);assert.equal(h.plugin.settings.pending.length,0);assert.equal(h.plugin.settings.folderLinks.length,0);
   }finally{h.plugin.onunload();}
 });
 

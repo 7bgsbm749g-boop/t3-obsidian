@@ -12,11 +12,33 @@ is its only explorer completion signal.
 
 A focused, visible Markdown note acknowledges its completions after at least
 750 ms. Background tabs, a hidden document, an unfocused window and modal
-dialogs do not acknowledge them. Each new exact run has its own receipt. Final
-save revisions do not relight an acknowledged run. Receipts stay in Obsidian's
-device-local storage across reloads, follow file and folder renames, and retain
-deletion tombstones. Viewing on one device does not acknowledge another device.
-No note or shared settings writes drive the animation.
+dialogs do not acknowledge them. T3's server `lastVisitedAt` determines whether
+each exact completed run is unread. Reading a result in T3 clears its Obsidian
+highlight; reading it in Obsidian sends T3's `thread.visit` command. Mirrored
+destinations and other clients then use the same server state.
+
+Visits carry the bound run's canonical completion time, never the device clock
+or a newer thread timestamp. Reading an older imported result therefore cannot
+mark a newer result read. Several results in one note share one visit per thread,
+through the newest completion actually shown in that note. The plugin confirms
+the resulting server watermark before clearing the highlight. Lost visit
+acknowledgements retain the same command ID for a bounded retry. An explicit T3
+mark-unread remains unread while the same note stays focused; switching notes,
+refocusing, or displaying a new completion permits another acknowledgement.
+
+The plugin shares one credential and one shell metadata read per machine every
+15 seconds while its explorer projection refreshes. Refocusing requests a fresh
+read. No transcript or unrelated thread metadata is retained by this component.
+Connection failures keep the last confirmed server state and never create a
+local read flag. Servers without `lastVisitedAt` cannot supply this feature;
+ordinary activity indicators and response delivery continue to work.
+
+Device-local receipts retain only note/run identity across reloads, follow file
+and folder renames, and retain deletion tombstones. The retired `viewed` flag is
+ignored. Old receipts recover their connection only from an exact saved response
+binding. A missing completion time can be filled only when T3's latest completed
+run has that same run ID; a newer run cannot be substituted. No note or shared
+settings writes drive the animation.
 
 Already attached runs keep their live completion watch after their tab closes.
 Verified completion releases that watch; the final Markdown save still waits

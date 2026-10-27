@@ -1,11 +1,21 @@
 import type {ResponseRecord} from './response-record';
 import {legacyQuestionReply} from './response-model';
 import {responseRunTerminal} from './response-stop-receipt';
+import type {ResponseRequest} from './response-model';
+import type {InlineTurn} from './inline-thread';
+
+export interface CompletionSource {environmentId:string;projectId:string;threadId:string;runId:string;completedAt?:string}
+/** Only canonical run timestamps can acknowledge a result in T3. */
+export function completionSource(request:Pick<ResponseRequest,'threadEnvironmentId'|'projectId'|'threadId'>,turn:InlineTurn|undefined):CompletionSource|undefined {
+  if(!turn||turn.state!=='completed'||!turn.turnId||!request.threadEnvironmentId||!request.projectId||!request.threadId)return;
+  return {environmentId:request.threadEnvironmentId,projectId:request.projectId,threadId:request.threadId,runId:turn.turnId,
+    ...(turn.completedAt&&Number.isFinite(Date.parse(turn.completedAt))?{completedAt:turn.completedAt}:{})};
+}
 
 /** A read-only projection of response bindings, never a second run lifecycle. */
 export interface ExplorerResponse {
   id:string;notePath:string;epoch:number;revision:number;
-  active:boolean;input:boolean;complete:boolean;deleted?:boolean;sourceNotePath?:string;completionId?:string;
+  active:boolean;input:boolean;complete:boolean;deleted?:boolean;sourceNotePath?:string;completionId?:string;completion?:CompletionSource;
 }
 export const explorerResponsePath=(directory:string)=>`${directory}/explorer-responses.json`;
 export function leaseExplorerResponse(record:ResponseRecord):ExplorerResponse {
@@ -13,6 +23,7 @@ export function leaseExplorerResponse(record:ResponseRecord):ExplorerResponse {
   const input=!state?.userStopped&&(legacyQuestionReply(state)||!!state?.questionFollows?.some(q=>!q.answered&&!q.dismissed));
   return {id:record.request.id,notePath:state?.notePath??record.request.notePath,epoch:record.epoch,revision:record.revision,
     completionId:JSON.stringify([state?.messageId??record.request.messageId,state?.turnId??'']),
+    completion:completionSource(record.request,state?.turnId?state.bindingCheckpoint?.turns?.[state.turnId]:undefined),
     ...(record.responseRemovedAt!==undefined?{deleted:true}:{}),
     active:record.responseRemovedAt===undefined&&!record.stopRequestedAt&&!state?.userStopped&&(!responseRunTerminal(record)||!!state?.pendingMessageId)&&(!state?.finishedAt||!!state.pendingMessageId)&&(!state||state.status==='running'||state.status==='waiting'&&!input||!!state.pendingMessageId),
     input:record.responseRemovedAt===undefined&&input,complete:record.responseRemovedAt===undefined&&state?.status==='complete'&&!input&&!state.pendingMessageId&&!state.userStopped};

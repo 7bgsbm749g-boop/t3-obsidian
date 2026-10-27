@@ -8,7 +8,7 @@ export type FolderCommand = {version:1;id:string;folderPath:string} & (
 );
 export interface FolderCommandResult {
   id:string;ok:boolean;vaultId:string;folderPath:string;directLink:FolderLink|null;effectiveLink:FolderLink|null;
-  routing:'linked-project'|'new-folder-project'|'vault-project-setup';
+  routing:'linked-project'|'no-project';
 }
 export function isFolderCommand(value:{kind?:string}):value is FolderCommand {
   return ['inspect-folder','link-folder','unlink-folder'].includes(value.kind??'');
@@ -25,15 +25,15 @@ export function validateFolderCommand(value:any):FolderCommand {
     if(value.replyFolders!==undefined){validateReplyFolders(value.replyFolders);if(value.folderPath==='/')throw Error('Use the general settings for vault-root file locations.');}
     for(const key of ['projectId','connectionId','environmentId'])if(typeof value[key]!=='string'||!value[key].trim()||value[key]!==value[key].trim()||value[key].length>200||/[\x00-\x1f\x7f]/.test(value[key]))throw Error(`Linking requires an explicit ${key}.`);
     if(!['project','self'].includes(value.mode)||typeof value.relink!=='boolean')throw Error('Choose project or self link mode and an explicit relink preference.');
-    if(value.folderPath==='/'&&value.mode!=='self')throw Error('The vault root requires self mode and an existing project for this vault.');
+    if(value.folderPath==='/')throw Error('The vault root is not a project link. Choose a folder inside the vault.');
   }
   return value;
 }
 export function inspectFolderLinks(id:string,vaultId:string,folderPath:string,links:FolderLink[]):FolderCommandResult {
-  const directLink=links.find(link=>link.folderPath===folderPath)??null;
+  const directLink=folderPath==='/'?null:links.find(link=>link.folderPath===folderPath)??null;
   // A hypothetical child follows exactly the same nearest-ancestor rule as a note.
   const effectiveLink=folderLinkForPath(links,folderPath==='/'?'command-inspection.md':folderPath+'/command-inspection.md')??null;
-  const routing=effectiveLink&&effectiveLink.folderPath!=='/'||folderPath==='/'&&effectiveLink?'linked-project':folderPath!=='/'?'new-folder-project':'vault-project-setup';
+  const routing=effectiveLink?'linked-project':'no-project';
   return JSON.parse(JSON.stringify({id,ok:true,vaultId,folderPath,directLink,effectiveLink,routing}));
 }
 interface Prepared {before:FolderLink|null;after:FolderLink|null;project?:Project;result:FolderCommandResult}

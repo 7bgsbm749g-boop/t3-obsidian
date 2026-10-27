@@ -65,6 +65,9 @@
       "validation/connection-health-live.ts",
       "validation/remote-delivery-api.ts",
       "validation/remote-delivery-results.ts"
+    ],
+    "tests/completion-glow.test.ts": [
+      "validation/completion-read-lab.ts"
     ]
   }
 }

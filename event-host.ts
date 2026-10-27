@@ -26,5 +26,5 @@ export async function forwardEventCommand(identity:EventHostIdentity,command:Eve
   if(existing===undefined)await files.write(request.request,request.body);
   const deadline=Date.now()+timeout;
   do {const result=await read();if(result)return result;await pause(250);}while(Date.now()<deadline);
-  throw Error('The vault project machine has not acknowledged this subscription command. Keep its Obsidian client running and retry the same request ID.');
+  throw Error('The vault connection machine has not acknowledged this subscription command. Keep its Obsidian client running and retry the same request ID.');
 }
