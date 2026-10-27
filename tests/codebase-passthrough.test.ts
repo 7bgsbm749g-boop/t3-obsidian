@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
 import {catalogCodebases,virtualPath} from '../codebase-core';
+class MockNotice {messageEl={classList:{add(){}},setAttribute(){}};hide(){}}
 const scope={environmentId:'env',projectId:'scratch',root:'/machine/scratch',title:'No project'},workspace={...scope,root:'/machine/thread-folder',threadId:'thread'};
 const bundled=build({entryPoints:['codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight']});
 async function fixture(){
@@ -11,7 +12,7 @@ async function fixture(){
   const app:any={loadLocalStorage:(key:string)=>local.get(key),saveLocalStorage:(key:string,value:any)=>local.set(key,value),vault:{configDir:'.obsidian',adapter:{read:async()=>{throw Error('missing');},getResourcePath:()=> 'capacitor://localhost/_capacitor_file_/private/vault'},getFileByPath:(path:string)=>path===physical.path?physical:null,getAbstractFileByPath:()=>null,read:async()=> 'physical',getFiles:()=>[physical]},metadataCache:{getFirstLinkpathDest:(path:string)=>path===physical.path?physical:null,getCache:()=>null},workspace:{openLinkText:async()=>{},on:()=>({}),onLayoutReady:()=>{},getLeavesOfType:()=>[],getLeaf:()=>({})}};
   const plugin={registerView:()=>{},registerInterval:()=>{},registerEditorSuggest:()=>{},registerEvent:()=>{},addCommand:()=>{},registerMarkdownPostProcessor:(handler:any)=>{postprocess=handler;}};
   const io:any={catalog:async(environmentId:string)=>{assert.equal(environmentId,'env');catalogs++;return [scope,workspace];},resource:async()=>{resources++;return {url:'https://signed.example/api/assets/chart',expiresAt:Date.now()+300000};},read:async()=> 'remote'};
-  const module={exports:{} as any};runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:()=>({EditorSuggest:Base,ItemView:Base,MarkdownView:Base,FuzzySuggestModal:Base,TFile:File,TFolder:File,Notice:Base}),window:{setInterval:()=>0},document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},TextEncoder,URL,setTimeout,clearTimeout,performance});
+  const module={exports:{} as any};runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:()=>({EditorSuggest:Base,ItemView:Base,MarkdownView:Base,FuzzySuggestModal:Base,TFile:File,TFolder:File,Notice:MockNotice}),window:{setInterval:()=>0},document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},TextEncoder,URL,setTimeout,clearTimeout,performance});
   const bridge=new module.exports.CodebaseBridge(app,plugin,io,()=>[],'passthrough',{environments:()=>environments,load:()=>undefined,save:async()=>{}});await bridge.install();bridge.open=async(item:any)=>{opened=item;};
   function image(src:string){const attrs:Record<string,string>={src,alt:'chart'};return {attrs,getAttribute:(key:string)=>attrs[key]??null,setAttribute:(key:string,value:string)=>{attrs[key]=value;},closest:()=>null};}
   const render=async(img:any)=>postprocess({querySelectorAll:(selector:string)=>selector==='img'?[img]:[]},{sourcePath:'Unlinked/Note.md'});

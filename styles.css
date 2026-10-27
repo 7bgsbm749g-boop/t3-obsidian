@@ -314,6 +314,28 @@
   border-inline-start: 1px solid var(--background-modifier-border);
   pointer-events: none;
 }
+.send-to-t3-file-opening {
+  display: flex;
+  align-items: center;
+  gap: .65em;
+  overflow-wrap: anywhere;
+}
+.send-to-t3-file-opening::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-inline-start-color: transparent;
+  border-radius: 50%;
+  animation: send-to-t3-file-opening-spin .8s linear infinite;
+}
+@keyframes send-to-t3-file-opening-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .send-to-t3-file-opening::before { animation: none; }
+}
 .send-to-t3-run-timer { font-variant-numeric: tabular-nums; color: var(--text-muted); font-weight: normal; }
 .send-to-t3-fold-key { display: none; }
 /* Container syntax has no visible paragraph in Reading view. */
