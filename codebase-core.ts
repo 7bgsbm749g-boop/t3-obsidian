@@ -11,6 +11,7 @@ export function changeCodebaseProjectLinks(links:FolderLink[],scope:CodebaseScop
 export interface CodebaseIO {
   timings?:Array<{operation:string;milliseconds:number}>;
   dispose?():void|Promise<void>;
+  catalog?(environmentId:string):Promise<CodebaseScope[]>;
   workspaces?(scope:CodebaseScope):Promise<CodebaseScope[]>;
   list(scope:CodebaseScope,directory:string):Promise<{entries:CodebaseEntry[];truncated:boolean}>;
   search(scope:CodebaseScope,name:string):Promise<CodebaseEntry[]>;
@@ -19,6 +20,16 @@ export interface CodebaseIO {
   resource(scope:CodebaseScope,path:string):Promise<{url:string;expiresAt:number}>;
   renameProject?(scope:CodebaseScope,title:string):Promise<void>;
   deleteProject?(scope:CodebaseScope):Promise<void>;
+}
+/** Workspace identities come from the authenticated catalog, never from a link's cwd. */
+export function catalogCodebases(environmentId:string,shell:{projects?:any[];threads?:any[]}):CodebaseScope[]{
+  const root=(value:unknown):value is string=>typeof value==='string'&&/^(?:\/(?!\/)|[a-z]:[\\/])/i.test(value)&&!/[\x00-\x1f]/.test(value)&&!value.replace(/\\/g,'/').split('/').some(part=>part==='.'||part==='..');
+  const scopes:CodebaseScope[]=[],projects=new Map<string,CodebaseScope>();
+  for(const project of shell.projects??[])if(typeof project.id==='string'&&project.id&&!project.deletedAt&&root(project.workspaceRoot)){
+    const scope={environmentId,projectId:project.id,title:typeof project.title==='string'?project.title:project.id,root:project.workspaceRoot};projects.set(project.id,scope);scopes.push(scope);
+  }
+  for(const thread of shell.threads??[]){const project=projects.get(thread.projectId);if(project&&typeof thread.id==='string'&&thread.id&&!thread.deletedAt&&root(thread.worktreePath))scopes.push({...project,root:thread.worktreePath,threadId:thread.id,title:typeof thread.title==='string'?thread.title:project.title});}
+  return scopes;
 }
 export function relativeCodebasePath(path:string):string {
   if(!path||path.startsWith('/')||path.includes('\\')||/[\x00-\x1f]/.test(path)||path.split('/').some(p=>!p||p==='.'||p==='..')||/^[a-z]:/i.test(path))throw Error('Invalid project file path.');

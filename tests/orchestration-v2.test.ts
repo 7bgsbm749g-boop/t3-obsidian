@@ -182,6 +182,19 @@ test('v2 attachment uploads remap context asset IDs and retain the saved request
   assert.ok(!('dataUrl' in wire[0].attachments[0]));
 });
 
+test('automatic-title launch uploads images and remaps references without changing its durable first message',async()=>{
+ const calls:any[]=[],Socket=settingsSocket(undefined,undefined,(tag,payload)=>{calls.push({tag,payload});return {threadId:payload.threadId};});
+ const api=t3Api(async path=>{assert.equal(path,'/api/auth/websocket-ticket');return {ticket:'ticket'};},'https://t3.example',url=>new Socket(url) as any);
+ const launch={commandId:'create',threadId:'thread',projectId:'project',title:'New thread',generateTitle:true,workspaceStrategy:{type:'root'},initialMessage:{messageId:'prompt',text:'Plan [image](t3-context://image)',attachments:[{type:'image',id:'local',name:'garden.png',mimeType:'image/png',sizeBytes:1,dataUrl:'data:image/png;base64,YQ=='}],context:{version:1,records:[{contextId:'image',attachmentId:'local'}]}}};
+ const before=structuredClone(launch);
+ for(let i=0;i<2;i++)assert.equal((await api('/api/orchestration/launch',launch)).threadId,'thread');
+ assert.deepEqual(launch,before);assert.equal(calls.length,2);assert.equal(calls[0].tag,'orchestration.launchThread');
+ assert.deepEqual(calls[0],calls[1]);assert.equal(calls[0].payload.initialMessage.messageId,'prompt');
+ assert.equal(calls[0].payload.initialMessage.context.records[0].attachmentId,'stored-prompt-0');
+ assert.equal(calls[0].payload.initialMessage.attachments[0].id,'stored-prompt-0');
+ assert.equal(calls[0].payload.initialMessage.attachments[0].dataUrl,undefined);
+});
+
 test('full recovery follows opaque history cursors without advancing past concurrent live events',async()=>{
   const paths:string[]=[],older={id:'old-item',type:'user_message',messageId:'old-prompt',runId:'old-run',text:'Older',ordinal:0,startedAt:at};
   const api=t3Api(async path=>{paths.push(path);return path.endsWith('/bounded?compactTurnItems=1')?{...snapshot(),hasMoreHistory:true,historyCursor:'opaque / cursor'}:{snapshotSequence:50,items:[{sourceThreadId:'thread',item:older}],nextCursor:null,hasMoreHistory:false};},'https://t3.example');

@@ -20,3 +20,16 @@ test('project rename and delete send one exact command and reconcile a lost repl
  await io.deleteProject!(scope);assert.equal(commands.length,2);assert.equal(commands[1].type,'project.delete');assert.equal(commands[1].force,true);assert.equal(deleted,true);await io.deleteProject!(scope);assert.equal(commands.length,2,'An already deleted project only needs its local link removed');
  await assert.rejects(io.deleteProject!({...scope,threadId:'thread'}),/project root/);assert.equal(commands.length,2);io.dispose!();
 });
+
+test('catalog access needs no folder link, preserves the thread cwd, and rejects forged or moved roots before file RPC',async()=>{
+ let root='/scratch/thread-a';const calls:Array<{tag:string;payload:any}>=[];
+ const io=codebaseTransport(async environmentId=>{assert.equal(environmentId,'env');return {origin:'https://t3.example',api:async()=>({projects:[{id:'scratch',title:'No project',workspaceRoot:'/scratch'}],threads:[{id:'thread',projectId:'scratch',worktreePath:root}]})};},{connect:async()=>({closed:false,close(){},call:async(tag,payload)=>{calls.push({tag,payload});return {relativeUrl:'/api/assets/preview?key=signed',expiresAt:Date.now()+300000};}})});
+ try{
+  const scopes=await io.catalog!('env'),thread=scopes.find(value=>value.threadId==='thread')!;
+  assert.equal(thread.root,'/scratch/thread-a');assert.equal(scopes.length,2);
+  const resource=await io.resource(thread,'evidence/chart.png');assert.match(resource.url,/^https:\/\/t3\.example\/api\/assets\//);
+  assert.equal(calls[0].payload.resource.cwd,'/scratch/thread-a');assert.equal(calls[0].payload.resource.path,'evidence/chart.png');
+  await assert.rejects(io.resource({...thread,root:'/etc'},'passwd'),/workspace changed/);assert.equal(calls.length,1);
+  root='/scratch/thread-b';await assert.rejects(io.write(thread,'report.md','stale edit'),/workspace changed/);assert.equal(calls.length,1,'Fresh save verification must reject a moved thread before sending bytes');
+ }finally{io.dispose!();}
+});

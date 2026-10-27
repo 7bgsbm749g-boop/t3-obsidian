@@ -6,11 +6,13 @@ The plugin owns this bridge. T3 is unchanged. Project bytes remain in the projec
 
 `codebase-core.ts` defines workspace identities, path validation and save state. `codebase-transport.ts` uses existing authenticated T3 RPCs for directory listing, search, text reads/writes and signed previews. Reads verify the project/thread workspace against a catalog snapshot with a 15-second lifetime. Writes force a fresh catalog check. One credential owner and multiplexed socket are reused per machine; connection setup and upstream requests have bounded waits. A moved or missing workspace fails rather than silently opening a different file.
 
+File access uses the authenticated environments supplied by `CodebaseStorage.environments()`, rather than requiring a folder link. `CodebaseIO.catalog(environmentId)` discovers current project roots and each thread's `worktreePath`. A thread workspace takes precedence over the project's root for files inside it, including T3's No project conversations. Disconnected environments cannot supply cached file bytes. Folder links still organize Codebase view and narrow basename choices; they are not file-access permissions. Existing vault wiki links and physical vault media retain native resolution.
+
 `codebase-native.ts` maintains its own TFile/TFolder objects. It wraps explicit file lookup, file read/write, resource lookup, metadata link lookup and native link opening. The physical root, global fileMap, adapter listing and vault file enumeration remain unchanged. The bridge emits no global vault create/modify events. Thus Headless Sync has no physical project bytes to scan. Native desktop core Sync enumeration is not modified, but the isolated validation does not establish native mobile or every third-party plugin's behavior.
 
 The only synced bridge data is identity/reference/choice metadata in the plugin's shared `data.json` settings. Draft text stays in device-local storage. Signed resource URLs and credentials do not enter that metadata or note text. New response registrations use protocol v4, which older import-capable writers reject. Reload the updated plugin on other devices before sending new jobs there. Legacy jobs are still readable by the updated writer. Response delivery never creates attachment folders. Old imports remain until an explicit cleanup; they are not evidence of a new import.
 
-The desktop maintenance command `archive-reply-imports` moves the old default `T3 Code Attachments` tree into an existing linked project on that desktop. Use `scripts/obsidian-command.py --vault VAULT archive-reply-imports --project-id PROJECT --environment-id ENVIRONMENT --archive-directory PROJECT_RELATIVE_DIRECTORY` with verified identities. It accepts only the old UUID-folder/hash-prefixed filename layout, refuses unrelated content, symlinks, nested vault/project roots and open attachment tabs, and never runs automatically. Every archive is created exclusively and checked byte-for-byte; an exact retry can reuse matching copies. Supported text copies are also verified through the authenticated T3 project reader. Synced `vaultAliases` metadata preserves existing links without changing note text. Only after that metadata is saved does the command recheck and remove each vault copy, then prune empty folders. Changed or unavailable copies stop cleanup. Physical vault files retain precedence while they remain. An unlinked archive fails closed instead of creating a missing vault note. Reload the updated plugin on other devices so they can resolve these aliases. The archive retains the imported historical bytes, which may differ from today's original source file.
+The desktop maintenance command `archive-reply-imports` moves the old default `T3 Code Attachments` tree into an existing linked project on that desktop. Use `scripts/obsidian-command.py --vault VAULT archive-reply-imports --project-id PROJECT --environment-id ENVIRONMENT --archive-directory PROJECT_RELATIVE_DIRECTORY` with verified identities. It accepts only the old UUID-folder/hash-prefixed filename layout, refuses unrelated content, symlinks, nested vault/project roots and open attachment tabs, and never runs automatically. Every archive is created exclusively and checked byte-for-byte; an exact retry can reuse matching copies. Supported text copies are also verified through the authenticated T3 project reader. Synced `vaultAliases` metadata preserves existing links without changing note text. Only after that metadata is saved does the command recheck and remove each vault copy, then prune empty folders. Changed or unavailable copies stop cleanup. Physical vault files retain precedence while they remain. An unavailable archive or disconnected environment fails closed instead of creating a missing vault note. Reload the updated plugin on other devices so they can resolve these aliases. The archive retains the imported historical bytes, which may differ from today's original source file.
 
 ## Native editing
 
@@ -43,7 +45,7 @@ links retain native Obsidian behavior. For project references, the bridge
 resolves absolute workspace paths, local `file:` URLs, `sandbox:` paths, and
 Obsidian's slashless form before physical vault lookup. An accidental physical
 copy therefore cannot capture an exact project path. Bare vault links retain
-their existing precedence. Paths must fall within a known linked workspace at
+their existing precedence. Paths must fall within an authenticated workspace at
 a directory boundary; traversal and invalid owned paths cannot create notes.
 
 The source note's recorded choice, linked project and machine select the
@@ -58,6 +60,8 @@ through native view state. Local file-URL clicks and rendered image resources
 use small native Markdown adapters; no saved link text, editor language,
 physical vault inventory or project file content is changed by resolution.
 Signed image URLs remain only in the rendered DOM and in memory.
+
+Rendered image paths are decoded from desktop `app://` and mobile native-file URLs. Reading view and a viewport-scoped CodeMirror extension prepare cold image resources; no view switch is required to request them. The Live Preview observer watches only its editor content, coalesces changes, and disconnects with that editor. Late resources cannot replace recycled image nodes or update a disconnected environment. Contract tests cover synthetic iOS/Android URL forms and observer lifecycle; these do not establish native phone coverage.
 
 
 The 2026-10-06 isolated desktop run retained evidence at

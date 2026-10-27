@@ -27,7 +27,7 @@ export class EventHostServer {
   async load():Promise<EventState|undefined>{
     const raw=await this.files.read(this.identity.directory+'/state.json');if(!raw)return undefined;
     const saved=JSON.parse(raw);
-    if(saved.version!==1||eventCanonical(saved.host)!==eventCanonical(this.identity))throw Error('Saved subscriptions belong to a different vault project machine.');
+    if(saved.version!==1||eventCanonical(saved.host)!==eventCanonical(this.identity))throw Error('Saved subscriptions belong to a different vault connection machine.');
     return saved.state;
   }
   async save(state:EventState){if(this.stopped||!this.ready())throw Error('Subscription host ownership changed.');await this.files.write(this.identity.directory+'/state.json',JSON.stringify({version:1,host:this.identity,state}));}

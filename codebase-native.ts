@@ -1,5 +1,5 @@
-import {App,EditorSuggest,type Editor,type EditorPosition,type EditorSuggestContext,ItemView,MarkdownView,Menu,Modal,Setting,Notice,TFile,TFolder,FuzzySuggestModal,WorkspaceLeaf,type Plugin} from 'obsidian';
-import {CODEBASE_PREFIX,CodebaseDocument,codebaseRootLabels,contextualCandidates,linkedCodebases,relativeCodebasePath,scopeKey,virtualPath,type CodebaseScope,type CodebaseIO,type CodebaseEntry} from './codebase-core';
+import {App,EditorSuggest,type Editor,type EditorPosition,type EditorSuggestContext,ItemView,MarkdownView,Menu,Modal,Setting,Notice,TFile,TFolder,FuzzySuggestModal,WorkspaceLeaf,type Plugin,editorInfoField} from 'obsidian';
+import {CODEBASE_PREFIX,CodebaseDocument,codebaseRootLabels,contextualCandidates,linkedCodebases,relativeCodebasePath,scopeKey,virtualPath,catalogCodebases,type CodebaseScope,type CodebaseIO,type CodebaseEntry} from './codebase-core';
 import {projectLink,projectMarkdownLink,projectPathRoutes} from './codebase-links';
 import {registerProjectReferences} from './project-reference';
 import type {FolderLink} from './folder-link';
@@ -11,9 +11,10 @@ import {CODEBASE_VIEW as VIEW,CodebaseView} from './codebase-view';
 import {timingSummaries} from './codebase-performance';
 import {NativeLanguageViews} from './language-views';
 import {contentHash} from './completion';
+import {nativeMediaSource,originalMediaSource,codebaseMediaExtension} from './codebase-media';
 export {CodebaseView} from './codebase-view';
 export interface CodebaseState {version:1;references:Record<string,SavedReference>;choices:Record<string,string>;automaticChoices?:Record<string,string[]>;vaultAliases?:Record<string,string>}
-export interface CodebaseStorage {load():CodebaseState|undefined;save(state:CodebaseState):Promise<void>;projectChanged?(scope:CodebaseScope,change:{title?:string;deleted?:boolean}):Promise<void>}
+export interface CodebaseStorage {environments?():string[];load():CodebaseState|undefined;save(state:CodebaseState):Promise<void>;projectChanged?(scope:CodebaseScope,change:{title?:string;deleted?:boolean}):Promise<void>}
 const MEDIA=/\.(?:png|jpe?g|gif|webp|svg|bmp|avif|pdf|mp[34]|wav|m4a|3gp|flac|ogg|oga|opus|webm|ogv|mov|mkv)$/i;
 export interface RegisteredFile {scope:CodebaseScope;path:string;file:TFile;document:CodebaseDocument;resource?:{url:string;expiresAt:number};preparing?:Promise<void>;text?:string}
 export interface SavedReference {scope:CodebaseScope;path:string;note:string;name:string}
@@ -80,6 +81,7 @@ export class CodebaseBridge {
     this.nativeSwitcher();
     this.nativeFileOpen();
     this.nativePathLinks();
+    if(this.plugin.registerEditorExtension)this.plugin.registerEditorExtension(codebaseMediaExtension(editorInfoField,(root,source,original,current)=>this.renderMedia(root,source,original,current)));
     for(const method of ['getFileByPath','getAbstractFileByPath'])this.patch(vault,method,(original:any)=>(path:string)=>this.files.get(path)?.file??this.files.get(this.legacyPaths[path])?.file??this.folders.get(path)??original(path)??this.vaultAlias(path)?.file??null);
     for(const method of ['read','cachedRead'])this.patch(vault,method,(original:any)=>async(file:TFile)=>{
       const item=this.files.get(file.path);if(item){this.captureBases(item);await this.prepare(item);const before=item.document.base;item.text=await item.document.read();this.synchronizePeers(item,before,item.text);return item.text;}
@@ -88,7 +90,7 @@ export class CodebaseBridge {
     this.patch(vault,'modify',(original:any)=>async(file:TFile,text:string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,text,options);if(text===item.document.base)return;await this.prepare(item);const before=item.document.base,peers=this.editorLeaves().map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===file.path),matching=peers.filter(view=>this.viewText(view)===text),origins=peers.map(view=>({view,basis:this.viewBase(view,item)})).filter(({view,basis})=>{const native=view as MarkdownView&{lastSavedData?:string;saving?:unknown};return basis?.text===before&&!!native.saving&&native.data===text&&native.lastSavedData===text;});if(text===before)return;try{if(matching.some(view=>{const basis=this.viewBase(view,item);return basis&&basis.text!==before;})){item.document.uncertain=true;item.document.draft=text;this.retain(file.path,text);}await item.document.save(text);for(const {view,basis} of origins)if(view.file?.path===file.path&&this.viewBase(view,item)===basis)this.setViewBase(view,item,text);}catch(error){new Notice(`${error instanceof Error?error.message:String(error)} Use Review unsaved project edit to compare versions.`,10000);throw error;}item.text=text;this.synchronizePeers(item,before,text);file.stat.mtime=Date.now();file.stat.size=new TextEncoder().encode(text).length;});
     this.patch(vault,'process',(original:any)=>async(file:TFile,change:(text:string)=>string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,change,options);const text=change(await vault.read(file));await vault.modify(file,text);return text;});
     this.patch(vault,'append',(original:any)=>async(file:TFile,text:string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,text,options);await vault.process(file,old=>old+text);});
-    this.patch(vault,'readBinary',(original:any)=>async(file:TFile)=>{const item=this.files.get(file.path);if(!item)return original(file);await this.prepare(item);const response=await fetch(item.resource!.url,{credentials:'omit'});if(!response.ok)throw Error('The project file is unavailable.');return response.arrayBuffer();});
+    this.patch(vault,'readBinary',(original:any)=>async(file:TFile)=>{const item=this.files.get(file.path);if(!item)return original(file);await this.prepare(item,true);const response=await fetch(item.resource!.url,{credentials:'omit'});if(!response.ok)throw Error('The project file is unavailable.');return response.arrayBuffer();});
     this.patch(vault,'getResourcePath',(original:any)=>(file:TFile)=>{const item=this.files.get(file.path);return item?this.resource(item):original(file);});
     // Native viewers sometimes read the adapter directly. No list, getRoot,
     // getFiles, getAllLoadedFiles, fileMap, or global vault event is changed.
@@ -118,7 +120,7 @@ export class CodebaseBridge {
       if(!route.owned&&this.absoluteReference(link)){const discovered=await this.discoverWorkspaces();route=this.pathRoute(link,source);if(!route.owned&&!discovered){new Notice('Project locations are unavailable. No vault note was created.');return;}}
       if(route.owned){const item=route.items.length===1?route.items[0]:route.items.length?await this.choose(route.items,link,source):undefined;if(!item){new Notice('The project file is unavailable or its location is ambiguous.');return;}try{this.choices[JSON.stringify([source,link.split('#')[0]])]=item.file.path;this.pin(item,source);const parsed=projectLink(link)!;return await this.open(item,workspace.getLeaf(newLeaf),{...state,eState:{...state?.eState,...(parsed.line===undefined?{}:{line:parsed.line,startLoc:{line:parsed.line,col:parsed.column??0},endLoc:{line:parsed.line,col:parsed.column??0},cursor:{from:{line:parsed.line,ch:parsed.column??0},to:{line:parsed.line,ch:parsed.column??0}}})}},parsed.subpath);}catch(error){new Notice(`The project file is unavailable: ${error instanceof Error?error.message:String(error)}`,10000);return;}}
       if(physicalLink(link.split('#')[0],source))return original(link,source,newLeaf,state);
-      if(this.absoluteReference(link)&&(this.scopes().length||this.sourceOrigins.has(source))){new Notice('This path is not available in a linked project workspace.');return;}
+      if(this.absoluteReference(link)&&(this.environmentIds().length||this.sourceOrigins.has(source))){new Notice('This path is not available in a linked project workspace.');return;}
       const sourceItem=this.files.get(source);if(sourceItem&&link.split('#')[0].includes('/')&&!this.resolve(link,source)){const parts=sourceItem.path.split('/').slice(0,-1);for(const part of link.split('#')[0].split('/')){if(part==='.')continue;if(part==='..'){if(!parts.length)throw Error('The link leaves the project workspace.');parts.pop();}else parts.push(part);}this.register(sourceItem.scope,parts.join('/'));}
       let candidates=this.candidates(link,source);
       // Unclaimed vault links belong to Obsidian, including newly typed wiki
@@ -160,7 +162,11 @@ export class CodebaseBridge {
   }
 
   private patch(target:any,key:string,wrap:(original:any)=>any){if(typeof target[key]!=='function')return;const original=target[key],replacement=wrap(original.bind(target));target[key]=replacement;this.undo.push(()=>{if(target===this.app.vault.adapter)return;/* Keep a fail-closed prefix guard while old native leaves unload. */if(target[key]===replacement)target[key]=original;});}
-  private allowed(scope:CodebaseScope,linked=this.scopes()){return linked.some(s=>s.environmentId===scope.environmentId&&s.projectId===scope.projectId&&(!!scope.threadId||s.root===scope.root));}
+  private environmentIds(){return [...new Set(this.storage?.environments?.()??this.scopes().map(scope=>scope.environmentId))];}
+  private allowed(scope:CodebaseScope,linked=this.scopes()){
+    if(this.storage?.environments)return this.environmentIds().includes(scope.environmentId)&&!this.links().some(link=>link.self&&link.environmentId===scope.environmentId&&link.projectId===scope.projectId);
+    return linked.some(s=>s.environmentId===scope.environmentId&&s.projectId===scope.projectId&&(!!scope.threadId||s.root===scope.root));
+  }
   private editorLeaves(){return [...new Set(['markdown',...this.languageViews.types()].flatMap(type=>this.app.workspace.getLeavesOfType(type)))];}
   private canRead(path:string){return !this.editorLeaves().some(leaf=>{const view=leaf.view as MarkdownView&{saving?:unknown};return view.file?.path===path&&!!view.saving;});}
   private viewText(view:MarkdownView){return view.getMode?.()==='preview'?view.getViewData():view.editor?.getValue();}
@@ -271,13 +277,14 @@ export class CodebaseBridge {
   }
 
   async list(scope:CodebaseScope,directory:string){await this.browse.load(scope,directory);const result=this.browse.get(scope,directory);if(!result)throw Error(this.browse.errors.get(JSON.stringify([scopeKey(scope),scope.root,directory]))??'The project folder is unavailable.');return result.entries;}
-  private resource(item:RegisteredFile){if(this.stopped||!this.allowed(item.scope))return '';if(!item.resource||item.resource.expiresAt<Date.now()+5000){void this.prepare(item).catch(()=>{});return '';}return item.resource.url;}
-  async prepare(item:RegisteredFile){if(this.stopped)throw Error('The project file bridge is stopped.');if(!this.allowed(item.scope))throw Error('This project is no longer linked to the vault.');if(MEDIA.test(item.path)&&(!item.resource||item.resource.expiresAt<Date.now()+60000)){if(!item.preparing){item.preparing=this.io.resource(item.scope,item.path).then(resource=>{if(this.stopped||!this.allowed(item.scope))throw Error('The project file is no longer available.');item.resource=resource;});void item.preparing.finally(()=>{item.preparing=undefined;}).catch(()=>{});}await item.preparing;}}
+  private resource(item:RegisteredFile){if(this.stopped||!this.allowed(item.scope))return '';if(!item.resource||item.resource.expiresAt<Date.now()+5000){void this.prepare(item,true).catch(()=>{});return '';}return item.resource.url;}
+  async prepare(item:RegisteredFile,binary=false){if(this.stopped)throw Error('The project file bridge is stopped.');if(!this.allowed(item.scope))throw Error(this.storage?.environments?'The project environment is disconnected or unavailable.':'This project is no longer linked to the vault.');if((binary||MEDIA.test(item.path))&&(!item.resource||item.resource.expiresAt<Date.now()+60000)){if(!item.preparing){item.preparing=this.io.resource(item.scope,item.path).then(resource=>{if(this.stopped||!this.allowed(item.scope))throw Error('The project file is no longer available.');item.resource=resource;});void item.preparing.finally(()=>{item.preparing=undefined;}).catch(()=>{});}await item.preparing;}}
   /** Only rendered media needs discovery or a signed resource. Vault reads
    * remain free of Markdown parsing and background project searches. */
   private async prepareRenderedEmbed(link:string,source:string){
     if(this.stopped||!MEDIA.test(link.split('#')[0].split('?')[0]))return;
     let item=this.resolve(link,source);
+    if(!item&&(this.absoluteReference(link)||this.storage?.environments&&projectLink(link)?.path.includes('/')&&!this.app.metadataCache.getFirstLinkpathDest(link,source))){await this.discoverWorkspaces();item=this.resolve(link,source);}
     if(!item&&!this.app.metadataCache.getFirstLinkpathDest(link,source)){
       const sourceItem=this.files.get(source);
       if(sourceItem){
@@ -305,15 +312,13 @@ export class CodebaseBridge {
   async reply(reference:ReplyReference,request:ResponseRequest,access:ThreadAccess){
     this.observeSource(request);
     const parsed=projectLink(reference.source);if(!parsed)return undefined;
-    const shell=await access.api('/api/orchestration/shell'),project=shell.projects?.find((p:any)=>p.id===request.projectId),thread=shell.threads?.find((t:any)=>t.id===request.threadId);
-    if(!project)return undefined;
-    const main:CodebaseScope={environmentId:request.threadEnvironmentId,projectId:project.id,title:project.title,root:project.workspaceRoot};
-    const scopes=[main,...(thread?.worktreePath?[{...main,root:thread.worktreePath,threadId:request.threadId}]:[])];
-    if(this.links().some(link=>link.self&&link.environmentId===main.environmentId&&link.projectId===main.projectId))return undefined;
+    const shell=await access.api('/api/orchestration/shell');
+    const scopes=catalogCodebases(request.threadEnvironmentId,shell).filter(scope=>scope.projectId===request.projectId&&(!scope.threadId||scope.threadId===request.threadId));
+    if(!scopes.length)return undefined;
     for(const scope of scopes)this.knownScopes.set(virtualPath(scope,'identity'),scope);
     const route=projectPathRoutes(reference.source,scopes);let match=route.matches[0];
     if(!route.owned&&!/^(?:\/|[a-z]:\/)/i.test(parsed.path))try{relativeCodebasePath(parsed.path);match={scope:scopes.at(-1)!,path:parsed.path};}catch{}
-    if(match&&this.allowed(match.scope)){const item=this.register(match.scope,match.path);this.automaticChoice(request.notePath,parsed.path,item.file.path);this.automaticChoice(request.notePath,item.file.name,item.file.path);this.pin(item,request.notePath);}
+    if(match&&this.allowed(match.scope)){const item=this.register(match.scope,match.path);this.automaticChoice(request.notePath,parsed.path,item.file.path);this.automaticChoice(request.notePath,item.file.name,item.file.path);this.pin(item,request.notePath);if(MEDIA.test(item.path)&&typeof this.io.resource==='function')await this.prepare(item);}
     // References retain their original spelling. Resolution is a plugin concern.
     return undefined;
   }
@@ -332,47 +337,41 @@ export class CodebaseBridge {
       if(replay.delete(anchor))return;
       const link=anchor.getAttribute('data-href')??anchor.getAttribute('href');if(!link)return;
       const source=sourceFor(anchor),route=this.pathRoute(link,source),absolute=this.absoluteReference(link);
-      if(!route.owned&&(!absolute||!this.io.workspaces||!this.scopes().length))return;
+      if(!route.owned&&(!absolute||!this.io.workspaces&&!this.io.catalog||!this.environmentIds().length))return;
       event.preventDefault();event.stopImmediatePropagation();
       const open=async()=>{const discovered=route.owned||await this.discoverWorkspaces();if(this.stopped)return;if(this.pathRoute(link,source).owned)await this.app.workspace.openLinkText(link,source,event.ctrlKey||event.metaKey);else if(!discovered||this.sourceOrigins.has(source)||this.files.has(source)){new Notice('Project locations are unavailable.');}else{replay.add(anchor);anchor.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:event.ctrlKey,metaKey:event.metaKey,shiftKey:event.shiftKey,altKey:event.altKey}));}};
       void open().catch(error=>new Notice(String(error),10000));
     },{capture:true});
-    this.plugin.registerMarkdownPostProcessor?.(async(el,context)=>{
-      // Native embeds expose their original link. Discover relative project
-      // media here, rather than parsing every note read by unrelated services.
-      for(const embed of Array.from(el.querySelectorAll('.internal-embed[src], .internal-embed[data-src]'))){
-        const link=embed.getAttribute('src')??embed.getAttribute('data-src');if(!link)continue;
-        try{
-          const item=await this.prepareRenderedEmbed(link,context.sourcePath);
-          if(item&&!this.stopped&&this.allowed(item.scope)&&item.resource){
-            const media=embed.querySelector('img, video, audio, iframe, embed');
-            if(media)media.setAttribute('src',item.resource.url);
-            else if(/\.(?:png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(item.path)){const image=document.createElement('img');image.setAttribute('src',item.resource.url);image.setAttribute('alt',link);embed.replaceChildren(image);}
-          }
-        }catch{/* Offline media must not block rendering the rest of the note. */}
-      }
-      for(const image of Array.from(el.querySelectorAll('img[src]'))){
-        const rendered=image.getAttribute('src');if(!rendered||/^https?:/i.test(rendered))continue;
-        let link=rendered;
-        if(/^app:\/\//i.test(link))try{
-          const physicalRoot=this.app.vault.adapter.getResourcePath?.('').replace(/\/$/,'');
-          if(physicalRoot&&(rendered===physicalRoot||rendered.startsWith(physicalRoot+'/'))){
-            const relative=decodeURIComponent(rendered.slice(physicalRoot.length).replace(/^\//,'').split(/[?#]/)[0]);
-            if(this.physicalFileLookup?.(relative))continue;
-            link=relative;
-          }else{new URL(link);link=link.replace(/^app:\/\/[^/]+/i,'').split('?')[0];}
-        }catch{continue;}
-        try{
-          let route=this.pathRoute(link,context.sourcePath);
-          if(!route.owned&&this.absoluteReference(link)){await this.discoverWorkspaces();route=this.pathRoute(link,context.sourcePath);}
-          const item=route.owned?route.items.length===1?route.items[0]:undefined:await this.prepareRenderedEmbed(link,context.sourcePath);
-          if(route.owned&&!item){image.removeAttribute('src');image.setAttribute('alt','The project image is unavailable.');}
-          if(!item||this.stopped||!MEDIA.test(item.path))continue;
-          image.removeAttribute('src');await this.prepare(item);
-          if(!this.stopped&&this.allowed(item.scope)&&item.resource)image.setAttribute('src',item.resource.url);
-        }catch{if(!this.stopped)image.setAttribute('alt','The project image is unavailable.');}
-      }
-    });
+    this.plugin.registerMarkdownPostProcessor?.((el,context)=>this.renderMedia(el,context.sourcePath,image=>{const section=context.getSectionInfo?.(el);return section?originalMediaSource(section.text,image.getAttribute('alt'),section):undefined;}));
+  }
+
+  private async renderMedia(el:HTMLElement,source:string,original?:(image:Element)=>string|undefined,current:()=>boolean=()=>true){
+    for(const embed of Array.from(el.querySelectorAll('.internal-embed[src], .internal-embed[data-src]'))){
+      if(this.stopped||!current())return;
+      const link=embed.getAttribute('src')??embed.getAttribute('data-src');if(!link)continue;
+      try{
+        const item=await this.prepareRenderedEmbed(link,source);
+        if(!item||this.stopped||!current()||!this.allowed(item.scope)||!item.resource||(embed.getAttribute('src')??embed.getAttribute('data-src'))!==link)continue;
+        const media=embed.querySelector('img, video, audio, iframe, embed');
+        if(media){if(media.getAttribute('src')!==item.resource.url)media.setAttribute('src',item.resource.url);}
+        else if(/\.(?:png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(item.path)){const image=embed.ownerDocument.createElement('img');image.setAttribute('src',item.resource.url);image.setAttribute('alt',link);embed.replaceChildren(image);}
+      }catch{/* An unavailable embed cannot block the rest of the note. */}
+    }
+    for(const image of Array.from(el.querySelectorAll('img'))){
+      if(this.stopped||!current())return;
+      const rendered=image.getAttribute('src')??'',native=nativeMediaSource(rendered,this.app.vault.adapter.getResourcePath?.(''));
+      if(native?.vaultRelative&&this.physicalFileLookup?.(native.vaultRelative))continue;
+      const parent=image.closest?.('.internal-embed[src], .internal-embed[data-src]'),parentLink=parent?.getAttribute('src')??parent?.getAttribute('data-src');
+      if(!native&&!parentLink)continue; // Signed resources and ordinary web images need no work.
+      const originalLink=original?.(image),link=parentLink??originalLink??native?.link;if(!link)continue;
+      try{
+        const item=await this.prepareRenderedEmbed(link,source);
+        if(!item||this.stopped||!current()||!this.allowed(item.scope)||!item.resource||(image.getAttribute('src')??'')!==rendered)continue;
+        if(parentLink&&(parent?.getAttribute('src')??parent?.getAttribute('data-src'))!==parentLink)continue;
+        if(!parentLink&&originalLink!==undefined&&original?.(image)!==originalLink)continue;
+        if(image.getAttribute('src')!==item.resource.url)image.setAttribute('src',item.resource.url);
+      }catch{/* Retain native alt text and allow an explicit refresh after access recovers. */}
+    }
   }
 
   private absoluteReference(name:string){const path=projectLink(name)?.path;if(!path)return false;return /^(?:\/|[a-z]:\/)/i.test(path)||this.scopes().some(scope=>scope.root.startsWith('/')&&path.startsWith(scope.root.split('/')[1]+'/'));}
@@ -390,8 +389,9 @@ export class CodebaseBridge {
       if(this.vaultAliases[alias]&&!this.physicalFileLookup?.(alias)){const item=this.vaultAlias(alias);return {owned:true,items:item?[item]:[] as RegisteredFile[]};}
     }
     if(!/[\\/]/.test(name)||/^(?!file:|sandbox:)[a-z][a-z0-9+.-]*:/i.test(name)&&! /^[a-z]:[\\/]/i.test(name))return {owned:false,items:[] as RegisteredFile[]};
-    const parsed=projectLink(name);if(parsed&&!/^(?:\/|[a-z]:\/)/i.test(parsed.path)&&!this.links().some(link=>link.workspaceRoot?.startsWith('/')&&parsed.path.startsWith(link.workspaceRoot.split('/')[1]+'/'))&&![...this.knownScopes.values()].some(scope=>scope.root.startsWith('/')&&parsed.path.startsWith(scope.root.split('/')[1]+'/')))return {owned:false,items:[] as RegisteredFile[]};
-    const linked=this.scopes(),scopes=this.routeScopes(linked),allowed=(scope:CodebaseScope)=>linked.some(s=>s.environmentId===scope.environmentId&&s.projectId===scope.projectId&&(!!scope.threadId||s.root===scope.root)),active=scopes.filter(allowed);
+    const linked=this.scopes(),scopes=this.routeScopes(linked),parsed=projectLink(name);
+    if(parsed&&!/^(?:\/|[a-z]:\/)/i.test(parsed.path)&&!scopes.some(scope=>scope.root.startsWith('/')&&parsed.path.startsWith(scope.root.split('/')[1]+'/')))return {owned:false,items:[] as RegisteredFile[]};
+    const allowed=(scope:CodebaseScope)=>this.allowed(scope,linked),active=scopes.filter(allowed);
     const remembered=this.choices[JSON.stringify([source,projectLink(name)?.path??name]) ]??this.choices[JSON.stringify([source,name.split('#')[0]])],chosen=remembered?this.files.get(remembered):undefined;
     if(chosen&&!allowed(chosen.scope)&&projectPathRoutes(name,[chosen.scope]).owned)return {owned:true,items:[] as RegisteredFile[]};
     const origins=[...this.sourceOrigins.get(source)?.values()??[]],originKeys=new Set(origins.map(origin=>JSON.stringify(origin))),origin=originKeys.size===1?origins[0]:undefined;
@@ -401,6 +401,19 @@ export class CodebaseBridge {
     return {owned:projectPathRoutes(name,scopes).owned,items:[] as RegisteredFile[]};
   }
   private async discoverWorkspaces(){
+    if(this.io.catalog&&this.storage?.environments){
+      let complete=true;
+      // Keep cross-machine discovery bounded; each transport shares its catalog request.
+      for(const environmentId of this.environmentIds()){
+        const key='environment:'+environmentId;let record=this.workspaceScopes.get(key);
+        if(record?.pending){await record.pending;complete&&=!record.error;continue;}
+        if(record&&Date.now()-record.at<15000){complete&&=!record.error;continue;}
+        if(!record){record={at:0,value:[]};this.workspaceScopes.set(key,record);}const current=record;
+        current.pending=this.io.catalog(environmentId).then(value=>{if(this.stopped)return;current.value=value;current.error=false;current.at=Date.now();}).catch(()=>{current.error=true;current.at=Date.now();}).finally(()=>{current.pending=undefined;});
+        await current.pending;complete&&=!current.error;
+      }
+      return complete;
+    }
     if(!this.io.workspaces)return false;
     const records=await Promise.all(this.scopes().map(async scope=>{
       const key=virtualPath(scope,'identity');let record=this.workspaceScopes.get(key);

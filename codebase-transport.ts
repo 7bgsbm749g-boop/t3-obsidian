@@ -2,7 +2,7 @@ import {connectT3Rpc} from './t3-rpc';
 import {ThreadAccessCache} from './thread-access-cache';
 import type {ThreadAccess,ThreadAccessCloseReason} from './thread-stream';
 import type {CodebaseIO,CodebaseScope} from './codebase-core';
-import {relativeCodebasePath} from './codebase-core';
+import {relativeCodebasePath,catalogCodebases} from './codebase-core';
 
 export interface CodebaseTiming {operation:string;milliseconds:number}
 export interface CodebaseTransport extends CodebaseIO {timings:CodebaseTiming[]}
@@ -36,7 +36,7 @@ export function codebaseTransport(createAccess:(environmentId:string,reason?:Thr
     const work=measured('catalog',async()=>{const borrowed=await bounded(access.get(environmentId)),value=await bounded(borrowed.api('/api/orchestration/shell'));if(stopped)throw Error('The project connection is stopped.');catalogs.set(environmentId,{value,at:now()});return value;});
     catalogPending.set(environmentId,work);try{return await work;}finally{if(catalogPending.get(environmentId)===work)catalogPending.delete(environmentId);}
   }
-  async function verify(scope:CodebaseScope,fresh=false,allowMissing=false){const shell=await catalog(scope.environmentId,fresh),project=shell.projects?.find((p:any)=>p.id===scope.projectId),thread=scope.threadId?shell.threads?.find((t:any)=>t.id===scope.threadId&&t.projectId===scope.projectId):undefined;if(!project&&allowMissing)return undefined;if(!project||scope.threadId&&!thread||(thread?.worktreePath??project.workspaceRoot)!==scope.root)throw Error('The project workspace changed or is unavailable. Refresh its folder link before opening files.');return project;}
+  async function verify(scope:CodebaseScope,fresh=false,allowMissing=false){const shell=await catalog(scope.environmentId,fresh),project=shell.projects?.find((p:any)=>p.id===scope.projectId&&!p.deletedAt),thread=scope.threadId?shell.threads?.find((t:any)=>t.id===scope.threadId&&t.projectId===scope.projectId&&!t.deletedAt):undefined;if(!project&&allowMissing)return undefined;const known=catalogCodebases(scope.environmentId,shell).some(value=>value.projectId===scope.projectId&&value.threadId===scope.threadId&&value.root===scope.root);if(!project||!known||scope.threadId&&!thread)throw Error('The project workspace changed or is unavailable. Refresh project locations before opening files.');return project;}
   async function call(scope:CodebaseScope,tag:string,payload:unknown){return measured(tag,async()=>{const [socket]=await Promise.all([connection(scope.environmentId),verify(scope,tag==='projects.writeFile')]);return bounded(socket.rpc.call(tag,payload));});}
   async function projectCommand(scope:CodebaseScope,change:{title:string}|{deleted:true}){
     if(scope.threadId)throw Error('Choose the project root to change a project.');
@@ -55,6 +55,7 @@ export function codebaseTransport(createAccess:(environmentId:string,reason?:Thr
   }
   return {
     timings,
+    async catalog(environmentId){return catalogCodebases(environmentId,await catalog(environmentId));},
     dispose(){stopped=true;for(const socket of sockets.values())socket.rpc.close();sockets.clear();catalogs.clear();void access.dispose();},
     async workspaces(scope){await verify(scope);const shell=await catalog(scope.environmentId);return (shell.threads??[]).filter((t:any)=>t.projectId===scope.projectId&&t.worktreePath).map((t:any)=>({...scope,root:t.worktreePath,threadId:t.id,title:t.title??t.id}));},
     list:(scope,directory)=>{if(directory)relativeCodebasePath(directory);return call(scope,'projects.listEntries',{cwd:scope.root,directoryPath:directory});},
