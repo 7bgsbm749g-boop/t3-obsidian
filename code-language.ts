@@ -1,5 +1,7 @@
 /** No Obsidian, CodeMirror, or grammar initialization in the routing layer. */
-export type CodeViewType='typescript'|'javascript'|'json'|'css'|'python'|'c'|'plaintext';
+export type CodeViewType='typescript'|'javascript'|'json'|'css'|'python'|'c'|
+  'cpp'|'java'|'csharp'|'visual-basic'|'sql'|'r'|'rust'|'go'|'php'|'ruby'|
+  'kotlin'|'swift'|'dart'|'bash'|'powershell'|'lua'|'html'|'yaml'|'toml'|'xml'|'plaintext';
 export type CodeGrammar=Exclude<CodeViewType,'plaintext'>|'tsx'|'jsx';
 export interface CodeLanguage {type:CodeViewType;grammar?:CodeGrammar;extensions:readonly string[]}
 export const CODE_LANGUAGES:readonly CodeLanguage[]=[
@@ -11,9 +13,29 @@ export const CODE_LANGUAGES:readonly CodeLanguage[]=[
   {type:'css',grammar:'css',extensions:['css']},
   {type:'python',grammar:'python',extensions:['py','pyw','pyi']},
   {type:'c',grammar:'c',extensions:['c','h']},
+  {type:'cpp',grammar:'cpp',extensions:['cpp','cc','cxx','c++','hpp','hh','hxx','h++']},
+  {type:'java',grammar:'java',extensions:['java']},
+  {type:'csharp',grammar:'csharp',extensions:['cs','csx']},
+  {type:'visual-basic',grammar:'visual-basic',extensions:['vb','bas','cls','frm']},
+  {type:'sql',grammar:'sql',extensions:['sql']},
+  {type:'r',grammar:'r',extensions:['r','rscript']},
+  {type:'rust',grammar:'rust',extensions:['rs']},
+  {type:'go',grammar:'go',extensions:['go']},
+  {type:'php',grammar:'php',extensions:['php','phtml']},
+  {type:'ruby',grammar:'ruby',extensions:['rb','rake','gemspec']},
+  {type:'kotlin',grammar:'kotlin',extensions:['kt','kts']},
+  {type:'swift',grammar:'swift',extensions:['swift']},
+  {type:'dart',grammar:'dart',extensions:['dart']},
+  {type:'bash',grammar:'bash',extensions:['sh','bash']},
+  {type:'powershell',grammar:'powershell',extensions:['ps1','psm1','psd1']},
+  {type:'lua',grammar:'lua',extensions:['lua']},
+  {type:'html',grammar:'html',extensions:['html','htm']},
+  {type:'yaml',grammar:'yaml',extensions:['yaml','yml']},
+  {type:'toml',grammar:'toml',extensions:['toml']},
+  {type:'xml',grammar:'xml',extensions:['xml','xsd','xsl','xslt']},
   {type:'plaintext',extensions:[]},
 ];
-export const CODE_VIEW_TYPES:readonly CodeViewType[]=['typescript','javascript','json','css','python','c','plaintext'];
+export const CODE_VIEW_TYPES:readonly CodeViewType[]=[...new Set(CODE_LANGUAGES.map(profile=>profile.type))];
 export const MAX_CODE_PARSE_LENGTH=300_000;
 /** Diff raw UTF-16 text without normalizing line endings or indentation. */
 export function rawCodeChange(before:string,after:string):{from:number;to:number;insert:string}|undefined {
