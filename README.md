@@ -2,6 +2,8 @@
 
 One Obsidian plugin for desktop and mobile. Chat from the command palette, send a Markdown note to a T3 project, or ask a thread to watch a note or folder. Linked folders choose the destination for notes below them. Manual sends preserve Markdown and embedded images.
 
+Completed-reply highlights use T3's shared read state. Reading the result in T3 clears its note highlight; viewing it in Obsidian marks only that displayed result read in T3. See [unread completion glow](docs/completion-glow.md).
+
 The plugin requires T3 Orchestrator v2 on each destination computer. Update T3 before connecting. Existing project, thread, and message IDs remain valid after T3's migration. T3 does not migrate old provider runs or pending approvals; those old controls cannot resume. New messages use the v2 delivery policy and keep the existing thread's permissions and model. See [Orchestrator v2 compatibility](docs/orchestrator-v2.md) for recovery and validation details.
 
 ## Import and command performance

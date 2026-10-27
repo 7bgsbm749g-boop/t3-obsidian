@@ -291,7 +291,10 @@ export default class SendToT3 extends Plugin {
     this.responseBindingReplica=mergeResponseBindingData(data?.responseBindings,await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`));
     this.settings.responseBindings=this.responseBindingReplica;
     const completionKey=`t3-completion-glow:${this.settings.vaultId}`;
-    this.completionGlow=new CompletionGlow(this.app.loadLocalStorage(completionKey),receipts=>this.app.saveLocalStorage(completionKey,receipts));
+    this.completionGlow=new CompletionGlow(this.app.loadLocalStorage(completionKey),receipts=>this.app.saveLocalStorage(completionKey,receipts),{
+      access:(environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected'),
+      changed:()=>this.folderIndicators?.refresh(),
+    });
     this.smartReplica=mergeSmartSend(data?.smartSend,await deviceState(`smart-send:${this.deviceId}:${this.settings.vaultId}`));this.settings.smartSend=this.smartReplica;
     this.folderLinkReplica=mergeFolderLinkChanges(this.settings.folderLinkChanges,loadFolderLinkChanges(await deviceState(`folder-links:${this.deviceId}:${this.settings.vaultId}`)));
     this.settings.folderLinkChanges=this.folderLinkReplica;
@@ -514,7 +517,7 @@ export default class SendToT3 extends Plugin {
           const responses=this.deviceInline?.explorerResponses()??[],known=new Set(responses.map(r=>r.id));
           const all=[...responses,...(this.inlineChat?.explorerResponses()??[]).filter(r=>!known.has(r.id))];
           const exists=(path:string)=>this.app.vault.getAbstractFileByPath(path) instanceof TFile;
-          this.completionGlow?.observe(all);
+          this.completionGlow?.observe(all,responseBindingRequests(this.settings.responseBindings??{}));
           const view=this.app.workspace.getActiveViewOfType(MarkdownView),doc=view?.containerEl.ownerDocument;
           this.completionGlow?.view(view?.file&&doc?.visibilityState==='visible'&&doc.hasFocus()&&view.containerEl.getClientRects().length&&!doc.querySelector('.modal-container')?view.file.path:undefined);
           const notes=noteIndicators(all,exists);
@@ -545,7 +548,7 @@ export default class SendToT3 extends Plugin {
         this.registerEvent(this.app.workspace.on('active-leaf-change',()=>this.folderIndicators?.refresh()));
         this.registerDomEvent(document,'visibilitychange',()=>{this.completionGlow?.view(undefined);this.folderIndicators?.refresh();});
         this.registerDomEvent(window,'blur',()=>this.completionGlow?.view(undefined));
-        this.registerDomEvent(window,'focus',()=>this.folderIndicators?.refresh());
+        this.registerDomEvent(window,'focus',()=>{this.folderIndicators?.refresh();void this.completionGlow?.refresh(true);});
       }
       this.registerInterval(window.setInterval(()=>void this.checkExternalSettings().catch(error=>new Notice(`T3 settings: ${message(error)}`,12000)),5000));
     });
@@ -2659,7 +2662,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }
   }
-  onunload(){closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;

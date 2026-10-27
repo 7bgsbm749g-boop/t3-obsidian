@@ -1,5 +1,8 @@
 {
   "dependencies": {
+    "tests/completion-glow.test.ts": [
+      "validation/completion-read-lab.ts"
+    ],
     "tests/response-emissions.test.ts": [
       "validation/thought-stream-lab.ts"
     ],

@@ -8,6 +8,7 @@ import type {DeviceResponseIO} from './device-local-responses';
 import {logFailure} from './diagnostics';
 import type {ResponseStopReceipt} from './response-stop-receipt';
 import {localFinalIdentity} from './local-final-cache';
+import {completionSource} from './explorer-responses';
 import {interruptStoppedResponse} from './response-stop';
 import {completedSelectionDraft,validSteeringInput,type SteeringInput} from './inline-steering';
 import type {ResponseConnectionIssue} from './sign-in-state';
@@ -209,6 +210,6 @@ export class LocalResponseManager {
   }
   renamed(before:string,after:string){for(const runtime of this.jobs.values())if(runtime.request.notePath===before||runtime.request.notePath.startsWith(before+'/')){runtime.request={...runtime.request,notePath:after+runtime.request.notePath.slice(before.length)};runtime.retryAt=0;}}
   deleted(path:string){for(const runtime of this.jobs.values())if(runtime.request.notePath===path||runtime.request.notePath.startsWith(path+'/'))this.stopLocally(runtime.request.id);}
-  responses(){return [...this.jobs.values()].filter(runtime=>!runtime.stopped&&(!runtime.done||runtime.update?.completionVerified&&runtime.update.phase==='complete')).map(runtime=>({id:runtime.request.id,notePath:runtime.request.notePath,epoch:1,revision:1,completionId:JSON.stringify([runtime.update?.messageId??runtime.request.localMessageId??runtime.request.messageId,runtime.update?.turnId??'']),active:!runtime.update?.completionVerified&&runtime.update?.phase!=='error',input:!runtime.update?.completionVerified&&!!runtime.update?.questionActivities?.length,complete:!!runtime.update?.completionVerified&&runtime.update.phase==='complete'}));}
+  responses(){return [...this.jobs.values()].filter(runtime=>!runtime.stopped&&(!runtime.done||runtime.update?.completionVerified&&runtime.update.phase==='complete')).map(runtime=>({id:runtime.request.id,notePath:runtime.request.notePath,epoch:1,revision:1,completionId:JSON.stringify([runtime.update?.messageId??runtime.request.localMessageId??runtime.request.messageId,runtime.update?.turnId??'']),completion:completionSource(runtime.request,runtime.update?.turnId?runtime.update.checkpoint?.turns?.[runtime.update.turnId]??(runtime.request.importTurn?.turnId===runtime.update.turnId?runtime.request.importTurn:undefined):undefined),active:!runtime.update?.completionVerified&&runtime.update?.phase!=='error',input:!runtime.update?.completionVerified&&!!runtime.update?.questionActivities?.length,complete:!!runtime.update?.completionVerified&&runtime.update.phase==='complete'}));}
   dispose(){this.closed=true;for(const runtime of this.jobs.values())runtime.preview.dispose();this.jobs.clear();}
 }
