@@ -12,9 +12,10 @@ import {t3Api,abortableRead,requestAborted,type AbortableT3Api,type T3RequestOpt
 import {T3_PROTOCOL_VERSION,T3_PROTOCOL_HEADER} from './orchestration-v2';
 import type {SocketFactory} from './t3-rpc';
 import {PLUGIN_SCOPE,hasPluginPermissions} from './environment-permissions';
+import {AUTO_THREAD_TITLE} from './thread-title';
 export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean}
 export interface PairedSession {token:string;expiresAt:number;environmentId:string;url:string;dpopKeyId?:string;accountId?:string;permissions?:string[]}
-export interface DirectPlan {protocolVersion?:2;hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:any;turn:any;observedActiveTurnId?:string;delivery?:InlineStartRequest}
+export interface DirectPlan {protocolVersion?:2;launch?:boolean;hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:any;turn:any;observedActiveTurnId?:string;delivery?:InlineStartRequest}
 export type Fetcher=typeof fetch;
 export function endpoint(value:string):string {
  let u:URL;try{u=new URL(value.trim());}catch{throw Error('Enter a T3 HTTPS address or pairing link.');}
@@ -122,12 +123,20 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
   const shell=await api('shell');const project=shell.projects.find((p:any)=>p.id===r.project.id);if(!project)throw Error('Project no longer exists. Scan this connection again.');
   const defaults=await readNewThreadDefaults(environment,endpoint(r.connection.url||''),project);
   const common={threadId:commandId(r.id,'thread'),...defaults,interactionMode:'default',createdAt:new Date().toISOString()};
-  r.directPlan={protocolVersion:2,hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title:r.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
+  r.directPlan={protocolVersion:2,...(r.title===AUTO_THREAD_TITLE?{launch:true}:{}),hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title:r.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
   }
  }
  // Persist the complete commands before their first attempt AND on every retry.
  // A lost reply can only replay the same commands, including timestamps/model.
  await save();const plan=r.directPlan;
+ // V2 generates automatic titles only when launch receives the first message.
+ // Persist the choice so old pending plans retain their original command path.
+ if(plan.phase==='prepared'&&plan.launch){
+  const {commandId,threadId,projectId,title,modelSelection,runtimeMode,interactionMode}=plan.create;
+  const {messageId,text,attachments,context}=plan.turn.message;
+  await environment('/api/orchestration/launch',{commandId,threadId,projectId,title,generateTitle:true,modelSelection,runtimeMode,interactionMode,creationSource:'web',workspaceStrategy:{type:'root'},initialMessage:{messageId,text,attachments,...(context?{context}:{})}});
+  plan.phase='started';await save();
+ }
  if(plan.phase==='prepared'){await api('dispatch',{...plan.create,...(plan.protocolVersion===2?{}:{__legacyV1:true})});plan.phase='created';await save();}
  if(plan.phase==='created'){const acknowledged=await api('dispatch',{...plan.turn,...(plan.protocolVersion===2?{}:{__legacyV1:true})});if(Number.isSafeInteger(acknowledged?.sequence)&&acknowledged.sequence>=0)plan.delivery={messageId:plan.turn.message.messageId,requestedAt:plan.turn.createdAt,sequence:acknowledged.sequence,activeTurnId:plan.observedActiveTurnId};plan.phase='started';await save();}
  return {threadId:plan.turn.threadId as string,phase:'started' as const};
