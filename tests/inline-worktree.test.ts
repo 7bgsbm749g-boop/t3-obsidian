@@ -5,7 +5,7 @@ import {normalizeV2Snapshot,normalizeV2StreamItem} from '../orchestration-v2';
 import {delegatedTurnIds,delegatedWork} from '../inline-delegation';
 import {followInlineQuestions,inlineQuestionPhase} from '../inline-questions';
 import {finalResponseKey} from '../final-response';
-import {handoffProjection,handoffSource,handoffRun,handoffMessage,handoffItem,handoffPrompt,handoffMessageId} from './fixtures/worktree-handoff';
+import {handoffProjection,handoffSource,handoffRun,handoffMessage,handoffItem,handoffPrompt,handoffMessageId,interruptedHandoffItem} from './fixtures/worktree-handoff';
 
 const snapshot=(overrides:any={})=>applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:normalizeV2Snapshot(handoffProjection(overrides))}).state;
 const event=(state:InlineThreadState,sequence:number,type:string,payload:any)=>applyThreadItem(state,normalizeV2StreamItem({kind:'event',sequence,event:{type,payload}})).state;
@@ -16,6 +16,53 @@ test('canonical successful handoff joins exact runs and retains the original res
  assert.equal(followInlineQuestions(state,['source']).turnId,'resume');assert.equal(inlineQuestionPhase(state,'resume'),'running');
  assert.equal(finalResponseKey(state,'source'),undefined);
  assert.equal(state.worktreeHandoffs!['handoff-tool'].messageId,handoffMessageId);
+});
+
+test('an interrupted handoff without a result recovers the exact machine continuation after detachment',()=>{
+ const state=snapshot({turnItems:[interruptedHandoffItem],messages:[{...handoffMessage,createdAt:'2026-10-20T20:00:04.000Z'}]});
+ assert.deepEqual(delegatedTurnIds(state,['source']),['source','resume']);
+ assert.equal(followInlineQuestions(state,['source']).turnId,'resume');
+ assert.equal(inlineQuestionPhase(state,'resume'),'running');
+ assert.equal(delegatedWork(state,['source']).handoffFailed,false);
+ assert.doesNotMatch(renderInlineTurn(state,'resume','thread','running','collapse'),/Worktree continuation failed/);
+ assert.equal(finalResponseKey(state,'source'),undefined);
+});
+
+test('interrupted handoff recovery requires the next run to have been dispatched during the source lifecycle',()=>{
+ for(const run of [{...handoffRun,ordinal:3},{...handoffRun,ordinal:undefined},{...handoffRun,requestedAt:undefined},
+   {...handoffRun,requestedAt:'2026-10-20T20:00:00.500Z'},{...handoffRun,requestedAt:'2026-10-20T20:00:03.001Z'},
+   {...handoffRun,userMessageId:'other'}]){
+  assert.deepEqual(delegatedTurnIds(snapshot({turnItems:[interruptedHandoffItem],runs:[handoffSource,run]}),['source']),['source']);
+ }
+ for(const source of [{...handoffSource,status:'running'},{...handoffSource,status:'failed'},
+   {...handoffSource,ordinal:undefined},{...handoffSource,completedAt:null}]){
+  assert.deepEqual(delegatedTurnIds(snapshot({turnItems:[interruptedHandoffItem],runs:[source,handoffRun]}),['source']),['source']);
+ }
+ for(const change of [{createdBy:'user'},{creationSource:'web'},{id:'ordinary-agent-message'},{text:'Other task'},
+   {createdAt:'2026-10-20T20:00:00Z'},{runId:'other'}]){
+  assert.deepEqual(delegatedTurnIds(snapshot({turnItems:[interruptedHandoffItem],messages:[{...handoffMessage,...change}]}),['source']),['source']);
+ }
+ const later={...interruptedHandoffItem,id:'later-attempt',startedAt:'2026-10-20T20:00:01.500Z',input:{...handoffItem.input,continuationPrompt:'Different continuation'}};
+ assert.deepEqual(delegatedTurnIds(snapshot({turnItems:[interruptedHandoffItem,later]}),['source']),['source']);
+ for(const status of ['failed','cancelled'])assert.deepEqual(delegatedTurnIds(snapshot({turnItems:[{...interruptedHandoffItem,status}]}),['source']),['source']);
+ const explicitFailure={...interruptedHandoffItem,output:{continuation:{status:'failed',detail:'Dispatch failed'}}};
+ assert.deepEqual(delegatedTurnIds(snapshot({turnItems:[explicitFailure]}),['source']),['source']);
+});
+
+test('interrupted handoff metadata can arrive in any order and survives omitted history after checkpoint restore',()=>{
+ const permutations=<T>(items:T[]):T[][]=>items.length?items.flatMap((item,index)=>permutations(items.filter((_,i)=>i!==index)).map(rest=>[item,...rest])):[[]];
+ for(const order of permutations([['turn-item.updated',interruptedHandoffItem],['message.updated',handoffMessage],['run.created',handoffRun],['run.updated',handoffSource]] as const)){
+  let state=snapshot({runs:[{...handoffSource,status:'running',completedAt:null}],messages:[],turnItems:[]}),sequence=10;
+  for(const [type,payload] of order)state=event(state,++sequence,type,payload);
+  assert.deepEqual(delegatedTurnIds(state,['source']),['source','resume']);
+  state=restoreInlineBindings({protocolVersion:2,messages:[],activities:[]},JSON.parse(JSON.stringify(inlineBindingCheckpoint(state))));
+  state=event(state,++sequence,'turn-item.updated',interruptedHandoffItem);
+  assert.deepEqual(delegatedTurnIds(state,['source']),['source','resume']);
+  assert.equal(state.worktreeHandoffs!['handoff-tool'].status,'scheduled');
+ }
+ const missing=snapshot({turnItems:[interruptedHandoffItem],messages:[],runs:[handoffSource]});
+ assert.equal(inlineQuestionPhase(missing,'source'),'error');
+ assert.equal(delegatedWork(missing,['source']).moving,false);
 });
 
 test('pending handoff and queued continuation keep the timer and response active',()=>{

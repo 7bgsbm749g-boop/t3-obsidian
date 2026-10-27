@@ -6,6 +6,8 @@ export const handoffRun={id:'resume',ordinal:2,status:'running',userMessageId:ha
 export const handoffMessage={id:handoffMessageId,role:'user',createdBy:'agent',creationSource:'mcp',runId:'resume',text:handoffPrompt,streaming:false,createdAt:'2026-10-20T20:00:02.000Z'};
 export const handoffItem={id:'handoff-tool',type:'dynamic_tool',toolName:'t3-code.t3_worktree_handoff',runId:'source',status:'completed',startedAt:handoffAt,completedAt:'2026-10-20T20:00:02.500Z',
   input:{branch:'test/handoff',continuationPrompt:handoffPrompt},output:{branch:'test/handoff',worktreePath:'/synthetic/worktree',continuation:{status:'scheduled',delivery:'queued'}}};
+// A workspace detach can interrupt the tool before its success result is saved.
+export const interruptedHandoffItem={...handoffItem,status:'interrupted',completedAt:'2026-10-20T20:00:01.000Z',output:undefined};
 export function handoffProjection(overrides:any={}){
  return {snapshotSequence:10,projection:{thread:{id:'thread',projectId:'project',title:'Handoff test'},runs:[handoffSource,handoffRun],
   messages:[{id:'prompt',role:'user',runId:'source',text:'Synthetic task',streaming:false},handoffMessage,{id:'before',role:'assistant',runId:'source',text:'Before move',streaming:false}],

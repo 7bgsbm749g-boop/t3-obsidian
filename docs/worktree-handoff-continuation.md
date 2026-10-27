@@ -10,7 +10,14 @@ handoff tool item identifies the source run and exact continuation prompt.
 The continuation has a server-reserved message ID and agent/MCP attribution.
 The adapter joins these records only when the prompt SHA-256 matches, the
 message falls inside the tool's recorded execution interval, and there is one
-candidate. Only a successful scheduled handoff can add its replacement run.
+candidate. A successful scheduled handoff can add its replacement run.
+If workspace detachment interrupts the handoff tool before its result is saved,
+the same machine attribution, namespace and exact prompt digest can prove the
+continuation. This fallback also requires the interrupted source's recorded end,
+the immediately next run ordinal, its exact input message, and a run request
+inside the handoff/source execution interval. The message can finish projection
+after detachment. A later handoff attempt excludes an earlier attempt's match.
+Explicit failed/cancelled tools or failed dispatch results cannot use this fallback.
 An ordinary user message, another agent message, ambiguous matches, or an
 unrelated latest run does not establish ownership.
 
@@ -55,3 +62,17 @@ The existing synthetic preparation helper accepts `--refresh` to install the
 reviewed runtime in the prepared lab while checking that both settings files
 remain unchanged. Reload the clients after refresh; `--restore` retains its
 original plugin/settings restoration behavior.
+
+For an isolated real handoff check, build a new private lab with
+`node scripts/build-native-response-lab.mjs evidence/TASK --worktree`. Register
+a dedicated synthetic Git project beneath that lab and put its `projectId` in
+`TEST-CONFIG.json` at the lab root. Launch the returned profile through Cua.
+The isolated reader discards the handoff tool's success result while preserving
+the real server messages, runs and timestamps. Server records stay unchanged.
+The fixture imports the original response, follows its real worktree move, and
+records saved-file, editor, canonical-history and screenshot evidence. If the
+desktop capture is stale, launch this test profile with `--disable-gpu` and
+`--disable-renderer-backgrounding`. After
+visual inspection, create `finish-test.json` at the lab root. The fixture deletes
+its exact T3 thread and all test notes through the normal application APIs and
+records `CLEANUP.json`. This check uses no QLO2 fixtures or Obsidian Sync.

@@ -1,7 +1,7 @@
 {
   "dependencies": {
-    "tests/completion-glow.test.ts": [
-      "validation/completion-read-lab.ts"
+    "tests/inline-worktree.test.ts": [
+      "validation/worktree-continuation-lab.ts"
     ],
     "tests/response-emissions.test.ts": [
       "validation/thought-stream-lab.ts"
@@ -65,6 +65,9 @@
       "validation/connection-health-live.ts",
       "validation/remote-delivery-api.ts",
       "validation/remote-delivery-results.ts"
+    ],
+    "tests/completion-glow.test.ts": [
+      "validation/completion-read-lab.ts"
     ]
   }
 }
