@@ -18,6 +18,7 @@ import {recordDesktopAuth} from './desktop-auth-audit';
 import {t3Api,requestAborted,cancelledRequest,type T3RequestOptions} from './t3-api';
 import type {DirectReadOptions} from './direct';
 import {T3_PROTOCOL_HEADER,T3_PROTOCOL_VERSION} from './orchestration-v2';
+import {ensureNoProject} from './no-project';
 
 export function desktopDefaults():Connection {return {executable:'',host:'local',native:true,baseDir:join(homedir(),'.t3')};}
 export function cli(command:string[],args:string[],signal?:AbortSignal):Promise<string> {
@@ -73,7 +74,7 @@ export function canonical(value:any):string {
  return JSON.stringify(value).replace(/[\u007f-\uffff]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
 }
 export function parseOperation(args:string[],input:string):any {
- if(args.length===1 && ['projects','capabilities'].includes(args[0]))return {action:args[0]};
+ if(args.length===1 && ['projects','capabilities','no-project'].includes(args[0]))return {action:args[0]};
  if(args.length===2 && args[0]==='read'){uuid5(args[1],'validate');return {action:'read',threadId:args[1]};}
  if(args.length===3 && args[0]==='threads' && args[1]==='--project')return {action:'threads',project:args[2]};
  if(args.length!==9 || args[0]!=='start' || args[1]!=='--project' || args[3]!=='--title' || args[5]!=='--request-id' || !['--prompt-file','--payload-file'].includes(args[7]) || args[8]!=='-')throw new Error('Unsupported T3 operation.');
@@ -157,6 +158,7 @@ export async function runDesktop(connection:Connection,args:string[],input='',op
   if(!session.token || !session.sessionId)throw new Error('Unexpected T3 session response.');
   const transport=desktopApi(runtime.origin,session.token);
   const api=(path:string,payload?:any)=>transport(path.startsWith('/api/')?path:'/api/orchestration/'+path,payload,options);
+  if(req.action==='no-project')return await ensureNoProject(api);
   if(req.action==='start')return await start(api,req,connection.stateDir||join(base,'send-to-t3-code','desktop'),project=>readNewThreadDefaults(api,runtime.origin,project));
   if(req.action==='read')return (await api('threads/'+encodeURIComponent(req.threadId)+(options.control?'?controlOnly=true':'?turnLimit=10'))).thread;
   const shell=await api('shell');if(req.action==='projects')return {projects:shell.projects};

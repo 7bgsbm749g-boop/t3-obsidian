@@ -5,7 +5,7 @@ import {noteContext,mergeNoteContexts,type NoteContextRecord} from '../note-cont
 import {validateAgentCommand} from '../note-command';
 import type {ResponseRequest} from '../response-model';
 
-const record=():NoteContextRecord=>({messageId:randomUUID(),threadId:randomUUID(),projectId:randomUUID(),environmentId:'env',notePath:'Source.md',bindingIds:[randomUUID(),randomUUID()],waitForOtherThreads:true,createdAt:'2026-10-16T12:00:00Z'});
+const record=():NoteContextRecord=>({messageId:randomUUID(),threadId:randomUUID(),projectId:randomUUID(),environmentId:'env',notePath:'Source.md',bindingIds:[randomUUID(),randomUUID()],createdAt:'2026-10-16T12:00:00Z'});
 function bindings(send:NoteContextRecord):ResponseRequest[]{return send.bindingIds.map((id,i)=>({version:4,localOnly:true,nativeProjection:true,responseContainer:true,initialOwner:randomUUID(),id,vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:`Destination ${i}.md`,threadId:send.threadId,messageId:send.messageId,projectId:send.projectId,threadEnvironmentId:send.environmentId,initialHash:'a'.repeat(64),createdAt:send.createdAt}));}
 const vault={name:'QLO2',id:'vault',workspaceRoot:'/vault'};
 
@@ -13,7 +13,7 @@ test('exact context lookup returns all mirrored destinations without exposing pr
   const send=record(),other=record(),all=bindings(send),before=JSON.stringify(all);
   const result=noteContext({version:1,id:randomUUID(),kind:'note-context',notePath:'Source.md',threadId:send.threadId,messageId:send.messageId},[other,send],all,vault);
   assert.deepEqual(result.context.destinations.map(item=>item.notePath),['Destination 0.md','Destination 1.md']);
-  assert.equal(result.context.send.waitForOtherThreads,true);assert.equal(result.context.destinations[0].stagingSupported,true);
+  assert.equal(Object.hasOwn(result.context.send,'waitForOtherThreads'),false);assert.equal(result.context.destinations[0].stagingSupported,true);
   assert.equal(JSON.stringify(all),before);assert.doesNotMatch(JSON.stringify(result),/initialHash|initialOwner|initialInput|token|prompt/);
 });
 test('note-only lookup refuses multiple sends and identity filters must all agree',()=>{
@@ -33,4 +33,10 @@ test('context command validation rejects traversal, missing selectors and malfor
   const command={version:1,id:randomUUID(),kind:'note-context',notePath:'Task.md'};
   assert.deepEqual(validateAgentCommand(command),command);
   for(const change of [{notePath:'../outside.md'},{notePath:undefined},{messageId:'wrong'},{threadId:'bad\nidentity'}])assert.throws(()=>validateAgentCommand({...command,...change}),/context lookup/);
+});
+
+test('old send contexts remain readable while their retired wait setting is ignored',()=>{
+  const old={...record(),waitForOtherThreads:true},loaded=mergeNoteContexts([old]);
+  assert.equal(loaded.length,1);assert.equal(loaded[0].messageId,old.messageId);
+  assert.equal(Object.hasOwn(loaded[0],'waitForOtherThreads'),false);
 });

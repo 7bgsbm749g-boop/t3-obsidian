@@ -16,13 +16,13 @@ test('one saved destination replaces the previous link for a folder',()=>{
   assert.deepEqual(upsertFolderLink([link],next),[next]);
 });
 
-test('vault root links persist and the nearest folder owns a note on a path boundary',()=>{
+test('legacy vault root links persist without routing notes and the nearest folder owns a note on a path boundary',()=>{
   const root={...link,id:'root',folderPath:'/'};
   const nested={...link,id:'nested',folderPath:'Projects/App/Inner'};
   const links=loadFolderLinks({folderLinks:[root,link,nested]});
   assert.equal(links.length,3);
-  assert.equal(folderLinkForPath(links,'root.md')?.id,'root');
-  assert.equal(folderLinkForPath(links,'Projects/Application/note.md')?.id,'root');
+  assert.equal(folderLinkForPath(links,'root.md'),undefined);
+  assert.equal(folderLinkForPath(links,'Projects/Application/note.md'),undefined);
   assert.equal(folderLinkForPath(links,'Projects/App/note.md')?.id,'one');
   assert.equal(folderLinkForPath(links,'Projects/App/Inner/note.md')?.id,'nested');
   assert.equal(folderLinkForPath([link],'Unlinked/note.md'),undefined);
