@@ -16,7 +16,7 @@ export interface ResponseRequest {
   localMessageId?:string;
   localSteering?:InlineSteering[];
   localStage?:{originalHash:string;stagedHash:string};
-  localResume?:{bindingCheckpoint?:InlineBindingCheckpoint;turnIds?:string[];questionFollows?:InlineQuestionFollow[];incoming?:InlineSteering[];presentationTurns?:Record<string,InlineTurn>};
+  localResume?:{prose?:InlineMessage[];bindingCheckpoint?:InlineBindingCheckpoint;turnIds?:string[];questionFollows?:InlineQuestionFollow[];incoming?:InlineSteering[];presentationTurns?:Record<string,InlineTurn>};
   /** Exact source lifecycle retained when importing an already existing run. */
   importTurn?:InlineTurn;
   replyFolders?:ReplyFolders;

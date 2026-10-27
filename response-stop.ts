@@ -15,7 +15,8 @@ export function stoppedResponseBody(body:string):string {
   const protectedCode=markdownCodeRanges(body);
   const questions=[...body.matchAll(/^<!-- t3-question:start:([^\n]+) -->\n([\s\S]*?)\n<!-- t3-question:end:\1 -->$/gm)].filter(match=>parseQuestionToken(match[1])&&!protectedCode.some(([from,to])=>match.index!>=from&&match.index!<to));
   for(const match of questions.reverse()){
-    const text=match[2].split('\n').filter(line=>line!=='> **T3 · Question pending**'&&line!=='> **T3 · Answer needed**'&&line!==`> [Answer](t3-question:${match[1]})`).join('\n');
+    let text=match[2].split('\n').filter(line=>line!=='> **T3 · Question pending**'&&line!=='> **T3 · Answer needed**'&&line!==`> [Answer](t3-question:${match[1]})`).join('\n');
+    if(match[2].startsWith('<div class="send-to-t3-question" data-t3-question="'+match[1]+'">'))text=match[2].slice(match[2].indexOf('</div>')+6,-6);
     body=body.slice(0,match.index)+text+body.slice(match.index!+match[0].length);
   }
   // Collapse keeps its thread header when stopped, with a frozen duration.
@@ -32,8 +33,8 @@ export function stoppedResponseBody(body:string):string {
       const summary=/data-t3-tool-summary="([^"]+)"/.exec(line)?.[1]??`Used ${count} ${count===1?'tool':'tools'}`;
       line=line.replace('class="send-to-t3-response-activity"','class="send-to-t3-tool-group"').replace(' data-t3-live-tool="true"','').replace(/<summary>[\s\S]*?<\/summary>/,`<summary><span data-t3-tool-icon="hammer" aria-hidden="true"></span><span>${summary} · stopped</span></summary>`);
     }
-    if(!/^> \[!t3-progress\][+-] \*\*[^\n]+ · (?:Working|Reconnecting|Moving to worktree|Waiting for subagents|Error)\*\*/.test(line))return line;
-    return line.replace(/ · (?:Working|Reconnecting|Moving to worktree|Waiting for subagents|Error)\*\*/, ' · Interrupted**').replace(/ <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>/,'').replace(/<span class="send-to-t3-run-timer" data-t3-start="(\d+)"(?: data-t3-end="\d+")? aria-label="Elapsed run time">[^<]*<\/span>/,(_match,start)=>{
+    if(!/^> \[!t3-progress\][+-] \*\*[^\n]+ · (?:Working|Reconnecting|Moving to worktree|Waiting for subagents|Waiting for answer|Error)\*\*/.test(line))return line;
+    return line.replace(/ · (?:Working|Reconnecting|Moving to worktree|Waiting for subagents|Waiting for answer|Error)\*\*/, ' · Interrupted**').replace(/ <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>/,'').replace(/<span class="send-to-t3-run-timer" data-t3-start="(\d+)"(?: data-t3-end="\d+")? aria-label="Elapsed run time">[^<]*<\/span>/,(_match,start)=>{
       const end=Date.now(),timing={startedAt:new Date(Number(start)).toISOString(),finishedAt:new Date(end).toISOString()};
       return `<span class="send-to-t3-run-timer" data-t3-start="${start}" data-t3-end="${end}" aria-label="Elapsed run time">${elapsedRun(timing)}</span>`;
     });

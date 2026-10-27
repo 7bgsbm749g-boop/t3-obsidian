@@ -1,42 +1,52 @@
-# Late question answer streams
+# Questions stay with their original response
 
-Local final delivery replaces a response container with ordinary Markdown and
-stops its preview. A nonblocking question can remain pending after that save.
-Previously, submitting its answer sent the command to T3 but did not attach
-another editor response. The retired writer could keep the old container open;
-the local final-save path deliberately cannot reopen saved replies.
+A local completed turn no longer retires its response while an async question
+is unresolved. The final text stays visible and the shared response header
+shows **Waiting for answer** without a loading animation. Questions use compact
+rows in the response instead of an independent quoted panel. Canonical answer
+resolution hides the whole row in Live Preview and Reading view; a compact
+submitted-answer disclosure remains in chronological response history. Closing
+the form leaves a question pending. Dismiss resolves an async question without
+sending an answer.
 
-Message-mode submissions now retain the question, answer command and source
-note path before dispatch. An acknowledgement or canonical resolution makes
-this intent eligible for stream recovery. The handler reads the exact
-`async-answer:REQUEST_ID` message. Canonical run ownership takes precedence;
-source completion timestamps distinguish an unbound late answer from steering
-inside the original run. A missing answer or uncertain source lifecycle waits
-for projection and cannot adopt the thread's unrelated latest run.
+Turn completion and response retirement are separate decisions. A verified
+terminal update retains a device-local recovery copy, including its exact turn
+bindings, pending questions, received prose and input boundaries. The original
+note anchor and synced routing record stay intact while questions wait. A
+closed note retains its question watch. A new device can read T3 from the same
+anchor; a reload can restore the local checkpoint without certifying a final
+note write. A cached final from an older plugin that still contains question
+controls also remains attached.
 
-A late answer gets a separate local response container, with a deterministic
-identity for its environment, thread, question and note. It inherits the
-original response's display preferences. Its initial input is the submitted
-answer disclosure, including the original questions. The new final save
-replaces only this new container. The original reply and ordinary note edits
-remain in place. An answer inside the source run uses the existing stream;
-native blocking answers and dismissals do not create continuation intents.
+The existing exact async-answer follower now applies to local responses. It
+retains the original response identity, earlier final text and submitted input
+while following the answer's canonical turn. An accepted resolution that arrives
+before its answer message keeps waiting for the exact binding. Another latest
+turn is never sufficient. Final-save guards reject an update superseded by a
+question or answer at the write boundary. Only a verified terminal update with
+no pending questions can replace the original anchor with completed Markdown.
 
-The accepted intent survives a lost acknowledgement, missing projection,
-failed registration and reload. Recovery only attaches a reader; it never
-dispatches another answer. Existing bindings prevent duplicate or resurrected
-completed streams. An exact generated question can locate a renamed origin.
-Editor widgets capture their own note path, including in an inactive pane;
-Reading view uses its renderer's source path. Recovery data stays in the
-existing device-local question store, while response routing uses the existing
-synced binding store.
+Late-answer recovery persists the exact answer intent before dispatch. It
+registers the existing original response instead of appending a second stream.
+The intent remains until that original reader observes the exact answer turn,
+including after lost acknowledgements or a restart between registration and
+first projection. Native blocking answers and dismissals do not create these
+intents. Existing continuations created by older releases remain supported.
 
-Local source previews do not follow a late answer into another run while the
-old final save waits for Sync. The legacy writer retains its existing follow
-behavior. Regression checks cover local final saves, canonical ownership,
-unrelated runs, duplicate attempts, missing projection, reload, lost
-acknowledgements, registration failure, origin rename, and native/dismiss paths.
+For an older response already saved as Markdown, canonical source-turn ownership
+must identify one original binding. Its stored response body must match exactly
+one complete, unfenced region in the destination. A checked note update replaces
+only that region with the original anchor and restores its source prose. Edited,
+copied or missing text is preserved; a notice explains the failed reattachment.
+Generated question cleanup waits for the recovery intent so it cannot remove
+that exact saved-text evidence prematurely. Resolved cleanup removes only valid
+generated sections outside live responses and preserves literal code examples.
 
-A release requires a real QLO2 late-answer delivery and immutable smoke
-evidence in addition to the build and complete automated suite. Desktop
-verification does not establish native mobile behavior.
+The native validation fixture is `validation/unified-questions-lab.ts`, built
+with `node scripts/build-native-response-lab.mjs EVIDENCE_DIRECTORY --questions`.
+Supply `TEST-CONFIG.json` with the current source thread ID. It runs one bounded
+real T3 async question, waits for source completion, restarts the local response
+manager, and waits for a native Answer/Submit action. It records rendered and
+saved results and deletes its exact temporary thread and notes. The fixture
+uses an isolated unsynced vault. It does not establish real Sync races, desktop
+core Sync engine behavior or native iPhone/Android behavior.

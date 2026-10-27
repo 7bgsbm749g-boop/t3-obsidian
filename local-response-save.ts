@@ -1,8 +1,9 @@
-export type LocalSavePendingReason='verification'|'sync'|'note-closed'|'note-unavailable'|'note-changed'|'stopped'|'save-error'|'saving'|'plugin-unavailable';
+export type LocalSavePendingReason='answer'|'verification'|'sync'|'note-closed'|'note-unavailable'|'note-changed'|'stopped'|'save-error'|'saving'|'plugin-unavailable';
 export type LocalResponseSaveResult={saved:true}|{saved:false;reason:LocalSavePendingReason};
 
 export function localSavePendingMessage(reason:LocalSavePendingReason):string {
   switch(reason){
+    case 'answer':return 'Waiting for the pending question to be answered or dismissed.';
     case 'verification':return 'Waiting to verify the final response with T3.';
     case 'sync':return 'Waiting for Obsidian Sync to finish.';
     case 'note-closed':return 'Open the destination note to finish saving.';

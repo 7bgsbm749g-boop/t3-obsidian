@@ -46,12 +46,13 @@ export function parseQuestionToken(token:string):QuestionTarget|undefined {
 }
 export const questionUrl=(target:QuestionTarget)=>`t3-question:${questionToken(target)}`;
 export function questionTargets(document:string):QuestionTarget[]{
-  return [...document.matchAll(/^> \[Answer\]\(t3-question:([^\s)]+)\)$/gm)].flatMap(match=>{const target=parseQuestionToken(match[1]);return target?[target]:[];});
+  return [...document.matchAll(/^> \[Answer\]\(t3-question:([^\s)]+)\)$|<a href="t3-question:([^"\s]+)">Answer<\/a>/gm)].flatMap(match=>{const target=parseQuestionToken(match[1]??match[2]);return target?[target]:[];});
 }
-const markdownText=(value:string)=>value.replace(/[\\`*_{}\[\]()#+.!>|<>]/g,'\\$&').split(/\r?\n/).join('\n> ');
+const html=(value:string)=>value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\r\n?|\n/g,'&#10;');
 export function renderQuestion(request:PendingQuestion,target:QuestionTarget):string {
   const token=questionToken(target);
-  return [`<!-- t3-question:start:${token} -->`,request.responseMode==='message'?'> **T3 · Question pending**':'> **T3 · Answer needed**',...request.questions.flatMap(q=>['>',`> **${markdownText(q.header)}**`, `> ${markdownText(q.question)}`,...(q.options.length?['>']:[]),...q.options.map(o=>`> - ${markdownText(o.label)}${o.description?`: ${markdownText(o.description)}`:''}`)]),'>',`> [Answer](${questionUrl(target)})`,`<!-- t3-question:end:${token} -->`].join('\n');
+  const body=request.questions.map(q=>`<p class="send-to-t3-question-prompt">${html(q.question)}</p>${q.options.length?`<ul>${q.options.map(o=>`<li>${html(o.label)}${o.description?`: ${html(o.description)}`:''}</li>`).join('')}</ul>`:''}`).join('');
+  return [`<!-- t3-question:start:${token} -->`,`<div class="send-to-t3-question" data-t3-question="${token}"><div class="send-to-t3-question-heading"><span data-t3-tool-icon="message-circle" aria-hidden="true"></span><strong>${request.responseMode==='message'?'Question pending':'Answer needed'}</strong><a href="${questionUrl(target)}">Answer</a></div>${body}</div>`,`<!-- t3-question:end:${token} -->`].join('\n');
 }
 /** Exact generated sections only; examples inside code remain ordinary text. */
 export function questionSections(document:string):{from:number;to:number;target:QuestionTarget}[]{
@@ -80,10 +81,7 @@ export function removeDismissedQuestions(document:string,dismissed:(target:Quest
 }
 /** Only remove a resolved question outside a live response. Never invalidate a writer hash. */
 export function clearResolvedQuestion(document:string,target:QuestionTarget):string {
-  const token=questionToken(target),start=`<!-- t3-question:start:${token} -->`,end=`<!-- t3-question:end:${token} -->`;
-  const from=document.indexOf(start),endAt=document.indexOf(end,from+start.length);
-  if(from<0||endAt<0||document.indexOf(start,from+start.length)>=0||document.indexOf(end,endAt+end.length)>=0)return document;
-  if(insideResponse(document,from))return document;
-  const section=document.slice(from+start.length,endAt).replace(/^> \[Answer\]\(t3-question:[^\s)]+\)\n?/gm,'').replace(/^> \*\*T3 · (?:Question pending|Answer needed)\*\*$/m,'> **T3 · Question answered**');
-  return document.slice(0,from)+section.trim()+document.slice(endAt+end.length);
+  const section=questionSections(document).find(section=>questionKey(section.target)===questionKey(target));
+  if(!section||insideResponse(document,section.from))return document;
+  return document.slice(0,section.from)+document.slice(section.to);
 }

@@ -233,3 +233,40 @@ test('a refused steering preparation removes only its pending input and keeps th
   h.emit('Original response still completes.');await drain();assert.match(h.read(),/Original response still completes/);
  }finally{h.manager.dispose();}
 });
+
+test('a verified final with a pending question retains one attachment, recovery copy and background watch',async()=>{
+  const h=fixture();let retained:DirectInlineUpdate|undefined;h.io.retainLocalFinal=async(update:DirectInlineUpdate)=>{retained=update;};await h.manager.register(h.binding);
+  const pending:DirectInlineUpdate={request:h.binding,messageId:h.binding.messageId,sequence:5,body:'Final text and question',turnId:'source',phase:'complete',completionVerified:true,questionsPending:true,resume:{turnIds:['source'],prose:[],questionFollows:[{requestId:'q',turnId:'source',responseMode:'message',questions:[]}]}};
+  h.callbacks.get(h.binding.id)!(pending);await drain();
+  assert.equal(h.writes(),0);assert.equal(retained?.questionsPending,true);assert.equal(h.manager.responses()[0].input,true);assert.equal(h.manager.responses()[0].complete,false);assert.equal(h.manager.responses()[0].active,false);
+  assert.deepEqual(await h.manager.waitForSave(h.binding.id,0),{saved:false,reason:'answer'});
+  let ticks=0;const runtime=(h.manager as any).jobs.get(h.binding.id);runtime.preview.tick=()=>ticks++;h.open(false);h.manager.tick();assert.equal(ticks,1);
+  h.open(true);h.callbacks.get(h.binding.id)!({...pending,sequence:6,body:'Original final\nAnswer\nFollow-up final',turnId:'follow-up',questionsPending:false});await drain();
+  assert.equal(h.writes(),1);assert.equal(h.finished.length,1);assert.match(h.read(),/Original final\nAnswer\nFollow-up final/);h.manager.dispose();
+});
+
+test('pending final recovery after reload never detaches the original response before the question resolves',async()=>{
+  const first=fixture();await first.manager.register(first.binding);let cached:any;first.io.retainLocalFinal=async(update:DirectInlineUpdate)=>{cached=retainedLocalFinal(update);};
+  first.callbacks.get(first.binding.id)!({request:first.binding,messageId:first.binding.messageId,sequence:5,body:'Visible final with pending question',turnId:'source',phase:'complete',completionVerified:true,questionsPending:true,resume:{turnIds:['source'],prose:[],questionFollows:[{requestId:'q',turnId:'source',responseMode:'message'}]}});await drain();first.manager.dispose();
+  const next=fixture(first.binding,first.read(),first.records());next.io.loadLocalFinal=async(binding:ResponseRequest)=>restoredLocalFinal(cached,binding);next.manager.resume();await drain();
+  assert.equal(next.writes(),0);assert.equal(next.manager.status(first.binding.id)?.pendingSaveReason,'answer');assert.equal(next.manager.record(first.binding.id)?.state?.questionFollows?.[0].requestId,'q');next.manager.dispose();
+});
+
+test('a question arriving at the atomic final-write boundary invalidates that final save',async()=>{
+  const h=fixture();await h.manager.register(h.binding);const compare=h.notes.compareAndSet;let injected=false;
+  h.notes.compareAndSet=async(...args)=>{if(!injected){injected=true;h.callbacks.get(h.binding.id)!({request:h.binding,messageId:h.binding.messageId,sequence:6,body:'Final with question',turnId:'exact-turn',phase:'complete',completionVerified:true,questionsPending:true});}return compare(...args);};
+  h.emit();await drain();assert.equal(h.writes(),0);assert.equal(h.manager.status(h.binding.id)?.pendingSaveReason,'answer');h.manager.dispose();
+});
+
+test('an older cached final containing unresolved question controls is retained instead of finalized',()=>{
+ const binding=request(),target={environmentId:'env',threadId:binding.threadId,requestId:'old-question'};
+ const body='Saved final\n> [Answer](t3-question:'+encodeURIComponent(JSON.stringify(target))+')';
+ const restored=restoredLocalFinal(retainedLocalFinal({request:binding,messageId:binding.messageId,sequence:1,body,turnId:'old-turn',phase:'complete',completionVerified:true}),binding);
+ assert.equal(restored?.questionsPending,true);
+});
+
+test('live completion cannot write before the local question checkpoint has loaded',async()=>{
+ const h=fixture();let release!:(value:DirectInlineUpdate|undefined)=>void;h.io.loadLocalFinal=()=>new Promise(resolve=>{release=resolve;});
+ await h.manager.register(h.binding);h.emit();await drain();assert.equal(h.writes(),0);
+ release(undefined);await drain();assert.equal(h.writes(),1);h.manager.dispose();
+});

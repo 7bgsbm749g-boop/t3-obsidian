@@ -18,7 +18,7 @@ export interface LocalFinalNoteIO {
   read(path:string):Promise<string|undefined>;
   compareAndSet(path:string,before:string,after:string,guard?:()=>boolean):Promise<boolean>;
 }
-type Runtime={request:ResponseRequest;record:ResponseRecord;preview:DirectInlinePreview;update?:DirectInlineUpdate;retained?:Promise<void>;work?:Promise<void>;stopped?:boolean;stopAcknowledged?:boolean;done?:boolean;saved?:boolean;pendingSave?:LocalSavePendingReason;retryAt:number};
+type Runtime={request:ResponseRequest;record:ResponseRecord;preview:DirectInlinePreview;update?:DirectInlineUpdate;restoring?:boolean;retained?:Promise<void>;work?:Promise<void>;stopped?:boolean;stopAcknowledged?:boolean;done?:boolean;saved?:boolean;pendingSave?:LocalSavePendingReason;retryAt:number};
 /** A loaded anchor and its synced settings record reconnect independently of
  * any remote writer. Identical device final writes converge through Sync. */
 export class LocalResponseManager {
@@ -44,12 +44,12 @@ export class LocalResponseManager {
       return old;
     }
     const record:ResponseRecord={request,epoch:1,revision:1,owner:this.actor,expiresAt:0,coordinated:true,state:{...request.localResume,requestHash:'',accepted:true,notePath:request.notePath,messageId:request.localMessageId??request.messageId,steering:request.localSteering,status:'waiting',hashes:[],updatedAt:request.createdAt}};
-    const runtime={request,record,retryAt:0} as Runtime;
+    const runtime={request,record,retryAt:0,restoring:true} as Runtime;
     runtime.preview=this.makePreview(record,()=>this.io.access(request.threadEnvironmentId),update=>{
       if(this.closed||runtime.done||runtime.stopped)return;
-      const same=runtime.update?.completionVerified&&update.completionVerified&&runtime.update.turnId===update.turnId&&runtime.update.messageId===update.messageId&&runtime.update.body===update.body&&runtime.update.phase===update.phase;
+      const same=runtime.update?.completionVerified&&update.completionVerified&&runtime.update.turnId===update.turnId&&runtime.update.messageId===update.messageId&&runtime.update.body===update.body&&runtime.update.phase===update.phase&&runtime.update.questionsPending===update.questionsPending;
       if(!same)runtime.update=update;this.io.receiveDirect?.(update);
-      runtime.record.state={...runtime.record.state!,body:update.body,status:update.phase==='error'?'error':update.phase??'running',turnId:update.turnId,bindingCheckpoint:update.checkpoint};
+      runtime.record.state={...runtime.record.state!,...update.resume,body:update.body,status:update.phase==='error'?'error':update.phase??'running',turnId:update.turnId,bindingCheckpoint:update.checkpoint};
       if(update.questionActivities)this.io.localQuestions?.(update);
       if(update.completionVerified&&['complete','interrupted'].includes(update.phase??'')){
         if(!same)runtime.retained=this.io.retainLocalFinal?.(update).catch(error=>logFailure('response.local.final-cache',error,{bindingId:request.id}));
@@ -58,7 +58,11 @@ export class LocalResponseManager {
     },issue=>{if(!this.closed&&!runtime.done&&!runtime.stopped)this.io.localConnection?.(request.id,issue);});
     this.jobs.set(request.id,runtime);
     void Promise.resolve(this.io.receiveCoordinated?.(record)).catch(error=>logFailure('response.local.adopt',error,{bindingId:request.id}));
-    void this.io.loadLocalFinal?.(request).then(update=>{if(!update||this.closed||runtime.done||runtime.stopped||runtime.update?.completionVerified)return;runtime.update={...update,request:runtime.record.request};this.io.receiveDirect?.(runtime.update);this.finish(runtime);}).catch(error=>logFailure('response.local.final-restore',error,{bindingId:request.id}));
+    void Promise.resolve(this.io.loadLocalFinal?.(request)).then(update=>{
+      if(!update||this.closed||runtime.done||runtime.stopped)return;
+      if(!runtime.update){runtime.update={...update,request:runtime.record.request};runtime.record.state={...runtime.record.state!,...update.resume,body:update.body,bindingCheckpoint:update.checkpoint};runtime.preview.update(runtime.record);this.io.receiveDirect?.(runtime.update);}
+      runtime.preview.restore?.(update.resume);
+    }).catch(error=>logFailure('response.local.final-restore',error,{bindingId:request.id})).finally(()=>{runtime.restoring=false;this.finish(runtime);});
     return runtime;
   }
   async register(request:ResponseRequest){
@@ -106,7 +110,7 @@ export class LocalResponseManager {
       if(!loaded){
         // Imported runs may complete through checked file IO after their tab
         // closes. Ordinary replies keep their existing open-editor boundary.
-        if(!runtime.done&&!runtime.stopped&&!runtime.update?.completionVerified)runtime.preview.tick(true);
+        if(!runtime.done&&!runtime.stopped&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.tick(true);
         else runtime.preview.suspend();
         if(!runtime.done&&!this.migrations.has(runtime.request.id)&&documents.some(note=>note.path===runtime.request.notePath)){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,runtime.request.notePath);}
         if(!runtime.done&&this.canFinishClosed(runtime)&&runtime.update?.completionVerified)this.finish(runtime);
@@ -123,6 +127,7 @@ export class LocalResponseManager {
     if(runtime.saved)return {saved:true};
     if(runtime.done)return {saved:false,reason:'note-changed'};
     if(runtime.stopped)return {saved:false,reason:'stopped'};
+    if(runtime.update?.questionsPending)return {saved:false,reason:'answer'};
     if(!runtime.update?.completionVerified)return {saved:false,reason:'verification'};
     if(this.io.syncReady?.(runtime.request.notePath)===false)return {saved:false,reason:'sync'};
     if(!this.canFinishClosed(runtime)&&!this.io.isOpen(runtime.request.notePath))return {saved:false,reason:'note-closed'};
@@ -140,8 +145,8 @@ export class LocalResponseManager {
     }
   }
   private finish(runtime:Runtime){
-    if(this.closed||runtime.done||runtime.stopped||runtime.work||this.now()<runtime.retryAt||!this.canFinishClosed(runtime)&&!this.io.isOpen(runtime.request.notePath)||this.io.syncReady?.(runtime.request.notePath)===false)return;
-    const update=runtime.update;if(!update?.completionVerified)return;
+    if(this.closed||runtime.done||runtime.stopped||runtime.restoring||runtime.work||this.now()<runtime.retryAt||!this.canFinishClosed(runtime)&&!this.io.isOpen(runtime.request.notePath)||this.io.syncReady?.(runtime.request.notePath)===false)return;
+    const update=runtime.update;if(!update?.completionVerified||update.questionsPending)return;
     runtime.pendingSave='saving';
     runtime.work=(async()=>{
       await runtime.retained;
@@ -168,7 +173,7 @@ export class LocalResponseManager {
   status(id:string):ResponseStopReceipt|undefined{
     const runtime=this.jobs.get(id);if(!runtime)return;
     const save=this.saveResult(runtime);
-    return {version:1,bindingId:id,commandId:'',epoch:1,revision:1,hostRecorded:!!runtime.stopAcknowledged,runTerminal:!!runtime.update?.completionVerified&&['complete','interrupted'].includes(runtime.update.phase??''),finalSaved:!!runtime.done,finalWriterPending:!!runtime.update?.completionVerified&&!runtime.done,...(!save.saved&&!runtime.done?{pendingSaveReason:save.reason}:{})};
+    return {version:1,bindingId:id,commandId:'',epoch:1,revision:1,hostRecorded:!!runtime.stopAcknowledged,runTerminal:!!runtime.update?.completionVerified&&['complete','interrupted'].includes(runtime.update.phase??''),finalSaved:!!runtime.done,finalWriterPending:!!runtime.update?.completionVerified&&!runtime.update.questionsPending&&!runtime.done,...(!save.saved&&!runtime.done?{pendingSaveReason:save.reason}:{})};
   }
   stopLocally(id:string){const runtime=this.jobs.get(id);if(runtime){runtime.stopped=true;runtime.preview.dispose();}}
   async stop(id:string,body?:string){
@@ -210,6 +215,6 @@ export class LocalResponseManager {
   }
   renamed(before:string,after:string){for(const runtime of this.jobs.values())if(runtime.request.notePath===before||runtime.request.notePath.startsWith(before+'/')){runtime.request={...runtime.request,notePath:after+runtime.request.notePath.slice(before.length)};runtime.retryAt=0;}}
   deleted(path:string){for(const runtime of this.jobs.values())if(runtime.request.notePath===path||runtime.request.notePath.startsWith(path+'/'))this.stopLocally(runtime.request.id);}
-  responses(){return [...this.jobs.values()].filter(runtime=>!runtime.stopped&&(!runtime.done||runtime.update?.completionVerified&&runtime.update.phase==='complete')).map(runtime=>({id:runtime.request.id,notePath:runtime.request.notePath,epoch:1,revision:1,completionId:JSON.stringify([runtime.update?.messageId??runtime.request.localMessageId??runtime.request.messageId,runtime.update?.turnId??'']),completion:completionSource(runtime.request,runtime.update?.turnId?runtime.update.checkpoint?.turns?.[runtime.update.turnId]??(runtime.request.importTurn?.turnId===runtime.update.turnId?runtime.request.importTurn:undefined):undefined),active:!runtime.update?.completionVerified&&runtime.update?.phase!=='error',input:!runtime.update?.completionVerified&&!!runtime.update?.questionActivities?.length,complete:!!runtime.update?.completionVerified&&runtime.update.phase==='complete'}));}
+  responses(){return [...this.jobs.values()].filter(runtime=>!runtime.stopped&&(!runtime.done||runtime.update?.completionVerified&&runtime.update.phase==='complete')).map(runtime=>({id:runtime.request.id,notePath:runtime.request.notePath,epoch:1,revision:1,completionId:JSON.stringify([runtime.update?.messageId??runtime.request.localMessageId??runtime.request.messageId,runtime.update?.turnId??'']),completion:completionSource(runtime.request,runtime.update?.turnId?runtime.update.checkpoint?.turns?.[runtime.update.turnId]??(runtime.request.importTurn?.turnId===runtime.update.turnId?runtime.request.importTurn:undefined):undefined),active:!runtime.update?.completionVerified&&runtime.update?.phase!=='error',input:!!runtime.update?.questionsPending||!runtime.update?.completionVerified&&!!runtime.update?.questionActivities?.length,complete:!!runtime.update?.completionVerified&&!runtime.update.questionsPending&&runtime.update.phase==='complete'}));}
   dispose(){this.closed=true;for(const runtime of this.jobs.values())runtime.preview.dispose();this.jobs.clear();}
 }

@@ -71,6 +71,9 @@
     ],
     "tests/completion-glow.test.ts": [
       "validation/completion-read-lab.ts"
+    ],
+    "tests/question-continuation.test.ts": [
+      "validation/unified-questions-lab.ts"
     ]
   }
 }

@@ -134,7 +134,8 @@ test('dismissed section cleanup preserves answers, other questions, code example
   assert.equal(removeDismissedQuestions(live,dismissed),live);assert.equal(questionSections(live).length,1);
   assert.equal(removeDismissedQuestions(live.replaceAll('t3-inline:','t3-response:'),dismissed),live.replaceAll('t3-inline:','t3-response:'));
   assert.equal(removeDismissedQuestions(section.replace('t3-question:end:','broken:end:'),dismissed),section.replace('t3-question:end:','broken:end:'));
-  assert.match(clearResolvedQuestion(section,target),/Question answered/);
+  assert.equal(clearResolvedQuestion(section,target),'');
+  assert.equal(clearResolvedQuestion(example,target),example);
 });
 
 test('one submission uses two control reads and shows feedback before access begins',async()=>{

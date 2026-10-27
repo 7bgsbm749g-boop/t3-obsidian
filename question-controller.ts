@@ -26,7 +26,9 @@ export class QuestionController {
   private draftTimer?:ReturnType<typeof setTimeout>;
   private saved='';
   private dismissedKeys=new Set<string>();
+  private hiddenKeys=new Set<string>();
   dismissalRevision=0;
+  visibilityRevision=0;
   private sends=new Map<string,Promise<void>>();
   private dismissalRetries=new Map<string,number>();
   private stopped=false;
@@ -38,7 +40,7 @@ export class QuestionController {
   dispose(){this.stopped=true;for(const controller of this.readControllers)controller.abort(Error('Question controls closed.'));try{this.flushDrafts();}catch(error){logFailure('question.draft.flush',error);}finally{this.listeners.clear();this.tracked.clear();}}
   subscribe(listener:()=>void){this.listeners.add(listener);return ()=>{this.listeners.delete(listener);};}
   private updateDismissals(){const keys=new Set([...this.records.values()].filter(record=>this.isDismissed(record.target)).map(record=>questionKey(record.target)));if(keys.size!==this.dismissedKeys.size||[...keys].some(key=>!this.dismissedKeys.has(key))){this.dismissedKeys=keys;this.dismissalRevision++;}}
-  private notify(){this.updateDismissals();if(!this.stopped)for(const listener of this.listeners)listener();}
+  private notify(){this.updateDismissals();const keys=new Set([...this.records.values()].filter(record=>this.isHidden(record.target)).map(record=>questionKey(record.target)));if(keys.size!==this.hiddenKeys.size||[...keys].some(key=>!this.hiddenKeys.has(key))){this.hiddenKeys=keys;this.visibilityRevision++;}if(!this.stopped)for(const listener of this.listeners)listener();}
   private persist(){if(this.draftTimer)clearTimeout(this.draftTimer);this.draftTimer=undefined;const records=[...this.records.values()],bytes=JSON.stringify(records);if(bytes===this.saved)return;this.store.save(records);this.saved=bytes;}
   flushDrafts(){this.persist();}
   /** Rendering and open forms retain a target even when disk has only anchors. */
@@ -47,6 +49,8 @@ export class QuestionController {
   record(target:QuestionTarget){const key=questionKey(target);let record=this.records.get(key);if(!record){record={target,drafts:Object.create(null)};this.records.set(key,record);}return record;}
   view(target:QuestionTarget):QuestionView{return this.views.get(questionKey(target))??(this.records.get(questionKey(target))?.resolved?{status:'resolved'}:{status:'loading'});}
   isDismissed(target:QuestionTarget){const record=this.records.get(questionKey(target));return !!(record?.dismissed||record?.command?.type==='thread.user-input.dismiss');}
+  isHidden(target:QuestionTarget){return this.isDismissed(target)||this.view(target).status==='resolved';}
+  hasHiddenQuestions(){return [...this.records.values()].some(record=>this.isHidden(record.target));}
   hasDismissals(){return [...this.records.values()].some(record=>this.isDismissed(record.target));}
   pendingDismissals(){return [...this.records.values()].filter(record=>this.isDismissed(record.target)&&!record.resolved).map(record=>record.target);}
   /** Dismiss is an explicit durable intent, safe to finish without another click. */
