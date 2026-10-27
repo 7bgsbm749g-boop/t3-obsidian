@@ -4,6 +4,7 @@ import {pair, pairingInput,sendDirect,readDirect,commandId,jsonHttp} from '../di
 import type {Request} from '../bridge';
 import {modelConfig,settingsSocket} from './rpc-fixture';
 import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../environment-permissions';
+import {noteThreadTitle} from '../thread-title';
 const eid='environment';const url='https://t3.example';const now=Date.now();
 const session={url,environmentId:eid,token:'device-token',expiresAt:now+600000};
 const descriptor={environmentId:eid,label:'Computer',orchestrationProtocolVersion:2};
@@ -61,6 +62,45 @@ test('new direct sends never dispatch or copy history when settings cannot be re
  };
  await assert.rejects(sendDirect(request,session,async()=>{saved=true;},fetcher as any),/503/);
  assert.equal(dispatched,false);assert.equal(saved,false);assert.equal(request.directPlan,undefined);
+});
+
+test('automatic titles launch with the exact first message and retry the saved launch after a lost reply',async(t)=>{
+ const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
+ const config=modelConfig(),launches:any[]=[],saved:any[]=[];let reads=0,lose=true;
+ globalThis.WebSocket=settingsSocket(()=>config,()=>{reads++;},async(tag,payload)=>{
+  assert.equal(tag,'orchestration.launchThread','A low-level create/dispatch does not generate a V2 title');
+  assert.ok(saved.length);launches.push(payload);
+  if(lose){lose=false;throw Error('Lost launch acknowledgement');}
+  return {threadId:payload.threadId};
+ }) as any;
+ const fetcher:any=async(u:string)=>response(u.endsWith('/environment')?descriptor:u.endsWith('/shell')?{projects:[{id:'p'}]}:{ticket:'test'});
+ const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:noteThreadTitle('Named note.md','always'),prompt:'Plan a vegetable garden'};
+ const save=async()=>{saved.push(structuredClone(request));};
+ await assert.rejects(sendDirect(request,session,save,fetcher),/Cannot reach/);
+ assert.equal(saved[0].directPlan.launch,true);assert.equal(saved[0].directPlan.phase,'prepared');
+ assert.equal(launches[0].title,'New thread');assert.equal(launches[0].generateTitle,true);assert.equal(launches[0].threadId,commandId(request.id,'thread'));
+ assert.deepEqual(launches[0].initialMessage,{messageId:commandId(request.id,'message'),text:request.prompt,attachments:[]});
+ assert.deepEqual(launches[0].workspaceStrategy,{type:'root'});assert.deepEqual(launches[0].modelSelection,config.settings.defaultModelSelection);
+ assert.equal(launches[0].runtimeMode,'full-access');assert.equal(launches[0].interactionMode,'default');
+ config.settings.defaultModelSelection.model='changed';
+ const restored=structuredClone(saved[0]);await sendDirect(restored,session,save,fetcher);
+ assert.deepEqual(launches[1],launches[0]);assert.equal(reads,1);assert.equal(restored.directPlan.phase,'started');
+ await sendDirect(restored,session,save,fetcher);assert.equal(launches.length,2);
+ for(const note of ['Untitled.md','Folder/Untitled 12.md',undefined]){
+  const next:Request={...request,id:crypto.randomUUID(),title:noteThreadTitle(note,'untitled-only'),directPlan:undefined};
+  await sendDirect(next,session,save,fetcher);assert.equal(next.directPlan?.launch,true);
+ }
+});
+
+test('saved pending creates retain their original route even when the title is automatic',async(t)=>{
+ const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});const commands:any[]=[];
+ globalThis.WebSocket=settingsSocket(modelConfig,undefined,async(tag,payload)=>{assert.equal(tag,'orchestration.dispatchCommand');commands.push(payload);return {};}) as any;
+ const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:'New thread',prompt:'Original pending send'};
+ const fetcher:any=async(u:string)=>response(u.endsWith('/environment')?descriptor:u.endsWith('/shell')?{projects:[{id:'p'}]}:{ticket:'test'});
+ await assert.rejects(sendDirect(request,session,async()=>{throw Error('Save unavailable');},fetcher),/Save unavailable/);
+ delete request.directPlan!.launch;
+ await sendDirect(request,session,async()=>{},fetcher);
+ assert.deepEqual(commands.map(c=>c.type),['thread.create','message.dispatch']);
 });
 
 test('direct credentials are bound to origin/environment and expired sessions require re-pairing',async()=>{

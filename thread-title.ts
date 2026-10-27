@@ -5,7 +5,7 @@ export function threadTitleGeneration(value:unknown):ThreadTitleGeneration {
   return value==='always'?'always':'untitled-only';
 }
 
-/** T3 requires a title; its placeholder enables first-turn title generation. */
+/** T3's launch service generates a title from its first message for this placeholder. */
 export function noteThreadTitle(notePath:string|undefined,mode:ThreadTitleGeneration):string {
   const basename=notePath?.split('/').at(-1)?.replace(/\.md$/i,'').trim();
   return mode==='always'||!basename||/^untitled(?: \d+)?$/i.test(basename)

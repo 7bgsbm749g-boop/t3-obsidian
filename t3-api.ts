@@ -24,6 +24,15 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
   const outputSizes=new Map<string,number>();let outputCharacters=0;
   const senderTitles=new Map<string,string|undefined>();let senderRefresh=-Infinity;
   const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+  async function persistAttachments(rpc:Awaited<ReturnType<typeof connectT3Rpc>>,threadId:string,message:any){
+    const uploads=message.attachments.filter((a:any)=>typeof a.dataUrl==='string');
+    if(!uploads.length)return message;
+    const result=await rpc.call('assets.persistChatAttachments',{threadId,messageId:message.messageId,attachments:uploads});
+    if(!Array.isArray(result?.attachments)||result.attachments.length!==uploads.length)throw Error('T3 did not confirm the image upload. Retry the saved request.');
+    const ids=new Map(uploads.map((a:any,i:number)=>[a.id,result.attachments[i].id]));let index=0;
+    return {...message,attachments:message.attachments.map((a:any)=>typeof a.dataUrl==='string'?result.attachments[index++]:a),
+      ...(message.context?{context:{...message.context,records:message.context.records.map((r:any)=>({...r,...(ids.has(r.attachmentId)?{attachmentId:ids.get(r.attachmentId)}:{})}))}}:{})};
+  }
   async function senderMessages(snapshot:any){
     const messages=snapshot.projection.messages;
     const ids=[...new Set<string>(messages.filter((m:any)=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')).map((m:any)=>m.senderThreadId))].slice(-256);
@@ -83,6 +92,11 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       const rpc=await connectT3Rpc(raw,origin,makeSocket);
       try{return (await rpc.call('orchestration.getTurnItem',payload))?.item;}finally{rpc.close();}
     }
+    // Internal route for a new auto-titled thread and its immutable first send.
+    if(path==='/api/orchestration/launch'){
+      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      try{return await rpc.call('orchestration.launchThread',{...payload,initialMessage:await persistAttachments(rpc,payload.threadId,payload.initialMessage)});}finally{rpc.close();}
+    }
     if(path==='/api/orchestration/dispatch'){
       const {__legacyV1,...saved}=payload;
       let command=v2Command(saved);
@@ -116,15 +130,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       }
       const rpc=await connectT3Rpc(raw,origin,makeSocket);
       try{
-        if(command.type==='message.dispatch'&&command.attachments.some((a:any)=>typeof a.dataUrl==='string')){
-          const uploads=command.attachments.filter((a:any)=>typeof a.dataUrl==='string');
-          const result=await rpc.call('assets.persistChatAttachments',{threadId:command.threadId,messageId:command.messageId,attachments:uploads});
-          if(!Array.isArray(result?.attachments)||result.attachments.length!==uploads.length)throw Error('T3 did not confirm the image upload. Retry the saved request.');
-          const ids=new Map(uploads.map((a:any,i:number)=>[a.id,result.attachments[i].id]));
-          let index=0;
-          command={...command,attachments:command.attachments.map((a:any)=>typeof a.dataUrl==='string'?result.attachments[index++]:a),
-            ...(command.context?{context:{...command.context,records:command.context.records.map((r:any)=>({...r,...(ids.has(r.attachmentId)?{attachmentId:ids.get(r.attachmentId)}:{})}))}}:{})};
-        }
+        if(command.type==='message.dispatch')command=await persistAttachments(rpc,command.threadId,command);
         return await rpc.call('orchestration.dispatchCommand',command);
       }finally{rpc.close();}
     }
