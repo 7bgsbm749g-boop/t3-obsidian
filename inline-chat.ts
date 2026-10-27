@@ -17,7 +17,7 @@ import type {ResponseStorageTarget} from './response-model';
 import {replaceInlineEditorText} from './inline-editor';
 import {pendingQuestions} from './questions';
 import {pendingApprovals} from './approvals';
-import {observeIncoming,mergeProse,selectionRange,steeringBoundary,validSteeringInput,type InlineSteering,type SteeringInput} from './inline-steering';
+import {observeIncoming,mergeProse,completedSelectionDraft,steeringBoundary,validSteeringInput,type InlineSteering,type SteeringInput} from './inline-steering';
 import type {InlineMessage,InlineBindingCheckpoint} from './inline-thread';
 import {replaceChangedText} from './inline-note-io';
 import {interruptStoppedResponse,stopResponseEdit,stoppedResponseBody} from './response-stop';
@@ -84,7 +84,7 @@ export class InlineChatManager {
   steer(job:InlineJob,input:SteeringInput){
     if(!validSteeringInput(input))throw Error('Invalid steering message.');
     const existing=job.steering?.find(item=>item.messageId===input.messageId);
-    if(existing){if(existing.text!==input.text||JSON.stringify(existing.selection)!==JSON.stringify(input.selection))throw Error('This steering ID already belongs to another message.');return;}
+    if(existing){if(existing.text!==input.text||JSON.stringify([existing.selection,existing.selections,existing.sourceResponseId])!==JSON.stringify([input.selection,input.selections,input.sourceResponseId]))throw Error('This steering ID already belongs to another message.');return;}
     if(job.hosted||job.finalized||!job.turnId||!['running','reconnecting'].includes(job.phase))throw Error('Wait for a running response before steering.');
     const editor=this.editorFor(job),region=editor&&regionBody(editor.getValue(),job.id);
     if(!region||contentHash(region.body)!==job.bodyHash)throw Error('The response block changed. Your edits are preserved.');
@@ -269,22 +269,13 @@ export class InlineChatManager {
     const original=editor.getValue();let document=original;
     const current=regionBody(document,job.id);
     const terminal=job.phase==='complete'&&!questions.waiting||['interrupted','cancelled'].includes(job.phase);
-    const outside=current?inlineResponseRange(document,job.id):undefined;
-    if(!terminal&&current&&current.body===next&&!job.steering?.some(input=>input.confirmed&&input.selection&&(!input.selectionApplied||selectionRange(document,input.selection,outside))))return;
-    const selectionsApplied:InlineSteering[]=[];
-    if(current)for(const input of job.steering??[]){
-      if(!input.confirmed||!input.selection)continue;
-      const region=regionBody(document,job.id)!;
-      const range=selectionRange(document,input.selection,inlineResponseRange(document,job.id));
-      if(range&&(range.to<=inlineResponseRange(document,job.id)!.from||range.from>=inlineResponseRange(document,job.id)!.to))document=document.slice(0,range.from)+document.slice(range.to);
-      selectionsApplied.push(input);
-    }
+    if(current)document=completedSelectionDraft(document,job.id,job.steering);
+    if(!terminal&&current&&current.body===next&&document===original)return;
     const expectedHash=current?contentHash(current.body):job.bodyHash;
     const change=terminal?finalizeRegion(document,job.id,expectedHash,next):replaceRegion(document,job.id,expectedHash,next);
     if(!change){logFailure('note.write.conflict',new Error('Response markers were removed or malformed.'),{jobId:job.id,notePath:job.path,expectedHash:job.bodyHash,actualHash:current?contentHash(current.body):undefined});job.phase='conflict';runtime.monitor?.stop();this.persist();new Notice(`T3 stopped writing to ${job.path} because its response markers were removed or malformed. The T3 thread remains available.`,12000);return;}
     logEvent('note.response.write',{jobId:job.id,notePath:job.path,fromHash:contentHash(original),toHash:contentHash(document.slice(0,change.from)+change.text+document.slice(change.to)),terminal});
     replaceChangedText(editor,original,document.slice(0,change.from)+change.text+document.slice(change.to));
-    for(const input of selectionsApplied)input.selectionApplied=true;
     if(terminal)job.finalized=true;
     else job.bodyHash=contentHash(next);
     this.persist();

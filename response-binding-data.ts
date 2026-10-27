@@ -12,7 +12,7 @@ export function compactResponseBinding(request:ResponseRequest):ResponseRequest 
   value.host={environmentId:request.host.environmentId,workspaceRoot:request.host.workspaceRoot,directory:request.host.directory,...(request.host.connectionId?{connectionId:request.host.connectionId}:{})};
   if(request.localSteering?.length)value.localSteering=request.localSteering.map(input=>{
     if(!validSteeringInput(input))throw Error('Invalid saved response input.');
-    return {messageId:input.messageId,text:input.text,before:[],...(input.selection?{selection:input.selection}:{}),...(input.confirmed?{confirmed:true}:{}),...(input.label?{label:input.label}:{}),...(input.createdAt?{createdAt:input.createdAt}:{})};
+    return {messageId:input.messageId,text:input.text,before:[],...(input.selection?{selection:input.selection}:{}),...(input.selections?{selections:input.selections}:{}),...(input.sourceResponseId?{sourceResponseId:input.sourceResponseId}:{}),...(input.confirmed?{confirmed:true}:{}),...(input.label?{label:input.label}:{}),...(input.createdAt?{createdAt:input.createdAt}:{})};
   });
   return JSON.parse(JSON.stringify(validateResponseRequest(value)));
 }

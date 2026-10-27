@@ -35,6 +35,13 @@ const completeV2=(h:ReturnType<typeof fixture>,sequence=2,text='Final reply')=>{
 };
 const finalItem=(text='Final reply')=>({id:'opaque-item',threadId:'thread',runId:'turn',messageId:'answer',type:'assistant_message',text,streaming:false,status:'completed',updatedAt:'2026-10-06T03:01:00.000Z'});
 const settle=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
+test('displayed input identities are emitted only when their canonical steering quote renders',()=>{
+ const h=fixture(),messageId=randomUUID(),input={messageId,text:'Move this steer.',before:[]};
+ h.record.state={requestHash:'',accepted:true,notePath:'Note.md',status:'running',hashes:[],updatedAt:'',steering:[input]};h.preview.update(h.record);h.preview.tick(true);
+ h.item(h.snapshot());assert.deepEqual(h.updates.at(-1)!.displayedInputIds,[]);
+ const snapshot=h.snapshot(3) as any;snapshot.snapshot.thread.messages.splice(1,0,{id:messageId,role:'user',text:input.text,turnId:'turn',streaming:false});h.item(snapshot);
+ assert.deepEqual(h.updates.at(-1)!.displayedInputIds,[messageId]);assert.match(h.updates.at(-1)!.body,/\[!t3-steering\] You[\s\S]*Move this steer/);h.preview.dispose();
+});
 test('the live preview keeps public thoughts from snapshots and updates outside retained assistant prose',()=>{
  const h=fixture();h.record.request.intermediateMode='collapse';h.preview.tick(true);
  const initial=h.snapshot() as any;

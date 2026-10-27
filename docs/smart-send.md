@@ -42,6 +42,21 @@ draft has streaming switched off. The steering transcript uses the same
 prepared source delta and question as the delivered message. Mirrored notes
 reuse their own matching streams; only new destinations receive new blocks.
 Completed responses and explicit new threads receive independent blocks.
+Confirmed steering moves its newly sent source out of the editor as soon as
+the corresponding **You** row appears in the stream box, while the response
+is still running. This applies to selections and whole-note additions. Exact
+source ranges use saved-note coordinates, independent of growing live output
+and compact tool summaries. Previously sent context, generated replies, and
+formatting-only changes are not removal candidates. Typed composer questions
+have no editor source to remove.
+
+The same native editor update displays the confirmed input and removes its
+unchanged source, then requests a normal Obsidian save. Failed or unconfirmed
+sends preserve their source. Changed or ambiguous anchors preserve current
+text. Source receipts belong to the originating response, so mirror order
+cannot move text from another destination. Receipts survive settings recovery;
+repeated events and delayed saved-source restoration safely recheck the exact
+anchor. Final-save cleanup remains a fallback.
 After a reload, an attached response with no recovered turn proof must reconnect
 before another send. Several matching streams require an explicit response
 choice. This prevents an uncertain match from creating another copy.

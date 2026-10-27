@@ -7,6 +7,19 @@ const path='Jobs/Smart.md',destination='machine/project/thread';
 const fresh=()=>loadSmartSend(undefined);
 const importSource={environmentId:'machine',projectId:'project',threadId:'thread'};
 const importReceipt=runImportReceipt({version:1,...importSource,bindingId:'11111111-1111-4111-8111-111111111111',messageId:'prompt',runId:'run'});
+
+test('steering source ranges exclude confirmed source and generated responses',async()=>{
+  const data=fresh(),first=await prepareSmartSend(data,path,destination,'Keep this original.');confirmSmartSend(data,'first',destination,first.capture);
+  const document='Keep this original.\n\n'+responseAnchor('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')+'\n\nNew steer.\n';
+  const plan=await prepareSmartSend(data,path,destination,document);
+  assert.match(plan.text,/New steer/);assert.equal(plan.ranges.map(range=>document.slice(...range)).join('').trim(),'New steer.');
+  assert.ok(plan.ranges.every(([from])=>from>document.indexOf(':::') ));
+});
+test('decoration-only changes cannot become steering removal ranges',async()=>{
+  const first=await send(fresh(),'Keep this original.');
+  const plan=await prepareSmartSend(first.data,path,destination,'**Keep this original.**');
+  assert.equal(plan.text,'');assert.deepEqual(plan.ranges,[]);
+});
 async function send(data= fresh(),text='First request.',scope?:[number,number],id='one',target=destination){const plan=await prepareSmartSend(data,path,target,text,scope);if(plan.text.trim())confirmSmartSend(data,id,target,plan.capture);return {data,...plan};}
 
 test('first send includes the requested source and confirmed repeats have no payload',async()=>{

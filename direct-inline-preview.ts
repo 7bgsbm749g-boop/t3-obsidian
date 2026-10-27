@@ -11,7 +11,7 @@ import {responseTooLarge,type StreamReadFailure} from './t3-response-limits';
 import {signInRequired,type ResponseConnectionIssue} from './sign-in-state';
 import {delegatedWork} from './inline-delegation';
 
-export interface DirectInlineUpdate {request:ResponseRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;questionsPending?:boolean;resume?:NonNullable<ResponseRequest['localResume']>&{prose:InlineThreadState['messages']};failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
+export interface DirectInlineUpdate {request:ResponseRequest;messageId:string;sequence:number;body:string;displayedInputIds?:string[];turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;questionsPending?:boolean;resume?:NonNullable<ResponseRequest['localResume']>&{prose:InlineThreadState['messages']};failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
 type Watch=typeof watchThread;
 export interface PreviewClock {now():number;later(callback:()=>void,ms:number):unknown;cancel(handle:unknown):void}
 const displayClock:PreviewClock={now:()=>performance.now(),later:(callback,ms)=>setTimeout(callback,ms),cancel:handle=>clearTimeout(handle as ReturnType<typeof setTimeout>)};
@@ -148,7 +148,7 @@ export class DirectInlinePreview {
     this.terminal=terminal;
     const questionActivities=current.activities.filter(activity=>activity.kind.startsWith('user-input.')||activity.kind==='provider.user-input.respond.failed');
     const checkpoint=inlineBindingCheckpoint(this.state);
-    this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,turnId,turnIds:this.turnIds.slice(),phase:this.failure&&!completionVerified?'error':phase,completionVerified,questionsPending:questions.waiting,resume:{bindingCheckpoint:checkpoint,turnIds:this.turnIds.slice(),questionFollows:this.follows,prose:this.prose,incoming:this.incoming,presentationTurns:current.turns},failure:completionVerified?undefined:this.failure,checkpoint,...(questionActivities.length?{questionActivities}:{})});
+    this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,displayedInputIds:inputs.map(input=>input.messageId),turnId,turnIds:this.turnIds.slice(),phase:this.failure&&!completionVerified?'error':phase,completionVerified,questionsPending:questions.waiting,resume:{bindingCheckpoint:checkpoint,turnIds:this.turnIds.slice(),questionFollows:this.follows,prose:this.prose,incoming:this.incoming,presentationTurns:current.turns},failure:completionVerified?undefined:this.failure,checkpoint,...(questionActivities.length?{questionActivities}:{})});
     if((request.deviceCompletion||request.localOnly)&&terminal&&!completionVerified)this.verifyCompletion();
     if(this.interruptedTurnId)this.verifyInterruption();
     return true;
