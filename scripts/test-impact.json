@@ -1,5 +1,8 @@
 {
   "dependencies": {
+    "tests/native-response-projection.test.ts": [
+      "validation/steering-consumption-lab.ts"
+    ],
     "tests/inline-worktree.test.ts": [
       "validation/worktree-continuation-lab.ts"
     ],

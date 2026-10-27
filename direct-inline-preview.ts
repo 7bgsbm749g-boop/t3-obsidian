@@ -11,7 +11,7 @@ import {responseTooLarge,type StreamReadFailure} from './t3-response-limits';
 import {signInRequired,type ResponseConnectionIssue} from './sign-in-state';
 import {delegatedWork} from './inline-delegation';
 
-export interface DirectInlineUpdate {request:ResponseRequest;messageId:string;sequence:number;body:string;turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
+export interface DirectInlineUpdate {request:ResponseRequest;messageId:string;sequence:number;body:string;displayedInputIds?:string[];turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
 type Watch=typeof watchThread;
 export interface PreviewClock {now():number;later(callback:()=>void,ms:number):unknown;cancel(handle:unknown):void}
 const displayClock:PreviewClock={now:()=>performance.now(),later:(callback,ms)=>setTimeout(callback,ms),cancel:handle=>clearTimeout(handle as ReturnType<typeof setTimeout>)};
@@ -144,7 +144,7 @@ export class DirectInlinePreview {
     const terminal=phase==='complete'||phase==='interrupted',completionVerified=terminal&&(exactStopped||(this.state.protocolVersion===2?!!key&&key===this.verifiedKey:this.verifiedSequence>=(this.state.sequence??0)));
     this.terminal=terminal;
     const questionActivities=this.state.activities.filter(activity=>activity.kind.startsWith('user-input.')||activity.kind==='provider.user-input.respond.failed');
-    this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,turnId,turnIds:this.turnIds.slice(),phase:this.failure&&!completionVerified?'error':phase,completionVerified,failure:completionVerified?undefined:this.failure,checkpoint:inlineBindingCheckpoint(this.state),...(questionActivities.length?{questionActivities}:{})});
+    this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,displayedInputIds:inputs.map(input=>input.messageId),turnId,turnIds:this.turnIds.slice(),phase:this.failure&&!completionVerified?'error':phase,completionVerified,failure:completionVerified?undefined:this.failure,checkpoint:inlineBindingCheckpoint(this.state),...(questionActivities.length?{questionActivities}:{})});
     if((request.deviceCompletion||request.localOnly)&&terminal&&!completionVerified)this.verifyCompletion();
     if(this.interruptedTurnId)this.verifyInterruption();
     return true;

@@ -454,7 +454,12 @@ export class NativeResponseManager {
             adapter.markMaterialized(proof.bindingId);
             if(responseRegion(saved,proof.bindingId))adapter.preserveConflict({base:proof.document,local:proof.document,incoming:saved,reason:'An incoming note resurrected an already completed response anchor.'});
           }
-          adapter.setResponses(responses);
+          const inputs=responses.flatMap(response=>{
+            const stream=this.streams.get(response.id);
+            if(!stream?.request.localOnly||stream.failure)return [];
+            return [{id:response.id,steering:(stream.request.localSteering??[]).map(input=>({...input,confirmed:!!stream.checkpoint?.bindings?.[input.messageId]&&!!stream.displayedInputIds?.includes(input.messageId)}))}];
+          });
+          adapter.setResponses(responses,inputs);
         }
       }catch(error){logFailure('note.projection.retry',error,{notePath:view.file.path});}
       if(this.view(view)?.conflictRecord())void this.adoptSaved(view);

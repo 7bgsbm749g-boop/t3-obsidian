@@ -47,6 +47,48 @@ function fakeView(document:string,normalizeIncoming?:(text:string)=>string){
   return {view,adapter,conflicts,originalGet,originalSet,read:()=>value,edit:(data:string)=>{value=data;},saves:()=>saves};
 }
 
+test('confirmed steering moves its exact source into the running projection and saves it',()=>{
+  const document=`Keep this.\n\n${responseAnchor(id)}\n\nSteer now.\n\nKeep this too.`,h=fakeView(document),text='Steer now.',start=document.indexOf(text);
+  const input={messageId:'steer',text,before:[],confirmed:true,selection:selectionAnchor(document,text,start,start+text.length)};
+  const body='> [!t3-progress]+ Working\n> > [!t3-steering] You\n> > Steer now.';
+  h.adapter.setResponses([{id,body}], [{id,steering:[{...input,confirmed:false}]}]);assert.equal(h.adapter.saved(),document);
+  h.adapter.setResponses([{id,body}], [{id,steering:[input]}]);
+  assert.equal(h.adapter.saved(),document.replace(text,''));assert.equal(h.read().split(text).length-1,1);assert.ok(h.read().includes('Keep this too.'));assert.equal(h.saves(),1);
+  h.adapter.setResponses([{id,body}], [{id,steering:[input]}]);assert.equal(h.saves(),1);
+  const recovered=fakeView(h.adapter.saved());recovered.adapter.setResponses([{id,body}],[{id,steering:[input]}]);assert.equal(recovered.read().split(text).length-1,1);
+  h.adapter.dispose();recovered.adapter.dispose();
+});
+
+test('steering capture maps canonical live output into the saved source coordinates',()=>{
+  const document=`Before\n\n${responseAnchor(id)}\n\nSteer after the response.\nTail`,h=fakeView(document);
+  h.adapter.setResponses([{id,body:'> Growing output.\n\n'+largeTools()}]);
+  const canonical=h.adapter.canonicalDisplayed(),text='Steer after the response.',from=canonical.indexOf(text);
+  h.adapter.setResponses([{id,body:'> Live output grew while preparing the send.'}]);
+  const [anchor]=h.adapter.sourceSelections(canonical,[[from,from+text.length]]);
+  assert.equal(anchor.start,document.indexOf(text));assert.equal(anchor.before,document.slice(anchor.start-24,anchor.start));
+  h.adapter.setResponses([{id,body:'> Changed output.\n\n> [!t3-steering] You\n> '+text}],[{id,steering:[{messageId:'steer',text,before:[],confirmed:true,selection:anchor}]}]);
+  assert.equal(h.adapter.saved(),document.replace(text,''));
+  assert.throws(()=>h.adapter.sourceSelections(canonical,[[from,from+text.length]]),/source note changed/);
+  const current=h.adapter.canonicalDisplayed(),generated=current.indexOf('Changed output');assert.throws(()=>h.adapter.sourceSelections(current,[[generated,generated+7]]),/Generated responses/);h.adapter.dispose();
+});
+
+test('steering preserves edited source and removes an exact source restored by a delayed save',()=>{
+  const document=`Before\n\n${responseAnchor(id)}\n\nOriginal steer.\nTail`,h=fakeView(document),text='Original steer.',start=document.indexOf(text);
+  const input={messageId:'steer',text,before:[],confirmed:true,selection:selectionAnchor(document,text,start,start+text.length)},responses=[{id,body:'> [!t3-steering] You\n> '+text}];
+  h.adapter.setResponses(responses);h.edit(h.read().replace(/Original steer\.(?=\nTail)/,'Edited steer.'));
+  h.adapter.setResponses(responses,[{id,steering:[input]}]);assert.ok(h.adapter.saved().includes('Edited steer.'));assert.equal(h.saves(),0);
+  h.edit(h.read().replace('Edited steer.','Original steer.'));h.adapter.setResponses(responses,[{id,steering:[input]}]);
+  assert.equal(h.adapter.saved(),document.replace(text,''));assert.equal(h.read().split(text).length-1,1);assert.equal(h.saves(),1);h.adapter.dispose();
+});
+
+test('adjacent steering ranges and overlapping receipts consume once and exclude mirror targets',()=>{
+  const document=`Before\n\n${responseAnchor(id)}\n\nFirst steer. Second steer.\nTail`,h=fakeView(document),first=document.indexOf('First steer.'),second=document.indexOf('Second steer.');
+  const selections=[selectionAnchor(document,'First steer.',first,first+12),selectionAnchor(document,'Second steer.',second,second+13)];
+  const input={messageId:'steer',text:'First steer. Second steer.',before:[],confirmed:true,selections,sourceResponseId:other},body='> First steer. Second steer.';
+  h.adapter.setResponses([{id,body}],[{id,steering:[input]}]);assert.equal(h.adapter.saved(),document);
+  h.adapter.setResponses([{id,body}],[{id,steering:[{...input,sourceResponseId:id},{...input,sourceResponseId:id}]}]);assert.equal(h.adapter.saved(),document.replace('First steer.','').replace('Second steer.',''));assert.equal(h.saves(),1);h.adapter.dispose();
+});
+
 function largeTools(){return renderResponseToolGroup({id:'synthetic',turnId:'turn',tools:[{id:'tool',turnId:'turn',key:'tool',status:'completed',label:'Read output',activeLabel:'Read output',icon:'file-text',action:'read',sequence:1,output:'retained output '.repeat(1000)}]} satisfies ResponseToolGroup);}
 test('native tool summaries preserve completed and active canonical output through typing and final adoption',()=>{
   const tools=largeTools(),document='Before\n\n'+tools+'\n\n'+responseAnchor(id)+'\n\nAfter',h=fakeView(document);

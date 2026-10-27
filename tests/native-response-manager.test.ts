@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {NativeResponseManager} from '../native-response-manager';
 import {responseAnchor,projectResponses} from '../native-response-projection';
-import {initialRegion,regionBody} from '../inline-thread';
+import {initialRegion,regionBody,selectionAnchor} from '../inline-thread';
 import {contentHash} from '../completion';
 import {readNativeCommitProof,type NativeCommitProof} from '../native-response-commit';
 import type {ResponseRecord} from '../response-record';
@@ -30,6 +30,21 @@ function fixture(panes=1,local=new Map<string,unknown>()){
 }
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
 async function start(h:ReturnType<typeof fixture>){await h.manager.receive(record());await h.manager.receive(record(other));for(const frames of h.frames)frames.length=0;}
+
+test('a confirmed local steering update removes source with its quote while the turn is running',async()=>{
+ const h=fixture(),active=record();active.request.localOnly=true;
+ const text='After',offset=before.indexOf(text),messageId='dddddddd-bbbb-cccc-dddd-eeeeeeeeeeee';
+ active.request.localSteering=[{messageId,text,before:[],selection:selectionAnchor(before,text,offset,offset+text.length),sourceResponseId:id}];
+ await h.manager.receive(active);
+ const update={request:active.request,messageId:active.request.messageId,sequence:10,turnId:'turn',phase:'running' as const,body:'> Working\n> [!t3-steering] You\n> After'};
+ h.manager.stream(update);assert.equal(h.manager.view(h.views[0] as any)!.saved(),before);
+ h.frames[0].length=0;
+ h.manager.stream({...update,sequence:11,checkpoint:{bindings:{[messageId]:{turnId:'turn',kind:'steer'}}}});assert.equal(h.manager.view(h.views[0] as any)!.saved(),before);
+ h.manager.stream({...update,sequence:12,displayedInputIds:[messageId],checkpoint:{bindings:{[messageId]:{turnId:'turn',kind:'steer'}}}});
+ assert.equal(h.manager.view(h.views[0] as any)!.saved(),before.replace('After',''));
+ assert.equal(h.frames[0].length,1);assert.equal(h.frames[0][0].split(text).length-1,1);
+ h.manager.stream({...update,sequence:9});assert.equal(h.visible().split(text).length-1,1);h.manager.dispose();
+});
 function neverBlank(h:ReturnType<typeof fixture>){for(const frames of h.frames)assert.ok(frames.every(frame=>frame.includes(body)),JSON.stringify(frames));}
 
 test('the size failure is visible only on its response and retained text survives until recovery',async()=>{

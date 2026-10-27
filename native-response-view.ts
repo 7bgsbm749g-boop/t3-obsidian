@@ -1,8 +1,9 @@
 import type {MarkdownView,TFile} from 'obsidian';
-import {regionBody} from './inline-thread';
+import {regionBody,selectionAnchor} from './inline-thread';
+import {completedSelectionDraft,type InlineSteering} from './inline-steering';
 import type {Extension,Transaction as CMTransaction,TransactionSpec} from '@codemirror/state';
 import {changedEdits,changedInterval,mergeSavedEdits} from './coordinated-merge';
-import {advanceProjection,projectResponses,savedProjection,savedToDisplay,responseRegion,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
+import {advanceProjection,projectResponses,savedProjection,savedToDisplay,displayToSaved,responseRegion,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
 import {ResponseScroll} from './response-scroll';
 import {presentToolGroups,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,canonicalToolGroup,type ToolPresentation} from './response-tool-presentation';
 import {toolDisplayOffset} from './response-tool-presentation';
@@ -232,6 +233,19 @@ export class NativeResponseView {
   /** Prompt/context reads retain full tool output and local response bodies.
    * This is deliberately separate from the saved projection and CM offsets. */
   canonicalDisplayed(){return projectResponses(this.saved(),this.responses).display;}
+  sourceSelections(document:string,ranges:readonly [number,number][]){
+    const current=projectResponses(this.saved(),this.responses);
+    // The live response can grow while the chooser or image preparation waits.
+    // Compare ordinary source, then map through the captured response lengths.
+    if(savedProjection(document,current)!==current.saved)throw new ProjectionConflict('The source note changed before steering.');
+    const projection={...current,display:document,ranges:current.ranges.map(range=>{const captured=responseRegion(document,range.id)!;return {...range,displayFrom:captured.from,displayTo:captured.to};})};
+    return ranges.map(([from,to])=>{
+      if(projection.ranges.some(range=>from<range.displayTo&&to>range.displayFrom))throw new ProjectionConflict('Generated responses cannot be consumed as steering source.');
+      const start=displayToSaved(projection,from),end=displayToSaved(projection,to);
+      if(start.kind!=='saved'||end.kind!=='saved')throw new ProjectionConflict('The steering source overlaps a response.');
+      return selectionAnchor(projection.saved,projection.saved.slice(start.offset,end.offset),start.offset,end.offset);
+    });
+  }
   canonicalSelection(from:number,to:number){
     const projection=this.currentProjection();
     if(!Number.isSafeInteger(from)||!Number.isSafeInteger(to)||from<0||to<from||to>projection.display.length)throw new ProjectionConflict('The selected display range changed.');
@@ -262,16 +276,19 @@ export class NativeResponseView {
     };
     return {from:position(from,false),to:position(to,true),text:this.displayed().slice(from,to)};
   }
-  setResponses(responses:readonly LocalResponse[]){
+  setResponses(responses:readonly LocalResponse[],inputs:readonly {id:string;steering:InlineSteering[]}[]=[]){
     if(this.disposed)throw Error('Native response view is disposed.');
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
     const cm=(this.view.editor as any)?.cm;
     if(cm?.dispatch&&cm!==this.moveEditor){this.releaseMoveHistory?.();this.moveEditor=cm;this.releaseMoveHistory=guardResponseMoveHistory(cm,(transaction,move)=>this.moveTransaction(transaction,move));}
-    if(this.compactTools===((this.view as any).getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable&&response.stoppable===this.responses[index].stoppable)&&this.displayed()===this.projection.display)return;
-    const saved=this.saved(),projection=this.buildProjection(saved,responses);
+    const before=this.saved();let saved=before;
+    for(const input of inputs)if(responses.some(response=>response.id===input.id))saved=completedSelectionDraft(saved,input.id,input.steering);
+    if(saved===before&&this.compactTools===((this.view as any).getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable&&response.stoppable===this.responses[index].stoppable)&&this.displayed()===this.projection.display)return;
+    const projection=this.buildProjection(saved,responses);
     this.responses=responses.map(response=>({...response}));this.projection=projection;
     for(const response of responses)this.materialized.delete(response.id);
     this.render(projection.display,false);
+    if(saved!==before)this.view.requestSave();
   }
   private render(display:string,clear:boolean){
     const current=this.displayed(),change=changedInterval(current,display);

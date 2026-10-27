@@ -1,31 +1,42 @@
 import {turnForMessage,type InlineMessage,type InlineThreadState,type SelectionAnchor} from './inline-thread';
 import {responseRegion} from './native-response-projection';
-import {responseBoundaries} from './response-container';
+import {responseIds} from './response-container';
 import type {SubmittedAnswer} from './response-answers';
 
 export function completedSelectionDraft(document:string,id:string,steering:InlineSteering[]=[]){
+  steering=steering.filter(input=>input.confirmed&&(!input.sourceResponseId||input.sourceResponseId===id)&&(input.selections??(input.selection?[input.selection]:[])).some(anchor=>document.includes(anchor.text)));
+  if(!steering.length)return document;
+  const ranges:Array<{from:number;to:number}>=[];
+  const regions=responseIds(document).map(id=>responseRegion(document,id)!);
   for(const input of steering){
-    if(!input.confirmed||!input.selection)continue;
     const region=responseRegion(document,id);if(!region)throw Error('The response anchor changed before selection consumption.');
-    const range=selectionRange(document,input.selection,region);
-    if(range&&!responseBoundaries(document).some(boundary=>boundary.from<range.to&&boundary.to>range.from))document=document.slice(0,range.from)+document.slice(range.to);
+    for(const anchor of input.selections??(input.selection?[input.selection]:[])){
+      const range=selectionRange(document,anchor,region);
+      if(range&&!regions.some(region=>region.from<range.to&&region.to>range.from))ranges.push(range);
+    }
   }
+  // Resolve every anchor before editing: one removal can change the context
+  // of the next. Overlapping receipts remove their source only once.
+  const merged:Array<{from:number;to:number}>=[];
+  for(const range of ranges.sort((a,b)=>a.from-b.from)){const previous=merged.at(-1);if(previous&&range.from<=previous.to)previous.to=Math.max(previous.to,range.to);else merged.push({...range});}
+  for(const range of merged.reverse())document=document.slice(0,range.from)+document.slice(range.to);
   return document;
 }
 
 /** Stored with the response checkpoint, never inferred from editable Markdown. */
 export interface InlineSteering {
   messageId:string;text:string;before:InlineMessage[];
-  selection?:SelectionAnchor;selectionApplied?:boolean;confirmed?:boolean;
+  selection?:SelectionAnchor;selections?:SelectionAnchor[];sourceResponseId?:string;selectionApplied?:boolean;confirmed?:boolean;
   label?:string;createdAt?:string;position?:'live'|'recovered';
   answer?:SubmittedAnswer;
 }
-export interface SteeringInput {messageId:string;text:string;selection?:SelectionAnchor}
+export interface SteeringInput {messageId:string;text:string;selection?:SelectionAnchor;selections?:SelectionAnchor[];sourceResponseId?:string}
 
 export function validSteeringInput(value:any):value is SteeringInput {
-  const a=value?.selection;
+  const validAnchor=(a:any)=>a&&typeof a.text==='string'&&!!a.text&&Number.isSafeInteger(a.start)&&a.start>=0&&Number.isSafeInteger(a.end)&&a.end===a.start+a.text.length&&typeof a.before==='string'&&typeof a.after==='string';
   return !!value&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.messageId??'')&&typeof value.text==='string'&&!!value.text.trim()&&value.text.length<=120_000&&
-    (!a||typeof a.text==='string'&&!!a.text&&Number.isSafeInteger(a.start)&&a.start>=0&&Number.isSafeInteger(a.end)&&a.end===a.start+a.text.length&&typeof a.before==='string'&&typeof a.after==='string');
+    (!value.selection||validAnchor(value.selection))&&(!value.selections||Array.isArray(value.selections)&&value.selections.length<=120_000&&value.selections.every(validAnchor)&&value.selections.reduce((size:number,a:SelectionAnchor)=>size+a.text.length,0)<=120_000)&&
+    (!value.sourceResponseId||/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.sourceResponseId));
 }
 
 /** Place input after complete paragraphs; never split a live code fence. */

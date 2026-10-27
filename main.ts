@@ -106,6 +106,7 @@ import {approvalButton,approvalEditorExtension} from './approval-ui';
 import {approvalTargets,parseApprovalUrl,clearApprovalControls,type ApprovalTarget} from './approvals';
 import {settlementState,type ThreadSettlementJob} from './thread-settlement';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;insertion?:CursorInsertion;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
+type SteeringSource={document:string;ranges:Span[]};
 type PaletteActionContext={file:TFile;editor?:EditorChatContext;insertion:CursorInsertion|null};
 const NEW_FOLDER_PROJECT='folder:new';
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
@@ -1600,8 +1601,6 @@ export default class SendToT3 extends Plugin {
     const responsePath=hosted?.record.state?.notePath??hosted?.record.request.notePath;
     if(hosted&&responsePath!==note.path)await this.checkResponseNote(id,responsePath!,note.path);
     await this.checkRecoveryBlock(id,note.path);
-    let selection=context.referenceSelection?undefined:context.canonicalAnchor??context.anchor;
-    if(selection){const document=this.notePromptDocument(context.view),range=selectionRange(document,selection);if(!range)throw Error('The selected text changed. Select it again.');if(selectionOverlapsInlineResponse(document,{start:range.from,end:range.to}))selection=undefined;}
     const project=await this.recoveryProject(projectId,environmentId),key=projectKey(project);
     if(options?.expectedProjectKey&&options.expectedProjectKey!==key||options?.projectOverrideKey&&options.projectOverrideKey!==key)throw Error('Steering must use the running thread’s project.');
     const current=await this.readChatThread(this.connection(project),project,threadId);
@@ -1616,7 +1615,6 @@ export default class SendToT3 extends Plugin {
     await this.sendChat(prompt,note,{threadId,responseId:id,projectOverrideKey:key,jobOptions,sourceContext:context,onPrepared:(request,input)=>{
       logEvent('steering.prepared',{jobId:id,requestId:request.id,messageId:commandId(request.id,'message'),threadId,projectId});
       if(request.inlineSteering?.jobId!==id)throw Error('This response no longer owns the active turn. Reopen the chooser before sending.');
-      request.inlineSteering.input={messageId:commandId(request.id,'message'),text:input,...(selection?{selection}:{})};
     }});
   }
   private async recoveryRecord(id:string,_path:string):Promise<{record:ResponseRecord;host:ResponseStorageTarget}|undefined>{return this.deviceInline?.cachedResponse(id);}
@@ -1957,7 +1955,7 @@ export default class SendToT3 extends Plugin {
     this.busy=true;
     const startedAt=Date.now();let request:Request|undefined;
     try{
-      let smartCapture:SmartCapture|undefined;
+      let smartCapture:SmartCapture|undefined,steeringSource:SteeringSource|undefined;
       let preparedInput=prompt;
       const historical=note&&options?.threadId&&!options.expectedProjectKey?this.previousNoteThread(note.path,options.threadId):undefined;
       let {project,link}=await this.chatTarget(note?.path,historical,Boolean(options?.newThread||options?.expectedProjectKey),options?.projectOverrideKey??options?.expectedProjectKey);
@@ -1978,6 +1976,7 @@ export default class SendToT3 extends Plugin {
         if(!material.trim()&&!question.trim()){new Notice('Nothing new to send.');return;}
         preparedInput=[material,question.trim()?`**USER ASKS:**\n${question}`:''].filter(Boolean).join('\n\n');
         prompt=preparedInput;smartCapture=plan.capture;
+        steeringSource={document:context.smartDocument!,ranges:context.referenceSelection?[]:plan.ranges};
       }
       const images=options?.barePrompt?undefined:await this.prepareImages(prompt,note?.path??'',true,options?.sourceContext?.snapshot);
       let text=images?.markdown??prompt;
@@ -2005,7 +2004,7 @@ export default class SendToT3 extends Plugin {
       if(this.stopped)throw Error('The plugin was disabled before sending.');
       const title=await this.requestTitle(connection,project,threadId,note?.path);
       request={...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
-      if(note&&!options?.barePrompt)await this.prepareNoteSteering(request,note.path,preparedInput,options?.sourceContext,options?.responseId);
+      if(note&&!options?.barePrompt)await this.prepareNoteSteering(request,note.path,preparedInput,options?.sourceContext,options?.responseId,steeringSource);
       await options?.onPrepared?.(request,preparedInput);
       logEvent('request.prepared',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,notePath:note?.path,promptHash:contentHash(request.prompt),promptLength:request.prompt.length});
       this.settings.pending.push(request);
@@ -2462,8 +2461,9 @@ export default class SendToT3 extends Plugin {
       const note=this.noteContext(file),link=options?.folderLink??folderLinkForPath(this.settings.folderLinks,file.path)??{id:'manual',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true};
       request = {smartSend:smart.capture,jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path),prompt:images.markdown+this.messageFooter(file.path),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
       if(request.prompt.length>120_000) throw new Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
-      if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path],undefined,options?.destinationSection,file.path,smart.text,options?.insertion);
-      else await this.prepareNoteSteering(request,file.path,smart.text);
+      const steeringSource={document:content,ranges:smart.ranges};
+      if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path],undefined,options?.destinationSection,file.path,smart.text,options?.insertion,steeringSource);
+      else await this.prepareNoteSteering(request,file.path,smart.text,undefined,undefined,steeringSource);
       await options?.onPrepared?.(request);
       this.settings.pending.push(request); await this.save();
       const sentThreadId=await this.dispatch(request,options?.quiet);
@@ -2473,7 +2473,7 @@ export default class SendToT3 extends Plugin {
   }
   /** Resolve against the final thread and its provider turn, never the cursor.
    * Reconnecting bindings block a send until ownership is known. */
-  private async prepareNoteSteering(request:Request,path:string,input:string,context?:EditorChatContext,preferredId?:string):Promise<boolean>{
+  private async prepareNoteSteering(request:Request,path:string,input:string,context?:EditorChatContext,preferredId?:string,source?:SteeringSource):Promise<boolean>{
     if(!request.threadId)return false;
     const environment=request.connection.environmentId??await this.localInlineEnvironment();
     const stored=responseBindingRequests(this.settings.responseBindings??{}).filter(binding=>binding.vaultId===this.settings.vaultId&&binding.threadId===request.threadId&&binding.projectId===request.project.id&&binding.threadEnvironmentId===environment);
@@ -2497,25 +2497,35 @@ export default class SendToT3 extends Plugin {
       await this.checkResponseNote(target.id,target.hosted.record.state?.notePath??target.hosted.record.request.notePath,path);
       await this.deviceInline!.relocateResponse(target.hosted.host,target.hosted.record,path);
     }
-    let selection=context&&!context.referenceSelection?context.canonicalAnchor??context.anchor:undefined;
-    if(selection){const source=this.notePromptDocument(context!.view),range=selectionRange(source,selection);if(!range)throw Error('The selected text changed. Select it again.');if(selectionOverlapsInlineResponse(source,{start:range.from,end:range.to}))selection=undefined;}
+    const view=context?.view??this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===path);
+    if(!source&&context&&!context.referenceSelection){
+      const anchor=context.canonicalAnchor??context.anchor;
+      if(anchor){const current=this.notePromptDocument(context.view),range=selectionRange(current,anchor);if(!range)throw Error('The selected text changed. Select it again.');if(!selectionOverlapsInlineResponse(current,{start:range.from,end:range.to}))source={document:current,ranges:[[range.from,range.to]]};}
+    }
+    const adapter=view&&nativeResponses(this.app).view(view as MarkdownView);
+    let selections:SelectionAnchor[]=[];
+    if(source?.ranges.length){
+      if(adapter)selections=adapter.sourceSelections(source.document,source.ranges);
+      else {if(document!==source.document)throw Error('The source note changed before steering.');selections=source.ranges.map(([from,to])=>selectionAnchor(document,document.slice(from,to),from,to));}
+    }
     const policy=target.hosted?.record.request??target.job!;
     request.jobOptions=resolveJobOptions({enabled:true,intermediateMode:policy.intermediateMode,keepIntermediate:policy.keepIntermediate,finalAnswerFormat:policy.finalAnswerFormat});
     const destination={jobId:target.id,...(target.hosted?{host:target.hosted.host}:{}),notePath:path};
     const steering=request.inlineSteering;
     if(steering){
+      if(selections.length)steering.input={...steering.input,sourceResponseId:target.id,selection:selections[0],...(selections.length>1?{selections}:{})};
       if(!steering.targets?.some(item=>item.jobId===target.id))steering.targets=[...steering.targets??[{jobId:steering.jobId,host:steering.host,notePath:request.noteThread?.notePath??path}],destination];
-    }else request.inlineSteering={...destination,input:{messageId:commandId(request.id,'message'),text:input,...(selection?{selection}:{})},targets:[destination]};
+    }else request.inlineSteering={...destination,input:{messageId:commandId(request.id,'message'),text:input,...(selections.length?{sourceResponseId:target.id,selection:selections[0],...(selections.length>1?{selections}:{})}:{})},targets:[destination]};
     return true;
   }
-  private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string,destinationSection?:string,sourcePath?:string,input?:string,insertion?:CursorInsertion|null){
+  private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string,destinationSection?:string,sourcePath?:string,input?:string,insertion?:CursorInsertion|null,steeringSource?:SteeringSource){
     const policy=request.jobOptions?.inline??resolveJobOptions(this.settings.inlineStreaming).inline;
     const io=deviceNoteIO(this.app),host=await this.localResponseTarget(request);
     for(const path of destinations){const document=await io.readNote(path);if(document===undefined)throw Error(`Destination note unavailable: ${path}`);if(insertion&&path===sourcePath&&!destinationSection)resolveCursorInsertion(document,insertion);else endInsertionOffset(document);}
     const source:ResponseRequest={destinationSection,localOnly:true,nativeProjection:true,responseContainer:true,version:4,finalAnswerFormat:policy.finalAnswerFormat,independent:true,threadTitle:request.title,id:request.id,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destinations[0],threadId:request.threadId??commandId(request.id,'thread'),messageId:commandId(request.id,'message'),projectId:request.project.id,threadEnvironmentId:request.connection.environmentId??await this.localInlineEnvironment(),initialHash:initialRegion(request.id).bodyHash,createdAt:startedAt??new Date().toISOString(),keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode};
     request.inlineBindings=[];
     const fresh:string[]=[];
-    for(const path of destinations)if(input===undefined||!await this.prepareNoteSteering(request,path,input))fresh.push(path);
+    for(const path of destinations)if(input===undefined||!await this.prepareNoteSteering(request,path,input,undefined,undefined,path===sourcePath?steeringSource:undefined))fresh.push(path);
     for(const path of fresh)request.inlineBindings.push(await editorStream(source,path,io,()=>!this.stopped,undefined,path===sourcePath?insertion??undefined:undefined));
     request.inlineHost=request.inlineBindings[0];
   }
