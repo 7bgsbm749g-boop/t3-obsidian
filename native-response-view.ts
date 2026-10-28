@@ -298,8 +298,10 @@ export class NativeResponseView {
       const {Transaction}=require('@codemirror/state') as typeof import('@codemirror/state');
       // Streaming updates map selections and ordinary undo history without
       // becoming user undo steps. Native rendering and folds stay in place.
-      cm.dispatch({changes:{from:change.from,to:change.to,insert:change.text},annotations:[Transaction.addToHistory.of(false),Transaction.userEvent.of('send-to-t3-projection')],filter:false,scrollIntoView:false});
-    }else this.originalSet.call(this.view,display,clear);
+      const edit={from:change.from,to:change.to,insert:change.text},changes=cm.state?.changes?.(edit);
+      const heightEffect=this.scroll.preserveHeight(display,changes);
+      cm.dispatch({changes:changes??edit,effects:heightEffect?[heightEffect]:[],annotations:[Transaction.addToHistory.of(false),Transaction.userEvent.of('send-to-t3-projection')],filter:false,scrollIntoView:false});
+    }else {this.scroll.clearHeight();this.originalSet.call(this.view,display,clear);}
     this.scroll.updated();
   }
   private incoming(incoming:string,clear:boolean){

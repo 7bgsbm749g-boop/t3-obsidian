@@ -7,9 +7,28 @@ import {NativeResponseView} from '../native-response-view';
 import {EditorState} from '@codemirror/state';
 import {renderResponseToolGroup,type ResponseToolGroup} from '../response-tools';
 import {presentToolGroups} from '../response-tool-presentation';
+import {heightFixture} from './fixtures/response-height';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 const saved=`Before\n\n${responseAnchor(id)}\n\nBetween\n\n${responseAnchor(other)}\n\nAfter`;
+test('native projection guards height before a background redraw and retains saved text and selection',()=>{
+  const document=`Before\n\n${responseAnchor(id)}\n\nAfter`,h=heightFixture(document),adapter=new NativeResponseView(h.view,document,record=>{throw Error(record.reason);},async()=>document);
+  const body='> [!t3-progress]+ Working <span data-t3-fold="thread:active"></span>\n> First paragraph';
+  adapter.setResponses([{id,body}]);h.advance(1000);assert.equal(h.guarded(),false);
+  const selection=h.cm.state.selection;let dispatched=false;
+  h.cm.onDispatch=(spec:any)=>{assert.equal(h.guarded(),true);assert.ok(spec.effects.some((effect:any)=>effect.value?.range),'every guarded update needs a consumed viewport target');h.rendered(false);h.height(6500);dispatched=true;};
+  adapter.setResponses([{id,body:body+'\n> New output'}]);assert.equal(dispatched,true);assert.equal(h.scroller.scrollTop,7000);assert.equal(adapter.saved(),document);assert.equal(h.cm.state.selection.main.head,selection.main.head);
+  h.cm.onDispatch=undefined;h.rendered(true);h.height(11000);h.advance(1000);assert.equal(h.guarded(),false);
+  adapter.dispose();assert.equal(h.guarded(),false);assert.equal(h.jobs.size,0);
+});
+test('Reading response updates retain explicit Follow while clearing any editor height guard',()=>{
+  const document=`Before\n\n${responseAnchor(id)}\n\nAfter`,h=heightFixture(document);h.mode('preview');
+  const adapter=new NativeResponseView(h.view,document,record=>{throw Error(record.reason);},async()=>document);
+  const body='> [!t3-progress]+ Working <span data-t3-fold="thread:active"></span>\n> First paragraph';
+  adapter.setResponses([{id,body}]);adapter.toggleScroll('thread:active');assert.equal(adapter.scrollControl('thread:active')?.active,true);
+  adapter.setResponses([{id,body:body+'\n> More output'}]);assert.equal(adapter.scrollControl('thread:active')?.active,true);assert.equal(h.guarded(),false);
+  adapter.dispose();assert.equal(h.jobs.size,0);
+});
 test('many independent native response projections preserve ordinary edits and map positions',()=>{
   const projection=projectResponses(saved,[{id,body:'> Stream\n\n| Weight |\n| --- |\n| 25kg |'},{id:other,body:'> Other stream'}]);
   assert.equal(savedProjection(projection.display,projection),saved);

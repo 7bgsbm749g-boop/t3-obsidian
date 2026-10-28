@@ -1,5 +1,8 @@
 {
   "dependencies": {
+    "tests/response-height.test.ts": [
+      "validation/scroll-follow-lab.ts"
+    ],
     "tests/native-response-projection.test.ts": [
       "validation/steering-consumption-lab.ts"
     ],

@@ -34,6 +34,35 @@ is prepared with:
 node scripts/build-native-response-lab.mjs /absolute/new/evidence --scroll-follow
 ```
 
+For the large-note regression, write `{"large":true}` to `case.json` in the
+prepared evidence directory before launching its client. This creates about
+489,000 projected characters: 1,000 unchanged paragraphs and 1,200 long response
+paragraphs. Type and delete a draft below the response, visit the bottom, scroll
+up 2,400 px and issue a `grow` command. The viewport must stay in place with
+Follow off. Repeat with editing focus removed and with the cursor at document
+start. Check active Follow and a manual scroll during a `burst` separately.
+`waitMs` permits a settled observation; `cleanup` removes both temporary notes
+through normal vault operations and records `cleanup.json`.
+
+Native parsing can briefly replace a large rendered callout with a shorter
+height estimate. The editor then reaches a temporary bottom and can stay pinned
+there when the callout returns. Background updates hold a minimum content height
+through that transition, without writing a scroll position or changing cursor,
+focus or note data. If the native viewport becomes empty, a mapped source reveal
+asks CodeMirror to render it again; a scoped scroll handler consumes that reveal's
+scroll action. Each guarded update also carries a consumed target so an incomplete
+EOF viewport cannot supply an implicit scroll correction between fast updates.
+The request tag survives mapping and has no expiry: slow rendering must never
+turn a viewport-only request into a real scroll. A valid viewport from the
+reader's new position supplies the next target. Normal explicit Follow requests
+still use their normal handler.
+The minimum is removed after the native block and parser
+settle. Completion, note/mode changes, viewport resize, user editing, intentional
+folding, a shorter projection and disposal clear it. A shorter projection must
+be free to remove its old height. Checks stop polling after five seconds; later DOM
+work can wake a still-virtualized guard. The floor is scoped to that pane's
+content and survives native replacement of its inline styles.
+
 Its control.json mailbox accepts snapshot, grow (with an optional lines count),
 and mode (source or preview). Setup and observations use the real native
 projection; activation and cancellation require trusted native input. The
