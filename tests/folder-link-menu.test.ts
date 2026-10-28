@@ -195,7 +195,7 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
     await item.callback({ctrlKey:true});
     const choices=h.modals.at(-1);assert.ok(choices);
     assert.equal(choices.constructor.name,'SendDestinationModal');
-    assert.equal(choices.titleEl.text,'Send to T3 Code');
+    assert.equal(choices.titleEl.text,'T3 Code');
     assert.deepEqual(choices.contentEl.settings.flatMap((setting:any)=>setting.controls.map((control:any)=>control.text)),['New thread','Existing thread…']);
     await h.button(choices,'New thread').click();
     assert.equal(sent.length,1);assert.equal(sent[0].file,file);assert.equal(sent[0].project.id,'nested');assert.equal(sent[0].options.threadId,undefined);

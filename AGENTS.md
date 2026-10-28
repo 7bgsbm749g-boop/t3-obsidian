@@ -1,4 +1,4 @@
-# Send to T3 Code repository guidance
+# T3 Code repository guidance
 
 ## Authoritative locations
 

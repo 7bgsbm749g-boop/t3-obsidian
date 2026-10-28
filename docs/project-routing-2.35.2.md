@@ -25,8 +25,8 @@ third used `4a91b9ab-05f5-5c94-9b3b-d6acf1a19593`. Both threads belong to QLO2
 project `81eaa7ea-dc46-4c0c-b725-579cd2cd708f`.
 
 Only explicit New project opened the creation UI. Cancelling created no folder
-link and sent no additional message. The affected Diagnose Send to T3 Code Issues
-note displayed its remembered Send to T3 Code project; its dialog was cancelled
+link and sent no additional message. The affected Diagnose T3 Code Issues
+note displayed its remembered T3 Code project; its dialog was cancelled
 without dispatch. The temporary fixture was removed, the original note restored,
 and folder links were unchanged.
 

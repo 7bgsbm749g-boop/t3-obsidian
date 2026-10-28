@@ -59,7 +59,7 @@ export async function connectMachine(a:CloudAccount,m:CloudMachine,keyId:string,
  const connected=await request(url,{method:'POST',headers:{Authorization:'DPoP '+t.access_token,DPoP:await proof(key,'POST',url,t.access_token),'Content-Type':'application/json'},body:JSON.stringify({clientProofKeyThumbprint:await thumbprint(key)})},fetcher);
  if(connected.environmentId!==m.environmentId||endpoint(connected.endpoint.httpBaseUrl)!==m.url||typeof connected.credential!=='string')throw new CloudError('environment_changed');
  const d=await descriptor(m.url,fetcher);if(d.environmentId!==m.environmentId)throw new CloudError('environment_changed');
- const tokenUrl=m.url+'/oauth/token';const tokenOpts=form({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:connected.credential,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:PLUGIN_SCOPE,client_label:'Send to T3 Code (Obsidian)'});
+ const tokenUrl=m.url+'/oauth/token';const tokenOpts=form({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:connected.credential,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:PLUGIN_SCOPE,client_label:'T3 Code (Obsidian)'});
  const session=await request(tokenUrl,{...tokenOpts,headers:{...tokenOpts.headers,DPoP:await proof(key,'POST',tokenUrl)}},fetcher);
  if(session.token_type!=='DPoP'||typeof session.access_token!=='string'||!Number.isFinite(session.expires_in)||session.expires_in<=0)throw new CloudError('invalid_environment_token');
  const permissions=String(session.scope).split(/\s+/);

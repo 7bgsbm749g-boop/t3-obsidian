@@ -40,7 +40,7 @@ test('the first palette row follows selection and typed input in all four states
   const sent:{query:string;selection:string}[]=[];
   const hook=installPaletteChat(app,(query,selectedText)=>{sent.push({query,selection:selectedText});},{getSelection:()=>selection});
   modal.onOpen();
-  assert.equal(suggest(modal,'')[0].item.name,'Send to T3 Code');
+  assert.equal(suggest(modal,'')[0].item.name,'T3 Code');
   selection='Selected paragraph';
   assert.equal(suggest(modal,'')[0].item.name,'Ask T3 Code');
   assert.equal(suggest(modal,'Why?')[0].item.name,'Ask T3 Code: “Why?”');
@@ -100,7 +100,7 @@ test('empty input has no chat row and duplicate activation submits only once per
   const { app, modal, command } = fixture();
   const sent: string[] = [];
   const hook = installPaletteChat(app, query => { sent.push(query); });
-  assert.deepEqual(suggest(modal, ' \n\t').map(row=>row.item.name), ['Send to T3 Code','Ordinary command']);
+  assert.deepEqual(suggest(modal, ' \n\t').map(row=>row.item.name), ['T3 Code','Ordinary command']);
   modal.onOpen();
   const first = suggest(modal, 'first')[0];
   const alsoFirst = suggest(modal, 'first')[0];
@@ -257,7 +257,7 @@ test('an edit between suggestion generation and selection cannot send a stale pr
 
 test('the dynamic row hides only the registered manual command and disposal restores it',()=>{
   const {app,modal,command}=fixture();
-  const manual={item:{id:'send-to-t3-code:send-or-ask',name:'Send to T3 Code'},match:{score:1}};
+  const manual={item:{id:'send-to-t3-code:send-or-ask',name:'T3 Code'},match:{score:1}};
   modal.getSuggestions=()=>[manual,command];
   const hook=installPaletteChat(app,()=>{});
   assert.deepEqual(suggest(modal,'').map(row=>row.item.id),['send-to-t3-code:palette-query','ordinary']);

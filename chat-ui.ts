@@ -102,7 +102,7 @@ class SendDestinationModal extends NoteTabPanel {
   onOpen(){
     this.opened=true;const revision=++this.revision;
     logEvent('ui.destination.opened',{notePath:this.host.getNotePath(),steering:this.host.steering,composing:this.composing,projectKey:this.projectKey});
-    this.titleEl.setText('Send to T3 Code');this.contentEl.empty();
+    this.titleEl.setText('T3 Code');this.contentEl.empty();
     const row=this.contentEl.createEl('p',{cls:'send-to-t3-destination-top'});
     const projectButton=row.createEl('button',{text:this.host.getProjectName(this.projectKey),cls:'send-to-t3-note-project',attr:{'aria-label':`Change project for this send: ${this.host.getProjectName(this.projectKey)}`,title:this.host.getTargetDescription(this.projectKey)}});
     projectButton.disabled=Boolean(this.host.busy);

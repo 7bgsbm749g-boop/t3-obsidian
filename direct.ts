@@ -61,7 +61,7 @@ export async function descriptor(url:string,fetcher?:Fetcher,signal?:AbortSignal
 export async function pair(address:string,code:string,fetcher?:Fetcher,expectedEnvironmentId?:string):Promise<{descriptor:any;session:PairedSession}>{
  const input=pairingInput(address,code);if(!input.code)throw Error('Paste a fresh one-time pairing link or pairing code from T3 Settings → Connections.');
  const d=await descriptor(input.url,fetcher);if(expectedEnvironmentId&&d.environmentId!==expectedEnvironmentId)throw Error("The address no longer matches the selected T3 machine. Discover machines again; no pairing code was sent.");
- const body=new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:input.code,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:PLUGIN_SCOPE,client_label:'Send to T3 Code (Obsidian)'}).toString();
+ const body=new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:input.code,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:PLUGIN_SCOPE,client_label:'T3 Code (Obsidian)'}).toString();
  const token=await jsonHttp(input.url+'/oauth/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body},fetcher);
  if(token.token_type!=='Bearer'||typeof token.access_token!=='string'||!Number.isFinite(token.expires_in)||token.expires_in<=0)throw Error('T3 returned an unsupported pairing session.');
  const permissions=String(token.scope).split(/\s+/);

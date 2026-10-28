@@ -325,7 +325,7 @@ export default class SendToT3 extends Plugin {
       for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const win=leaf.view.containerEl?.ownerDocument.defaultView;if(win&&!windows.has(win)){windows.add(win);watch(win);}}
       this.registerEvent(this.app.workspace.on('window-open',(_workspace,win)=>{if(!windows.has(win)){windows.add(win);watch(win);}}));
     }
-    this.addCommand({id:'send-or-ask',name:'Send to T3 Code',editorCheckCallback:(checking,editor,view)=>{
+    this.addCommand({id:'send-or-ask',name:'T3 Code',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;
       if(this.stopped||this.busy||this.defaultSending||!file||file.extension.toLowerCase()!=='md')return false;
       if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view},this.commandSendSelector(view)).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
@@ -1118,7 +1118,7 @@ export default class SendToT3 extends Plugin {
   openSettings(){
     const settings=(this.app as App & {setting?:{open():void;openTabById(id:string):void}}).setting;
     if(settings){settings.open();settings.openTabById(this.manifest.id);}
-    else new Notice('Open Settings → Send to T3 Code to sign in.');
+    else new Notice('Open Settings → T3 Code to sign in.');
   }
   chatReadinessError():string|undefined {
     if(this.stopped)return 'The plugin has been disabled. Re-enable it before sending.';
@@ -1127,7 +1127,7 @@ export default class SendToT3 extends Plugin {
     if(hasDeviceSession)return;
     if(this.signInExpired)return REAUTHENTICATE_MESSAGE;
     if(this.connecting)return 'T3 is still connecting your computers. Wait for connection sync to finish.';
-    if(this.nativeAccount&&!this.connectionSyncComplete)return 'T3 has not connected on this device. Check the sign-in status in Send to T3 Code settings.';
+    if(this.nativeAccount&&!this.connectionSyncComplete)return 'T3 has not connected on this device. Check the sign-in status in T3 Code settings.';
     if(!this.nativeAccount)return 'Sign in to T3 on this device first. Synced project names do not sign this device in.';
   }
   private chatNote():{path:string;absolutePath?:string}|undefined {
@@ -1299,7 +1299,7 @@ export default class SendToT3 extends Plugin {
       const threads=projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);
       if(this.stopped)return;
       new ExistingThreadModal(this.app,threads,thread=>this.sendNote(file,thread.id,projectKey(project),false,overrideKey,resolve?.(),insertion),undefined,undefined,back).open();
-    }catch(error){if(back)throw error;new Notice(`Send to T3 Code: ${message(error)}`,10000);}
+    }catch(error){if(back)throw error;new Notice(`T3 Code: ${message(error)}`,10000);}
   }
   openRunImport(file:TFile){
     if(this.stopped||this.busy)return;
@@ -1858,7 +1858,7 @@ export default class SendToT3 extends Plugin {
       if(!available){machine=this.fallbackNoProjectMachine();if(!machine)throw Error('Local T3 is unavailable. Connect another T3 machine before sending.');}
     }
     if(!machine){
-      if(!interactive)throw Error('Choose a No project machine in Send to T3 Code settings before sending.');
+      if(!interactive)throw Error('Choose a No project machine in T3 Code settings before sending.');
       const host=await this.configureVaultConnection();machine=host.connectionId||'local';
     }
     if(machine.startsWith('environment:')){
@@ -2520,7 +2520,7 @@ export default class SendToT3 extends Plugin {
       this.settings.pending.push(request); await this.save();
       const sentThreadId=await this.dispatch(request,options?.quiet);
       return {threadId:sentThreadId,request};
-    } catch(e) {if(request)await this.failRequest(request,e,'preparation',startedAt);else this.recordSendFailure(undefined,e,'preparation',startedAt);const detail=`${unsavedMessage(e)} The send failed. See the send failure log.`;if(options?.throwOnError)throw new RequestDeliveryError(detail,false,Boolean(request));new Notice(`Send to T3 Code: ${detail}`,12000);}
+    } catch(e) {if(request)await this.failRequest(request,e,'preparation',startedAt);else this.recordSendFailure(undefined,e,'preparation',startedAt);const detail=`${unsavedMessage(e)} The send failed. See the send failure log.`;if(options?.throwOnError)throw new RequestDeliveryError(detail,false,Boolean(request));new Notice(`T3 Code: ${detail}`,12000);}
     finally {this.busy = false;}
   }
   /** Resolve against the final thread and its provider turn, never the cursor.
@@ -2763,7 +2763,7 @@ export default class SendToT3 extends Plugin {
           });
           if(this.stopped)continue;
           job.status='kept';job.detail=detail;await this.save();
-          new Notice(`Send to T3 Code: ${detail}`,10000);
+          new Notice(`T3 Code: ${detail}`,10000);
         }catch(e){if(!this.stopped && job.detail!==message(e)){job.detail=message(e);try{await this.save();}catch{ /* Try again next poll. */ }}}
       }
       await this.monitorSettlements();
