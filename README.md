@@ -2,7 +2,7 @@
 
 Connect Obsidian notes to [T3 Code](https://github.com/pingdotgg/t3code). Send notes and selected text to an agent, stream replies into the editor, and link folders to T3 projects. The repository is **t3-obsidian**; the plugin appears as **T3 Code** in Obsidian.
 
-This is an independent community integration, maintained by the contributors to this repository. It is not an official T3 Code or Obsidian product.
+This is an independent community integration, maintained by [jslepx](https://github.com/7bgsbm749g-boop). It is not an official T3 Code or Obsidian product.
 
 ## Install
 
