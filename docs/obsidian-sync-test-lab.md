@@ -81,7 +81,7 @@ To reopen a closed lab editor, use the Cua Driver `launch_app` operation with
 Launch each profile separately. Discover its current PID/window ID through Cua;
 recorded PIDs are not durable identities. Follow the cua-driver native snapshot,
 action, and verification workflow. Preserve unrelated Obsidian windows. The lab
-does not automatically install or authenticate Send to T3 Code: prepare the
+does not automatically install or authenticate T3 Code: prepare the
 reviewed plugin build and supported connections in each test vault before a
 plugin-specific reproduction. Never transplant production `data.json`, private
 leases, or subscription records into a lab client.

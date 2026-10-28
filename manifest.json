@@ -1,9 +1,10 @@
 {
   "id": "send-to-t3-code",
-  "name": "Send to T3 Code",
+  "name": "T3 Code",
   "version": "2.45.50",
   "minAppVersion": "1.8.7",
   "description": "Chat with T3, send notes, link folders, and record durable automation events.",
-  "author": "Send to T3 Code contributors",
+  "author": "T3 Code contributors",
+  "authorUrl": "https://github.com/7bgsbm749g-boop",
   "isDesktopOnly": false
 }

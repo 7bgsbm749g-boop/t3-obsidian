@@ -85,7 +85,7 @@ export function installPaletteChat<Context = unknown>(
         const selection=options.captureSource?source?.selection??'':options.getSelection?.()??'';
         const name=query.trim()
           ? `${selection.trim()?'Ask T3 Code':'T3 Code'}: “${query}”`
-          : selection.trim()?'Ask T3 Code':'Send to T3 Code';
+          : selection.trim()?'Ask T3 Code':'T3 Code';
         const row: ChatRow = {
           item: { id: 'send-to-t3-code:palette-query', name },
           match: { score: 0, matches: [] },

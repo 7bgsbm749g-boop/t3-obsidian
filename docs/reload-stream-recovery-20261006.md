@@ -2,7 +2,7 @@
 
 ## Observed production fault
 
-The laptop QLO2 report covered missing streams and the Send to T3 Code project
+The laptop QLO2 report covered missing streams and the T3 Code project
 link after an app reload and restart. Read-only investigation retained both
 machines' note files, host leases, immutable generation revisions, and official
 Sync server history outside the vault:

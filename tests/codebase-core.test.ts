@@ -25,9 +25,9 @@ test('unchanged old buffer cannot replace a queued real edit',async()=>{
  assert.equal(f.remote,'real edit');assert.equal(f.writes,1);assert.equal(f.draft,undefined);
 });
 test('duplicate project titles identify workspace parents without changing identities',()=>{
- const a={...scope,title:'Send to T3 Code',root:'/home/ubuntu/projects/send-to-t3-code'},b={...a,projectId:'old',root:'/home/ubuntu/vault/.obsidian/plugins/send-to-t3-code'},solo={...scope,projectId:'solo',title:'Other'};
- const labels=codebaseRootLabels([a,b,solo]);assert.equal(labels.get(scopeKey(a)),'Send to T3 Code (projects)');assert.equal(labels.get(scopeKey(b)),'Send to T3 Code (plugins)');assert.equal(labels.get(scopeKey(solo)),'Other');assert.equal(a.title,b.title);
- const siblings=[{...a,root:'/work/alpha'},{...b,root:'/work/beta'}],siblingLabels=codebaseRootLabels(siblings);assert.equal(siblingLabels.get(scopeKey(a)),'Send to T3 Code (alpha)');assert.equal(siblingLabels.get(scopeKey(b)),'Send to T3 Code (beta)');
+ const a={...scope,title:'T3 Code',root:'/home/ubuntu/projects/send-to-t3-code'},b={...a,projectId:'old',root:'/home/ubuntu/vault/.obsidian/plugins/send-to-t3-code'},solo={...scope,projectId:'solo',title:'Other'};
+ const labels=codebaseRootLabels([a,b,solo]);assert.equal(labels.get(scopeKey(a)),'T3 Code (projects)');assert.equal(labels.get(scopeKey(b)),'T3 Code (plugins)');assert.equal(labels.get(scopeKey(solo)),'Other');assert.equal(a.title,b.title);
+ const siblings=[{...a,root:'/work/alpha'},{...b,root:'/work/beta'}],siblingLabels=codebaseRootLabels(siblings);assert.equal(siblingLabels.get(scopeKey(a)),'T3 Code (alpha)');assert.equal(siblingLabels.get(scopeKey(b)),'T3 Code (beta)');
 });
 
 test('project changes update only exact machine/project links and preserve folders and other machines',()=>{

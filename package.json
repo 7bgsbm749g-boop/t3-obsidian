@@ -1,7 +1,15 @@
 {
-  "name": "send-to-t3-code",
+  "name": "t3-obsidian",
   "version": "2.45.50",
   "private": true,
+  "description": "T3 Code integration for Obsidian notes, conversations, and linked projects.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/7bgsbm749g-boop/t3-obsidian.git"
+  },
+  "bugs": "https://github.com/7bgsbm749g-boop/t3-obsidian/issues",
+  "homepage": "https://github.com/7bgsbm749g-boop/t3-obsidian#readme",
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
     "test": "python3 scripts/change_checks.py",

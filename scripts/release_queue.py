@@ -176,12 +176,12 @@ def install(canonical: Path, *, queue: Path = QUEUE) -> None:
     units = Path.home() / '.config/systemd/user'
     units.mkdir(parents=True, exist_ok=True)
     (units / (UNIT + '.service')).write_text(
-        '[Unit]\nDescription=Serialize Send to T3 Code releases\n'
+        '[Unit]\nDescription=Serialize T3 Code releases\n'
         '[Service]\nType=oneshot\nWorkingDirectory=' + str(canonical) + '\n'
         'ExecStart=/usr/bin/python3 ' + str(canonical / 'scripts/release-qlo2.py') + ' --drain-queue\n'
         'TimeoutStartSec=3600\n')
     (units / (UNIT + '.path')).write_text(
-        '[Unit]\nDescription=Wake the Send to T3 Code release queue\n'
+        '[Unit]\nDescription=Wake the T3 Code release queue\n'
         '[Path]\nPathExists=' + str(queue / 'wake') + '\nUnit=' + UNIT + '.service\n'
         '[Install]\nWantedBy=default.target\n')
     subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)

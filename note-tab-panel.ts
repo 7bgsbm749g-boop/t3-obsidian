@@ -36,7 +36,7 @@ export class NoteTabPanel extends Modal {
     this.viewportChanged=()=>{const height=doc.defaultView?.visualViewport?.height;if(height)this.modalEl.style.setProperty('--t3-panel-viewport-height',`${Math.max(120,height*0.75)}px`);};
     doc.defaultView?.visualViewport?.addEventListener('resize',this.viewportChanged);this.viewportChanged();
     this.onOpen();
-    this.modalEl.setAttribute('aria-label',this.titleEl?.textContent||this.contentEl.querySelector('h2')?.textContent||'Send to T3 Code');
+    this.modalEl.setAttribute('aria-label',this.titleEl?.textContent||this.contentEl.querySelector('h2')?.textContent||'T3 Code');
     this.modalEl.querySelector<HTMLElement>('input:not(:disabled),textarea:not(:disabled),button:not(:disabled):not([hidden])')?.focus({preventScroll:true});
   }
   close(restoreFocus=true){

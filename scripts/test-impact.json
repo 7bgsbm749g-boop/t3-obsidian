@@ -31,7 +31,8 @@
     "dist/main.js": [
       "main.ts",
       "esbuild.config.mjs",
-      "manifest.json"
+      "manifest.json",
+      "THIRD_PARTY_NOTICES.md"
     ],
     "main.ts": [
       "styles.css"

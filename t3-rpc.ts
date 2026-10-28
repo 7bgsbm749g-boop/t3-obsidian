@@ -17,7 +17,7 @@ export class T3RequestTimeoutError extends Error {
 }
 let connections=0;
 export class T3RpcError extends Error {
-  constructor(public kind:string,public requiredPermission?:string,public rpcMethod?:string){super(kind==='EnvironmentAuthorizationError'&&['filesystem:read','filesystem:write'].includes(requiredPermission??'')?'The T3 connection does not permit note access. Reconnect this machine in Send to T3 Code settings with filesystem read and write access.':kind==='ProjectReadFileError'?'Cannot read the synced vault settings in this folder.':kind==='FilesystemBrowseError'?'Cannot open this folder on the selected machine.':'The selected machine could not complete the T3 request.');}
+  constructor(public kind:string,public requiredPermission?:string,public rpcMethod?:string){super(kind==='EnvironmentAuthorizationError'&&['filesystem:read','filesystem:write'].includes(requiredPermission??'')?'The T3 connection does not permit note access. Reconnect this machine in T3 Code settings with filesystem read and write access.':kind==='ProjectReadFileError'?'Cannot read the synced vault settings in this folder.':kind==='FilesystemBrowseError'?'Cannot open this folder on the selected machine.':'The selected machine could not complete the T3 request.');}
 }
 
 /** Unary requests over T3's authenticated Effect RPC protocol. */

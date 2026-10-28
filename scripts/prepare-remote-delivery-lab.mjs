@@ -25,7 +25,7 @@ if(process.argv.includes('--fixed')){
   console.log('Installed reviewed build in synthetic lab only; reload both lab plugins.');process.exit(0);
 }
 try{await access(join(evidence,'LAB.json'));throw Error('Lab setup already exists.');}catch(error){if(error.code!=='ENOENT')throw error;}
-for(const role of ['a','b'])try{await access(`/home/ubuntu/vaults/Sync Test ${role.toUpperCase()}/.obsidian/plugins/send-to-t3-code`);throw Error('Lab already has Send to T3 Code; preserve it before setup.');}catch(error){if(error.code!=='ENOENT')throw error;}
+for(const role of ['a','b'])try{await access(`/home/ubuntu/vaults/Sync Test ${role.toUpperCase()}/.obsidian/plugins/send-to-t3-code`);throw Error('Lab already has T3 Code; preserve it before setup.');}catch(error){if(error.code!=='ENOENT')throw error;}
 const base='/home/ubuntu/.t3',{origin}=JSON.parse(await readFile(base+'/userdata/server-runtime.json','utf8'));
 const descriptor=await (await fetch(origin+'/.well-known/t3/environment')).json();
 const permissions=['orchestration:read','orchestration:operate','filesystem:read','filesystem:write'];
@@ -46,7 +46,7 @@ const oldZip=resolve(archiveOption>=0?process.argv[archiveOption+1]:'release/sen
 const oldVersion=JSON.parse(execFileSync('python3',['-c','import zipfile,sys;print(zipfile.ZipFile(sys.argv[1]).read("send-to-t3-code/manifest.json").decode())',oldZip],{encoding:'utf8'})).version;
 for(const role of ['a','b']){
   const vault=`/home/ubuntu/vaults/Sync Test ${role.toUpperCase()}`,configDir=join(vault,'.obsidian'),plugin=join(configDir,'plugins/send-to-t3-code'),observer=join(configDir,'plugins/remote-delivery-lab');
-  try{await access(plugin);throw Error('Lab already has Send to T3 Code; preserve it before setup.');}catch(error){if(error.code!=='ENOENT')throw error;}
+  try{await access(plugin);throw Error('Lab already has T3 Code; preserve it before setup.');}catch(error){if(error.code!=='ENOENT')throw error;}
   await mkdir(plugin,{recursive:true});await mkdir(observer,{recursive:true});await mkdir(join(vault,folder),{recursive:true});
   for(const name of ['app.json','community-plugins.json']){const path=join(configDir,name);let bytes;try{bytes=await readFile(path);}catch(error){if(error.code!=='ENOENT')throw error;}backups.push({path,bytes:bytes?.toString('base64')??null});const data=bytes?JSON.parse(bytes):name==='app.json'?{}:[];await writeFile(path,JSON.stringify(name==='app.json'?{...data,safeMode:false}:['remote-delivery-lab',...data,'send-to-t3-code']));}
   execFileSync('python3',['-c','import zipfile,sys,pathlib\nz=zipfile.ZipFile(sys.argv[1]);p=pathlib.Path(sys.argv[2])\nfor n in ["main.js","manifest.json","styles.css"]: (p/n).write_bytes(z.read("send-to-t3-code/"+n))',oldZip,plugin]);
