@@ -171,6 +171,20 @@ export async function runDesktop(connection:Connection,args:string[],input='',op
  }}
 }
 
+/** Borrow the plugin-owned local credential, preserving the same durable
+ * request ledger and native launch path without per-operation CLI startup. */
+export async function runDesktopWithAccess(connection:Connection,args:string[],input:string,access:ThreadAccess,options:DirectReadOptions={}):Promise<any>{
+  requestAborted(options.signal);
+  if(connection.host!=='local')throw Error('Local T3 connects only to this computer.');
+  const req=parseOperation(args,input),base=connection.baseDir||join(homedir(),'.t3');
+  const api=(path:string,payload?:any)=>{requestAborted(options.signal);return access.api(path.startsWith('/api/')?path:'/api/orchestration/'+path,payload);};
+  if(req.action==='capabilities')return {imagePayloadVersion:1,imageContextVersion:1,native:true};
+  if(req.action==='no-project')return ensureNoProject(api);
+  if(req.action==='start')return start(api,req,connection.stateDir||join(base,'send-to-t3-code','desktop'),project=>readNewThreadDefaults(api,access.origin,project));
+  if(req.action==='read')return (await api('threads/'+encodeURIComponent(req.threadId)+(options.control?'?controlOnly=true':'?turnLimit=10'))).thread;
+  const shell=await api('shell');return req.action==='projects'?{projects:shell.projects}:{threads:shell.threads.filter((thread:any)=>thread.projectId===req.project)};
+}
+
 /** A short-lived local session dedicated to one live thread subscription. */
 export async function desktopThreadAccess(connection:Connection,component:'response-host'|'thread-reader'='thread-reader'):Promise<ThreadAccess>{
   if(connection.host!=='local')throw Error('Local T3 is available only on this computer.');
@@ -203,4 +217,24 @@ export async function desktopEnvironment(connection:Connection):Promise<string>{
   const descriptor=await requestJson(runtime.origin,'','/.well-known/t3/environment');
   if(typeof descriptor?.environmentId!=='string'||descriptor.orchestrationProtocolVersion!==T3_PROTOCOL_VERSION)throw Error('Update local T3 to Orchestrator v2 before connecting.');
   return descriptor.environmentId;
+}
+
+/** Public loopback discovery only: no CLI, credential, or remote round trip.
+ * Missing/stopped local T3 fails immediately; an unresponsive listener is bounded. */
+export async function availableDesktopEnvironment(connection:Connection,timeoutMs=150):Promise<string|undefined>{
+  try{
+    const base=connection.baseDir||join(homedir(),'.t3'),runtime=JSON.parse(await fs.readFile(join(base,'userdata','server-runtime.json'),'utf8'));
+    const origin=new URL(runtime.origin);
+    if(origin.protocol!=='http:'||!['localhost','127.0.0.1','[::1]'].includes(origin.hostname)||origin.username||origin.password||origin.pathname!=='/'||origin.search||origin.hash)return;
+    return await new Promise<string|undefined>(resolve=>{
+      let done=false;const finish=(id?:string)=>{if(done)return;done=true;clearTimeout(timer);resolve(id);};
+      const request=http.get(new URL('/.well-known/t3/environment',origin),response=>{
+        if(response.statusCode!==200){response.resume();finish();return;}
+        let body='';response.setEncoding('utf8');response.on('error',()=>finish());
+        response.on('data',(text:string)=>{body+=text;if(body.length>65_536){request.destroy();finish();}});
+        response.on('end',()=>{try{const descriptor=JSON.parse(body);finish(descriptor.orchestrationProtocolVersion===T3_PROTOCOL_VERSION&&typeof descriptor.environmentId==='string'&&descriptor.environmentId?descriptor.environmentId:undefined);}catch{finish();}});
+      });
+      const timer=setTimeout(()=>{request.destroy();finish();},timeoutMs);request.on('error',()=>finish());
+    });
+  }catch{return;}
 }

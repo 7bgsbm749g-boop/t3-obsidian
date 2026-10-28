@@ -296,6 +296,57 @@ test('mobile resolves a legacy local vault location through its exact discovered
   }finally{h.plugin.onunload();}
 });
 
+test('default desktop No project uses local T3, reuses a warm check, and stages in the actual local vault',async()=>{
+  const h=await folderMenuHarness(),notices=h.notices.length;
+  try{
+    h.fileMenu('Note.md',false);h.plugin.settings.vaultHost={connectionId:'c',environmentId:'env',workspaceRoot:'/remote-vault'};
+    h.plugin.app.vault.adapter={getFullPath:()=>'/local-vault'};
+    let checks=0;const reads:any[]=[];
+    h.plugin.localNoProjectEnvironment=async()=>{checks++;return 'local-env';};
+    h.plugin.readNoProjectProject=async(connection:any)=>{reads.push(connection);return {id:'local-scratch',title:'No project',workspaceRoot:'/local-scratch'};};
+    await h.plugin.refreshLocalNoProject();const started=performance.now();
+    for(let n=0;n<2;n++){
+      const target=await h.plugin.noProjectTarget();assert.equal(target.project.id,'local-scratch');assert.equal(target.project.connectionId,undefined);
+    }
+    assert.equal(h.plugin.defaultNoProjectMachine(),'local');assert.equal(checks,1);assert.ok(performance.now()-started<100,'Warm selection must not wait for another health check');
+    assert.ok(reads.every(connection=>connection.host==='local'&&connection.environmentId==='local-env'));
+    const host=await h.plugin.localResponseTarget({connection:reads[0]});assert.equal(host.workspaceRoot,'/local-vault');assert.equal(host.environmentId,'local-env');
+    assert.equal(h.plugin.vaultConnection().workspaceRoot,'/remote-vault');assert.equal(h.notices.length,notices);
+  }finally{h.plugin.onunload();}
+});
+
+test('unavailable local No project silently uses the vault machine without a picker or local setup',async()=>{
+  const h=await folderMenuHarness(),notices=h.notices.length;
+  try{
+    h.fileMenu('Note.md',false);h.plugin.settings.vaultHost={connectionId:'c',environmentId:'env',workspaceRoot:'/remote-vault'};
+    h.plugin.localNoProjectEnvironment=async()=>undefined;
+    const reads:any[]=[];h.plugin.readNoProjectProject=async(connection:any)=>{reads.push(connection);return {id:'remote-scratch',title:'No project',workspaceRoot:'/remote-scratch'};};
+    const result=await h.plugin.noProjectTarget();assert.equal(result.project.connectionId,'c');assert.equal(reads.length,1);assert.equal(reads[0].transport,'direct');
+    assert.equal(h.modals.length,0);assert.equal(h.notices.length,notices);
+  }finally{h.plugin.onunload();}
+});
+
+test('local No project setup failure falls back before dispatch, while explicit machine choices retain their errors',async()=>{
+  const h=await folderMenuHarness(),notices=h.notices.length;
+  try{
+    h.fileMenu('Note.md',false);h.plugin.localNoProjectEnvironment=async()=> 'local-env';
+    const reads:string[]=[];h.plugin.readNoProjectProject=async(connection:any)=>{reads.push(connection.host);if(connection.host==='local')throw Error('Local setup failed');return {id:'remote-scratch',title:'No project',workspaceRoot:'/remote-scratch'};};
+    assert.equal((await h.plugin.noProjectTarget()).project.connectionId,'c');assert.deepEqual(reads,['local','direct']);
+    reads.length=0;await h.plugin.noProjectTarget();assert.deepEqual(reads,['direct'],'A recent local setup failure must not delay the next send');
+    reads.length=0;await assert.rejects(h.plugin.noProjectTarget('thread:no-project:local'),/Local setup failed/);assert.deepEqual(reads,['local']);assert.equal(h.notices.length,notices);
+  }finally{h.plugin.onunload();}
+});
+
+test('a stalled local preparation has a bounded silent fallback and explicit remote choices skip local discovery',async()=>{
+  const h=await folderMenuHarness(),notices=h.notices.length;
+  try{
+    h.fileMenu('Note.md',false);let checks=0;h.plugin.localNoProjectEnvironment=async()=>{checks++;return 'local-env';};
+    let localSignal:AbortSignal|undefined;h.plugin.readNoProjectProject=async(connection:any,signal?:AbortSignal)=>{if(connection.host==='local'){localSignal=signal;return new Promise(()=>{});}return {id:'remote-scratch',title:'No project',workspaceRoot:'/remote-scratch'};};
+    const start=performance.now();assert.equal((await h.plugin.noProjectTarget()).project.connectionId,'c');assert.ok(performance.now()-start<1600);assert.equal(localSignal?.aborted,true);
+    const previous=checks;await h.plugin.noProjectTarget('thread:no-project:c');assert.equal(checks,previous);assert.equal(h.notices.length,notices);
+  }finally{h.plugin.onunload();}
+});
+
 test('vault connection setup saves the verified path without registering or linking a T3 project',async()=>{
   const h=await folderMenuHarness();
   try{

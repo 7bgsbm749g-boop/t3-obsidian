@@ -77,6 +77,9 @@
     ],
     "tests/question-continuation.test.ts": [
       "validation/unified-questions-lab.ts"
+    ],
+    "tests/local-response-manager.test.ts": [
+      "validation/agent-note-edits-lab.ts"
     ]
   }
 }

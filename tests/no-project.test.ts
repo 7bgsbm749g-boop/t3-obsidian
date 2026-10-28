@@ -6,6 +6,25 @@ import {readDirect,sendDirect,commandId} from '../direct';
 import type {Request} from '../bridge';
 import {noteThreadTitle} from '../thread-title';
 import {settingsSocket} from './rpc-fixture';
+import {availableDesktopEnvironment} from '../desktop';
+import {createServer} from 'node:http';
+import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+
+test('local availability discovery is a bounded public loopback read and missing runtimes need no network',async()=>{
+  const base=await mkdtemp(join(tmpdir(),'no-project-local-'));const connection={host:'local',executable:'',baseDir:base};
+  const server=createServer((request,response)=>{assert.equal(request.url,'/.well-known/t3/environment');assert.equal(request.headers.authorization,undefined);response.end(JSON.stringify({environmentId:'local-test',orchestrationProtocolVersion:2}));});
+  try{
+    assert.equal(await availableDesktopEnvironment(connection),undefined);
+    await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const port=(server.address() as any).port;
+    await mkdir(join(base,'userdata'));const runtime=join(base,'userdata/server-runtime.json');await writeFile(runtime,JSON.stringify({origin:`http://127.0.0.1:${port}`}));
+    assert.equal(await availableDesktopEnvironment(connection),'local-test');
+    server.removeAllListeners('request');server.on('request',()=>{});
+    const started=performance.now();assert.equal(await availableDesktopEnvironment(connection,40),undefined);assert.ok(performance.now()-started<500);
+    await writeFile(runtime,JSON.stringify({origin:'https://remote.example'}));assert.equal(await availableDesktopEnvironment(connection),undefined);
+  }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await rm(base,{recursive:true,force:true});}
+});
 
 test('No project uses T3 native setup and retains its actual ID and workspace',async()=>{
   const calls:string[]=[];

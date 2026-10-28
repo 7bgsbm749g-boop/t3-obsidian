@@ -91,6 +91,13 @@ remain source rather than suppressing text without a proven location.
 Active response containers and recognized generated progress callouts are also
 excluded. Ordinary quotes and literal marker examples remain source.
 
+Checked staged note edits also record their inserted and replacement ranges
+before the final write. Smart Send excludes unchanged agent-written text from
+those ranges for every destination, including after settings Sync, reload, and
+rename. Later user additions within or outside the edited text remain source.
+Deletions add no exclusion. Direct filesystem writes outside the staging
+protocol have no agent provenance and remain ordinary source.
+
 Older note replies can be recovered from canonical T3 snapshots for their known
 note/thread bindings. Only complete-line, unique rendered matches are recorded;
 recovery does not rewrite the note. Arbitrary unmarked or independently edited

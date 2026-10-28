@@ -155,6 +155,7 @@ export class LocalResponseManager {
       if(this.closed||runtime.stopped||!this.canFinishClosed(runtime)&&!this.io.isOpen(path)||this.io.syncReady?.(path)===false)return;
       if(!this.range(current,runtime.request.id)){runtime.done=true;runtime.saved=!!update.body&&current.includes(update.body);runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);return;}
       let document=await this.io.localFinalDraft?.(current,this.range(current,runtime.request.id)!.request)??current;
+      if(document!==current)await this.io.rememberNoteEdits?.(runtime.request,current,document);
       const confirmed=(runtime.request.localSteering??[]).map(input=>({...input,confirmed:!!update.checkpoint?.bindings?.[input.messageId]&&!!update.displayedInputIds?.includes(input.messageId)}));
       document=completedSelectionDraft(document,runtime.request.id,confirmed);
       const range=this.range(document,runtime.request.id);

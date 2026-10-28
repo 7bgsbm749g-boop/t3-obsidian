@@ -9,6 +9,7 @@ import type { NoteCompletion } from './completion';
 import type { NoteThread } from './note-threads';
 import type {FolderLink} from './folder-link';
 import type {ResponseRequest} from './response-model';
+import type {ThreadAccess} from './thread-stream';
 import type {SteeringInput} from './inline-steering';
 export interface Project { id: string; title: string; workspaceRoot: string; connectionId?:string; connectionName?:string }
 export function projectKey(project:Project){return project.connectionId?`${project.connectionId}:${project.id}`:project.id;}
@@ -28,7 +29,7 @@ export function parseProjects(value: any): Project[] {
     ids.add(p.id); return {id:p.id,title:p.title,workspaceRoot:p.workspaceRoot};
   });
 }
-interface Runtime {mobile:boolean; pairedSession?:(id:string)=>PairedSession|undefined|Promise<PairedSession|undefined>;saveRequest?:(request:Request)=>Promise<void>}
+interface Runtime {mobile:boolean; localAccess?:()=>Promise<ThreadAccess>;pairedSession?:(id:string)=>PairedSession|undefined|Promise<PairedSession|undefined>;saveRequest?:(request:Request)=>Promise<void>}
 let runtime:Runtime|undefined;
 export function configureBridge(value:Runtime) {runtime=value;}
 // The retired value remains readable only to reject old persisted work safely.
@@ -47,7 +48,8 @@ export async function runBridge(connection:Connection,args:string[],input='',opt
   else{
   if(retiredConnection(connection))throw new Error(RETIRED_MESSAGE);
   if(runtime?.mobile)throw new Error('This saved request uses the local T3 connection. Retry it on the desktop where it was sent. On mobile, create new sends using Direct T3 pairing.');
-  result=await (await import('./desktop')).runDesktop(connection,args,input,options);
+  const desktop=await import('./desktop');
+  result=runtime?.localAccess?await desktop.runDesktopWithAccess(connection,args,input,await abortableRead(runtime.localAccess(),options.signal),options):await desktop.runDesktop(connection,args,input,options);
   }
   logEvent('transport.operation.completed',{operation,control:options.control,elapsedMs:Date.now()-started,transport:connection.transport??'desktop',environmentId:connection.environmentId});return result;
   }catch(error){logFailure('transport.operation.failed',error,{operation,control:options.control,cancelled:options.signal?.aborted,elapsedMs:Date.now()-started,transport:connection.transport??'desktop',environmentId:connection.environmentId});throw error;}

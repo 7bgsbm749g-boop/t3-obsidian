@@ -1,4 +1,4 @@
-import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,rememberResponse,confirmSmartSend,moveSmartNotes,recoverSmartNote,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from './smart-send';
+import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,recoverSmartNote,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from './smart-send';
 import {DuplicateResponseLocation} from './response-location';
 import {retainedLocalFinal,restoredLocalFinal} from './local-final-cache';
 import {HtmlResultStore} from './html-result-store';
@@ -20,7 +20,7 @@ import {appendSendFailure,sendFailureLog,type SendFailure} from './send-failures
 import {ConnectionRecovery,type ConnectionReloadState} from './connection-recovery';
 import {hasPluginPermissions} from './environment-permissions';
 import {REAUTHENTICATE_MESSAGE,SignInRequiredError,signInRequired} from './sign-in-state';
-import {T3HttpError} from './thread-access-cache';
+import {T3HttpError,ThreadAccessCache} from './thread-access-cache';
 import {mergeSharedSettings} from './shared-settings';
 import {noteThreadTitle,threadTitleGeneration,type ThreadTitleGeneration} from './thread-title';
 import {ResponseLocationModal} from './response-location-ui';
@@ -179,6 +179,11 @@ export default class SendToT3 extends Plugin {
   private completionGlow?:CompletionGlow;
   private vaultSetup?:Promise<VaultHost>;
   private noProjectProjects=new Map<string,Project>();
+  private localNoProjectCheck?:Promise<string|undefined>;
+  private localNoProjectId?:string;
+  private localNoProjectCheckedAt=0;
+  private localNoProjectRetryAt=0;
+  private localDesktopAccess?:ThreadAccessCache;
   private vaultSetupModal?:VaultSetupModal;
   private vaultRegistrations:Record<string,VaultRegistration>={};
   private eventSubscriptions?:EventSubscriptions;
@@ -372,6 +377,7 @@ export default class SendToT3 extends Plugin {
       ...deviceNoteIO(this.app),
       localFinalNotes:deviceFinalNoteIO(this.app,()=>!this.stopped),
       rememberResponse:async(request,body,before,after,offset)=>{if(await rememberResponse(this.smartData(),request.notePath,request.id,body,before,after,offset))await this.save(true);},
+      rememberNoteEdits:async(request,before,after)=>{if(await rememberNoteEdits(this.smartData(),request.notePath,request.id,before,after))await this.save(true);},
       localBindings:()=>responseBindingRequests(this.settings.responseBindings??this.responseBindingReplica),
       saveLocalBinding:request=>this.saveResponseBinding(request),
       retainLocalFinal:async update=>{await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${update.request.id}`,retainedLocalFinal(update));},
@@ -502,7 +508,7 @@ export default class SendToT3 extends Plugin {
     for(const job of this.settings.completionJobs){job.connection=migrateConnection(job.connection);if(retiredConnection(job.connection)&&job.status==='watching'){job.status='kept';job.detail='Kept note: the companion mode was removed. Check the original thread in T3.';}}
     this.settings.settlementJobs=this.settings.settlementJobs.filter(job=>job&&typeof job.requestId==='string'&&typeof job.messageId==='string'&&typeof job.threadId==='string'&&typeof job.projectId==='string'&&job.connection&&!retiredConnection(job.connection)).map(job=>({...job,connection:migrateConnection(job.connection)}));
     await this.initializeProjectCatalog();
-    configureBridge({mobile:Platform.isMobile,pairedSession:id=>this.sessionFor(id),saveRequest:async request=>{if(!this.settings.pending.includes(request))throw Error('Saved request is missing. Nothing was sent.');this.persistAgentCommand(request);await this.save();}});
+    configureBridge({mobile:Platform.isMobile,...(!Platform.isMobile?{localAccess:()=>this.desktopAccess()}:{}),pairedSession:id=>this.sessionFor(id),saveRequest:async request=>{if(!this.settings.pending.includes(request))throw Error('Saved request is missing. Nothing was sent.');this.persistAgentCommand(request);await this.save();}});
     // Migrate unfinished desktop requests once, but do not rewrite the shared
     // settings file merely because this device started. Credentials and jobs
     // are device-local.
@@ -1116,7 +1122,7 @@ export default class SendToT3 extends Plugin {
   }
   chatReadinessError():string|undefined {
     if(this.stopped)return 'The plugin has been disabled. Re-enable it before sending.';
-    if(this.mode==='desktop')return;
+    if(this.mode==='desktop'||!Platform.isMobile&&this.localNoProjectId)return;
     const hasDeviceSession=this.settings.paired.some(c=>{const session=this.pairedSessions[c.id];return session?.environmentId===c.environmentId&&session.url===c.url&&session.expiresAt>Date.now()+5000;});
     if(hasDeviceSession)return;
     if(this.signInExpired)return REAUTHENTICATE_MESSAGE;
@@ -1758,6 +1764,10 @@ export default class SendToT3 extends Plugin {
     return {environmentId,workspaceRoot:root.workspaceRoot,directory:`${this.app.vault.configDir||'.obsidian'}/t3-code/inline/v1`,...(root.connectionId?{connectionId:root.connectionId}:{})};
   }
   private async localResponseTarget(request:Request):Promise<ResponseStorageTarget>{
+    if(!Platform.isMobile&&request.connection.host==='local'&&request.connection.transport!=='direct'){
+      const workspaceRoot=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
+      if(workspaceRoot)return {environmentId:request.connection.environmentId??await this.localInlineEnvironment(),workspaceRoot,directory:`${this.app.vault.configDir||'.obsidian'}/t3-code/inline/v1`};
+    }
     return this.inlineHostTarget();
   }
   private async prepareHostedInline(job:InlineJob,request:Request){
@@ -1814,13 +1824,39 @@ export default class SendToT3 extends Plugin {
     return paired?{...host,connectionId:paired.id,environmentId:paired.environmentId}:host;
   }
   private defaultNoProjectMachine():string|undefined {
+    if(!Platform.isMobile)return 'local';
     const host=this.vaultConnection();
     if(host)return host.connectionId||'local';
-    if(!Platform.isMobile)return 'local';
     return this.settings.paired.length===1?this.settings.paired[0].id:undefined;
   }
+  private fallbackNoProjectMachine():string|undefined {
+    const host=this.vaultConnection();
+    if(host?.connectionId&&this.settings.paired.some(item=>item.id===host.connectionId))return host.connectionId;
+    return this.settings.paired.length===1?this.settings.paired[0].id:undefined;
+  }
+  private localNoProjectEnvironment(){return import('./desktop').then(desktop=>desktop.availableDesktopEnvironment(this.settings.connection));}
+  private desktopAccess(){
+    this.localDesktopAccess??=new ThreadAccessCache(async()=>{
+      const desktop=await import('./desktop');return desktop.desktopThreadAccess({...this.settings.connection,host:'local'});
+    });
+    return this.localDesktopAccess.get(JSON.stringify([this.settings.connection.executable,this.settings.connection.baseDir??'']));
+  }
+  private refreshLocalNoProject():Promise<string|undefined>{
+    if(Platform.isMobile||this.stopped)return Promise.resolve(undefined);
+    if(this.localNoProjectCheck)return this.localNoProjectCheck;
+    const work=this.localNoProjectEnvironment().catch(()=>undefined).then(id=>{
+      if(!this.stopped){this.localNoProjectId=id;this.localNoProjectCheckedAt=Date.now();if(id){this.inlineEnvironment=Promise.resolve(id);void this.desktopAccess().catch(()=>{});}}
+      return id;
+    });
+    this.localNoProjectCheck=work;void work.finally(()=>{if(this.localNoProjectCheck===work)this.localNoProjectCheck=undefined;});return work;
+  }
+  private readNoProjectProject(connection:Connection,signal?:AbortSignal):Promise<Project>{return runBridge(connection,['no-project'],'',{signal});}
   private async noProjectTarget(key=NO_PROJECT,interactive=true):Promise<{project:Project;link:FolderLink}>{
-    let machine=noProjectMachine(key)??this.defaultNoProjectMachine();
+    const explicit=noProjectMachine(key);let machine=explicit??this.defaultNoProjectMachine();
+    if(!explicit&&machine==='local'&&!Platform.isMobile){
+      const available=Date.now()<this.localNoProjectRetryAt?undefined:Date.now()-this.localNoProjectCheckedAt<1000?this.localNoProjectId:await this.refreshLocalNoProject();
+      if(!available){machine=this.fallbackNoProjectMachine();if(!machine)throw Error('Local T3 is unavailable. Connect another T3 machine before sending.');}
+    }
     if(!machine){
       if(!interactive)throw Error('Choose a No project machine in Send to T3 Code settings before sending.');
       const host=await this.configureVaultConnection();machine=host.connectionId||'local';
@@ -1835,8 +1871,13 @@ export default class SendToT3 extends Plugin {
     if(machine==='local'&&Platform.isMobile)throw Error('The default machine is local to another desktop. Choose a connected computer.');
     const paired=machine==='local'?undefined:this.settings.paired.find(item=>item.id===machine);
     if(machine!=='local'&&!paired)throw Error('The selected T3 machine is unavailable. Reconnect it or choose another machine.');
-    const connection:Connection=paired?{transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId}:{...this.settings.connection,host:'local',transport:'desktop'};
-    const found=await runBridge(connection,['no-project']);
+    const connection:Connection=paired?{transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId}:{...this.settings.connection,host:'local',transport:'desktop',...(this.localNoProjectId?{environmentId:this.localNoProjectId}:{})};
+    const fallback=!explicit&&machine==='local'?this.fallbackNoProjectMachine():undefined;
+    const controller=fallback?new AbortController():undefined,timer=controller?setTimeout(()=>controller.abort(Error('Local No project setup is unavailable.')),1000):undefined;
+    let found:Project;
+    try{found=await abortableRead(this.readNoProjectProject(connection,controller?.signal),controller?.signal);}
+    catch(error){if(!fallback||this.stopped)throw error;this.localNoProjectRetryAt=Date.now()+15_000;return this.noProjectTarget(noProjectKey(fallback),interactive);}
+    finally{if(timer!==undefined)clearTimeout(timer);}
     const project:Project={...found,...(paired?{connectionId:paired.id,connectionName:paired.name}:{})};
     this.noProjectProjects.set(machine,project);
     if(paired)this.settings.directProjects=[...this.settings.directProjects.filter(item=>projectKey(item)!==projectKey(project)),project];
@@ -2045,7 +2086,7 @@ export default class SendToT3 extends Plugin {
     }
     return [...catalog.values()].map(entry=>entry.project);
   }
-  connection(project:Project):Connection {if(project.connectionId){const c=this.settings.paired.find(c=>c.id===project.connectionId);if(!c)throw Error('Pair a T3 connection in settings first.');return {transport:'direct',url:c.url,connectionId:c.id,environmentId:c.environmentId,host:'direct',executable:''};}return {...this.settings.connection,host:'local',transport:'desktop'};}
+  connection(project:Project):Connection {if(project.connectionId){const c=this.settings.paired.find(c=>c.id===project.connectionId);if(!c)throw Error('Pair a T3 connection in settings first.');return {transport:'direct',url:c.url,connectionId:c.id,environmentId:c.environmentId,host:'direct',executable:''};}return {...this.settings.connection,host:'local',transport:'desktop',...(this.localNoProjectId?{environmentId:this.localNoProjectId}:{})};}
   async pairConnection(name:string,address:string,code:string,expectedEnvironmentId?:string){
     const result=await pair(address,code,undefined,expectedEnvironmentId);
     const existing=this.settings.paired.find(c=>c.environmentId===result.descriptor.environmentId&&c.url===result.session.url);
@@ -2200,6 +2241,7 @@ export default class SendToT3 extends Plugin {
   }
   private refreshProjectsInBackground(force=false){
     if(this.stopped)return;
+    void this.refreshLocalNoProject();
     this.syncProjectSources();
     void this.refreshMachines(force).catch(error=>{this.cloudError=message(error);this.cloudChanged?.();});
   }
@@ -2680,7 +2722,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }
   }
-  onunload(){closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){void this.localDesktopAccess?.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;
