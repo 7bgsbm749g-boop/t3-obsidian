@@ -1,5 +1,7 @@
 import type {MarkdownView} from 'obsidian';
 import type {ResponseProjection} from './native-response-projection';
+import {ResponseHeightGuard} from './response-height';
+import type {ChangeDesc} from '@codemirror/state';
 
 export type ScrollControl={active:boolean;position:'top'|'bottom';moving:boolean};
 export const responseScrollChanged='send-to-t3-scroll-changed';
@@ -15,26 +17,30 @@ export class ResponseScroll {
   private observer?:MutationObserver;
   private resize?:ResizeObserver;
   private watched=new Set<Element>();
+  private height:ResponseHeightGuard;
   constructor(private view:MarkdownView,private projection:()=>ResponseProjection){
+    this.height=new ResponseHeightGuard(view,()=>this.updated());
     const window=view.contentEl?.ownerDocument.defaultView;if(!window)return;
     const inside=(event:Event)=>view.contentEl.contains(event.target as Node);
     const button=(event:Event)=>((event.target as Node)?.nodeType===1?event.target as Element:(event.target as Node)?.parentElement)?.closest('.send-to-t3-stream-follow');
     const manual=(event:Event)=>{if(event.isTrusted&&inside(event))this.stop();};
-    const click=(event:MouseEvent)=>{if(event.isTrusted&&(!inside(event)||!button(event)))this.stop();};
+    const click=(event:MouseEvent)=>{if(event.isTrusted&&(!inside(event)||!button(event)))this.stop();if(event.isTrusted&&(event.target as Element)?.closest?.('.callout-title, summary'))this.height.clear();};
     const pointer=(event:PointerEvent)=>{if(event.isTrusted&&(!inside(event)||!button(event)))this.stop();};
-    const key=(event:KeyboardEvent)=>{if(button(event)&&['Enter',' '].includes(event.key))return;if(!['Control','Shift','Alt','Meta'].includes(event.key))manual(event);};
+    const key=(event:KeyboardEvent)=>{if(['Enter',' '].includes(event.key)&&(event.target as Element)?.closest?.('.callout-title, summary'))this.height.clear();if(button(event)&&['Enter',' '].includes(event.key))return;if(!['Control','Shift','Alt','Meta'].includes(event.key))manual(event);};
+    const input=(event:Event)=>{if(event.isTrusted&&inside(event))this.height.clear();};
     const selection=()=>{const selected=window.getSelection();if(selected&&!selected.isCollapsed&&view.contentEl.contains(selected.anchorNode))this.stop();};
     window.addEventListener('click',click,true);
     window.addEventListener('pointerdown',pointer,true);
     window.addEventListener('wheel',manual,{capture:true,passive:true});
     window.addEventListener('touchmove',manual,{capture:true,passive:true});
     window.addEventListener('keydown',key,true);
+    window.addEventListener('beforeinput',input,true);
     view.contentEl.ownerDocument.addEventListener('selectionchange',selection);
     window.addEventListener('resize',this.updated);
     window.visualViewport?.addEventListener('resize',this.updated);
     window.visualViewport?.addEventListener('scroll',this.updated);
-    this.stopListeners=()=>{window.removeEventListener('click',click,true);window.removeEventListener('pointerdown',pointer,true);window.removeEventListener('wheel',manual,true);window.removeEventListener('touchmove',manual,true);window.removeEventListener('keydown',key,true);view.contentEl.ownerDocument.removeEventListener('selectionchange',selection);window.removeEventListener('resize',this.updated);window.visualViewport?.removeEventListener('resize',this.updated);window.visualViewport?.removeEventListener('scroll',this.updated);};
-    if(window.MutationObserver){this.observer=new window.MutationObserver(this.updated);this.observer.observe(view.contentEl,{childList:true,subtree:true});}
+    this.stopListeners=()=>{window.removeEventListener('click',click,true);window.removeEventListener('pointerdown',pointer,true);window.removeEventListener('wheel',manual,true);window.removeEventListener('touchmove',manual,true);window.removeEventListener('keydown',key,true);window.removeEventListener('beforeinput',input,true);view.contentEl.ownerDocument.removeEventListener('selectionchange',selection);window.removeEventListener('resize',this.updated);window.visualViewport?.removeEventListener('resize',this.updated);window.visualViewport?.removeEventListener('scroll',this.updated);};
+    if(window.MutationObserver){this.observer=new window.MutationObserver(()=>{this.height.changed();this.updated();});this.observer.observe(view.contentEl,{childList:true,subtree:true});}
     if(window.ResizeObserver)this.resize=new window.ResizeObserver(this.updated);
   }
   private mode(){return this.view.getMode()+':'+!!this.view.contentEl?.querySelector('.markdown-source-view.is-live-preview');}
@@ -63,9 +69,12 @@ export class ResponseScroll {
     if(this.frame!==undefined){window?.cancelAnimationFrame(this.frame);this.frame=undefined;}
     this.resize?.disconnect();this.watched.clear();if(changed)this.notify();
   }
-  suspend(){this.stop();}
+  preserveHeight(display:string,changes?:ChangeDesc){return this.height.begin(display,changes);}
+  clearHeight(){this.height.clear();}
+  suspend(){this.stop();this.height.clear();}
   /** Projection updates and late native layout changes share one pending frame. */
   updated=()=>{
+    this.height.updated();
     const following=this.following;if(!following)return;
     if(this.mode()!==following.mode||this.range(following.key)?.id!==following.id){this.stop();return;}
     const window=this.view.contentEl.ownerDocument.defaultView;
@@ -111,5 +120,5 @@ export class ResponseScroll {
       else if(previous!==1)this.notify();
     });
   };
-  dispose(){this.stop();this.observer?.disconnect();this.stopListeners?.();this.stopListeners=undefined;this.positions.clear();}
+  dispose(){this.stop();this.height.clear();this.observer?.disconnect();this.stopListeners?.();this.stopListeners=undefined;this.positions.clear();}
 }
