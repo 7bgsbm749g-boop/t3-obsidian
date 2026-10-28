@@ -24,7 +24,7 @@ const fs=require('node:fs');
 const args=process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(callsPath)},JSON.stringify(args)+'\\n');
 if(args[0]==='auth'){
- if(args[2]==='issue')console.log(JSON.stringify({token:'test-only',sessionId:'test-session'}));
+ if(args[2]==='issue')console.log(JSON.stringify({token:'test-only',sessionId:'11111111-1111-4111-8111-111111111111'}));
 }else if(args[0]==='project'&&args[1]==='add'){
  const projects=JSON.parse(fs.readFileSync(${JSON.stringify(catalogPath)},'utf8'));
  const project={id:args.at(-1)===${JSON.stringify(vaultRoot)}?${JSON.stringify(project.id)}:require('node:crypto').randomUUID(),title:args[args.indexOf('--title')+1],workspaceRoot:args.at(-1)};
@@ -83,7 +83,7 @@ if(args[0]==='auth'){
     addFolder:async(path:string)=>{const folder=new Folder();folder.path=path;folder.name=path.split('/').at(-1)!;folders.set(path,folder);await mkdir(join(vaultRoot,path),{recursive:true});},
     setNote:(path?:string)=>{activeFile=path?{path,extension:'md'}:undefined;},
     cliCalls:async()=> (await readFile(callsPath,'utf8')).trim().split('\n').map(line=>JSON.parse(line)),
-    dispose:async()=>{plugin.onunload();await new Promise<void>(resolve=>server.close(()=>resolve()));await rm(dir,{recursive:true,force:true});},
+    dispose:async()=>{plugin.onunload();await plugin.localDesktopAccess?.dispose();await new Promise<void>(resolve=>server.close(()=>resolve()));await rm(dir,{recursive:true,force:true});},
   };
 }
 
@@ -207,13 +207,15 @@ test('old vault conversations remain selectable while new notes ignore the legac
   }finally{await h.dispose();}
 });
 
-test('a saved local connection resolves to its original remote machine on a different desktop',{timeout:20_000},async()=>{
+test('a saved vault connection keeps its original remote machine while new No project defaults to this desktop',{timeout:20_000},async()=>{
   const h=await harness(true);
   try{
     h.plugin.eventLocalEnvironmentId='test-environment';
     h.plugin.settings.paired=[{id:'original',name:'Original computer',environmentId:'other-environment',url:'https://original.example'}];
     h.plugin.settings.vaultHost={connectionId:'',environmentId:'other-environment',workspaceRoot:h.vaultRoot};
-    assert.equal(h.plugin.defaultNoProjectMachine(),'original');
+    assert.equal(h.plugin.vaultConnection().connectionId,'original');
+    assert.equal(h.plugin.fallbackNoProjectMachine(),'original');
+    assert.equal(h.plugin.defaultNoProjectMachine(),'local');
     h.plugin.settings.vaultHost.environmentId='test-environment';
     assert.equal(h.plugin.defaultNoProjectMachine(),'local');
   }finally{await h.dispose();}

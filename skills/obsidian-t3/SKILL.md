@@ -102,6 +102,16 @@ current note/editor state, merges compatible changes, saves, and verifies the
 result. If edits conflict or the response has finished, inspect the failure and
 preserve the versions. Do not force a write or change the original checksum.
 
+After editing note content, include this notice in the final response: "The note
+edits may take a few seconds to appear." For a staged submission, describe it as
+submitted until the final save is verified; keep any failure or pending status
+clear. The delay notice does not prove that the edit was saved.
+
+When the user asks you to remember a formatting preference for editing Obsidian
+notes, add that preference to this skill's **User preferences** section in the
+maintained source. Use the project's source and release workflow below. Apply
+the recorded preferences to future note edits.
+
 Direct filesystem changes bypass these checks. Prefer staging for active reply
 notes. A move or rename without content changes is not a staged edit. For other
 authorized note work, preserve contents and active response boundaries; read the
@@ -266,6 +276,8 @@ and do not automatically chain. Pause/cancel cannot undo an applied action.
 For ordinary T3 orchestration use native T3 tools. A delegated child already
 wakes its parent. PR monitoring uses `watch_pull_request` when available. Use
 `personal-fleet` only for requested work on another fleet machine.
+
+## User preferences
 
 ## References, diagnostics, and maintenance
 

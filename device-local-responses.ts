@@ -21,6 +21,7 @@ export interface DeviceResponseIO {
   localConnection?(id:string,issue?:ResponseConnectionIssue):void;
   localFinalBody?(update:DirectInlineUpdate):Promise<string>;
   rememberResponse?(request:ResponseRequest,body:string,before:string,after:string,offset:number):Promise<void>;
+  rememberNoteEdits?(request:ResponseRequest,before:string,after:string):Promise<void>;
   localFinalDraft?(document:string,request:ResponseRequest):Promise<string>;
   retainLocalFinal?(update:DirectInlineUpdate):Promise<void>;
   loadLocalFinal?(request:ResponseRequest):Promise<DirectInlineUpdate|undefined>;

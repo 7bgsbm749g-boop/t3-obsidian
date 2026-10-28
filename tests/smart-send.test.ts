@@ -1,12 +1,51 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {loadSmartSend,mergeSmartSend,prepareSmartSend,confirmSmartSend,rememberResponse,smartNote,sourceProjection,moveSmartNotes,recoverSmartNote,packText,unpackText} from '../smart-send';
+import {loadSmartSend,mergeSmartSend,prepareSmartSend,confirmSmartSend,rememberResponse,rememberNoteEdits,smartNote,sourceProjection,moveSmartNotes,recoverSmartNote,packText,unpackText} from '../smart-send';
 import {responseAnchor} from '../native-response-projection';
 import {findRunImport,runImportReceipt} from '../run-import-receipt';
 const path='Jobs/Smart.md',destination='machine/project/thread';
 const fresh=()=>loadSmartSend(undefined);
 const importSource={environmentId:'machine',projectId:'project',threadId:'thread'};
 const importReceipt=runImportReceipt({version:1,...importSource,bindingId:'11111111-1111-4111-8111-111111111111',messageId:'prompt',runId:'run'});
+
+test('staged agent additions and replacements are excluded for every destination, preserving unsent user text',async()=>{
+  const data=fresh(),before='Unsent user opening.\n\nOld wording.\n\nUnsent user ending.',after=before.replace('Old wording.','Agent replacement.\n\nAgent addition.');
+  assert.equal(await rememberNoteEdits(data,path,'edit',before,after),true);
+  assert.equal(await rememberNoteEdits(data,path,'edit',before,after),false);
+  for(const target of [destination,'other-thread']){
+    assert.equal((await prepareSmartSend(data,path,target,after)).text.replace(/\n+/g,'\n').trim(),'Unsent user opening.\nUnsent user ending.');
+    const from=after.indexOf('Agent replacement.');
+    assert.equal((await prepareSmartSend(data,path,target,after,[from,from+18])).text,'');
+  }
+});
+test('user additions inside a staged edit remain source after settings merge, reload and rename',async()=>{
+  const original=fresh(),before='Before\n\nOld\n\nAfter',after=before.replace('Old','Agent first line.\nAgent final line.');
+  await rememberNoteEdits(original,path,'edit',before,after);
+  const data=loadSmartSend(JSON.parse(JSON.stringify(mergeSmartSend(fresh(),original))));
+  moveSmartNotes(data,path,'Moved.md');
+  const document=after.replace('Agent first line.','**Agent first line.**\nUser insertion.')+'\nUser ending.';
+  const sent=(await prepareSmartSend(data,'Moved.md',destination,document)).text;
+  assert.match(sent,/User insertion\./);assert.match(sent,/User ending\./);assert.match(sent,/Before/);assert.match(sent,/After/);
+  assert.doesNotMatch(sent,/Agent|\*\*/);
+});
+test('staged deletions and unchanged drafts add no exclusion; duplicate user lines keep their occurrence',async()=>{
+  const data=fresh();assert.equal(await rememberNoteEdits(data,path,'delete','Keep\nDelete\nTail','Keep\nTail'),false);
+  assert.equal(await rememberNoteEdits(data,path,'same','Keep','Keep'),false);
+  const before='Before\nSame line.\nAfter',after=before+'\nSame line.';
+  await rememberNoteEdits(data,path,'repeat',before,after);
+  assert.equal((await prepareSmartSend(data,path,destination,after)).text.trim(),before);
+});
+test('partial-word replacements exclude the resulting word and punctuation without suppressing other user words',async()=>{
+  const data=fresh();await rememberNoteEdits(data,path,'word','User says it can. More user text.','User says it cannot. More user text.');
+  assert.equal((await prepareSmartSend(data,path,destination,'User says it cannot. More user text.')).text,'User says it  More user text.');
+});
+test('independent staged edit records for the same resulting snapshot merge without losing exclusions',async()=>{
+  const a=fresh(),b=fresh(),after='Agent first.\nAgent second.\nUser tail.';
+  await rememberNoteEdits(a,path,'shared','Old one.\nAgent second.\nUser tail.',after);
+  await rememberNoteEdits(b,path,'shared','Agent first.\nOld two.\nUser tail.',after);
+  const merged=mergeSmartSend(a,b);assert.equal(Object.keys(merged.noteEdits!).length,2);
+  assert.equal((await prepareSmartSend(merged,path,destination,after)).text.trim(),'User tail.');
+});
 
 test('steering source ranges exclude confirmed source and generated responses',async()=>{
   const data=fresh(),first=await prepareSmartSend(data,path,destination,'Keep this original.');confirmSmartSend(data,'first',destination,first.capture);

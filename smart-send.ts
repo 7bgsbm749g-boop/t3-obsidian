@@ -5,15 +5,17 @@ import {streamBlocks} from './stream-block';
 import {runImportReceipts} from './run-import-receipt';
 import {markdownCodeRanges} from './reply-html';
 import {markdownText,mergeSpans as union,subtractSpans} from './smart-markdown';
+import {changedEdits} from './coordinated-merge';
 
 export type Span=[number,number];
 export interface PackedText {hash:string;encoding:'text'|'gzip';data:string}
 interface NoteIdentity {path:string;revision:number;deleted?:boolean;renamedAt?:number}
 interface ResponseText {noteId:string;body:string;before:string;after:string;offset:number}
+interface NoteEditText {noteId:string;source:PackedText;added:Span[]}
 export interface SmartCapture {noteId:string;source:PackedText;covered:Span[];parents:string[];bindings?:string[]}
 interface SentText extends SmartCapture {destination:string}
-export interface SmartSendData {version:1;notes:Record<string,NoteIdentity>;responses:Record<string,ResponseText>;bodies:Record<string,PackedText>;heads:Record<string,SentText>;retired:string[]}
-const empty=():SmartSendData=>({version:1,notes:{},responses:{},bodies:{},heads:{},retired:[]});
+export interface SmartSendData {version:1;notes:Record<string,NoteIdentity>;responses:Record<string,ResponseText>;noteEdits?:Record<string,NoteEditText>;bodies:Record<string,PackedText>;heads:Record<string,SentText>;retired:string[]}
+const empty=():SmartSendData=>({version:1,notes:{},responses:{},noteEdits:{},bodies:{},heads:{},retired:[]});
 const decoded=new Map<string,string>();
 function cache(hash:string,text:string){
   decoded.delete(hash);if(text.length>2_000_000)return text;
@@ -46,6 +48,7 @@ export function loadSmartSend(value:any):SmartSendData{
   for(const [id,n] of Object.entries(value.notes??{}) as [string,any][])if(typeof n?.path==='string'&&Number.isSafeInteger(n.revision)&&(n.renamedAt===undefined||Number.isSafeInteger(n.renamedAt)&&n.renamedAt<=n.revision))out.notes[id]=n;
   for(const [id,b] of Object.entries(value.bodies??{}))if(packed(b)&&b.hash===id)out.bodies[id]=b;
   for(const [id,r] of Object.entries(value.responses??{}) as [string,any][])if(typeof r?.noteId==='string'&&typeof r.body==='string'&&typeof r.before==='string'&&typeof r.after==='string'&&Number.isSafeInteger(r.offset))out.responses[id]=r;
+  for(const [id,e] of Object.entries(value.noteEdits??{}) as [string,any][])if(typeof e?.noteId==='string'&&packed(e.source)&&spans(e.added)&&e.added.every(([,to]:Span)=>e.source.encoding!=='text'||to<=e.source.data.length))out.noteEdits![id]=e;
   for(const [id,h] of Object.entries(value.heads??{}) as [string,any][])if(typeof h?.noteId==='string'&&typeof h.destination==='string'&&packed(h.source)&&spans(h.covered)&&Array.isArray(h.parents)&&h.parents.every((p:any)=>typeof p==='string')&&(h.bindings===undefined||Array.isArray(h.bindings)&&h.bindings.every((id:any)=>typeof id==='string')))out.heads[id]=h;
   out.retired=Array.isArray(value.retired)?value.retired.filter((id:any)=>typeof id==='string'):[];return out;
 }
@@ -53,7 +56,7 @@ export function loadSmartSend(value:any):SmartSendData{
  * exact predecessors it read; simultaneous device branches both survive. */
 export function mergeSmartSend(...values:unknown[]):SmartSendData{
   const out=empty(),retired=new Set<string>();
-  for(const value of values){const data=loadSmartSend(value);Object.assign(out.bodies,data.bodies);Object.assign(out.responses,data.responses);Object.assign(out.heads,data.heads);for(const id of data.retired)retired.add(id);
+  for(const value of values){const data=loadSmartSend(value);Object.assign(out.bodies,data.bodies);Object.assign(out.responses,data.responses);Object.assign(out.noteEdits!,data.noteEdits);Object.assign(out.heads,data.heads);for(const id of data.retired)retired.add(id);
     for(const [id,n] of Object.entries(data.notes)){const old=out.notes[id];
       // A client can see a remote rename as delete/create before settings
       // arrive. Its deletion of the old location cannot erase a known move.
@@ -118,6 +121,26 @@ function mappedCoverage(before:string,after:string,covered:Span[]){
   const a=markdownText(before),b=markdownText(after);
   return b.map(textCoverage(a.text,b.text,a.map(covered)),true);
 }
+/** Capture only staged replacements, before the checked final write. Mapping
+ * these spans later keeps ordinary typing outside and inside the agent edit. */
+export async function rememberNoteEdits(data:SmartSendData,path:string,id:string,before:string,after:string){
+  const added:Span[]=[];let shift=0;
+  for(const edit of changedEdits(before,after)){
+    if(edit.text.trim()){
+      let from=edit.from+shift,to=from+edit.text.length;
+      // A minimal diff can retain an old word edge or its punctuation. Keep
+      // the resulting edited token together instead of sending its residue.
+      if(/\S/.test(after[from]))while(from>0&&/\S/.test(after[from-1]))from--;
+      if(/\S/.test(after[to-1]))while(to<after.length&&/\S/.test(after[to]))to++;
+      added.push([from,to]);
+    }
+    shift+=edit.text.length-(edit.to-edit.from);
+  }
+  if(!added.length)return false;
+  const noteId=smartNote(data,path),source=await packText(after),ranges=union(added),key=`${id}:${contentHash(JSON.stringify([source.hash,ranges]))}`,next={noteId,source,added:ranges};
+  const edits=data.noteEdits??={};if(JSON.stringify(edits[key])===JSON.stringify(next))return false;
+  edits[key]=next;return true;
+}
 /** Keep exact rendered output once, compressed and addressed by content. */
 export async function rememberResponse(data:SmartSendData,path:string,id:string,body:string,before:string,after:string,offset:number){
   if(!body.trim())return;
@@ -152,6 +175,7 @@ function editedResponseRange(document:string,body:string,record:ResponseText):Sp
 export async function sourceProjection(data:SmartSendData,noteId:string,document:string){
   const removed:Span[]=[],known:Span[]=[],identities=noteIdentities(data,noteId);
   let comparison:ReturnType<typeof markdownText>|undefined;
+  for(const edit of Object.values(data.noteEdits??{}))if(identities.has(edit.noteId))removed.push(...mappedCoverage(await unpackText(edit.source),document,edit.added));
   const receipts=[...runImportReceipts(document)],code=receipts.length?markdownCodeRanges(document):[];
   for(const {from,to} of receipts)if(!code.some(([start,end])=>from<end&&to>start))removed.push([from,to]);
   for(const id of responseIds(document)){const frame=responseFrame(document,id);if(frame)removed.push([frame.from,frame.to]);}

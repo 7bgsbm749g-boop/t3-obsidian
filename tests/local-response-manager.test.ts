@@ -14,6 +14,7 @@ import {dirname} from 'node:path';
 import {retainedLocalFinal,restoredLocalFinal} from '../local-final-cache';
 import type {ResponseRequest} from '../response-model';
 import type {DirectInlineUpdate} from '../direct-inline-preview';
+import {loadSmartSend,rememberNoteEdits,rememberResponse,prepareSmartSend} from '../smart-send';
 
 function request():ResponseRequest{return {version:4,localOnly:true,nativeProjection:true,responseContainer:true,independent:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},notePath:'Test.md',threadId:randomUUID(),projectId:randomUUID(),messageId:randomUUID(),threadEnvironmentId:'env',initialHash:contentHash(''),createdAt:'2026-10-14T00:00:00Z'};}
 function fixture(binding=request(),initial?:string,records:ResponseBindingData={}){
@@ -25,6 +26,27 @@ function fixture(binding=request(),initial?:string,records:ResponseBindingData={
   return {binding,manager,io,notes,records:()=>records,receiveRecords:(value:ResponseBindingData)=>records=value,callbacks,registered,errors,finished,read:()=>document,write:(text:string)=>document=text,open:(value:boolean)=>open=value,ready:(value:boolean)=>ready=value,advance:()=>now+=1100,writes:()=>writes,emit:(body='Final answer',verified=true,messageId=binding.messageId)=>callbacks.get(binding.id)!({request:binding,messageId,sequence:5,body,turnId:'exact-turn',phase:'complete',completionVerified:verified})};
 }
 const drain=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
+
+test('staged edits persist their Smart Send exclusions before final write and keep later user additions',async()=>{
+  const h=fixture(),data=loadSmartSend(undefined),events:string[]=[];
+  await h.manager.register(h.binding);
+  h.io.localFinalDraft=async(document:string)=>document.replace('Before','Agent first.\nAgent last.');
+  h.io.rememberNoteEdits=async(request:ResponseRequest,before:string,after:string)=>{events.push('edit');await rememberNoteEdits(data,request.notePath,request.id,before,after);};
+  h.io.rememberResponse=async(request:ResponseRequest,body:string,before:string,after:string,offset:number)=>{events.push('reply');await rememberResponse(data,request.notePath,request.id,body,before,after,offset);};
+  const write=h.notes.compareAndSet;h.notes.compareAndSet=async(...args)=>{events.push('write');return write(...args);};
+  h.emit();await drain();
+  assert.deepEqual(events,['edit','reply','write']);assert.equal(h.writes(),1);
+  const document=h.read().replace('Agent first.','Agent first.\nUser insertion.')+'\nUser ending.';
+  const sent=(await prepareSmartSend(loadSmartSend(JSON.parse(JSON.stringify(data))),h.binding.notePath,'another-thread',document)).text;
+  assert.match(sent,/User insertion\./);assert.match(sent,/User ending\./);assert.match(sent,/After/);assert.doesNotMatch(sent,/Agent|Final answer/);
+  h.manager.dispose();
+});
+test('failed staged edit provenance persistence prevents the final write',async()=>{
+  const h=fixture();await h.manager.register(h.binding);
+  h.io.localFinalDraft=async(document:string)=>document.replace('Before','Agent edit');
+  h.io.rememberNoteEdits=async()=>{throw Error('Provenance storage unavailable');};
+  h.emit();await drain();assert.equal(h.writes(),0);assert.match(h.read(),/^Before/);assert.equal(h.errors.length,1);h.manager.dispose();
+});
 
 test('completion indicators retain the exact canonical run and time after the final save',async()=>{
   const h=fixture();await h.manager.register(h.binding);
