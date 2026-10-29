@@ -4,8 +4,9 @@
 
 - Implement and test in the current thread's source worktree. Parallel tasks use separate worktrees.
 - `/home/ubuntu/projects/send-to-t3-code` is the integration and release checkout. The release queue worker owns integration and publication there; task threads submit reviewed commits from their own worktrees.
-- `/home/ubuntu/Obsidian Vault/.obsidian/plugins/send-to-t3-code` is the development-vault installation. It may contain only `main.js`, `manifest.json`, `styles.css`, and its device-local `data.json`. Never edit source there.
-- `/home/ubuntu/vaults/QLO2/.obsidian/plugins/send-to-t3-code` is the QLO2 installation published by Obsidian Sync. Never edit it by hand.
+- `/home/ubuntu/Obsidian Vault/.obsidian/plugins/t-three-code` is the development-vault installation. It may contain only `main.js`, `manifest.json`, `styles.css`, and its device-local `data.json`. Never edit source there.
+- `/home/ubuntu/vaults/QLO2/.obsidian/plugins/t-three-code` is the QLO2 installation published by Obsidian Sync. Never edit it by hand.
+- The store rejects the old `send-to-t3-code` ID because it contains a digit. The release queue discovers either installation and performs the one-time move to `t-three-code`, including hotkey and enabled-plugin references, with backups. The owner disables the old QLO2 plugin while its queue slot is held, retries the job, and enables the migrated plugin for the live check. Never install both IDs. Private storage namespaces and the immutable archive root remain unchanged.
 - Preserve every installation's `data.json`. Release tooling must prove it remained byte-identical.
 
 If the current working directory is an installed-plugin directory, stop and move the work to a source worktree. Do not reconstruct source from an installed bundle.

@@ -61,7 +61,8 @@ if(Test-Path $routePath) {
   $storage=$route.storageRoot
 }
 $base=Join-Path $storage '.obsidian/t3-code/commands/v1'
-if(-not (Test-Path (Join-Path $p.vault '.obsidian/plugins/send-to-t3-code/manifest.json'))) { throw 'QLO2 plugin is unavailable' }
+if(-not (Test-Path (Join-Path $p.vault '.obsidian/plugins/t-three-code/manifest.json')) -and
+   -not (Test-Path (Join-Path $p.vault '.obsidian/plugins/send-to-t3-code/manifest.json'))) { throw 'QLO2 plugin is unavailable' }
 $request=Join-Path $base ('requests/'+$p.command.id+'.json'); $result=Join-Path $base ('results/'+$p.command.id+'.json')
 if($p.cleanup) {
   if($p.command.kind -ne 'client-status') { throw 'Cleanup is limited to this status request' }

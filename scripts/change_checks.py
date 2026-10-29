@@ -24,7 +24,9 @@ import time
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = Path('/home/ubuntu/projects/send-to-t3-code/evidence/checks')
 RECEIPTS = Path('/home/ubuntu/projects/send-to-t3-code/evidence/releases')
-QLO2 = Path('/home/ubuntu/vaults/QLO2/.obsidian/plugins/send-to-t3-code/manifest.json')
+QLO2 = Path('/home/ubuntu/vaults/QLO2/.obsidian/plugins/t-three-code/manifest.json')
+if not QLO2.exists():
+    QLO2 = QLO2.parent.with_name('send-to-t3-code') / 'manifest.json'
 RELEASE_FILES = ('manifest.json', 'versions.json', 'styles.css', 'README.md', 'LICENSE')
 RUNNER_INPUTS = {'scripts/change_checks.py', 'scripts/test-impact.json'}
 CODE_SUFFIXES = {'.ts', '.tsx', '.js', '.mjs', '.cjs', '.py', '.css'}

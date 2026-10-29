@@ -25,12 +25,13 @@ import re
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import change_checks
 import release_queue
+from plugin_id_migration import installed_plugin, needs_migration, migrate_installation
 
 
 ROOT = Path(__file__).resolve().parent.parent
 CANONICAL_ROOT = Path('/home/ubuntu/projects/send-to-t3-code')
-DEV_PLUGIN = Path('/home/ubuntu/Obsidian Vault/.obsidian/plugins/send-to-t3-code')
-QLO2_PLUGIN = Path('/home/ubuntu/vaults/QLO2/.obsidian/plugins/send-to-t3-code')
+DEV_PLUGIN = installed_plugin(Path('/home/ubuntu/Obsidian Vault/.obsidian/plugins'))
+QLO2_PLUGIN = installed_plugin(Path('/home/ubuntu/vaults/QLO2/.obsidian/plugins'))
 BACKUPS = Path('/home/ubuntu/projects/send-to-t3-code/evidence')
 RECEIPTS = BACKUPS / 'releases'
 SYNC_SERVICE = 'obsidian-qlo2-sync.service'
@@ -241,7 +242,7 @@ def sync_release() -> list[str]:
     return [
         line.removeprefix('Upload complete ')
         for line in lines
-        if line.startswith('Upload complete .obsidian/plugins/send-to-t3-code/')
+        if line.startswith(f'Upload complete .obsidian/plugins/{QLO2_PLUGIN.name}/')
     ]
 
 
@@ -252,6 +253,7 @@ def deploy_qlo2(
     *,
     allow_same_version: bool = False,
 ) -> dict[str, Any]:
+    global QLO2_PLUGIN
     run(['systemctl', '--user', 'is-active', '--quiet', SYNC_SERVICE])
     if not QLO2_PLUGIN.is_dir():
         raise SystemExit(f'QLO2 plugin installation is missing: {QLO2_PLUGIN}')
@@ -280,6 +282,9 @@ def deploy_qlo2(
     run(['systemctl', '--user', 'stop', SYNC_SERVICE])
     try:
         with zipfile.ZipFile(archive) as bundle:
+            identifier = json.loads(bundle.read('send-to-t3-code/manifest.json')).get('id')
+            QLO2_PLUGIN = migrate_installation(QLO2_PLUGIN, identifier, backup / 'id-migration')
+            data_path = QLO2_PLUGIN / 'data.json'
             for name in RELEASE_FILES:
                 atomic_write(QLO2_PLUGIN / name, bundle.read(f'send-to-t3-code/{name}'))
         if data_path.read_bytes() != settings:
@@ -337,9 +342,25 @@ def publish_release(
     resumed: bool,
     skip_laptop_reload: bool = False,
 ) -> None:
+    global DEV_PLUGIN
     archive_hashes = validate_archive(archive, version, compare_source=not resumed)
     with zipfile.ZipFile(archive) as bundle:
         runtime = {name: bundle.read(f'send-to-t3-code/{name}') for name in RUNTIME_FILES}
+    identifier = json.loads(runtime['manifest.json']).get('id')
+    # A running legacy instance can recreate/write its old data path after a
+    # directory move. Hold the queue slot until the owner has disabled it.
+    for plugin in (DEV_PLUGIN, QLO2_PLUGIN):
+        if needs_migration(plugin, identifier):
+            enabled = plugin.parent.parent / 'community-plugins.json'
+            if plugin == QLO2_PLUGIN and enabled.exists() and plugin.name in read_json(enabled):
+                raise SystemExit(f'Plugin ID migration: disable T3 Code in {plugin.parents[2]} while this queue slot is held, then retry this job. Re-enable T3 Code after installation before completing smoke.')
+            try:
+                client_command('client-status', vault=plugin.parents[2])
+            except (subprocess.SubprocessError, OSError, ValueError, SystemExit):
+                pass
+            else:
+                raise SystemExit(f'Plugin ID migration: disable T3 Code in {plugin.parents[2]} while this queue slot is held, then retry this job. Re-enable T3 Code after installation before completing smoke.')
+    DEV_PLUGIN = migrate_installation(DEV_PLUGIN, identifier, BACKUPS / f'id-migration-{version}-development')
     dev_hashes = install_runtime(DEV_PLUGIN, strict_dev=True, runtime=runtime)
     deployment = deploy_qlo2(
         archive,
@@ -388,9 +409,9 @@ def publish_release(
         print(f'QLO2 client verification pending: {error}. Retry with --check-client {version}.', file=sys.stderr)
 
 
-def client_command(*arguments: str) -> dict:
+def client_command(*arguments: str, vault: Path | None = None) -> dict:
     result = run([sys.executable, str(ROOT / 'scripts/obsidian-command.py'), '--vault',
-                  str(QLO2_PLUGIN.parents[2]), '--timeout', '5', *arguments], capture=True, timeout=8)
+                  str(vault or QLO2_PLUGIN.parents[2]), '--timeout', '5', *arguments], capture=True, timeout=8)
     value = json.loads(result.stdout)
     if not value.get('ok'):
         raise SystemExit('The real QLO2 client did not acknowledge the command.')

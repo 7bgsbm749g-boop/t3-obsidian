@@ -527,7 +527,7 @@ export default class SendToT3 extends Plugin {
         this.registerDomEvent(document,'pointerdown',remember,true);
         this.registerDomEvent(document,'touchstart',remember,true);
       }
-      this.paletteChat=installPaletteChat(this.app,(prompt,selection,showSelector,source)=>this.openPaletteAction(prompt,selection,showSelector,source),{onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),captureSource:()=>this.capturePaletteSource()});
+      this.paletteChat=installPaletteChat(this.app,(prompt,selection,showSelector,source)=>this.openPaletteAction(prompt,selection,showSelector,source),{pluginId:this.manifest.id,onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.app.loadLocalStorage(this.chatDraftKey)??'',saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),captureSource:()=>this.capturePaletteSource()});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined'){
         this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>{
@@ -1545,7 +1545,7 @@ export default class SendToT3 extends Plugin {
   }
   private commandSendSelector(view:MarkdownView|MarkdownFileInfo){
     const app=this.app as App&{hotkeyManager?:{customKeys?:Record<string,import('obsidian').Hotkey[]>;getHotkeys?:(id:string)=>import('obsidian').Hotkey[]}};
-    const id='send-to-t3-code:send-or-ask';
+    const id=`${this.manifest?.id??pluginManifest.id}:send-or-ask`;
     const hotkeys=app.hotkeyManager?.customKeys?.[id]??app.hotkeyManager?.getHotkeys?.(id)??[];
     const win=(view as MarkdownView).containerEl?.ownerDocument.defaultView??(typeof window!=='undefined'?window:undefined);
     return this.sendGesture.selector(win,hotkeys,Platform.isMacOS);
@@ -2916,7 +2916,7 @@ export class T3Settings extends PluginSettingTab {
     new Setting(el).setName('Intermediate agent responses').setDesc('Progress stays in an open box while the agent works. The box closes when the final answer is complete. Click the header to open or close it.');
     el.createEl('h3',{text:'Project files'});
     el.createEl('p',{text:'Project files stay in their T3 workspaces. Codebase view opens them in Obsidian. Reply attachments are not copied into the vault.'});
-    new Setting(el).setName('Codebase view').addButton(b=>b.setButtonText('Open').onClick(()=>{void (this.app as any).commands.executeCommandById('send-to-t3-code:codebase-view');}));
+    new Setting(el).setName('Codebase view').addButton(b=>b.setButtonText('Open').onClick(()=>{void (this.app as any).commands.executeCommandById(`${this.plugin.manifest.id}:codebase-view`);}));
     el.createEl('h3',{text:'Legacy cleanup'});
     new Setting(el).setName('Legacy cleanup defaults').setDesc('Applies only to previously queued cleanup jobs. Manual sends and questions always keep their notes. Changed or renamed notes are kept.').addDropdown(d=>d.addOptions({keep:'Keep note',archive:'Archive note',delete:'Delete note (vault trash)'}).setValue(this.plugin.settings.completion.action).onChange(async value=>{this.plugin.settings.completion.action=value as CompletionAction;await this.plugin.save();this.display();}));
     if(this.plugin.settings.completion.action==='archive') new Setting(el).setName('Archive folder').setDesc('Folder inside this vault. Original subfolders are preserved; existing notes are never overwritten.').addText(t=>t.setValue(this.plugin.settings.completion.archiveFolder).onChange(async value=>{this.plugin.settings.completion.archiveFolder=value;await this.plugin.save();}));

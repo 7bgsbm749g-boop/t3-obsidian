@@ -274,3 +274,11 @@ test('Control is captured from the palette activation, including keyboard and mo
   assert.deepEqual(sent.map(s=>s.showSelector),[false,true,true]);
   hook.dispose();
 });
+
+test('the store ID uses one palette action and retains unrelated commands',()=>{
+  const {app,modal,command}=fixture();
+  modal.getSuggestions=()=>[{item:{id:'t-three-code:send-or-ask',name:'T3 Code'},match:{score:1}},command];
+  const hook=installPaletteChat(app,()=>{},{pluginId:'t-three-code'});
+  assert.deepEqual(suggest(modal,'').map(row=>row.item.id),['t-three-code:palette-query','ordinary']);
+  hook.dispose();
+});
