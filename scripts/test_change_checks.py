@@ -73,6 +73,16 @@ class ImpactSelectionTests(unittest.TestCase):
         self.assertEqual(plan['testFiles'], [])
         self.assertEqual(plan['uncoveredFiles'], ['uncovered.ts'])
 
+    def test_esbuild_entry_points_and_their_transitive_imports_select_consumers(self):
+        previous = {'view.ts': b"import './core';", 'core.ts': b'export const value=1;',
+                    'other.ts': b'export const other=1;',
+                    'tests/view.test.ts': b"build({entryPoints: ['view.ts', `other.ts`], write:false});"}
+        graph = checks.dependency_graph(previous)
+        self.assertIn('core.ts', checks.closure({'tests/view.test.ts'}, graph))
+        for source in ('view.ts', 'core.ts', 'other.ts'):
+            current = {**previous, source: previous[source] + b'\n// changed'}
+            self.assertEqual(checks.select_tests(current, previous)['testFiles'], ['tests/view.test.ts'])
+
 
 class ValidationCacheTests(unittest.TestCase):
     def setUp(self):
@@ -146,6 +156,32 @@ class ValidationCacheTests(unittest.TestCase):
                 self.validate()
         self.assertFalse((self.cache / 'tests').exists())
         self.assertFalse((self.cache / 'validations').exists())
+
+    def test_notice_only_change_rebuilds_the_bundle(self):
+        (self.root / 'esbuild.config.mjs').write_text("readFile('THIRD_PARTY_NOTICES.md');")
+        (self.root / 'THIRD_PARTY_NOTICES.md').write_bytes(b'original notice')
+        def command(root, arguments, log, timeout=900):
+            self.command(root, arguments, log, timeout)
+            if arguments == ['npm', 'run', 'build']:
+                (root / 'dist/main.js').write_bytes((root / 'THIRD_PARTY_NOTICES.md').read_bytes())
+        with patch.object(checks, 'checked_command', side_effect=command):
+            context = {'dependenciesSha256': checks.dependency_hash(self.root)}
+            first, reused = checks.cached_build(self.root, checks.source_files(self.root), context, self.cache)
+            self.assertFalse(reused)
+            (self.root / 'THIRD_PARTY_NOTICES.md').write_bytes(b'updated notice')
+            second, reused = checks.cached_build(self.root, checks.source_files(self.root), context, self.cache)
+            self.assertFalse(reused)
+            self.assertNotEqual(first, second)
+            self.assertEqual(second.read_bytes(), b'updated notice')
+
+    def test_entry_point_source_changes_cannot_reuse_an_all_tests_success(self):
+        (self.root / 'tests/core.test.ts').write_text("build({entryPoints:['core.ts']});")
+        with patch.object(checks, 'environment', return_value={}), patch.object(checks, 'checked_command', side_effect=self.command):
+            first = checks.run_validation(self.root, base=self.base, cache=self.cache, all_tests=True)
+            self.assertIn('tests/core.test.ts', json.loads(first.read_bytes())['testSuite']['executed'])
+            (self.root / 'core.ts').write_bytes(b'export const value=9;')
+            second = checks.run_validation(self.root, base=self.base, cache=self.cache, all_tests=True)
+            self.assertIn('tests/core.test.ts', json.loads(second.read_bytes())['testSuite']['executed'])
 
     def test_failed_tests_and_damaged_evidence_cannot_be_reused(self):
         def fail(root, command, log, timeout=900):

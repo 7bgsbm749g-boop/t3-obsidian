@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {prepareEventAction,executeEventAction,validateEventAction,type ActionIO,type EventAction,type ActionPlan} from '../event-actions';
 import {EventSubscriptions,eventContent,type EventState,type NoteEventSnapshot,type NoteEventSubscriptionCommand} from '../event-subscriptions';
+import {projectEventNote} from '../event-note-projection';
+import {loadSmartSend,rememberResponse} from '../smart-send';
 
 function ioHarness(entries:Array<[string,string]>=[['Jobs/A.md','body']]){
   const files=new Map(entries);let writes=0,moves=0;
@@ -15,9 +17,9 @@ const actionCommand=(action:EventAction):NoteEventSubscriptionCommand=>({version
 function snapshot(path:string,content:string):NoteEventSnapshot{
   const front=/^---\n([\s\S]*?)\n---\n/.exec(content);return {path,content,properties:front?JSON.parse(front[1]):{}};
 }
-async function serviceHarness(h:ReturnType<typeof ioHarness>,initial?:EventState){
+async function serviceHarness(h:ReturnType<typeof ioHarness>,initial?:EventState,projectNote?:(note:NoteEventSnapshot)=>Promise<NoteEventSnapshot>){
   let saved=initial,now=1000,fail=false,threadCalls=0;
-  const service=new EventSubscriptions({load:async()=>saved,save:async s=>{saved=structuredClone(s);},notes:async()=>[...h.files].map(([p,c])=>snapshot(p,c)),
+  const service=new EventSubscriptions({load:async()=>saved,save:async s=>{saved=structuredClone(s);},notes:async()=>[...h.files].map(([p,c])=>snapshot(p,c)),projectNote,
     validateTarget:async()=>{threadCalls++;throw Error('Thread access must not be used');},isBusy:async()=>{threadCalls++;throw Error('Thread access must not be used');},prepare:async()=>{threadCalls++;throw Error('Thread access must not be used');},deliver:async()=>{threadCalls++;throw Error('Thread access must not be used');},
     prepareAction:n=>prepareEventAction(n.action!,n.events.at(-1)?.kind==='job'?undefined:n.events.at(-1)?.path,h.io),
     deliverAction:async n=>{await executeEventAction(n.command as ActionPlan,h.io);if(fail)throw Error('lost save');},recording:()=>{},now:()=>now,id:randomUUID});
@@ -58,6 +60,15 @@ test('a move follows note watch paths without retriggering a rename action',asyn
   const h=ioHarness(),s=await serviceHarness(h),command={...actionCommand({kind:'move-note',folder:'Ready'}),scope:{path:'Jobs/A.md',kind:'note' as const,recursive:false},filter:{events:['modify','rename'] as ['modify','rename']}};
   await s.service.command(command);h.files.set('Jobs/A.md','edited');await s.service.observe('modify','Jobs/A.md',snapshot('Jobs/A.md','edited'));s.advance();await s.service.tick();
   await s.service.observe('rename','Ready/A.md',snapshot('Ready/A.md','edited'),'Jobs/A.md');assert.equal(s.saved.notifications.length,1);assert.equal(s.saved.subscriptions[0].scope.path,'Ready/A.md');assert.equal(h.moves,1);
+});
+test('action effects and note comparisons share generated-reply provenance',async()=>{
+  const id=randomUUID(),body='Generated final reply.',text='User source.\n\n'+body+'\n\nUser tail.',data=loadSmartSend(undefined);
+  await rememberResponse(data,'Jobs/A.md',id,body,'User source.\n\n','\n\nUser tail.',14);
+  const h=ioHarness([['Jobs/A.md',text]]),s=await serviceHarness(h,undefined,note=>projectEventNote(note,data,[]));
+  await s.service.command(actionCommand({kind:'set-property',property:'done',value:true}));
+  h.files.set('Jobs/A.md',text+'\nUser edit.');await s.service.observe('modify','Jobs/A.md',snapshot('Jobs/A.md',h.files.get('Jobs/A.md')!));s.advance();await s.service.tick();
+  await s.service.observe('modify','Jobs/A.md',snapshot('Jobs/A.md',h.files.get('Jobs/A.md')!));
+  assert.equal(s.saved.notifications.length,1);assert.equal(s.saved.notifications[0].status,'delivered');assert.equal(h.writes,1);
 });
 test('action validation rejects unsafe paths, unknown options, missing values and ambiguous destinations',async()=>{
   for(const folder of ['../Ready','.obsidian','/tmp','T3 Code Logs','Ready/'])assert.throws(()=>validateEventAction({kind:'move-note',folder}));

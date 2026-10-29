@@ -12,6 +12,7 @@ import {timingSummaries} from './codebase-performance';
 import {NativeLanguageViews} from './language-views';
 import {contentHash} from './completion';
 import {nativeMediaSource,originalMediaSource,codebaseMediaExtension} from './codebase-media';
+import {installCodebaseAdapter} from './codebase-adapter';
 export {CodebaseView} from './codebase-view';
 export interface CodebaseState {version:1;references:Record<string,SavedReference>;choices:Record<string,string>;automaticChoices?:Record<string,string[]>;vaultAliases?:Record<string,string>}
 export interface CodebaseStorage {environments?():string[];load():CodebaseState|undefined;save(state:CodebaseState):Promise<void>;projectChanged?(scope:CodebaseScope,change:{title?:string;deleted?:boolean}):Promise<void>}
@@ -95,8 +96,7 @@ export class CodebaseBridge {
     this.patch(vault,'getResourcePath',(original:any)=>(file:TFile)=>{const item=this.files.get(file.path);return item?this.resource(item):original(file);});
     // Native viewers sometimes read the adapter directly. No list, getRoot,
     // getFiles, getAllLoadedFiles, fileMap, or global vault event is changed.
-    for(const method of ['read','readBinary','write','writeBinary','append','exists','stat','getResourcePath','remove','rename','mkdir','trashLocal','trashSystem'])this.patch(vault.adapter,method,(original:any)=>(path:string,...args:any[])=>{
-      if(!path.startsWith(CODEBASE_PREFIX))return original(path,...args);
+    this.undo.push(installCodebaseAdapter(vault.adapter,(method,path,args)=>{
       if(this.stopped)throw Error('The T3 project file bridge is stopped. Project bytes cannot be written to the vault.');
       const item=this.files.get(path);
       if(method==='exists')return Promise.resolve(!!item||this.folders.has(path));
@@ -108,7 +108,7 @@ export class CodebaseBridge {
       if(method==='append')return vault.append(item.file,args[0]);
       if(method==='getResourcePath')return this.resource(item);
       throw Error('This operation is not supported for project files.');
-    });
+    }));
     for(const method of ['rename','delete','trash','modifyBinary'])this.patch(vault,method,(original:any)=>(file:TFile,...args:any[])=>{if(file.path.startsWith(CODEBASE_PREFIX))throw Error('This operation is not supported for project files.');return original(file,...args);});
     const physicalLink=cache.getFirstLinkpathDest.bind(cache);
     this.patch(cache,'getFirstLinkpathDest',(original:any)=>(name:string,source:string)=>{if(this.vaultWikiLink(name,source))return original(name,source);const route=this.pathRoute(name,source);return route.owned?route.items.length===1?route.items[0].file:null:original(name,source)??this.resolve(name,source)?.file??null;});
@@ -166,7 +166,7 @@ export class CodebaseBridge {
     for(const [source,path] of Object.entries(saved.vaultAliases??{}))if(/^T3 Code Attachments\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\/[0-9a-f]{16}-[^/]+$/i.test(source)&&this.records.has(migrated[path]??path))this.vaultAliases[source]=migrated[path]??path;
   }
 
-  private patch(target:any,key:string,wrap:(original:any)=>any){if(typeof target[key]!=='function')return;const original=target[key],replacement=wrap(original.bind(target));target[key]=replacement;this.undo.push(()=>{if(target===this.app.vault.adapter)return;/* Keep a fail-closed prefix guard while old native leaves unload. */if(target[key]===replacement)target[key]=original;});}
+  private patch(target:any,key:string,wrap:(original:any)=>any){if(typeof target[key]!=='function')return;const original=target[key],replacement=wrap(original.bind(target));target[key]=replacement;this.undo.push(()=>{if(target[key]===replacement)target[key]=original;});}
   private environmentIds(){return [...new Set(this.storage?.environments?.()??this.scopes().map(scope=>scope.environmentId))];}
   private allowed(scope:CodebaseScope,linked=this.scopes()){
     if(this.storage?.environments)return this.environmentIds().includes(scope.environmentId)&&!this.links().some(link=>link.self&&link.environmentId===scope.environmentId&&link.projectId===scope.projectId);

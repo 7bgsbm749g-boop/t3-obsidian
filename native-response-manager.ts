@@ -14,7 +14,7 @@ import {nativeCommitMatches,readNativeCommitProof,type NativeCommitProof} from '
 import type {DirectInlineUpdate} from './direct-inline-preview';
 import {loadNativePreviews,checkedNativePreview,sameNativePreview,previewMatches,previewMessageId,MAX_NATIVE_PREVIEWS,MAX_NATIVE_PREVIEW_CHARACTERS,type NativePreviewEntry,type NativePreviewSnapshot} from './native-preview-cache';
 interface DeviceCompletionReceipt {version:1;id:string;actor:string;vaultId:string;notePath:string;commitId:string;hash:string;token:string;requestHash:string;at:number}
-import type {NativeStoppedResponse,NativeStoppedStore} from './native-stop-store';
+import type {NativeStoppedResponse,NativeStoppedStore,NativeStoppedReference} from './native-stop-store';
 import {retainedLease,isCompletedLeaseIndex,canCompactLease} from './completed-lease-index';
 
 const managers=new WeakMap<App,NativeResponseManager>();
@@ -29,6 +29,9 @@ interface FinalSaveFence {
  * buffer over a competing view. Conflicts adopt fresh saved text automatically. */
 export class NativeResponseManager {
   private localStops=new Map<string,NativeStoppedResponse>();
+  private stopReferences=new Map<string,NativeStoppedReference>();
+  private stopLoads=new Map<string,Promise<NativeStoppedResponse|undefined>>();
+  private stopMoves=Promise.resolve();
   private stopKey?:string;
   private stoppedStore?:NativeStoppedStore;
   private stoppedRestore?:Promise<void>;
@@ -116,26 +119,56 @@ export class NativeResponseManager {
   async configureStoppedStore(store:NativeStoppedStore){
     this.stoppedStore=store;const legacy=[...this.localStops.values()].map(stop=>({...stop})),lifetime=this.lifetime;
     const work=(async()=>{
-      const restored=await store.readAll(),ids=new Set(restored.map(stop=>stop.id));
-      for(const stop of restored)this.localStops.set(stop.id,stop);
+      const restored=store.list?await store.list():await store.readAll(),ids=new Set(restored.map(stop=>stop.id));
+      if(this.lifetime!==lifetime)return;
+      for(const {id,path,hidden} of restored)this.stopReferences.set(id,{id,path,hidden});
+      if(store.list)for(const id of ids)if(!this.pendingStops.has(id))this.localStops.delete(id);
+      // Compatibility stores may still supply full records. The production
+      // store reads only its small index until an open anchor needs a body.
+      if(!store.list)for(const stop of restored as NativeStoppedResponse[])this.localStops.set(stop.id,stop);
       // Retain the old full bodies until each missing IndexedDB body/index is
       // committed. A crash between migration and clearing is harmless.
-      for(const stop of legacy)if(!ids.has(stop.id))await store.write(stop);
+      for(const stop of legacy)if(!ids.has(stop.id)){await store.write(stop);if(this.lifetime===lifetime)this.stopReferences.set(stop.id,{id:stop.id,path:stop.path,hidden:stop.hidden});}
       if(this.stopKey&&legacy.length)this.app.saveLocalStorage(this.stopKey,[]);
+      if(this.lifetime!==lifetime)return;
+      this.pruneStoppedBodies();await Promise.all([...this.stopReferences.values()].filter(stop=>this.needsStoppedBody(stop)).map(stop=>this.loadStoppedBody(stop.id)));
       this.stoppedRestoreFailure=undefined;if(this.lifetime===lifetime)this.refresh();
     })().catch(error=>{this.stoppedRestoreFailure=error;throw error;});
     this.stoppedRestore=work;try{await work;}finally{if(this.stoppedRestore===work)this.stoppedRestore=undefined;}
+  }
+  private needsStoppedBody(stop:NativeStoppedReference){
+    if(!this.app.vault.getFileByPath(stop.path))return false;
+    return this.app.workspace.getLeavesOfType('markdown').some(leaf=>{
+      const view=leaf.view as MarkdownView;if(view.file?.path!==stop.path||typeof view.getViewData!=='function')return false;
+      try{return !!responseRegion(this.view(view)?.recoveryDocument()??view.getViewData(),stop.id);}catch{return false;}
+    });
+  }
+  private pruneStoppedBodies(){
+    for(const [id,stop] of this.localStops)if(this.stopReferences.has(id)&&!this.pendingStops.has(id)&&!this.stopFailures.has(id)&&!this.needsStoppedBody(stop))this.localStops.delete(id);
+  }
+  private loadStoppedBody(id:string,force=false):Promise<NativeStoppedResponse|undefined>{
+    const loaded=this.localStops.get(id);if(loaded)return Promise.resolve(loaded);
+    const pending=this.stopLoads.get(id);if(pending)return pending;
+    const reference=this.stopReferences.get(id),store=this.stoppedStore,lifetime=this.lifetime;if(!reference||!store)return Promise.resolve(undefined);
+    const work=store.readAll([id]).then(stops=>{
+      const stop=stops.find(stop=>stop.id===id);if(!stop)throw Error('A frozen response body needs recovery.');
+      if(this.lifetime!==lifetime||this.stopReferences.get(id)!==reference)return;
+      this.stopFailures.delete(id);const current={...stop,path:reference.path};if(force||this.needsStoppedBody(reference))this.localStops.set(id,current);return current;
+    }).catch(error=>{if(this.lifetime===lifetime)this.stopFailures.set(id,error);throw error;}).finally(()=>{if(this.stopLoads.get(id)===work)this.stopLoads.delete(id);if(this.lifetime===lifetime)this.refresh();});
+    this.stopLoads.set(id,work);return work;
   }
   private retainStop(stop:NativeStoppedResponse){
     const previous=this.pendingStops.get(stop.id),snapshot={...stop},store=this.stoppedStore!,lifetime=this.lifetime;
     const work=(async()=>{
       if(previous)await previous.catch(()=>{});
       await store.write(snapshot);
+      if(this.lifetime===lifetime)this.stopReferences.set(stop.id,{id:snapshot.id,path:snapshot.path,hidden:snapshot.hidden});
+      if(this.lifetime!==lifetime)return;
       this.stopFailures.delete(stop.id);
       // Keep all recovery copies until body and index are durable.
       this.streams.delete(stop.id);this.forgetPreview(stop.id);if(this.lifetime===lifetime)this.refresh();
-    })().catch(error=>{this.stopFailures.set(stop.id,error);throw error;});
-    this.pendingStops.set(stop.id,work);void work.finally(()=>{if(this.pendingStops.get(stop.id)===work)this.pendingStops.delete(stop.id);}).catch(()=>{});return work;
+    })().catch(error=>{if(this.lifetime===lifetime)this.stopFailures.set(stop.id,error);throw error;});
+    this.pendingStops.set(stop.id,work);void work.finally(()=>{if(this.pendingStops.get(stop.id)===work)this.pendingStops.delete(stop.id);if(this.lifetime===lifetime)this.pruneStoppedBodies();}).catch(()=>{});return work;
   }
   private dirtyPreview(){
     this.previewDirty=true;
@@ -155,6 +188,7 @@ export class NativeResponseManager {
     await Promise.all([...this.views].filter(([,adapter])=>adapter.conflictRecord()).map(([view])=>this.adoptSaved(view)));
     await this.flushPreviewCache();
     if(this.stoppedRestore)await this.stoppedRestore.catch(()=>{});
+    await this.stopMoves;await Promise.allSettled([...this.stopLoads.values()]);
     while(this.pendingStops.size)await Promise.allSettled([...this.pendingStops.values()]);
     if(this.stoppedRestoreFailure||this.stopFailures.size)throw Error('Waiting for durable frozen response storage before reloading.');
     await this.flushPreviewCache();
@@ -199,7 +233,7 @@ export class NativeResponseManager {
     for(const receipt of this.completionIdentities.values())if(!this.deviceCommits.has(receipt.id)&&[...this.views].some(([view])=>view.file?.path===receipt.path&&!!responseRegion(this.reconnectDocument(view),receipt.id)))ids.push(receipt.id);
     return [...new Set(ids)];
   }
-  deleted(path:string){for(const entry of [...this.cached.values()])if(entry.notePath===path||entry.notePath.startsWith(path+'/'))this.forgetPreview(entry.id);void this.flushPreviewCache();}
+  deleted(path:string){for(const [id,stop] of this.localStops)if(stop.path===path||stop.path.startsWith(path+'/'))this.localStops.delete(id);for(const entry of [...this.cached.values()])if(entry.notePath===path||entry.notePath.startsWith(path+'/'))this.forgetPreview(entry.id);void this.flushPreviewCache();}
   /** A real vault rename keeps the TFile and response identity. Host leases
    * can lag behind that event (particularly across mobile Sync). */
   renamed(before:string,after:string){
@@ -212,9 +246,14 @@ export class NativeResponseManager {
       aliases.set(before,after);this.relocations.set(id,aliases);
     }
     const movedStops:NativeStoppedResponse[]=[];for(const stop of this.localStops.values()){const path=moved(stop.path);if(path!==stop.path){stop.path=path;movedStops.push(stop);}}
+    for(const [id,stop] of this.stopReferences)if(moved(stop.path)!==stop.path)this.stopReferences.set(id,{...stop,path:moved(stop.path)});
     for(const commit of this.deviceCommits.values())commit.path=moved(commit.path);
     for(const receipt of this.completionIdentities.values())receipt.path=moved(receipt.path);
-    if(this.stoppedStore){for(const stop of movedStops)void this.retainStop(stop).catch(error=>logFailure('note.stop.rename-storage',error,{bindingId:stop.id}));}
+    if(this.stoppedStore){
+      const store=this.stoppedStore;
+      this.stopMoves=this.stopMoves.catch(()=>{}).then(()=>store.relocate?.(before,after));void this.stopMoves.catch(error=>{this.stoppedRestoreFailure=error;logFailure('note.stop.rename-storage',error);});
+      for(const stop of movedStops)void this.retainStop(stop).catch(error=>logFailure('note.stop.rename-storage',error,{bindingId:stop.id}));
+    }
     else if(this.stopKey&&this.localStops.size)this.app.saveLocalStorage(this.stopKey,[...this.localStops.values()]);
     for(const item of this.provisional.values())item.path=moved(item.path);
     for(const entry of this.cached.values()){const path=moved(entry.notePath);if(path!==entry.notePath){entry.notePath=path;this.dirtyPreview();}}
@@ -227,6 +266,7 @@ export class NativeResponseManager {
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
   stoppedBody(id:string){return this.localStops.get(id)?.body;}
   stop(id:string,path?:string,hidden=false,sourceView?:MarkdownView):Promise<void>|void{
+    if(this.stopReferences.has(id)&&!this.localStops.has(id))return this.loadStoppedBody(id,true).then(stop=>{if(!stop)throw Error('The frozen response is unavailable.');this.localStops.set(id,stop);return this.stop(id,path,hidden,sourceView);});
     this.connectionIssues.delete(id);
     const record=this.records.get(id),provisional=this.provisional.get(id),cached=this.cached.get(id);
     const previous=this.localStops.get(id),nextPath=path??previous?.path??provisional?.path??cached?.notePath??record?.state?.notePath??record?.request.notePath??'',nextHidden=hidden||previous?.hidden===true;
@@ -243,7 +283,7 @@ export class NativeResponseManager {
     this.refresh();
   }
   stream(update:DirectInlineUpdate){
-    if(this.localStops.has(update.request.id))return;
+    if(this.localStops.has(update.request.id)||this.stopReferences.has(update.request.id))return;
     const record=this.records.get(update.request.id),previous=this.streams.get(update.request.id);
     if(record&&(record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.request.vaultId!==update.request.vaultId||record.request.threadId!==update.request.threadId||record.request.projectId!==update.request.projectId||record.request.threadEnvironmentId!==update.request.threadEnvironmentId))return;
     if(previous&&previous.sequence>update.sequence)return;
@@ -257,7 +297,7 @@ export class NativeResponseManager {
     this.streams.set(update.request.id,{...update,request:{...update.request,notePath:path}});this.refresh(new Set([path,previous?.request.notePath??path]));
   }
   title(id:string,title:string){if(!title.trim()||this.titles.get(id)===title)return;this.titles.set(id,title);this.refresh();}
-  localCompleted(id:string,path:string){this.records.delete(id);this.streams.delete(id);this.connectionIssues.delete(id);this.provisional.delete(id);this.forgetPreview(id);this.refresh(new Set([path]));}
+  localCompleted(id:string,path:string){this.localStops.delete(id);this.records.delete(id);this.streams.delete(id);this.connectionIssues.delete(id);this.provisional.delete(id);this.forgetPreview(id);this.refresh(new Set([path]));}
   async allowLocalBinding(id:string,path:string){
     const file=this.app.vault.getFileByPath(path);if(!file)return;
     const disk=await this.app.vault.read(file);if(!responseRegion(disk,id))return;
@@ -385,6 +425,7 @@ export class NativeResponseManager {
     return adapter;
   }
   refresh(paths?:ReadonlySet<string>){
+    this.pruneStoppedBodies();
     const opened=new Set<string>();
     const live=new Set(this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView));
     for(const [view,warnings] of this.warnings)if(!live.has(view)){for(const element of warnings.values())element.remove();this.warnings.delete(view);}
@@ -407,6 +448,8 @@ export class NativeResponseManager {
         let adapter=this.view(view);
         const fence=this.activeFinalSaves.get(view.file.path);if(adapter&&fence)this.joinFinalSave(fence,adapter);
         let saved=adapter?adapter.saved():view.getViewData();
+        const waiting=[...this.stopReferences.values()].filter(stop=>stop.path===view.file!.path&&!this.localStops.has(stop.id)&&!this.stopFailures.has(stop.id)&&this.needsStoppedBody(stop));
+        if(waiting.length){for(const stop of waiting)void this.loadStoppedBody(stop.id).catch(error=>logFailure('note.stop.body-load',error,{bindingId:stop.id}));continue;}
         const commits=[...this.deviceCommits.values()].filter(commit=>commit.path===view.file!.path),retired=[...this.completionIdentities.values()].filter(receipt=>receipt.path===view.file!.path&&!this.deviceCommits.has(receipt.id));
         let savedHash:string|undefined;
         const settled=[...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===view.file!.path&&record.state?.cleanupComplete&&record.state.delivery&&!adapter?.hasMaterialized(record.request.id)&&!responseRegion(saved,record.request.id)&&((savedHash??=contentHash(saved))===record.state.delivery.hash||this.proofs.has(record.request.id)&&nativeCommitMatches(this.proofs.get(record.request.id)!,saved))).map(record=>record.request.id);
@@ -532,5 +575,5 @@ export class NativeResponseManager {
   prepare(path:string,before:string,after:string,ids:string[]){if(this.activeFinalSaves.has(path)&&!this.finalSaveReady(path))throw Error('The native panes changed before final delivery.');for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.prepareMaterialization(before,after,ids);}
   cancel(path:string){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.cancelMaterialization();}
   committed(path:string,saved:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path){if(this.uninitializedViews.has(adapter)){adapter.initializeDiskBaseline(saved,true);this.uninitializedViews.delete(adapter);}if(!adapter.acceptCommitted(saved,ids))throw Error('A native pane did not adopt the saved result.');}}
-  dispose(){this.savedAdoptions.clear();void this.flushPreviewCache();this.lifetime++;for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.connectionIssues.clear();this.proofs.clear();this.deviceCommits.clear();this.completionIdentities.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
+  dispose(){this.savedAdoptions.clear();void this.flushPreviewCache();this.lifetime++;this.localStops.clear();this.stopReferences.clear();this.stopLoads.clear();this.stopFailures.clear();for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.connectionIssues.clear();this.proofs.clear();this.deviceCommits.clear();this.completionIdentities.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
 }
