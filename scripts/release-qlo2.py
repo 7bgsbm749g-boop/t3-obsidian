@@ -25,7 +25,7 @@ import re
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import change_checks
 import release_queue
-from plugin_id_migration import installed_plugin, needs_migration, migrate_installation
+from plugin_id_migration import LEGACY_ID, installed_plugin, needs_migration, migrate_installation
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -283,7 +283,9 @@ def deploy_qlo2(
     try:
         with zipfile.ZipFile(archive) as bundle:
             identifier = json.loads(bundle.read('send-to-t3-code/manifest.json')).get('id')
-            QLO2_PLUGIN = migrate_installation(QLO2_PLUGIN, identifier, backup / 'id-migration')
+            activation = migration_activation(version)
+            QLO2_PLUGIN = migrate_installation(QLO2_PLUGIN, identifier, backup / 'id-migration',
+                                               restore_enabled=activation.get(str(QLO2_PLUGIN), False))
             data_path = QLO2_PLUGIN / 'data.json'
             for name in RELEASE_FILES:
                 atomic_write(QLO2_PLUGIN / name, bundle.read(f'send-to-t3-code/{name}'))
@@ -333,6 +335,11 @@ def write_release_receipt(version: str, value: dict[str, Any]) -> Path:
     return receipt
 
 
+def migration_activation(version: str) -> dict[str, bool]:
+    path = BACKUPS / f'id-migration-{version}-activation.json'
+    return read_json(path) if path.is_file() else {}
+
+
 def publish_release(
     version: str,
     archive: Path,
@@ -347,6 +354,16 @@ def publish_release(
     with zipfile.ZipFile(archive) as bundle:
         runtime = {name: bundle.read(f'send-to-t3-code/{name}') for name in RUNTIME_FILES}
     identifier = json.loads(runtime['manifest.json']).get('id')
+    if any(needs_migration(plugin, identifier) for plugin in (DEV_PLUGIN, QLO2_PLUGIN)):
+        activation_path = BACKUPS / f'id-migration-{version}-activation.json'
+        if not activation_path.exists():
+            activation = {}
+            for plugin in (DEV_PLUGIN, QLO2_PLUGIN):
+                enabled = plugin.parent.parent / 'community-plugins.json'
+                activation[str(plugin)] = enabled.is_file() and LEGACY_ID in read_json(enabled)
+            activation_path.parent.mkdir(parents=True, exist_ok=True)
+            with activation_path.open('xb') as output:
+                output.write((json.dumps(activation, indent=2) + '\n').encode())
     # A running legacy instance can recreate/write its old data path after a
     # directory move. Hold the queue slot until the owner has disabled it.
     for plugin in (DEV_PLUGIN, QLO2_PLUGIN):
@@ -360,7 +377,8 @@ def publish_release(
                 pass
             else:
                 raise SystemExit(f'Plugin ID migration: disable T3 Code in {plugin.parents[2]} while this queue slot is held, then retry this job. Re-enable T3 Code after installation before completing smoke.')
-    DEV_PLUGIN = migrate_installation(DEV_PLUGIN, identifier, BACKUPS / f'id-migration-{version}-development')
+    DEV_PLUGIN = migrate_installation(DEV_PLUGIN, identifier, BACKUPS / f'id-migration-{version}-development',
+                                     restore_enabled=migration_activation(version).get(str(DEV_PLUGIN), False))
     dev_hashes = install_runtime(DEV_PLUGIN, strict_dev=True, runtime=runtime)
     deployment = deploy_qlo2(
         archive,

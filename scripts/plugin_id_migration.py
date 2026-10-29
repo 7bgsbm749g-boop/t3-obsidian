@@ -19,7 +19,7 @@ def needs_migration(plugin: Path, identifier: str) -> bool:
     return plugin.name == LEGACY_ID and identifier == PLUGIN_ID
 
 
-def migrate_installation(plugin: Path, identifier: str, backup: Path) -> Path:
+def migrate_installation(plugin: Path, identifier: str, backup: Path, *, restore_enabled: bool = False) -> Path:
     """Caller stops the old client and, for QLO2, pauses Sync before calling."""
     if not needs_migration(plugin, identifier):
         return plugin
@@ -39,6 +39,8 @@ def migrate_installation(plugin: Path, identifier: str, backup: Path) -> Path:
         if not isinstance(enabled, list) or any(not isinstance(item, str) for item in enabled):
             raise SystemExit('Invalid enabled-plugin list; migration refused.')
         updated = list(dict.fromkeys(PLUGIN_ID if item == LEGACY_ID else item for item in enabled))
+        if restore_enabled and PLUGIN_ID not in updated:
+            updated.append(PLUGIN_ID)
         if updated != enabled:
             changes[enabled_path] = (original, (json.dumps(updated, indent=2) + '\n').encode())
     hotkeys_path = config / 'hotkeys.json'

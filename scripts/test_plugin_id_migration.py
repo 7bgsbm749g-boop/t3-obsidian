@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from plugin_id_migration import PLUGIN_ID, LEGACY_ID, installed_plugin, migrate_installation
+from scripts.plugin_id_migration import PLUGIN_ID, LEGACY_ID, installed_plugin, migrate_installation
 
 
 class PluginIdMigrationTests(unittest.TestCase):
@@ -68,6 +68,14 @@ class PluginIdMigrationTests(unittest.TestCase):
             self.assertEqual(migrate_installation(plugin, LEGACY_ID, root / 'evidence'), plugin)
             migrate_installation(plugin, PLUGIN_ID, root / 'evidence')
             self.assertEqual(json.loads((config / 'community-plugins.json').read_bytes()), ['other'])
+
+    def test_release_restores_the_original_enabled_state_after_its_temporary_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config, plugin = self.fixture(root)
+            (config / 'community-plugins.json').write_text('["other"]')
+            migrate_installation(plugin, PLUGIN_ID, root / 'evidence', restore_enabled=True)
+            self.assertEqual(json.loads((config / 'community-plugins.json').read_bytes()), ['other', PLUGIN_ID])
 
 
 if __name__ == '__main__':
