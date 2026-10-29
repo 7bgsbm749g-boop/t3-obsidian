@@ -101,6 +101,8 @@ T3 `html_render` results appear as live pages in Live Preview and Reading mode. 
 
 The plugin verifies the exact completed T3 tool item, then downloads its attachment through the existing authenticated connection and signed asset API. HTML runs in an opaque-origin sandbox, with no Obsidian or Node API. T3's theme and size messages adapt the page to the note's colors, fonts and width. Other response HTML stays escaped.
 
+The render copy adds a fixed inline Escape-key handler to a detached document before it becomes the sandboxed page. This handler has no external script URL and is never attached to Obsidian's document. Its only action is to notify the parent about a trusted Escape key; the parent accepts it only from the exact focused frame while the host has user activation.
+
 Verified page bytes are cached in device-local IndexedDB, outside the synced vault and plugin settings. A downloaded, self-contained page can reopen offline, including after a plugin reload. The cache retains at most 64 pages and 100 MiB; each page can use up to 25 MiB. A new device must download a page while connected. Remote scripts, fonts, images and live data still require their network sources; caching the HTML does not package those dependencies. Cache failures show a small Retry control and do not block the reply's final save. No attachment folder is created in the vault.
 
 See [HTML result integration and validation](docs/html-results.md).

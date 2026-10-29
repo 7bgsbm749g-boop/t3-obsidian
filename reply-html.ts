@@ -25,6 +25,7 @@ export function markdownCodeRanges(markdown:string):Array<[number,number]> {
   // inline code. Its other inline nodes are unnecessary for this code-only
   // query, so do not allocate them. Groups with backticks use the full inline
   // grammar, including links, escapes and spans across soft/container lines.
+  // eslint-disable-next-line no-unsanitized/method -- micromark's document() is a Markdown tokenizer, not the DOM Document API.
   const events=parse().document().write(preprocess()(markdown.replace(/</g,' '),undefined,true));
   for(;;){
     const checked=new Set<object>();

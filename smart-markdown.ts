@@ -29,6 +29,7 @@ export function subtractSpans(wanted:Span[],covered:Span[]):Span[]{
 function parseMarkdownText(source:string){
   const marks:Array<{content:Span;syntax:Span[];container?:Span}>=[];
   const tasks:Span[]=[],headers:Span[]=[],quotes:Span[]=[];
+  // eslint-disable-next-line no-unsanitized/method -- micromark's document() is a Markdown tokenizer, not the DOM Document API.
   const events=parse({extensions:[gfmStrikethrough({singleTilde:false})]}).document().write(preprocess()(source,undefined,true));
   while(!subtokenize(events)){}
   for(const [kind,token] of events){

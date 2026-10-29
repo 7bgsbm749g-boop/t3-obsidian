@@ -2071,7 +2071,7 @@ export default class SendToT3 extends Plugin {
     const modal=new Modal(this.app);modal.titleEl.setText('Send failure log');
     const log=sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId);
     modal.contentEl.createEl('p',{text:'The last 64 send failures on this device. Message text and credentials are excluded.'});
-    const field=modal.contentEl.createEl('textarea');field.readOnly=true;field.value=JSON.stringify(log,null,2);field.style.width='100%';field.style.height='320px';
+    const field=modal.contentEl.createEl('textarea',{cls:'send-to-t3-failure-log'});field.readOnly=true;field.value=JSON.stringify(log,null,2);
     new Setting(modal.contentEl).addButton(button=>button.setButtonText('Copy log').onClick(()=>{field.select();document.execCommand('copy');}));modal.open();
   }
 
@@ -2855,7 +2855,7 @@ export class T3Settings extends PluginSettingTab {
   private selectedMachine:CloudMachine|null=null;
   cloudUI(el:HTMLElement){
     const p=this.plugin;p.cloudChanged=()=>this.display();
-    el.createEl('h3',{text:p.nativeAccount?'T3 connection on this device':p.signInExpired?'Refresh authentication':'Sign in on this device'});
+    new Setting(el).setName(p.nativeAccount?'T3 connection on this device':p.signInExpired?'Refresh authentication':'Sign in on this device').setHeading();
     el.createEl('p',{text:p.nativeAccount?'Your account is stored only on this device. Projects and saved folder links appear after T3 finishes connecting your computers.':p.signInExpired?REAUTHENTICATE_MESSAGE:'This device is not signed in to T3. Verify your T3 email here, or use advanced manual pairing below.'});
     if(p.nativeAccount){
       new Setting(el).setName(p.nativeAccount.identity).setDesc(p.connecting?'Connecting computers and discovering projects…':'Signed in. Connections renew automatically.').addButton(b=>b.setButtonText('Refresh connections').setDisabled(p.connecting).onClick(async()=>{try{await p.refreshMachines();}catch(e){p.cloudError=message(e);}this.display();})).addButton(b=>b.setButtonText('Sign out').onClick(async()=>{await p.signOutCloud();this.display();}));
@@ -2905,22 +2905,22 @@ export class T3Settings extends PluginSettingTab {
     new Setting(el).setName('T3 data directory').setDesc('Usually your home directory followed by .t3. Must match the running T3 installation.').addText(t=>t.setValue(this.plugin.settings.connection.baseDir??'').onChange(async value=>{this.plugin.settings.connection.baseDir=value.trim();await this.plugin.save();}));
 
     }
-    el.createEl('h3',{text:'Threads'});
+    new Setting(el).setName('Threads').setHeading();
     new Setting(el).setName('Thread title generation').setDesc('Send and Ask use the note title by default. Let T3 name untitled notes, or generate titles for every new thread. Existing threads keep their titles.').addDropdown(d=>d.addOption('untitled-only','Only for untitled notes').addOption('always','Always use T3').setValue(this.plugin.settings.threadTitleGeneration).onChange(async value=>{this.plugin.settings.threadTitleGeneration=threadTitleGeneration(value);await this.plugin.save();}));
     new Setting(el).setName('Settle completed threads').setDesc('Move Obsidian threads out of T3 Code’s active list after a successful turn and its inline reply finish. Sending to a settled thread wakes it again. Checks run while Obsidian is open.').addToggle(t=>t.setValue(this.plugin.settings.autoSettleThreads).onChange(async enabled=>{this.plugin.settings.autoSettleThreads=enabled;if(!enabled)this.plugin.settings.settlementJobs=[];await this.plugin.save();}));
     new Setting(el).setName('Command palette').setDesc(this.plugin.paletteChatStatus()==='active'?'Use the first T3 Code row to send the current note or ask a question about it.':'The live T3 Code row is unavailable in this Obsidian version or the core Command palette is disabled.');
     el.createEl('p',{text:'Sending includes the current note and its embedded images. Asking sends the question and note location. A selected passage and its embedded images are included with the question.'});
-    el.createEl('h3',{text:'Inline responses'});
+    new Setting(el).setName('Inline responses').setHeading();
     new Setting(el).setName('Stream replies into the editor').setDesc('For every manual Send or Ask, insert the reply into the note. Selection questions appear below the selection; other replies use the cursor position captured for Send, or follow the paragraph when the cursor is inside it.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));
     new Setting(el).setName('Final answer format').setDesc('Choose how the completed final answer appears. Intermediate responses keep their formatting in the progress box. Images and files are handled in both formats. Applies to new responses.').addDropdown(dropdown=>dropdown.addOptions({formatted:'Current formatting','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));
     new Setting(el).setName('Intermediate agent responses').setDesc('Progress stays in an open box while the agent works. The box closes when the final answer is complete. Click the header to open or close it.');
-    el.createEl('h3',{text:'Project files'});
+    new Setting(el).setName('Project files').setHeading();
     el.createEl('p',{text:'Project files stay in their T3 workspaces. Codebase view opens them in Obsidian. Reply attachments are not copied into the vault.'});
     new Setting(el).setName('Codebase view').addButton(b=>b.setButtonText('Open').onClick(()=>{void (this.app as any).commands.executeCommandById(`${this.plugin.manifest.id}:codebase-view`);}));
-    el.createEl('h3',{text:'Legacy cleanup'});
+    new Setting(el).setName('Legacy cleanup').setHeading();
     new Setting(el).setName('Legacy cleanup defaults').setDesc('Applies only to previously queued cleanup jobs. Manual sends and questions always keep their notes. Changed or renamed notes are kept.').addDropdown(d=>d.addOptions({keep:'Keep note',archive:'Archive note',delete:'Delete note (vault trash)'}).setValue(this.plugin.settings.completion.action).onChange(async value=>{this.plugin.settings.completion.action=value as CompletionAction;await this.plugin.save();this.display();}));
     if(this.plugin.settings.completion.action==='archive') new Setting(el).setName('Archive folder').setDesc('Folder inside this vault. Original subfolders are preserved; existing notes are never overwritten.').addText(t=>t.setValue(this.plugin.settings.completion.archiveFolder).onChange(async value=>{this.plugin.settings.completion.archiveFolder=value;await this.plugin.save();}));
-    el.createEl('h3',{text:'Linked folders'});
+    new Setting(el).setName('Linked folders').setHeading();
     el.createEl('p',{text:'Folder links route questions and manual note sends. Create T3 project lets you choose its workspace location.'});
     const root=this.plugin.vaultConnection();
     const machine=root?.connectionId?this.plugin.settings.paired.find(c=>c.id===root.connectionId)?.name:undefined;
@@ -2932,7 +2932,7 @@ export class T3Settings extends PluginSettingTab {
       setting.addButton(b=>b.setButtonText('Unlink').onClick(async()=>{await this.plugin.unlinkFolder(link.folderPath);this.display();}));
     }
     if(this.plugin.settings.completionJobs.length){
-      el.createEl('h3',{text:'Task completion monitoring'});
+      new Setting(el).setName('Task completion monitoring').setHeading();
       el.createEl('p',{text:'Checks every 30 seconds while Obsidian is active and resumes after restart or reopening on this device. Mobile background checks are not guaranteed. A completed T3 turn is the completion signal; this does not judge whether the answer fully solved the task.'});
       for(const job of this.plugin.settings.completionJobs) new Setting(el).setName(job.notePath).setDesc(`${job.action} · ${job.threadId} · ${job.detail || 'Waiting for successful completion'}`).addButton(b=>b.setButtonText(job.status==='watching'?'Stop monitoring':'Dismiss').onClick(async()=>{this.plugin.settings.completionJobs=this.plugin.settings.completionJobs.filter(j=>j!==job);await this.plugin.save();this.display();}));
       new Setting(el).addButton(b=>b.setButtonText('Check now').onClick(async()=>{b.setDisabled(true);await this.plugin.monitorCompletions();this.display();}));
