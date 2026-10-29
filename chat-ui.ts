@@ -120,8 +120,8 @@ class SendDestinationModal extends NoteTabPanel {
     const detail=this.contentEl.createEl('p',{text:''});
     const busyDetail=this.contentEl.createEl('p',{text:'Another send is in progress. This window will become available when it finishes.',attr:{role:'status'}});
     if(this.composing){
-      this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Message for T3',placeholder:'What would you like to do?',rows:'5'}});
-      this.field.style.width='100%';this.field.value=this.prompt??'';
+      this.field=this.contentEl.createEl('textarea',{cls:'send-to-t3-destination-prompt',attr:{'aria-label':'Message for T3',placeholder:'What would you like to do?',rows:'5'}});
+      this.field.value=this.prompt??'';
       this.field.addEventListener('keydown',event=>{
         if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)&&!event.isComposing){event.preventDefault();void this.choose('default');}
       });

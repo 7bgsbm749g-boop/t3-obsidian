@@ -15,6 +15,7 @@ function scan(doc:Text,from:number,to:number):number[]{
  * top-level token is a restart point; blanks inside lists, code or HTML aren't.
  * Definitions and their following paragraph stay in the same content token. */
 function section(doc:Text,from:number,to:number,candidates:ReadonlySet<number>,references:Map<string,HtmlResultReference|undefined>){
+  // eslint-disable-next-line no-unsanitized/method -- micromark's document() is a Markdown tokenizer, not the DOM Document API.
   const events=parse().document().write(preprocess()(doc.sliceString(from,to),undefined,true));
   for(;;){
     for(const [kind,token] of events)if(kind==='enter'&&(token.contentType==='text'||token.contentType==='string'))token.contentType=undefined;

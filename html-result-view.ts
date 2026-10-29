@@ -37,6 +37,8 @@ function viewerDocument(html:string,doc:Document):string {
   // A blob document has no vault-relative base. Keep its own hash links while
   // excluding Obsidian/file protocols from subresource and form requests.
   const policy=parsed.createElement('meta');policy.httpEquiv='Content-Security-Policy';policy.content="default-src http: https: data: blob:; script-src http: https: data: blob: 'unsafe-inline' 'unsafe-eval'; style-src http: https: data: blob: 'unsafe-inline'; connect-src http: https: ws: wss:; base-uri http: https:; form-action http: https:";
+  // This fixed inline handler has no src and is never attached to Obsidian's
+  // document. It is serialized into the opaque-origin sandboxed blob below.
   const bridge=parsed.createElement('script');bridge.textContent='window.addEventListener("keydown",function(e){if(e.isTrusted&&e.key==="Escape"&&!e.defaultPrevented){window.parent.postMessage({jsonrpc:"2.0",method:"t3/notifications/escape"},"*");}},false);';
   parsed.head.prepend(policy,bridge);
   return '<!doctype html>\n'+parsed.documentElement.outerHTML;

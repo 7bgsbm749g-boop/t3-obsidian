@@ -48,7 +48,7 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
  let settingsTab:any;const ui:{text:string[];buttons:Array<{text:string;run?:()=>Promise<void>}>;inputs:string[]}={text:[],buttons:[],inputs:[]};
  const element={createEl:(_tag:string,options:any)=>{ui.text.push(options.text);return element;}};
  class Setting{
-  constructor(_el:any){}setName(text:string){ui.text.push(text);return this;}setDesc(text:string){ui.text.push(text);return this;}
+  constructor(_el:any){}setName(text:string){ui.text.push(text);return this;}setDesc(text:string){ui.text.push(text);return this;}setHeading(){return this;}
   addText(callback:any){callback({inputEl:{},setPlaceholder(){return this;},setValue(text:string){ui.inputs.push(text);return this;},onChange(){return this;}});return this;}
   addButton(callback:any){const button:any={text:'',setButtonText(text:string){this.text=text;return this;},setCta(){return this;},setDisabled(){return this;},onClick(run:any){this.run=run;return this;}};callback(button);ui.buttons.push(button);return this;}
  }
