@@ -30,11 +30,12 @@ class ReleasePipelineTests(unittest.TestCase):
             with zipfile.ZipFile(archive, 'w') as bundle:
                 for name in release.RUNTIME_FILES:
                     bundle.writestr('send-to-t3-code/' + name, '{"id":"t-three-code"}' if name == 'manifest.json' else name)
-            with patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'DEV_PLUGIN', plugin), patch.object(release, 'validate_archive', return_value={}), patch.object(release, 'install_runtime') as install, patch.object(release, 'migrate_installation') as migrate:
+            with patch.object(release, 'BACKUPS', root / 'evidence'), patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'DEV_PLUGIN', plugin), patch.object(release, 'validate_archive', return_value={}), patch.object(release, 'install_runtime') as install, patch.object(release, 'migrate_installation') as migrate:
                 with self.assertRaisesRegex(SystemExit, 'disable T3 Code'):
                     release.publish_release('3.4.5', archive, 'reviewed', [], resumed=False)
                 install.assert_not_called()
                 migrate.assert_not_called()
+                self.assertTrue(release.migration_activation('3.4.5')[str(plugin)])
 
     def test_installed_queue_prevents_a_direct_publication_from_bypassing_its_slots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -223,7 +223,7 @@ def update(directory: Path, state: dict, **values) -> None:
 
 def engine_hash(root: Path) -> dict:
     return {name: hashlib.sha256((root / 'scripts' / name).read_bytes()).hexdigest()
-            for name in ('release-qlo2.py', 'release_queue.py', 'change_checks.py')
+            for name in ('release-qlo2.py', 'release_queue.py', 'change_checks.py', 'plugin_id_migration.py')
             if (root / 'scripts' / name).is_file()}
 
 
