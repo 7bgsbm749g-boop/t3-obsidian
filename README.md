@@ -6,7 +6,9 @@ This is an independent community integration, maintained by jslepx ([7bgsbm749g-
 
 ## Install
 
-The plugin is being prepared for submission to the Obsidian Community directory. Until it is listed, download `main.js`, `manifest.json`, and `styles.css` from the [latest GitHub release](https://github.com/7bgsbm749g-boop/t3-obsidian/releases/latest), place them in `<vault>/.obsidian/plugins/send-to-t3-code/`, then enable **T3 Code** in Obsidian's Community plugins settings. Reload the plugin after an update. The folder and internal plugin ID remain `send-to-t3-code` so existing installations keep their settings, hotkeys, and local storage.
+The plugin is being submitted to the Obsidian Community directory. Until it is listed, download `main.js`, `manifest.json`, and `styles.css` from the [latest GitHub release](https://github.com/7bgsbm749g-boop/t3-obsidian/releases/latest), place them in `<vault>/.obsidian/plugins/t-three-code/`, then enable **T3 Code** in Obsidian's Community plugins settings. Reload the plugin after an update. The store ID is `t-three-code`: Obsidian IDs allow only lowercase letters and hyphens, and cannot contain `obsidian`.
+
+Existing manual installations used `send-to-t3-code`. Disable that installation before moving its folder to `t-three-code`, retain its exact `data.json`, and replace the old command prefix with `t-three-code:` in your custom hotkeys. Then enable **T3 Code**. Do not keep both folders. Device credential, draft, IndexedDB, and private response storage names remain unchanged. The QLO2 release queue performs the folder and hotkey migration with backups and verifies that `data.json` is byte-identical; its owner must disable the old client while that migration holds the queue slot, then enable the migrated plugin for the live check.
 
 Obsidian 1.8.7 or later and a running T3 Code installation with Orchestrator v2 are required. Desktop and mobile use T3 Connect; the local CLI option is desktop only. See [Setup: desktop and mobile](#setup-desktop-and-mobile) for sign-in and pairing.
 
@@ -158,7 +160,7 @@ Updates may replace a scope or filter, but cannot change the receiving thread. A
 ## Setup: desktop and mobile
 
 1. Install and run T3 Code on your computers. Sign in to the same T3 account and enable **T3 Connect** on each destination. T3 supplies the public HTTPS connection; no Tailscale or plugin companion is required. See [T3 remote access](https://github.com/pingdotgg/t3code/blob/main/docs/user/remote-access.md).
-2. Install `main.js` and `manifest.json` in `<vault>/.obsidian/plugins/send-to-t3-code/` and enable the plugin.
+2. Install `main.js` and `manifest.json` in `<vault>/.obsidian/plugins/t-three-code/` and enable the plugin.
 3. In **Settings → T3 Code**, keep **T3 Connect (recommended)** selected. Enter your T3 account email and click **Send sign-in code**.
 4. Enter the six-digit code from T3’s email and click **Verify and connect**. The plugin discovers your account’s computers, authorizes each online connection and scans its projects automatically. No terminal commands, machine URLs, pairing links or per-machine codes are needed.
 5. Every discovered project appears automatically in the folder and send project menus. Their names include the destination computer. On mobile, use the note menu → **Open in T3 Code**, or the command palette’s **T3 Code** row.

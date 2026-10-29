@@ -5,6 +5,7 @@
 export type PaletteChatStatus = 'active' | 'unavailable' | 'incompatible' | 'disposed';
 
 export interface PaletteChatOptions<Context = unknown> {
+  pluginId?: string;
   onStatus?: (status: PaletteChatStatus) => void;
   onError?: (error: unknown) => void;
   getDraft?: () => string;
@@ -87,14 +88,14 @@ export function installPaletteChat<Context = unknown>(
           ? `${selection.trim()?'Ask T3 Code':'T3 Code'}: “${query}”`
           : selection.trim()?'Ask T3 Code':'T3 Code';
         const row: ChatRow = {
-          item: { id: 'send-to-t3-code:palette-query', name },
+          item: { id: `${options.pluginId??'send-to-t3-code'}:palette-query`, name },
           match: { score: 0, matches: [] },
         };
         rows.set(row, { query, selection, epoch, context:source?.context, error:sourceError });
         // Insert after core filtering/sorting, before its display limit is applied.
         // The registered command is the hotkey/fallback surface. While this
         // dynamic row is available, show only one manual T3 action.
-        return [row, ...suggestions.filter(suggestion=>suggestion?.item?.id!=='send-to-t3-code:send-or-ask')];
+        return [row, ...suggestions.filter(suggestion=>suggestion?.item?.id!==`${options.pluginId??'send-to-t3-code'}:send-or-ask`)];
       },
       renderSuggestion(...args) {
         const row = args[0];

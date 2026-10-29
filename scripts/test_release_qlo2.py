@@ -8,6 +8,7 @@ import unittest
 import subprocess
 import base64
 import gzip
+import zipfile
 from unittest.mock import patch
 
 
@@ -19,6 +20,22 @@ SPEC.loader.exec_module(release)
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    def test_id_migration_holds_the_queue_slot_before_installing_over_an_enabled_client(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plugin = root / 'vault/.obsidian/plugins/send-to-t3-code'
+            plugin.mkdir(parents=True)
+            (plugin.parent.parent / 'community-plugins.json').write_text('["send-to-t3-code"]')
+            archive = root / 'candidate.zip'
+            with zipfile.ZipFile(archive, 'w') as bundle:
+                for name in release.RUNTIME_FILES:
+                    bundle.writestr('send-to-t3-code/' + name, '{"id":"t-three-code"}' if name == 'manifest.json' else name)
+            with patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'DEV_PLUGIN', plugin), patch.object(release, 'validate_archive', return_value={}), patch.object(release, 'install_runtime') as install, patch.object(release, 'migrate_installation') as migrate:
+                with self.assertRaisesRegex(SystemExit, 'disable T3 Code'):
+                    release.publish_release('3.4.5', archive, 'reviewed', [], resumed=False)
+                install.assert_not_called()
+                migrate.assert_not_called()
+
     def test_installed_queue_prevents_a_direct_publication_from_bypassing_its_slots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); units = root / '.config/systemd/user'; units.mkdir(parents=True)
