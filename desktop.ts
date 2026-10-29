@@ -19,6 +19,7 @@ import {t3Api,requestAborted,cancelledRequest,type T3RequestOptions} from './t3-
 import type {DirectReadOptions} from './direct';
 import {T3_PROTOCOL_HEADER,T3_PROTOCOL_VERSION} from './orchestration-v2';
 import {ensureNoProject} from './no-project';
+import {AUTO_THREAD_TITLE} from './thread-title';
 
 export function desktopDefaults():Connection {return {executable:'',host:'local',native:true,baseDir:join(homedir(),'.t3')};}
 export function cli(command:string[],args:string[],signal?:AbortSignal):Promise<string> {
@@ -131,8 +132,17 @@ export async function start(api:(path:string,payload?:any)=>Promise<any>,req:any
    const defaults=await loadDefaults(project);
    const stamp=new Date().toISOString();const threadId=uuid5(id,'thread');
    const common={threadId,...defaults,interactionMode:'default',createdAt:stamp};
-   ledger={protocolVersion:2,requestHash:hash,requestId:id,threadId,project,phase:'prepared',create:{...common,type:'thread.create',commandId:uuid5(id,'create'),projectId:project.id,title:req.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:uuid5(id,'turn'),message:{messageId:uuid5(id,'message'),role:'user',text:req.prompt,attachments:req.attachments??[],...(req.context?{context:req.context}:{})}}};await save(path,ledger);
+   ledger={protocolVersion:2,...(req.title===AUTO_THREAD_TITLE?{launch:true}:{}),requestHash:hash,requestId:id,threadId,project,phase:'prepared',create:{...common,type:'thread.create',commandId:uuid5(id,'create'),projectId:project.id,title:req.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:uuid5(id,'turn'),message:{messageId:uuid5(id,'message'),role:'user',text:req.prompt,attachments:req.attachments??[],...(req.context?{context:req.context}:{})}}};await save(path,ledger);
    }
+  }
+  if(compromised)throw compromised;
+  // Persist the launch choice before its first attempt. Existing ledgers keep
+  // their original create/dispatch path and immutable retry identities.
+  if(ledger.phase==='prepared'&&ledger.launch){
+   const {commandId,threadId,projectId,title,modelSelection,runtimeMode,interactionMode}=ledger.create;
+   const {messageId,text,attachments,context}=ledger.turn.message;
+   await api('/api/orchestration/launch',{commandId,threadId,projectId,title,generateTitle:true,modelSelection,runtimeMode,interactionMode,creationSource:'web',workspaceStrategy:{type:'root'},initialMessage:{messageId,text,attachments,...(context?{context}:{})}});
+   ledger.phase='started';await save(path,ledger);
   }
   if(compromised)throw compromised;
   if(ledger.phase==='prepared'){await api('dispatch',{...ledger.create,...(ledger.protocolVersion===2?{}:{__legacyV1:true})});ledger.phase='created';await save(path,ledger);}

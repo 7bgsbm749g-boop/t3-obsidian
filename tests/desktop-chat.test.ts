@@ -74,6 +74,7 @@ if(args[0]==='auth'){
     global:{},process,Buffer,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
     WebSocket:settingsSocket(undefined,undefined,async(tag,payload)=>{
       if(tag==='projects.ensureScratch'){const projects=JSON.parse(await readFile(catalogPath,'utf8'));if(!projects.some((p:any)=>p.id===noProject.id))await writeFile(catalogPath,JSON.stringify([...projects,noProject]));return {projectId:noProject.id};}
+      if(tag==='orchestration.launchThread'){commands.push(payload);return {threadId:payload.threadId};}
       assert.equal(tag,'orchestration.dispatchCommand');commands.push(payload);return {};
     }),Headers,Response,AbortController,URL,URLSearchParams,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval,console,
   },{timeout:5000});
@@ -102,8 +103,9 @@ for(const existing of [false,true])test(`desktop chat uses No project with ${exi
     h.plugin.onunload();const restarted=await h.start();
     h.setNote();await restarted.sendChat('Work in the vault');
     assert.equal(h.commands[2].projectId,h.noProject.id);
-    assert.ok(h.commands[3].text.startsWith('Work in the vault'));
-    assert.doesNotMatch(h.commands[3].text,/T3 EVENT HISTORY CAPABILITY/);
+    assert.equal(h.commands[2].generateTitle,true);assert.equal(h.commands.length,3);
+    assert.ok(h.commands[2].initialMessage.text.startsWith('Work in the vault'));
+    assert.doesNotMatch(h.commands[2].initialMessage.text,/T3 EVENT HISTORY CAPABILITY/);
     assert.equal((await h.cliCalls()).filter(args=>args[0]==='project').length,0);
     assert.equal(restarted.settings.completionJobs.length,0);
     restarted.onunload();
@@ -114,7 +116,7 @@ test('desktop root fallback works while the user has T3 Connect mode selected',{
   const h=await harness(false,'direct');
   try{
     await h.plugin.sendChat('Use the vault');
-    assert.equal(h.commands.length,2);assert.equal(h.commands[0].projectId,h.noProject.id);
+    assert.equal(h.commands.length,1);assert.equal(h.commands[0].projectId,h.noProject.id);assert.equal(h.commands[0].generateTitle,true);
     assert.equal(h.plugin.mode,'direct','Automatic local routing must preserve the selected connection mode');
   }finally{await h.dispose();}
 });

@@ -2,6 +2,7 @@ import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,rememberR
 import {DuplicateResponseLocation} from './response-location';
 import {retainedLocalFinal,restoredLocalFinal} from './local-final-cache';
 import {HtmlResultStore} from './html-result-store';
+import {projectEventNote} from './event-note-projection';
 import {HtmlResultViews} from './html-result-view';
 import {hasResponseMarkers} from './inline-thread';
 import {responseIds,responseFrame} from './response-container';
@@ -834,6 +835,7 @@ export default class SendToT3 extends Plugin {
         const files=this.app.vault.getMarkdownFiles().filter(file=>inEventScope(scope,file.path));
         return Promise.all(files.map(async file=>this.eventSnapshot(file.path,await this.app.vault.read(file))));
       },
+      projectNote:note=>projectEventNote(note,this.smartData(),responseBindingRequests(this.settings.responseBindings??{})),
       validateTarget:async target=>{await this.eventThread(target);},
       isBusy:async target=>threadIsActive(await this.eventThread(target)),
       prepare:async notification=>existingThreadTurn(await this.eventThread(notification.target!),notification.target!,commandId(notification.id,'turn'),{messageId:commandId(notification.id,'message'),role:'user',text:notificationPrompt(notification,this.app.vault.getName()),attachments:[]}),

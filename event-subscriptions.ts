@@ -21,13 +21,14 @@ export interface NoteEventSubscriptionCommand {
 }
 export type EventSubscriptionCommand=NoteEventSubscriptionCommand|ThreadDisplayCommand;
 export interface EventCommandResult {display?:ThreadDisplay;displays?:ThreadDisplay[];host?:import('./event-host').EventHostIdentity;id:string;ok:boolean;subscriptionId?:string;subscriptions?:EventSubscription[];monitoring?:boolean;notifications?:Array<Pick<EventNotification,'id'|'subscriptionId'|'status'|'count'|'attempts'|'error'|'action'>>;error?:string}
-export interface NoteEventSnapshot {path:string;content:string;properties:Record<string,unknown>|null}
+export interface NoteEventSnapshot {path:string;content:string;properties:Record<string,unknown>|null;pendingResponseIds?:string[]}
 export interface NoteEvent {kind:EventKind;path:string;oldPath?:string;at:string;beforeHash?:string;afterHash?:string;property?:string;before?:unknown;after?:unknown}
 export interface EventNotification {id:string;subscriptionId:string;target?:EventTarget;action?:EventAction;events:Array<NoteEvent|JobEvent>;count:number;firstAt:number;dueAt:number;status:'pending'|'prepared'|'delivered'|'cancelled';command?:unknown;attempts:number;retryAt?:number;error?:string}
 export interface ActionEffect {notificationId:string;kind:'modify'|'rename';path:string;oldPath?:string;afterHash:string;expiresAt:number}
 export interface EventState {actionEffects?:ActionEffect[];version:1;subscriptions:EventSubscription[];notifications:EventNotification[];commands:Record<string,{input:string;result:EventCommandResult}>;feedback:EventTarget[];displays?:ThreadDisplay[];threads?:Record<string,{state:InlineThreadState;sequence?:number}>}
 export interface EventSubscriptionHost {
   load():Promise<unknown>;save(state:EventState):Promise<void>;notes(scope:EventScope):Promise<NoteEventSnapshot[]>;
+  projectNote?(note:NoteEventSnapshot):Promise<NoteEventSnapshot>;
   validateTarget(target:EventTarget):Promise<void>;isBusy(target:EventTarget):Promise<boolean>;
   prepare(notification:EventNotification):Promise<unknown>;
   deliver(notification:EventNotification):Promise<'delivered'|'busy'>;
@@ -127,6 +128,7 @@ function compactObservedThread(state:InlineThreadState):InlineThreadState {
 /** One desktop host, serialized capture, durable messages; no task definitions. */
 export class EventSubscriptions {
   private canonicalUntil=new Map<string,number>();
+  private pendingNotes=new Map<string,{kind:Exclude<EventKind,'property'>;path:string;oldPath?:string}>();
   private state=empty();private baselines=new Map<string,Map<string,NoteEventSnapshot>>();private work=Promise.resolve();private ticking?:Promise<void>;private tickNeedsSave=false;private dirty=false;private reads?:Map<string,Promise<InlineThreadState>>;private stopped=false;private monitors=new Map<string,{stop():void}>();
   constructor(private host:EventSubscriptionHost){}
   get active(){return this.state.subscriptions.some(subscription=>subscription.enabled)||(this.state.displays??[]).some(d=>d.enabled&&!d.cancelled);}
@@ -166,7 +168,8 @@ export class EventSubscriptions {
     }
     for(const subscription of this.state.subscriptions)if(subscription.enabled)await this.seed(subscription);
   });}
-  private async seed(subscription:EventSubscription){if(subscription.job)return;const notes=await this.host.notes(subscription.scope);this.baselines.set(subscription.id,new Map(notes.filter(note=>inEventScope(subscription.scope,note.path)).map(note=>[note.path,{...note,content:eventContent(note.content)}])));}
+  private async seed(subscription:EventSubscription){if(subscription.job)return;const notes=await this.host.notes(subscription.scope);this.baselines.set(subscription.id,new Map(notes.filter(note=>inEventScope(subscription.scope,note.path)).map(note=>[note.path,{...note}])));}
+  private async projected(note:NoteEventSnapshot){const source=this.host.projectNote?await this.host.projectNote(note):note;return {...source,content:eventContent(source.content)};}
   async command(input:EventSubscriptionCommand):Promise<EventCommandResult>{return this.serialize(async()=>{
     const command=validateEventCommand(input),key=canonical(command),prior=this.state.commands[command.id];
     if(prior){if(prior.input!==key)throw Error('This request ID already belongs to different input.');return clone(prior.result);}
@@ -203,12 +206,32 @@ export class EventSubscriptions {
     return this.serialize(()=>this.capture(kind,path,note,oldPath));
   }
   private async capture(kind:Exclude<EventKind,'property'>,path:string,note?:NoteEventSnapshot,oldPath?:string){
-      const now=this.host.now(),content=note?eventContent(note.content):undefined;
+      const projected=note?await this.projected(note):undefined,now=this.host.now(),content=projected?.content;
+      this.pendingNotes.delete(path);
+      if(oldPath)this.pendingNotes.delete(oldPath);
+      const priorProjections=new Map<string,NoteEventSnapshot>();
+      let waiting=false;
+      for(const subscription of this.state.subscriptions){
+        if(!subscription.enabled||subscription.job)continue;
+        const prior=this.baselines.get(subscription.id)?.get(oldPath??path);if(!prior)continue;
+        const before=await this.projected({...prior,path});priorProjections.set(subscription.id,before);
+        if(note){
+          const pending=new Set([...(projected?.pendingResponseIds??[]),...(before.pendingResponseIds??[])]);
+          // Removing an empty anchor alone is a user deletion. A replacement
+          // must wait for the corresponding saved provenance before comparison.
+          waiting||=responseIds(prior.content).some(id=>{
+            if(!pending.has(id))return false;
+            if(responseIds(note.content).includes(id))return false;
+            try{const frame=responseFrame(prior.content,id);return !!frame&&note!.content!==prior.content.slice(0,frame.from)+prior.content.slice(frame.to);}catch{return false;}
+          });
+        }
+      }
+      if(waiting){this.pendingNotes.set(path,{kind,path,oldPath});return;}
       this.expireEffects(now);
       const effect=this.state.actionEffects?.find(e=>e.kind===kind&&e.path===path&&e.oldPath===oldPath&&content!==undefined&&e.afterHash===hash(content));
       for(const subscription of this.state.subscriptions){
         if(subscription.job||!subscription.enabled||!inEventScope(subscription.scope,path)&&!(oldPath&&inEventScope(subscription.scope,oldPath)))continue;
-        const baselines=this.baselines.get(subscription.id)??new Map<string,NoteEventSnapshot>(),before=baselines.get(oldPath??path);
+        const baselines=this.baselines.get(subscription.id)??new Map<string,NoteEventSnapshot>(),before=priorProjections.get(subscription.id);
         const feedback=this.state.feedback.some(target=>sameTarget(target,subscription));
         // Only turns initiated by this system suppress feedback. Ordinary busy
         // threads still receive queued changes from users and other threads.
@@ -225,7 +248,7 @@ export class EventSubscriptions {
         }
         for(const event of events)this.enqueue(subscription,event,now);
         if(kind==='rename'&&oldPath&&subscription.scope.kind==='note'&&subscription.scope.path===oldPath){subscription.scope.path=path;subscription.revision++;this.dirty=true;}
-        if(oldPath)baselines.delete(oldPath);if(note&&kind!=='delete'&&inEventScope(subscription.scope,path))baselines.set(path,{...note,content:content!});else baselines.delete(path);
+        if(oldPath)baselines.delete(oldPath);if(note&&kind!=='delete'&&inEventScope(subscription.scope,path))baselines.set(path,{...note});else baselines.delete(path);
         this.baselines.set(subscription.id,baselines);
       }
       if(effect){this.state.actionEffects=this.state.actionEffects!.filter(e=>e!==effect);this.dirty=true;}
@@ -267,6 +290,12 @@ export class EventSubscriptions {
   tick(){if(this.ticking)return this.ticking;const run=this.serialize(async()=>{
     if(this.tickNeedsSave){await this.save();this.tickNeedsSave=false;}
     if(!this.active)return;
+    for(const pending of [...this.pendingNotes.values()]){
+      if(!this.interested(pending.path,pending.oldPath)){this.pendingNotes.delete(pending.path);continue;}
+      const note=(await this.host.notes({path:pending.path,kind:'note',recursive:false})).find(note=>note.path===pending.path);
+      if(note)await this.capture(pending.kind,pending.path,note,pending.oldPath);
+      else this.pendingNotes.delete(pending.path);
+    }
     this.expireEffects(this.host.now(),true);
     for(const subscription of this.state.subscriptions.filter(s=>s.enabled&&s.job)){
       try{
@@ -310,7 +339,7 @@ export class EventSubscriptions {
           const plan=notification.command as ActionPlan;
           if(plan.before!==plan.after||plan.destination&&plan.destination!==plan.path){
             const effects=this.state.actionEffects??=[];
-            const effect={notificationId:notification.id,kind:plan.kind==='move-note'?'rename' as const:'modify' as const,path:plan.destination??plan.path,...(plan.destination?{oldPath:plan.path}:{}),afterHash:hash(eventContent(plan.after)),expiresAt:this.host.now()+60_000};
+            const effect={notificationId:notification.id,kind:plan.kind==='move-note'?'rename' as const:'modify' as const,path:plan.destination??plan.path,...(plan.destination?{oldPath:plan.path}:{}),afterHash:hash((await this.projected({path:plan.destination??plan.path,content:plan.after,properties:null})).content),expiresAt:this.host.now()+60_000};
             const index=effects.findIndex(e=>e.notificationId===notification.id);if(index<0)effects.push(effect);else effects[index]=effect;
           }
           await this.save();await this.host.deliverAction!(notification);
@@ -375,7 +404,7 @@ export class EventSubscriptions {
       }).catch(()=>{});
     },()=>this.state.threads?.[key]?.sequence,()=>{this.canonicalUntil.delete(key);}));
   }
-  stop(){this.stopped=true;for(const monitor of this.monitors.values())monitor.stop();this.monitors.clear();this.baselines.clear();this.host.recording(false);}
+  stop(){this.stopped=true;for(const monitor of this.monitors.values())monitor.stop();this.monitors.clear();this.baselines.clear();this.pendingNotes.clear();this.host.recording(false);}
 }
 
 export function notificationPrompt(notification:EventNotification,vault:string){

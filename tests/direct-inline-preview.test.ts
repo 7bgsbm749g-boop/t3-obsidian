@@ -170,6 +170,19 @@ test('a v2 item verification arriving after suspension cannot finish the respons
  let release!:(value:any)=>void;const h=fixture(false,()=>new Promise(resolve=>{release=resolve;}));h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};h.preview.tick(true);h.item(completeV2(h));await settle();const count=h.updates.length;h.preview.tick(false);release(finalItem());await settle();assert.equal(h.updates.length,count);h.preview.dispose();
 });
 
+test('final verification releases access on success, failure, timeout, suspension, and late access',async()=>{
+ for(const outcome of ['success','failure','timeout','suspend','late']){
+  const h=fixture(false);h.record.request.localOnly=true;let closes=0,reads=0,resolveAccess!:(access:any)=>void;
+  const access={origin:'https://fixture',api:async()=>{reads++;if(outcome==='failure')throw Error('Synthetic verification failure');if(['timeout','suspend'].includes(outcome))return new Promise(()=>{});return finalItem();},close:()=>{closes++;}};
+  (h.preview as any).access=()=>outcome==='late'?new Promise(resolve=>{resolveAccess=resolve;}):Promise.resolve(access);
+  h.preview.tick(true);h.item(completeV2(h));await settle();
+  if(outcome==='timeout'||outcome==='late'){h.clock.advance(10_000);await settle();}
+  if(outcome==='suspend')h.preview.tick(false);
+  if(outcome==='late'){resolveAccess(access);await settle();assert.equal(reads,0,'expired access must not start another read');}
+  assert.equal(closes,1,outcome);h.preview.dispose();await settle();assert.equal(closes,1,'cleanup must be idempotent');
+ }
+});
+
 test('direct completion verifies canonical final prose instead of sealing a session-ready commentary message',async()=>{
  let release!:(value:any)=>void;const pending=new Promise(resolve=>{release=resolve;}),h=fixture(false,()=>pending);
  h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};

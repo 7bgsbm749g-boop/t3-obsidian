@@ -38,6 +38,7 @@ export class DirectInlinePreview {
   private completionTurnId?:string;
   private failure?:StreamReadFailure;
   private verification?:Promise<void>;
+  private closeVerification?:()=>void;
   private nextVerification=0;
   private terminal=false;
   private interruptedTurnId?:string;
@@ -183,10 +184,21 @@ export class DirectInlinePreview {
     const turnId=this.completionTurnId!,key=finalResponseKey(this.state,turnId),state=this.state;
     if(state.protocolVersion===2&&(!key||key===this.verifiedKey||this.failure?.operation==='final-reply'&&this.failure.key===key))return;
     if(state.protocolVersion!==2&&this.failure)return;
-    let timeout:unknown;
+    let timeout:unknown,access:ThreadAccess|undefined,closed=false,expired=false;
+    const close=()=>{
+      if(!access||closed)return;closed=true;
+      try{void Promise.resolve(access.close?.(expired?'late-access':'caller-closed')).catch(error=>logFailure('stream.direct.verification-close',error,{bindingId:request.id}));}catch(error){logFailure('stream.direct.verification-close',error,{bindingId:request.id});}
+    };
+    const cancel=()=>{expired=true;close();};this.closeVerification=cancel;
     const work=Promise.race([
-      this.access().then(async access=>state.protocolVersion===2?checkFinalResponse(access,request.threadId,state,turnId):readInlineSnapshot(access,request.threadId,request.projectId,{messageIds:[this.messageId()],turnIds:this.turnIds})),
-      new Promise<never>((_resolve,reject)=>{timeout=this.clock.later(()=>reject(Error('T3 completion verification timed out.')),10_000);}),
+      this.access().then(async ready=>{
+        access=ready;
+        try{
+          if(expired||this.stopped||generation!==this.generation)throw Error('T3 completion verification cancelled.');
+          return await (state.protocolVersion===2?checkFinalResponse(ready,request.threadId,state,turnId):readInlineSnapshot(ready,request.threadId,request.projectId,{messageIds:[this.messageId()],turnIds:this.turnIds}));
+        }finally{close();}
+      }),
+      new Promise<never>((_resolve,reject)=>{timeout=this.clock.later(()=>{cancel();reject(Error('T3 completion verification timed out.'));},10_000);}),
     ]).then(result=>{
       if(this.stopped||generation!==this.generation)return;
       if(state.protocolVersion===2){
@@ -202,10 +214,10 @@ export class DirectInlinePreview {
         this.verifiedSequence=result.snapshotSequence;
       }
       this.schedule(true);
-    }).catch(error=>{if(!this.stopped&&generation===this.generation){logFailure('stream.direct.completion-verification',error,{bindingId:request.id});if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:state.protocolVersion===2?'final-reply':'snapshot',key};this.schedule(true);}else this.connectionFailed(error);}}).finally(()=>{this.clock.cancel(timeout);if(this.verification===work){this.verification=undefined;this.nextVerification=this.clock.now()+1000;}});
+    }).catch(error=>{if(!this.stopped&&generation===this.generation){logFailure('stream.direct.completion-verification',error,{bindingId:request.id});if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:state.protocolVersion===2?'final-reply':'snapshot',key};this.schedule(true);}else this.connectionFailed(error);}}).finally(()=>{cancel();if(this.closeVerification===cancel)this.closeVerification=undefined;this.clock.cancel(timeout);if(this.verification===work){this.verification=undefined;this.nextVerification=this.clock.now()+1000;}});
     this.verification=work;
   }
   reconnect(open:boolean){if(this.stopped)return;this.suspend();this.connectionIssue=undefined;this.connectionChanged?.();this.tick(open);}
-  suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;this.verification=undefined;this.interruptionVerification=undefined;this.nextInterruptionVerification=0;this.nextVerification=0;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
+  suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;this.closeVerification?.();this.closeVerification=undefined;this.verification=undefined;this.interruptionVerification=undefined;this.nextInterruptionVerification=0;this.nextVerification=0;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
   dispose(){this.stopped=true;this.suspend();}
 }

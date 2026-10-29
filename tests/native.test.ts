@@ -7,6 +7,7 @@ import {createServer} from 'node:http';
 import {uuid5,canonical,start,cli,parseOperation,requestJson} from '../desktop';
 import {resolveNewThreadDefaults} from '../model-defaults';
 import {modelConfig} from './rpc-fixture';
+import {noteThreadTitle} from '../thread-title';
 const id='98e4d70e-cbd5-4a23-aad0-a50732a59bf2';
 test('native IDs and fingerprints match old durable requests',()=>{
  assert.equal(uuid5(id,'thread'),'6732c96c-84e7-5252-8c8a-ce9bb2d9ad50');
@@ -42,6 +43,30 @@ test('native settings failures leave no plan and retry reads the current default
   assert.equal(calls.length,0);
   await start(api,req,dir,async project=>resolveNewThreadDefaults(modelConfig(),project));
   assert.equal(calls.length,2);assert.equal(calls[0].modelSelection.model,'gpt-5.6-sol');
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('local automatic titles launch once with durable identical bytes after a lost acknowledgement',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'native-title-')),calls:any[]=[];let lost=true,defaults=0;
+ const api=async(path:string,payload?:any)=>{if(path==='shell')return {projects:[{id:'p'}]};assert.equal(path,'/api/orchestration/launch');calls.push(structuredClone(payload));if(lost){lost=false;throw Error('lost launch reply');}return {};};
+ const request={action:'start',requestId:id,project:'p',title:noteThreadTitle('Untitled.md','untitled-only'),prompt:'Synthetic question',attachments:[],context:{version:1}};
+ try{
+  await assert.rejects(start(api,request,dir,async project=>{defaults++;return resolveNewThreadDefaults(modelConfig(),project);}),/lost launch reply/);
+  assert.equal(calls[0].generateTitle,true);assert.equal(calls[0].title,'New thread');assert.equal(calls[0].threadId,uuid5(id,'thread'));assert.equal(calls[0].initialMessage.messageId,uuid5(id,'message'));assert.deepEqual(calls[0].initialMessage.context,request.context);
+  assert.equal((await start(api,request,dir)).phase,'started');assert.deepEqual(calls[0],calls[1]);assert.equal(defaults,1);
+  await start(api,request,dir);assert.equal(calls.length,2);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('an existing prepared local placeholder ledger keeps its original command path',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'native-old-title-'));const calls:any[]=[];
+ const request={action:'start',requestId:id,project:'p',title:'New thread',prompt:'Original input'};
+ const api=async(path:string,payload?:any)=>{if(path==='shell')return {projects:[{id:'p'}]};calls.push({path,payload});throw Error('not dispatched');};
+ try{
+  await assert.rejects(start(api,request,dir,async project=>resolveNewThreadDefaults(modelConfig(),project)),/not dispatched/);
+  const path=join(dir,'requests',id+'.json'),ledger=JSON.parse(await readFile(path,'utf8'));delete ledger.launch;await writeFile(path,JSON.stringify(ledger));calls.length=0;
+  await start(async(path,payload)=>{calls.push({path,payload});return {};},request,dir);
+  assert.deepEqual(calls.map(call=>[call.path,call.payload.type]),[['dispatch','thread.create'],['dispatch','thread.turn.start']]);
  }finally{await rm(dir,{recursive:true,force:true});}
 });
 
