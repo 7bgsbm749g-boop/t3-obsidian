@@ -81,6 +81,15 @@ export default class ThoughtStreamLab extends Plugin {
     command('command-two',4);thinking('three',5,'A third public summary.');
     await until(()=>leaves.every(leaf=>batch(leaf)?.querySelector(':scope > summary')?.textContent?.includes('Ran 2 commands · 3 thoughts')));
     check('each pane keeps its own fold choice as the mixed batch grows',!batch(first)?.open&&!!batch(second)?.open&&leaves.every(leaf=>groups(leaf).length===1&&batch(leaf)?.getAttribute('data-t3-tool-group')===identity));
+    command('command-two',4,'failed');
+    for(const leaf of leaves)if(!batch(leaf)?.open)batch(leaf)?.querySelector<HTMLElement>(':scope > summary')?.click();
+    const failedCommand=(leaf:any)=>batch(leaf)?.querySelector<HTMLDetailsElement>('[data-t3-tool-status="failed"]');
+    await until(()=>leaves.every(leaf=>failedCommand(leaf)));
+    check('failed commands keep counts and thoughts without a failure count in the batch summary',leaves.every(leaf=>batch(leaf)?.querySelector(':scope > summary')?.textContent?.trim()==='Ran 2 commands · 3 thoughts'));
+    for(const leaf of leaves)failedCommand(leaf)?.querySelector<HTMLElement>(':scope > summary')?.click();
+    await until(()=>leaves.every(leaf=>failedCommand(leaf)?.open));
+    check('expanded batches retain individual command failures and output',leaves.every(leaf=>failedCommand(leaf)?.open&&failedCommand(leaf)?.textContent?.includes('Failed pwd')&&failedCommand(leaf)?.textContent?.includes('Synthetic exact result')));
+    await this.capture('batch-failed-command.png');
     check('generated activity does not enter saved note text',leaves.every(leaf=>(leaf.view as MarkdownView).getViewData()===saved)&&await app.vault.read(file)===saved);
     event('thread.message-sent',{messageId:'commentary',role:'assistant',text:'A commentary boundary.',turnId:'turn',createdAt:at(6),streaming:false});
     thinking('four',7,'A separate public thought.');await until(()=>leaves.every(leaf=>groups(leaf).length===2));

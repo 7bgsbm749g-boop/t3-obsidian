@@ -144,10 +144,10 @@ export function currentResponseToolGroup(state:InlineThreadState,turnId:string,g
 }
 
 export function renderResponseToolGroup(group:ResponseToolGroup,current?:{tool:ResponseTool;active:boolean}):string {
-  const failures=group.tools.filter(t=>t.status==='failed').length,stopped=group.tools.filter(t=>t.status==='stopped'||t.status==='declined').length;
+  const stopped=group.tools.filter(t=>t.status==='stopped'||t.status==='declined').length;
   const thoughts=group.thoughts??[],count=thoughts.length;
   const batch=[summarizeResponseTools(group.tools),count?`${count} ${count===1?'thought':'thoughts'}`:''].filter(Boolean).join(' · ');
-  const label=current?(current.active?current.tool.activeLabel:current.tool.label):`${batch}${failures?` · ${failures} failed`:''}${stopped?` · ${stopped} stopped or declined`:''}`;
+  const label=current?(current.active?current.tool.activeLabel:current.tool.label):`${batch}${stopped?` · ${stopped} stopped or declined`:''}`;
   const summary=`<span data-t3-tool-icon="${html(current?.tool.icon??(group.tools.length?'hammer':'brain'))}" aria-hidden="true"></span><span>${html(label)}</span>`+(current?.active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'');
   const entries=[...group.tools.map(tool=>({createdAt:tool.createdAt,sequence:tool.sequence,body:renderResponseTool(tool)})),...thoughts.map(thought=>({createdAt:thought.createdAt,sequence:thought.sequence??0,body:renderResponseThought(thought)}))].sort(timelineOrder);
   return `<details class="${current?'send-to-t3-response-activity':'send-to-t3-tool-group'}" data-t3-tool-group="${html(group.id)}" data-t3-tool-summary="${html(batch)}"${current?' data-t3-live-tool="true"':''}><summary>${summary}</summary><div class="send-to-t3-tool-group-content">${entries.map(entry=>entry.body).join('')}</div></details>`;
