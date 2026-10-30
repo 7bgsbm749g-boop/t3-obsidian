@@ -10,6 +10,7 @@ import {checkFinalResponse,finalResponseKey} from './final-response';
 import {responseTooLarge,type StreamReadFailure} from './t3-response-limits';
 import {signInRequired,type ResponseConnectionIssue} from './sign-in-state';
 import {delegatedWork} from './inline-delegation';
+import {failedContinuations} from './failed-continuation';
 
 export interface DirectInlineUpdate {request:ResponseRequest;messageId:string;sequence:number;body:string;displayedInputIds?:string[];turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;questionsPending?:boolean;resume?:NonNullable<ResponseRequest['localResume']>&{prose:InlineThreadState['messages']};failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
 type Watch=typeof watchThread;
@@ -117,12 +118,13 @@ export class DirectInlinePreview {
     this.turnIds=[...new Set([...this.turnIds,turnId])];
     const steering=(this.record.state?.steering??[]).map(input=>({...input}));
     for(const input of steering){const turn=turnForMessage(this.state,input.messageId);if(!turn)continue;input.confirmed=true;turnId=turn;if(!this.turnIds.includes(turn))this.turnIds.push(turn);}
+    const recovery=failedContinuations(this.state,this.turnIds,this.prose);this.state=recovery.state;this.turnIds=recovery.turnIds;
     const questions=followInlineQuestions(this.state,this.turnIds,this.follows,this.prose);
     this.follows=questions.follows;this.turnIds=questions.turnIds;turnId=questions.turnId??turnId;
-    this.incoming=observeIncoming(this.state,this.turnIds,this.incoming,steering,[request.messageId,request.initialInput?.messageId??'',...Object.values(this.state.turns??{}).filter(turn=>this.turnIds.includes(turn.turnId)).map(turn=>turn.messageId??''),...this.follows.flatMap(follow=>follow.input?[follow.input.messageId]:[])]);
+    this.incoming=observeIncoming(this.state,this.turnIds,this.incoming,steering,[request.messageId,request.initialInput?.messageId??'',...Object.values(this.state.turns??{}).filter(turn=>this.turnIds.includes(turn.turnId)&&!recovery.messageIds.has(turn.messageId??'')).map(turn=>turn.messageId??''),...this.follows.flatMap(follow=>follow.input?[follow.input.messageId]:[])]);
     this.prose=mergeProse(this.prose,this.state.messages,this.turnIds);
     const inputs=questionConversationInputs(this.state,this.incoming??[],this.follows,this.prose);
-    const conversation=this.turnIds.length>1||inputs.length?{messages:this.prose,steering:inputs,preserveHistory:questions.continued}:undefined;
+    const conversation=this.turnIds.length>1||inputs.length?{messages:this.prose,steering:inputs,preserveHistory:questions.continued||recovery.continued}:undefined;
     let phase=inlineQuestionPhase(this.state,turnId,this.follows);
     const work=delegatedWork(this.state,this.turnIds);
     const interrupted=this.state.protocolVersion===2&&phase==='interrupted';

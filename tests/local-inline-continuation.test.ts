@@ -5,6 +5,22 @@ import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
 import {initialRegion} from '../inline-thread';
+import {normalizeV2Snapshot} from '../orchestration-v2';
+
+test('a legacy local response automatically follows an exact human retry and retains it through reload',async()=>{
+ const result=await build({entryPoints:['inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+ const module={exports:{} as any},realRequire=createRequire(import.meta.url);
+ runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Notice:class{}}:realRequire(id),console,setTimeout,clearTimeout,TextEncoder,Uint8Array});
+ const id=randomUUID(),initial=initialRegion(id),at=(n:number)=>new Date(n*1000).toISOString();let value='User text\n'+initial.text,saved:any[]=[{id,path:'Note.md',requestId:id,threadId:'thread',messageId:'original',bodyHash:initial.bodyHash,phase:'running',createdAt:at(1),intermediateMode:'collapse'}];
+ const editor={getValue:()=>value,offsetToPos:(n:number)=>n,replaceRange:(text:string,from:number,to:number)=>value=value.slice(0,from)+text+value.slice(to)};
+ const app={loadLocalStorage:()=>saved,saveLocalStorage:(_key:string,jobs:any[])=>saved=JSON.parse(JSON.stringify(jobs)),workspace:{getLeavesOfType:()=>[{view:{file:{path:'Note.md'},editor}}]}};
+ const create=()=>{const manager=new module.exports.InlineChatManager(app,'jobs',async()=>undefined);manager.schedule=()=>{};manager.start=()=>{};return manager;};let manager=create(),job=manager.find(id);
+ const snapshot=(sequence:number,retry=false,done=false)=>({kind:'snapshot',snapshot:normalizeV2Snapshot({snapshotSequence:sequence,projection:{thread:{id:'thread',projectId:'project'},runtimeRequests:[],turnItems:[],runs:[{id:'source',userMessageId:'original',ordinal:1,status:'failed',requestedAt:at(1),completedAt:at(2)},...(retry?[{id:'retry',userMessageId:'continue',ordinal:2,status:done?'completed':'running',requestedAt:at(3),completedAt:done?at(5):null}]:[])],messages:[{id:'original',runId:'source',role:'user',text:'Begin',createdBy:'user',creationSource:'web',streaming:false,createdAt:at(1)},{id:'old',runId:'source',role:'assistant',text:'Old progress.',streaming:false,createdAt:at(1.5)},...(retry?[{id:'continue',runId:'retry',role:'user',text:'Continue in T3.',createdBy:'user',creationSource:'web',streaming:false,createdAt:at(3)},{id:'answer',runId:'retry',role:'assistant',text:done?'Final recovery.':'New progress.',streaming:!done,createdAt:at(4)}]:[])]}})});
+ manager.receive(job,snapshot(1));manager.flush(job);assert.equal(job.phase,'error');
+ manager.receive(job,snapshot(2,true));manager.flush(job);assert.equal(job.turnId,'retry');assert.equal(job.messageId,'original');assert.match(value,/Old progress[\s\S]*Continue in T3[\s\S]*New progress/);
+ manager.dispose();manager=create();job=manager.find(id);manager.receive(job,snapshot(3,true,true));manager.flush(job);
+ assert.equal(job.finalized,true);assert.match(value,/Old progress[\s\S]*Continue in T3[\s\S]*Final recovery/);assert.doesNotMatch(value,/t3-inline:/);manager.dispose();
+});
 
 for(const format of [undefined,'raw-markdown'])for(const text of [undefined,'Explain the selection.'])test(`${format??'legacy'} device-local jobs retain progress and ${text?'initial input':'legacy behavior'} across follow, reload and completion`,async()=>{
   const result=await build({entryPoints:['inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
