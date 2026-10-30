@@ -388,10 +388,14 @@ class ReleaseQueueTests(unittest.TestCase):
         # A replacement with only a tooling diff must retain the original
         # product job and all restored behavior-evidence dependencies.
         replacement['maintenanceOnly'] = True
+        replacement['sourceInputsSha256'] = {}
         queue.retry(submitted['jobId'], replacement=replacement, queue=self.store)
         self.assertFalse(queue.read(directory / 'request-1.json')['maintenanceOnly'])
+        self.assertEqual(queue.read(directory / 'request-1.json')['sourceInputsSha256']['first.ts'],
+                         queue.hashlib.sha256((source / 'first.ts').read_bytes()).hexdigest())
         queue.drain(self.release, queue=self.store)
         self.assertEqual(self.published, ['1.0.2'])
+        self.assertEqual(queue.status(submitted['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
         self.assertEqual((directory / 'request.json').read_bytes(), original)
         self.assertTrue((directory / 'request-1.json').exists())
         self.assertEqual(self.submit(source)['jobId'], submitted['jobId'])

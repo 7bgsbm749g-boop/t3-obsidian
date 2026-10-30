@@ -229,9 +229,14 @@ def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) 
             previous = read(directory / state.get('requestFile', 'request.json'))
             # A failed integration remains in Git history after its explicit
             # revert. A merge-base can therefore hide restored product inputs.
+            inputs = {}
+            for source_name in previous['sourceInputsSha256'].keys() | replacement['sourceInputsSha256'].keys():
+                item = subprocess.run(['git', 'show', f'{replacement["commit"]}:{source_name}'],
+                                      cwd=replacement['sourceRoot'], capture_output=True)
+                inputs[source_name] = hashlib.sha256(item.stdout).hexdigest() if item.returncode == 0 else None
             replacement = {**replacement,
                            'maintenanceOnly': bool(previous.get('maintenanceOnly')) and bool(replacement.get('maintenanceOnly')),
-                           'sourceInputsSha256': {**previous['sourceInputsSha256'], **replacement['sourceInputsSha256']}}
+                           'sourceInputsSha256': inputs}
             save_request(directory, replacement, name)
             state.update(requestRevision=revision, requestFile=name)
         state.update(status='queued', updatedAt=now(), failures=0)
