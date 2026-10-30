@@ -1,3 +1,4 @@
+import {editorLivePreviewField} from 'obsidian';
 import {Notice,editorInfoField,type App} from 'obsidian';
 import {NoteTabPanel} from './note-tab-panel';
 import type {Extension} from '@codemirror/state';
@@ -161,7 +162,7 @@ export function questionEditorExtension(controller:QuestionController,open:(targ
   const plugin=ViewPlugin.fromClass(class {
     decorations:DecorationSet;
     constructor(view:EditorView){this.decorations=build(view);}
-    update(update:ViewUpdate){if(update.docChanged||update.viewportChanged||update.transactions.some(transaction=>transaction.effects.some(effect=>effect.is(refreshDismissed))))this.decorations=build(update.view);}
+    update(update:ViewUpdate){if(update.docChanged||update.startState.field(editorLivePreviewField,false)!==update.state.field(editorLivePreviewField,false)||update.transactions.some(transaction=>transaction.effects.some(effect=>effect.is(refreshDismissed))))this.decorations=build(update.view);}
   },{decorations:value=>value.decorations});
   return [plugin,EditorView.atomicRanges.of(view=>view.plugin(plugin)?.decorations??Decoration.none),dismissed,dismissalUpdates];
 }

@@ -263,6 +263,7 @@ export class NativeResponseManager {
   }
   view(view:MarkdownView){const adapter=this.views.get(view);return adapter&&!adapter.isDisposed()?adapter:undefined;}
   toolGroup(element:HTMLElement,ref:string){for(const [view,adapter] of this.views)if(view.contentEl?.contains(element))return adapter.toolGroup(ref);}
+  renderToolBody(element:HTMLElement,body:string){for(const [view,adapter] of this.views)if(view.contentEl?.contains(element))return adapter.renderToolBody(body,element.getAttribute('data-t3-tool-ref')??undefined);return body;}
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
   stoppedBody(id:string){return this.localStops.get(id)?.body;}
   stop(id:string,path?:string,hidden=false,sourceView?:MarkdownView):Promise<void>|void{
@@ -411,7 +412,27 @@ export class NativeResponseManager {
     for(const id of new Set(ids)){if(this.deviceCommits.has(id)||!containsResponseBoundary(document,id))continue;const region=responseRegion(document,id);if(region)document=document.slice(0,region.from)+responseAnchor(id,document)+document.slice(region.to);}
     return document;
   }
-  private wrap(view:MarkdownView,saved=view.getViewData()){
+  installLoading(prototype:MarkdownView){
+    const original=prototype.setViewData,manager=this;
+    if(typeof original!=='function')return ()=>{};
+    let active=true;
+    const wrapped:MarkdownView['setViewData']=function(this:MarkdownView,incoming,clear){
+      if(active&&!manager.view(this)&&this.file&&(this as any).getState?.().source!==true&&incoming.includes('data-t3-tool-group=')&&incoming.includes('send-to-t3-tool-group-content')){
+        try{manager.wrap(this,incoming,{set:original,clear});return;}
+        catch(error){
+          // A damaged pre-existing note must remain readable. Fall back only
+          // if initialization left the native methods intact; never bypass a
+          // retained save guard after a partially failed native update.
+          if(this.setViewData!==wrapped)throw error;
+          logFailure('note.projection.open',error,{notePath:this.file.path});
+        }
+      }
+      return original.call(this,incoming,clear);
+    };
+    prototype.setViewData=wrapped;
+    return ()=>{active=false;if(prototype.setViewData===wrapped)prototype.setViewData=original;};
+  }
+  private wrap(view:MarkdownView,saved=view.getViewData(),initial?:{set:MarkdownView['setViewData'];clear:boolean}){
     const existing=this.view(view);if(existing)return existing;
     const file=view.file;if(!file)throw Error('The native response note closed before final delivery.');
     let adapter!:NativeResponseView;
@@ -419,7 +440,7 @@ export class NativeResponseManager {
       logFailure('note.projection.conflict',Error(conflict.reason),{notePath:file.path});
       const fence=this.activeFinalSaves.get(file.path);if(fence)fence.invalid=true;
       void this.adoptSaved(view);
-    },async()=>view.file===file?this.app.vault.read(file):undefined,incoming=>this.normalize(file.path,incoming),incoming=>this.completed(file.path,incoming,new Set(adapter.responseIds())));
+    },async()=>view.file===file?this.app.vault.read(file):undefined,incoming=>this.normalize(file.path,incoming),incoming=>this.completed(file.path,incoming,new Set(adapter.responseIds())),initial);
     this.views.set(view,adapter);this.uninitializedViews.add(adapter);
     const fence=this.activeFinalSaves.get(file.path);if(fence)this.joinFinalSave(fence,adapter);
     return adapter;
@@ -429,7 +450,7 @@ export class NativeResponseManager {
     const opened=new Set<string>();
     const live=new Set(this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView));
     for(const [view,warnings] of this.warnings)if(!live.has(view)){for(const element of warnings.values())element.remove();this.warnings.delete(view);}
-    for(const [view,adapter] of this.views)if(!live.has(view)||adapter.isDisposed()){if(!adapter.isDisposed())adapter.dispose();this.views.delete(view);}
+    for(const [view,adapter] of this.views)if(!live.has(view)||adapter.isDisposed()){if(!adapter.isDisposed())adapter.dispose(true);this.views.delete(view);}
     for(const view of live){
       if(!view.file||typeof view.getViewData!=='function'||paths&&!paths.has(view.file.path))continue;
       const blocked=[...this.records.values()].filter(record=>!record.stopRequestedAt&&!record.state?.cleanupComplete&&record.state?.locationConflict?.includes(view.file!.path));

@@ -2,11 +2,21 @@ import type {Extension,StateField} from '@codemirror/state';
 import type {EditorView,ViewUpdate} from '@codemirror/view';
 import type {MarkdownFileInfo} from 'obsidian';
 import {replyReferences} from './reply-assets';
+const sourceCache=new Map<string,ReturnType<typeof replyReferences>>();
+let cachedCharacters=0,sourceParses=0;
+const maxSourceCharacters=1_048_576;
+export function mediaSourceCacheStatus(){return {entries:sourceCache.size,characters:cachedCharacters,sourceParses,maxCharacters:maxSourceCharacters};}
 
 export function originalMediaSource(markdown:string,alt:string|null,section?:{lineStart:number;lineEnd:number}){
   if(section){let start=0,end=0;for(let line=0;line<=section.lineEnd;line++){if(line===section.lineStart)start=end;const next=markdown.indexOf('\n',end);end=next<0?markdown.length:next+1;if(next<0)break;}markdown=markdown.slice(start,end);}
-  if(markdown.length>8192)return;
-  const references=replyReferences(markdown).filter(reference=>reference.image),matching=references.filter(reference=>reference.label===alt);
+  if(markdown.length>8192||!markdown.includes('!['))return;
+  let references=sourceCache.get(markdown);
+  if(references){sourceCache.delete(markdown);sourceCache.set(markdown,references);}
+  else{
+    sourceParses++;references=replyReferences(markdown).filter(reference=>reference.image);sourceCache.set(markdown,references);cachedCharacters+=markdown.length;
+    while(sourceCache.size>128||cachedCharacters>maxSourceCharacters){const first=sourceCache.keys().next().value!;sourceCache.delete(first);cachedCharacters-=first.length;}
+  }
+  const matching=references.filter(reference=>reference.label===alt);
   return (matching.length===1?matching[0]:references.length===1?references[0]:undefined)?.source;
 }
 

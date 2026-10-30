@@ -1,8 +1,6 @@
-import {App,MarkdownRenderChild,Modal,Plugin,editorLivePreviewField,setIcon} from 'obsidian';
-import type {Extension,EditorState} from '@codemirror/state';
+import {App,MarkdownRenderChild,Modal,Plugin,setIcon} from 'obsidian';
 import {HtmlResultError,HtmlResultStore} from './html-result-store';
 import {HTML_RESULT_LANGUAGE,htmlResultFrameHeight,htmlResultKey,parseHtmlResult,type HtmlResultReference} from './html-results';
-import {HtmlResultIndex} from './html-result-index';
 
 interface Theme {appearance:'dark'|'light';variables:Record<string,string>}
 interface Mounted {root:HTMLElement;reference:HtmlResultReference;refreshTheme():void;recover():Promise<void>;dispose():void}
@@ -46,14 +44,24 @@ function viewerDocument(html:string,doc:Document):string {
 
 export class HtmlResultViews {
   private mounted=new Set<Mounted>();private stopped=false;
+  private prepared=new Map<string,string>();private preparedCharacters=0;
   constructor(private app:App,private store:HtmlResultStore,private options:HtmlResultViewOptions={}){}
+  private prepare(html:string,doc:Document){
+    const cached=this.prepared.get(html);if(cached!==undefined){this.prepared.delete(html);this.prepared.set(html,cached);return cached;}
+    const prepared=viewerDocument(html,doc),characters=html.length+prepared.length;
+    if(characters<=8_000_000){
+      this.prepared.set(html,prepared);this.preparedCharacters+=characters;
+      while(this.prepared.size>16||this.preparedCharacters>8_000_000){const [source,value]=this.prepared.entries().next().value!;this.prepared.delete(source);this.preparedCharacters-=source.length+value.length;}
+    }
+    return prepared;
+  }
   install(plugin:Plugin){
     plugin.registerMarkdownCodeBlockProcessor(HTML_RESULT_LANGUAGE,(source,el,ctx)=>{
       const reference=parseHtmlResult(source);if(!reference){el.createEl('p',{text:'Invalid T3 HTML reference.'});return;}
       const mounted=this.mount(reference,el.ownerDocument);el.append(mounted.root);
       const child=new MarkdownRenderChild(el);child.register(mounted.dispose);ctx.addChild(child);
     });
-    plugin.registerEditorExtension(this.extension());
+    // Native code-block processors also own Live Preview widgets.
     plugin.registerEvent(this.app.workspace.on('css-change',()=>this.refreshTheme()));
     plugin.register(()=>this.dispose());
   }
@@ -94,7 +102,7 @@ export class HtmlResultViews {
         const html=await this.store.get(reference);if(disposed||this.stopped||current!==generation)return;
         const next=doc.createElement('iframe');next.title=reference.title;next.setAttribute('sandbox','allow-scripts allow-forms');next.referrerPolicy='no-referrer';next.loading='lazy';next.className='send-to-t3-html-frame';
         const theme=themeFor(doc);next.style.colorScheme=theme.appearance;
-        blob=win.URL.createObjectURL(new win.Blob([viewerDocument(html,doc)],{type:'text/html;charset=utf-8'}));
+        blob=win.URL.createObjectURL(new win.Blob([this.prepare(html,doc)],{type:'text/html;charset=utf-8'}));
         next.src=blob+'#t3-theme='+encodeURIComponent(JSON.stringify(theme));next.addEventListener('load',postTheme);frame=next;surface.replaceChildren(next);showState('ready');
       }catch(error){
         if(disposed||this.stopped||current!==generation)return;
@@ -123,30 +131,7 @@ export class HtmlResultViews {
     const mounted:Mounted={root,reference,refreshTheme:postTheme,recover,dispose:()=>{if(disposed)return;disposed=true;generation++;resize.disconnect();win.removeEventListener('message',receive);frame?.remove();if(blob)win.URL.revokeObjectURL(blob);this.mounted.delete(mounted);}};
     this.mounted.add(mounted);if(!this.stopped)void load();else mounted.dispose();return mounted;
   }
-  private extension():Extension {
-    const owner=this,{StateField,Prec}=require('@codemirror/state') as typeof import('@codemirror/state');
-    const {Decoration,EditorView,WidgetType}=require('@codemirror/view') as typeof import('@codemirror/view');
-    const roots=new WeakMap<HTMLElement,Mounted>();
-    class HtmlWidget extends WidgetType {
-      constructor(readonly reference:HtmlResultReference){super();}
-      eq(other:HtmlWidget){return JSON.stringify(this.reference)===JSON.stringify(other.reference);}
-      toDOM(view:import('@codemirror/view').EditorView){const mounted=owner.mount(this.reference,view.dom.ownerDocument);mounted.root.dataset.t3HtmlEditorWidget='true';roots.set(mounted.root,mounted);return mounted.root;}
-      destroy(dom:HTMLElement){roots.get(dom)?.dispose();roots.delete(dom);}
-      ignoreEvent(){return true;}
-      get estimatedHeight(){return 80;}
-    }
-    const live=(state:EditorState)=>state.field(editorLivePreviewField,false)===true;
-    const decorations=(index?:HtmlResultIndex)=>!index?Decoration.none:Decoration.set(index.blocks.map(block=>Decoration.replace({widget:new HtmlWidget(block.reference),block:true}).range(block.from,block.to)),true);
-    const create=(state:EditorState)=>{const index=live(state)?HtmlResultIndex.create(state.doc):undefined;return {index,decorations:decorations(index)};};
-    const field=StateField.define<{index?:HtmlResultIndex;decorations:import('@codemirror/view').DecorationSet}>({create,update:(value,tr)=>{
-      if(live(tr.startState)!==live(tr.state))return create(tr.state);
-      if(!tr.docChanged||!live(tr.state))return value;
-      const index=value.index!.update(tr.changes,tr.state.doc);
-      return {index,decorations:decorations(index)};
-    },provide:field=>EditorView.decorations.from(field,value=>value.decorations)});
-    return [Prec.highest(field),EditorView.atomicRanges.of(view=>view.state.field(field).decorations)];
-  }
-  dispose(){this.stopped=true;for(const mounted of [...this.mounted])mounted.dispose();this.store.dispose();}
+  dispose(){this.stopped=true;for(const mounted of [...this.mounted])mounted.dispose();this.prepared.clear();this.preparedCharacters=0;this.store.dispose();}
 }
 
 class HtmlResultModal extends Modal {

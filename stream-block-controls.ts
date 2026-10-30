@@ -66,7 +66,10 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
         follow.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' ')toggle(event);});
       }
       const id=key(fold),view=viewFor(fold);
-      let ready=false;try{const found=id&&view?streamBlock(saved(view),id):undefined;ready=!!found?.complete&&!found.tracked;}catch{}
+      // This is only a visibility hint. Use the compact native document for
+      // it; the click handler above rechecks canonical saved bytes before any
+      // destructive action. Layout must not repeatedly parse hidden output.
+      let ready=false;try{const found=id&&view?streamBlock(view.getMode()==='source'?view.editor.getValue():saved(view),id):undefined;ready=!!found?.complete&&!found.tracked;}catch{}
       const response=id&&view?nativeResponses(app).view(view)?.responseForFold(id):undefined;
       const needsSignIn=!!response&&nativeResponses(app).connectionIssue(response)?.kind==='sign-in-required';
       controls.signIn.hidden=!needsSignIn;actions.classList.toggle('send-to-t3-stream-auth-required',needsSignIn);

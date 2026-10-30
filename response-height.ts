@@ -26,6 +26,7 @@ export class ResponseHeightGuard {
   private frame?:number;
   private timer?:number;
   constructor(private view:MarkdownView,private released:()=>void=()=>{}){}
+  isActive(){return !!this.guard;}
   private mode(){return this.view.getMode()+':'+!!this.view.contentEl?.querySelector('.markdown-source-view.is-live-preview');}
   private now(window:Window){return window.performance?.now()??Date.now();}
   private folds(scroller:HTMLElement){return Array.from(scroller.querySelectorAll<HTMLElement>('.callout[data-callout="t3-progress"]'));}
