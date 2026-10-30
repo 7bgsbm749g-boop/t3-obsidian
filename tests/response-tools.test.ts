@@ -80,7 +80,7 @@ test('failure and stop outcomes stay visible and stop clears every running call 
   const body=renderInlineTurn(state,'turn','thread','running','collapse'),stopped=stoppedResponseBody(body);
   assert.equal(stopped.match(/data-t3-tool-status="stopped"/g)?.length,2);assert.match(stopped,/Stopped pwd/);assert.match(stopped,/Stopped ls/);assert.doesNotMatch(stopped,/inProgress|Running|inline-spinner/);
   state.activities=state.activities.map(a=>({...a,kind:'tool.completed',payload:{...a.payload,status:'failed'}}));
-  const failed=renderInlineTurn(state,'turn','thread','running','collapse');assert.match(failed,/<span>Ran 2 commands · 2 failed/);assert.match(failed,/Failed ls/);assert.doesNotMatch(failed,/data-t3-live-tool/);
+  const failed=renderInlineTurn(state,'turn','thread','running','collapse');assert.match(failed,/<span>Ran 2 commands<\/span><\/summary>/);assert.match(failed,/Failed ls/);assert.doesNotMatch(failed,/data-t3-live-tool/);
   const failedCall=state.activities[1];
   for(const status of ['declined','stopped']){
     state.activities=[{...failedCall,payload:{...failedCall.payload,status}}];
