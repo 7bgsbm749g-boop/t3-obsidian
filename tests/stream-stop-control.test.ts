@@ -39,8 +39,21 @@ class Element {
   rect={top:10,height:20};getBoundingClientRect(){return this.rect;}
   constructor(readonly kind='text'){}
   appendChild(child:Element){child.remove();this.children.push(child);child.parentElement=this;return child;}
+  contains(element:Element):boolean{return this===element||this.children.some(child=>child.contains(element));}
   remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(child=>child!==this);this.parentElement=null;}
-  closest(selector:string):Element|null {const match=selector.startsWith('.callout')?this.kind==='fold':selector==='.cm-embed-block'?this.kind==='widget':this.className.split(' ').includes('send-to-t3-stream-stop');return match?this:this.parentElement?.closest(selector)??null;}
+  closest(selector:string):Element|null {
+    const match=selector.split(',').some(part=>{
+      const item=part.trim();
+      if(item==='.callout[data-callout="t3-progress"]')return this.kind==='fold';
+      if(item==='.callout-title')return this.kind==='heading';
+      if(item==='.cm-embed-block')return this.kind==='widget';
+      if(item.startsWith('.'))return this.className.split(' ').includes(item.slice(1));
+      if(item==='[tabindex]:not([tabindex="-1"])')return this.attrs.has('tabindex')&&this.attrs.get('tabindex')!=='-1';
+      const attribute=item.match(/^\[([^=]+)="([^"]+)"\]$/);if(attribute)return this.attrs.get(attribute[1])===attribute[2];
+      return item===(this.kind==='link'?'a':this.kind);
+    });
+    return match?this:this.parentElement?.closest(selector)??null;
+  }
   querySelector(selector:string):Element|undefined {return selector.includes('callout-title')?this.children.find(child=>child.kind==='heading'):this.children.find(child=>child.kind==='fold')??this.children.map(child=>child.querySelector(selector)).find(Boolean);}
   setAttribute(name:string,value:string){this.attrs.set(name,value);}
 }
@@ -56,14 +69,14 @@ function fixture(stop:(target:StreamStopTarget)=>Promise<void>=async()=>{}){
   const flush=async()=>{mutated();await new Promise(resolve=>setImmediate(resolve));};
   return {root,folds,targets,view,errors,calls,fire,flush,button:(i=0)=>folds[i].children.find(child=>child.className.split(' ').includes('send-to-t3-stream-stop'))!,dispose:()=>{dispose();globalThis.MutationObserver=savedObserver;}};
 }
-test('click, touch-generated click and keyboard focus reveal only their box without cancelling links or selection',async()=>{
+test('click, touch-generated click and keyboard focus on plain content reveal only their box without cancelling selection',async()=>{
   const h=fixture();try{
     assert.equal(h.button().hidden,true);assert.equal(h.button(1).hidden,true);
-    const link=new Element('link');h.folds[0].appendChild(link);
-    for(const type of ['pointerdown','mousedown','pointerup'])assert.equal(h.fire(type,link).defaultPrevented,false);
+    const text=new Element();h.folds[0].appendChild(text);
+    for(const type of ['pointerdown','mousedown','pointerup'])assert.equal(h.fire(type,text).defaultPrevented,false);
     assert.equal(h.button().hidden,true,'The first pointer cannot land on a newly inserted Stop');
     let otherListener=0;h.root.addEventListener('click',()=>otherListener++);
-    assert.equal(h.fire('click',link).defaultPrevented,false);assert.equal(otherListener,1,'Link/title handlers still receive the click');
+    assert.equal(h.fire('click',text).defaultPrevented,false);assert.equal(otherListener,1,'Other handlers still receive the click');
     assert.equal(h.calls.length,0);assert.equal(h.button().hidden,false);assert.equal(h.button(1).hidden,true);
     assert.equal(h.button().attrs.get('aria-label'),'Stop T3 response');
     assert.ok(h.button().className.split(' ').includes('clickable-icon'),'Use Obsidian icon styling instead of its filled text-button styling');
@@ -72,6 +85,51 @@ test('click, touch-generated click and keyboard focus reveal only their box with
     const replacement=new Element('fold');h.root.body.appendChild(replacement);h.targets.set(replacement,h.targets.get(h.folds[0])!);h.targets.delete(h.folds[0]);h.folds[0]=replacement;await h.flush();
     assert.equal(h.button().hidden,false,'Token replacement preserves revealed state in the same pane');
     h.targets.set(replacement,{id,key:'different-run:active',view:h.view});await h.flush();assert.equal(h.button().hidden,true);
+  }finally{h.dispose();}
+});
+test('titles, nested icons and interactive controls never reveal Stop on click or focus',async()=>{
+  const h=fixture();try{
+    const controls=['heading','link','button','input','textarea','select','summary','label','audio','video'].map(kind=>new Element(kind));
+    for(const role of ['button','link','checkbox','radio','switch','tab','menuitem','combobox','textbox','slider']){const element=new Element();element.setAttribute('role',role);controls.push(element);}
+    for(const [name,value] of [['tabindex','0'],['contenteditable','true']]){const element=new Element();element.setAttribute(name,value);controls.push(element);}
+    for(const className of ['clickable-icon','edit-block-button']){const element=new Element();element.className=className;controls.push(element);}
+    let received=0;h.root.addEventListener('click',()=>received++);
+    for(const control of controls){
+      h.folds[0].appendChild(control);const icon=control.appendChild(new Element('svg'));
+      assert.equal(h.fire('pointerdown',icon).defaultPrevented,false);
+      h.fire('focusin',control);assert.equal(h.button().hidden,true);
+      assert.equal(h.fire('click',icon).defaultPrevented,false);await h.flush();
+      assert.equal(h.button().hidden,true,`${control.kind} must keep Stop hidden`);
+      h.fire('focusin',control);assert.equal(h.button().hidden,true,'Keyboard focus on a control also leaves Stop hidden');
+    }
+    assert.equal(received,controls.length);assert.equal(h.calls.length,0);
+    h.fire('click',h.folds[0]);assert.equal(h.button().hidden,false,'Plain content still reveals Stop');
+    h.fire('click',controls[0]);assert.equal(h.button().hidden,false,'A control does not dismiss an already visible Stop in the same response');
+  }finally{h.dispose();}
+});
+test('Follow action and title focus redirected to the native widget do not reveal Stop',async()=>{
+  const h=fixture();try{
+    const widget=new Element('widget');widget.setAttribute('tabindex','-1');h.root.body.appendChild(widget);widget.appendChild(h.folds[0]);
+    const actions=widget.appendChild(new Element()),follow=actions.appendChild(new Element());follow.setAttribute('role','button');
+    const heading=h.folds[0].appendChild(new Element('heading'));
+    for(const control of [follow,heading]){
+      const icon=control.appendChild(new Element('svg'));
+      h.fire('pointerdown',icon);h.fire('focusin',widget);assert.equal(h.button().hidden,true,'Focus redirected before click must not shift Follow');
+      h.fire('click',icon);h.fire('focusin',widget);await h.flush();assert.equal(h.button().hidden,true);
+    }
+    h.fire('pointerdown',follow);h.fire('keydown',widget);h.fire('focusin',widget);assert.equal(h.button().hidden,false,'Keyboard navigation clears a pointer gesture without a click');
+    h.fire('click',h.root.body);h.fire('pointerdown',follow);h.fire('pointercancel',follow);h.fire('focusin',widget);assert.equal(h.button().hidden,false);
+    h.fire('click',h.root.body);h.fire('pointerdown',follow);h.fire('pointerdown',h.folds[0]);h.fire('click',h.folds[0]);assert.equal(h.button().hidden,false,'The next content tap clears suppression');
+  }finally{h.dispose();}
+});
+test('editable editor ancestors and focusable response wrappers do not block plain-content reveal',()=>{
+  const h=fixture();try{
+    h.root.body.setAttribute('contenteditable','true');
+    const widget=new Element('widget');widget.setAttribute('tabindex','0');h.root.body.appendChild(widget);widget.appendChild(h.folds[0]);
+    const text=h.folds[0].appendChild(new Element());
+    h.fire('pointerdown',text);h.fire('focusin',widget);assert.equal(h.button().hidden,false);
+    h.fire('click',h.root.body);h.fire('click',text);assert.equal(h.button().hidden,false);
+    h.fire('click',h.root.body);h.fire('focusin',widget);assert.equal(h.button().hidden,false);
   }finally{h.dispose();}
 });
 test('outside clicks, taps and focus dismiss immediately; entering another pane cannot revive an old reveal',async()=>{
