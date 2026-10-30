@@ -563,8 +563,12 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const errorShown=lastError&&state.activities.some(activity=>activity.turnId===turnId&&activity.kind==='response.notification'&&activity.payload?.error&&
     (typeof activity.payload.text==='string'?activity.payload.text:activity.summary).trim()===lastError.trim());
   const errorStatus=lastError&&!errorShown?renderProviderError(`session-error:${turnId}`,lastError,state.latestTurn?.completedAt??state.turns?.[turnId]?.completedAt??undefined):'';
+  // Plans are replaceable task snapshots. Show the latest list immediately
+  // below the thread title, at its existing depth inside the history.
+  const tasks=emissions.filter(item=>item.kind==='response.plan').at(-1)?.body??'';
+  const timelineEmissions=emissions.filter(item=>item.kind!=='response.plan');
   let currentTool=phase==='running'&&!waiting?currentResponseToolGroup(state,turnId,toolGroups):undefined;
-  const latestEmission=phase==='running'?emissions.at(-1):undefined;
+  const latestEmission=phase==='running'?timelineEmissions.at(-1):undefined;
   const currentEmission=!waiting&&latestEmission?.active&&latestEmission.turnId===turnId&&
     !state.messages.some(message=>message.turnId===turnId&&Date.parse(message.createdAt??'')>Date.parse(latestEmission.createdAt??''))&&
     (!currentTool||Date.parse(currentTool.tool.createdAt??'')<=Date.parse(latestEmission.createdAt??''))?latestEmission:undefined;
@@ -572,7 +576,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const historyGroups=toolGroups.filter(group=>group!==currentTool?.group);
   const workRows=historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
   const historyRows=[...workRows,
-    ...emissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
+    ...timelineEmissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
   const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??(currentTool?renderResponseToolGroup(currentTool.group,currentTool):responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Thinking'))}`:'';
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
@@ -587,7 +591,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&!rawFinal(segment.messageId)&&!rawFinal(segments[index-1]?.messageId)&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
     previousRole=segment.role;
     const next=(body?body+(embedded?'\n\n':separator):'')+embedded+rendered;
-    return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}`:next;
+    return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}${tasks?'\n\n'+tasks:''}`:next;
   },''):messages.some(message=>growing(message.id))?messages.map(message=>assistant(message.text,message.id)).filter(Boolean).join('\n\n'):format==='raw-markdown'?answerBlocks.join('\n\n'):answer?quoteResponse(closeOpenFence(answer)):'';
   if(mode!=='collapse'&&htmlResults.length){
     if(!transcript)prose=messages.map(message=>htmlBefore(Date.parse(message.createdAt??'')||0)+assistant(message.text,message.id)).filter(Boolean).join('\n\n');
@@ -609,7 +613,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const finalIndex=finalId?pieces.reduce((last,piece,index)=>piece.role==='assistant'&&piece.messageId===finalId?index:last,-1):-1;
     // Initial questions and continuation prompts share steering's history
     // placement. Keep their exact input record separate from turn bindings.
-    const history:string[]=initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[];let final='';
+    const history:string[]=[...(tasks?[tasks]:[]),...(initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[])];let final='';
     let toolIndex=0;
     const toolsBefore=(at=Infinity)=>{while(toolIndex<historyRows.length&&(Date.parse(historyRows[toolIndex].createdAt??'')||0)<=at)history.push(historyRows[toolIndex++].body);};
     for(const [index,piece] of pieces.entries()){
@@ -626,12 +630,12 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const status=handoffError||errorStatus||approvals;
     return fold+(htmlBodies.length?'\n\n'+htmlBodies.map(value=>value.body).join('\n\n'):'')+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }
-  const toolHistory=(retain?historyRows:phase!=='complete'?[...workRows.filter(item=>item.hasThoughts),...emissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence):[]).map(item=>item.body).join('\n\n');
-  if(phase==='complete')return input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
+  const toolHistory=(retain?historyRows:phase!=='complete'?[...workRows.filter(item=>item.hasThoughts),...timelineEmissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence):[]).map(item=>item.body).join('\n\n');
+  if(phase==='complete')return (retain&&tasks?tasks+'\n\n':'')+input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
   const status=handoffError?'\n\n'+handoffError:errorStatus?'\n\n'+errorStatus:approvals?'\n\n'+approvals:'';
   const contents=[input.trimEnd(),prose].filter(Boolean).join('\n\n');
   const body=contents?`\n\n${contents}\n`:'';
-  return `${followupIndex<0?heading+timer+spinner:''}${status}${body}${toolHistory?'\n\n'+toolHistory:''}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
+  return `${followupIndex<0?heading+timer+spinner+(tasks?'\n\n'+tasks:''):''}${status}${body}${toolHistory?'\n\n'+toolHistory:''}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
 }
 
 export function turnPhase(state:InlineThreadState,turnId:string):'running'|'complete'|'interrupted'|'error' {

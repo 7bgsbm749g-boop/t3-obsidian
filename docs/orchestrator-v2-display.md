@@ -9,11 +9,29 @@ Sync handling and existing orphan anchors. Those investigations are read-only.
 
 The v2 adapter already receives public `reasoning` turn items, but the response
 renderer previously selected only assistant prose. The note now shows those
-public summaries in native, default-closed Thought callouts. Plans use native
-Plan callouts. They are ordered with retained tools inside the existing progress
-fold, never substituted for the final answer or used as completion evidence.
+public summaries in native, default-closed Thought callouts. The latest plan now
+uses a default-closed **Tasks** panel directly below the thread title, at the
+same depth inside the existing progress fold. Retained tools and commentary keep
+their chronological order after Tasks. Display rows never replace the final
+answer or act as completion evidence.
 The existing intermediate-output policy still removes them from a final-only
 completion. No hidden provider state is requested.
+
+Tasks uses a gray `list-checks` icon and read-only status marks for pending,
+in-progress (`[/]`), and completed items. Its private HTML classes and attributes
+avoid the native task-list selectors used by other checkbox plugins. Structured
+steps and Markdown lists use the same marks. The panel shares tool disclosures'
+DOM retention and pane-local fold choices, keyed to the run rather than a plan
+snapshot ID, so commentary, tools, task updates, and completion do not reset its
+choice. The outer history keeps its existing completion fold policy.
+
+`validation/tasks-panel-lab.ts` replays these updates in real desktop Live
+Preview and Reading panes in a separate, unsynced vault. Build it with
+`node scripts/build-native-response-lab.mjs evidence/TASK/native --tasks`.
+The lab checks placement, gray icons, all three states, non-editable indicators,
+representative competing checkbox CSS, independent pane choices, replacement
+plan IDs, completion, unchanged saved note bytes, and fixture cleanup. Evidence
+stays outside the vault. This check does not establish native mobile coverage.
 
 Compaction turn items previously became generic tools labelled `Running
 compaction`. They now show `Compacting context` or `Context compacted` with the
