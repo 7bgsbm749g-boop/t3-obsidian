@@ -8,7 +8,7 @@ import {responseActivityLabel,responseActivityRow} from './response-activity';
 import {visibleInlineInput} from './input-presentation';
 import {responseToolGroups,currentResponseToolGroup,renderResponseToolGroup} from './response-tools';
 import {applyV2ControlEvent,responseRun} from './orchestration-v2';
-import {responseEmissions} from './response-emissions';
+import {responseEmissions,renderProviderError} from './response-emissions';
 import {renderSubmittedAnswer,type SubmittedAnswer} from './response-answers';
 import {responseHtmlResults,renderHtmlResult} from './html-results';
 import {containerStart,responseFrame,responseIds,responseBoundaries} from './response-container';
@@ -557,6 +557,12 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const htmlBefore=(at=Infinity)=>{const parts:string[]=[];while(htmlIndex<htmlBodies.length&&htmlBodies[htmlIndex].at<=at)parts.push(htmlBodies[htmlIndex++].body);return parts.length?parts.join('\n\n')+'\n\n':'';};
   const toolGroups=responseToolGroups(state,displayedTurns);
   const emissions=responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim())),phase==='running'?turnId:undefined);
+  // The session repeats the canonical error item. Show that message once, in
+  // its timeline position; older sessions without an item use the same row.
+  const lastError=phase==='error'&&(!state.latestTurn||state.latestTurn.turnId===turnId)?state.session?.lastError:undefined;
+  const errorShown=lastError&&state.activities.some(activity=>activity.turnId===turnId&&activity.kind==='response.notification'&&activity.payload?.error&&
+    (typeof activity.payload.text==='string'?activity.payload.text:activity.summary).trim()===lastError.trim());
+  const errorStatus=lastError&&!errorShown?renderProviderError(`session-error:${turnId}`,lastError,state.latestTurn?.completedAt??state.turns?.[turnId]?.completedAt??undefined):'';
   let currentTool=phase==='running'&&!waiting?currentResponseToolGroup(state,turnId,toolGroups):undefined;
   const latestEmission=phase==='running'?emissions.at(-1):undefined;
   const currentEmission=!waiting&&latestEmission?.active&&latestEmission.turnId===turnId&&
@@ -617,12 +623,12 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     // Completion starts a new fold default, independent of live user choices.
     const key=encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active');
     const fold=`> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
-    const status=handoffError||(phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):approvals);
+    const status=handoffError||errorStatus||approvals;
     return fold+(htmlBodies.length?'\n\n'+htmlBodies.map(value=>value.body).join('\n\n'):'')+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }
   const toolHistory=(retain?historyRows:phase!=='complete'?[...workRows.filter(item=>item.hasThoughts),...emissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence):[]).map(item=>item.body).join('\n\n');
   if(phase==='complete')return input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
-  const status=handoffError?'\n\n'+handoffError:phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):approvals?'\n\n'+approvals:'';
+  const status=handoffError?'\n\n'+handoffError:errorStatus?'\n\n'+errorStatus:approvals?'\n\n'+approvals:'';
   const contents=[input.trimEnd(),prose].filter(Boolean).join('\n\n');
   const body=contents?`\n\n${contents}\n`:'';
   return `${followupIndex<0?heading+timer+spinner:''}${status}${body}${toolHistory?'\n\n'+toolHistory:''}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;

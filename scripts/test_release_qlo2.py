@@ -168,6 +168,37 @@ class ReleasePipelineTests(unittest.TestCase):
                     self.assertEqual([p.name for p in deployed.iterdir()], ['deployment.json'])
                     (plugin / name).write_bytes(files[name])
 
+    def test_later_release_does_not_prevent_completion_of_retained_exact_smoke(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); plugin = root / 'plugin'; plugin.mkdir()
+            (plugin / 'manifest.json').write_text('{"version":"3.4.6"}')
+            receipts = root / 'releases'; deployed = receipts / '3.4.5'; deployed.mkdir(parents=True)
+            files = {name: name.encode() for name in release.RELEASE_FILES}
+            files['manifest.json'] = b'{"version":"3.4.5"}'
+            hashes = {name: release.sha256_bytes(value) for name, value in files.items()}
+            (deployed / 'deployment.json').write_text(json.dumps({'version':'3.4.5','status':'awaiting-live-smoke','releaseFileSha256':hashes}))
+            client = {'version':'3.4.5', 'before':{'client':{'instanceId':'old'}},
+                      'after':{'client':{'instanceId':'new','loadedVersion':'3.4.5'}},
+                      'runtimeSha256':{name:hashes[name] for name in release.RUNTIME_FILES}}
+            (deployed / 'client-check.json').write_text(json.dumps(client))
+            archive = root / 'archive.zip'
+            with zipfile.ZipFile(archive, 'w') as bundle:
+                for name, value in files.items(): bundle.writestr('send-to-t3-code/' + name, value)
+            evidence = root / 'behavior.json'; evidence.write_text('{"verifiedExactArchivedCandidate":true}')
+            with patch.object(release, 'canonical_root_required'), patch.object(release, 'RECEIPTS', receipts), patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'archive_path', return_value=archive):
+                for key in ('runtimeSha256', 'after'):
+                    wrong = {**client, key: {}}
+                    (deployed / 'client-check.json').write_text(json.dumps(wrong))
+                    with self.assertRaisesRegex(SystemExit, 'native-client proof'):
+                        release.complete_smoke('3.4.5','native',evidence,'Verified exact archived candidate')
+                    self.assertFalse((deployed / 'smoke-native.json').exists())
+                (deployed / 'client-check.json').write_text(json.dumps(client))
+                release.complete_smoke('3.4.5','native',evidence,'Verified exact archived candidate')
+                receipt = json.loads((deployed / 'smoke-native.json').read_text())
+                self.assertTrue(receipt['historicalClientProof'])
+                self.assertEqual(receipt['installedMainSha256'], hashes['main.js'])
+                self.assertEqual(json.loads((plugin / 'manifest.json').read_text())['version'], '3.4.6')
+
     def test_plain_resume_accepts_only_release_generated_version_edits_and_uses_archive_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / 'dist').mkdir()

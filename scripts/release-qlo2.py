@@ -491,18 +491,33 @@ def complete_smoke(version: str, device: str, evidence: Path, notes: str) -> Non
     deployment = read_json(deployment_path)
     if deployment['version'] != version or deployment['status'] != 'awaiting-live-smoke':
         raise SystemExit(f'{version} is not awaiting a live smoke test.')
-    if read_json(QLO2_PLUGIN / 'manifest.json')['version'] != version:
-        raise SystemExit(f'QLO2 is not currently installed at {version}.')
     expected = deployment.get('releaseFileSha256', {})
-    background = deployment.get('backgroundResponseHost')
-    if background and sha256_file(Path(background['runtime'])) != background['runtimeSha256']:
-        raise SystemExit('The background response host does not match its immutable release.')
-    for name in RELEASE_FILES:
-        if name not in expected or not (QLO2_PLUGIN / name).is_file() or sha256_file(QLO2_PLUGIN / name) != expected[name]:
-            raise SystemExit(f'QLO2 {name} does not match the immutable deployment; smoke completion refused.')
-    for name in RUNTIME_FILES:
-        if not (DEV_PLUGIN / name).is_file() or sha256_file(DEV_PLUGIN / name) != expected[name]:
-            raise SystemExit(f'Development {name} does not match the immutable deployment; smoke completion refused.')
+    current_version = read_json(QLO2_PLUGIN / 'manifest.json')['version']
+    historical = current_version != version
+    if historical:
+        if parse_version(current_version) <= parse_version(version):
+            raise SystemExit(f'QLO2 has not advanced beyond {version}.')
+        client = read_json(directory / 'client-check.json')
+        before = client.get('before', {}).get('client', {})
+        after = client.get('after', {}).get('client', {})
+        if (client.get('version') != version or after.get('loadedVersion') != version or
+                not before.get('instanceId') or not after.get('instanceId') or
+                before['instanceId'] == after['instanceId'] or
+                any(client.get('runtimeSha256', {}).get(name) != expected.get(name) or not expected.get(name) for name in RUNTIME_FILES)):
+            raise SystemExit('No matching retained native-client proof exists for this release.')
+        hashes = validate_archive(archive_path(version), version, compare_source=False)
+        if any(hashes.get(name) != expected.get(name) or not expected.get(name) for name in RELEASE_FILES):
+            raise SystemExit('The immutable archive does not match the deployment.')
+    else:
+        background = deployment.get('backgroundResponseHost')
+        if background and sha256_file(Path(background['runtime'])) != background['runtimeSha256']:
+            raise SystemExit('The background response host does not match its immutable release.')
+        for name in RELEASE_FILES:
+            if name not in expected or not (QLO2_PLUGIN / name).is_file() or sha256_file(QLO2_PLUGIN / name) != expected[name]:
+                raise SystemExit(f'QLO2 {name} does not match the immutable deployment; smoke completion refused.')
+        for name in RUNTIME_FILES:
+            if not (DEV_PLUGIN / name).is_file() or sha256_file(DEV_PLUGIN / name) != expected[name]:
+                raise SystemExit(f'Development {name} does not match the immutable deployment; smoke completion refused.')
     if not evidence.is_file():
         raise SystemExit(f'Smoke evidence does not exist: {evidence}')
     smoke = directory / f'smoke-{device}.json'
@@ -517,7 +532,8 @@ def complete_smoke(version: str, device: str, evidence: Path, notes: str) -> Non
         'status': 'complete',
         'device': device,
         'completedAt': utc_now(),
-        'installedMainSha256': sha256_file(QLO2_PLUGIN / 'main.js'),
+        'installedMainSha256': expected['main.js'],
+        'historicalClientProof': historical,
         'evidence': str(evidence_copy),
         'evidenceSha256': sha256_file(evidence_copy),
         'notes': notes,

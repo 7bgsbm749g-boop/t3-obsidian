@@ -36,7 +36,8 @@ test('a failed turn shows its T3 reason and remains identifiable for recovery',(
   const id='f95a3b36-7393-4508-9fb3-38aa2da3590f',region=initialRegion(id);
   const state={messages:[],activities:[],session:{status:'error',activeTurnId:null,lastError:'Codex usage limit reached. Reset in 2h.'},latestTurn:{turnId:'turn',state:'error'}} as any;
   const body=renderInlineTurn(state,'turn','thread','error');
-  assert.match(body,/Codex usage limit reached\\\. Reset in 2h/);
+  assert.match(body,/Codex usage limit reached\. Reset in 2h/);
+  assert.match(body,/send-to-t3-provider-error/);
   const change=replaceRegion(region.text,id,region.bodyHash,body)!;
   const document=region.text.slice(0,change.from)+change.text+region.text.slice(change.to);
   assert.deepEqual(failedInlineIds(document),[id]);

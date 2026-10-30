@@ -1,4 +1,4 @@
-"""Persistent FIFO release ownership. No thread discovery or agent messaging."""
+"""Serialized releases with durable retries and isolated job failures."""
 from __future__ import annotations
 
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -17,6 +17,13 @@ QUEUE = Path('/home/ubuntu/projects/send-to-t3-code/evidence/release-queue')
 UNIT = 'send-to-t3-release-queue'
 JOB_ID = re.compile(r'^\d{12}-[0-9a-f]{16}$')
 VERSION_FILES = {'package.json', 'package-lock.json', 'manifest.json', 'versions.json'}
+MAX_ATTEMPTS = 3
+FINISHED = {'complete', 'failed', 'needs-evidence', 'awaiting-smoke'}
+
+
+def maintenance_only(names: list[str]) -> bool:
+    return bool(names) and all(name.startswith(('scripts/', 'tests/', 'docs/')) or
+                               name in {'AGENTS.md', 'README.md', 'LICENSE'} for name in names)
 
 
 def now() -> str:
@@ -112,6 +119,7 @@ def submission(root: Path, canonical: Path, commit: str, *, bump: str = 'patch',
         item = subprocess.run(['git', 'show', f'{commit}:{name}'], cwd=root, capture_output=True)
         inputs[name] = hashlib.sha256(item.stdout).hexdigest() if item.returncode == 0 else None
     return {**identity, 'createdAt': now(), 'sourceRoot': str(root), 'mergeBase': base,
+            'maintenanceOnly': maintenance_only(changed),
             'dependencyInputsSha256': dependency_inputs(root, commit),
             'sourceInputsSha256': inputs, 'validation': str(validation) if validation else None,
             'evidence': str(evidence) if evidence else None}
@@ -156,9 +164,11 @@ def enqueue(root: Path, canonical: Path, commit: str, *, bump: str = 'patch', va
 def status(job_id: str | None = None, *, queue: Path = QUEUE) -> dict:
     with locked(queue / 'queue.lock'):
         selected = [job_path(queue, job_id)] if job_id else jobs(queue)
-        return {'jobs': [{'jobId': path.name, **read(path / 'state.json'),
+        entries = [{'jobId': path.name, **read(path / 'state.json'),
                           'sourceCommit': read(path / read(path / 'state.json').get('requestFile', 'request.json'))['commit'], 'log': str(path / 'worker.log')}
-                         for path in selected]}
+                   for path in selected]
+        return {'jobs': entries, 'counts': {name: sum(item['status'] == name for item in entries)
+                                          for name in sorted({item['status'] for item in entries})}}
 
 
 def kick(*, queue: Path = QUEUE) -> None:
@@ -179,7 +189,7 @@ def install(canonical: Path, *, queue: Path = QUEUE) -> None:
         '[Unit]\nDescription=Serialize T3 Code releases\n'
         '[Service]\nType=oneshot\nWorkingDirectory=' + str(canonical) + '\n'
         'ExecStart=/usr/bin/python3 ' + str(canonical / 'scripts/release-qlo2.py') + ' --drain-queue\n'
-        'TimeoutStartSec=3600\n')
+        'TimeoutStartSec=3600\nRestart=on-failure\nRestartSec=15\n')
     (units / (UNIT + '.path')).write_text(
         '[Unit]\nDescription=Wake the T3 Code release queue\n'
         '[Path]\nPathExists=' + str(queue / 'wake') + '\nUnit=' + UNIT + '.service\n'
@@ -188,12 +198,27 @@ def install(canonical: Path, *, queue: Path = QUEUE) -> None:
     subprocess.run(['systemctl', '--user', 'enable', '--now', UNIT + '.path'], check=True)
 
 
+def schedule_retry(when: str, *, queue: Path = QUEUE) -> None:
+    """One persisted deadline, armed only while recovery is needed; no polling."""
+    units = Path.home() / '.config/systemd/user'
+    if not (units / (UNIT + '.service')).is_file():
+        return
+    timestamp = dt.datetime.fromisoformat(when).astimezone(dt.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    (units / (UNIT + '-retry.timer')).write_text(
+        '[Unit]\nDescription=Retry an interrupted T3 release\n[Timer]\n'
+        f'OnCalendar={timestamp}\nPersistent=true\nAccuracySec=1s\nUnit={UNIT}.service\n')
+    subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True, timeout=10)
+    subprocess.run(['systemctl', '--user', 'restart', UNIT + '-retry.timer'], check=True, timeout=10)
+
+
 def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) -> dict:
     with locked(queue / 'queue.lock'):
         directory = job_path(queue, job_id)
         state = read(directory / 'state.json')
-        if state['status'] not in {'blocked', 'failed', 'awaiting-smoke'}:
+        if state['status'] not in {'blocked', 'failed', 'awaiting-smoke', 'needs-evidence', 'retrying'}:
             raise SystemExit('Only a failed, blocked, or smoke-waiting job can be retried.')
+        if state['status'] == 'retrying' and not state.get('nextRetryAt'):
+            raise SystemExit('This job is already recovering in the active worker.')
         if replacement:
             if any(Path(state[key]).exists() for key in ('archive', 'deploymentReceipt') if state.get(key)):
                 raise SystemExit('This job already has immutable release bytes. Resume them; submit later code separately.')
@@ -201,7 +226,11 @@ def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) 
             name = f'request-{revision}.json'
             save_request(directory, replacement, name)
             state.update(requestRevision=revision, requestFile=name)
-        state.update(status='queued', updatedAt=now())
+        state.update(status='queued', updatedAt=now(), failures=0)
+        for key in ('error', 'nextAction', 'nextRetryAt'):
+            state.pop(key, None)
+        if state.get('rollbackCommits'):
+            state.pop('version', None)
         write(directory / 'state.json', state)
         (queue / 'wake').touch()
     return {'jobId': job_id, **state}
@@ -231,10 +260,19 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
     root = release.ROOT
     version = state.get('version')
     deployed = version and (release.release_receipt_dir(version) / 'deployment.json').is_file()
+    if not request.get('maintenanceOnly') and not request.get('evidence') and not version:
+        update(directory, state, status='needs-evidence',
+               nextAction='Supply changed-behavior evidence with --retry-queued --replacement before publication. Later jobs continue.')
+        return False
     if not deployed and not (version and release.archive_path(version).exists()):
         if git(root, 'status', '--porcelain=v1'):
             raise SystemExit('Canonical checkout contains uncommitted work. The queue will not alter it.')
         update(directory, state, status='integrating')
+        while state.get('rollbackCommits'):
+            # Restore only the queue's own reverted merge; never reset history.
+            release.run(['git', 'revert', '--no-edit', state['rollbackCommits'][-1]])
+            update(directory, state, rollbackCommits=state['rollbackCommits'][:-1],
+                   ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': git(root, 'rev-parse', 'HEAD'), 'merge': False}])
         ancestor = subprocess.run(['git', 'merge-base', '--is-ancestor', request['commit'], 'HEAD'], cwd=root)
         if ancestor.returncode:
             try:
@@ -245,6 +283,7 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
                 if (root / '.git').is_dir() and (root / '.git/MERGE_HEAD').exists():
                     release.run(['git', 'merge', '--abort'])
                 raise
+            update(directory, state, ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': git(root, 'rev-parse', 'HEAD'), 'merge': True}])
         update(directory, state, integratedCommit=git(root, 'rev-parse', 'HEAD'))
         if engine_hash(root) != loaded_engine:
             # Exit with the wake marker intact. systemd starts a fresh worker,
@@ -252,6 +291,11 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
             update(directory, state, status='queued', nextAction='Restarting the updated release worker.')
             return True
         ensure_dependencies(root)
+        if request.get('maintenanceOnly'):
+            proof = release.change_checks.run_validation(root)
+            update(directory, state, status='complete', completedAt=now(), validation=str(proof),
+                   delivery='source-only', error=None, nextAction=None)
+            return False
         source_version = release.read_json(root / 'manifest.json')['version']
         version = version or (source_version if request.get('validation') else release.bump_version(source_version, request['bump']))
         update(directory, state, version=version, status='releasing',
@@ -278,8 +322,9 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
     evidence = release.release_receipt_dir(version) / 'client-check.json'
     if not evidence.exists():
         release.check_client(version)
+    update(directory, state, status='verifying-evidence')
     if completed_smoke(release, version):
-        update(directory, state, status='complete', completedAt=now())
+        update(directory, state, status='complete', completedAt=now(), error=None, nextAction=None)
         return False
     matches = all((release.sha256_file(root / name) if (root / name).is_file() else None) == checksum
                   for name, checksum in request['sourceInputsSha256'].items())
@@ -297,13 +342,38 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
                              'clientCheck': str(evidence), 'clientCheckSha256': release.sha256_file(evidence),
                              'notes': request['notes'], 'queueJobId': directory.name, 'workerLog': str(directory / 'worker.log')})
         release.complete_smoke(version, 'vps-qlo2-queue', combined, request['notes'])
-        update(directory, state, status='complete', completedAt=now())
+        update(directory, state, status='complete', completedAt=now(), error=None, nextAction=None)
     else:
         update(directory, state, status='awaiting-smoke',
                nextAction=f'Verify only changed behavior for {version}, then use --complete-smoke. '
-                          'This job retains the release slot; other threads only submit their own jobs.',
+                          'Publication is verified; other jobs can continue. This release remains incomplete.',
                suppliedBehaviorInputsMatch=matches)
     return False
+
+
+def isolate_failure(release, directory: Path, state: dict) -> bool:
+    """Remove only this job's unshipped integration, retaining commits and logs."""
+    version = state.get('version')
+    if version and (release.archive_path(version).exists() or
+                    (release.release_receipt_dir(version) / 'deployment.json').exists()):
+        return False
+    if git(release.ROOT, 'status', '--porcelain=v1'):
+        return False
+    owned = state.get('ownedIntegrations', [])
+    if owned:
+        if git(release.ROOT, 'rev-parse', 'HEAD') != owned[-1]['commit']:
+            return False
+        for integration in reversed(owned):
+            command = ['git', 'revert', '--no-edit']
+            if integration['merge']:
+                command += ['-m', '1']
+            release.run([*command, integration['commit']])
+            update(directory, state, rollbackCommits=[*state.get('rollbackCommits', []), git(release.ROOT, 'rev-parse', 'HEAD')],
+                   ownedIntegrations=state['ownedIntegrations'][:-1])
+    elif state.get('integratedCommit'):
+        return False
+    update(directory, state, status='failed', nextAction='This candidate needs repair. Later jobs continue; use --retry-queued with corrected committed source.')
+    return True
 
 
 def drain(release, *, queue: Path = QUEUE) -> dict:
@@ -314,15 +384,22 @@ def drain(release, *, queue: Path = QUEUE) -> dict:
                 loaded_engine = engine_hash(release.ROOT)
                 while True:
                     with locked(queue / 'queue.lock'):
-                        directory = next((path for path in jobs(queue)
-                                          if read(path / 'state.json')['status'] != 'complete'), None)
+                        pending = [(path, read(path / 'state.json')) for path in jobs(queue)]
+                        # Smoke completion can arrive after a later release. It
+                        # remains visible without owning the installation lane.
+                        for path, item in pending:
+                            if item['status'] == 'awaiting-smoke' and completed_smoke(release, item['version']):
+                                update(path, item, status='complete', completedAt=now(), nextAction=None, error=None)
+                        directory = next((path for path, item in pending if item['status'] not in FINISHED), None)
                         if directory is None:
                             (queue / 'wake').unlink(missing_ok=True)
                             return {'status': 'idle'}
                         state = read(directory / 'state.json')
-                        if state['status'] in {'blocked', 'failed'}:
+                        if state.get('nextRetryAt') and state['nextRetryAt'] > now():
                             (queue / 'wake').unlink(missing_ok=True)
-                            return {'status': 'blocked', 'jobId': directory.name}
+                            schedule_retry(state['nextRetryAt'], queue=queue)
+                            return {'status': 'retrying', 'jobId': directory.name, 'nextRetryAt': state['nextRetryAt']}
+                        state.pop('nextRetryAt', None)
                         request = read(directory / state.get('requestFile', 'request.json'))
                     with (directory / 'worker.log').open('a', buffering=1) as log, redirect_stdout(log), redirect_stderr(log):
                         print(f'Queue attempt {now()}: {directory.name}', flush=True)
@@ -331,9 +408,27 @@ def drain(release, *, queue: Path = QUEUE) -> dict:
                             if restart:
                                 return {'status': 'worker-restart', 'jobId': directory.name}
                         except (Exception, SystemExit) as error:
-                            update(directory, state, status='blocked', error=str(error),
-                                   nextAction='Inspect this job log, resolve its blocker, and use --retry-queued JOB_ID. '
-                                              'No other thread needs to coordinate the release.')
+                            failures = state.get('failures', 0) + 1
+                            failed_stage = state['status']
+                            attempt = directory / f'failure-{len(list(directory.glob("failure-*.json"))) + 1:04d}.json'
+                            write(attempt, {'at': now(), 'error': str(error), 'stage': state['status'], 'version': state.get('version')})
+                            update(directory, state, status='retrying', failures=failures, error=str(error),
+                                   nextAction='Automatic recovery is active. Failed checks are never bypassed.')
+                            if failures >= MAX_ATTEMPTS:
+                                if failed_stage == 'verifying-evidence':
+                                    update(directory, state, status='awaiting-smoke',
+                                           nextAction='Publication and native client are verified. Repair changed-behavior evidence; later jobs continue.')
+                                    continue
+                                try:
+                                    isolated = isolate_failure(release, directory, state)
+                                except (Exception, SystemExit) as cleanup_error:
+                                    isolated = False
+                                    update(directory, state, recoveryError=str(cleanup_error))
+                                if not isolated:
+                                    deadline = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=min(300, 15 * 2 ** min(failures - MAX_ATTEMPTS, 5)))).isoformat()
+                                    update(directory, state, nextRetryAt=deadline)
+                    if state['status'] in FINISHED or state['status'] == 'retrying':
+                        continue
                     if state['status'] != 'complete':
                         with locked(queue / 'queue.lock'):
                             if read(directory / 'state.json')['status'] == 'queued':

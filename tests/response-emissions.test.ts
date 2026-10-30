@@ -5,7 +5,7 @@ import {applyThreadItem,renderInlineTurn,turnPhase} from '../inline-thread';
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
 import {stoppedResponseBody} from '../response-stop';
-import {responseEmissions} from '../response-emissions';
+import {responseEmissions,renderProviderError} from '../response-emissions';
 import {responseToolGroups,renderResponseToolGroup} from '../response-tools';
 
 const at=(n:number)=>new Date(n*1000).toISOString();
@@ -102,7 +102,47 @@ test('compaction retained from an earlier turn cannot animate in the current tur
 test('unrelated run emissions are excluded and completed errors are visible without live controls',()=>{
   const state=fixture([{id:'other',type:'reasoning',runId:'other-run',text:'Unrelated',streaming:false},{id:'error',type:'error',status:'failed',failure:{message:'The tool failed.'}}]);
   const body=renderInlineTurn(state,'run','thread','running','collapse');
-  assert.doesNotMatch(body,/Unrelated|Running error/);assert.match(body,/\[!t3-notification\] Error/);assert.match(body,/The tool failed\./);
+  assert.doesNotMatch(body,/Unrelated|Running error|\[!t3-notification\] Error/);assert.match(body,/send-to-t3-provider-error/);assert.match(body,/Provider error/);assert.match(body,/The tool failed\./);
+});
+
+test('provider errors keep their timeline position and clock while plain notices remain notices',()=>{
+  const state=fixture([{id:'error',type:'error',status:'failed',failure:{message:'Selected model is at capacity. Please try a different model.'},startedAt:at(3)},
+    {id:'notice',type:'notification',text:'A useful notice.',startedAt:at(5)}]);
+  const body=renderInlineTurn(state,'run','thread','error','collapse');
+  assert.match(body,/data-t3-tool-icon="circle-alert"/);assert.match(body,/data-t3-notification-at="3000" datetime="1970-01-01T00:00:03.000Z"/);
+  assert.ok(body.indexOf('Selected model')<body.indexOf('Checking.')&&body.indexOf('Checking.')<body.indexOf('A useful notice.'));
+  assert.match(body,/\[!t3-notification\] Notice/);assert.doesNotMatch(body,/inline-spinner|\[!t3-notification\] Error/);
+});
+
+test('provider error text and IDs cannot inject HTML, Markdown callouts or controls',()=>{
+  const body=renderProviderError('error" onclick="bad','<img src=x onerror="bad"> & **literal**\r\n> [!danger]\n</div><script>bad</script>',at(3));
+  assert.match(body,/data-t3-emission-id="error&quot; onclick=&quot;bad"/);
+  assert.match(body,/&lt;img src=x onerror=&quot;bad&quot;&gt; &amp; \*\*literal\*\*&#10;&gt; \[!danger\]/);
+  assert.doesNotMatch(body,/<img|<script|<strong|\n|\r/);
+  assert.doesNotMatch(renderProviderError('id','No clock.'),/<time|NaN/);
+  assert.doesNotMatch(renderProviderError('id','No clock.','invalid'),/<time|NaN/);
+});
+
+test('terminal session errors render once in every history mode, including session-only failures',()=>{
+  const text='Selected model is at capacity. Please try a different model.';
+  const state=fixture([{id:'error',type:'error',status:'failed',failure:{message:text}}]);
+  state.session={status:'error',activeTurnId:null,lastError:text};state.latestTurn={turnId:'run',state:'error',completedAt:at(6)};
+  for(const mode of ['remove','keep','collapse'] as const){
+    const body=renderInlineTurn(state,'run','thread','error',mode);
+    assert.equal(body.split(text).length-1,1,mode);assert.equal(body.split('>Provider error<').length-1,1,mode);
+    const fallback=renderInlineTurn({...state,activities:[]},'run','thread','error',mode);
+    assert.equal(fallback.split(text).length-1,1);assert.match(fallback,/data-t3-emission-id="session-error:run"/);
+    assert.match(fallback,/data-t3-notification-at="6000"/);
+    assert.doesNotMatch(renderInlineTurn({...state,activities:[],latestTurn:{turnId:'other-run',state:'error'}},'run','thread','error',mode),/Provider error|Selected model/);
+  }
+});
+
+test('live canonical error updates replace their existing row without completing a run',()=>{
+  let state=fixture([{id:'error',type:'error',status:'failed',failure:{message:'Original failure.'}}]);
+  state=applyThreadItem(state,normalizeV2StreamItem({kind:'event',sequence:2,event:{type:'turn-item.updated',payload:{id:'error',runId:'run',ordinal:1,type:'error',status:'failed',failure:{message:'Updated failure.'},startedAt:at(2),updatedAt:at(5)}}})).state;
+  const body=renderInlineTurn(state,'run','thread','running','collapse');
+  assert.equal(body.split('>Provider error<').length-1,1);assert.doesNotMatch(body,/Original failure/);assert.match(body,/Updated failure\./);
+  assert.equal(turnPhase(state,'run'),'running');
 });
 test('a plan after prose is a separate native quote block and following prose stays outside it',()=>{
  const state=fixture([{id:'plan',type:'todo_list',startedAt:at(5),steps:[{step:'Check display',status:'in_progress'}]}]);
