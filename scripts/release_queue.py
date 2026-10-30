@@ -413,6 +413,9 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
                    delivery='source-only', error=None, nextAction=None)
             return False
         source_version = release.read_json(root / 'manifest.json')['version']
+        if version and not request.get('validation') and tuple(map(int, version.split('.'))) <= tuple(map(int, source_version.split('.'))):
+            # Older task checkouts can retry without clearing a stale version.
+            version = None
         version = version or (source_version if request.get('validation') else next_version(release, directory, request))
         update(directory, state, version=version, status='releasing',
                archive=str(release.archive_path(version)),

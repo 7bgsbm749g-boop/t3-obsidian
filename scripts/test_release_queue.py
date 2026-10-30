@@ -227,6 +227,12 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertTrue((self.root / 'second.ts').exists())
         self.assertEqual(self.published, ['1.0.2'])
         self.assertEqual(self.git('status', '--porcelain=v1'), '')
+        queue.retry(a['jobId'], queue=self.store)
+        directory = queue.job_path(self.store, a['jobId'])
+        state = queue.read(directory / 'state.json'); state['version'] = '1.0.1'
+        queue.write(directory / 'state.json', state)
+        queue.drain(self.release, queue=self.store)
+        self.assertEqual(self.published, ['1.0.2', '1.0.3'])
 
     def test_independent_validation_registrations_merge_without_losing_a_mode(self):
         name = 'scripts/build-native-response-lab.mjs'
