@@ -17,6 +17,9 @@ the full validation path. Ordinary paragraph edits map already validated ranges;
 structural edits still validate context. Media source lookup is bounded and
 cached, and native image links bypass unnecessary Markdown parsing. Approval and
 question decorations no longer rebuild on viewport-only scrolling.
+Inactive response scroll helpers also skip geometry reads and fold scans. Follow
+intent, retained button positions and an active height guard still run their
+normal layout checks.
 
 The October 30 native investigation retains its private fixture, scripts,
 input hashes, resource logs, raw timings and recordings under the task's ignored
