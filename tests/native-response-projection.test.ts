@@ -116,7 +116,7 @@ test('native tool summaries preserve completed and active canonical output throu
   state=state.update({changes:{from:0,insert:'Typed '}}).state;h.view.editor.cm.state=state;h.edit(state.doc.toString());
   assert.equal(h.adapter.saved(),'Typed '+document);const after=h.read().indexOf('After');assert.deepEqual(h.adapter.mapSelection(after,after+5).from,{kind:'saved',offset:('Typed '+document).indexOf('After')});
   const final=('Typed '+document).replace(responseAnchor(id),'Final\n\n'+tools);h.adapter.prepareMaterialization('Typed '+document,final,[id]);assert.equal(h.adapter.acceptCommitted(final,[id]),true);assert.ok(h.read().length<2000);assert.equal(h.adapter.saved(),final);
-  const summary=h.read().indexOf('Open to view tool details.');state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});h.view.editor.cm.state=state;
+  const summary=h.read().indexOf('<summary>');assert.ok(summary>=0);state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});h.view.editor.cm.state=state;
   assert.equal(state.update({changes:{from:summary,to:summary+4,insert:'Lost'}}).state.doc.toString(),state.doc.toString());
   h.adapter.dispose();assert.equal(h.read(),final);assert.equal(final.split('retained output').length,h.read().split('retained output').length);
 });
@@ -139,7 +139,7 @@ test('canonical selection after completed tools keeps a separate valid native in
 });
 test('partial compact summaries select exact retained output as context and never an editable placeholder',()=>{
   const tools=largeTools(),document='Before\n\n'+tools+'\n\n'+responseAnchor(id)+'\n\nAfter',h=fakeView(document);h.adapter.setResponses([{id,body:'> Reply\n\n'+tools}]);
-  for(const at of [h.read().indexOf('Open to view tool details.'),h.read().lastIndexOf('Open to view tool details.')]){const selected=h.adapter.canonicalSelection(at,at+4);assert.equal(selected.text,tools);assert.equal(selected.reference,true);assert.doesNotMatch(selected.text,/data-t3-tool-ref=/);assert.equal(selected.document.slice(selected.start,selected.end),tools);}
+  for(const at of [h.read().indexOf('<summary>'),h.read().lastIndexOf('<summary>')]){assert.ok(at>=0);const selected=h.adapter.canonicalSelection(at,at+4);assert.equal(selected.text,tools);assert.equal(selected.reference,true);assert.doesNotMatch(selected.text,/data-t3-tool-ref=/);assert.equal(selected.document.slice(selected.start,selected.end),tools);}
   assert.throws(()=>h.adapter.canonicalSelection(-1,2),/range/);assert.throws(()=>h.adapter.canonicalSelection(0,h.read().length+1),/range/);
 });
 test('completed tool-only native pane echoes never become saved placeholders',async()=>{
@@ -159,7 +159,7 @@ test('a failed response rebuild retains exact completed tool output and the prio
 });
 test('a damaged compact pane echo remains a conflict and cannot reach an unwrapped native save',()=>{
   const tools=largeTools(),document='Before\n\n'+tools+'\n\nAfter',h=fakeView(document);h.adapter.setResponses([]);
-  const attempted=h.read().replace('Open to view tool details.','Changed summary.').replace('Before','Incoming before').replace('After','Incoming after');h.view.setViewData(attempted,false);
+  const attempted=h.read().replace('<summary>','<summary>Changed summary.').replace('Before','Incoming before').replace('After','Incoming after');h.view.setViewData(attempted,false);
   assert.ok(h.adapter.conflictRecord());assert.throws(()=>h.adapter.saved());
   assert.equal(h.adapter.conflictRecord()!.attemptedIncoming,attempted);assert.equal(h.adapter.conflictRecord()!.unsafeIncoming,false);
   h.adapter.dispose();assert.equal(h.read(),document.replace('Before','Incoming before').replace('After','Incoming after'));assert.doesNotMatch(h.read(),/data-t3-tool-ref=/);assert.ok(h.read().includes(tools));

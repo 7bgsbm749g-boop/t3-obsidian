@@ -426,6 +426,7 @@
 .callout[data-callout="t3-thought"] { --callout-icon: lucide-brain; }
 .callout[data-callout="t3-plan"] { --callout-icon: lucide-list-checks; }
 .callout[data-callout="t3-thought"] > .callout-title, .callout[data-callout="t3-plan"] > .callout-title { font-size: var(--font-smaller); font-weight: normal; color: var(--text-muted); }
+.callout[data-callout="t3-thought"] > .callout-title > .callout-icon .svg-icon { color: var(--text-muted); }
 .callout[data-callout="t3-thought"] > .callout-title > .callout-title-inner { display: flex; align-items: baseline; flex: 1; gap: .35em; font-weight: inherit; }
 .send-to-t3-thought-time { margin-inline-start: auto; font-size: var(--font-ui-smaller); font-weight: normal; font-variant-numeric: tabular-nums; }
 .callout[data-callout="t3-thought"] > .callout-content { padding-inline-start: 1.7em; }
@@ -498,10 +499,11 @@
 
 /* The unfinished paragraph keeps a stable text node until a block boundary. */
 .send-to-t3-stream-tail { white-space: pre-wrap; overflow-wrap: anywhere; }
-.send-to-t3-tool, .send-to-t3-tool-group, .send-to-t3-response-activity, .send-to-t3-answer { margin: .5em 0; font-size: var(--font-smaller); }
-.send-to-t3-tool > summary, details[data-t3-tool-group] > summary, .send-to-t3-answer > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); }
-.send-to-t3-tool > summary::before, details[data-t3-tool-group] > summary::before, .send-to-t3-answer > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
-.send-to-t3-tool[open] > summary::before, details[data-t3-tool-group][open] > summary::before, .send-to-t3-answer[open] > summary::before { transform: rotate(90deg); }
+.send-to-t3-tool, .send-to-t3-thought, .send-to-t3-tool-group, .send-to-t3-response-activity, .send-to-t3-answer { margin: .5em 0; font-size: var(--font-smaller); }
+.send-to-t3-tool > summary, .send-to-t3-thought > summary, details[data-t3-tool-group] > summary, .send-to-t3-answer > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); }
+.send-to-t3-tool > summary::before, .send-to-t3-thought > summary::before, details[data-t3-tool-group] > summary::before, .send-to-t3-answer > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
+.send-to-t3-tool[open] > summary::before, .send-to-t3-thought[open] > summary::before, details[data-t3-tool-group][open] > summary::before, .send-to-t3-answer[open] > summary::before { transform: rotate(90deg); }
+.send-to-t3-thought-content { padding-inline-start: 1.7em; }
 .send-to-t3-answer-label { flex-shrink: 0; }
 .send-to-t3-answer-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-normal); }
 .send-to-t3-answer-time { margin-left: auto; flex-shrink: 0; font-size: var(--font-ui-smaller); }
@@ -517,6 +519,28 @@
 .send-to-t3-tool pre { max-height: 18em; overflow: auto; white-space: pre-wrap; }
 .send-to-t3-tool pre:has(> .send-to-t3-tool-copy) { position: relative; }
 @media (prefers-reduced-motion: reduce) { .send-to-t3-tool > summary::after { animation: none; } }
+.send-to-t3-worktree-setup { margin: .5em 0; font-family: var(--font-interface); font-size: 14px; line-height: 1.5; color: var(--text-muted); }
+.send-to-t3-setup-header { display: flex; align-items: baseline; gap: 8px; min-height: 32px; padding: 4px 4px 8px; margin-bottom: 6px; border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 60%, transparent); }
+.send-to-t3-setup-header > .send-to-t3-setup-time { margin-left: auto; }
+.send-to-t3-setup-stage { display: flex; align-items: center; gap: 12px; min-height: 28px; padding: 2px 4px; }
+.send-to-t3-setup-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send-to-t3-setup-trailing { display: flex; align-items: baseline; gap: 8px; margin-left: auto; min-width: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.send-to-t3-setup-trailing > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send-to-t3-setup-time { flex-shrink: 0; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.send-to-t3-setup-stage[data-worktree-setup-status="pending"] { opacity: .4; }
+.send-to-t3-setup-stage[data-worktree-setup-status="failed"], .send-to-t3-setup-error, .send-to-t3-worktree-setup[data-worktree-setup-phase="failed"] > .send-to-t3-setup-header { color: var(--text-error); }
+.send-to-t3-setup-stage[data-worktree-setup-status="warning"] { color: var(--text-warning); }
+.send-to-t3-setup-stage[data-worktree-setup-status="running"] > .send-to-t3-setup-icon { border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; width: 14px; height: 14px; flex-basis: 14px; margin: 1px; animation: send-to-t3-inline-spin .8s linear infinite; }
+.send-to-t3-setup-stage[data-worktree-setup-status="running"] > .send-to-t3-setup-icon svg { display: none; }
+.send-to-t3-setup-details { margin: 4px 0 0 28px; font-size: 12px; }
+.send-to-t3-setup-details > summary { display: flex; align-items: center; gap: 4px; width: fit-content; cursor: pointer; list-style: none; }
+.send-to-t3-setup-details > summary::-webkit-details-marker { display: none; }
+.send-to-t3-setup-details > summary::before { content: '›'; display: inline-block; width: 8px; font-size: 16px; line-height: 1; }
+.send-to-t3-setup-details[open] > summary::before { transform: rotate(90deg); }
+.send-to-t3-setup-metadata { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; margin: 2px 0; }
+.send-to-t3-setup-metadata code { background: transparent; padding: 0; font-size: inherit; overflow-wrap: anywhere; white-space: pre-wrap; }
+.send-to-t3-setup-tail { margin: 2px 0 4px 28px; padding: 6px 10px; max-height: 7em; overflow: auto; font-size: 11px; white-space: pre; }
+@media (prefers-reduced-motion: reduce) { .send-to-t3-setup-stage[data-worktree-setup-status="running"] > .send-to-t3-setup-icon { animation: none; } }
 .send-to-t3-import-prompt { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Existing spaces and tabs have the same display policy in both code modes. */

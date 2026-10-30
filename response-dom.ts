@@ -3,6 +3,10 @@
  * retain nodes instead of disappearing between token updates. */
 export function reconcileResponseDOM(current:Element,incoming:Element){
   if(current.isEqualNode(incoming))return;
+  // A matching content hash identifies the same canonical batch. Its incoming
+  // shell is intentionally empty; keep details already expanded by the client.
+  const ref=current.getAttribute('data-t3-tool-ref');
+  if(ref&&ref===incoming.getAttribute('data-t3-tool-ref'))return;
   if(current.hasAttribute('data-t3-tool-icon')&&current.getAttribute('data-t3-tool-icon')===incoming.getAttribute('data-t3-tool-icon')&&current.childNodes.length)return;
   const preserveOpen=current.tagName==='DETAILS',open=current.hasAttribute('open');
   // Client decoration must survive token patches so the animation keeps its phase.
@@ -10,7 +14,7 @@ export function reconcileResponseDOM(current:Element,incoming:Element){
     name==='style'&&/^\s*--send-to-t3-shine-state:\s*(running|paused);?\s*$/.test(value);
   for(const attribute of Array.from(current.attributes))if(!incoming.hasAttribute(attribute.name)&&!(preserveOpen&&attribute.name==='open')&&!clientAttribute(attribute.name,attribute.value))current.removeAttribute(attribute.name);
   for(const attribute of Array.from(incoming.attributes))if(!(preserveOpen&&attribute.name==='open')&&current.getAttribute(attribute.name)!==attribute.value)current.setAttribute(attribute.name,attribute.value);
-  const identity=(el:Element)=>el.getAttribute('data-t3-tool-group')??el.getAttribute('data-t3-tool-key')??el.getAttribute('data-t3-tool-id')??(el.hasAttribute('data-t3-answer-id')?`answer:${el.getAttribute('data-t3-answer-id')}`:null);
+  const identity=(el:Element)=>el.getAttribute('data-t3-worktree-setup')??el.getAttribute('data-worktree-setup-stage')??el.getAttribute('data-t3-tool-group')??el.getAttribute('data-t3-tool-key')??el.getAttribute('data-t3-tool-id')??(el.hasAttribute('data-t3-answer-id')?`answer:${el.getAttribute('data-t3-answer-id')}`:null);
   const keyed=new Map(Array.from(current.children).map(el=>[identity(el),el]).filter(([key])=>!!key) as [string,Element][]);
   const incomingKeys=new Set(Array.from(incoming.children).map(identity).filter(Boolean));
   let cursor=current.firstChild;
