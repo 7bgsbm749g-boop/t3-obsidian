@@ -1,10 +1,10 @@
 import type {MarkdownView,TFile} from 'obsidian';
 import {regionBody,selectionAnchor} from './inline-thread';
 import {completedSelectionDraft,type InlineSteering} from './inline-steering';
-import type {Extension,Transaction as CMTransaction,TransactionSpec} from '@codemirror/state';
+import type {EditorSelection,Extension,Transaction as CMTransaction,TransactionSpec} from '@codemirror/state';
 import {changedEdits,changedInterval,mergeSavedEdits} from './coordinated-merge';
 import {advanceProjection,projectResponses,savedProjection,savedToDisplay,displayToSaved,responseRegion,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
-import {ResponseScroll} from './response-scroll';
+import {ResponseScroll,type ResponseScrollState} from './response-scroll';
 import {presentToolGroups,historyToolBody,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,canonicalToolGroup,type ToolPresentation} from './response-tool-presentation';
 import {toolDisplayOffset} from './response-tool-presentation';
 import {responseFrame} from './response-container';
@@ -12,6 +12,9 @@ import {localResponseBindings} from './local-response-binding';
 import {movedResponse,responseMoveEffect,responseMoveHistory,guardResponseMoveHistory,type ResponseMove} from './response-move';
 
 export interface NativeViewConflict {base:string;local:string;incoming:string;reason:string;awaitingCompletion?:boolean;attemptedIncoming?:string;unsafeIncoming?:boolean}
+// A native pane replaces its Markdown view/adapters when navigating. Retain
+// only small runtime control state, keyed by the original vault file identity.
+const scrollStates=new WeakMap<object,Map<TFile,ResponseScrollState>>();
 /** Native rendering with a separate saved projection. */
 export class NativeResponseView {
   private originalGet:MarkdownView['getViewData'];
@@ -55,7 +58,12 @@ export class NativeResponseView {
   private releaseMoveHistory?:()=>void;
   constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[],initial?:{set:MarkdownView['setViewData'];clear:boolean}){
     this.file=view.file;this.base=saved;this.diskBase=saved;this.projection=this.buildProjection(saved,[]);
-    this.scroll=new ResponseScroll(view,()=>this.currentProjection());
+    const pane=view.leaf??view;let notes=scrollStates.get(pane);
+    if(!notes){notes=new Map();scrollStates.set(pane,notes);}
+    let scrollState=this.file?notes.get(this.file):undefined;
+    if(!scrollState){scrollState={positions:new Map()};if(this.file)notes.set(this.file,scrollState);}
+    while(notes.size>64)notes.delete(notes.keys().next().value!);
+    this.scroll=new ResponseScroll(view,()=>this.currentProjection(),scrollState);
     this.originalGet=view.getViewData;this.originalSet=view.setViewData;
     this.originalSave=view.save;
     this.originalRequestSave=view.requestSave;
@@ -337,7 +345,8 @@ export class NativeResponseView {
       // becoming user undo steps. Native rendering and folds stay in place.
       const edit={from:change.from,to:change.to,insert:change.text},changes=cm.state?.changes?.(edit);
       const heightEffect=this.scroll.preserveHeight(display,changes);
-      cm.dispatch({changes:changes??edit,effects:heightEffect?[heightEffect]:[],annotations:[Transaction.addToHistory.of(false),Transaction.userEvent.of('send-to-t3-projection')],filter:false,scrollIntoView:false});
+      const mapped=changes&&cm.state.selection.map(changes),selection=mapped&&this.outsideResponseSelection(mapped,cm.state.selection,this.projection);
+      cm.dispatch({changes:changes??edit,...(selection?{selection}:{}),effects:heightEffect?[heightEffect]:[],annotations:[Transaction.addToHistory.of(false),Transaction.userEvent.of('send-to-t3-projection')],filter:false,scrollIntoView:false});
     }else {this.scroll.clearHeight();this.originalSet.call(this.view,display,clear);}
     this.scroll.updated();
   }
@@ -586,11 +595,42 @@ export class NativeResponseView {
       return {changes:edits,selection,annotations:[Transaction.addToHistory.of(false),Transaction.userEvent.of('send-to-t3-projection')],filter:false,scrollIntoView:false};
     }catch{return;}
   }
+  private outsideResponseSelection(selection:EditorSelection,previous:EditorSelection,projection:ResponseProjection):EditorSelection|undefined {
+    if(!projection.ranges.length||(this.view as any).getState?.().source===true)return;
+    const {EditorSelection}=require('@codemirror/state') as typeof import('@codemirror/state');
+    let changed=false;
+    const ranges=selection.ranges.map((caret,index)=>{
+      const containing=(position:number)=>projection.ranges.find(range=>position>range.displayFrom&&position<range.displayTo);
+      const response=containing(caret.head),anchorResponse=containing(caret.anchor);
+      if(!response&&!anchorResponse)return caret;
+      const old=previous.ranges[index]?.head??previous.main.head;
+      changed=true;
+      // Native callout editing selects the whole body, rather than placing a
+      // cursor. Keep that path outside too. Browser text selection remains
+      // independent; note-wide selections with endpoints outside still work.
+      if(response&&response===anchorResponse){
+        const head=old<=response.displayFrom?response.displayTo:old>=response.displayTo?response.displayFrom:caret.head-response.displayFrom<response.displayTo-caret.head?response.displayFrom:response.displayTo;
+        return EditorSelection.cursor(head);
+      }
+      const forward=caret.anchor<caret.head;
+      return EditorSelection.range(anchorResponse?(forward?anchorResponse.displayFrom:anchorResponse.displayTo):caret.anchor,response?(forward?response.displayTo:response.displayFrom):caret.head);
+    });
+    return changed?EditorSelection.create(ranges,selection.mainIndex):undefined;
+  }
   filterTransaction(transaction:CMTransaction):CMTransaction|TransactionSpec[] {
     if(this.disposed)return transaction;
     const cm=(this.view.editor as any)?.cm;
     if(!cm?.state||cm.state!==transaction.startState)return transaction;
-    if(!transaction.docChanged)return transaction;
+    if(!transaction.docChanged){
+      if(!transaction.selection||!this.responses.length)return transaction;
+      try{
+        const projection=this.checkedDocuments.get(transaction.startState.doc)??this.currentProjection();
+        const selection=this.outsideResponseSelection(transaction.newSelection,transaction.startState.selection,projection);
+        // A caret inside a native callout makes Live Preview expose its HTML.
+        // Correct it in the same transaction, before Obsidian can render it.
+        return selection?[transaction,{selection,sequential:true}]:transaction;
+      }catch{return transaction;}
+    }
     if(this.unloading)return [];
     try{
       // A compact shell is presentation, not editable output. Ordinary edits
@@ -624,13 +664,15 @@ export class NativeResponseView {
       const next=this.canonicalProjection(advanceProjection(transaction,projection));
       this.checkedDocuments.set(transaction.newDoc,next);
       if(this.blocked)this.blocked={...this.blocked,local:next.saved};
-      return transaction;
+      const selection=this.outsideResponseSelection(transaction.newSelection,transaction.startState.selection.map(transaction.changes),next);
+      return selection?[transaction,{selection,sequential:true}]:transaction;
     }catch{return [];}
   }
   /** Remove local output before unwrapping the save boundary. A conflict must
    * first reach a safe saved projection; unwrapping a blocked view could save bad data. */
   dispose(detached=false){
     if(this.disposed)return;
+    this.scroll.dispose();
     if(this.view.file!==this.file){this.unwrap();return;}
     if(this.blocked?.unsafeIncoming){this.unloading=true;this.scroll.dispose();return;}
     // Unload must retain the user's current ordinary buffer, including typing

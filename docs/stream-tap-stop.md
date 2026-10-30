@@ -1,7 +1,11 @@
 # Tap to reveal Stop on an active response
 
-Click or tap an active response callout to reveal a square Stop button at its
-top right. Keyboard focus inside the callout also reveals it. The native button
+Click or tap plain content in an active response callout to reveal a square
+Stop button at its top right. Keyboard focus on the plain response widget also
+reveals it. The title, Follow chevron, links, buttons, form fields and other
+interactive controls do not reveal Stop when clicked or focused. This also
+applies when a control redirects pointer focus to the containing native widget,
+so Follow stays in place throughout its click. The native button
 has a `Stop T3 response` accessible name, a visible focus outline and a compact
 24 × 24 CSS pixel target with a 14 × 14 square icon. It uses Obsidian's native
 icon-button styling with a transparent resting background. It stays centered
@@ -24,6 +28,32 @@ keep separate identities. The button is removed for terminal previews,
 completed/saved responses, stopped responses and ambiguous or blocked views.
 Terminal eligibility is separate from the displayed fold key: a completion
 can arrive before its rendered text changes.
+
+## Interactive-control correction verified on 2026-10-30
+
+Stop reveal ignores the title, Follow, links and other interactive descendants,
+including their nested icons and keyboard focus. A pointer gesture on a control
+also suppresses reveal if Obsidian redirects focus to its native response widget.
+Plain content still reveals Stop; the editable editor ancestor and focusable
+response wrapper do not count as controls. Existing visible Stop controls remain
+usable, and pointer cancellation or keyboard navigation clears gesture state.
+
+Collapsed response blocks hide Follow even while Stop is visible. Collapsing
+also cancels follow and resets its position to the top for re-expansion. Clicking
+Follow to turn it off retains its current position and the viewport.
+
+`npm test` passed its selected checks and required build. Three controller
+regressions cover control clicks/focus, redirected widget focus, and editor
+ancestor boundaries. Native Obsidian 1.13.7 clicks in the isolated test vault
+verified Follow with Stop hidden, title collapse/expand with Stop hidden,
+plain-content reveal, one exact synthetic Beta interrupt and reference navigation.
+Reveal and control clicks preserved saved note bytes. All three fixture notes
+were deleted through the vault API; no real T3 threads were created. These are
+desktop fixture checks, with no native iPhone or Android coverage.
+
+Evidence and tested source hashes are in this task worktree's gitignored
+`evidence/stream-stop-click-20261030/behavior.json`. QLO2 receives no test content;
+its release, fresh Sync and loaded-client verification use the release queue.
 
 ## Compact-button correction verified on 2026-10-24
 

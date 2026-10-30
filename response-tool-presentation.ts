@@ -12,15 +12,16 @@ export interface PresentedToolGroup {ref:string;canonicalFrom:number;canonicalTo
 export interface ToolPresentation {canonical:string;display:string;groups:PresentedToolGroup[]}
 export interface CompactToolGroup {from:number;to:number;ref:string;text:string;complete:boolean}
 interface Tag {from:number;to:number;name:string;closing:boolean;attrs:Record<string,string>;raw:string}
-const allowedTags=new Set(['details','summary','div','span','p','pre','code']);
-const allowedAttrs=new Set(['class','aria-hidden','aria-label','data-t3-tool-group','data-t3-tool-summary','data-t3-live-tool','data-t3-tool-icon','data-t3-tool-id','data-t3-tool-key','data-t3-tool-status','data-t3-tool-ref']);
+const allowedTags=new Set(['details','summary','div','span','p','pre','code','strong','em','a','img','br','hr','blockquote','ul','ol','li','h1','h2','h3','h4','h5','h6']);
+const voidTags=new Set(['img','br','hr']);
+const allowedAttrs=new Set(['class','aria-hidden','aria-label','href','src','alt','title','start','data-t3-thought-at','data-t3-tool-group','data-t3-tool-summary','data-t3-live-tool','data-t3-tool-icon','data-t3-tool-id','data-t3-tool-key','data-t3-tool-status','data-t3-tool-ref']);
 /** Quoted attributes and escaped output cannot create a false closing tag. */
 function tagAt(text:string,from:number,unknownAttributes=false):Tag|undefined{
  if(text[from]!=='<')return;
  let quote='',end=from+1;for(;end<text.length;end++){const c=text[end];if(quote){if(c===quote)quote='';}else if(c==='"'||c==="'")quote=c;else if(c==='>')break;}
  if(end===text.length)return;
- const raw=text.slice(from,end+1),match=/^<(\/)?([a-z]+)([\s\S]*?)>$/.exec(raw);if(!match||!allowedTags.has(match[2]))return;
- const attrs:Record<string,string>={};let suffix=match[3];
+ const raw=text.slice(from,end+1),match=/^<(\/)?([a-z][a-z0-9]*)([\s\S]*?)>$/.exec(raw);if(!match||!allowedTags.has(match[2]))return;
+ const attrs:Record<string,string>={};let suffix=match[3];if(voidTags.has(match[2]))suffix=suffix.replace(/\/$/,'');
  while(suffix.trim()){
   const attribute=(unknownAttributes?/^\s+([a-z][a-z0-9-]*)=(["'])([\s\S]*?)\2/:/^\s+([a-z][a-z0-9-]*)="([^"]*)"/).exec(suffix);
   if(!attribute||!unknownAttributes&&!allowedAttrs.has(attribute[1])||Object.hasOwn(attrs,attribute[1]))return;
@@ -43,8 +44,12 @@ function groupAt(text:string,from:number,placeholder=false){
   if(tag.closing){if(stack.pop()!==tag.name)return;if(tag.name==='summary'&&stack.length===1)summaryTo=tag.to;if(!stack.length)return summaryTo&&content&&(placeholder||tools)?{first,to:tag.to,summary:text.slice(summary.from,summaryTo),complete:true}:undefined;}
   else {
    if(stack.length===1){if(!summaryTo){if(tag.name!=='summary'||next!==summary.from)return;}else {if(content||tag.name!=='div'||tag.attrs.class!=='send-to-t3-tool-group-content')return;content=true;}}
-   if(stack.length===2&&stack[1]==='div'&&!placeholder){if(tag.name!=='details'||tag.attrs.class!=='send-to-t3-tool'||!tag.attrs['data-t3-tool-id']||!tag.attrs['data-t3-tool-key']||!tag.attrs['data-t3-tool-status'])return;tools++;}
-   stack.push(tag.name);
+   if(stack.length===2&&stack[1]==='div'&&!placeholder){
+    const tool=tag.attrs.class==='send-to-t3-tool'&&!!tag.attrs['data-t3-tool-id']&&!!tag.attrs['data-t3-tool-status'];
+    const thought=tag.attrs.class==='send-to-t3-thought';
+    if(tag.name!=='details'||!tag.attrs['data-t3-tool-key']||!tool&&!thought)return;tools++;
+   }
+   if(!voidTags.has(tag.name))stack.push(tag.name);
   }
   cursor=tag.to;
  }
@@ -156,7 +161,7 @@ export function presentToolGroups(canonical:string,collapseHistory=true):ToolPre
  const originalOffset=(position:number)=>{let delta=0;for(const item of mapped){if(position<item.to)break;delta+=item.delta;}return position+delta;};
  for(const {from,found} of recognizedGroups(intermediate,false)){
   const start=originalOffset(from),to=originalOffset(found.to),original=canonical.slice(start,to),ref=contentHash(original);
-  const placeholder=found.first.raw.slice(0,-1)+` data-t3-tool-ref="${ref}">`+found.summary+'<div class="send-to-t3-tool-group-content"><p>Open to view tool details.</p></div></details>';
+  const placeholder=found.first.raw.slice(0,-1)+` data-t3-tool-ref="${ref}">`+found.summary+'<div class="send-to-t3-tool-group-content"></div></details>';
   replacements.push({from:start,to,ref,placeholder});
  }
  if(!replacements.length)return {canonical,display:canonical,groups:[]};
@@ -224,17 +229,22 @@ export function mountToolGroups(root:HTMLElement,resolve:(ref:string)=>string|un
  const selector='details[data-t3-tool-ref]',nodes=Array.from(root.querySelectorAll<HTMLDetailsElement>(selector));
  if(root.matches?.(selector))nodes.unshift(root as HTMLDetailsElement);
  for(const details of nodes){
-  let pending=false,loaded=false;const ref=details.getAttribute('data-t3-tool-ref')??'',history=details.getAttribute('class')==='send-to-t3-response-history';
-  const alive=()=>!disposed&&root.contains(details)&&details.isConnected&&details.getAttribute('data-t3-tool-ref')===ref;
+  let pending=false,loadedRef:string|undefined;
+  const alive=(ref:string)=>!disposed&&root.contains(details)&&details.isConnected&&details.getAttribute('data-t3-tool-ref')===ref;
   const toggle=async()=>{
-   if(!details.open||pending||loaded||!alive())return;pending=true;
+   const ref=details.getAttribute('data-t3-tool-ref')??'',history=details.getAttribute('class')==='send-to-t3-response-history';
+   if(!details.open||pending||loadedRef===ref||!alive(ref))return;pending=true;
    try{
-    const original=await resolve(ref);if(!alive()||!details.open)return;if(!original||contentHash(original)!==ref||!history&&(!groupAt(original,0)||groupAt(original,0)!.to!==original.length))throw Error('The retained tool details are unavailable.');
-    const temporary=root.ownerDocument.createElement('div');await render(history?historyToolBody(original):original,temporary);if(!alive()||!details.open)return;
+    const original=await resolve(ref);if(!alive(ref)||!details.open)return;if(!original||contentHash(original)!==ref||!history&&(!groupAt(original,0)||groupAt(original,0)!.to!==original.length))throw Error('The retained tool details are unavailable.');
+    const temporary=root.ownerDocument.createElement('div');await render(history?historyToolBody(original):original,temporary);if(!alive(ref)||!details.open)return;
     const content=history?temporary:temporary.querySelector('.send-to-t3-tool-group-content'),target=details.querySelector('.send-to-t3-tool-group-content');if(!content||!target)throw Error('Cannot render the retained tool details.');
-    target.replaceChildren(...Array.from(content.childNodes));loaded=true;
-   }catch(error){if(alive())failure?.(error);}finally{pending=false;}
+    target.replaceChildren(...Array.from(content.childNodes));loadedRef=ref;
+   }catch(error){if(alive(ref))failure?.(error);}finally{pending=false;if(alive(details.getAttribute('data-t3-tool-ref')??'')&&details.open&&ref!==details.getAttribute('data-t3-tool-ref'))void toggle();}
   };
+  // Retained open nodes do not emit toggle when their canonical content changes.
+  // Reload that exact new reference, rejecting any pending result for the old one.
+  const Observer=root.ownerDocument.defaultView?.MutationObserver;
+  if(Observer){const observer=new Observer(()=>{void toggle();});observer.observe(details,{attributes:true,attributeFilter:['data-t3-tool-ref']});cleanups.push(()=>observer.disconnect());}
   details.addEventListener('toggle',toggle);cleanups.push(()=>details.removeEventListener('toggle',toggle));if(details.open)void toggle();
  }
  return ()=>{disposed=true;for(const cleanup of cleanups)cleanup();};

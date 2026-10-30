@@ -5,7 +5,7 @@ import {displayToSaved,savedToDisplay,responseAnchor,responseRegion,projectRespo
 import {containerBody,containerEnd} from '../response-container';
 import {renderInlineTurn,selectionAnchor,insertionOffset} from '../inline-thread';
 import {NativeResponseView} from '../native-response-view';
-import {EditorState} from '@codemirror/state';
+import {EditorState,EditorSelection,StateEffect,Transaction} from '@codemirror/state';
 import {renderResponseToolGroup,type ResponseToolGroup} from '../response-tools';
 import {presentToolGroups} from '../response-tool-presentation';
 import {heightFixture} from './fixtures/response-height';
@@ -126,7 +126,7 @@ test('native tool summaries preserve completed and active canonical output throu
   state=state.update({changes:{from:0,insert:'Typed '}}).state;h.view.editor.cm.state=state;h.edit(state.doc.toString());
   assert.equal(h.adapter.saved(),'Typed '+document);const after=h.read().indexOf('After');assert.deepEqual(h.adapter.mapSelection(after,after+5).from,{kind:'saved',offset:('Typed '+document).indexOf('After')});
   const final=('Typed '+document).replace(responseAnchor(id),'Final\n\n'+tools);h.adapter.prepareMaterialization('Typed '+document,final,[id]);assert.equal(h.adapter.acceptCommitted(final,[id]),true);assert.ok(h.read().length<2000);assert.equal(h.adapter.saved(),final);
-  const summary=h.read().indexOf('Open to view tool details.');state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});h.view.editor.cm.state=state;
+  const summary=h.read().indexOf('<summary>');assert.ok(summary>=0);state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});h.view.editor.cm.state=state;
   assert.equal(state.update({changes:{from:summary,to:summary+4,insert:'Lost'}}).state.doc.toString(),state.doc.toString());
   h.adapter.dispose();assert.equal(h.read(),final);assert.equal(final.split('retained output').length,h.read().split('retained output').length);
 });
@@ -149,7 +149,7 @@ test('canonical selection after completed tools keeps a separate valid native in
 });
 test('partial compact summaries select exact retained output as context and never an editable placeholder',()=>{
   const tools=largeTools(),document='Before\n\n'+tools+'\n\n'+responseAnchor(id)+'\n\nAfter',h=fakeView(document);h.adapter.setResponses([{id,body:'> Reply\n\n'+tools}]);
-  for(const at of [h.read().indexOf('Open to view tool details.'),h.read().lastIndexOf('Open to view tool details.')]){const selected=h.adapter.canonicalSelection(at,at+4);assert.equal(selected.text,tools);assert.equal(selected.reference,true);assert.doesNotMatch(selected.text,/data-t3-tool-ref=/);assert.equal(selected.document.slice(selected.start,selected.end),tools);}
+  for(const at of [h.read().indexOf('<summary>'),h.read().lastIndexOf('<summary>')]){assert.ok(at>=0);const selected=h.adapter.canonicalSelection(at,at+4);assert.equal(selected.text,tools);assert.equal(selected.reference,true);assert.doesNotMatch(selected.text,/data-t3-tool-ref=/);assert.equal(selected.document.slice(selected.start,selected.end),tools);}
   assert.throws(()=>h.adapter.canonicalSelection(-1,2),/range/);assert.throws(()=>h.adapter.canonicalSelection(0,h.read().length+1),/range/);
 });
 test('completed tool-only native pane echoes never become saved placeholders',async()=>{
@@ -169,7 +169,7 @@ test('a failed response rebuild retains exact completed tool output and the prio
 });
 test('a damaged compact pane echo remains a conflict and cannot reach an unwrapped native save',()=>{
   const tools=largeTools(),document='Before\n\n'+tools+'\n\nAfter',h=fakeView(document);h.adapter.setResponses([]);
-  const attempted=h.read().replace('Open to view tool details.','Changed summary.').replace('Before','Incoming before').replace('After','Incoming after');h.view.setViewData(attempted,false);
+  const attempted=h.read().replace('<summary>','<summary>Changed summary.').replace('Before','Incoming before').replace('After','Incoming after');h.view.setViewData(attempted,false);
   assert.ok(h.adapter.conflictRecord());assert.throws(()=>h.adapter.saved());
   assert.equal(h.adapter.conflictRecord()!.attemptedIncoming,attempted);assert.equal(h.adapter.conflictRecord()!.unsafeIncoming,false);
   h.adapter.dispose();assert.equal(h.read(),document.replace('Before','Incoming before').replace('After','Incoming after'));assert.doesNotMatch(h.read(),/data-t3-tool-ref=/);assert.ok(h.read().includes(tools));
@@ -296,6 +296,43 @@ test('native transaction filter prevents partial response edits while preserving
   const from=state.doc.toString().indexOf('Stream');assert.equal(state.update({changes:{from,to:from+6,insert:'bad'}}).state.doc.toString(),state.doc.toString());
   const ordinary=state.update({changes:{from:0,to:6,insert:'User edit'}}).state.doc.toString();
   assert.ok(ordinary.startsWith('User edit'));assert.ok(ordinary.includes('> Stream'));
+});
+test('Live Preview skips active response carets and native block-edit selections in both directions',()=>{
+  const h=fakeView(saved);h.adapter.setResponses([{id,body:'> Stream\n> **Rendered output**'},{id:other,body:'> Other'}]);
+  let state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension(),EditorState.allowMultipleSelections.of(true)]});
+  h.view.editor={cm:{state}};
+  const dispatch=(spec:any)=>{const tr=state.update(spec);state=tr.state;h.view.editor.cm.state=state;h.edit(state.doc.toString());return tr;};
+  const region=responseRegion(h.read(),id)!,inside=h.read().indexOf('Stream');
+  const tr=dispatch({selection:{anchor:inside},userEvent:'select'});
+  assert.equal(state.selection.main.head,region.to);assert.equal(tr.docChanged,false);assert.equal(tr.isUserEvent('select'),true);
+  dispatch({selection:{anchor:inside},userEvent:'select.pointer'});assert.equal(state.selection.main.head,region.from);
+  dispatch({selection:EditorSelection.create([EditorSelection.cursor(inside),EditorSelection.cursor(h.read().indexOf('Other'))],1)});
+  assert.equal(state.selection.ranges.length,2);assert.equal(state.selection.mainIndex,1);
+  assert.equal(state.selection.ranges[0].head,region.to);assert.equal(state.selection.main.head,responseRegion(h.read(),other)!.to);
+  dispatch({selection:{anchor:inside,head:inside+6}});assert.equal(state.selection.main.empty,true);assert.equal(state.selection.main.head,region.from);
+  dispatch({selection:{anchor:0,head:inside}});assert.equal(state.selection.main.anchor,0);assert.equal(state.selection.main.head,region.to);
+  dispatch({selection:{anchor:inside,head:0}});assert.equal(state.selection.main.anchor,region.to);assert.equal(state.selection.main.head,0);
+  dispatch({selection:{anchor:0,head:state.doc.length}});assert.equal(state.selection.main.from,0);assert.equal(state.selection.main.to,state.doc.length);
+  dispatch({selection:{anchor:inside+3}});assert.ok([region.from,region.to].includes(state.selection.main.head));
+  const ordinary=state.doc.toString().indexOf('Between');dispatch({selection:{anchor:ordinary}});assert.equal(state.selection.main.head,ordinary);
+  const edit=dispatch({changes:{from:0,insert:'Typed '},selection:{anchor:inside+6}});
+  assert.equal(edit.docChanged,true);assert.equal(state.selection.main.head,responseRegion(h.read(),id)!.from);assert.ok(h.adapter.saved().startsWith('Typed Before'));
+  h.view.getState=()=>({source:true});dispatch({selection:{anchor:inside+6}});assert.equal(state.selection.main.head,inside+6);
+  h.view.getState=()=>({source:false});h.adapter.setResponses([]);
+  state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});h.view.editor.cm.state=state;
+  dispatch({selection:{anchor:responseRegion(h.read(),id)!.from+3}});assert.equal(state.selection.main.head,responseRegion(h.read(),id)!.from+3);
+});
+test('unfiltered stream redraws move a stale caret out before rendering and leave undo history untouched',()=>{
+  const document=`Before\n\n${responseAnchor(id)}\n\nAfter`,h=heightFixture(document),adapter=new NativeResponseView(h.view,document,()=>assert.fail('No conflict'),async()=>document);
+  adapter.setResponses([{id,body:'> Old stream'}]);
+  h.cm.dispatch({effects:StateEffect.appendConfig.of(adapter.extension())});
+  h.cm.dispatch({selection:{anchor:h.cm.state.doc.toString().indexOf('Old stream')},filter:false});
+  adapter.setResponses([{id,body:'> New growing stream'}]);
+  const region=responseRegion(h.cm.state.doc.toString(),id)!;
+  assert.ok([region.from,region.to].includes(h.cm.state.selection.main.head));assert.equal(adapter.saved(),document);
+  let redraw:any;h.cm.onDispatch=(spec:any)=>{redraw=spec;};adapter.setResponses([{id,body:'> More growing stream'}]);
+  assert.equal(redraw.annotations.some((annotation:any)=>annotation.type===Transaction.addToHistory&&annotation.value===false),true);
+  adapter.dispose();assert.equal(h.jobs.size,0);
 });
 test('typing beside either tracking comment remains editable and survives save, stream updates and reopen',async()=>{
   for(const side of ['before','after'] as const){

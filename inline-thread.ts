@@ -8,21 +8,23 @@ import {responseActivityLabel,responseActivityRow} from './response-activity';
 import {visibleInlineInput} from './input-presentation';
 import {responseToolGroups,currentResponseToolGroup,renderResponseToolGroup} from './response-tools';
 import {applyV2ControlEvent,responseRun} from './orchestration-v2';
-import {responseEmissions} from './response-emissions';
+import {responseEmissions,renderProviderError} from './response-emissions';
 import {renderSubmittedAnswer,type SubmittedAnswer} from './response-answers';
 import {responseHtmlResults,renderHtmlResult} from './html-results';
 import {containerStart,responseFrame,responseIds,responseBoundaries} from './response-container';
 import {delegatedWork} from './inline-delegation';
 import {mergeWorktreeHandoffs,resolveWorktreeHandoffs,type InlineWorktreeHandoff} from './inline-worktree';
+import {readWorktreeSetup,type WorktreeSetup} from './worktree-setup';
+import type {FailedContinuation} from './failed-continuation';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;itemId?:string;sequence?:number;updatedAt?:string;createdAt?:string;context?:unknown;createdBy?:string;creationSource?:string;senderThreadId?:string|null;senderThreadTitle?:string;delegatedCompletion?:{parentRunId:string;generation:number;taskIds:string[]}}
 export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null;createdAt?:string;sequence?:number;payload?:Record<string,any>}
-export interface InlineTurn {turnId:string;state:string;messageId?:string;requestedAt?:string;completedAt?:string|null;assistantMessageId?:string|null;ordinal?:number;delegatedParentRunId?:string;delegatedCompletion?:{disposition:string;delivery?:{messageId:string;generation:number;taskIds:string[]}|null}}
+export interface InlineTurn {turnId:string;state:string;messageId?:string;requestedAt?:string;startedAt?:string|null;completedAt?:string|null;assistantMessageId?:string|null;ordinal?:number;delegatedParentRunId?:string;delegatedCompletion?:{disposition:string;delivery?:{messageId:string;generation:number;taskIds:string[]}|null}}
 export interface InlineSubagent {id:string;runId:string;title?:string;status:string;origin?:string;completionWake?:string;completionDelivery?:{state:string;observedByRunId?:string}}
 export interface InlineStartRequest {messageId:string;requestedAt:string;sequence:number;activeTurnId?:string;turnId?:string;failed?:boolean}
 export interface InlineBinding {turnId:string;kind:'explicit'|'timestamp'|'start'|'steer';sequence?:number}
-export interface InlineBindingCheckpoint {protocolVersion?:2;bindings?:Record<string,InlineBinding>;starts?:Record<string,InlineStartRequest>;turns?:Record<string,InlineTurn>;subagents?:Record<string,InlineSubagent>;worktreeHandoffs?:Record<string,InlineWorktreeHandoff>;sequence?:number;inputBoundaries?:Record<string,InlineMessage[]>;inputTurns?:Record<string,string>;session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;htmlResults?:InlineActivity[]}
+export interface InlineBindingCheckpoint {failedContinuations?:Record<string,FailedContinuation>;worktreeSetup?:WorktreeSetup;protocolVersion?:2;bindings?:Record<string,InlineBinding>;starts?:Record<string,InlineStartRequest>;turns?:Record<string,InlineTurn>;subagents?:Record<string,InlineSubagent>;worktreeHandoffs?:Record<string,InlineWorktreeHandoff>;sequence?:number;inputBoundaries?:Record<string,InlineMessage[]>;inputTurns?:Record<string,string>;session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;htmlResults?:InlineActivity[]}
 export interface InlineThreadState extends InlineBindingCheckpoint {title?:string;messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;legacyMessageIds?:string[];v2Requests?:Record<string,any>;v2Controls?:Record<string,any>;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {
@@ -85,9 +87,9 @@ export interface InitialInlineInput {messageId:string;text:string;label?:string;
 function renderInitialInput(input:InitialInlineInput,createdAt?:string){return input.answer?renderSubmittedAnswer(input.answer,input.text,createdAt):renderInlineInput(input.text,input.label);}
 
 /** The same neutral user quote is used for initial questions and steering. */
-export function renderInlineInput(text:string,label='You',position?:'live'|'recovered'):string {
+export function renderInlineInput(text:string,label='You'):string {
   const heading=label.replace(/[\r\n\t]+/g,' ').replace(/[\\`*_{}\[\]()#+.!>|]/g,'\\$&').slice(0,200);
-  return `> [!t3-steering] ${heading}${position==='recovered'?' · Recovered (paragraph position approximate)':''}\n${closeOpenFence(visibleInlineInput(text)).split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
+  return `> [!t3-steering] ${heading}\n${closeOpenFence(visibleInlineInput(text)).split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
 }
 
 export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming):{text:string;bodyHash:string} {
@@ -155,7 +157,7 @@ export function finalizeRegion(document:string,id:string,expectedHash:string,fin
 /** Keep exact prompt evidence independently of a snapshot's recent transcript. */
 export function inlineBindingCheckpoint(state:InlineThreadState):InlineBindingCheckpoint {
   const htmlResults=state.activities.filter(activity=>activity.kind==='response.html');
-  return {protocolVersion:state.protocolVersion,bindings:state.bindings,starts:state.starts,turns:{...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})},subagents:state.subagents,worktreeHandoffs:state.worktreeHandoffs,sequence:state.sequence,inputBoundaries:state.inputBoundaries,inputTurns:state.inputTurns,session:state.session?{status:state.session.status,activeTurnId:state.session.activeTurnId}:undefined,latestTurn:state.latestTurn,...(htmlResults.length?{htmlResults}:{})};
+  return {failedContinuations:state.failedContinuations,worktreeSetup:state.worktreeSetup,protocolVersion:state.protocolVersion,bindings:state.bindings,starts:state.starts,turns:{...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})},subagents:state.subagents,worktreeHandoffs:state.worktreeHandoffs,sequence:state.sequence,inputBoundaries:state.inputBoundaries,inputTurns:state.inputTurns,session:state.session?{status:state.session.status,activeTurnId:state.session.activeTurnId}:undefined,latestTurn:state.latestTurn,...(htmlResults.length?{htmlResults}:{})};
 }
 function retiredV1Turn(turn:InlineTurn):InlineTurn {
   return ['preparing','starting','running','waiting','queued'].includes(turn.state)?{...turn,state:'interrupted'}:turn;
@@ -177,7 +179,7 @@ export function restoreInlineBindings(state:InlineThreadState,saved?:InlineBindi
   const latestTurn=state.latestTurn??saved?.latestTurn;
   const bindings={...saved?.bindings,...state.bindings};
   const activities=state.historyComplete===true?state.activities:[...saved?.htmlResults?.filter(activity=>validActivity(activity)&&activity.kind==='response.html'&&!state.activities.some(current=>current.id===activity.id))??[],...state.activities];
-  return establishBindings({...state,worktreeHandoffs:mergeWorktreeHandoffs(saved?.worktreeHandoffs,state.worktreeHandoffs),activities,messages:legacyMessages(state,turns,bindings),subagents:{...saved?.subagents,...state.subagents},session:state.session??saved?.session,inputBoundaries:{...saved?.inputBoundaries,...state.inputBoundaries},inputTurns:{...saved?.inputTurns,...state.inputTurns},sequence:state.sequence??saved?.sequence,latestTurn:latestTurn?turns[latestTurn.turnId]??latestTurn:undefined,turns,bindings,starts:{...saved?.starts,...state.starts}});
+  return establishBindings({...state,failedContinuations:{...saved?.failedContinuations,...state.failedContinuations},worktreeSetup:state.worktreeSetup??saved?.worktreeSetup,worktreeHandoffs:mergeWorktreeHandoffs(saved?.worktreeHandoffs,state.worktreeHandoffs),activities,messages:legacyMessages(state,turns,bindings),subagents:{...saved?.subagents,...state.subagents},session:state.session??saved?.session,inputBoundaries:{...saved?.inputBoundaries,...state.inputBoundaries},inputTurns:{...saved?.inputTurns,...state.inputTurns},sequence:state.sequence??saved?.sequence,latestTurn:latestTurn?turns[latestTurn.turnId]??latestTurn:undefined,turns,bindings,starts:{...saved?.starts,...state.starts}});
 }
 function establishBindings(state:InlineThreadState):InlineThreadState {
   const bindings={...state.bindings},turns={...state.turns},starts={...state.starts};
@@ -251,6 +253,11 @@ export function applyThreadItem(previous:InlineThreadState,item:any):{state:Inli
   }
   if(item?.kind!=='event')return {state:previous};
   const event=item.event,p=event?.payload;
+  if(event.type==='thread.worktree-setup'){
+    const setup=readWorktreeSetup(p,event.aggregateId);
+    if(!setup||state.worktreeSetup&&setup.sequence<=state.worktreeSetup.sequence)return {state:previous};
+    return finish({...state,worktreeSetup:setup});
+  }
   if(event.type==='thread.run-updated'&&typeof p?.id==='string'){
     const turn={...state.turns?.[p.id],...responseRun(p,state.messages)},turns:Record<string,InlineTurn>={...state.turns,[p.id]:turn};
     const queued=p.status==='queued',newest=!queued&&(!state.latestTurn||p.ordinal>=(state.latestTurn.ordinal??0));
@@ -551,20 +558,31 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const htmlBefore=(at=Infinity)=>{const parts:string[]=[];while(htmlIndex<htmlBodies.length&&htmlBodies[htmlIndex].at<=at)parts.push(htmlBodies[htmlIndex++].body);return parts.length?parts.join('\n\n')+'\n\n':'';};
   const toolGroups=responseToolGroups(state,displayedTurns);
   const emissions=responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim())),phase==='running'?turnId:undefined);
+  // The session repeats the canonical error item. Show that message once, in
+  // its timeline position; older sessions without an item use the same row.
+  const lastError=phase==='error'&&(!state.latestTurn||state.latestTurn.turnId===turnId)?state.session?.lastError:undefined;
+  const errorShown=lastError&&state.activities.some(activity=>activity.turnId===turnId&&activity.kind==='response.notification'&&activity.payload?.error&&
+    (typeof activity.payload.text==='string'?activity.payload.text:activity.summary).trim()===lastError.trim());
+  const errorStatus=lastError&&!errorShown?renderProviderError(`session-error:${turnId}`,lastError,state.latestTurn?.completedAt??state.turns?.[turnId]?.completedAt??undefined):'';
+  // Plans are replaceable task snapshots. Show the latest list immediately
+  // below the thread title, at its existing depth inside the history.
+  const tasks=emissions.filter(item=>item.kind==='response.plan').at(-1)?.body??'';
+  const timelineEmissions=emissions.filter(item=>item.kind!=='response.plan');
   let currentTool=phase==='running'&&!waiting?currentResponseToolGroup(state,turnId,toolGroups):undefined;
-  const latestEmission=phase==='running'?emissions.at(-1):undefined;
+  const latestEmission=phase==='running'?timelineEmissions.at(-1):undefined;
   const currentEmission=!waiting&&latestEmission?.active&&latestEmission.turnId===turnId&&
     !state.messages.some(message=>message.turnId===turnId&&Date.parse(message.createdAt??'')>Date.parse(latestEmission.createdAt??''))&&
     (!currentTool||Date.parse(currentTool.tool.createdAt??'')<=Date.parse(latestEmission.createdAt??''))?latestEmission:undefined;
   if(currentEmission)currentTool=undefined;
   const historyGroups=toolGroups.filter(group=>group!==currentTool?.group);
-  const historyRows=[...historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.tools[0].sequence,body:renderResponseToolGroup(group)})),
-    ...emissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
+  const workRows=historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
+  const historyRows=[...workRows,
+    ...timelineEmissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
   const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??(currentTool?renderResponseToolGroup(currentTool.group,currentTool):responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Thinking'))}`:'';
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
-  const renderInput=(input:InlineSteering|typeof segments[number])=>input.answer?renderSubmittedAnswer(input.answer,input.text,input.createdAt):renderInlineInput(input.text,input.label,input.position);
+  const renderInput=(input:InlineSteering|typeof segments[number])=>input.answer?renderSubmittedAnswer(input.answer,input.text,input.createdAt):renderInlineInput(input.text,input.label);
   let previousRole:string|undefined;
   let prose=transcript?segments.reduce((body,segment,index)=>{
     const rendered=segment.role==='user'?renderInput(segment):assistant(segment.text,segment.messageId);
@@ -574,7 +592,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&!rawFinal(segment.messageId)&&!rawFinal(segments[index-1]?.messageId)&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
     previousRole=segment.role;
     const next=(body?body+(embedded?'\n\n':separator):'')+embedded+rendered;
-    return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}`:next;
+    return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}${tasks?'\n\n'+tasks:''}`:next;
   },''):messages.some(message=>growing(message.id))?messages.map(message=>assistant(message.text,message.id)).filter(Boolean).join('\n\n'):format==='raw-markdown'?answerBlocks.join('\n\n'):answer?quoteResponse(closeOpenFence(answer)):'';
   if(mode!=='collapse'&&htmlResults.length){
     if(!transcript)prose=messages.map(message=>htmlBefore(Date.parse(message.createdAt??'')||0)+assistant(message.text,message.id)).filter(Boolean).join('\n\n');
@@ -596,7 +614,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const finalIndex=finalId?pieces.reduce((last,piece,index)=>piece.role==='assistant'&&piece.messageId===finalId?index:last,-1):-1;
     // Initial questions and continuation prompts share steering's history
     // placement. Keep their exact input record separate from turn bindings.
-    const history:string[]=initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[];let final='';
+    const history:string[]=[...(tasks?[tasks]:[]),...(initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[])];let final='';
     let toolIndex=0;
     const toolsBefore=(at=Infinity)=>{while(toolIndex<historyRows.length&&(Date.parse(historyRows[toolIndex].createdAt??'')||0)<=at)history.push(historyRows[toolIndex++].body);};
     for(const [index,piece] of pieces.entries()){
@@ -610,15 +628,15 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     // Completion starts a new fold default, independent of live user choices.
     const key=encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active');
     const fold=`> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
-    const status=handoffError||(phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):approvals);
+    const status=handoffError||errorStatus||approvals;
     return fold+(htmlBodies.length?'\n\n'+htmlBodies.map(value=>value.body).join('\n\n'):'')+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }
-  const toolHistory=(retain?historyRows:phase!=='complete'?emissions.filter(item=>item!==currentEmission):[]).map(item=>item.body).join('\n\n');
-  if(phase==='complete')return input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
-  const status=handoffError?'\n\n'+handoffError:phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):approvals?'\n\n'+approvals:'';
+  const toolHistory=(retain?historyRows:phase!=='complete'?[...workRows.filter(item=>item.hasThoughts),...timelineEmissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence):[]).map(item=>item.body).join('\n\n');
+  if(phase==='complete')return (retain&&tasks?tasks+'\n\n':'')+input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
+  const status=handoffError?'\n\n'+handoffError:errorStatus?'\n\n'+errorStatus:approvals?'\n\n'+approvals:'';
   const contents=[input.trimEnd(),prose].filter(Boolean).join('\n\n');
   const body=contents?`\n\n${contents}\n`:'';
-  return `${followupIndex<0?heading+timer+spinner:''}${status}${body}${toolHistory?'\n\n'+toolHistory:''}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
+  return `${followupIndex<0?heading+timer+spinner+(tasks?'\n\n'+tasks:''):''}${status}${body}${toolHistory?'\n\n'+toolHistory:''}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
 }
 
 export function turnPhase(state:InlineThreadState,turnId:string):'running'|'complete'|'interrupted'|'error' {

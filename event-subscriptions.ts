@@ -2,7 +2,7 @@ import {obsidianFooter} from './obsidian-prompt';
 import {responseIds,containerStart,responseFrame} from './response-container';
 import {EventActionSkipped,validateEventAction,type EventAction,type ActionPlan} from './event-actions';
 import {jobEvents,validateJob,type JobWatch,type JobEvent,type JobObservation} from './job-lifecycle';
-import {STREAM_COMMANDS,validateDisplayCommand,displayCommand,tickDisplay,renameDisplays,type ThreadDisplayCommand,type ThreadDisplay,type DisplayHost} from './thread-display';
+import {STREAM_COMMANDS,validateDisplayCommand,displayCommand,tickDisplay,renameDisplays,validateResponseReservation,reserveThreadResponse,reservedResponseBindings,renameResponseReservations,type ThreadResponseReservationCommand,type ThreadResponseReservation,type ThreadDisplayCommand,type ThreadDisplay,type DisplayHost} from './thread-display';
 import {applyThreadItem,type InlineThreadState} from './inline-thread';
 import {sha256} from '@noble/hashes/sha256';
 import {safeNotePath} from './response-model';
@@ -19,13 +19,13 @@ export interface NoteEventSubscriptionCommand {
   version:1;id:string;kind:'subscribe'|'subscribe-job'|'subscriptions'|'update-subscription'|'pause-subscription'|'resume-subscription'|'cancel-subscription';
   subscriptionId?:string;target?:EventTarget;action?:EventAction;jobStates?:string[];scope?:EventScope;filter?:EventFilter;job?:JobWatch;
 }
-export type EventSubscriptionCommand=NoteEventSubscriptionCommand|ThreadDisplayCommand;
+export type EventSubscriptionCommand=NoteEventSubscriptionCommand|ThreadDisplayCommand|ThreadResponseReservationCommand;
 export interface EventCommandResult {display?:ThreadDisplay;displays?:ThreadDisplay[];host?:import('./event-host').EventHostIdentity;id:string;ok:boolean;subscriptionId?:string;subscriptions?:EventSubscription[];monitoring?:boolean;notifications?:Array<Pick<EventNotification,'id'|'subscriptionId'|'status'|'count'|'attempts'|'error'|'action'>>;error?:string}
 export interface NoteEventSnapshot {path:string;content:string;properties:Record<string,unknown>|null;pendingResponseIds?:string[]}
 export interface NoteEvent {kind:EventKind;path:string;oldPath?:string;at:string;beforeHash?:string;afterHash?:string;property?:string;before?:unknown;after?:unknown}
 export interface EventNotification {id:string;subscriptionId:string;target?:EventTarget;action?:EventAction;events:Array<NoteEvent|JobEvent>;count:number;firstAt:number;dueAt:number;status:'pending'|'prepared'|'delivered'|'cancelled';command?:unknown;attempts:number;retryAt?:number;error?:string}
 export interface ActionEffect {notificationId:string;kind:'modify'|'rename';path:string;oldPath?:string;afterHash:string;expiresAt:number}
-export interface EventState {actionEffects?:ActionEffect[];version:1;subscriptions:EventSubscription[];notifications:EventNotification[];commands:Record<string,{input:string;result:EventCommandResult}>;feedback:EventTarget[];displays?:ThreadDisplay[];threads?:Record<string,{state:InlineThreadState;sequence?:number}>}
+export interface EventState {responseReservations?:ThreadResponseReservation[];actionEffects?:ActionEffect[];version:1;subscriptions:EventSubscription[];notifications:EventNotification[];commands:Record<string,{input:string;result:EventCommandResult}>;feedback:EventTarget[];displays?:ThreadDisplay[];threads?:Record<string,{state:InlineThreadState;sequence?:number}>}
 export interface EventSubscriptionHost {
   load():Promise<unknown>;save(state:EventState):Promise<void>;notes(scope:EventScope):Promise<NoteEventSnapshot[]>;
   projectNote?(note:NoteEventSnapshot):Promise<NoteEventSnapshot>;
@@ -56,6 +56,7 @@ export function validateEventFilter(value:any):EventFilter {
   return {events:[...value.events],...(value.property?{property:value.property}:{}),...(Object.hasOwn(value,'equals')?{equals:value.equals}:{})};
 }
 export function validateEventCommand(value:any):EventSubscriptionCommand {
+  if(value?.kind==='reserve-thread-response')return validateResponseReservation(value);
   if(STREAM_COMMANDS.includes(value?.kind))return validateDisplayCommand(value);
   if(value?.version!==1||!uuid(value.id)||!['subscribe','subscribe-job','subscriptions','update-subscription','pause-subscription','resume-subscription','cancel-subscription'].includes(value.kind))throw Error('Invalid event subscription command.');
   if(value.kind==='subscribe'||value.kind==='subscribe-job'){
@@ -160,6 +161,7 @@ export class EventSubscriptions {
       if(saved.version!==1||!Array.isArray(saved.subscriptions)||!Array.isArray(saved.notifications)||!saved.commands||!Array.isArray(saved.feedback))throw Error('Invalid saved event subscription state.');
       for(const subscription of saved.subscriptions){validateEventCommand({version:1,id:subscription.id,kind:subscription.job?'subscribe-job':'subscribe',...(subscription.action?{action:subscription.action,jobStates:subscription.jobStates}:{target:subscription}),...(subscription.job?{job:subscription.job}:{scope:subscription.scope,filter:subscription.filter})});if(typeof subscription.enabled!=='boolean')throw Error('Invalid saved subscription.');}
       this.state=clone(saved);
+      for(const reservation of this.state.responseReservations??[])validateResponseReservation({version:1,id:'00000000-0000-4000-8000-000000000000',kind:'reserve-thread-response',source:reservation,messageId:reservation.messageId,responses:reservation.responses});
       this.pruneThreads();
       for(const thread of Object.values(this.state.threads??{}))thread.state=compactObservedThread(thread.state);
       for(const display of this.state.displays??[])for(const binding of display.bindings)if(binding.request&&!binding.request.localOnly){binding.status='skipped';delete binding.request;delete binding.error;}
@@ -173,6 +175,11 @@ export class EventSubscriptions {
   async command(input:EventSubscriptionCommand):Promise<EventCommandResult>{return this.serialize(async()=>{
     const command=validateEventCommand(input),key=canonical(command),prior=this.state.commands[command.id];
     if(prior){if(prior.input!==key)throw Error('This request ID already belongs to different input.');return clone(prior.result);}
+    if(command.kind==='reserve-thread-response'){
+      reserveThreadResponse(this.state.responseReservations??=[],command);
+      const result:EventCommandResult={id:command.id,ok:true};
+      this.state.commands[command.id]={input:key,result};await this.save();return result;
+    }
     if((STREAM_COMMANDS as readonly string[]).includes(command.kind)){
       const fields=await displayCommand(this.state.displays??= [],command as ThreadDisplayCommand,this.displayIO(true),this.host.now());
       const result:EventCommandResult={id:command.id,ok:true,monitoring:this.active,...clone(fields)};
@@ -199,9 +206,9 @@ export class EventSubscriptions {
     const result:EventCommandResult={id:noteCommand.id,ok:true,monitoring:this.active,...(subscription?{subscriptionId:subscription.id}:{}),...(noteCommand.kind==='subscriptions'?{subscriptions:clone(this.state.subscriptions),notifications:this.state.notifications.filter(n=>n.action||n.status==='pending'||n.status==='prepared').map(({id,subscriptionId,status,count,attempts,error,action})=>({id,subscriptionId,status,count,attempts,...(action?{action}:{}),...(error?{error}:{})}))}:{})};
     this.state.commands[noteCommand.id]={input:key,result};await this.save();return result;
   });}
-  interested(path:string,oldPath?:string){return !this.stopped&&Boolean(oldPath&&(this.state.displays??[]).length)||!this.stopped&&this.state.subscriptions.some(subscription=>subscription.enabled&&!subscription.job&&(inEventScope(subscription.scope,path)||Boolean(oldPath&&inEventScope(subscription.scope,oldPath))));}
+  interested(path:string,oldPath?:string){return !this.stopped&&Boolean(oldPath&&((this.state.displays??[]).length||(this.state.responseReservations??[]).length))||!this.stopped&&this.state.subscriptions.some(subscription=>subscription.enabled&&!subscription.job&&(inEventScope(subscription.scope,path)||Boolean(oldPath&&inEventScope(subscription.scope,oldPath))));}
   async observe(kind:Exclude<EventKind,'property'>,path:string,note?:NoteEventSnapshot,oldPath?:string){
-    if(kind==='rename'&&oldPath&&(this.state.displays??[]).length)await this.serialize(async()=>{renameDisplays(this.state.displays!,oldPath,path);await this.save();});
+    if(kind==='rename'&&oldPath&&((this.state.displays??[]).length||(this.state.responseReservations??[]).length))await this.serialize(async()=>{renameDisplays(this.state.displays??[],oldPath,path);renameResponseReservations(this.state.responseReservations??[],oldPath,path);await this.save();});
     if(!this.interested(path,oldPath))return;
     return this.serialize(()=>this.capture(kind,path,note,oldPath));
   }
@@ -253,16 +260,16 @@ export class EventSubscriptions {
       }
       if(effect){this.state.actionEffects=this.state.actionEffects!.filter(e=>e!==effect);this.dirty=true;}
       // Follow an explicitly watched note or folder through a rename.
-      if(kind==='rename'&&oldPath){renameDisplays(this.state.displays??[],oldPath,path);this.dirty=true;}
+      if(kind==='rename'&&oldPath){renameDisplays(this.state.displays??[],oldPath,path);renameResponseReservations(this.state.responseReservations??[],oldPath,path);this.dirty=true;}
       if(kind==='rename'&&oldPath)for(const subscription of this.state.subscriptions)if(subscription.scope.path===oldPath||subscription.scope.path.startsWith(oldPath+'/')){subscription.scope.path=path+subscription.scope.path.slice(oldPath.length);subscription.revision++;this.dirty=true;}
       await this.saveIfDirty();
   }
-  interestedFolder(path:string,oldPath?:string){return Boolean(oldPath&&(this.state.displays??[]).length)||this.active&&[path,oldPath].some(folder=>folder&&this.state.subscriptions.some(s=>s.enabled&&!s.job&&(s.scope.path===folder||s.scope.path.startsWith(folder+'/')||s.scope.kind==='folder'&&inEventScope(s.scope,folder+'/scope.md'))));}
+  interestedFolder(path:string,oldPath?:string){return Boolean(oldPath&&((this.state.displays??[]).length||(this.state.responseReservations??[]).length))||this.active&&[path,oldPath].some(folder=>folder&&this.state.subscriptions.some(s=>s.enabled&&!s.job&&(s.scope.path===folder||s.scope.path.startsWith(folder+'/')||s.scope.kind==='folder'&&inEventScope(s.scope,folder+'/scope.md'))));}
   async renameFolder(oldPath:string,path:string,notes:NoteEventSnapshot[]){
-    if((this.state.displays??[]).length)await this.serialize(async()=>{renameDisplays(this.state.displays!,oldPath,path);await this.save();});
+    if((this.state.displays??[]).length||(this.state.responseReservations??[]).length)await this.serialize(async()=>{renameDisplays(this.state.displays??[],oldPath,path);renameResponseReservations(this.state.responseReservations??[],oldPath,path);await this.save();});
     if(!this.interestedFolder(path,oldPath))return;
     return this.serialize(async()=>{
-      renameDisplays(this.state.displays??[],oldPath,path);
+      renameDisplays(this.state.displays??[],oldPath,path);renameResponseReservations(this.state.responseReservations??[],oldPath,path);
       for(const note of notes)await this.capture('rename',note.path,note,oldPath+note.path.slice(path.length));
       for(const subscription of this.state.subscriptions)if(subscription.scope.path===oldPath||subscription.scope.path.startsWith(oldPath+'/')){subscription.scope.path=path+subscription.scope.path.slice(oldPath.length);subscription.revision++;}
       for(const subscription of this.state.subscriptions)if(subscription.enabled)await this.seed(subscription);
@@ -382,7 +389,8 @@ export class EventSubscriptions {
   }
   private displayIO(forceCanonical=false):DisplayHost {
     if(!this.host.displayHost)throw Error('Thread streaming is unavailable.');
-    return {...this.host.displayHost,readThread:target=>this.readObservedThread(target,forceCanonical),save:()=>this.save()};
+    const host=this.host.displayHost;
+    return {...host,responseBindings:async target=>[...reservedResponseBindings(this.state.responseReservations??[],target),...await host.responseBindings(target)],readThread:target=>this.readObservedThread(target,forceCanonical),save:()=>this.save()};
   }
   private syncMonitors(){
     if(this.stopped||!this.host.watchThread)return;

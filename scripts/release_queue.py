@@ -1,4 +1,4 @@
-"""Persistent FIFO release ownership. No thread discovery or agent messaging."""
+"""Serialized releases with durable retries and isolated job failures."""
 from __future__ import annotations
 
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -17,6 +17,13 @@ QUEUE = Path('/home/ubuntu/projects/send-to-t3-code/evidence/release-queue')
 UNIT = 'send-to-t3-release-queue'
 JOB_ID = re.compile(r'^\d{12}-[0-9a-f]{16}$')
 VERSION_FILES = {'package.json', 'package-lock.json', 'manifest.json', 'versions.json'}
+MAX_ATTEMPTS = 3
+FINISHED = {'complete', 'failed', 'needs-evidence', 'awaiting-smoke', 'waiting-for-dependency'}
+
+
+def maintenance_only(names: list[str]) -> bool:
+    return bool(names) and all(name.startswith(('scripts/', 'tests/', 'docs/')) or
+                               name in {'AGENTS.md', 'README.md', 'LICENSE'} for name in names)
 
 
 def now() -> str:
@@ -112,6 +119,7 @@ def submission(root: Path, canonical: Path, commit: str, *, bump: str = 'patch',
         item = subprocess.run(['git', 'show', f'{commit}:{name}'], cwd=root, capture_output=True)
         inputs[name] = hashlib.sha256(item.stdout).hexdigest() if item.returncode == 0 else None
     return {**identity, 'createdAt': now(), 'sourceRoot': str(root), 'mergeBase': base,
+            'maintenanceOnly': maintenance_only(changed),
             'dependencyInputsSha256': dependency_inputs(root, commit),
             'sourceInputsSha256': inputs, 'validation': str(validation) if validation else None,
             'evidence': str(evidence) if evidence else None}
@@ -156,9 +164,11 @@ def enqueue(root: Path, canonical: Path, commit: str, *, bump: str = 'patch', va
 def status(job_id: str | None = None, *, queue: Path = QUEUE) -> dict:
     with locked(queue / 'queue.lock'):
         selected = [job_path(queue, job_id)] if job_id else jobs(queue)
-        return {'jobs': [{'jobId': path.name, **read(path / 'state.json'),
+        entries = [{'jobId': path.name, **read(path / 'state.json'),
                           'sourceCommit': read(path / read(path / 'state.json').get('requestFile', 'request.json'))['commit'], 'log': str(path / 'worker.log')}
-                         for path in selected]}
+                   for path in selected]
+        return {'jobs': entries, 'counts': {name: sum(item['status'] == name for item in entries)
+                                          for name in sorted({item['status'] for item in entries})}}
 
 
 def kick(*, queue: Path = QUEUE) -> None:
@@ -179,7 +189,7 @@ def install(canonical: Path, *, queue: Path = QUEUE) -> None:
         '[Unit]\nDescription=Serialize T3 Code releases\n'
         '[Service]\nType=oneshot\nWorkingDirectory=' + str(canonical) + '\n'
         'ExecStart=/usr/bin/python3 ' + str(canonical / 'scripts/release-qlo2.py') + ' --drain-queue\n'
-        'TimeoutStartSec=3600\n')
+        'TimeoutStartSec=3600\nRestart=on-failure\nRestartSec=15\n')
     (units / (UNIT + '.path')).write_text(
         '[Unit]\nDescription=Wake the T3 Code release queue\n'
         '[Path]\nPathExists=' + str(queue / 'wake') + '\nUnit=' + UNIT + '.service\n'
@@ -188,20 +198,54 @@ def install(canonical: Path, *, queue: Path = QUEUE) -> None:
     subprocess.run(['systemctl', '--user', 'enable', '--now', UNIT + '.path'], check=True)
 
 
+def schedule_retry(when: str, *, queue: Path = QUEUE) -> None:
+    """One persisted deadline, armed only while recovery is needed; no polling."""
+    units = Path.home() / '.config/systemd/user'
+    if not (units / (UNIT + '.service')).is_file():
+        return
+    timestamp = dt.datetime.fromisoformat(when).astimezone(dt.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    (units / (UNIT + '-retry.timer')).write_text(
+        '[Unit]\nDescription=Retry an interrupted T3 release\n[Timer]\n'
+        f'OnCalendar={timestamp}\nPersistent=true\nAccuracySec=1s\nUnit={UNIT}.service\n'
+        '[Install]\nWantedBy=timers.target\n')
+    subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True, timeout=10)
+    subprocess.run(['systemctl', '--user', 'enable', UNIT + '-retry.timer'], check=True, timeout=10)
+    subprocess.run(['systemctl', '--user', 'restart', UNIT + '-retry.timer'], check=True, timeout=10)
+
+
 def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) -> dict:
     with locked(queue / 'queue.lock'):
         directory = job_path(queue, job_id)
         state = read(directory / 'state.json')
-        if state['status'] not in {'blocked', 'failed', 'awaiting-smoke'}:
+        if state['status'] not in {'blocked', 'failed', 'awaiting-smoke', 'needs-evidence', 'retrying'}:
             raise SystemExit('Only a failed, blocked, or smoke-waiting job can be retried.')
+        if state['status'] == 'retrying' and not state.get('nextRetryAt'):
+            raise SystemExit('This job is already recovering in the active worker.')
         if replacement:
             if any(Path(state[key]).exists() for key in ('archive', 'deploymentReceipt') if state.get(key)):
                 raise SystemExit('This job already has immutable release bytes. Resume them; submit later code separately.')
             revision = state.get('requestRevision', 0) + 1
             name = f'request-{revision}.json'
+            previous = read(directory / state.get('requestFile', 'request.json'))
+            # A failed integration remains in Git history after its explicit
+            # revert. A merge-base can therefore hide restored product inputs.
+            inputs = {}
+            for source_name in previous['sourceInputsSha256'].keys() | replacement['sourceInputsSha256'].keys():
+                item = subprocess.run(['git', 'show', f'{replacement["commit"]}:{source_name}'],
+                                      cwd=replacement['sourceRoot'], capture_output=True)
+                inputs[source_name] = hashlib.sha256(item.stdout).hexdigest() if item.returncode == 0 else None
+            replacement = {**replacement,
+                           'maintenanceOnly': bool(previous.get('maintenanceOnly')) and bool(replacement.get('maintenanceOnly')),
+                           'sourceInputsSha256': inputs}
             save_request(directory, replacement, name)
             state.update(requestRevision=revision, requestFile=name)
-        state.update(status='queued', updatedAt=now())
+        state.update(status='queued', updatedAt=now(), failures=0)
+        for key in ('error', 'nextAction', 'nextRetryAt'):
+            state.pop(key, None)
+        if state.get('rollbackCommits'):
+            if state.get('version'):
+                state['reservedVersions'] = sorted(set([*state.get('reservedVersions', []), state['version']]))
+            state.pop('version', None)
         write(directory / 'state.json', state)
         (queue / 'wake').touch()
     return {'jobId': job_id, **state}
@@ -221,20 +265,127 @@ def update(directory: Path, state: dict, **values) -> None:
     write(directory / 'state.json', state)
 
 
+def revert_owned(release, commit: str, *, merge: bool = False) -> None:
+    try:
+        release.run(['git', 'revert', '--no-edit', *(['-m', '1'] if merge else []), commit])
+    except subprocess.CalledProcessError:
+        marker = Path(git(release.ROOT, 'rev-parse', '--git-path', 'REVERT_HEAD'))
+        if not marker.is_absolute():
+            marker = release.ROOT / marker
+        if marker.exists():
+            release.run(['git', 'revert', '--abort'])
+        raise
+
+
+def registration_line(line: str):
+    """Parse only the lab builder's flag list or validation entry-point chain."""
+    flags = re.fullmatch(r"(if\(!\[)(.*)(\]\.some.*)", line)
+    if flags:
+        body = flags[2]
+        tokens = re.findall(r"'(--[a-z0-9-]+)'", body)
+        if ','.join("'" + token + "'" for token in tokens) != body:
+            return None
+        return flags[1], [(token, token) for token in tokens], flags[3], 'flags'
+    entries = re.fullmatch(r'(.*entryPoints:\[)(.*)(\],bundle:.*)', line)
+    if entries:
+        pattern = r"process\.argv\.includes\('(--[a-z0-9-]+)'\)\?'(validation/[a-z0-9-]+\.ts)':"
+        tokens = re.findall(pattern, entries[2])
+        remainder = re.sub(pattern, '', entries[2])
+        if not re.fullmatch(r"'validation/[a-z0-9-]+\.ts'", remainder):
+            return None
+        if ''.join(f"process.argv.includes('{key}')?'{value}':" for key, value in tokens) + remainder != entries[2]:
+            return None
+        return entries[1], tokens, remainder + entries[3], 'entries'
+    return None
+
+
+def resolve_validation_merge(release) -> bool:
+    """Union independent additions to the two lab registries, never product code."""
+    name = 'scripts/build-native-response-lab.mjs'
+    if git(release.ROOT, 'diff', '--name-only', '--diff-filter=U').splitlines() != [name]:
+        return False
+    base = [parsed for line in git(release.ROOT, 'show', ':1:' + name).splitlines()
+            if (parsed := registration_line(line))]
+    path = release.ROOT / name
+    source = path.read_text()
+    conflict = re.compile(r'^<<<<<<<[^\n]*\n(.*?)^=======\n(.*?)^>>>>>>>[^\n]*\n', re.M | re.S)
+    matches = list(conflict.finditer(source))
+    if not matches:
+        return False
+    for match in reversed(matches):
+        left, right = match[1].splitlines(), match[2].splitlines()
+        if len(left) != len(right):
+            return False
+        lines = []
+        for left_line, right_line in zip(left, right):
+            if left_line == right_line:
+                lines.append(left_line)
+                continue
+            ours, theirs = registration_line(left_line), registration_line(right_line)
+            if not ours or not theirs or (ours[0], ours[2:]) != (theirs[0], theirs[2:]):
+                return False
+            original = next((item for item in base if (item[0], item[2:]) == (ours[0], ours[2:])), None)
+            if original is None:
+                return False
+            a, b, before = dict(ours[1]), dict(theirs[1]), dict(original[1])
+            if len(a) != len(ours[1]) or len(b) != len(theirs[1]):
+                return False
+            if any(a.get(key) != value or b.get(key) != value for key, value in before.items()):
+                return False
+            if any(a[key] != b[key] for key in a.keys() & b.keys()):
+                return False
+            combined = {**a, **b}
+            body = (','.join("'" + key + "'" for key in combined) if ours[3] == 'flags' else
+                    ''.join(f"process.argv.includes('{key}')?'{value}':" for key, value in combined.items()))
+            lines.append(ours[0] + body + ours[2])
+        source = source[:match.start()] + '\n'.join(lines) + '\n' + source[match.end():]
+    if re.search(r'^(<<<<<<<|=======|>>>>>>>)', source, re.M):
+        return False
+    path.write_text(source)
+    release.run(['git', 'add', name])
+    release.run(['git', 'commit', '--no-edit'])
+    print('Merged independent validation-mode registrations; no product conflicts were resolved automatically.', flush=True)
+    return True
+
+
 def engine_hash(root: Path) -> dict:
     return {name: hashlib.sha256((root / 'scripts' / name).read_bytes()).hexdigest()
             for name in ('release-qlo2.py', 'release_queue.py', 'change_checks.py', 'plugin_id_migration.py')
             if (root / 'scripts' / name).is_file()}
 
 
+def next_version(release, directory: Path, request: dict) -> str:
+    """An assigned version belongs to its job, even when validation fails."""
+    versions = [release.read_json(release.ROOT / 'manifest.json')['version']]
+    for path in jobs(directory.parent.parent):
+        item = read(path / 'state.json')
+        versions.extend(item.get('reservedVersions', []))
+        if item.get('version'):
+            versions.append(item['version'])
+    latest = max(versions, key=lambda value: tuple(int(part) for part in value.split('.')))
+    return release.bump_version(latest, request['bump'])
+
+
 def run_job(release, directory: Path, request: dict, state: dict, loaded_engine: dict) -> bool:
     root = release.ROOT
+    if 'maintenanceOnly' not in request:
+        request = {**request, 'maintenanceOnly': maintenance_only(
+            git(root, 'diff', '--name-only', '--no-renames', request['mergeBase'], request['commit']).splitlines())}
     version = state.get('version')
     deployed = version and (release.release_receipt_dir(version) / 'deployment.json').is_file()
+    if not request.get('maintenanceOnly') and not request.get('evidence') and not version:
+        update(directory, state, status='needs-evidence',
+               nextAction='Supply changed-behavior evidence with --retry-queued --replacement before publication. Later jobs continue.')
+        return False
     if not deployed and not (version and release.archive_path(version).exists()):
         if git(root, 'status', '--porcelain=v1'):
             raise SystemExit('Canonical checkout contains uncommitted work. The queue will not alter it.')
         update(directory, state, status='integrating')
+        while state.get('rollbackCommits'):
+            # Restore only the queue's own reverted merge; never reset history.
+            revert_owned(release, state['rollbackCommits'][-1])
+            update(directory, state, rollbackCommits=state['rollbackCommits'][:-1],
+                   ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': git(root, 'rev-parse', 'HEAD'), 'merge': False}])
         ancestor = subprocess.run(['git', 'merge-base', '--is-ancestor', request['commit'], 'HEAD'], cwd=root)
         if ancestor.returncode:
             try:
@@ -242,9 +393,18 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
             except subprocess.CalledProcessError:
                 # This merge began in a clean checkout. Abort only our own
                 # conflicted merge; preserve all submitted commits and logs.
-                if (root / '.git').is_dir() and (root / '.git/MERGE_HEAD').exists():
-                    release.run(['git', 'merge', '--abort'])
-                raise
+                resolved = False
+                try:
+                    resolved = resolve_validation_merge(release)
+                finally:
+                    marker = Path(git(root, 'rev-parse', '--git-path', 'MERGE_HEAD'))
+                    if not marker.is_absolute():
+                        marker = root / marker
+                    if not resolved and marker.exists():
+                        release.run(['git', 'merge', '--abort'])
+                if not resolved:
+                    raise
+            update(directory, state, ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': git(root, 'rev-parse', 'HEAD'), 'merge': True}])
         update(directory, state, integratedCommit=git(root, 'rev-parse', 'HEAD'))
         if engine_hash(root) != loaded_engine:
             # Exit with the wake marker intact. systemd starts a fresh worker,
@@ -252,8 +412,16 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
             update(directory, state, status='queued', nextAction='Restarting the updated release worker.')
             return True
         ensure_dependencies(root)
+        if request.get('maintenanceOnly'):
+            proof = release.change_checks.run_validation(root)
+            update(directory, state, status='complete', completedAt=now(), validation=str(proof),
+                   delivery='source-only', error=None, nextAction=None)
+            return False
         source_version = release.read_json(root / 'manifest.json')['version']
-        version = version or (source_version if request.get('validation') else release.bump_version(source_version, request['bump']))
+        if version and not request.get('validation') and tuple(map(int, version.split('.'))) <= tuple(map(int, source_version.split('.'))):
+            # Older task checkouts can retry without clearing a stale version.
+            version = None
+        version = version or (source_version if request.get('validation') else next_version(release, directory, request))
         update(directory, state, version=version, status='releasing',
                archive=str(release.archive_path(version)),
                deploymentReceipt=str(release.release_receipt_dir(version) / 'deployment.json'))
@@ -278,8 +446,9 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
     evidence = release.release_receipt_dir(version) / 'client-check.json'
     if not evidence.exists():
         release.check_client(version)
+    update(directory, state, status='verifying-evidence')
     if completed_smoke(release, version):
-        update(directory, state, status='complete', completedAt=now())
+        update(directory, state, status='complete', completedAt=now(), error=None, nextAction=None)
         return False
     matches = all((release.sha256_file(root / name) if (root / name).is_file() else None) == checksum
                   for name, checksum in request['sourceInputsSha256'].items())
@@ -297,13 +466,35 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
                              'clientCheck': str(evidence), 'clientCheckSha256': release.sha256_file(evidence),
                              'notes': request['notes'], 'queueJobId': directory.name, 'workerLog': str(directory / 'worker.log')})
         release.complete_smoke(version, 'vps-qlo2-queue', combined, request['notes'])
-        update(directory, state, status='complete', completedAt=now())
+        update(directory, state, status='complete', completedAt=now(), error=None, nextAction=None)
     else:
         update(directory, state, status='awaiting-smoke',
                nextAction=f'Verify only changed behavior for {version}, then use --complete-smoke. '
-                          'This job retains the release slot; other threads only submit their own jobs.',
+                          'Publication is verified; other jobs can continue. This release remains incomplete.',
                suppliedBehaviorInputsMatch=matches)
     return False
+
+
+def isolate_failure(release, directory: Path, state: dict) -> bool:
+    """Remove only this job's unshipped integration, retaining commits and logs."""
+    version = state.get('version')
+    if version and (release.archive_path(version).exists() or
+                    (release.release_receipt_dir(version) / 'deployment.json').exists()):
+        return False
+    if git(release.ROOT, 'status', '--porcelain=v1'):
+        return False
+    owned = state.get('ownedIntegrations', [])
+    if owned:
+        if git(release.ROOT, 'rev-parse', 'HEAD') != owned[-1]['commit']:
+            return False
+        for integration in reversed(owned):
+            revert_owned(release, integration['commit'], merge=integration['merge'])
+            update(directory, state, rollbackCommits=[*state.get('rollbackCommits', []), git(release.ROOT, 'rev-parse', 'HEAD')],
+                   ownedIntegrations=state['ownedIntegrations'][:-1])
+    elif state.get('integratedCommit'):
+        return False
+    update(directory, state, status='failed', nextAction='This candidate needs repair. Later jobs continue; use --retry-queued with corrected committed source.')
+    return True
 
 
 def drain(release, *, queue: Path = QUEUE) -> dict:
@@ -314,16 +505,39 @@ def drain(release, *, queue: Path = QUEUE) -> dict:
                 loaded_engine = engine_hash(release.ROOT)
                 while True:
                     with locked(queue / 'queue.lock'):
-                        directory = next((path for path in jobs(queue)
-                                          if read(path / 'state.json')['status'] != 'complete'), None)
+                        pending = [(path, read(path / 'state.json')) for path in jobs(queue)]
+                        # Smoke completion can arrive after a later release. It
+                        # remains visible without owning the installation lane.
+                        for path, item in pending:
+                            if item['status'] == 'awaiting-smoke' and completed_smoke(release, item['version']):
+                                update(path, item, status='complete', completedAt=now(), nextAction=None, error=None)
+                            if item['status'] == 'waiting-for-dependency':
+                                parent = read(job_path(queue, item['requiresJobId']) / 'state.json')
+                                if parent['status'] == 'complete':
+                                    update(path, item, status='queued', requiresJobId=None, nextAction=None)
+                        directory = next((path for path, item in pending if item['status'] not in FINISHED), None)
                         if directory is None:
                             (queue / 'wake').unlink(missing_ok=True)
                             return {'status': 'idle'}
                         state = read(directory / 'state.json')
-                        if state['status'] in {'blocked', 'failed'}:
+                        if state.get('nextRetryAt') and state['nextRetryAt'] > now():
                             (queue / 'wake').unlink(missing_ok=True)
-                            return {'status': 'blocked', 'jobId': directory.name}
+                            schedule_retry(state['nextRetryAt'], queue=queue)
+                            return {'status': 'retrying', 'jobId': directory.name, 'nextRetryAt': state['nextRetryAt']}
+                        state.pop('nextRetryAt', None)
                         request = read(directory / state.get('requestFile', 'request.json'))
+                        dependency = None
+                        for path, item in pending:
+                            if path == directory or not item.get('rollbackCommits'):
+                                continue
+                            parent = read(path / item.get('requestFile', 'request.json'))
+                            if subprocess.run(['git', 'merge-base', '--is-ancestor', parent['commit'], request['commit']], cwd=release.ROOT, capture_output=True).returncode == 0:
+                                dependency = path.name
+                                break
+                        if dependency:
+                            update(directory, state, status='waiting-for-dependency', requiresJobId=dependency,
+                                   nextAction='This candidate includes a reverted job. It resumes after that job is repaired; independent jobs continue.')
+                            continue
                     with (directory / 'worker.log').open('a', buffering=1) as log, redirect_stdout(log), redirect_stderr(log):
                         print(f'Queue attempt {now()}: {directory.name}', flush=True)
                         try:
@@ -331,9 +545,27 @@ def drain(release, *, queue: Path = QUEUE) -> dict:
                             if restart:
                                 return {'status': 'worker-restart', 'jobId': directory.name}
                         except (Exception, SystemExit) as error:
-                            update(directory, state, status='blocked', error=str(error),
-                                   nextAction='Inspect this job log, resolve its blocker, and use --retry-queued JOB_ID. '
-                                              'No other thread needs to coordinate the release.')
+                            failures = state.get('failures', 0) + 1
+                            failed_stage = state['status']
+                            attempt = directory / f'failure-{len(list(directory.glob("failure-*.json"))) + 1:04d}.json'
+                            write(attempt, {'at': now(), 'error': str(error), 'stage': state['status'], 'version': state.get('version')})
+                            update(directory, state, status='retrying', failures=failures, error=str(error),
+                                   nextAction='Automatic recovery is active. Failed checks are never bypassed.')
+                            if failures >= MAX_ATTEMPTS:
+                                if failed_stage == 'verifying-evidence':
+                                    update(directory, state, status='awaiting-smoke',
+                                           nextAction='Publication and native client are verified. Repair changed-behavior evidence; later jobs continue.')
+                                    continue
+                                try:
+                                    isolated = isolate_failure(release, directory, state)
+                                except (Exception, SystemExit) as cleanup_error:
+                                    isolated = False
+                                    update(directory, state, recoveryError=str(cleanup_error))
+                                if not isolated:
+                                    deadline = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=min(300, 15 * 2 ** min(failures - MAX_ATTEMPTS, 5)))).isoformat()
+                                    update(directory, state, nextRetryAt=deadline)
+                    if state['status'] in FINISHED or state['status'] == 'retrying':
+                        continue
                     if state['status'] != 'complete':
                         with locked(queue / 'queue.lock'):
                             if read(directory / 'state.json')['status'] == 'queued':

@@ -1,8 +1,8 @@
 # Explicit response follow control
 
 The running response block offers a double-down-arrow button in Live Preview
-and Reading. Each pane starts with follow off. A trusted click, Enter or Space
-on this button enables follow for its exact active fold identity. Text clicks,
+and Reading. Each note in a pane starts with follow off. A trusted click, Enter
+or Space on this button enables follow for its exact active fold identity. Text clicks,
 synthetic clicks, cursor proximity and arriving stream updates do not enable it.
 Source mode has no rendered block button; a mode change cancels follow.
 
@@ -16,17 +16,25 @@ response bytes. Reading measures only its own rendered scroller; a retained,
 hidden Source widget cannot supply its target geometry. Reduced-motion clients
 align immediately and omit the button animation.
 
-The explicit off action always returns the button to the top. Off restores the
-normal icon color and leaves the viewport in place. Manual wheel/touch scroll,
-selection, editing, scrollbar interaction or another click cancel pending work
-and retain the current button position. Completion, removal, mode changes,
-conflicts and disposal also cancel it. State stays local to the pane and is
-never written into the note or settings. Completed saved history keeps its
-existing close action and checked deletion behavior.
+The explicit off action retains the button's current position. Off restores the
+normal icon color and leaves the viewport in place. Collapsing the response hides
+the button, cancels follow, and resets its position to the top for the next
+expansion. This also resets a lower button left by an earlier cancellation.
+Manual wheel/touch scroll or a native pane scroll from a scrollbar or keyboard
+turns follow off and retains the current button position. Follow's own scroll
+events do not turn it off. Clicking elsewhere in the app, typing and selecting
+text keep it active. Switching to another note pauses viewport work and retains
+the choice for that note in that pane; returning restores active follow.
+Collapsing turns it off before storing that note's state. Completion, removal,
+mode changes and conflicts also cancel active viewport work. State stays in
+memory, local to the note and pane, and is never written into the note or
+settings. Completed saved history keeps its existing close action and checked
+deletion behavior.
 
 Regression tests cover immediate activation, rendered geometry, layout-only
-growth, a changing target during the animation, repeated off actions returning to the top,
-manual cancellation, response identity, Reading's visible viewport,
+growth, a changing target during the animation, repeated off actions retaining their position,
+collapse and re-expansion resetting only the affected response to the top,
+manual scrolling, app clicks and selection, note-switch restoration, response identity, Reading's visible viewport,
 virtualized widget recovery and listener cleanup. The synthetic native fixture
 is prepared with:
 

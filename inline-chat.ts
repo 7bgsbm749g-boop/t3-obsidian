@@ -1,4 +1,5 @@
 import type {DirectInlineUpdate} from './direct-inline-preview';
+import {failedContinuations} from './failed-continuation';
 import {nativeResponses} from './native-response-manager';
 import {responseAnchor} from './native-response-projection';
 import {completionSource,type ExplorerResponse} from './explorer-responses';
@@ -179,6 +180,7 @@ export class InlineChatManager {
   }
   private receive(job:InlineJob,item:ThreadStreamItem){
     if(this.stopped||job.finalized||job.phase==='cancelled'||!this.jobs.includes(job))return;
+    const previousTurnId=job.turnId;
     const runtime=this.runtime(job);
     if(item.kind==='snapshot'&&Number.isSafeInteger(item.snapshot?.snapshotSequence)&&item.snapshot.snapshotSequence<runtime.sequence){logEvent('stream.snapshot.stale',{jobId:job.id,sequence:item.snapshot.snapshotSequence,lastSequence:runtime.sequence});return;}
     if(item.kind==='event'&&Number.isSafeInteger(item.event?.sequence)&&item.event.sequence<=runtime.sequence)return;
@@ -202,10 +204,12 @@ export class InlineChatManager {
         const turn=turnForMessage(runtime.state,input.messageId);
         if(turn){job.turnId=turn;if(!job.turnIds.includes(turn))job.turnIds.push(turn);}
       }
+      const recovery=failedContinuations(runtime.state,job.turnIds,job.prose);runtime.state=recovery.state;job.turnIds=recovery.turnIds;
       const questions=followInlineQuestions(runtime.state,job.turnIds,job.questionFollows,job.prose);
       job.questionFollows=questions.follows;job.turnIds=questions.turnIds;job.turnId=questions.turnId;
-      job.incoming=observeIncoming(runtime.state,job.turnIds,job.incoming,job.steering,[commandId(job.requestId,'message'),job.initialInput?.messageId??'',...Object.values(runtime.state.turns??{}).filter(turn=>job.turnIds!.includes(turn.turnId)).map(turn=>turn.messageId??''),...job.questionFollows.flatMap(follow=>follow.input?[follow.input.messageId]:[])]);
+      job.incoming=observeIncoming(runtime.state,job.turnIds,job.incoming,job.steering,[commandId(job.requestId,'message'),job.initialInput?.messageId??'',...Object.values(runtime.state.turns??{}).filter(turn=>job.turnIds!.includes(turn.turnId)&&!recovery.messageIds.has(turn.messageId??'')).map(turn=>turn.messageId??''),...job.questionFollows.flatMap(follow=>follow.input?[follow.input.messageId]:[])]);
       job.prose=mergeProse(job.prose??[],runtime.state.messages,job.turnIds);
+      job.bindingCheckpoint=inlineBindingCheckpoint(runtime.state);this.persist();
     }
     if(item.kind==='snapshot')runtime.sequence=Number.isSafeInteger(applied.sequence)?applied.sequence!:runtime.sequence;
     else if(applied.sequence!==undefined)runtime.sequence=applied.sequence;
@@ -215,7 +219,7 @@ export class InlineChatManager {
     if(activity&&activity.requestId!==runtime.alerted){runtime.alerted=activity.requestId;new Notice(activity.kind==='command'?'T3 needs command approval. Use Approve or Deny in the note.':`T3 needs your response in thread ${job.threadId}: ${activity.summary.slice(0,140)}`,12000);}
     const phase=job.turnId?inlineQuestionPhase(runtime.state,job.turnId,job.questionFollows):'running';
     if(job.phase==='error'&&phase==='running'&&runtime.state.latestTurn?.turnId!==job.turnId&&runtime.state.session?.activeTurnId!==job.turnId)return;
-    if(job.phase==='error'&&phase==='error')return;
+    if(job.phase==='error'&&phase==='error'&&job.turnId===previousTurnId)return;
     const nextPhase=job.steering?.some(input=>!input.confirmed||!turnForMessage(runtime.state,input.messageId))?'running':phase;
     if(job.phase!==nextPhase)logEvent('response.phase.changed',{jobId:job.id,threadId:job.threadId,turnId:job.turnId,from:job.phase,to:nextPhase});
     job.phase=nextPhase;this.schedule(job);
@@ -263,7 +267,7 @@ export class InlineChatManager {
     }
     const questions=followInlineQuestions(runtime.state,job.turnIds??[],job.questionFollows,job.prose);
     const inputs=questionConversationInputs(runtime.state,job.incoming??[],questions.follows,job.prose??[]);
-    const conversation=(job.turnIds?.length??0)>1||inputs.length?{messages:job.prose??[],steering:inputs,preserveHistory:questions.continued}:undefined;
+    const conversation=(job.turnIds?.length??0)>1||inputs.length?{messages:job.prose??[],steering:inputs,preserveHistory:questions.continued||failedContinuations(runtime.state,job.turnIds??[]).continued}:undefined;
     if(job.phase==='complete'||job.phase==='interrupted')job.finishedAt??=completionTime(runtime.state,job.turnId??'');else delete job.finishedAt;
     const next=renderInlineTurn(runtime.state,job.turnId??'',job.threadId,job.phase==='conflict'?'error':job.phase,intermediateMode(job.intermediateMode,job.keepIntermediate),job.connection?.environmentId,conversation,job.initialInput,undefined,{startedAt:job.createdAt,finishedAt:job.finishedAt},finalAnswerFormat(job.finalAnswerFormat));
     const original=editor.getValue();let document=original;

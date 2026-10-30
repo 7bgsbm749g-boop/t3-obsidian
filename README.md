@@ -93,7 +93,7 @@ Steer callouts come from T3-confirmed incoming messages, including messages sent
 
 The VPS fleet adapter attaches a `fleet-sender` context record after verifying the caller's local Codex session against its T3 thread. Valid records display **Agent · source title**; unattributed messages display **User**, including question answers without author evidence. T3's user role and message prose do not identify an author. This metadata is a trusted-client display convention, not a signed identity. Native T3 author headings remain a platform limitation. The laptop adapter has not been updated or verified for this change.
 
-Live events retain the existing complete-paragraph boundary, including code-fence protection. The installed T3 detail feed omits start-request events, so incoming-message display uses the observed active response or its canonical lifecycle; it never treats that display association as an execution binding or a reason to adopt another turn. A recovered input without an observed boundary is marked **Recovered (paragraph position approximate)** because snapshots cannot reconstruct historical growth within one assistant message. Completed reply blocks retain their exact response binding. The existing opt-in `stream-thread` registration displays future turns in its chosen destinations; it now includes each turn's canonical initial input and sender label.
+Live events retain the existing complete-paragraph boundary, including code-fence protection. The installed T3 detail feed omits start-request events, so incoming-message display uses the observed active response or its canonical lifecycle; it never treats that display association as an execution binding or a reason to adopt another turn. Recovered inputs show only their sender label, such as **User**, without recovery or paragraph-position notices. Completed reply blocks retain their exact response binding. The existing opt-in `stream-thread` registration displays future turns in its chosen destinations; it now includes each turn's canonical initial input and sender label.
 
 ## HTML results
 
@@ -161,9 +161,11 @@ Updates may replace a scope or filter, but cannot change the receiving thread. A
 
 ## Setup: desktop and mobile
 
+Settings are grouped into **Connection**, **Replies**, **Projects**, and **Advanced**. The selected page stays open during connection updates. Use the arrow keys, Home, or End to move between page tabs. Expand **Beta** under **Replies** to test the thread and note modes; Free remains the default. Manual pairing, connection removal, legacy cleanup, and the send failure log are under **Advanced**.
+
 1. Install and run T3 Code on your computers. Sign in to the same T3 account and enable **T3 Connect** on each destination. T3 supplies the public HTTPS connection; no Tailscale or plugin companion is required. See [T3 remote access](https://github.com/pingdotgg/t3code/blob/main/docs/user/remote-access.md).
 2. Install `main.js` and `manifest.json` in `<vault>/.obsidian/plugins/t-three-code/` and enable the plugin.
-3. In **Settings → T3 Code**, keep **T3 Connect (recommended)** selected. Enter your T3 account email and click **Send sign-in code**.
+3. In **Settings → T3 Code → Connection**, keep **T3 Connect (recommended)** selected. Enter your T3 account email and click **Send sign-in code**.
 4. Enter the six-digit code from T3’s email and click **Verify and connect**. The plugin discovers your account’s computers, authorizes each online connection and scans its projects automatically. No terminal commands, machine URLs, pairing links or per-machine codes are needed.
 5. Every discovered project appears automatically in the folder and send project menus. Their names include the destination computer. On mobile, use the note menu → **Open in T3 Code**, or the command palette’s **T3 Code** row.
 
@@ -179,7 +181,7 @@ Sources: [T3 relay authorization](https://github.com/pingdotgg/t3code/blob/main/
 
 ### Advanced: manual pairing
 
-After account connection finishes, existing manual pairings still work. Expand **Advanced: manual pairing** to use a known HTTPS environment address and a fresh T3 pairing code or link. A hosted `https://app.t3.codes/pair?host=…#token=…` link is accepted. Manual pairing is available without account sign-in. Each device pairs separately; manual sessions require pairing again after their displayed expiry. Re-pairing preserves folder routing and pending requests.
+After account connection finishes, existing manual pairings still work. Open **Settings → T3 Code → Advanced → Manual pairing** to use a known HTTPS environment address and a fresh T3 pairing code or link. A hosted `https://app.t3.codes/pair?host=…#token=…` link is accepted. Manual pairing is available without account sign-in. Each device pairs separately; manual sessions require pairing again after their displayed expiry. Re-pairing preserves folder routing and pending requests.
 
 T3’s Connections page currently hides its pairing controls when Network access and Tailscale HTTPS are both off, even when T3 Connect is enabled. In that case the official `t3 auth pairing create --ttl 10m --label Obsidian --json` command on the destination can issue a code without changing its network settings. This command is **not needed for the recommended account setup**.
 
@@ -187,7 +189,7 @@ Manual pairing exchanges a one-time code for a scoped bearer session. The code i
 
 ### Advanced: this computer only
 
-Desktop users can choose **This computer only (advanced)** to use local T3 without account sign-in. Install T3 and its matching official CLI. The plugin discovers the CLI in standard locations or PATH; executable and data-directory overrides are available if needed. Registered local projects appear automatically and refresh in the background. The CLI issues five-minute sessions for T3’s authenticated loopback API, which the plugin revokes after each operation. No shell interpolation, Python or Fleet adapter is used. This option is unavailable on mobile.
+Desktop users can choose **This computer only** on the **Connection** page to use local T3 without account sign-in. Install T3 and its matching official CLI. The plugin discovers the CLI in standard locations or PATH; executable and data-directory overrides are available if needed. Registered local projects appear automatically and refresh in the background. The CLI issues five-minute sessions for T3’s authenticated loopback API, which the plugin revokes after each operation. No shell interpolation, Python or Fleet adapter is used. This option is unavailable on mobile.
 
 File connections send a health check after five seconds without a valid reply. Three more seconds without a reply confirms a silent connection and closes it. A safe file read can use one fresh connection; prompt sends and uncertain writes are never repeated. A slow request on a responding connection keeps its own 15-second limit and does not cancel other requests.
 
@@ -257,7 +259,7 @@ The draft survives project changes, returning from the existing-thread picker, a
 
 When a note has no remembered thread, its nearest explicitly linked folder supplies the destination, including for notes in subfolders. Unlinked notes, root-level notes, and chat with no note open use **No project**. T3 supplies its own internal workspace; the plugin does not create a project at the vault root. Each connected computer can be selected under **No project · <machine>**. Existing conversations remain in their original projects and keep their note history. Only selecting **New project** and confirming a new-thread send opens the external workspace picker. Cancelling creates no thread or folder link. A confirmed send saves the external folder link; failed delivery does not save a new folder link.
 
-Manage the vault connection under **Settings → T3 Code → Linked folders → Vault connection → Connect vault / Change machine**. Choose a machine and its existing synced vault folder. The plugin verifies the synced vault identity and saves the machine and path without registering a T3 project. This location hosts note subscriptions, followed-thread subscriptions, and staged note edits. It also selects the default machine for new No project conversations. Existing root records remain readable as vault connection locations; no history or note migration runs. Cancelling keeps the prompt ready.
+Manage the vault connection under **Settings → T3 Code → Projects → Linked folders → Vault connection → Connect vault / Change machine**. Choose a machine and its existing synced vault folder. The plugin verifies the synced vault identity and saves the machine and path without registering a T3 project. This location hosts note subscriptions, followed-thread subscriptions, and staged note edits. It also selects the default machine for new No project conversations. Existing root records remain readable as vault connection locations; no history or note migration runs. Cancelling keeps the prompt ready.
 
 Vault identity, known machine locations, and the chosen vault connection sync in plugin settings; credentials remain device-local. Enable community-plugin settings in Obsidian Sync on participating devices. A matching name alone never connects a folder: different local vault names are fine, but the synced identity must match. New replies stream and save on the current device. Subscriptions and staged note edits still require their selected desktop vault client. The connection does not provision Sync or upload a replacement vault.
 
@@ -265,11 +267,11 @@ Newly connected remote vaults check that the referenced note appears in the dest
 
 The live row uses isolated, version-checked internal command-palette methods because Obsidian does not expose a public dynamic-result API; keep the core Command palette plugin enabled. The palette captures the source note, selection range, and cursor before it takes focus. Closing the palette or moving the cursor cannot move the response to the note end. Repeated passages retain the exact selected occurrence. Switching notes while choosing a thread does not change the captured context.
 
-Questions retain the optional wait instruction and 120,000-character limit (including note context). They never enroll the note for archive/delete cleanup. Failed sends end without a retry request. **Settings → T3 Code → Send failure log** shows their device-local failure details.
+Questions retain the optional wait instruction and 120,000-character limit (including note context). They never enroll the note for archive/delete cleanup. Failed sends end without a retry request. **Settings → T3 Code → Advanced → Send failure log** shows their device-local failure details.
 
 ## Inline responses
 
-Under **Settings → T3 Code → Inline responses**, **Stream replies into the editor** is on by default for all manual Send and Ask actions. With an updated host and sending device, new replies stream locally and the sending device saves their final result without waiting for Obsidian Sync. A durable grant permits one final writer. If the sending device closes before that grant, the **Vault connection** can finish after its presence expires. Existing responses and older clients retain host completion. Older hosts retain exclusive device writer ownership, even when a folder link sends the T3 thread to a different machine. Turning streaming off keeps answers in T3 threads.
+Under **Settings → T3 Code → Replies → Inline responses**, **Stream replies into the editor** is on by default for all manual Send and Ask actions. With an updated host and sending device, new replies stream locally and the sending device saves their final result without waiting for Obsidian Sync. A durable grant permits one final writer. If the sending device closes before that grant, the **Vault connection** can finish after its presence expires. Existing responses and older clients retain host completion. Older hosts retain exclusive device writer ownership, even when a folder link sends the T3 thread to a different machine. Turning streaming off keeps answers in T3 threads.
 
 The open note receives reply text directly from T3 as soon as its response is registered. It does not wait for the new note anchor to reach the vault connection machine through Sync. Older host updates cannot replace newer local text. The sending device normally saves the final reply under its durable grant; the host supplies fallback completion before that grant. Sync carries the saved note to other devices. The visible status stays **Working** while the response runs or reconnects.
 
@@ -331,7 +333,7 @@ The editor menu can request **Stop T3 response** from a synced device. Even an o
 
 ## Folder links
 
-Right-click a folder and choose **Link to T3 Code → Link to <project>**. Confirm the link in the dialog. Links appear under **Settings → T3 Code → Linked folders** and route manual chat and note sends. Saving a link alone does not send notes.
+Right-click a folder and choose **Link to T3 Code → Link to <project>**. Confirm the link in the dialog. Links appear under **Settings → T3 Code → Projects → Linked folders** and route manual chat and note sends. Saving a link alone does not send notes.
 
 **Unlink**, directly below **Create T3 project…**, removes only the selected folder’s direct link. It is disabled when that folder has no direct link, including when it inherits a parent link. Parent and nested links, T3 projects, files, and remembered conversations remain unchanged. After unlinking, the folder can inherit its nearest parent link. Unlinking does not require a T3 connection.
 
@@ -365,11 +367,11 @@ Existing history and requests saved under the former note-thread-link terminolog
 
 Each destination receives only its unsent source and the images embedded in that source or your typed question. Existing-thread sends preserve its model, runtime permissions and interaction mode. An idle thread starts another turn; a running thread receives input through T3’s steering behavior. Resolve pending approvals or structured input in T3 before sending another note. Retries reuse the original thread and message IDs without creating a new thread. Every confirmed manual note send keeps the note and supersedes any older cleanup job for it.
 
-**Settings → T3 Code → Threads → Settle completed threads** is on by default. After a successful Obsidian turn, the plugin moves its T3 thread from the active list to the Settled shelf. A streamed answer must finish saving into its note first. Checks run every 30 seconds while the sending Obsidian client is open and resume after a restart. Pending approval, requested input, live background work, failed or interrupted turns, and turns superseded by later activity do not trigger settlement. Only threads sent by this plugin are affected. A later send to the same settled thread automatically wakes it and preserves the note’s remembered destination. Turning the setting off cancels pending settle checks; later sends remain active. Settling does not archive or delete the thread.
+**Settings → T3 Code → Replies → Threads → Settle completed threads** is on by default. After a successful Obsidian turn, the plugin moves its T3 thread from the active list to the Settled shelf. A streamed answer must finish saving into its note first. Checks run every 30 seconds while the sending Obsidian client is open and resume after a restart. Pending approval, requested input, live background work, failed or interrupted turns, and turns superseded by later activity do not trigger settlement. Only threads sent by this plugin are affected. A later send to the same settled thread automatically wakes it and preserves the note’s remembered destination. Turning the setting off cancels pending settle checks; later sends remain active. Settling does not archive or delete the thread.
 
 ## When task completes
 
-Manual sends always keep their note because each confirmed thread becomes its next default destination. The **Orchestration → Legacy cleanup defaults** settings remain available for previously queued cleanup jobs: **Keep note** (default), **Archive note**, or **Delete note (vault trash)**. Archive has a configurable vault-relative folder, defaulting to `Archive/T3 Code`; it preserves the note’s original subfolders and adds a numeric suffix if a destination already exists. Delete moves only the Markdown note to this vault’s `.trash`; embedded image files remain in place.
+Manual sends always keep their note because each confirmed thread becomes its next default destination. The **Advanced → Legacy cleanup → Legacy cleanup defaults** settings remain available for previously queued cleanup jobs: **Keep note** (default), **Archive note**, or **Delete note (vault trash)**. Archive has a configurable vault-relative folder, defaulting to `Archive/T3 Code`; it preserves the note’s original subfolders and adds a numeric suffix if a destination already exists. Delete moves only the Markdown note to this vault’s `.trash`; embedded image files remain in place.
 
 The plugin polls the destination T3 environment every 30 seconds while Obsidian is active. Mobile can suspend the app; checks resume when reopened. The completion signal is the original sent turn reporting `completed`, with its session idle (ready or stopped), no pending approval/input, and its original user message and final assistant message verified. This is a T3 lifecycle signal, not a judgment that the answer fully solved the task. Failed/interrupted turns and conversations that have advanced to additional turns keep the note.
 
@@ -377,7 +379,7 @@ The completion action and note fingerprint are saved when sending. Later setting
 
 Notes edited, replaced, renamed, or left with unsaved editor changes are kept. Archive/delete runs in the sending Obsidian vault, including when the T3 thread runs on another computer. Existing notes and previously sent threads are not automatically enrolled.
 
-The **Final answer format** setting under **Inline responses** defaults to **Current formatting**. **Raw Markdown** inserts only each verified completed final answer without added blockquote prefixes; while a turn is running, its paragraphs retain current formatting. Intermediate responses remain in the progress box, and questions, steering controls, status, timers, and tool activity keep their existing presentation. Both formats share project file reference resolution and literal-HTML protection. The choice is saved per response, including independent destination bindings, and survives reloads, writer takeover, continuations, and question answers. Setting changes affect new responses. Raw-mode responses require an updated writer; older clients cannot take them over.
+The **Final answer format** setting under **Replies → Inline responses** defaults to **Current formatting**. **Raw Markdown** inserts only each verified completed final answer without added blockquote prefixes; while a turn is running, its paragraphs retain current formatting. Intermediate responses remain in the progress box, and questions, steering controls, status, timers, and tool activity keep their existing presentation. Both formats share project file reference resolution and literal-HTML protection. The choice is saved per response, including independent destination bindings, and survives reloads, writer takeover, continuations, and question answers. Setting changes affect new responses. Raw-mode responses require an updated writer; older clients cannot take them over.
 
 ## Embedded images
 
@@ -432,9 +434,13 @@ Requires Node.js, npm, and Python 3. Run `npm ci`, then `npm test`. Checks selec
 
 For a release, commit the reviewed changes in the task worktree and run `npm run release:qlo2 -- --enqueue HEAD`. Each source commit gets one durable FIFO job. Read it with `npm run release:qlo2 -- --queue-status JOB_ID`. A single worker owns canonical integration, final version assignment, affected validation, packaging, installation, Sync, and the native QLO2 reload. Task threads do not edit the canonical checkout, reserve versions, contact sibling threads, or negotiate release turns. Install the event-driven worker once from the canonical checkout with `npm run release:qlo2 -- --install-queue`; it uses a systemd path unit rather than periodic polling.
 
-Supply retained changed-behavior evidence with `--enqueue HEAD --evidence PATH --notes "WHAT WAS VERIFIED"` when available. The worker can complete smoke automatically if the touched source inputs remain identical after integration. Otherwise the job holds its release slot at `awaiting-smoke`; its owner verifies the changed behavior and records `--complete-smoke` in the canonical checkout, which wakes the next queued job. Other threads submit their work independently and inspect only their own job. No thread discovery or agent messages are used. Failed jobs preserve their position and immutable archives; `--retry-queued JOB_ID` retries the same job. If packaging has not started, `--retry-queued JOB_ID --replacement HEAD` accepts corrected reviewed source in the same slot while retaining the original request. New behavior evidence must be supplied for changed code. Once an archive exists, retries must resume its original bytes.
+Supply retained changed-behavior evidence with `--enqueue HEAD --evidence PATH --notes "WHAT WAS VERIFIED"`. Product jobs without evidence wait at `needs-evidence` before integration; later jobs continue. Documentation, tests, and release-tool-only jobs receive affected validation and source integration without a plugin release. The worker completes smoke automatically if the touched source inputs remain identical after integration. Otherwise publication and the real native-client check must finish, then the job remains visibly incomplete at `awaiting-smoke` while later jobs continue. Its owner must test the exact archived candidate and record `--complete-smoke`. Historical completion requires matching archive bytes and the retained original native-client proof; the current installation is never downgraded. No thread discovery or agent messages are used.
+
+Failures retry automatically up to three attempts. An unpublished candidate that still fails is removed with explicit reverts of only the queue's own integration commits, marked `failed`, and set aside so independent jobs can proceed. Source commits, original requests, failure records, and logs are retained. Dirty or uncertain canonical state is preserved. Conflicting restores abort their own revert. Independent additions to the flag list and entry-point registry in `scripts/build-native-response-lab.mjs` can merge automatically; removals, changed existing mappings, other script changes, and product-code conflicts require repair. Publication, Sync, or native-client failures with immutable bytes use a persistent one-shot retry timer with increasing delays up to five minutes; the deadline survives a reboot and a crashed worker restarts automatically. These shared installation prerequisites still must succeed before another installation can start. The queue never bypasses failed tests, abandons a partial installation, rewrites an archive, or marks missing smoke as complete. `--retry-queued JOB_ID` retries a repaired job; before packaging, add `--replacement HEAD` and new evidence for corrected reviewed source. Once an archive exists, recovery resumes its original bytes.
 
 Queue requests, states, evidence, and logs are outside synced vaults under `/home/ubuntu/projects/send-to-t3-code/evidence/release-queue`. Clean-checkout checks, a worker lock, and the common release lock protect canonical work. Concurrent submissions are idempotent; a second worker cannot publish. The worker restarts before validation if integration changes release tooling. It never resets or discards unrelated canonical edits.
+
+Assigned candidate versions are never transferred to another job, including after failed validation. A repaired candidate receives a newer version when its reverted integration is restored. A candidate that includes reverted source waits for that source job to be repaired; independent jobs still continue. Restoring a failed product candidate retains its original product validation and evidence inputs even when the correction itself changes only tooling.
 
 For an optional candidate check before submission, use `npm run release:qlo2 -- --prepare --bump patch` (or `minor`/`major`). Commit the final checked bytes and enqueue with `--validation PATH`. This is not the concurrent default because normal jobs let the queue assign versions. A matching prepared candidate is packaged without another build or test run. Source, dependency bytes, runtime, installed-release baseline, bundle hashes, and saved test evidence must match; otherwise publication is refused. Repeat interrupted preparation with `--prepare --version VERSION`; unchanged successful checks remain cached.
 
@@ -616,7 +622,7 @@ Commands use a private local mailbox outside the vault. The checked `<configDir>
 
 Version 2.36.7 corrects Windows parent-path detection when the command bridge opens its private mailbox. The same check protects the private response journal. Paths inside a vault are still rejected. Load this release once on an affected Windows client; subsequent SSH status, failure-log and reload requests use its private mailbox. If the route has not been created, the laptop helper reports that initial load is required and does not write a command into the synced vault. Current releases invoke reload immediately; editor content and release hashes do not block it.
 
-Send and Ask use the note name for new thread titles. `Untitled`, `Untitled 1`, and other numbered untitled notes let T3 generate a title. Under **Threads → Thread title generation**, choose **Always use T3** to generate titles for every new thread. Messages without a note also use T3 generation. Existing threads keep their titles, and their canonical name labels the response from the start.
+Send and Ask use the note name for new thread titles. `Untitled`, `Untitled 1`, and other numbered untitled notes let T3 generate a title. Under **Replies → Threads → Thread title generation**, choose **Always use T3** to generate titles for every new thread. Messages without a note also use T3 generation. Existing threads keep their titles, and their canonical name labels the response from the start.
 
 Open editors follow T3 title metadata directly, so generated titles do not wait for an assistant message or a host response commit.
 
@@ -808,3 +814,22 @@ source path, binding IDs, creation time and the wait preference; they merge
 through normal settings Sync and retain the latest 256 sends. Several matches
 require exact filters; no newest-send guess is made. Subscription notifications
 also use the clean footer and retain observed event data as their message body.
+
+### Thread and note modes
+
+In **Settings → T3 Code → Replies**, expand **Beta**, then choose **Thread and note mode**:
+
+- **1:1**: each note continues one thread, and each thread belongs to one note.
+  An unlinked note can create a thread or choose an unlinked existing thread.
+  Linked notes show only their current thread in the send chooser. Replies go
+  to the source note. Send, Ask, run imports, agent commands, and thread streams
+  follow the same rule.
+- **Free**: retain many-to-many links, thread choices, and multiple reply destinations.
+  This is the default for existing installations.
+
+Switching modes keeps saved replies and link history. When existing links overlap,
+1:1 selects pairs by most recent confirmed use, with a stable tie break. A note
+left without a pair can start a new thread. To change an existing pair, switch to
+Free, send or import using the desired thread, then return to 1:1. Thread streams
+that conflict with 1:1 wait until Free is selected again; already attached replies
+finish normally. This mode applies across the vault and syncs with plugin settings.

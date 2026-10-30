@@ -165,7 +165,8 @@ python3 /home/ubuntu/projects/send-to-t3-code/scripts/obsidian-command.py \
   --destination 'Projects/Task.md' --destination 'Projects/Summary.md'
 ```
 
-A new T3 thread is created by default. `--thread-id ID` continues that thread
+In Free mode, a new T3 thread is created by default. In 1:1 mode, a linked source
+continues its paired thread; an unlinked source creates one. `--thread-id ID` continues that thread
 using Smart Send, which excludes generated replies and unchanged source.
 Without `--destination`, the reply goes to the source note. Explicit destinations
 replace that default. `--no-stream` sends without reply destinations; do not mix
@@ -194,6 +195,16 @@ Manage with `pause-thread-stream`, `resume-thread-stream`, or
 `cancel-thread-stream --subscription-id ID`. `remove-stream-destination` also
 requires `--remove-destination NOTE.md`. Pausing future attachments does not
 cancel already attached replies.
+
+Expand the collapsed **Replies → Beta** section to find **Thread and note mode**.
+This vault-wide setting applies to Send, Ask,
+imports, agent sends, and thread streams. **Free** (the migration default) allows
+many-to-many links. **1:1** permits one active thread per note and one note per
+thread; replies must return to the source note. Choose an unlinked thread for
+an unlinked note, or continue the current pair. A conflicting action fails
+before sending or inserting a reply. Switch to Free to change a pair or use
+multiple destinations. Existing replies and history remain intact. Conflicting
+thread streams wait in 1:1 and resume in Free; attached replies can finish.
 
 UI sends use the current default thread. Ask inside a response steers that
 response; Ask outside creates an independent reply. The chooser selects New

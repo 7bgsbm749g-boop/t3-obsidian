@@ -35,6 +35,41 @@ const completeV2=(h:ReturnType<typeof fixture>,sequence=2,text='Final reply')=>{
 };
 const finalItem=(text='Final reply')=>({id:'opaque-item',threadId:'thread',runId:'turn',messageId:'answer',type:'assistant_message',text,streaming:false,status:'completed',updatedAt:'2026-10-06T03:01:00.000Z'});
 const settle=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
+
+const recoverySnapshot=(sequence:number,status='running',withInput=true):ThreadStreamItem=>({kind:'snapshot',snapshot:normalizeV2Snapshot({snapshotSequence:sequence,projection:{thread:{id:'thread',projectId:'project'},runtimeRequests:[],runs:[
+ {id:'turn',ordinal:1,userMessageId:'prompt',status:'failed',requestedAt:'2026-10-06T03:00:00Z',completedAt:'2026-10-06T03:01:00Z'},
+ {id:'retry',ordinal:2,userMessageId:'retry-input',status,requestedAt:'2026-10-06T03:02:00Z',...(status==='completed'?{completedAt:'2026-10-06T03:03:00Z'}:{})}],messages:[
+ {id:'prompt',runId:'turn',role:'user',text:'Original task',createdBy:'user',creationSource:'web',createdAt:'2026-10-06T03:00:00Z',streaming:false},
+ {id:'old',runId:'turn',role:'assistant',text:'Earlier progress.',createdAt:'2026-10-06T03:00:30Z',streaming:false},
+ ...(withInput?[{id:'retry-input',runId:'retry',role:'user',text:'Continue from T3.',createdBy:'user',creationSource:'web',createdAt:'2026-10-06T03:02:00Z',streaming:false}]:[]),
+ {id:'retry-answer',runId:'retry',role:'assistant',text:'Recovered answer.',createdAt:'2026-10-06T03:02:30Z',streaming:status!=='completed'}],turnItems:[
+ {id:'retry-final',runId:'retry',messageId:'retry-answer',type:'assistant_message',status:status==='completed'?'completed':'running',text:'Recovered answer.',streaming:status!=='completed',updatedAt:'2026-10-06T03:02:30Z'}]}})});
+
+test('a T3 user retry automatically joins the original response and verifies only its exact final item',async()=>{
+ const reads:any[]=[],h=fixture(true,async(path,payload)=>{reads.push({path,payload});return {id:'retry-final',threadId:'thread',runId:'retry',messageId:'retry-answer',type:'assistant_message',text:'Recovered answer.',streaming:false,status:'completed',updatedAt:'2026-10-06T03:02:30Z'};});
+ h.record.request.localOnly=true;h.record.request.intermediateMode='collapse';h.preview.tick(true);
+ h.item(recoverySnapshot(1));let update=h.updates.at(-1)!;
+ assert.equal(update.messageId,'prompt');assert.equal(update.turnId,'retry');assert.equal(update.phase,'running');assert.deepEqual(update.turnIds,['turn','retry']);
+ assert.match(update.body,/Earlier progress[\s\S]*Continue from T3\.[\s\S]*Recovered answer/);assert.equal(update.displayedInputIds?.filter(id=>id==='retry-input').length,1);
+ h.item(recoverySnapshot(2,'completed'));await settle();update=h.updates.at(-1)!;
+ assert.equal(update.completionVerified,true);assert.equal(update.turnId,'retry');assert.deepEqual(reads,[{path:'/api/orchestration/turn-item',payload:{threadId:'thread',itemId:'retry-final',revision:'2026-10-06T03:02:30Z'}}]);
+ const resume=update.resume;h.preview.dispose();
+ const restored=fixture();restored.preview.restore(resume);restored.preview.tick(true);restored.item(recoverySnapshot(3,'completed',false));
+ assert.equal(restored.updates.at(-1)!.turnId,'retry');assert.match(restored.updates.at(-1)!.body,/Continue from T3/);restored.preview.dispose();
+});
+
+test('a run update without its user input waits; a stopped or removed preview cannot attach',()=>{
+ const h=fixture();h.preview.tick(true);h.item(recoverySnapshot(1,'running',false));assert.equal(h.updates.at(-1)!.turnId,'turn');assert.equal(h.updates.at(-1)!.phase,'error');
+ h.item(recoverySnapshot(2));assert.equal(h.updates.at(-1)!.turnId,'retry');const count=h.updates.length;
+ h.preview.dispose();h.item(recoverySnapshot(3,'completed'));assert.equal(h.updates.length,count);
+ const removed=fixture();removed.preview.tick(true);removed.record.responseRemovedAt=Date.parse('2026-10-06T03:01:00Z');removed.preview.update(removed.record);removed.item(recoverySnapshot(1));assert.equal(removed.updates.length,0);
+});
+
+test('a live primary input after the failed session keeps earlier output above the continuation prompt',()=>{
+ const h=fixture();h.record.request.intermediateMode='collapse';h.preview.tick(true);h.item(recoverySnapshot(1,'running',false));
+ h.item(normalizeV2StreamItem({kind:'event',sequence:2,event:{type:'message.updated',payload:{id:'retry-input',runId:'retry',role:'user',text:'Continue from T3.',createdBy:'user',creationSource:'web',createdAt:'2026-10-06T03:02:00Z',streaming:false}}}));
+ const body=h.updates.at(-1)!.body;assert.equal(h.updates.at(-1)!.turnId,'retry');assert.ok(body.indexOf('Earlier progress.')<body.indexOf('Continue from T3.'));assert.ok(body.indexOf('Continue from T3.')<body.indexOf('Recovered answer.'));h.preview.dispose();
+});
 test('displayed input identities are emitted only when their canonical steering quote renders',()=>{
  const h=fixture(),messageId=randomUUID(),input={messageId,text:'Move this steer.',before:[]};
  h.record.state={requestHash:'',accepted:true,notePath:'Note.md',status:'running',hashes:[],updatedAt:'',steering:[input]};h.preview.update(h.record);h.preview.tick(true);
@@ -46,9 +81,9 @@ test('the live preview keeps public thoughts from snapshots and updates outside 
  const h=fixture();h.record.request.intermediateMode='collapse';h.preview.tick(true);
  const initial=h.snapshot() as any;
  initial.snapshot.thread.messages.push({id:'reasoning:one',role:'reasoning',turnId:'turn',text:'**First public summary**',streaming:false,createdAt:'2026-10-06T03:00:01Z'});
- h.item(initial);assert.match(h.updates.at(-1)!.body,/\[!t3-thought\]- Thought/);
+ h.item(initial);assert.match(h.updates.at(-1)!.body,/class="send-to-t3-thought"/);
  h.item(normalizeV2StreamItem({kind:'event',sequence:3,event:{type:'turn-item.updated',payload:{id:'two',runId:'turn',type:'reasoning',ordinal:2,text:'**Second public summary**',streaming:true,startedAt:'2026-10-06T03:00:02Z'}}}));h.clock.advance(80);
- assert.match(h.updates.at(-1)!.body,/Thought \(×2\)/);assert.match(h.updates.at(-1)!.body,/First public summary[\s\S]*Second public summary/);
+ assert.match(h.updates.at(-1)!.body,/2 thoughts/);assert.match(h.updates.at(-1)!.body,/First public summary[\s\S]*Second public summary/);
  h.item(normalizeV2StreamItem({kind:'event',sequence:4,event:{type:'turn-item.updated',payload:{id:'other',runId:'unrelated',type:'reasoning',text:'Unrelated summary',streaming:false}}}));h.clock.advance(80);
  assert.doesNotMatch(h.updates.at(-1)!.body,/Unrelated summary/);assert.equal(h.updates.at(-1)!.phase,'running');assert.equal(h.updates.at(-1)!.completionVerified,false);h.preview.dispose();
 });

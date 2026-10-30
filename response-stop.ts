@@ -8,6 +8,7 @@ import {clearApprovalControls} from './approvals';
 import {commandId} from './direct';
 import type {ThreadAccess} from './thread-stream';
 import {delegatedWork} from './inline-delegation';
+import {stopWorktreeSetup} from './worktree-setup';
 
 /** Seal the visible transcript, without rebuilding it from a possibly stale stream. */
 export function stoppedResponseBody(body:string):string {
@@ -24,6 +25,7 @@ export function stoppedResponseBody(body:string):string {
   body=body.split('\n').map(line=>{
     const position=stopOffset;stopOffset+=line.length+1;
     if(beforeStop.some(([from,to])=>position>=from&&position<to))return line;
+    line=stopWorktreeSetup(line);
     if(/^(?:> )?<span class="send-to-t3-context" data-t3-emission-id="/.test(line))return line
       .replace(/ <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>/,'')
       .replace('<span>Compacting context</span>','<span>Context compaction stopped</span>');

@@ -78,13 +78,21 @@ if(args[0]==='auth'){
       assert.equal(tag,'orchestration.dispatchCommand');commands.push(payload);return {};
     }),Headers,Response,AbortController,URL,URLSearchParams,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval,console,
   },{timeout:5000});
-  const start=async()=>{const plugin=new module.exports.default();await plugin.onload();return plugin;};
+  const instances:any[]=[];
+  const start=async()=>{const plugin=new module.exports.default();instances.push(plugin);await plugin.onload();return plugin;};
   const plugin=await start();
   return {plugin,start,shared,commands,project,noProject,vaultRoot,root,
     addFolder:async(path:string)=>{const folder=new Folder();folder.path=path;folder.name=path.split('/').at(-1)!;folders.set(path,folder);await mkdir(join(vaultRoot,path),{recursive:true});},
     setNote:(path?:string)=>{activeFile=path?{path,extension:'md'}:undefined;},
     cliCalls:async()=> (await readFile(callsPath,'utf8')).trim().split('\n').map(line=>JSON.parse(line)),
-    dispose:async()=>{plugin.onunload();await plugin.localDesktopAccess?.dispose();await new Promise<void>(resolve=>server.close(()=>resolve()));await rm(dir,{recursive:true,force:true});},
+    dispose:async()=>{
+      for(const instance of instances)instance.onunload();
+      await Promise.all(instances.map(instance=>instance.localDesktopAccess?.dispose()));
+      await new Promise<void>(resolve=>server.close(()=>resolve()));
+      // Credential closure queues a final audit write. Retry directory removal
+      // while that bounded write finishes, including for restarted instances.
+      await rm(dir,{recursive:true,force:true,maxRetries:10,retryDelay:25});
+    },
   };
 }
 

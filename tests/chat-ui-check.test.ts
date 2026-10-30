@@ -14,9 +14,31 @@ async function fixture(alternative?:string,closeImmediately=false,initialBusy=fa
  runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal,FuzzySuggestModal:Modal,Setting,Notice:class{constructor(t:string){notices.push(t);}}}:require(id),setTimeout:(fn:any,ms:number)=>setTimeout(fn,ms===5000?30:ms),clearTimeout,performance,AbortController,DOMException,Event,URL,URLSearchParams,Buffer});
  let busy=initialBusy;const busyListeners=new Set<()=>void>();
  const host={hasNewContent:hasContent===undefined?undefined:async()=>hasContent,get busy(){return busy;},onBusyChange:(listener:()=>void)=>{busyListeners.add(listener);return ()=>busyListeners.delete(listener);},steering:remembered,getNotePath:()=> 'Synthetic.md',getDefaultProjectKey:()=> 'project',getAlternativeProjectKey:()=>alternative,getProjectName:()=> 'Synthetic',getTargetDescription:()=> 'Synthetic',getProjectChoices:()=>[],getDefaultThread:()=>remembered?'thread':undefined,getDefaultDestination:(key:string|undefined,signal:AbortSignal)=>new Promise(resolve=>{calls.push({key,signal,resolve});}),sendChat:async(_p:any,key:any,_r:any,_b:any,d:any)=>{sent.push({target:'default',key,d});},sendToNew:async(_p:any,key:any)=>{sent.push({target:'new',key});},sendToExisting:async(_p:any,key:any)=>{sent.push({target:'existing',key});}};
+ const previews:string[]=[];(host as any).beginSend=()=>{previews.push('show');return ()=>previews.push('clear');};
  const opening=module.exports.openNoteSendFlow({},host,!automatic);if(closeImmediately)modals[0].close();await Promise.resolve();
- return {exports:module.exports,host,opening,modals,modal:modals[0],calls,sent,notices,busyListeners,setBusy:(value:boolean)=>{busy=value;for(const listener of busyListeners)listener();}};
+ return {exports:module.exports,host,opening,modals,modal:modals[0],calls,sent,notices,previews,busyListeners,setBusy:(value:boolean)=>{busy=value;for(const listener of busyListeners)listener();}};
 }
+
+test('automatic send shows a pending block before its conversation check and clears it on failure',async()=>{
+ const h=await fixture(undefined,false,false,true);
+ assert.deepEqual(h.previews,['show']);assert.equal(h.sent.length,0);
+ h.calls[0].resolve({label:'Unavailable',unavailable:true,detail:'Synthetic failure'});await h.opening;
+ assert.deepEqual(h.previews,['show','clear']);assert.equal(h.sent.length,0);
+});
+
+test('selector shows no block until Send, then shows it while the exact check is pending',async()=>{
+ const h=await fixture();assert.deepEqual(h.previews,[]);
+ const sending=h.modal.choose('default');assert.deepEqual(h.previews,['show']);assert.equal(h.sent.length,0);
+ h.calls[0].resolve({label:'Continue',threadId:'checked'});await sending;
+ assert.deepEqual(h.previews,['show','clear']);assert.equal(h.sent.length,1);
+});
+
+test('no new content and destination timeout clear the pending block',async()=>{
+ const empty=await fixture(undefined,false,false,true,false,false);await empty.opening;
+ assert.deepEqual(empty.previews,['show','clear']);assert.equal(empty.sent.length,0);empty.modals[0].close();
+ const timeout=await fixture(undefined,false,false,true);await timeout.opening;
+ assert.deepEqual(timeout.previews,['show','clear']);assert.equal(timeout.sent.length,0);
+});
 test('same project redraw coalesces one pending check and obsolete UI cannot update the new project',async()=>{
  const h=await fixture();h.modal.onOpen();await Promise.resolve();assert.equal(h.calls.length,1);
  h.modal.projectKey='other';h.modal.onOpen();await Promise.resolve();assert.equal(h.calls.length,2);assert.equal(h.calls[0].signal.aborted,true);
@@ -120,4 +142,15 @@ test('an unchanged selector still allows a new destination and typed Ask retains
 test('a note with no source also opens only New and Existing when no previous thread exists',async()=>{
  const h=await fixture(undefined,false,false,true,false,false);await h.opening;
  assert.equal(h.modals.length,1);assert.equal(h.calls.length,0);assert.equal(h.sent.length,0);assert.equal(h.modals[0].defaultButton,undefined);h.modals[0].close();
+});
+
+test('1:1 linked-note chooser keeps continuation and overrides while blocking new thread and project changes',async()=>{
+ const h=await fixture();(h.host as any).getThreadChoiceRestriction=()=> '1:1 mode: continue the linked thread.';
+ h.modal.onOpen();await Promise.resolve();
+ assert.equal(h.modal.actions.buttons[1].buttonEl.hidden,true);assert.equal(h.modal.actions.buttons[2].buttonEl.hidden,true);
+ assert.equal(h.modal.contentEl.children[0].children[0].disabled,true);assert.equal(h.modal.contentEl.children[0].children[1].disabled,false);
+ h.setBusy(true);h.setBusy(false);assert.equal(h.modal.actions.buttons[1].buttonEl.disabled,true);
+ await h.modal.choose('new');assert.equal(h.sent.length,0);assert.match(h.notices[0],/1:1 mode/);
+ h.calls[0].resolve({label:'Continue thread',threadId:'one',projectKey:'project'});await h.modal.ready;
+ await h.modal.choose('default');assert.equal(h.sent.length,1);assert.equal(h.sent[0].d.threadId,'one');
 });

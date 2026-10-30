@@ -4,6 +4,29 @@ import {safeNotePath,type ResponseRequest} from './response-model';
 import {turnForMessage,type InlineMessage,type InlineThreadState} from './inline-thread';
 import type {EventTarget} from './event-subscriptions';
 import {isRunInput} from './run-input';
+import {isT3MessageId} from './t3-message-id';
+
+export interface ThreadResponseReservation extends EventTarget {messageId:string;responses:Array<{path:string;bindingId:string}>}
+export interface ThreadResponseReservationCommand {version:1;id:string;kind:'reserve-thread-response';source:EventTarget;messageId:string;responses:ThreadResponseReservation['responses']}
+export function validateResponseReservation(value:any):ThreadResponseReservationCommand {
+  const uuid=(id:unknown)=>typeof id==='string'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id);
+  if(value?.version!==1||!uuid(value.id)||value.kind!=='reserve-thread-response'||!value.source||![value.source.threadId,value.source.projectId,value.source.environmentId].every(id=>typeof id==='string'&&id.length>0&&id.length<=200&&!/[\x00-\x1f]/.test(id))||!isT3MessageId(value.messageId))throw Error('Invalid response stream reservation.');
+  if(!Array.isArray(value.responses)||!value.responses.length||value.responses.length>32||value.responses.some((response:any)=>!response||!safeNotePath(response.path)||!uuid(response.bindingId))||new Set(value.responses.map((response:any)=>response.path)).size!==value.responses.length)throw Error('Reserve 1–32 unique response destinations and binding IDs.');
+  return value;
+}
+export function reserveThreadResponse(reservations:ThreadResponseReservation[],command:ThreadResponseReservationCommand){
+  const prior=reservations.find(reservation=>reservation.environmentId===command.source.environmentId&&reservation.projectId===command.source.projectId&&reservation.threadId===command.source.threadId&&reservation.messageId===command.messageId);
+  if(!prior){reservations.push({...command.source,messageId:command.messageId,responses:command.responses.map(response=>({...response}))});return;}
+  for(const response of command.responses){const existing=prior.responses.find(item=>item.path===response.path);if(existing&&existing.bindingId!==response.bindingId)throw Error('This reply already has a stream reserved in that note.');}
+  if(prior.responses.length+command.responses.filter(response=>!prior.responses.some(item=>item.path===response.path)).length>32)throw Error('A reply can reserve at most 32 destination notes.');
+  for(const response of command.responses)if(!prior.responses.some(item=>item.path===response.path))prior.responses.push({...response});
+}
+export function reservedResponseBindings(reservations:ThreadResponseReservation[],target:EventTarget){
+  return reservations.filter(reservation=>reservation.environmentId===target.environmentId&&reservation.projectId===target.projectId&&reservation.threadId===target.threadId).flatMap(reservation=>reservation.responses.map(response=>({id:response.bindingId,path:response.path,messageIds:[reservation.messageId],turnIds:[] as string[]})));
+}
+export function renameResponseReservations(reservations:ThreadResponseReservation[],before:string,after:string){
+  for(const reservation of reservations)for(const response of reservation.responses)if(response.path===before||response.path.startsWith(before+'/'))response.path=after+response.path.slice(before.length);
+}
 
 export const STREAM_COMMANDS=['stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination'] as const;
 export interface ThreadDisplayCommand {version:1;id:string;kind:typeof STREAM_COMMANDS[number];source?:EventTarget;destinationSection?:string;destinations?:string[];subscriptionId?:string;destination?:string;scope?:'thread';start?:'future'|'history'|'after';afterMessageId?:string}
@@ -11,6 +34,8 @@ export interface DisplayDestination {id:string;path:string;section?:string;remov
 export interface DisplayBinding {messageId:string;turnId?:string;destinationId:string;request?:ResponseRequest;bindingId?:string;status:'planned'|'attached'|'skipped';error?:string}
 export interface ThreadDisplay extends EventTarget {id:string;scope:'thread';enabled:boolean;cancelled?:boolean;createdAt:string;boundary:string[];destinations:DisplayDestination[];bindings:DisplayBinding[];error?:string}
 export interface DisplayHost {
+  validateRelation?(target:EventTarget,paths:string[]):Promise<void>;
+  confirmRelation?(target:EventTarget,paths:string[]):Promise<void>;
   readThread(target:EventTarget):Promise<InlineThreadState>;
   validateDestination(path:string):Promise<void>;
   /** Existing bindings include completed records, steering and continuations. */
@@ -37,6 +62,7 @@ export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisp
   if(command.kind==='thread-streams')return {displays};
   if(command.kind==='stream-thread'){
     if(displays.length>=256)throw Error('Thread streaming registration limit reached.');
+    await host.validateRelation?.(command.source!,command.destinations!);
     for(const path of command.destinations!)await host.validateDestination(path);
     const state=await host.readThread(command.source!);
     if(!state.historyComplete)throw Error('A complete canonical history is required to establish the streaming boundary.');
@@ -44,6 +70,7 @@ export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisp
     if(command.start==='after'&&selected<0)throw Error('The selected prompt is no longer in the T3 history.');
     const boundary=command.start==='history'?[]:(command.start==='after'?prompts.slice(0,selected+1):prompts).map(m=>m.id);
     const display:ThreadDisplay={...command.source!,id:command.id,scope:'thread',enabled:true,createdAt:new Date(now).toISOString(),boundary,destinations:command.destinations!.map(path=>({id:commandId(command.id,`destination:${path}`),path,...(command.destinationSection?{section:command.destinationSection}:{})})),bindings:[]};
+    await host.confirmRelation?.(display,command.destinations!);
     displays.push(display);return {subscriptionId:display.id,display};
   }
   const display=displays.find(d=>d.id===command.subscriptionId);if(!display)throw Error('Thread streaming registration not found.');
@@ -51,7 +78,10 @@ export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisp
   if(command.kind==='pause-thread-stream')display.enabled=false;
   if(command.kind==='cancel-thread-stream'){display.enabled=false;display.cancelled=true;}
   if(command.kind==='resume-thread-stream'){
+    const paths=display.destinations.filter(destination=>!destination.removed).map(destination=>destination.path);
+    await host.validateRelation?.(display,paths);
     const state=await host.readThread(display);if(!state.historyComplete)throw Error('A complete canonical history is required to resume.');
+    await host.confirmRelation?.(display,paths);
     // Paused runs are skipped. Active child bindings continue independently.
     display.boundary=[...new Set([...display.boundary,...state.messages.filter(isRunInput).map(m=>m.id)])];display.enabled=true;
   }
@@ -62,6 +92,7 @@ export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisp
 }
 export async function tickDisplay(display:ThreadDisplay,host:DisplayHost){
   if(!display.enabled||display.cancelled)return;
+  await host.validateRelation?.(display,display.destinations.filter(destination=>!destination.removed).map(destination=>destination.path));
   const state=await host.readThread(display);
   if(!state.historyComplete)throw Error('Waiting for canonical thread history.');
   // Completed attachments and future-start boundaries need no private lease

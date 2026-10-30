@@ -12,6 +12,25 @@ test('large nested generated groups leave CodeMirror while exact canonical bytes
  const original=html('large','🎯 private detail '.repeat(1500),20),canonical='Before.\n\n> '+original+'\n\nFinal prose.\n',p=presentToolGroups(canonical);
  assert.ok(canonical.length>300_000);assert.ok(p.display.length<800);assert.equal(p.canonical,canonical);assert.equal(p.groups.length,1);assert.equal(p.groups[0].ref.length,64);assert.equal(canonicalToolGroup(p,p.groups[0].ref),original);assert.equal(p.groups[0].canonicalTo-p.groups[0].canonicalFrom,original.length);assert.match(p.display,/Ran 20 commands/);assert.doesNotMatch(p.display,/private detail/);assert.equal(restoreToolGroups(p.display,p),canonical);assert.deepEqual(toolDisplayOffset(p,2),{kind:'canonical',offset:2});assert.deepEqual(toolDisplayOffset(p,p.groups[0].displayFrom+10),{kind:'tool',ref:p.groups[0].ref,from:p.groups[0].canonicalFrom,to:p.groups[0].canonicalTo});assert.deepEqual(toolDisplayOffset(p,p.display.length),{kind:'canonical',offset:canonical.length});
 });
+test('compact groups have no instructional text while details wait to load',()=>{
+ const g=group(),completed=renderResponseToolGroup(g),running=renderResponseToolGroup(g,{tool:g.tools[0],active:true});
+ for(const canonical of [completed,running]){
+  const p=presentToolGroups(canonical);
+  assert.equal(p.groups.length,1);assert.doesNotMatch(p.display,/Open to view tool details\./);
+  assert.match(p.display,/<div class="send-to-t3-tool-group-content"><\/div><\/details>$/);
+  assert.equal(canonicalToolGroup(p,p.groups[0].ref),canonical);assert.equal(restoreToolGroups(p.display,p),canonical);
+ }
+});
+
+test('mixed and thought-only batches retain formatted summaries and exact canonical bytes',()=>{
+ const text='# Heading\n\n**Bold** and *emphasis* with [link](https://example.com "Title").\n\n2. First\n3. Second\n\n> Quote\n\n---\n\nLine  \nbreak\n\n![image](https://example.com/image.png "Image")\n\n```ts\nconst exact = `<script>`;\n```\n\n<script>literal</script> [unsafe](javascript:alert(1))';
+ for(const tools of [[],group().tools]){
+  const original=renderResponseToolGroup({...group(),tools,thoughts:[{id:'thought',turnId:'turn',role:'reasoning',text,streaming:false,createdAt:'2026-10-30T01:00:00Z',sequence:0}]});
+  const p=presentToolGroups(original);assert.equal(p.groups.length,1);assert.match(p.display,/1 thought/);assert.doesNotMatch(p.display,/Heading/);assert.match(original,/<strong>Bold<\/strong>/);assert.match(original,/&lt;script&gt;/);assert.doesNotMatch(original,/<script>|href="javascript:/);
+  assert.equal(canonicalToolGroup(p,p.groups[0].ref),original);assert.equal(restoreToolGroups(p.display,p),original);
+  assert.throws(()=>restoreToolGroups(p.display.replace('1 thought','2 thoughts'),p),/changed/);
+ }
+});
 test('tool bytes are restored exactly while ordinary edits stay on both sides',()=>{
  const first=html('first','one'),second=html('second','two'),canonical='Before\n'+first+'\nBetween\n'+second+'\nAfter',p=presentToolGroups(canonical),edited=p.display.replace('Before','Edited before').replace('Between','New middle').replace('After','Edited after');
  assert.equal(restoreToolGroups(edited,p),'Edited before\n'+first+'\nNew middle\n'+second+'\nEdited after');assert.equal(p.groups.length,2);assert.deepEqual(toolDisplayOffset(p,p.groups[1].displayFrom-1),{kind:'canonical',offset:p.groups[1].canonicalFrom-1});
@@ -42,7 +61,7 @@ test('unmatched generated summaries are rejected while literal copies remain ord
  for(const changed of [compact.replace(' data-t3-tool-ref=',' data-custom="changed" data-t3-tool-ref='),compact.replace(`data-t3-tool-ref="${p.groups[0].ref}"`,`data-t3-tool-ref='${p.groups[0].ref}'`)])assert.throws(()=>assertCanonicalToolGroups(changed),/no canonical/);
 });
 test('damaged known summaries recover exact backing and surrounding edits, while changed identities stay unresolved',()=>{
- const canonical='Before\n'+html('first','retained first')+'\nAfter',p=presentToolGroups(canonical),damaged=p.display.replace('Before','Incoming before').replace('After','Incoming after').replace('Open to view tool details.','Changed summary');
+ const canonical='Before\n'+html('first','retained first')+'\nAfter',p=presentToolGroups(canonical),damaged=p.display.replace('Before','Incoming before').replace('After','Incoming after').replace('Ran 2 commands','Changed summary');
  assert.throws(()=>restoreToolGroups(damaged,p),/changed/);assert.equal(recoverToolGroups(damaged,p),canonical.replace('Before','Incoming before').replace('After','Incoming after'));
  for(const ref of ['', 'f'.repeat(64),'unknown']){
   const changed=damaged.replace(p.groups[0].ref,ref);assert.equal(compactToolGroups(changed).length,1);assert.throws(()=>recoverToolGroups(changed,p),/identity/);assert.throws(()=>restoreToolGroups(changed,p),/changed/);
@@ -131,4 +150,17 @@ test('compressed flow context keeps raw HTML terminators, code examples and quot
   const p=presentToolGroups(source),histories=p.groups.filter(group=>group.placeholder.includes('class="send-to-t3-response-history"'));
   assert.equal(histories.length,expected.length,prefix+' '+ending);assert.equal(restoreToolGroups(p.display,p),source);
  }
+});
+
+test('an open retained batch reloads a changed reference without another user toggle',async()=>{
+ const first=html('stream','old result'),next=html('stream','updated exact result'),before=presentToolGroups(first),after=presentToolGroups(next),h=dom(before.groups[0].ref);
+ let changed!:()=>void,disconnected=false,reads=0;
+ class Observer {constructor(callback:()=>void){changed=callback;}observe(){}disconnect(){disconnected=true;}}
+ (h.root.ownerDocument as any).defaultView={MutationObserver:Observer};
+ const dispose=mountToolGroups(h.root as unknown as HTMLElement,ref=>{reads++;return ref===before.groups[0].ref?first:next;},renderMock);
+ await h.details.toggle(true);assert.equal(h.target.children[0].textContent,first);
+ h.details.attrs['data-t3-tool-ref']=after.groups[0].ref;changed();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(h.details.open,true);assert.equal(reads,2);assert.equal(h.target.children[0].textContent,next);
+ changed();await new Promise(resolve=>setImmediate(resolve));assert.equal(reads,2);
+ dispose();assert.equal(disconnected,true);
 });
