@@ -79,13 +79,20 @@ test('projects omit legacy vault-root links and mobile offers only T3 Connect',a
   assert.ok(h.panel().all().some(el=>el.text.startsWith('No folders are linked.')));
 });
 
-test('thread/note modes save in Replies without changing links or response settings',async()=>{
+test('thread/note modes default to Free inside collapsed Beta and preserve links when changed',async()=>{
   const h=await harness();h.plugin.settings.noteThreads=[{notePath:'A.md',threadId:'one'}];
   const before=JSON.stringify(h.plugin.settings.noteThreads);h.select('Replies');
+  const beta=()=>h.panel().all().find(el=>el.tag==='details'&&el.children[0]?.text==='Beta')!;
+  assert.equal(beta().open,false);assert.ok(beta().all().includes(h.row('Thread and note mode')));
+  assert.equal(h.saves(),0,'Opening Beta settings must not change the saved mode');
+  beta().open=true;beta().fire('toggle');
   const control=h.row('Thread and note mode').controls[0];
-  assert.equal(control.value,'free');assert.deepEqual(Object.keys(control.options),['one-to-one','free']);
+  assert.equal(control.value,'free');assert.deepEqual(Object.keys(control.options),['free','one-to-one']);
   await control.change('one-to-one');assert.equal(h.plugin.settings.threadNoteMode,'one-to-one');
   h.plugin.cloudChanged();assert.equal(h.row('Thread and note mode').controls[0].value,'one-to-one');
+  assert.equal(beta().open,true,'Account updates keep Beta open while changing the mode');
+  beta().open=false;beta().fire('toggle');h.plugin.cloudChanged();assert.equal(beta().open,false);
+  assert.equal(h.row('Thread and note mode').controls[0].value,'one-to-one','Collapsing Beta preserves an existing choice');
   await h.row('Thread and note mode').controls[0].change('free');
   assert.equal(h.saves(),2);assert.equal(JSON.stringify(h.plugin.settings.noteThreads),before);
   assert.equal(h.plugin.settings.inlineStreaming.enabled,true);
