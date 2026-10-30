@@ -355,7 +355,11 @@ class ReleaseQueueTests(unittest.TestCase):
         subprocess.run(['git', 'add', '.'], cwd=source, check=True)
         subprocess.run(['git', 'commit', '-qm', 'correct source'], cwd=source, check=True)
         replacement = queue.submission(source, self.root, 'HEAD', evidence=self.evidence, notes='Verified correction')
+        # A replacement with only a tooling diff must retain the original
+        # product job and all restored behavior-evidence dependencies.
+        replacement['maintenanceOnly'] = True
         queue.retry(submitted['jobId'], replacement=replacement, queue=self.store)
+        self.assertFalse(queue.read(directory / 'request-1.json')['maintenanceOnly'])
         queue.drain(self.release, queue=self.store)
         self.assertEqual(self.published, ['1.0.1'])
         self.assertEqual((directory / 'request.json').read_bytes(), original)

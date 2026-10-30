@@ -226,6 +226,12 @@ def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) 
                 raise SystemExit('This job already has immutable release bytes. Resume them; submit later code separately.')
             revision = state.get('requestRevision', 0) + 1
             name = f'request-{revision}.json'
+            previous = read(directory / state.get('requestFile', 'request.json'))
+            # A failed integration remains in Git history after its explicit
+            # revert. A merge-base can therefore hide restored product inputs.
+            replacement = {**replacement,
+                           'maintenanceOnly': bool(previous.get('maintenanceOnly')) and bool(replacement.get('maintenanceOnly')),
+                           'sourceInputsSha256': {**previous['sourceInputsSha256'], **replacement['sourceInputsSha256']}}
             save_request(directory, replacement, name)
             state.update(requestRevision=revision, requestFile=name)
         state.update(status='queued', updatedAt=now(), failures=0)
