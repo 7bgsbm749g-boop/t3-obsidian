@@ -78,3 +78,15 @@ test('projects omit legacy vault-root links and mobile offers only T3 Connect',a
   assert.ok(h.row('Vault connection'));assert.ok(h.row('Codebase view'));assert.equal(h.row('Vault root'),undefined);
   assert.ok(h.panel().all().some(el=>el.text.startsWith('No folders are linked.')));
 });
+
+test('thread/note modes save in Replies without changing links or response settings',async()=>{
+  const h=await harness();h.plugin.settings.noteThreads=[{notePath:'A.md',threadId:'one'}];
+  const before=JSON.stringify(h.plugin.settings.noteThreads);h.select('Replies');
+  const control=h.row('Thread and note mode').controls[0];
+  assert.equal(control.value,'free');assert.deepEqual(Object.keys(control.options),['one-to-one','free']);
+  await control.change('one-to-one');assert.equal(h.plugin.settings.threadNoteMode,'one-to-one');
+  h.plugin.cloudChanged();assert.equal(h.row('Thread and note mode').controls[0].value,'one-to-one');
+  await h.row('Thread and note mode').controls[0].change('free');
+  assert.equal(h.saves(),2);assert.equal(JSON.stringify(h.plugin.settings.noteThreads),before);
+  assert.equal(h.plugin.settings.inlineStreaming.enabled,true);
+});
