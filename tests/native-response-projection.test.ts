@@ -1,3 +1,4 @@
+import {markdownCodeCacheStatus} from '../reply-html';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {displayToSaved,savedToDisplay,responseAnchor,responseRegion,projectResponses,savedProjection,editableDisplayRange} from '../native-response-projection';
@@ -65,6 +66,15 @@ function fakeView(document:string,normalizeIncoming?:(text:string)=>string){
   const adapter=new NativeResponseView(view,document,record=>conflicts.push(record),async()=>disk,normalizeIncoming);
   return {view,adapter,conflicts,originalGet,originalSet,read:()=>value,edit:(data:string)=>{value=data;},saves:()=>saves};
 }
+
+test('detached views retain exact late-save bytes without rendering and restore native methods on reuse',async()=>{
+ const document=`Before\n\n${responseAnchor(id)}\n\nAfter`,h=fakeView(document);
+ h.adapter.setResponses([{id,body:'Transient output'}]);h.edit(h.read().replace('After','Edited after'));
+ const displayed=h.read(),expected=document.replace('After','Edited after');
+ h.adapter.dispose(true);assert.equal(h.adapter.isDisposed(),true);assert.equal(h.read(),displayed);assert.equal(h.view.getViewData(),expected);
+ await h.view.save();assert.equal(h.view.getViewData(),expected);
+ h.view.setViewData('Next note',false);assert.equal(h.read(),'Next note');assert.equal(h.view.getViewData,h.originalGet);assert.equal(h.view.setViewData,h.originalSet);
+});
 
 test('confirmed steering moves its exact source into the running projection and saves it',()=>{
   const document=`Keep this.\n\n${responseAnchor(id)}\n\nSteer now.\n\nKeep this too.`,h=fakeView(document),text='Steer now.',start=document.indexOf(text);
@@ -400,4 +410,23 @@ test('cross-pane final materialization recognizes its exact saved intent with an
  const final=saved.replace(responseAnchor(id),'\n> Finished'),echo=projectResponses(final,[{id:other,body:'> Independent stream'}]).display;
  fixture.adapter.prepareMaterialization(saved,final,[id]);fixture.view.setViewData(echo,false);fixture.adapter.acceptCommitted(final,[id]);
  assert.deepEqual(fixture.conflicts,[]);assert.equal(fixture.view.getViewData(),final);assert.ok(fixture.read().includes('Independent stream'));
+});
+
+test('ordinary transactions around retained tools map exact saved bytes without reparsing Markdown',()=>{
+ const document='Before ordinary text.\n\n'+largeTools()+'\n\nAfter ordinary text.',h=fakeView(document);h.adapter.setResponses([]);
+ let state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});h.view.editor={cm:{state}};
+ const before=markdownCodeCacheStatus();let expected=document;
+ for(let i=0;i<30;i++){
+  const at=i%2===0?2:state.doc.toString().indexOf('After')+2;
+  const savedAt=i%2===0?2:expected.indexOf('After')+2;
+  state=state.update({changes:{from:at,insert:'x'}}).state;h.view.editor.cm.state=state;h.edit(state.doc.toString());expected=expected.slice(0,savedAt)+'x'+expected.slice(savedAt);
+  assert.equal(h.adapter.saved(),expected);assert.equal(h.adapter.currentProjection().saved,expected);
+ }
+ assert.equal(markdownCodeCacheStatus().sourceParses,before.sourceParses);
+ // Delimiter and newline edits still take full validation, including undo.
+ for(const insert of ['\n','`','<pre>']){
+  const old=state.doc.toString();state=state.update({changes:{from:2,insert}}).state;h.view.editor.cm.state=state;h.edit(state.doc.toString());
+  state=state.update({changes:{from:2,to:2+insert.length,insert:''}}).state;h.view.editor.cm.state=state;h.edit(state.doc.toString());assert.equal(state.doc.toString(),old);assert.equal(h.adapter.saved(),expected);
+ }
+ h.adapter.dispose();assert.equal(h.read(),expected);
 });

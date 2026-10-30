@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {streamBlocks,streamBlock,removeStreamBlock} from '../stream-block';
+import {streamBlocks,streamBlock,removeStreamBlock,streamBlockCacheStatus} from '../stream-block';
 import {initialRegion} from '../inline-thread';
 import {contentHash} from '../completion';
 import {validateResponseCommand} from '../response-command';
@@ -57,4 +57,14 @@ test('close commands require a safe note, completed identity and reviewed block 
   const {key,body}=historyFixture(),command={version:1,id:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',kind:'close-stream-block',notePath:'Note.md',foldKey:key,hash:contentHash(streamBlock(body,key)!.text)};
   assert.deepEqual(validateResponseCommand(command),command);
   for(const change of [{notePath:'../Other.md'},{foldKey:key.replace(':complete',':active')},{hash:'bad'},{id:'bad'}])assert.throws(()=>validateResponseCommand({...command,...change}));
+});
+
+test('large notes retain their history index between repeated layout refreshes',()=>{
+ const {body,key}=historyFixture(),note='A large ordinary paragraph '+ 'retained text '.repeat(160000)+'\n\n'+body;
+ assert.ok(note.length>2_000_000);
+ const first=streamBlock(note,key)!;assert.ok(first.complete);assert.ok(!first.tracked);
+ const before=streamBlockCacheStatus();
+ for(let i=0;i<30;i++)assert.deepEqual(streamBlock(note,key),first);
+ const after=streamBlockCacheStatus();assert.equal(after.sourceParses,before.sourceParses);assert.equal(after.hits-before.hits,30);assert.ok(after.characters<=after.maxCharacters);
+ assert.equal(streamBlock(note.replace(':complete',':active'),key),undefined);
 });

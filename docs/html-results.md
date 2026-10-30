@@ -18,7 +18,7 @@ Every retained cache entry carries its source identity and a SHA-256 checksum.
 
 Cache bytes live in the existing IndexedDB devices store, scoped to the vault.
 The persistent index retains up to 64 pages and 100 MiB. Old payloads are released
-when that budget is exceeded. Warm text has a separate eight-page/32-million-
+when that budget is exceeded. Warm text has a separate sixteen-page/32-million-
 character limit, and concurrent requests for one result share a fill. Unload
 closes frames and object URLs and prevents late downloads from publishing bytes.
 Attachment downloads do not delay final reply saves.
@@ -68,17 +68,14 @@ transition to enable automatic recovery.
 
 ## Native presentation
 
-Reading mode uses a registered Markdown code-block processor. Live Preview uses
-direct CodeMirror block decorations and atomic ranges. The source fence stays
-visible in Source mode. Widget identities survive ordinary edits and streaming
-updates through widget equality. A Live Preview index scans changed lines for
-candidate fences and reuses unchanged Markdown syntax fragments. Full context
-is retained so list markers, indentation, or plain letters which change an HTML
-block's context still remove or restore the correct widget. Remark validates
-only individual candidate fences, with unchanged reference values reused on
-later edits. Notes without candidate fences do not start the Markdown parser.
-Non-document transactions keep the current decoration set. Each viewer uses its
-own owner document, including popouts.
+Reading mode and Live Preview use Obsidian's registered Markdown code-block
+processor. The source fence stays visible in Source mode. Native Markdown owns
+block context, viewport mounting, widget positions and editor navigation; the
+plugin no longer adds a second whole-note HTML index or decoration layer.
+Source-view wrapper styles preserve the former card dimensions and appearance.
+Each viewer uses its own owner document, including popouts. Prepared render
+documents have a separate sixteen-entry/eight-million-character cache. Each
+mount still owns and revokes its own blob URL, iframe and event handlers.
 
 The viewer loads the prepared T3 document from a local blob URL in an iframe with
 `sandbox="allow-scripts allow-forms"`. It never allows same-origin access.
@@ -104,17 +101,17 @@ deduplication, bounded recovery, result retention outside folds, frame sizing,
 exact source verification, path normalization, cache corruption, concurrent fills,
 offline reopen and cache retirement. Receiver coverage uses independent sender
 and receiver caches, not a warm reopen of the sender cache. Production viewer
-tests cover compact state transitions, explicit sign-in, scoped one-shot
+tests cover native processor registration, compact state transitions, explicit sign-in, scoped one-shot
 recovery, unchanged sandbox flags, coalesced loads and disposal. Editor probes
-load the production extension and run real CodeMirror transactions for list and
-HTML-block context edits, normal typing, newlines, mode changes, replacement and
-restoration. Differential tests compare incremental references with the full
-Markdown parser through structural edits. Pending-load tests cover late auth
+check that no duplicate plugin decoration layer is installed. The retired index
+still has differential parser coverage, but is not an installed rendering path.
+Native fixtures verify Live Preview rendering and lifecycle. Pending-load tests cover late auth
 failures, shared recovery, one retry, successful loads, verification failures
 and disposal. The asset adapter has a focused RPC check. Run the synthetic edit
 benchmark with `npx tsx validation/html-result-edit-benchmark.ts LABEL OUTPUT.json`;
 it records transactions at three positions in a 52 KiB note, with and without
-one reference, and checks widget retention throughout.
+one reference, and verifies that no extra plugin widgets are installed. It does
+not measure Obsidian's native code-block rendering or paint.
 
 Build an isolated real-client fixture outside all source and synced vaults:
 

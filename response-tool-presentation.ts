@@ -1,3 +1,10 @@
+import {markdownFlowContext} from './markdown-flow';
+import {streamBlocks} from './stream-block';
+type CachedPresentation={collapsed?:ToolPresentation;expanded?:ToolPresentation;characters:number};
+const presentationCache=new Map<string,CachedPresentation>();
+const maxPresentationCharacters=8_000_000;
+let presentationCharacters=0;
+const copyPresentation=(value:ToolPresentation):ToolPresentation=>({...value,groups:value.groups.map(group=>({...group}))});
 import {contentHash} from './completion';
 import {markdownCodeRanges} from './reply-html';
 
@@ -23,7 +30,7 @@ function tagAt(text:string,from:number,unknownAttributes=false):Tag|undefined{
  return {from,to:end+1,name:match[2],closing:!!match[1],attrs,raw};
 }
 function generatedStart(first:Tag|undefined,placeholder:boolean):first is Tag {
- return !!first&&!first.closing&&first.name==='details'&&['send-to-t3-tool-group','send-to-t3-response-activity'].includes(first.attrs.class)&&!!first.attrs['data-t3-tool-group']&&first.attrs['data-t3-tool-summary']!==undefined&&Object.hasOwn(first.attrs,'data-t3-tool-ref')===placeholder;
+ return !!first&&!first.closing&&first.name==='details'&&['send-to-t3-tool-group','send-to-t3-response-activity','send-to-t3-response-history'].includes(first.attrs.class)&&!!first.attrs['data-t3-tool-group']&&first.attrs['data-t3-tool-summary']!==undefined&&Object.hasOwn(first.attrs,'data-t3-tool-ref')===placeholder;
 }
 function groupAt(text:string,from:number,placeholder=false){
  const first=tagAt(text,from);if(!generatedStart(first,placeholder))return;
@@ -60,13 +67,21 @@ function recognizedGroups(text:string,placeholder:boolean){
   if(Object.hasOwn(found.first.attrs,'data-t3-tool-ref')===placeholder)candidates.push({from,found,analysisFrom});cursor=found.to;search=found.to;
  }
  if(!candidates.length)return candidates;
- analysis+=text.slice(cursor);const excluded=[...markdownCodeRanges(analysis),...literalHtmlRanges(analysis)];
+ analysis+=text.slice(cursor);
+ // Generated groups usually start their own paragraph, including inside a
+ // quote. Flow context proves these cannot be inside inline code. Unusual
+ // inline examples retain the full code-span grammar.
+ const flow=markdownFlowContext(analysis.replace(/</g,' ')),code=candidates.every(candidate=>flow.paragraphStarts.has(candidate.analysisFrom)||flow.code.some(([from,to])=>candidate.analysisFrom>=from&&candidate.analysisFrom<to))?flow.code:markdownCodeRanges(analysis);
+ const excluded=[...code,...literalHtmlRanges(analysis)];
  return candidates.filter(({analysisFrom})=>!excluded.some(([start,end])=>start<=analysisFrom&&analysisFrom<end));
 }
 /** Only reserved generated containers outside literal Markdown/HTML count as
  * compact references. Ordinary attributes and quoted examples stay intact. */
 export function compactToolGroups(text:string):CompactToolGroup[]{
- if(!text.includes('data-t3-tool-ref='))return [];
+ // Escaped tool output often quotes this attribute as source code. Only an
+ // actual quoted attribute can be a reserved compact shell; plain mentions
+ // and &quot; must not trigger a scan of every retained tool group.
+ if(!/\bdata-t3-tool-ref=["']/.test(text))return [];
  return recognizedGroups(text,true).map(({from,found})=>({from,to:found.to,ref:found.first.attrs['data-t3-tool-ref'],text:text.slice(from,found.to),complete:found.complete}));
 }
 export function assertCanonicalToolGroups(text:string){
@@ -82,18 +97,84 @@ function literalHtmlRanges(text:string){
 /** Presentation only. The canonical body and final-write grant remain exact.
  * Only complete, recognized generated groups are replaced; malformed or
  * arbitrary Markdown is returned intact. Call on body updates, not keystrokes. */
-export function presentToolGroups(canonical:string):ToolPresentation{
- const groups:PresentedToolGroup[]=[],parts:string[]=[];
- const candidates=recognizedGroups(canonical,false);
- if(!candidates.length)return {canonical,display:canonical,groups};
- let cursor=0,displayLength=0;
- for(const {from,found} of candidates){
-  const original=canonical.slice(from,found.to),ref=contentHash(original);
-  const placeholder=found.first.raw.slice(0,-1)+` data-t3-tool-ref="${ref}">`+found.summary+'<div class="send-to-t3-tool-group-content"><p>Open to view tool details.</p></div></details>';
-  const ordinary=canonical.slice(cursor,from);parts.push(ordinary,placeholder);displayLength+=ordinary.length;
-  groups.push({ref,canonicalFrom:from,canonicalTo:found.to,displayFrom:displayLength,displayTo:displayLength+placeholder.length,placeholder});displayLength+=placeholder.length;cursor=found.to;
+/** Find complete runs of quoted history lines before asking the flow grammar
+ * for their context. A quoted line cannot close a surrounding Markdown fence.
+ * Keep raw-HTML terminators for literal HTML contexts. Only runs ending at a
+ * physical blank line or EOF are shortened, so lazy paragraph continuation
+ * cannot absorb the final answer. Notes with response boundaries retain the
+ * full grammar, including tracking comments inside literal code examples. */
+function toolFlowProjection(text:string){
+ const bodies=new Map<number,{from:number;to:number}>(),spans:Array<{from:number;to:number;originalFrom:number;originalTo:number}>=[],parts:string[]=[];
+ const identity={text,originalOffset:(position:number)=>position,bodies};
+ if(text.includes('<!-- t3-inline:')||text.includes('<!-- t3-response:')||text.includes('data-t3-response=')||text.includes(':::/send-to-t3-response'))return identity;
+ const headers=/^ {0,3}> \[!t3-progress\]- [^\r\n]*data-t3-fold="[^"\r\n]+"[^\r\n]*/gm;
+ let match:RegExpExecArray|null,cursor=0,length=0;
+ while((match=headers.exec(text))){
+  const newline=text.indexOf('\n',headers.lastIndex);if(newline<0)continue;
+  const start=newline+1;let at=start,to=start;
+  while(at<text.length){const next=text.indexOf('\n',at),end=next<0?text.length:next,line=text.slice(at,end);if(!/^ {0,3}>/.test(line))break;to=end-(text[end-1]==='\r'?1:0);at=next<0?text.length:next+1;}
+  if(to===start||at<text.length&&text.slice(at,text.indexOf('\n',at)<0?text.length:text.indexOf('\n',at)).trim())continue;
+  const body=text.slice(start,to),prefix=/^(?:>[ \t]*\r?\n)*> ?/.exec(body)?.[0];if(!prefix)continue;
+  const endings=body.match(/-->|\?>|\]\]>|<\/(?:pre|script|style|textarea)\s*>/gi)??[];
+  const replacement='> T3_HISTORY_FLOW '+endings.join(''),ordinary=text.slice(cursor,start);parts.push(ordinary,replacement);length+=ordinary.length;
+  spans.push({from:length,to:length+replacement.length,originalFrom:start,originalTo:to});length+=replacement.length;cursor=to;
+  bodies.set(match.index+match[0].indexOf('>'),{from:start+prefix.length,to});headers.lastIndex=at;
  }
- parts.push(canonical.slice(cursor));return {canonical,display:groups.length?parts.join(''):canonical,groups};
+ if(!spans.length)return identity;
+ parts.push(text.slice(cursor));
+ return {text:parts.join(''),bodies,originalOffset:(position:number)=>{let delta=0;for(const span of spans){if(position<span.to){if(position>span.from)throw Error('A history boundary entered retained output.');break;}delta+=(span.originalTo-span.originalFrom)-(span.to-span.from);}return position+delta;}};
+}
+/** Remove one generated quote level when a retained history body is opened. */
+export function historyToolBody(body:string){
+ return ('> '+body).split('\n').map(line=>{
+  if(/^ {0,3}>/.test(line))return line.replace(/^ {0,3}> ?/,'');
+  if(!line.trim())return line;
+  throw Error('The retained history body changed its quote context.');
+ }).join('\n');
+}
+export function presentToolGroups(canonical:string,collapseHistory=true):ToolPresentation{
+ const mode=collapseHistory?'collapsed':'expanded',cached=presentationCache.get(canonical),existing=cached?.[mode];
+ if(existing){presentationCache.delete(canonical);presentationCache.set(canonical,cached!);return copyPresentation(existing);}
+ const replacements:Array<{from:number;to:number;ref:string;placeholder:string}>=[];
+ const flow=collapseHistory?toolFlowProjection(canonical):undefined;
+ if(flow)for(const block of streamBlocks(flow.text)){
+  if(!block.complete||block.tracked||!block.text.startsWith('> [!t3-progress]- '))continue;
+  const header=block.text.indexOf('\n');if(header<0)continue;
+  const retained=flow.bodies.get(flow.originalOffset(block.from));
+  const body=block.text.slice(header+1),prefix=/^(?:>[ \t]*\r?\n)*> ?/.exec(body)?.[0];if(!prefix)continue;
+  const from=retained?.from??flow.originalOffset(block.from+header+1+prefix.length),to=flow.originalOffset(block.to);if(retained&&retained.to!==to)continue;
+  const original=canonical.slice(from,to);if(!original.trim())continue;
+  try{historyToolBody(original);}catch{continue;}
+  const ref=contentHash(original),placeholder='<details class="send-to-t3-response-history" data-t3-tool-group="history" data-t3-tool-summary="History" data-t3-tool-ref="'+ref+'"><summary>History</summary><div class="send-to-t3-tool-group-content"><p>Loading history…</p></div></details>';
+  replacements.push({from,to,ref,placeholder});
+ }
+ // Mask retained histories before looking for individual tools. Their output
+ // stays in canonical backing and is parsed only if the user opens the fold.
+ let intermediate='',cursor=0;const mapped:Array<{from:number;to:number;delta:number}>=[];
+ for(const item of replacements){intermediate+=canonical.slice(cursor,item.from);const from=intermediate.length;intermediate+=item.placeholder;mapped.push({from,to:intermediate.length,delta:item.to-item.from-item.placeholder.length});cursor=item.to;}
+ intermediate+=canonical.slice(cursor);
+ const originalOffset=(position:number)=>{let delta=0;for(const item of mapped){if(position<item.to)break;delta+=item.delta;}return position+delta;};
+ for(const {from,found} of recognizedGroups(intermediate,false)){
+  const start=originalOffset(from),to=originalOffset(found.to),original=canonical.slice(start,to),ref=contentHash(original);
+  const placeholder=found.first.raw.slice(0,-1)+` data-t3-tool-ref="${ref}">`+found.summary+'<div class="send-to-t3-tool-group-content"><p>Open to view tool details.</p></div></details>';
+  replacements.push({from:start,to,ref,placeholder});
+ }
+ if(!replacements.length)return {canonical,display:canonical,groups:[]};
+ replacements.sort((a,b)=>a.from-b.from);
+ const groups:PresentedToolGroup[]=[],parts:string[]=[];cursor=0;let displayLength=0;
+ for(const item of replacements){
+  if(item.from<cursor)throw Error('Overlapping retained presentation ranges.');
+  const ordinary=canonical.slice(cursor,item.from);parts.push(ordinary,item.placeholder);displayLength+=ordinary.length;
+  groups.push({ref:item.ref,canonicalFrom:item.from,canonicalTo:item.to,displayFrom:displayLength,displayTo:displayLength+item.placeholder.length,placeholder:item.placeholder});displayLength+=item.placeholder.length;cursor=item.to;
+ }
+ parts.push(canonical.slice(cursor));const result={canonical,display:parts.join(''),groups};
+ const entry=cached??{characters:canonical.length};
+ const characters=canonical.length+(mode==='collapsed'?result.display.length:entry.collapsed?.display.length??0)+(mode==='expanded'?result.display.length:entry.expanded?.display.length??0);
+ if(characters<=maxPresentationCharacters){
+  presentationCharacters+=characters-(cached?.characters??0);entry[mode]=result;entry.characters=characters;presentationCache.delete(canonical);presentationCache.set(canonical,entry);
+  while(presentationCharacters>maxPresentationCharacters||presentationCache.size>8){const [source,old]=presentationCache.entries().next().value!;presentationCache.delete(source);presentationCharacters-=old.characters;}
+ }
+ return copyPresentation(result);
 }
 export function canonicalToolGroup(presentation:ToolPresentation,ref:string){
  const group=presentation.groups.find(group=>group.ref===ref);if(!group)return;
@@ -143,14 +224,14 @@ export function mountToolGroups(root:HTMLElement,resolve:(ref:string)=>string|un
  const selector='details[data-t3-tool-ref]',nodes=Array.from(root.querySelectorAll<HTMLDetailsElement>(selector));
  if(root.matches?.(selector))nodes.unshift(root as HTMLDetailsElement);
  for(const details of nodes){
-  let pending=false,loaded=false;const ref=details.getAttribute('data-t3-tool-ref')??'';
+  let pending=false,loaded=false;const ref=details.getAttribute('data-t3-tool-ref')??'',history=details.getAttribute('class')==='send-to-t3-response-history';
   const alive=()=>!disposed&&root.contains(details)&&details.isConnected&&details.getAttribute('data-t3-tool-ref')===ref;
   const toggle=async()=>{
    if(!details.open||pending||loaded||!alive())return;pending=true;
    try{
-    const original=await resolve(ref);if(!alive()||!details.open)return;if(!original||contentHash(original)!==ref||!groupAt(original,0)||groupAt(original,0)!.to!==original.length)throw Error('The retained tool details are unavailable.');
-    const temporary=root.ownerDocument.createElement('div');await render(original,temporary);if(!alive()||!details.open)return;
-    const content=temporary.querySelector('.send-to-t3-tool-group-content'),target=details.querySelector('.send-to-t3-tool-group-content');if(!content||!target)throw Error('Cannot render the retained tool details.');
+    const original=await resolve(ref);if(!alive()||!details.open)return;if(!original||contentHash(original)!==ref||!history&&(!groupAt(original,0)||groupAt(original,0)!.to!==original.length))throw Error('The retained tool details are unavailable.');
+    const temporary=root.ownerDocument.createElement('div');await render(history?historyToolBody(original):original,temporary);if(!alive()||!details.open)return;
+    const content=history?temporary:temporary.querySelector('.send-to-t3-tool-group-content'),target=details.querySelector('.send-to-t3-tool-group-content');if(!content||!target)throw Error('Cannot render the retained tool details.');
     target.replaceChildren(...Array.from(content.childNodes));loaded=true;
    }catch(error){if(alive())failure?.(error);}finally{pending=false;}
   };

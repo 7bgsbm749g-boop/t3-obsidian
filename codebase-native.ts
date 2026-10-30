@@ -381,7 +381,7 @@ export class CodebaseBridge {
       if(native?.vaultRelative&&this.physicalFileLookup?.(native.vaultRelative))continue;
       const parent=image.closest?.('.internal-embed[src], .internal-embed[data-src]'),parentLink=parent?.getAttribute('src')??parent?.getAttribute('data-src');
       if(!native&&!parentLink)continue; // Signed resources and ordinary web images need no work.
-      const originalLink=original?.(image),link=parentLink??originalLink??native?.link;if(!link)continue;
+      const originalLink=parentLink?undefined:original?.(image),link=parentLink??originalLink??native?.link;if(!link)continue;
       try{
         const item=await this.prepareRenderedEmbed(link,source);
         if(!item||this.stopped||!current()||!this.allowed(item.scope)||!item.resource||(image.getAttribute('src')??'')!==rendered)continue;

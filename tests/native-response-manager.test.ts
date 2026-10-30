@@ -1,3 +1,4 @@
+import {renderResponseToolGroup} from '../response-tools';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {NativeResponseManager} from '../native-response-manager';
@@ -393,4 +394,28 @@ test('local settings records reconnect after retained preview revisions restart 
   const fresh={...active,revision:1};await h.manager.receive(fresh);
   h.manager.stream({request:fresh.request,messageId:id,sequence:11,body:'Fresh reconnected local reply',phase:'running'});
   assert.match(h.visible(),/Fresh reconnected local reply/);assert.equal(h.manager.view(h.views[0] as any)?.conflictRecord(),undefined);h.manager.dispose();
+});
+
+test('native loading compacts before the first editor set and preserves canonical saves and file switches',async()=>{
+ const tools=renderResponseToolGroup({id:'load-test',turnId:'turn',tools:[{id:'tool',turnId:'turn',key:'tool',status:'completed',label:'Read output',activeLabel:'Read output',icon:'file-text',action:'read',sequence:1,output:'Retained output '.repeat(1000)}]}),source='Before\n\n'+tools+'\n\nAfter';
+ const seen:string[]=[],savedReads:string[]=[];let disk=source;let reads=0;
+ class View{
+  file={path:'First.md'};value='';source=false;
+  getState(){return {source:this.source};}getMode(){return 'source';}getViewData(){return this.value;}
+  setViewData(value:string,_clear:boolean){savedReads.push(this.getViewData());seen.push(value);this.value=value;}
+  requestSave(){}async save(){disk=this.getViewData();}
+ }
+ const view=new View(),app:any={workspace:{getLeavesOfType:()=>[{view}]},vault:{read:async()=>{reads++;return disk;}}},manager=new NativeResponseManager(app),original=View.prototype.setViewData,stop=manager.installLoading(View.prototype as any);
+ view.setViewData(source,true);assert.equal(seen.length,1);assert.ok(seen[0].length<1000);assert.equal(savedReads[0],source);assert.equal(view.getViewData(),source);
+ const before=reads;await view.save();assert.equal(reads,before,'Unchanged canonical bytes need no disk read or write');assert.equal(disk,source);
+ view.file={path:'Second.md'};const second=source.replace('After','Second after');disk=second;view.setViewData(second,true);assert.equal(view.getViewData(),second);assert.ok(view.value.length<1000);
+ view.file={path:'Source.md'};view.source=true;view.setViewData(source,true);assert.equal(view.value,source);assert.equal(view.getViewData(),source);
+ stop();assert.equal(View.prototype.setViewData,original);manager.dispose();
+});
+
+test('a damaged existing tool note remains readable when early projection validation fails',()=>{
+ const original='<details class="send-to-t3-tool-group" data-t3-tool-group="damaged" data-t3-tool-summary="Read 1 file" data-t3-tool-ref="unknown"><summary>Read 1 file</summary><div class="send-to-t3-tool-group-content"><p>Open to view tool details.</p></div></details>';
+ class View{file={path:'Damaged.md'};value='';getViewData(){return this.value;}setViewData(text:string,_clear:boolean){this.value=text;}getMode(){return 'source';}requestSave(){}async save(){}}
+ const view=new View(),manager=new NativeResponseManager({workspace:{getLeavesOfType:()=>[{view}]}} as any),stop=manager.installLoading(View.prototype as any);
+ view.setViewData(original,true);assert.equal(view.getViewData(),original);assert.equal(manager.view(view as any),undefined);stop();manager.dispose();
 });

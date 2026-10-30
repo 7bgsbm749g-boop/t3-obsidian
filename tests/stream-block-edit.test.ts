@@ -1,3 +1,4 @@
+import {compactToolGroups} from '../response-tool-presentation';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EditorState} from '@codemirror/state';
@@ -77,7 +78,7 @@ test('an active or terminal-looking unsaved projection cannot be deleted as comp
   assert.ok(!streamBlock(active,fixture.key));
 });
 test('whole completed tool groups can be deleted but partial compact-shell edits stay rejected',()=>{
-  const {body,key}=withTools(),h=editor(body),display=h.view.editor.getValue(),at=display.indexOf('Open to view tool details.');
+  const {body,key}=withTools(),h=editor(body),display=h.view.editor.getValue(),at=compactToolGroups(display)[0].from+1;
   h.cm.dispatch({changes:{from:at,to:at+4,insert:'Changed'}});
   assert.equal(h.view.editor.getValue(),display);assert.equal(h.adapter.saved(),body);
   assert.equal(removeStreamBlockFromEditor(h.view,key,h.adapter.saved()),true);

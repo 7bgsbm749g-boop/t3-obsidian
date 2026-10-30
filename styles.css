@@ -449,6 +449,8 @@
 [data-t3-tool-icon] { display: inline-flex; width: 16px; height: 16px; flex: 0 0 16px; }
 [data-t3-tool-icon] svg { width: 16px; height: 16px; }
 .send-to-t3-tool-group-content { padding-left: 1.1em; }
+.markdown-rendered .send-to-t3-response-history,.markdown-rendered .send-to-t3-response-history>.send-to-t3-tool-group-content{display:contents;}
+.markdown-rendered .send-to-t3-response-history>summary{display:none;}
 .send-to-t3-tool[data-t3-tool-status="inProgress"] > summary::after { content: ''; width: .65em; height: .65em; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: send-to-t3-inline-spin .8s linear infinite; }
 .send-to-t3-tool[data-t3-tool-status="failed"] > summary { color: var(--text-error); }
 .send-to-t3-tool pre { max-height: 18em; overflow: auto; white-space: pre-wrap; }
@@ -466,10 +468,12 @@
 }
 /* HTML is the content, with the same small hover action as a native embed. */
 .send-to-t3-html-result{position:relative;display:block;width:100%;min-width:0;margin:var(--p-spacing,1em) 0;border:0;background:transparent;contain:layout;}
-.markdown-source-view .cm-preview-code-block:has(.send-to-t3-html-result){padding:0;background:transparent;border:0;box-shadow:none;}
-.markdown-source-view .cm-preview-code-block:has(.send-to-t3-html-result)>.edit-block-button{display:none;}
+.markdown-source-view .cm-preview-code-block:has(.send-to-t3-html-result){padding:0;background:transparent;border:0!important;border-radius:0;outline:none!important;box-shadow:none!important;overflow:visible;}
+.markdown-source-view .cm-preview-code-block .send-to-t3-html-result{margin:0;}
+.markdown-source-view .cm-preview-code-block:has(.send-to-t3-html-result) .edit-block-button{display:none!important;}
 .send-to-t3-html-surface{width:100%;height:100%;min-width:0;}
 .send-to-t3-html-frame{display:block;width:100%;height:100%;margin:0;padding:0;border:0;background:transparent;}
+.markdown-source-view .send-to-t3-html-frame{border-radius:0;}
 .send-to-t3-html-controls{position:absolute;inset-block-start:6px;inset-inline-end:6px;display:flex;gap:4px;opacity:0;transition:opacity .15s;}
 .send-to-t3-html-controls[hidden]{display:none;}
 .send-to-t3-html-result:hover>.send-to-t3-html-controls,.send-to-t3-html-result:focus-within>.send-to-t3-html-controls{opacity:1;}

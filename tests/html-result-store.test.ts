@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {HtmlResultError,HtmlResultStore,HTML_CACHE_MAX_ENTRIES,type HtmlResultStoreOptions,type HtmlResultDiagnostic} from '../html-result-store';
-import {htmlResultKey,HTML_RESULT_MAX_BYTES} from '../html-results';
+import {htmlResultKey,htmlResultIdentity,HTML_RESULT_MAX_BYTES} from '../html-results';
 import {reference,tool} from './fixtures/html-result';
 import {contentHash} from '../completion';
 const html='<!doctype html><button>Interactive ✓</button>',bytes=new TextEncoder().encode(html).buffer;
@@ -103,4 +103,14 @@ test('a download that completes after disposal is neither cached nor published',
  const downloading=new Promise<void>(resolve=>{started=resolve;}),store=new HtmlResultStore(f.storage,async()=>({origin:'https://t3.example',api:async path=>path==='/api/orchestration/turn-item'?tool():{relativeUrl:'/api/assets/page',expiresAt:Date.now()+60_000}}),()=>{started();return new Promise(resolve=>{finish=resolve;});});
  const result=store.get(reference);await downloading;store.dispose();finish({status:200,mimeType:'text/html',bytes});
  await assert.rejects(result,{code:'closed',stage:'download'});assert.equal(f.values.size,0);
+});
+
+test('scrolling back through twelve verified cards stays in memory',async()=>{
+ const refs=Array.from({length:12},(_,i)=>({...reference,itemId:'scroll-card-'+i}));let reads=0;
+ const pages=new Map(refs.map(ref=>[htmlResultKey(ref),{version:1,identity:htmlResultIdentity(ref),html,hash:contentHash(html),bytes:new TextEncoder().encode(html).byteLength}]));
+ const store=new HtmlResultStore({read:async(key:string)=>{reads++;return pages.get(key);},write:async()=>{}},async()=>assert.fail('Verified local pages need no account access'),async()=>assert.fail('Verified local pages need no download'));
+ for(const ref of refs)assert.equal(await store.get(ref),html);
+ assert.equal(reads,12);
+ for(const ref of [...refs].reverse())assert.equal(await store.get(ref),html);
+ assert.equal(reads,12);store.dispose();
 });

@@ -1,5 +1,8 @@
 {
   "dependencies": {
+    "tests/html-result-view.test.ts": [
+      "validation/html-result-edit-benchmark.ts"
+    ],
     "tests/response-height.test.ts": [
       "validation/scroll-follow-lab.ts"
     ],

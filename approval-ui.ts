@@ -1,3 +1,4 @@
+import {editorLivePreviewField} from 'obsidian';
 import {Notice} from 'obsidian';
 import type {Extension} from '@codemirror/state';
 import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
@@ -46,7 +47,7 @@ export function approvalEditorExtension(controller:ApprovalController):Extension
   const plugin=ViewPlugin.fromClass(class {
     decorations:DecorationSet;
     constructor(view:EditorView){this.decorations=build(view);}
-    update(update:ViewUpdate){if(update.docChanged||update.viewportChanged)this.decorations=build(update.view);}
+    update(update:ViewUpdate){if(update.docChanged||update.startState.field(editorLivePreviewField,false)!==update.state.field(editorLivePreviewField,false))this.decorations=build(update.view);}
   },{decorations:value=>value.decorations});
   return [plugin,EditorView.atomicRanges.of(view=>view.plugin(plugin)?.decorations??Decoration.none)];
 }

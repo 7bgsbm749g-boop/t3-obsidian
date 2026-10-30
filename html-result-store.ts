@@ -52,7 +52,7 @@ export class HtmlResultStore {
     const pending=this.pending.get(key);if(pending)return pending;
     const work=this.load(checked,key).then(html=>{
       if(this.stopped)throw new HtmlResultError('closed','reference');
-      if(html.length<=32_000_000){this.warm.set(key,html);this.characters+=html.length;while(this.warm.size>8||this.characters>32_000_000){const oldest=this.warm.keys().next().value!;this.characters-=this.warm.get(oldest)!.length;this.warm.delete(oldest);}}
+      if(html.length<=32_000_000){this.warm.set(key,html);this.characters+=html.length;while(this.warm.size>16||this.characters>32_000_000){const oldest=this.warm.keys().next().value!;this.characters-=this.warm.get(oldest)!.length;this.warm.delete(oldest);}}
       return html;
     }).catch(error=>{const failure=this.failure(error,'access');this.diagnostic(failure);throw failure;}).finally(()=>{this.pending.delete(key);});this.pending.set(key,work);return work;
   }

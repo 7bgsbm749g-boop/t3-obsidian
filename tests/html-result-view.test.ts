@@ -3,21 +3,17 @@ import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
-import {EditorState,StateEffect,StateField} from '@codemirror/state';
-import {EditorView} from '@codemirror/view';
 import {reference,tool} from './fixtures/html-result';
-import {renderHtmlResult,type HtmlResultReference} from '../html-results';
 
-const runtime=createRequire(import.meta.url),setLive=StateEffect.define<boolean>();
-const live=StateField.define({create:()=>true,update:(value,tr)=>{for(const effect of tr.effects)if(effect.is(setLive))value=effect.value;return value;}});
+const runtime=createRequire(import.meta.url);
 const bundled=build({stdin:{contents:"export * from './html-result-view'; export * from './html-result-store';",resolveDir:process.cwd()},bundle:true,write:false,format:'cjs',platform:'node',external:['obsidian','@codemirror/*']});
 async function production(){
  const module={exports:{} as any};
- runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal:class{},MarkdownRenderChild:class{},editorLivePreviewField:live,setIcon:()=>{}}:runtime(id),TextEncoder,TextDecoder,URL,console});
+ runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal:class{},MarkdownRenderChild:class{cleanup?:()=>void;register(cleanup:()=>void){this.cleanup=cleanup;}},setIcon:()=>{}}:runtime(id),TextEncoder,TextDecoder,URL,console});
  return module.exports;
 }
 
-// Small host-DOM fixture. Production store, view and CodeMirror state field run
+// Small host-DOM fixture. Production store and view run
 // unchanged; browser iframe execution still belongs to the native HTML lab.
 class Element {
  children:Element[]=[];parent?:Element;dataset:Record<string,string>={};attrs:Record<string,string>={};events:Record<string,()=>void>={};
@@ -37,12 +33,12 @@ class Element {
  button(text:string):Element|undefined{return this.children.find(child=>child.tagName==='button'&&child.textContent===text)??this.children.map(child=>child.button(text)).find(Boolean);}
 }
 function documentFixture(){
- const blobs=new Map<string,Blob>(),revoked:string[]=[],listeners=new Map();let created=0;
+ const blobs=new Map<string,Blob>(),revoked:string[]=[],listeners=new Map();let created=0,parses=0;
  const doc:any={createElement:(tag:string)=>new Element(tag,doc),body:{classList:{contains:()=>false}}};
  doc.defaultView={getComputedStyle:()=>({getPropertyValue:()=>'',fontFamily:'sans-serif'}),navigator:{},addEventListener:(type:string,handler:any)=>listeners.set(type,handler),removeEventListener:(type:string)=>listeners.delete(type),
   ResizeObserver:class{observe(){}disconnect(){}},Blob,URL:{createObjectURL:(blob:Blob)=>{const url='blob:html-test-'+ ++created;blobs.set(url,blob);return url;},revokeObjectURL:(url:string)=>{blobs.delete(url);revoked.push(url);}},
-  DOMParser:class{parseFromString(html:string){return {head:{prepend(){}},createElement:()=>({}),documentElement:{outerHTML:html}};}}};
- return {doc,blobs,revoked,listeners};
+  DOMParser:class{parseFromString(html:string){parses++;return {head:{prepend(){}},createElement:()=>({}),documentElement:{outerHTML:html}};}}};
+ return {doc,blobs,revoked,listeners,get parses(){return parses;}};
 }
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 async function loaded(root:Element){for(let i=0;root.dataset.t3HtmlState==='loading'&&i<30;i++)await flush();assert.notEqual(root.dataset.t3HtmlState,'loading');}
@@ -137,53 +133,22 @@ test('pending recovery is bounded and cannot retry a success, a verification fai
  }
 });
 
-async function editorFixture(){
- const module=await production(),views=new module.HtmlResultViews({workspace:{on:()=>({})}},{dispose(){}});let extension:any;
- views.install({registerMarkdownCodeBlockProcessor(){},registerEditorExtension:(value:any)=>{extension=value;},registerEvent(){},register(){}});
- const state=(text:string)=>EditorState.create({doc:text,extensions:[live,extension]});
- const ranges=(state:EditorState)=>{const sets=state.facet(EditorView.decorations),rows:Array<{from:number;to:number;widget:any}>=[];for(const set of sets)if(typeof set!=='function')set.between(0,state.doc.length,(from,to,value)=>{rows.push({from,to,widget:value.spec.widget});});return rows;};
- return {state,ranges};
-}
-
-test('production state field removes and restores an HTML widget when a plain line becomes a list',async()=>{
- const f=await editorFixture(),text='abc\n\n   '+renderHtmlResult(reference)+'\n\nAfter';
- let state=f.state(text);assert.equal(f.ranges(state).length,1);
- state=state.update({changes:{from:0,to:3,insert:'- a'}}).state;assert.equal(f.ranges(state).length,0,'the indented fence now belongs to a list');
- state=state.update({changes:{from:0,to:3,insert:'abc'}}).state;assert.equal(f.ranges(state).length,1,'the fence is top-level again');
+test('HTML uses one native code processor with the same page identity and lifecycle',async()=>{
+ const module=await production(),document=documentFixture(),views=new module.HtmlResultViews({workspace:{on:()=>({})}},{dispose(){}});
+ let processor:any,extensions=0,mounts=0,disposed=0;const children:any[]=[];
+ views.mount=(value:any,doc:any)=>{mounts++;assert.deepEqual(JSON.parse(JSON.stringify(value)),reference);assert.equal(doc,document.doc);return {root:new Element('div',doc),dispose:()=>{disposed++;}};};
+ views.install({registerMarkdownCodeBlockProcessor:(language:string,callback:any)=>{assert.equal(language,'t3-html');assert.equal(processor,undefined);processor=callback;},registerEditorExtension:()=>{extensions++;},registerEvent(){},register(){}});
+ assert.equal(extensions,0,'Native viewport and height caching must not compete with a second whole-note decoration field');
+ const root=new Element('div',document.doc);processor(JSON.stringify(reference),root,{addChild:(child:any)=>children.push(child)});
+ assert.equal(mounts,1);assert.equal(root.children.length,1);assert.equal(children.length,1);children[0].cleanup();assert.equal(disposed,1);
+ const invalid=new Element('div',document.doc);processor('{}',invalid,{addChild:()=>assert.fail('Invalid references have no renderer')});assert.equal(mounts,1);assert.match(invalid.textContent,/Invalid T3 HTML reference/);
 });
 
-test('production state field handles plain letters changing an HTML block separator',async()=>{
- const f=await editorFixture();let state=f.state('<div>\n\n'+renderHtmlResult(reference)+'\n\nAfter');assert.equal(f.ranges(state).length,1);
- state=state.update({changes:{from:6,insert:'word'}}).state;assert.equal(f.ranges(state).length,0,'the reference is inside the HTML block');
- state=state.update({changes:{from:6,to:10,insert:''}}).state;assert.equal(f.ranges(state).length,1);
-});
-
-test('production state field matches Remark around definitions and empty block quotes',async()=>{
- const f=await editorFixture(),block=renderHtmlResult(reference);
- for(const [before,after,count] of [['[a]: /x\ntext\n','[a]: /x\n<span>\n',1],['>\ntext\n','>\n<span>\n',0]] as const){
-  assert.equal(f.ranges(f.state(after+block)).length,count,'initial creation');
-  let state=f.state(before+block);assert.equal(f.ranges(state).length,1);
-  for(const prefix of [after,before,after,before]){
-   state=state.update({changes:{from:0,to:state.doc.length-block.length,insert:prefix}}).state;
-   const ranges=f.ranges(state);assert.equal(ranges.length,prefix===after?count:1,'context replacement or reverse edit');
-   for(const range of ranges)assert.equal(state.doc.sliceString(range.from,range.to),block);
-  }
- }
-});
-
-test('production state field preserves equivalent widgets through normal typing, newline, mode changes and restoration',async()=>{
- const f=await editorFixture(),text='Before\n\n'+renderHtmlResult(reference)+'\n\nAfter';let state=f.state(text);
- const original=f.ranges(state)[0];assert.equal(original.widget.estimatedHeight,80);
- for(const insert of ['Normal text. ','\n']){state=state.update({changes:{from:0,insert}}).state;const next=f.ranges(state)[0];assert.ok(next.widget.eq(original.widget));assert.equal(state.doc.sliceString(next.from,next.to),renderHtmlResult(reference));}
- state=state.update({effects:setLive.of(false)}).state;assert.equal(f.ranges(state).length,0);assert.match(state.doc.toString(),/```t3-html/);
- state=state.update({effects:setLive.of(true)}).state;assert.equal(f.ranges(state).length,1);
- const range=f.ranges(state)[0];state=state.update({changes:{from:range.from,to:range.to,insert:'Plain text'}}).state;assert.equal(f.ranges(state).length,0);
- state=state.update({changes:{from:range.from,to:range.from+'Plain text'.length,insert:renderHtmlResult(reference)}}).state;assert.equal(f.ranges(state).length,1);
-});
-
-test('production state field does not mount literal, nested or incomplete references',async()=>{
- const f=await editorFixture(),block=renderHtmlResult(reference);
- for(const text of ['````md\n'+block+'\n````','> '+block.split('\n').join('\n> '),'```t3-html\n'+JSON.stringify(reference),'```t3-html\n{}\n```'])assert.equal(f.ranges(f.state(text)).length,0);
- const changed:HtmlResultReference={...reference,revision:'2026-10-19T01:00:00Z'},state=f.state(block),updated=state.update({changes:{from:0,to:block.length,insert:renderHtmlResult(changed)}}).state;
- assert.equal(f.ranges(updated).length,1);assert.equal(f.ranges(updated)[0].widget.eq(f.ranges(state)[0].widget),false,'revision changes cannot reuse a different immutable page');
+test('remounting a verified page reuses its prepared document and retains separate sandbox lifetimes',async()=>{
+ const module=await production(),document=documentFixture();let html=page;
+ const views=new module.HtmlResultViews({},{get:async()=>html,dispose(){}});
+ const first=views.mount(reference,document.doc);await loaded(first.root);const firstUrl=first.root.find('iframe').src;first.dispose();
+ const second=views.mount(reference,document.doc);await loaded(second.root);assert.equal(document.parses,1);assert.notEqual(second.root.find('iframe').src,firstUrl);assert.equal(document.blobs.size,1);
+ html=page+'<p>New bytes</p>';const changed=views.mount(reference,document.doc);await loaded(changed.root);assert.equal(document.parses,2,'Changed verified bytes cannot reuse a different document');
+ views.dispose();assert.equal(document.blobs.size,0);
 });

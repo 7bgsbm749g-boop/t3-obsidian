@@ -258,6 +258,7 @@ export default class SendToT3 extends Plugin {
   private stopContentHash?:()=>void;
   async onload() {
     if(!Platform.isMobile)this.stopContentHash=(await import('./content-hash-desktop')).installDesktopContentHash();
+    if(typeof this.register==='function'&&MarkdownView?.prototype)this.register(nativeResponses(this.app).installLoading(MarkdownView.prototype));
     if(typeof this.registerDomEvent==='function')this.registerDomEvent(document,'t3-review-response-location' as any,(event:Event)=>{const id=(event as CustomEvent).detail?.bindingId;if(typeof id==='string')new ResponseLocationModal(this.app,id,command=>this.executeAgentCommand(command)).open();});
     if(typeof this.registerDomEvent==='function'){
       this.registerDomEvent(document,'toggle' as any,(event:Event)=>{
@@ -265,11 +266,17 @@ export default class SendToT3 extends Plugin {
         const ref=details.getAttribute('data-t3-tool-ref')!,old=this.toolRenderings.get(details);if(old?.ref===ref)return;
         if(old){old.dispose();this.removeChild(old.child);this.toolRenderings.delete(details);}
         const child=new MarkdownRenderChild(details);this.addChild(child);
-        const dispose=mountToolGroups(details,value=>nativeResponses(this.app).toolGroup(details,value),(html,target)=>MarkdownRenderer.render(this.app,html,target,this.app.workspace.getActiveFile()?.path??'',child),error=>new Notice(`T3 Code: ${message(error)}`));
+        const dispose=mountToolGroups(details,value=>nativeResponses(this.app).toolGroup(details,value),(html,target)=>MarkdownRenderer.render(this.app,details.classList.contains('send-to-t3-response-history')?nativeResponses(this.app).renderToolBody(details,html):html,target,this.app.workspace.getActiveFile()?.path??'',child),error=>new Notice(`T3 Code: ${message(error)}`));
         child.register(dispose);this.toolRenderings.set(details,{ref,child,dispose});
       },true);
-      const observer=new MutationObserver(()=>{for(const [details,rendering] of this.toolRenderings)if(!details.isConnected){rendering.dispose();this.removeChild(rendering.child);this.toolRenderings.delete(details);}});
-      observer.observe(document,{subtree:true,childList:true});this.register(()=>{observer.disconnect();for(const rendering of this.toolRenderings.values()){rendering.dispose();this.removeChild(rendering.child);}this.toolRenderings.clear();});
+      const openHistories=()=>{
+        if(this.stopped)return;
+        for(const details of Array.from(document.querySelectorAll<HTMLDetailsElement>('details.send-to-t3-response-history[data-t3-tool-ref]:not([open])'))){
+          const fold=details.closest('.callout[data-callout="t3-progress"]');if(fold&&!fold.classList.contains('is-collapsed'))details.open=true;
+        }
+      };
+      const observer=new MutationObserver((records=[])=>{for(const [details,rendering] of this.toolRenderings)if(!details.isConnected){rendering.dispose();this.removeChild(rendering.child);this.toolRenderings.delete(details);}if(records.some(record=>record.type==='childList'||(record.target as Element).matches?.('.callout[data-callout="t3-progress"]')))openHistories();});
+      observer.observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});this.register(()=>{observer.disconnect();for(const rendering of this.toolRenderings.values()){rendering.dispose();this.removeChild(rendering.child);}this.toolRenderings.clear();});
     }
     const data = await this.loadData();
     this.lastDiskSnapshot=JSON.stringify(data);

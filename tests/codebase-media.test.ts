@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {nativeMediaSource,originalMediaSource,codebaseMediaExtension} from '../codebase-media';
+import {nativeMediaSource,originalMediaSource,codebaseMediaExtension,mediaSourceCacheStatus} from '../codebase-media';
 
 test('native image paths resolve on desktop, iOS and Android without treating web images as local files',()=>{
   for(const value of ['app://obsidian.md/home/ubuntu/project/chart.png','capacitor://localhost/_capacitor_file_/home/ubuntu/project/chart.png','http://localhost/_app_file_/home/ubuntu/project/chart.png','https://localhost/_capacitor_file_/home/ubuntu/project/chart.png'])assert.equal(nativeMediaSource(value)?.link,'/home/ubuntu/project/chart.png');
@@ -37,4 +37,15 @@ test('a slow media request retains only one active scan and one pending rescan p
   await new Promise(resolve=>setTimeout(resolve,0));for(let i=0;i<100;i++)notify();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(renders,1);
   finish();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(renders,2);
   (notify as any)([{type:'attributes',target:{getAttribute:()=> 'https://t3.example/api/assets/signed'}}]);await new Promise(resolve=>setTimeout(resolve,0));assert.equal(renders,2,'The signed URL assigned by the bridge must not schedule another resource fill');instance.destroy();
+});
+
+test('repeated native media scans reuse bounded section parses and retain exact changed sources',()=>{
+ const markdown='![chart](/first.png) ![other](/other.png)';assert.equal(originalMediaSource(markdown,'chart'),'/first.png');
+ const before=mediaSourceCacheStatus();
+ for(let i=0;i<100;i++){assert.equal(originalMediaSource(markdown,'chart'),'/first.png');assert.equal(originalMediaSource(markdown,'other'),'/other.png');}
+ assert.equal(mediaSourceCacheStatus().sourceParses,before.sourceParses);
+ assert.equal(originalMediaSource(markdown.replace('first','changed'),'chart'),'/changed.png');
+ for(let i=0;i<150;i++)originalMediaSource('![chart](/'+i+'.png)','chart');
+ const status=mediaSourceCacheStatus();assert.ok(status.entries<=128);assert.ok(status.characters<=status.maxCharacters);
+ assert.equal(originalMediaSource(markdown,'chart'),'/first.png');
 });

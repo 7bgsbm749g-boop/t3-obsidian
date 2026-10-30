@@ -5,7 +5,7 @@ import type {Extension,Transaction as CMTransaction,TransactionSpec} from '@code
 import {changedEdits,changedInterval,mergeSavedEdits} from './coordinated-merge';
 import {advanceProjection,projectResponses,savedProjection,savedToDisplay,displayToSaved,responseRegion,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
 import {ResponseScroll} from './response-scroll';
-import {presentToolGroups,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,canonicalToolGroup,type ToolPresentation} from './response-tool-presentation';
+import {presentToolGroups,historyToolBody,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,canonicalToolGroup,type ToolPresentation} from './response-tool-presentation';
 import {toolDisplayOffset} from './response-tool-presentation';
 import {responseFrame} from './response-container';
 import {localResponseBindings} from './local-response-binding';
@@ -23,6 +23,7 @@ export class NativeResponseView {
   private deferredSave=false;
   private saveBaseline?:{descriptor:PropertyDescriptor;value:unknown};
   private checkedDocuments=new WeakMap<object,ResponseProjection>();
+  private checkedTools=new WeakMap<object,ReturnType<typeof compactToolGroups>>();
   private getWrapper:MarkdownView['getViewData'];
   private setWrapper:MarkdownView['setViewData'];
   private saveWrapper:MarkdownView['save'];
@@ -33,6 +34,8 @@ export class NativeResponseView {
   // groups can be deleted and restored without any response-host operation.
   private savedToolHistory=new Map<string,{canonical:string;placeholder:string;count:number}>();
   private responseTools=new Map<string,ToolPresentation>();
+  private lazyTools=new Map<string,string>();private lazyToolCharacters=0;
+  private lazyToolParents=new Map<string,string>();
   private compactTools=true;
   private base:string;
   private diskBase:string;
@@ -50,18 +53,24 @@ export class NativeResponseView {
   private scroll:ResponseScroll;
   private moveEditor?:object;
   private releaseMoveHistory?:()=>void;
-  constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[]){
+  constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[],initial?:{set:MarkdownView['setViewData'];clear:boolean}){
     this.file=view.file;this.base=saved;this.diskBase=saved;this.projection=this.buildProjection(saved,[]);
     this.scroll=new ResponseScroll(view,()=>this.currentProjection());
     this.originalGet=view.getViewData;this.originalSet=view.setViewData;
     this.originalSave=view.save;
     this.originalRequestSave=view.requestSave;
     this.requestSaveWrapper=()=>{if(this.unloading&&this.blocked)return;if(this.saveFences){this.deferredSave=true;return;}return this.originalRequestSave.call(view);};
-    this.getWrapper=()=>{const text=this.saved();this.observeNativeSave(text);return text;};
+    let initializing=!!initial;
+    this.getWrapper=()=>{if(initializing)return saved;const text=this.saved();this.observeNativeSave(text);return text;};
     this.setWrapper=(incoming,clear)=>this.incoming(incoming,clear);
     this.saveWrapper=async clear=>{
       if(this.unloading&&this.blocked)return;
       if(this.saveFences){this.deferredSave=true;return;}
+      // With no local response or outstanding native write, unchanged bytes
+      // need no save. In particular, do not read a multi-megabyte file twice
+      // merely to discover that there is nothing to write. External updates
+      // still arrive through the normal incoming-note path.
+      if(!clear&&!this.responses.length&&!this.blocked&&!this.ownSave&&(view as any).saving!==true&&this.saved()===this.diskBase)return;
       const file=view.file;
       const previousDisk=await this.readSaved();
       if(this.saveFences){this.deferredSave=true;return;}
@@ -92,6 +101,14 @@ export class NativeResponseView {
       if(!this.blocked&&view.file===file&&disk===intended){this.diskBase=disk;if(this.base===previousBase)this.base=intended;if(this.ownSave?.text===intended)this.ownSave=undefined;}
     };
     view.getViewData=this.getWrapper;view.setViewData=this.setWrapper;view.save=this.saveWrapper;view.requestSave=this.requestSaveWrapper;
+    // Install the save boundary before native parsing. Large retained tool
+    // output never needs to enter the Live Preview editor merely to be hidden
+    // by the next layout event. The canonical file remains the save source.
+    if(initial)try{initial.set.call(view,this.projection.display,initial.clear);}catch(error){
+      try{initial.set.call(view,saved,initial.clear);this.unwrap();}
+      catch{this.block({base:saved,local:saved,incoming:saved,unsafeIncoming:true,reason:'The native editor could not load the retained tool output.'});}
+      throw error;
+    }finally{initializing=false;}
   }
   responseBody(id:string){return this.responses.find(response=>response.id===id)?.body??regionBody(this.displayed(),id)?.body;}
   registerLocalBindings(ids:readonly string[]){for(const id of ids)this.knownLocal.add(id);}
@@ -138,7 +155,24 @@ export class NativeResponseView {
     cm.dispatch(cm.state.update({effects:responseMoveEffect().of({id,key,before,after:next.text,edits:next.edits,inverse:next.inverse}),annotations:[Transaction.userEvent.of('move.response'),isolateHistory.of('full')],filter:false,scrollIntoView:false}));
     const moved=this.saved()===next.text;if(moved)this.view.requestSave();return moved;
   }
-  toolGroup(ref:string){return this.savedToolHistory.get(ref)?.canonical??[...this.responseTools.values()].map(presentation=>canonicalToolGroup(presentation,ref)).find(body=>body!==undefined);}
+  toolGroup(ref:string):string|undefined {
+    const known=this.savedToolHistory.get(ref)?.canonical??this.lazyTools.get(ref)??[...this.responseTools.values()].map(presentation=>canonicalToolGroup(presentation,ref)).find(body=>body!==undefined);
+    if(known!==undefined)return known;
+    const parentRef=this.lazyToolParents.get(ref);
+    const parent=parentRef&&(this.savedToolHistory.get(parentRef)?.canonical??[...this.responseTools.values()].map(presentation=>canonicalToolGroup(presentation,parentRef)).find(body=>body!==undefined));
+    return parent?canonicalToolGroup(presentToolGroups(historyToolBody(parent),false),ref):undefined;
+  }
+  renderToolBody(body:string,parentRef?:string){
+    const presentation=presentToolGroups(body,false);
+    for(const group of presentation.groups){
+      if(parentRef){this.lazyToolParents.delete(group.ref);this.lazyToolParents.set(group.ref,parentRef);while(this.lazyToolParents.size>4096)this.lazyToolParents.delete(this.lazyToolParents.keys().next().value!);}
+      const original=body.slice(group.canonicalFrom,group.canonicalTo),previous=this.lazyTools.get(group.ref);
+      if(previous!==undefined){this.lazyTools.delete(group.ref);this.lazyToolCharacters-=previous.length;}
+      this.lazyTools.set(group.ref,original);this.lazyToolCharacters+=original.length;
+      while(this.lazyTools.size>256||this.lazyToolCharacters>8_000_000){const [ref,text]=this.lazyTools.entries().next().value!;this.lazyTools.delete(ref);this.lazyToolCharacters-=text.length;}
+    }
+    return presentation.display;
+  }
   private canonicalOffset(display:string,offset:number){
     const compact=compactToolGroups(display);let shift=0;
     for(const actual of compact){const group=this.savedToolHistory.get(actual.ref);if(!group||actual.text!==group.placeholder)throw new ProjectionConflict('The retained tool summary changed.');if(offset<=actual.from)break;if(offset<actual.to)throw new ProjectionConflict('The saved offset is inside a tool summary.');shift+=group.canonical.length-(actual.to-actual.from);}
@@ -171,6 +205,7 @@ export class NativeResponseView {
     const projection=this.canonicalProjection(projectResponses(savedTools.display,displayed),savedTools);
     this.savedTools=savedTools;this.responseTools=responseTools;this.compactTools=compact;
     this.checkedDocuments=new WeakMap();
+    this.checkedTools=new WeakMap();
     return projection;
   }
   private restoreSaved(display:string){return this.restoreSavedTools(savedProjection(display,this.projection));}
@@ -223,9 +258,11 @@ export class NativeResponseView {
   private conflictLocal():string {
     return this.blocked&&this.displayed()===this.blockedDisplay?this.blocked.local:this.localSaved();
   }
-  currentProjection(){
+  currentProjection():ResponseProjection{
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
     if(this.displayed()===this.projection.display)return this.projection;
+    const doc=(this.view.editor as any)?.cm?.state?.doc,cached=doc&&this.checkedDocuments.get(doc);
+    if(cached&&cached.display===this.displayed())return this.projection=cached;
     const saved=this.saved();
     this.projection=this.buildProjection(saved,this.responses);
     return this.projection;
@@ -463,6 +500,8 @@ export class NativeResponseView {
     if(this.view.save===this.saveWrapper)this.view.save=this.originalSave;
     if(this.view.requestSave===this.requestSaveWrapper)this.view.requestSave=this.originalRequestSave;
     this.savedToolHistory.clear();
+    this.lazyTools.clear();this.lazyToolCharacters=0;
+    this.lazyToolParents.clear();
     this.disposed=true;
   }
   private block(record:NativeViewConflict){this.scroll.suspend();this.blockedDisplay=this.displayed();this.blocked=record;this.conflict(record);}
@@ -556,10 +595,32 @@ export class NativeResponseView {
     try{
       // A compact shell is presentation, not editable output. Ordinary edits
       // may remove its whole range; partial edits would lose retained bytes.
-      const groups=compactToolGroups(transaction.startState.doc.toString());
+      const current=transaction.startState.doc.toString();
+      let groups=this.checkedTools.get(transaction.startState.doc);
+      if(!groups){groups=!this.responses.length&&current===this.savedTools.display?this.savedTools.groups.map(group=>({from:group.displayFrom,to:group.displayTo,ref:group.ref,text:group.placeholder,complete:true})):compactToolGroups(current);this.checkedTools.set(transaction.startState.doc,groups);}
       transaction.changes.iterChangedRanges((from,to)=>{if(groups.some(group=>from<group.to&&to>group.from&&!(from<=group.from&&to>=group.to)||from===to&&from>group.from&&from<group.to))throw new ProjectionConflict('The retained tool summary is only partly edited.');});
       let projection=this.checkedDocuments.get(transaction.startState.doc);
       if(!projection){const current=transaction.startState.doc.toString();projection=current===this.projection.display?this.projection:this.buildProjection(this.restoreSaved(current),this.responses);this.checkedDocuments.set(transaction.startState.doc,projection);}
+      // A same-line edit which preserves its initial ASCII letter cannot
+      // create a flow opener. Without code/HTML delimiters it cannot change
+      // the context of any retained shell. Map proven ranges and canonical
+      // bytes directly; structural edits keep the full validation below.
+      let ordinary=!projection.ranges.length;
+      transaction.changes.iterChanges((from,to,fromB,toB,inserted)=>{
+        const before=transaction.startState.doc.lineAt(from),after=transaction.newDoc.lineAt(fromB);
+        if(to>before.to||toB>after.to||!(/^[a-z]/i.test(before.text)&&/^[a-z]/i.test(after.text))||/[\n\r`~<>\\]/.test(inserted.toString()+transaction.startState.doc.sliceString(from,to)))ordinary=false;
+      });
+      if(ordinary){
+        const offset=(position:number)=>{let shift=0;for(const group of groups!){if(position<group.to)break;const retained=this.savedToolHistory.get(group.ref);if(!retained)throw new ProjectionConflict('The retained tool details are unavailable.');shift+=retained.canonical.length-(group.to-group.from);}return position+shift;};
+        const parts:string[]=[];let cursor=0;
+        transaction.changes.iterChanges((from,to,_from,_to,inserted)=>{const start=offset(from),end=offset(to);parts.push(projection!.saved.slice(cursor,start),inserted.toString());cursor=end;});
+        parts.push(projection.saved.slice(cursor));
+        const next={saved:parts.join(''),display:transaction.newDoc.toString(),ranges:[]};
+        this.checkedDocuments.set(transaction.newDoc,next);
+        this.checkedTools.set(transaction.newDoc,groups.map(group=>({...group,from:transaction.changes.mapPos(group.from,1),to:transaction.changes.mapPos(group.to,-1)})));
+        if(this.blocked)this.blocked={...this.blocked,local:next.saved};
+        return transaction;
+      }
       const next=this.canonicalProjection(advanceProjection(transaction,projection));
       this.checkedDocuments.set(transaction.newDoc,next);
       if(this.blocked)this.blocked={...this.blocked,local:next.saved};
@@ -568,7 +629,7 @@ export class NativeResponseView {
   }
   /** Remove local output before unwrapping the save boundary. A conflict must
    * first reach a safe saved projection; unwrapping a blocked view could save bad data. */
-  dispose(){
+  dispose(detached=false){
     if(this.disposed)return;
     if(this.view.file!==this.file){this.unwrap();return;}
     if(this.blocked?.unsafeIncoming){this.unloading=true;this.scroll.dispose();return;}
@@ -577,6 +638,18 @@ export class NativeResponseView {
     let saved=this.conflictLocal();
     if(this.blocked){const merge=mergeSavedEdits(this.blocked.base,this.blocked.incoming,changedEdits(this.blocked.base,saved));if(merge.ok)saved=merge.text;}
     try{assertCanonicalToolGroups(saved);}catch{this.unloading=true;this.scroll.dispose();return;}
+    if(detached){
+      // Native close can still ask for data after the leaf disappears. Keep
+      // exact canonical bytes available without rebuilding a dead editor.
+      // If Obsidian reuses this view, its next load restores native methods.
+      this.unwrap();
+      const view=this.view,originalGet=this.originalGet,originalSet=this.originalSet,get=()=>saved,set:MarkdownView['setViewData']=(incoming,clear)=>{
+        if(view.getViewData===get)view.getViewData=originalGet;
+        if(view.setViewData===set)view.setViewData=originalSet;
+        return originalSet.call(view,incoming,clear);
+      };
+      view.getViewData=get;view.setViewData=set;return;
+    }
     this.responses=[];this.projection=projectResponses(saved,[]);this.render(saved,false);
     this.unwrap();
   }

@@ -1,6 +1,9 @@
+import {streamBlocks} from '../stream-block';
+import {historyFixture} from './fixtures/stream-history';
+import {containerBody} from '../response-container';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {presentToolGroups,canonicalToolGroup,toolDisplayOffset,restoreToolGroups,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,mountToolGroups} from '../response-tool-presentation';
+import {presentToolGroups,canonicalToolGroup,toolDisplayOffset,restoreToolGroups,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,mountToolGroups,historyToolBody} from '../response-tool-presentation';
 import {renderResponseToolGroup,type ResponseTool,type ResponseToolGroup} from '../response-tools';
 const tool=(id='one',output='exact output'):ResponseTool=>({id,turnId:'turn',key:JSON.stringify(['turn',id]),status:'completed',label:'Ran npm',activeLabel:'Running npm',icon:'terminal',action:'command',sequence:1,command:'npm test',output});
 const group=(id='group',output='exact output',count=2):ResponseToolGroup=>({id,turnId:'turn',tools:Array.from({length:count},(_,i)=>tool(String(i),output))});
@@ -90,4 +93,42 @@ test('a connected group with a replaced reference rejects old output before reso
 });
 test('unknown and corrupt references fail closed before rendering',async()=>{
  const p=presentToolGroups(html()),h=dom(p.groups[0].ref),errors:unknown[]=[];let renders=0;const dispose=mountToolGroups(h.root as unknown as HTMLElement,()=>html('changed'),()=>{renders++;},error=>errors.push(error));await h.details.toggle(true);assert.equal(errors.length,1);assert.equal(renders,0);assert.equal(h.target.children.length,0);dispose();assert.equal(canonicalToolGroup(p,'unknown'),undefined);
+});
+
+test('cached tool presentations cannot share mutable ranges with another editor',()=>{
+ const source='Before\n\n'+html('cached range','retained details')+'\n\nAfter',first=presentToolGroups(source),expected=presentToolGroups(source);
+ first.groups[0].placeholder='Changed by caller';first.groups[0].canonicalTo=0;first.groups.length=0;
+ assert.deepEqual(presentToolGroups(source),expected);
+ const edited=source.replace('After','Edited after');assert.equal(restoreToolGroups(presentToolGroups(edited).display,presentToolGroups(edited)),edited);
+});
+
+test('flow context preserves quoted paragraph starts and cross-line inline code examples',()=>{
+ const source=html('flow context');
+ for(const text of ['> Before\n>\n> '+source+'\n>\n> After','Before\n\n'+source+'\n\nAfter'])assert.equal(presentToolGroups(text).groups.length,1);
+ for(const text of ['`Before\n'+source+'\nAfter`','> `Before\n> '+source+'\n> After`','````html\n\n'+source+'\n\n````','<pre>\n\n'+source+'\n\n</pre>'])assert.equal(presentToolGroups(text).groups.length,0);
+});
+
+test('collapsed generated history retains its exact header, final answer and canonical body',()=>{
+ const {body}=historyFixture(),source='Before\n\n'+body+'\n\nAfter',header=body.split('\n')[0],p=presentToolGroups(source);
+ assert.equal(p.groups.length,1);assert.match(p.display,/send-to-t3-response-history/);assert.ok(p.display.includes(header));assert.ok(p.display.includes('Final answer stays.'));assert.ok(!p.display.includes('Checking.'));
+ assert.equal(restoreToolGroups(p.display,p),source);assert.equal(restoreToolGroups(p.display.replace('Before','Edited before'),p),source.replace('Before','Edited before'));
+ const retained=canonicalToolGroup(p,p.groups[0].ref)!;assert.ok(historyToolBody(retained).includes('Checking.'));assert.equal(compactToolGroups(p.display)[0].ref,p.groups[0].ref);
+ assert.equal(presentToolGroups(source,false).groups.length,0);assert.deepEqual(presentToolGroups(source),p);
+ for(const literal of ['````md\n'+body+'\n````','> Example\n>\n'+body.split('\n').map(line=>'> '+line).join('\n'),body.replace('[!t3-progress]-','[!t3-progress]+'),containerBody('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',body)])assert.ok(!presentToolGroups(literal).display.includes('class="send-to-t3-response-history"'));
+});
+
+test('a retained history expands through the supplied renderer without an extra output wrapper',async()=>{
+ const {body}=historyFixture(),p=presentToolGroups(body),ref=p.groups[0].ref,h=dom(ref);h.details.attrs.class='send-to-t3-response-history';let rendered='';
+ const dispose=mountToolGroups(h.root as unknown as HTMLElement,key=>canonicalToolGroup(p,key),(text,target)=>{rendered=text;const content=new FakeElement('p');content.textContent=text;(target as unknown as FakeElement).append(content);});
+ assert.equal(rendered,'');await h.details.toggle(true);assert.ok(rendered.includes('Checking.'));assert.equal(rendered.trim(),streamBlocks(body)[0].text.split('\n').slice(1).map(line=>line.replace(/^> ?/,'')).join('\n').trim());assert.equal(h.target.children[0].tag,'p');dispose();assert.equal(restoreToolGroups(p.display,p),body);
+});
+
+test('compressed flow context keeps raw HTML terminators, code examples and quote boundaries exact',()=>{
+ const {body}=historyFixture(),normal=html('flow boundaries','Output with a `literal` code example.');
+ for(const prefix of ['', '```md\n','<pre>\n','<textarea>\n','<!--\n','<?target\n','<![CDATA[\n','[a]: /x\n','> quote\n>\n'])for(const ending of ['', '?>', ']]>', '-->']){
+  const tool=normal.replace('data-t3-tool-summary="', 'data-t3-tool-summary="'+ending),source=prefix+tool+'\n\n'+body;
+  const expected=streamBlocks(source).filter(block=>block.complete&&!block.tracked&&block.text.startsWith('> [!t3-progress]- '));
+  const p=presentToolGroups(source),histories=p.groups.filter(group=>group.placeholder.includes('class="send-to-t3-response-history"'));
+  assert.equal(histories.length,expected.length,prefix+' '+ending);assert.equal(restoreToolGroups(p.display,p),source);
+ }
 });
