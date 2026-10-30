@@ -6,6 +6,7 @@ import {unified} from 'unified';
 import remarkParse from 'remark-parse';
 import {stoppedResponseBody} from '../response-stop';
 import {responseEmissions} from '../response-emissions';
+import {responseToolGroups,renderResponseToolGroup} from '../response-tools';
 
 const at=(n:number)=>new Date(n*1000).toISOString();
 function fixture(items:any[]){return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:normalizeV2Snapshot({snapshotSequence:1,projection:{
@@ -17,7 +18,7 @@ test('public reasoning and plans appear in native folds in timeline order and st
   const state=fixture([{id:'thought',type:'reasoning',text:'**Checking the request**\n\nPublic summary with <script>literal</script>.',streaming:false},
     {id:'plan',type:'todo_list',steps:[{step:'Read the contract',status:'completed'},{step:'Verify the result',status:'in_progress'}]}]);
   const body=renderInlineTurn(state,'run','thread','running','collapse');
-  assert.match(body,/\[!t3-thought\]- Thought/);assert.match(body,/\*\*Checking the request\*\*/);assert.match(body,/\\<script>/);
+  assert.match(body,/class="send-to-t3-thought"/);assert.match(body,/<strong>Checking the request<\/strong>/);assert.match(body,/&lt;script&gt;/);
   assert.match(body,/\[!t3-plan\]- Plan/);assert.match(body,/- \[x\] Read the contract/);assert.match(body,/- \[ \] Verify the result \(In progress\)/);
   assert.ok(body.indexOf('Public summary')<body.indexOf('Read the contract')&&body.indexOf('Read the contract')<body.indexOf('Checking.'));
   state.messages.push({id:'final',role:'assistant',turnId:'run',text:'Final answer.',streaming:false,createdAt:at(7)});
@@ -30,20 +31,20 @@ test('public reasoning and plans appear in native folds in timeline order and st
 test('consecutive public thoughts share one closed group, timestamp and stable streaming identity',()=>{
   let state=fixture([{id:'one',type:'reasoning',text:'**First summary**',streaming:false,startedAt:at(2)},
     {id:'two',type:'reasoning',text:'**Second summary**',streaming:true,startedAt:at(3)}]);
-  const read=()=>responseEmissions(state,['run'],text=>text).filter(item=>item.kind==='reasoning');
+  const read=()=>responseToolGroups(state,['run']).map(group=>({id:group.id,body:renderResponseToolGroup(group)}));
   const [group]=read();assert.equal(read().length,1);
-  assert.match(group.body,/\[!t3-thought\]- Thought \(×2\)/);
+  assert.match(group.body,/<span>2 thoughts<\/span>/);
   assert.match(group.body,/data-t3-thought-at="2000"/);
   assert.ok(group.body.indexOf('First summary')<group.body.indexOf('Second summary'));
-  const identity=/data-t3-fold="([^"]+)"/.exec(group.body)![1];
+  const identity=group.id;
   state=applyThreadItem(state,normalizeV2StreamItem({kind:'event',sequence:2,event:{type:'turn-item.updated',payload:{id:'two',runId:'run',ordinal:2,type:'reasoning',text:'**Second summary extended**',streaming:false,startedAt:at(3),updatedAt:at(5)}}})).state;
   assert.equal(read().length,1);assert.match(read()[0].body,/Second summary extended/);
-  assert.equal(/data-t3-fold="([^"]+)"/.exec(read()[0].body)![1],identity);
-  for(const mode of ['keep','collapse','remove'] as const)assert.match(renderInlineTurn(state,'run','thread','running',mode),/Thought \(×2\)/);
+  assert.equal(read()[0].id,identity);
+  for(const mode of ['keep','collapse','remove'] as const)assert.match(renderInlineTurn(state,'run','thread','running',mode),/2 thoughts/);
   assert.equal(turnPhase(state,'run'),'running');
 });
 
-test('tools, prose, input, plans and different runs split thought groups',()=>{
+test('tools join thoughts while prose, input, plans and different runs split activity batches',()=>{
   for(const boundary of ['tool','prose','user','plan','run']){
     const items:any[]=[{id:'one',type:'reasoning',text:'Before',streaming:false,startedAt:at(2)},
       {id:'two',type:'reasoning',text:'After',streaming:false,startedAt:at(6),...(boundary==='run'?{runId:'next'}:{})}];
@@ -51,16 +52,20 @@ test('tools, prose, input, plans and different runs split thought groups',()=>{
     if(boundary==='plan')items.push({id:'plan',type:'proposed_plan',text:'Plan',startedAt:at(3)});
     const state=fixture(items);state.messages=state.messages.filter(message=>message.id!=='prose');
     if(boundary==='prose'||boundary==='user')state.messages.push({id:'boundary',role:boundary==='prose'?'assistant':'user',turnId:'run',text:'Boundary',streaming:false,createdAt:at(3)});
-    assert.equal(responseEmissions(state,['run','next'],text=>text).filter(item=>item.kind==='reasoning').length,2,boundary);
+    const groups=responseToolGroups(state,['run','next']);
+    assert.equal(groups.length,boundary==='tool'?1:2,boundary);
+    assert.equal(groups.reduce((n,group)=>n+(group.thoughts?.length??0),0),2);
+    if(boundary==='tool')assert.equal(groups[0].tools.length,1);
   }
 });
 
-test('canonical ordinals order same-time thought and tool boundaries',()=>{
+test('canonical ordinals order same-time thoughts and tools inside one batch',()=>{
   const state=fixture([{id:'two',type:'reasoning',text:'Second',streaming:false,ordinal:3,startedAt:at(2)},
     {id:'one',type:'reasoning',text:'First',streaming:false,ordinal:1,startedAt:at(2)},
     {id:'tool',type:'command_execution',input:'pwd',ordinal:2,startedAt:at(2)}]);
-  const groups=responseEmissions(state,['run'],text=>text).filter(item=>item.kind==='reasoning');
-  assert.equal(groups.length,2);assert.match(groups[0].body,/First/);assert.match(groups[1].body,/Second/);
+  const groups=responseToolGroups(state,['run']);
+  assert.equal(groups.length,1);const body=renderResponseToolGroup(groups[0]);
+  assert.ok(body.indexOf('<p>First</p>')<body.indexOf('data-t3-tool-id=')&&body.indexOf('data-t3-tool-id=')<body.indexOf('<p>Second</p>'));
 });
 
 test('compaction replaces its own display row and cannot complete an app run',()=>{

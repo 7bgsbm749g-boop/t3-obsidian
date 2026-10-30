@@ -3,6 +3,10 @@
  * retain nodes instead of disappearing between token updates. */
 export function reconcileResponseDOM(current:Element,incoming:Element){
   if(current.isEqualNode(incoming))return;
+  // A matching content hash identifies the same canonical batch. Its incoming
+  // shell is intentionally empty; keep details already expanded by the client.
+  const ref=current.getAttribute('data-t3-tool-ref');
+  if(ref&&ref===incoming.getAttribute('data-t3-tool-ref'))return;
   if(current.hasAttribute('data-t3-tool-icon')&&current.getAttribute('data-t3-tool-icon')===incoming.getAttribute('data-t3-tool-icon')&&current.childNodes.length)return;
   const preserveOpen=current.tagName==='DETAILS',open=current.hasAttribute('open');
   // Client decoration must survive token patches so the animation keeps its phase.

@@ -1,7 +1,8 @@
-import type {InlineActivity,InlineThreadState} from './inline-thread';
+import type {InlineActivity,InlineMessage,InlineThreadState} from './inline-thread';
+import {micromark} from 'micromark';
 export type ToolAction='command'|'edit'|'read'|'browser'|'device'|'search'|'code-search'|'thread'|'link-pr'|'unlink-pr'|'list-prs'|'other';
-export interface ResponseTool {id:string;turnId:string;key:string;status:string;label:string;activeLabel:string;icon:string;action:ToolAction;createdAt?:string;sequence:number;command?:string;cwd?:string;output?:string;exitCode?:number;durationMs?:number;files?:string[]}
-export interface ResponseToolGroup {id:string;turnId:string;createdAt?:string;tools:ResponseTool[]}
+export interface ResponseTool {id:string;turnId:string;key:string;status:string;label:string;activeLabel:string;icon:string;action:ToolAction;createdAt?:string;startedAt?:string;sequence:number;command?:string;cwd?:string;output?:string;exitCode?:number;durationMs?:number;files?:string[]}
+export interface ResponseToolGroup {id:string;turnId:string;createdAt?:string;sequence?:number;tools:ResponseTool[];thoughts?:InlineMessage[]}
 const object=(value:any):Record<string,any>=>value&&typeof value==='object'&&!Array.isArray(value)?value:{};
 const string=(value:any)=>typeof value==='string'?value.trim():'';
 const compact=(value:string)=>value.replace(/\s+/g,' ').slice(0,160);
@@ -98,37 +99,45 @@ export function responseTools(state:InlineThreadState,turns:string[]):ResponseTo
       info={...info,...Object.fromEntries(Object.entries(next).filter(([k,v])=>v!==undefined&&!(k==='status'&&terminal&&!done(next.status))&&(!terminal||done(next.status)||info[k as keyof typeof info]===undefined)))};
     }
     if(info.exitCode!==undefined&&info.exitCode!==0&&done(info.status))info.status='failed';
-    return {id,key,turnId,createdAt:position.createdAt,sequence:order(items[0]),...info,...presentation(info),action:toolAction(info),activeLabel:presentation({...info,status:['failed','declined','stopped'].includes(info.status)?info.status:'inProgress'}).label};
+    return {id,key,turnId,createdAt:position.createdAt,startedAt:items[0].createdAt,sequence:order(items[0]),...info,...presentation(info),action:toolAction(info),activeLabel:presentation({...info,status:['failed','declined','stopped'].includes(info.status)?info.status:'inProgress'}).label};
   }).sort((a,b)=>(Number.isFinite(Date.parse(a.createdAt??''))&&Number.isFinite(Date.parse(b.createdAt??''))?Date.parse(a.createdAt!)-Date.parse(b.createdAt!):0)||a.sequence-b.sequence);
 }
 
-/** Like T3's timeline, prose, reasoning, user input and turn boundaries split
- * consecutive calls. The latest canonical lifecycle entry supplies its position. */
+/** Thoughts and tools are peers in one batch. Only intervening public content
+ * or a turn boundary splits the batch. Canonical ordinals resolve tied times. */
 export function responseToolGroups(state:InlineThreadState,turns:string[]):ResponseToolGroup[] {
-  const boundaries=[...state.messages.filter(m=>['assistant','reasoning','user'].includes(m.role)&&m.text.trim()).map(m=>({turnId:m.turnId,at:Date.parse(m.createdAt??'')})),
-    ...state.activities.filter(a=>['user-input.requested','approval.requested','context-compaction'].includes(a.kind)).map(a=>({turnId:a.turnId,at:Date.parse(a.createdAt??'')}))].filter(b=>Number.isFinite(b.at));
+  const boundaries=[...state.messages.filter(m=>m.role!=='reasoning'&&m.text.trim()).map(m=>({turnId:m.turnId,createdAt:m.createdAt,sequence:m.sequence??0})),
+    ...state.activities.filter(a=>['user-input.requested','approval.requested','context-compaction','response.plan','response.notification','response.html'].includes(a.kind)).map(a=>({turnId:a.turnId,createdAt:a.createdAt,sequence:a.sequence??0}))];
+  const entries=[...responseTools(state,turns).map(tool=>({tool,thought:undefined,turnId:tool.turnId,createdAt:tool.createdAt,sequence:tool.sequence})),
+    ...state.messages.filter(m=>m.role==='reasoning'&&turns.includes(m.turnId??'')&&m.text.trim()).map(thought=>({tool:undefined,thought,turnId:thought.turnId!,createdAt:thought.createdAt,sequence:thought.sequence??0}))].sort(timelineOrder);
   const result:ResponseToolGroup[]=[];let previousSlot='';
-  for(const tool of responseTools(state,turns)){
-    const at=Date.parse(tool.createdAt??'');
-    const slot=JSON.stringify([tool.turnId,boundaries.filter(b=>(b.turnId===tool.turnId||b.turnId===null)&&b.at<=at).length]);
-    const last=result.at(-1);
-    if(last&&slot===previousSlot)last.tools.push(tool);
-    else result.push({id:encodeURIComponent(tool.key),turnId:tool.turnId,createdAt:tool.createdAt,tools:[tool]});
+  for(const entry of entries){
+    const slot=JSON.stringify([entry.turnId,boundaries.filter(b=>(b.turnId===entry.turnId||b.turnId===null)&&timelineOrder(b,entry)<=0).length]);
+    let group=result.at(-1);
+    if(!group||slot!==previousSlot){
+      group={id:'',turnId:entry.turnId,createdAt:entry.createdAt,sequence:entry.sequence,tools:[],thoughts:[]};result.push(group);
+    }
+    if(entry.tool)group.tools.push(entry.tool);else group.thoughts!.push(entry.thought!);
     previousSlot=slot;
   }
-  // Concurrent calls can finish out of order. Their first identity keeps the
-  // same dropdown while its current label and detail order change.
-  for(const group of result)group.id=encodeURIComponent(group.tools.reduce((first,tool)=>tool.sequence<first.sequence?tool:first).key);
+  // Concurrent calls can finish out of order. The earliest canonical identity
+  // keeps fold choices while thoughts, tools and lifecycle results arrive.
+  for(const group of result){
+    const identities=[...group.tools.map(tool=>({key:tool.key,createdAt:tool.startedAt??tool.createdAt,sequence:tool.sequence})),...(group.thoughts??[]).map(thought=>({key:thoughtKey(thought),createdAt:thought.createdAt,sequence:thought.sequence??0}))];
+    group.id=encodeURIComponent(identities.sort(timelineOrder)[0].key);
+  }
   return result;
 }
+const timelineOrder=(a:{createdAt?:string;sequence:number},b:{createdAt?:string;sequence:number})=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence;
+const thoughtKey=(thought:InlineMessage)=>JSON.stringify([thought.turnId,'thought',thought.id]);
 
 /** The latest successful call keeps the activity row live while the turn runs.
  * Actual results remain completed. A new timeline entry replaces that label. */
 export function currentResponseToolGroup(state:InlineThreadState,turnId:string,groups=responseToolGroups(state,[turnId])):{group:ResponseToolGroup;tool:ResponseTool;active:boolean}|undefined {
   const group=groups.filter(g=>g.turnId===turnId).at(-1);if(!group)return;
-  const latest=group.tools.at(-1)!;
+  const latest=group.tools.at(-1);if(!latest)return;
   const at=Date.parse(latest.createdAt??'');
-  if(Number.isFinite(at)&&(state.messages.some(m=>(m.turnId===turnId||m.turnId===null)&&m.text.trim()&&Date.parse(m.createdAt??'')>at)||state.activities.some(a=>a.turnId===turnId&&['user-input.requested','approval.requested','context-compaction'].includes(a.kind)&&Date.parse(a.createdAt??'')>at)))return;
+  if(Number.isFinite(at)&&(state.messages.some(m=>(m.turnId===turnId||m.turnId===null)&&m.text.trim()&&timelineOrder({createdAt:m.createdAt,sequence:m.sequence??0},latest)>0)||state.activities.some(a=>a.turnId===turnId&&['user-input.requested','approval.requested','context-compaction','response.plan','response.notification','response.html'].includes(a.kind)&&timelineOrder({createdAt:a.createdAt,sequence:a.sequence??0},latest)>0)))return;
   const tool=group.tools.filter(t=>t.status==='inProgress').at(-1)??latest;
   if(tool.status==='failed')return;
   return {group,tool,active:tool.status==='inProgress'||tool.status==='completed'};
@@ -136,9 +145,21 @@ export function currentResponseToolGroup(state:InlineThreadState,turnId:string,g
 
 export function renderResponseToolGroup(group:ResponseToolGroup,current?:{tool:ResponseTool;active:boolean}):string {
   const failures=group.tools.filter(t=>t.status==='failed').length,stopped=group.tools.filter(t=>t.status==='stopped'||t.status==='declined').length;
-  const label=current?(current.active?current.tool.activeLabel:current.tool.label):`${summarizeResponseTools(group.tools)}${failures?` · ${failures} failed`:''}${stopped?` · ${stopped} stopped or declined`:''}`;
-  const summary=`<span data-t3-tool-icon="${html(current?.tool.icon??'hammer')}" aria-hidden="true"></span><span>${html(label)}</span>`+(current?.active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'');
-  return `<details class="${current?'send-to-t3-response-activity':'send-to-t3-tool-group'}" data-t3-tool-group="${html(group.id)}" data-t3-tool-summary="${html(summarizeResponseTools(group.tools))}"${current?' data-t3-live-tool="true"':''}><summary>${summary}</summary><div class="send-to-t3-tool-group-content">${group.tools.map(renderResponseTool).join('')}</div></details>`;
+  const thoughts=group.thoughts??[],count=thoughts.length;
+  const batch=[summarizeResponseTools(group.tools),count?`${count} ${count===1?'thought':'thoughts'}`:''].filter(Boolean).join(' · ');
+  const label=current?(current.active?current.tool.activeLabel:current.tool.label):`${batch}${failures?` · ${failures} failed`:''}${stopped?` · ${stopped} stopped or declined`:''}`;
+  const summary=`<span data-t3-tool-icon="${html(current?.tool.icon??(group.tools.length?'hammer':'brain'))}" aria-hidden="true"></span><span>${html(label)}</span>`+(current?.active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'');
+  const entries=[...group.tools.map(tool=>({createdAt:tool.createdAt,sequence:tool.sequence,body:renderResponseTool(tool)})),...thoughts.map(thought=>({createdAt:thought.createdAt,sequence:thought.sequence??0,body:renderResponseThought(thought)}))].sort(timelineOrder);
+  return `<details class="${current?'send-to-t3-response-activity':'send-to-t3-tool-group'}" data-t3-tool-group="${html(group.id)}" data-t3-tool-summary="${html(batch)}"${current?' data-t3-live-tool="true"':''}><summary>${summary}</summary><div class="send-to-t3-tool-group-content">${entries.map(entry=>entry.body).join('')}</div></details>`;
+}
+
+function renderResponseThought(thought:InlineMessage):string {
+  const at=Date.parse(thought.createdAt??'');
+  const time=Number.isFinite(at)?`<span class="send-to-t3-thought-time" data-t3-thought-at="${at}"></span>`:'';
+  // micromark escapes raw HTML and unsafe URLs by default. Keep the generated
+  // block on one line, just like exact tool output, including code line breaks.
+  const body=micromark(thought.text).replace(/\r\n?|\n/g,'&#10;');
+  return `<details class="send-to-t3-thought" data-t3-tool-key="${html(thoughtKey(thought))}"><summary><span data-t3-tool-icon="brain" aria-hidden="true"></span><span>Thought</span>${time}</summary><div class="send-to-t3-thought-content">${body}</div></details>`;
 }
 
 /** T3's first-seen action order, distinct changed-file count and sentence form. */

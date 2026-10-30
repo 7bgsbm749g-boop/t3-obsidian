@@ -499,10 +499,11 @@
 
 /* The unfinished paragraph keeps a stable text node until a block boundary. */
 .send-to-t3-stream-tail { white-space: pre-wrap; overflow-wrap: anywhere; }
-.send-to-t3-tool, .send-to-t3-tool-group, .send-to-t3-response-activity, .send-to-t3-answer { margin: .5em 0; font-size: var(--font-smaller); }
-.send-to-t3-tool > summary, details[data-t3-tool-group] > summary, .send-to-t3-answer > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); }
-.send-to-t3-tool > summary::before, details[data-t3-tool-group] > summary::before, .send-to-t3-answer > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
-.send-to-t3-tool[open] > summary::before, details[data-t3-tool-group][open] > summary::before, .send-to-t3-answer[open] > summary::before { transform: rotate(90deg); }
+.send-to-t3-tool, .send-to-t3-thought, .send-to-t3-tool-group, .send-to-t3-response-activity, .send-to-t3-answer { margin: .5em 0; font-size: var(--font-smaller); }
+.send-to-t3-tool > summary, .send-to-t3-thought > summary, details[data-t3-tool-group] > summary, .send-to-t3-answer > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); }
+.send-to-t3-tool > summary::before, .send-to-t3-thought > summary::before, details[data-t3-tool-group] > summary::before, .send-to-t3-answer > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
+.send-to-t3-tool[open] > summary::before, .send-to-t3-thought[open] > summary::before, details[data-t3-tool-group][open] > summary::before, .send-to-t3-answer[open] > summary::before { transform: rotate(90deg); }
+.send-to-t3-thought-content { padding-inline-start: 1.7em; }
 .send-to-t3-answer-label { flex-shrink: 0; }
 .send-to-t3-answer-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-normal); }
 .send-to-t3-answer-time { margin-left: auto; flex-shrink: 0; font-size: var(--font-ui-smaller); }

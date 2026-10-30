@@ -4,7 +4,8 @@ The Obsidian reply now uses T3's distinction between a tool result and the
 current activity label. The latest successful tool can still label the live
 activity while the turn runs; expanding its dropdown shows the completed
 result. New prose, reasoning, user input, another tool batch or turn completion
-replaces that presentation. Failed, declined and stopped results retain their
+replaces that presentation. Thoughts now join the same activity batch as tools;
+see [the current grouping contract](thought-groups.md). Failed, declined and stopped results retain their
 outcomes.
 
 Earlier consecutive calls use closed action-summary dropdowns. The requested

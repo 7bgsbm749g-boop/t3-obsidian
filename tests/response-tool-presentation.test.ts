@@ -18,6 +18,16 @@ test('compact groups have no instructional text while details wait to load',()=>
   assert.equal(canonicalToolGroup(p,p.groups[0].ref),canonical);assert.equal(restoreToolGroups(p.display,p),canonical);
  }
 });
+
+test('mixed and thought-only batches retain formatted summaries and exact canonical bytes',()=>{
+ const text='# Heading\n\n**Bold** and *emphasis* with [link](https://example.com "Title").\n\n2. First\n3. Second\n\n> Quote\n\n---\n\nLine  \nbreak\n\n![image](https://example.com/image.png "Image")\n\n```ts\nconst exact = `<script>`;\n```\n\n<script>literal</script> [unsafe](javascript:alert(1))';
+ for(const tools of [[],group().tools]){
+  const original=renderResponseToolGroup({...group(),tools,thoughts:[{id:'thought',turnId:'turn',role:'reasoning',text,streaming:false,createdAt:'2026-10-30T01:00:00Z',sequence:0}]});
+  const p=presentToolGroups(original);assert.equal(p.groups.length,1);assert.match(p.display,/1 thought/);assert.doesNotMatch(p.display,/Heading/);assert.match(original,/<strong>Bold<\/strong>/);assert.match(original,/&lt;script&gt;/);assert.doesNotMatch(original,/<script>|href="javascript:/);
+  assert.equal(canonicalToolGroup(p,p.groups[0].ref),original);assert.equal(restoreToolGroups(p.display,p),original);
+  assert.throws(()=>restoreToolGroups(p.display.replace('1 thought','2 thoughts'),p),/changed/);
+ }
+});
 test('tool bytes are restored exactly while ordinary edits stay on both sides',()=>{
  const first=html('first','one'),second=html('second','two'),canonical='Before\n'+first+'\nBetween\n'+second+'\nAfter',p=presentToolGroups(canonical),edited=p.display.replace('Before','Edited before').replace('Between','New middle').replace('After','Edited after');
  assert.equal(restoreToolGroups(edited,p),'Edited before\n'+first+'\nNew middle\n'+second+'\nEdited after');assert.equal(p.groups.length,2);assert.deepEqual(toolDisplayOffset(p,p.groups[1].displayFrom-1),{kind:'canonical',offset:p.groups[1].canonicalFrom-1});
@@ -99,4 +109,17 @@ test('a connected group with a replaced reference rejects old output before reso
 });
 test('unknown and corrupt references fail closed before rendering',async()=>{
  const p=presentToolGroups(html()),h=dom(p.groups[0].ref),errors:unknown[]=[];let renders=0;const dispose=mountToolGroups(h.root as unknown as HTMLElement,()=>html('changed'),()=>{renders++;},error=>errors.push(error));await h.details.toggle(true);assert.equal(errors.length,1);assert.equal(renders,0);assert.equal(h.target.children.length,0);dispose();assert.equal(canonicalToolGroup(p,'unknown'),undefined);
+});
+
+test('an open retained batch reloads a changed reference without another user toggle',async()=>{
+ const first=html('stream','old result'),next=html('stream','updated exact result'),before=presentToolGroups(first),after=presentToolGroups(next),h=dom(before.groups[0].ref);
+ let changed!:()=>void,disconnected=false,reads=0;
+ class Observer {constructor(callback:()=>void){changed=callback;}observe(){}disconnect(){disconnected=true;}}
+ (h.root.ownerDocument as any).defaultView={MutationObserver:Observer};
+ const dispose=mountToolGroups(h.root as unknown as HTMLElement,ref=>{reads++;return ref===before.groups[0].ref?first:next;},renderMock);
+ await h.details.toggle(true);assert.equal(h.target.children[0].textContent,first);
+ h.details.attrs['data-t3-tool-ref']=after.groups[0].ref;changed();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(h.details.open,true);assert.equal(reads,2);assert.equal(h.target.children[0].textContent,next);
+ changed();await new Promise(resolve=>setImmediate(resolve));assert.equal(reads,2);
+ dispose();assert.equal(disconnected,true);
 });

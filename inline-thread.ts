@@ -558,7 +558,8 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     (!currentTool||Date.parse(currentTool.tool.createdAt??'')<=Date.parse(latestEmission.createdAt??''))?latestEmission:undefined;
   if(currentEmission)currentTool=undefined;
   const historyGroups=toolGroups.filter(group=>group!==currentTool?.group);
-  const historyRows=[...historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.tools[0].sequence,body:renderResponseToolGroup(group)})),
+  const workRows=historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
+  const historyRows=[...workRows,
     ...emissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
   const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??(currentTool?renderResponseToolGroup(currentTool.group,currentTool):responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Thinking'))}`:'';
   // A late answer resumes below the completed transcript. Keep its indicator
@@ -613,7 +614,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const status=handoffError||(phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?safeStatus(state.session.lastError):approvals);
     return fold+(htmlBodies.length?'\n\n'+htmlBodies.map(value=>value.body).join('\n\n'):'')+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }
-  const toolHistory=(retain?historyRows:phase!=='complete'?emissions.filter(item=>item!==currentEmission):[]).map(item=>item.body).join('\n\n');
+  const toolHistory=(retain?historyRows:phase!=='complete'?[...workRows.filter(item=>item.hasThoughts),...emissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence):[]).map(item=>item.body).join('\n\n');
   if(phase==='complete')return input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
   const status=handoffError?'\n\n'+handoffError:phase==='error'&&state.session?.lastError&&(!state.latestTurn||state.latestTurn.turnId===turnId)?'\n\n'+safeStatus(state.session.lastError):approvals?'\n\n'+approvals:'';
   const contents=[input.trimEnd(),prose].filter(Boolean).join('\n\n');
