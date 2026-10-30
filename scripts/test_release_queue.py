@@ -221,9 +221,11 @@ class ReleaseQueueTests(unittest.TestCase):
             self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
         self.assertEqual(queue.status(a['jobId'], queue=self.store)['jobs'][0]['status'], 'failed')
         self.assertEqual(queue.status(b['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+        self.assertEqual(queue.status(a['jobId'], queue=self.store)['jobs'][0]['version'], '1.0.1')
+        self.assertEqual(queue.status(b['jobId'], queue=self.store)['jobs'][0]['version'], '1.0.2')
         self.assertFalse((self.root / 'first.ts').exists())
         self.assertTrue((self.root / 'second.ts').exists())
-        self.assertEqual(self.published, ['1.0.1'])
+        self.assertEqual(self.published, ['1.0.2'])
         self.assertEqual(self.git('status', '--porcelain=v1'), '')
 
     def test_independent_validation_registrations_merge_without_losing_a_mode(self):
@@ -282,7 +284,7 @@ class ReleaseQueueTests(unittest.TestCase):
         queue.retry(a['jobId'], queue=self.store)
         queue.drain(self.release, queue=self.store)
         self.assertEqual(queue.status(b['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
-        self.assertEqual(self.published, ['1.0.1', '1.0.2', '1.0.3'])
+        self.assertEqual(self.published, ['1.0.2', '1.0.3', '1.0.4'])
 
     def test_legacy_blocked_job_is_recovered_automatically(self):
         a = self.submit(self.source('first'))
@@ -313,6 +315,9 @@ class ReleaseQueueTests(unittest.TestCase):
         subprocess.run(['git', 'add', '.'], cwd=source, check=True)
         subprocess.run(['git', 'commit', '-qm', 'maintenance'], cwd=source, check=True)
         a = self.submit(source, evidence=False)
+        request_path = queue.job_path(self.store, a['jobId']) / 'request.json'
+        legacy = queue.read(request_path); legacy.pop('maintenanceOnly')
+        queue.write(request_path, legacy)
         validate = SimpleNamespace(run_validation=lambda root: self.evidence)
         with patch.object(self.release, 'change_checks', validate, create=True):
             self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
@@ -380,7 +385,7 @@ class ReleaseQueueTests(unittest.TestCase):
         queue.retry(submitted['jobId'], replacement=replacement, queue=self.store)
         self.assertFalse(queue.read(directory / 'request-1.json')['maintenanceOnly'])
         queue.drain(self.release, queue=self.store)
-        self.assertEqual(self.published, ['1.0.1'])
+        self.assertEqual(self.published, ['1.0.2'])
         self.assertEqual((directory / 'request.json').read_bytes(), original)
         self.assertTrue((directory / 'request-1.json').exists())
         self.assertEqual(self.submit(source)['jobId'], submitted['jobId'])

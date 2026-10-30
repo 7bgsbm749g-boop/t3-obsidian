@@ -238,6 +238,8 @@ def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) 
         for key in ('error', 'nextAction', 'nextRetryAt'):
             state.pop(key, None)
         if state.get('rollbackCommits'):
+            if state.get('version'):
+                state['reservedVersions'] = sorted(set([*state.get('reservedVersions', []), state['version']]))
             state.pop('version', None)
         write(directory / 'state.json', state)
         (queue / 'wake').touch()
@@ -347,8 +349,23 @@ def engine_hash(root: Path) -> dict:
             if (root / 'scripts' / name).is_file()}
 
 
+def next_version(release, directory: Path, request: dict) -> str:
+    """An assigned version belongs to its job, even when validation fails."""
+    versions = [release.read_json(release.ROOT / 'manifest.json')['version']]
+    for path in jobs(directory.parent.parent):
+        item = read(path / 'state.json')
+        versions.extend(item.get('reservedVersions', []))
+        if item.get('version'):
+            versions.append(item['version'])
+    latest = max(versions, key=lambda value: tuple(int(part) for part in value.split('.')))
+    return release.bump_version(latest, request['bump'])
+
+
 def run_job(release, directory: Path, request: dict, state: dict, loaded_engine: dict) -> bool:
     root = release.ROOT
+    if 'maintenanceOnly' not in request:
+        request = {**request, 'maintenanceOnly': maintenance_only(
+            git(root, 'diff', '--name-only', '--no-renames', request['mergeBase'], request['commit']).splitlines())}
     version = state.get('version')
     deployed = version and (release.release_receipt_dir(version) / 'deployment.json').is_file()
     if not request.get('maintenanceOnly') and not request.get('evidence') and not version:
@@ -396,7 +413,7 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
                    delivery='source-only', error=None, nextAction=None)
             return False
         source_version = release.read_json(root / 'manifest.json')['version']
-        version = version or (source_version if request.get('validation') else release.bump_version(source_version, request['bump']))
+        version = version or (source_version if request.get('validation') else next_version(release, directory, request))
         update(directory, state, version=version, status='releasing',
                archive=str(release.archive_path(version)),
                deploymentReceipt=str(release.release_receipt_dir(version) / 'deployment.json'))
