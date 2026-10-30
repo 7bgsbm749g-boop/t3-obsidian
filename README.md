@@ -161,7 +161,7 @@ Updates may replace a scope or filter, but cannot change the receiving thread. A
 
 ## Setup: desktop and mobile
 
-Settings are grouped into **Connection**, **Replies**, **Projects**, and **Advanced**. The selected page stays open during connection updates. Use the arrow keys, Home, or End to move between page tabs. Manual pairing, connection removal, legacy cleanup, and the send failure log are under **Advanced**.
+Settings are grouped into **Connection**, **Replies**, **Projects**, and **Advanced**. The selected page stays open during connection updates. Use the arrow keys, Home, or End to move between page tabs. Expand **Beta** under **Replies** to test the thread and note modes; Free remains the default. Manual pairing, connection removal, legacy cleanup, and the send failure log are under **Advanced**.
 
 1. Install and run T3 Code on your computers. Sign in to the same T3 account and enable **T3 Connect** on each destination. T3 supplies the public HTTPS connection; no Tailscale or plugin companion is required. See [T3 remote access](https://github.com/pingdotgg/t3code/blob/main/docs/user/remote-access.md).
 2. Install `main.js` and `manifest.json` in `<vault>/.obsidian/plugins/t-three-code/` and enable the plugin.
@@ -815,7 +815,7 @@ also use the clean footer and retain observed event data as their message body.
 
 ### Thread and note modes
 
-In **Settings → T3 Code → Replies → Thread and note mode**, choose:
+In **Settings → T3 Code → Replies**, expand **Beta**, then choose **Thread and note mode**:
 
 - **1:1**: each note continues one thread, and each thread belongs to one note.
   An unlinked note can create a thread or choose an unlinked existing thread.

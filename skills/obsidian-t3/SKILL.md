@@ -196,7 +196,8 @@ Manage with `pause-thread-stream`, `resume-thread-stream`, or
 requires `--remove-destination NOTE.md`. Pausing future attachments does not
 cancel already attached replies.
 
-The vault-wide **Replies → Thread and note mode** setting applies to Send, Ask,
+Expand the collapsed **Replies → Beta** section to find **Thread and note mode**.
+This vault-wide setting applies to Send, Ask,
 imports, agent sends, and thread streams. **Free** (the migration default) allows
 many-to-many links. **1:1** permits one active thread per note and one note per
 thread; replies must return to the source note. Choose an unlinked thread for
