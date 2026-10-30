@@ -94,7 +94,7 @@ export class DirectInlinePreview {
     const request=this.record.request;
     if(item.kind==='synchronized')return;
     const sequence=item.kind==='snapshot'?item.snapshot?.snapshotSequence:item.event?.sequence;
-    if(!Number.isSafeInteger(sequence)||sequence<0)return;
+    if(item.kind!=='event'||item.event?.type!=='thread.worktree-setup')if(!Number.isSafeInteger(sequence)||sequence<0)return;
     if(item.kind==='snapshot'&&(item.snapshot?.thread?.id!==request.threadId||item.snapshot?.thread?.projectId!==request.projectId))return;
     if(item.kind==='event'&&item.event?.aggregateId!==undefined&&item.event.aggregateId!==request.threadId)return;
     if(this.connectionIssue){this.connectionIssue=undefined;this.connectionChanged?.();}

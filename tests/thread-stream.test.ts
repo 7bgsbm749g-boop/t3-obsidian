@@ -2,6 +2,26 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {watchThread,readInlineEvents} from '../thread-stream';
 import {T3ResponseTooLargeError} from '../t3-response-limits';
+import {completedSetup,preparationItem} from './fixtures/worktree-setup';
+
+test('setup uses the native optional subscription, its own cursor, bounded payloads and reconnect',async()=>{
+ const sockets:Socket[]=[],sent:any[]=[],items:any[]=[];
+ class Socket {
+  onopen?:()=>void;onclose?:()=>void;onmessage?:(event:any)=>void;onerror?:()=>void;
+  constructor(){sockets.push(this);queueMicrotask(()=>this.onopen?.());}
+  send(raw:string){const f=JSON.parse(raw);sent.push(f);if(f.tag==='orchestration.subscribeThread')queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[{kind:'event',sequence:100,event:{type:'turn-item.updated',payload:preparationItem}}]})}));if(f.tag==='subscribeWorktreeSetup')queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:'2',values:[null,{...completedSetup,threadId:'other'},completedSetup]})}));}
+  close(){this.onclose?.();}
+ }
+ const watcher=watchThread('fixture-thread',async()=>({origin:'https://fixture',api:async()=>({ticket:'ticket'})}),{item:item=>items.push(item),reconnecting:()=>{}},()=>new Socket() as any,undefined,{afterSequence:()=>100,pollSnapshots:false});
+ try{
+  await new Promise(resolve=>setTimeout(resolve,30));
+  assert.equal(sent.filter(f=>f.tag==='subscribeWorktreeSetup').length,1);assert.deepEqual(sent.find(f=>f.tag==='subscribeWorktreeSetup').payload,{threadId:'fixture-thread'});
+  assert.equal(items.length,2);assert.equal(items[1].event.type,'thread.worktree-setup');assert.equal(items[1].event.sequence,undefined);assert.equal(items[1].event.payload.sequence,8);
+  assert.ok(sent.some(f=>f._tag==='Ack'&&f.requestId==='2'));
+  sockets[0].onmessage?.({data:JSON.stringify({_tag:'Exit',requestId:'2',exit:{_tag:'Failure'}})});assert.equal(sockets.length,1,'Optional failure must not reconnect the transcript');
+  sockets[0].onclose?.();await new Promise(resolve=>setTimeout(resolve,1150));assert.equal(sent.filter(f=>f.tag==='subscribeWorktreeSetup').length,2);
+ }finally{watcher.stop();}
+});
 
 test('an oversized snapshot stops polling across reconnects while live text still arrives',async t=>{
  t.mock.timers.enable({apis:['setTimeout','Date']});let reads=0;const sockets:any[]=[],items:any[]=[],failures:any[]=[];

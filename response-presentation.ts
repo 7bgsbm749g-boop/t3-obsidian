@@ -1,5 +1,6 @@
 import type {InlineThreadState} from './inline-thread';
 import {reconcileResponseDOM} from './response-dom';
+import {setupDuration} from './worktree-setup';
 
 export type IntermediateMode='remove'|'keep'|'collapse';
 export type FinalAnswerFormat='formatted'|'raw-markdown';
@@ -41,7 +42,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   const toolChoices=new WeakMap<Element,Map<string,boolean>>();
   const owner=(element:Element)=>element.closest('.workspace-leaf-content')??root.documentElement;
   const detailSelector='details[data-t3-tool-group], details[data-t3-tool-key], details[data-t3-answer-id]';
-  const detailId=(element:Element)=>element.getAttribute('data-t3-tool-group')??element.getAttribute('data-t3-tool-key')??(element.hasAttribute('data-t3-answer-id')?`answer:${element.getAttribute('data-t3-answer-id')}`:undefined);
+  const detailId=(element:Element)=>element.getAttribute('data-t3-tool-group')??element.getAttribute('data-t3-tool-key')??(element.hasAttribute('data-t3-worktree-setup')?`setup:${element.getAttribute('data-t3-worktree-setup')}`:element.hasAttribute('data-t3-answer-id')?`answer:${element.getAttribute('data-t3-answer-id')}`:undefined);
   const key=(element:Element)=>element.querySelector<HTMLElement>('.send-to-t3-fold-key')?.dataset.t3Fold;
   const title=(element:Element)=>element.querySelector<HTMLElement>(':scope > .callout-title');
   const seen=new WeakMap<Element,{heading:HTMLElement;key:string|undefined}>();
@@ -50,6 +51,12 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   const refresh=()=>{
     queued=false;if(disposed)return;
     const layout=new Set<Element>(),actionsInUse=new Set<HTMLElement>();
+    for(const timer of Array.from(root.querySelectorAll<HTMLElement>('[data-t3-setup-start]'))){
+      const start=Number(timer.dataset.t3SetupStart),end=timer.dataset.t3SetupEnd;
+      if(!Number.isFinite(start))continue;
+      const text=setupDuration((end!==undefined&&Number.isFinite(Number(end))?Number(end):Date.now())-start);
+      if(timer.textContent!==text)timer.textContent=text;
+    }
     for(const timer of Array.from(root.querySelectorAll<HTMLElement>('.send-to-t3-run-timer[data-t3-start]'))){
       const start=Number(timer.dataset.t3Start),end=timer.dataset.t3End;
       if(!Number.isFinite(start))continue;
@@ -123,7 +130,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
       }
     }
     // Keep tool and submitted-answer disclosures through native renders.
-    for(let group of Array.from(root.querySelectorAll<HTMLElement>('details[data-t3-tool-group], details[data-t3-answer-id]'))){
+    for(let group of Array.from(root.querySelectorAll<HTMLElement>('details[data-t3-tool-group], details[data-t3-answer-id], div[data-t3-worktree-setup]'))){
       const id=detailId(group)!;
       const surface=group.closest('.cm-content, .markdown-preview-view')??owner(group);
       let cache=retainedTools.get(surface);if(!cache){cache=new Map();retainedTools.set(surface,cache);}
