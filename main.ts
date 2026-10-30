@@ -1,3 +1,5 @@
+import {SendPreviews} from './send-preview';
+import {savedToDisplay} from './native-response-projection';
 import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,recoverSmartNote,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from './smart-send';
 import {DuplicateResponseLocation} from './response-location';
 import {retainedLocalFinal,restoredLocalFinal} from './local-final-cache';
@@ -99,7 +101,7 @@ import {InlineChatManager,captureEditorSelection,type InlineJob} from './inline-
 import {type ResponseRequest,type ResponseStorageTarget,type ResponseFiles} from './response-model';
 import {type ResponseRecord} from './response-record';
 import {hiddenInlineMarkerExtension,hideResponseContainerBoundaries} from './inline-markers';
-import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,selectionOverlapsInlineResponse,selectionAnchor,initialRegion,endInsertionOffset,endMarker,failedInlineIds,regionBody,finalizeRegion,startMarker,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,selectionOverlapsInlineResponse,selectionAnchor,initialRegion,insertionOffset,endInsertionOffset,endMarker,failedInlineIds,regionBody,finalizeRegion,startMarker,type SelectionAnchor} from './inline-thread';
 import {QuestionController} from './question-controller';
 import {closeNoteTabPanel} from './note-tab-panel';
 import {QuestionModal,questionButton,questionEditorExtension,installQuestionLinks} from './question-ui';
@@ -156,6 +158,7 @@ export default class SendToT3 extends Plugin {
   private deviceId = '';
   private sending = false;
   private defaultSending=false;
+  private sendPreviews=new SendPreviews();
   private sendGesture=new SendGesture();
   private busyListeners=new Set<()=>void>();
   get busy(){return this.sending;}
@@ -1325,6 +1328,7 @@ export default class SendToT3 extends Plugin {
   }
   openNoteSend(file:TFile,showSelector=false,insertion=this.noteSendInsertion(file)){
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(this.noteContext(file)),
+      beginSend:options=>this.previewSend(file.path,undefined,insertion,options.inline.enabled),
       hasNewContent:(destination)=>this.hasSmartContent(file,destination),
       sendChat:(_text,key,resolve,_back,destination)=>this.sendNote(file,destination?.threadId,destination?.projectKey,false,key,resolve?.(),insertion),
       sendToNew:(_text,key,resolve)=>this.sendNote(file,undefined,undefined,true,key,resolve?.(),insertion),
@@ -1429,6 +1433,7 @@ export default class SendToT3 extends Plugin {
   async sendNote(file:TFile,threadId?:string,expectedProjectKey?:string,newThread=false,overrideKey?:string,jobOptions?:ResolvedJobOptions,insertion=this.noteSendInsertion(file)){
     if(this.busy)return;
     jobOptions??=resolveJobOptions(this.settings.inlineStreaming);
+    const finishPreview=this.previewSend(file.path,undefined,insertion,jobOptions.inline.enabled);
     try{
       const active=this.app.workspace.getActiveViewOfType(MarkdownView);
       const content=active?.file?.path===file.path&&active.editor?this.notePromptDocument(active):await this.app.vault.read(file);
@@ -1439,7 +1444,7 @@ export default class SendToT3 extends Plugin {
       if(expectedProjectKey&&projectKey(project)!==expectedProjectKey)throw Error('The folder’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
       await this.send(file,project,{threadId,newThread,projectOverrideKey:overrideKey,folderPicker:Boolean(expectedProjectKey),folderLink:link,jobOptions,throwOnError:true,insertion});
-    }catch(error){throw error;}
+    }finally{finishPreview();}
   }
   openChat(prompt?:string,showSelector=false){
     const view=this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -1482,23 +1487,41 @@ export default class SendToT3 extends Plugin {
     }
     if(context?.anchor)context=this.canonicalChatContext(context);
     const canonicalSelected=context?.canonicalAnchor?.text??selection;
-    if(view&&editor){
-      const document=this.notePromptDocument(view),anchor=context?.canonicalAnchor;
-      let scope:Span|undefined=anchor?[anchor.start,anchor.end]:undefined;
-      if(selected&&!scope){const from=document.indexOf(selection);if(from<0||document.lastIndexOf(selection)!==from)throw Error('The selected text changed. Select it again before sending.');scope=[from,from+selection.length];}
-      context={...context!,smartDocument:document,smartScope:scope,smartQuestion:prompt};
-      if(scope&&prompt.trim()&&!context.referenceSelection){
-        await this.recoverSmartReplies(file.path,document);
-        const data=this.smartData(),projection=await sourceProjection(data,smartNote(data,file.path),document);
-        const ordinary=projection.segments.reduce((sum,segment)=>sum+Math.max(0,Math.min(scope![1],segment.rawTo)-Math.max(scope![0],segment.rawFrom)),0);
-        if(ordinary<scope[1]-scope[0])context.referenceSelection=true;
-      }
-    }else if(selected)throw Error('Open the source note before sending its selection.');
-    const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\n**USER ASKS:**\n${prompt}`:selected?canonicalSelected:prompt;
-    return this.openChatWithNote(this.noteContext(file),question,context,true,showSelector);
+    const finishPreview=!showSelector?this.previewSend(file.path,context):()=>{};
+    try{
+      if(view&&editor){
+        const document=this.notePromptDocument(view),anchor=context?.canonicalAnchor;
+        let scope:Span|undefined=anchor?[anchor.start,anchor.end]:undefined;
+        if(selected&&!scope){const from=document.indexOf(selection);if(from<0||document.lastIndexOf(selection)!==from)throw Error('The selected text changed. Select it again before sending.');scope=[from,from+selection.length];}
+        context={...context!,smartDocument:document,smartScope:scope,smartQuestion:prompt};
+        if(scope&&prompt.trim()&&!context.referenceSelection){
+          await this.recoverSmartReplies(file.path,document);
+          const data=this.smartData(),projection=await sourceProjection(data,smartNote(data,file.path),document);
+          const ordinary=projection.segments.reduce((sum,segment)=>sum+Math.max(0,Math.min(scope![1],segment.rawTo)-Math.max(scope![0],segment.rawFrom)),0);
+          if(ordinary<scope[1]-scope[0])context.referenceSelection=true;
+        }
+      }else if(selected)throw Error('Open the source note before sending its selection.');
+      const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\n**USER ASKS:**\n${prompt}`:selected?canonicalSelected:prompt;
+      return await this.openChatWithNote(this.noteContext(file),question,context,true,showSelector);
+    }finally{finishPreview();}
   }
   private openEditorChat(selection:string,file:TFile,context:EditorChatContext,showSelector=false){
     return this.openAsk(file,selection,context,showSelector);
+  }
+  private previewSend(path?:string,context?:EditorChatContext,insertion?:CursorInsertion|null,enabled=this.settings.inlineStreaming.enabled){
+    if(!path||!enabled||this.busy||this.stopped)return ()=>{};
+    const view=context?.view??this.app.workspace?.getLeavesOfType?.('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===path);
+    if(!view?.editor||view.file?.path!==path)return ()=>{};
+    const document=view.editor.getValue();
+    if(context&&inlineSteeringTarget(document,context.editor.posToOffset(context.editor.getCursor()),context.responseId))return ()=>{};
+    let offset=endInsertionOffset(document);
+    if(context?.anchor)offset=insertionOffset(document,context.anchor);
+    else if(context?.insertion)offset=resolveCursorInsertion(document,context.insertion);
+    else if(insertion){
+      const adapter=nativeResponses(this.app).view(view as MarkdownView);
+      offset=adapter?savedToDisplay(adapter.currentProjection(),resolveCursorInsertion(adapter.saved(),insertion)):resolveCursorInsertion(document,insertion);
+    }
+    return this.sendPreviews.begin(view as MarkdownView,offset);
   }
   private notePromptDocument(view:MarkdownView|MarkdownFileInfo){return nativeResponses(this.app).view(view as MarkdownView)?.canonicalDisplayed()??view.editor?.getValue()??'';}
   private canonicalChatContext(context:EditorChatContext):EditorChatContext {
@@ -1583,6 +1606,7 @@ export default class SendToT3 extends Plugin {
     if(inline?.anchor)inline=this.canonicalChatContext(inline);
     const send=(text:string,options:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions})=>this.sendResolvedChat(text,note,inline,answerOnly,options);
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(note,inline),
+      beginSend:options=>this.previewSend(note?.path,inline,undefined,options.inline.enabled),
       hasNewContent:note?(destination)=>this.hasSmartContent(this.app.vault.getFileByPath(note.path)!,destination,inline):undefined,
       sendChat:(text,key,resolve,_back,destination)=>send(text,{threadId:destination?.threadId,responseId:destination?.responseId,expectedProjectKey:destination?.projectKey,projectOverrideKey:key,jobOptions:resolve?.()}),
       sendToNew:(text,key,resolve)=>send(text,{newThread:true,projectOverrideKey:key??NO_PROJECT,jobOptions:resolve?.()}),
@@ -1638,15 +1662,17 @@ export default class SendToT3 extends Plugin {
     const jobOptions=options?.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     const requestId=randomId(),initialInput=context.initialQuestion?{messageId:commandId(requestId,'message'),text:context.initialQuestion}:undefined;
     let job:InlineJob|undefined,delivered=false;
+    const finishPreview=this.previewSend(note.path,context,undefined,jobOptions.inline.enabled);
     try{
       await this.sendChat(prompt,note,{...options,jobOptions,requestId,sourceContext:context,onPrepared:async request=>{
-        // Package images before mutating the note.
+        // The pending indicator never enters image or prompt snapshots.
         if(request.inlineSteering)return;
 
         job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):context.insertion?manager.reserveAtCursor(context.editor,context.view,context.insertion,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
+        this.sendPreviews.hide(context.view as MarkdownView);
         await manager.prepare(job,request);
       }});delivered=true;if(job)manager.start(job);
-    }catch(error){if(job)await manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)));throw error;}
+    }catch(error){if(job)await manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)));throw error;}finally{finishPreview();}
   }
   private async steeringRecord(id:string):Promise<{record:ResponseRecord;host:ResponseStorageTarget}|undefined>{return this.deviceInline?.cachedResponse(id);}
   private async steeringDestination(id:string,signal?:AbortSignal){
@@ -2536,6 +2562,7 @@ export default class SendToT3 extends Plugin {
   }
   async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote;streamReply?:boolean;jobOptions?:ResolvedJobOptions;destinations?:string[];destinationSection?:string;insertion?:CursorInsertion|null;onPrepared?:(request:Request)=>Promise<void>}) {
     if (this.busy) {if(options?.throwOnError)throw Error('Obsidian is sending another request. Retry shortly.');return;}
+    const finishPreview=this.previewSend(file.path,undefined,options?.destinationSection?null:options?.insertion,options?.jobOptions?.inline.enabled??options?.streamReply??(!options?.quiet&&this.settings.inlineStreaming.enabled));
     this.busy = true;
     const startedAt=Date.now();let request:Request|undefined;
     const completion = {...this.settings.completion};
@@ -2570,7 +2597,7 @@ export default class SendToT3 extends Plugin {
       const sentThreadId=await this.dispatch(request,options?.quiet);
       return {threadId:sentThreadId,request};
     } catch(e) {if(request)await this.failRequest(request,e,'preparation',startedAt);else this.recordSendFailure(undefined,e,'preparation',startedAt);const detail=`${unsavedMessage(e)} The send failed. See the send failure log.`;if(options?.throwOnError)throw new RequestDeliveryError(detail,false,Boolean(request));new Notice(`T3 Code: ${detail}`,12000);}
-    finally {this.busy = false;}
+    finally {finishPreview();this.busy = false;}
   }
   /** Resolve against the final thread and its provider turn, never the cursor.
    * Reconnecting bindings block a send until ownership is known. */
@@ -2628,7 +2655,16 @@ export default class SendToT3 extends Plugin {
     request.inlineBindings=[];
     const fresh:string[]=[];
     for(const path of destinations)if(input===undefined||!await this.prepareNoteSteering(request,path,input,undefined,undefined,path===sourcePath?steeringSource:undefined))fresh.push(path);
-    for(const path of fresh)request.inlineBindings.push(await editorStream(source,path,io,()=>!this.stopped,undefined,path===sourcePath?insertion??undefined:undefined));
+    for(const path of fresh){
+      const binding=await editorStream(source,path,io,()=>!this.stopped,undefined,path===sourcePath?insertion??undefined:undefined);
+      request.inlineBindings.push(binding);
+      for(const leaf of this.app.workspace.getLeavesOfType('markdown')){
+        const view=leaf.view as MarkdownView;if(view.file?.path!==path)continue;
+        const initial=initialRegion(binding.id,binding.initialInput,binding.threadTitle,binding.intermediateMode,{startedAt:binding.createdAt});
+        nativeResponses(this.app).preview(view,binding.id,regionBody(initial.text,binding.id)!.body);
+      }
+    }
+    for(const leaf of this.app.workspace.getLeavesOfType('markdown'))if(destinations.includes((leaf.view as MarkdownView).file?.path??''))this.sendPreviews.hide(leaf.view as MarkdownView);
     request.inlineHost=request.inlineBindings[0];
   }
   private async responseGuard(binding:ResponseRequest,_status:'prepared'|'accepted'|'failed',_uncertain=false){if(!binding.localOnly)throw Error('Legacy reply creation was retired.');}
@@ -2777,7 +2813,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }
   }
-  onunload(){void this.localDesktopAccess?.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.sendPreviews.dispose();void this.localDesktopAccess?.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();this.noteCommandServer?.dispose();this.eventHostServer?.dispose();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;
