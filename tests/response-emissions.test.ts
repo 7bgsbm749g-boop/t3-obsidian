@@ -14,18 +14,18 @@ function fixture(items:any[]){return applyThreadItem({messages:[],activities:[]}
   messages:[{id:'prompt',role:'user',runId:'run',text:'Task',streaming:false,createdAt:at(1)},{id:'prose',role:'assistant',runId:'run',text:'Checking.',streaming:false,createdAt:at(4)}],
   runtimeRequests:[],turnItems:items.map((item,index)=>({runId:'run',ordinal:index+1,startedAt:at(index+2),updatedAt:at(index+2),status:'completed',...item}))}})}).state;}
 
-test('public reasoning and plans appear in native folds in timeline order and stay outside final prose',()=>{
+test('Tasks precedes chronological public reasoning and stays outside final prose',()=>{
   const state=fixture([{id:'thought',type:'reasoning',text:'**Checking the request**\n\nPublic summary with <script>literal</script>.',streaming:false},
     {id:'plan',type:'todo_list',steps:[{step:'Read the contract',status:'completed'},{step:'Verify the result',status:'in_progress'}]}]);
   const body=renderInlineTurn(state,'run','thread','running','collapse');
   assert.match(body,/class="send-to-t3-thought"/);assert.match(body,/<strong>Checking the request<\/strong>/);assert.match(body,/&lt;script&gt;/);
-  assert.match(body,/\[!t3-plan\]- Plan/);assert.match(body,/- \[x\] Read the contract/);assert.match(body,/- \[ \] Verify the result \(In progress\)/);
-  assert.ok(body.indexOf('Public summary')<body.indexOf('Read the contract')&&body.indexOf('Read the contract')<body.indexOf('Checking.'));
+  assert.match(body,/class="send-to-t3-tasks"/);assert.match(body,/data-t3-task-state="completed"[^\n]+Read the contract/);assert.match(body,/data-t3-task-state="in_progress"[^\n]+Verify the result/);
+  assert.ok(body.indexOf('Read the contract')<body.indexOf('Public summary')&&body.indexOf('Public summary')<body.indexOf('Checking.'));
   state.messages.push({id:'final',role:'assistant',turnId:'run',text:'Final answer.',streaming:false,createdAt:at(7)});
   state.turns!['run'].state='completed';state.turns!['run'].assistantMessageId='final';state.latestTurn=state.turns!['run'];state.session={status:'ready',activeTurnId:null};
   const completed=renderInlineTurn(state,'run','thread','complete','collapse');
   assert.ok(completed.indexOf('Public summary')<completed.indexOf('\n\n> Final answer.'));
-  assert.doesNotMatch(renderInlineTurn(state,'run','thread','complete','remove'),/Public summary|t3-thought|t3-plan/);
+  assert.doesNotMatch(renderInlineTurn(state,'run','thread','complete','remove'),/Public summary|t3-thought|send-to-t3-tasks/);
 });
 
 test('consecutive public thoughts share one closed group, timestamp and stable streaming identity',()=>{
@@ -144,13 +144,15 @@ test('live canonical error updates replace their existing row without completing
   assert.equal(body.split('>Provider error<').length-1,1);assert.doesNotMatch(body,/Original failure/);assert.match(body,/Updated failure\./);
   assert.equal(turnPhase(state,'run'),'running');
 });
-test('a plan after prose is a separate native quote block and following prose stays outside it',()=>{
+test('Tasks stays first at the same depth inside history and does not swallow adjacent prose',()=>{
  const state=fixture([{id:'plan',type:'todo_list',startedAt:at(5),steps:[{step:'Check display',status:'in_progress'}]}]);
  state.messages.push({id:'after',role:'assistant',turnId:'run',text:'Following commentary.',streaming:false,createdAt:at(6)});
  const body=renderInlineTurn(state,'run','thread','running','collapse'),tree:any=unified().use(remarkParse).parse(body);
  const quotes:any[]=[];const visit=(node:any)=>{if(node.type==='blockquote')quotes.push(node);for(const child of node.children??[])visit(child);};visit(tree);
  const text=(node:any):string=>node.value??(node.children??[]).map(text).join('');
- const plans=quotes.filter(quote=>text(quote.children[0]).startsWith('[!t3-plan]'));
- assert.equal(plans.length,1);assert.match(text(plans[0]),/Check display/);assert.doesNotMatch(text(plans[0]),/Checking\.|Following commentary/);
+ const history=quotes.find(quote=>text(quote.children[0]).startsWith('[!t3-progress]'));
+ const tasks=history.children.find((node:any)=>node.type==='html'&&node.value.includes('data-t3-tasks-id'));
+ assert.ok(tasks);assert.match(tasks.value,/Check display/);assert.doesNotMatch(tasks.value,/Checking\.|Following commentary/);
+ assert.equal(history.children[1],tasks);assert.ok(body.indexOf('Check display')<body.indexOf('Checking.'));
  assert.equal(state.messages.find(message=>message.id==='prose')?.text,'Checking.');
 });
