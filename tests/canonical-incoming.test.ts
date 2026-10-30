@@ -27,10 +27,11 @@ test('external steer captures live paragraph boundary, structured context and ex
  assert.doesNotMatch(renderInlineTurn(s,'turn','thread','running',true,undefined,{messages:s.messages.filter(m=>m.role==='assistant'),steering:incoming}),/Recovered/);
 });
 
-test('recovery is explicit about uncertain paragraph position and excludes unrelated later turns',()=>{
+test('recovered inputs show only their sender label and exclude unrelated later turns',()=>{
  const s=state();s.messages.push({id:'native',role:'user',turnId:'turn',text:'Native T3 input',streaming:false,createdAt:at(10)},{id:'other',role:'user',turnId:'later',text:'Unrelated input',streaming:false});
  const incoming=observeIncoming(s,['turn'],[],[],['primary']);assert.equal(incoming.length,1);assert.equal(incoming[0].label,'User');assert.equal(incoming[0].position,'recovered');
- assert.match(renderInlineTurn(s,'turn','thread','complete',true,undefined,{messages:[assistant('First.')],steering:incoming}),/User · Recovered \(paragraph position approximate\)/);
+ const rendered=renderInlineTurn(s,'turn','thread','complete',true,undefined,{messages:[assistant('First.')],steering:incoming});
+ assert.match(rendered,/\[!t3-steering\] User\n/);assert.doesNotMatch(rendered,/Recovered|approximate/);
  assert.equal(observeIncoming({...s,bindings:{native:{turnId:'later',kind:'explicit'}},messages:s.messages.map(m=>m.id==='native'?{...m,turnId:'later'}:m)},['turn'],incoming).length,0);
 });
 

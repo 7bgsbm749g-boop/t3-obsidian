@@ -87,9 +87,9 @@ export interface InitialInlineInput {messageId:string;text:string;label?:string;
 function renderInitialInput(input:InitialInlineInput,createdAt?:string){return input.answer?renderSubmittedAnswer(input.answer,input.text,createdAt):renderInlineInput(input.text,input.label);}
 
 /** The same neutral user quote is used for initial questions and steering. */
-export function renderInlineInput(text:string,label='You',position?:'live'|'recovered'):string {
+export function renderInlineInput(text:string,label='You'):string {
   const heading=label.replace(/[\r\n\t]+/g,' ').replace(/[\\`*_{}\[\]()#+.!>|]/g,'\\$&').slice(0,200);
-  return `> [!t3-steering] ${heading}${position==='recovered'?' · Recovered (paragraph position approximate)':''}\n${closeOpenFence(visibleInlineInput(text)).split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
+  return `> [!t3-steering] ${heading}\n${closeOpenFence(visibleInlineInput(text)).split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
 }
 
 export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming):{text:string;bodyHash:string} {
@@ -582,7 +582,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
-  const renderInput=(input:InlineSteering|typeof segments[number])=>input.answer?renderSubmittedAnswer(input.answer,input.text,input.createdAt):renderInlineInput(input.text,input.label,input.position);
+  const renderInput=(input:InlineSteering|typeof segments[number])=>input.answer?renderSubmittedAnswer(input.answer,input.text,input.createdAt):renderInlineInput(input.text,input.label);
   let previousRole:string|undefined;
   let prose=transcript?segments.reduce((body,segment,index)=>{
     const rendered=segment.role==='user'?renderInput(segment):assistant(segment.text,segment.messageId);
