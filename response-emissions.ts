@@ -1,5 +1,6 @@
 import type {InlineThreadState} from './inline-thread';
 import {renderWorktreeSetup,worktreeSetupPhase} from './worktree-setup';
+import {renderResponseTasks} from './response-tasks';
 
 export interface ResponseEmission {id:string;turnId:string|null;createdAt?:string;sequence:number;body:string;active:boolean;kind:string}
 const html=(text:string)=>text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\n/g,'&#10;');
@@ -38,9 +39,8 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
       const label=running?(active?'Compacting context':'Context compaction'):p.status==='failed'?'Context compaction failed':p.status==='stopped'?'Context compaction stopped':'Context compacted';
       body=`<span class="send-to-t3-context" data-t3-emission-id="${html(activity.id)}"><span data-t3-tool-icon="minimize-2" aria-hidden="true"></span><span>${label}</span>${active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':''}</span>`;
     }else if(activity.kind==='response.plan'){
-      const text=typeof p.text==='string'?p.text:(p.steps??[]).map((step:any)=>`- [${step.status==='completed'?'x':' '}] ${String(step.step??step.text??step.content??'').replace(/[\r\n]+/g,' ')}${step.status==='in_progress'?' (In progress)':''}`).join('\n');
-      if(!text.trim())continue;
-      body=separateCallout(`> [!t3-plan]- Plan\n>\n${markdown(text)}`);
+      body=renderResponseTasks(activity.turnId??activity.id,p);
+      if(!body)continue;
     }else{
       const text=typeof p.text==='string'?p.text:activity.summary;if(!text.trim())continue;
       body=p.error?renderProviderError(activity.id,text,activity.createdAt):separateCallout(`> [!t3-notification] Notice\n>\n${markdown(text)}`);
