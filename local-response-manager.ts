@@ -112,7 +112,9 @@ export class LocalResponseManager {
         // closes. Ordinary replies keep their existing open-editor boundary.
         if(!runtime.done&&!runtime.stopped&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.tick(true);
         else runtime.preview.suspend();
-        if(!runtime.done&&!this.migrations.has(runtime.request.id)&&documents.some(note=>note.path===runtime.request.notePath)){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,runtime.request.notePath);}
+        // A final commit removes the anchor before its file IO resolves. Let
+        // that pending commit report its own success or conflict.
+        if(!runtime.done&&!runtime.work&&!this.migrations.has(runtime.request.id)&&documents.some(note=>note.path===runtime.request.notePath)){runtime.done=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,runtime.request.notePath);}
         if(!runtime.done&&this.canFinishClosed(runtime)&&runtime.update?.completionVerified)this.finish(runtime);
         continue;
       }
