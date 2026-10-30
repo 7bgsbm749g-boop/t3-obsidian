@@ -61,7 +61,7 @@ test('consecutive calls become one collapsed history group; the current batch ap
   const collapsed=renderInlineTurn(state,'turn','thread','running','collapse');assert.ok(collapsed.indexOf('Before.')<collapsed.indexOf('Ran 2 commands')&&collapsed.indexOf('Ran 2 commands')<collapsed.indexOf('Between batches.'));
   state.messages.push(message('reason',7,'Public reasoning summary','reasoning'));
   assert.equal(currentResponseToolGroup(state,'turn'),undefined);assert.equal(responseActivityLabel(state,'turn'),'Thinking');
-  const advanced=renderInlineTurn(state,'turn','thread','running','collapse');assert.match(advanced,/<span>Ran 1 command<\/span><\/summary>/);assert.match(advanced,/\[!t3-thought\]- Thought/);assert.match(advanced,/Public reasoning summary/);assert.doesNotMatch(advanced,/<strong>Running npm/);
+  const advanced=renderInlineTurn(state,'turn','thread','running','collapse');assert.match(advanced,/<span>Ran 1 command · 1 thought<\/span><\/summary>/);assert.match(advanced,/class="send-to-t3-thought"/);assert.match(advanced,/Public reasoning summary/);assert.doesNotMatch(advanced,/<strong>Running npm/);
 });
 
 test('new prose, user input and turns split groups without merging reused tool IDs or reopening results',()=>{
@@ -99,4 +99,41 @@ test('summary matches T3 sentence and distinct file counts, including sparse fil
   const body=renderInlineTurn({messages:[],activities},'turn','thread','complete','collapse');assert.match(body,/<summary><span data-t3-tool-icon="hammer"[^\n]+<span>Ran 4 commands and changed 7 files<\/span><\/summary>/);
   const browser=responseTools({messages:[],activities:[a('browser',1,'tool.completed',{toolCallId:'browser',data:{server:'t3-code',tool:'preview_snapshot'}})]},['turn']);
   assert.equal(summarizeResponseTools([...browser,...tools.slice(0,1)]),'Used browser 1 time and ran 1 command');
+});
+
+test('alternating thoughts and tools share one stable batch through live, history and Stop',()=>{
+  const thought=(id:string,n:number)=>({id,turnId:'turn',role:'reasoning',text:`**Summary ${id}**`,streaming:false,createdAt:new Date(n*1000).toISOString(),sequence:n});
+  const state:InlineThreadState={messages:[thought('first',1)],activities:[a('one',2,'tool.completed',{toolCallId:'one',data:{command:'pwd',output:'first result'}})]};
+  const identity=responseToolGroups(state,['turn'])[0].id;
+  state.messages.push(thought('second',3));state.activities.push(a('two',4,'tool.started',{toolCallId:'two',data:{command:'npm test'}}));
+  const [group]=responseToolGroups(state,['turn']);assert.equal(group.id,identity);assert.equal(group.thoughts?.length,2);assert.equal(group.tools.length,2);
+  const live=renderInlineTurn(state,'turn','thread','running','collapse');
+  assert.equal(live.match(/data-t3-tool-group=/g)?.length,1);assert.equal(live.match(/class="send-to-t3-thought"/g)?.length,2);
+  assert.ok(live.indexOf('Summary first')<live.indexOf('first result')&&live.indexOf('first result')<live.indexOf('Summary second')&&live.indexOf('Summary second')<live.indexOf('data-t3-tool-id="two"'));
+  assert.doesNotMatch(live,/\[!t3-thought\]/);assert.match(live,/data-t3-tool-summary="Ran 2 commands · 2 thoughts"/);
+  const stopped=stoppedResponseBody(live);assert.match(stopped,/Ran 2 commands · 2 thoughts · stopped/);assert.match(stopped,/Summary second/);assert.doesNotMatch(stopped,/inline-spinner|data-t3-live-tool/);
+  state.messages.push(thought('third',5));
+  const history=renderInlineTurn(state,'turn','thread','running','collapse');assert.equal(history.match(/data-t3-tool-group=/g)?.length,1);assert.match(history,/<span>Ran 2 commands · 3 thoughts<\/span>/);
+});
+
+test('same-time commentary and other public display items split mixed batches by ordinal',()=>{
+  for(const kind of ['assistant','user-input.requested','approval.requested','context-compaction','response.plan','response.notification','response.html']){
+    const createdAt=new Date(1000).toISOString();
+    const state:InlineThreadState={messages:[{id:'thought',turnId:'turn',role:'reasoning',text:'Before',streaming:false,createdAt,sequence:1}],activities:[{...a('tool',3,'tool.completed',{toolCallId:'tool',data:{command:'pwd'}}),createdAt}]};
+    if(kind==='assistant')state.messages.push({id:'prose',turnId:'turn',role:'assistant',text:'Boundary',streaming:false,createdAt,sequence:2});
+    else state.activities.push({id:'boundary',turnId:'turn',kind,summary:'Boundary',createdAt,sequence:2});
+    const groups=responseToolGroups(state,['turn']);assert.equal(groups.length,2,kind);assert.equal(groups[0].thoughts?.length,1);assert.equal(groups[1].tools.length,1);
+  }
+});
+
+test('legacy thoughts without ordinals do not replace the earliest batch identity',()=>{
+  for(const first of ['thought','tool']){
+    const state:InlineThreadState={messages:[],activities:[]};
+    const addThought=(n:number)=>state.messages.push({id:'thought',turnId:'turn',role:'reasoning',text:'Summary',streaming:false,createdAt:new Date(n*1000).toISOString()});
+    const addTool=(n:number)=>state.activities.push(a('tool',n,'tool.completed',{toolCallId:'tool',data:{command:'pwd'}}));
+    if(first==='thought')addThought(1);else addTool(1);
+    const identity=responseToolGroups(state,['turn'])[0].id;
+    if(first==='thought')addTool(2);else addThought(2);
+    assert.equal(responseToolGroups(state,['turn'])[0].id,identity);
+  }
 });

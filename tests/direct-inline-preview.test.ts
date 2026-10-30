@@ -46,9 +46,9 @@ test('the live preview keeps public thoughts from snapshots and updates outside 
  const h=fixture();h.record.request.intermediateMode='collapse';h.preview.tick(true);
  const initial=h.snapshot() as any;
  initial.snapshot.thread.messages.push({id:'reasoning:one',role:'reasoning',turnId:'turn',text:'**First public summary**',streaming:false,createdAt:'2026-10-06T03:00:01Z'});
- h.item(initial);assert.match(h.updates.at(-1)!.body,/\[!t3-thought\]- Thought/);
+ h.item(initial);assert.match(h.updates.at(-1)!.body,/class="send-to-t3-thought"/);
  h.item(normalizeV2StreamItem({kind:'event',sequence:3,event:{type:'turn-item.updated',payload:{id:'two',runId:'turn',type:'reasoning',ordinal:2,text:'**Second public summary**',streaming:true,startedAt:'2026-10-06T03:00:02Z'}}}));h.clock.advance(80);
- assert.match(h.updates.at(-1)!.body,/Thought \(×2\)/);assert.match(h.updates.at(-1)!.body,/First public summary[\s\S]*Second public summary/);
+ assert.match(h.updates.at(-1)!.body,/2 thoughts/);assert.match(h.updates.at(-1)!.body,/First public summary[\s\S]*Second public summary/);
  h.item(normalizeV2StreamItem({kind:'event',sequence:4,event:{type:'turn-item.updated',payload:{id:'other',runId:'unrelated',type:'reasoning',text:'Unrelated summary',streaming:false}}}));h.clock.advance(80);
  assert.doesNotMatch(h.updates.at(-1)!.body,/Unrelated summary/);assert.equal(h.updates.at(-1)!.phase,'running');assert.equal(h.updates.at(-1)!.completionVerified,false);h.preview.dispose();
 });

@@ -9,28 +9,6 @@ const separateCallout=(body:string)=>`<!-- t3-display-block -->\n\n${body}\n\n<!
 /** Public timeline emissions are display data, never run completion evidence. */
 export function responseEmissions(state:InlineThreadState,turns:string[],markdown:(text:string)=>string,activeTurn?:string):ResponseEmission[] {
   const result:ResponseEmission[]=[];
-  // Prose, tools, inputs and other public timeline items end a thought group.
-  // Use the first item as its identity so another summary can join it live.
-  const timeline=[...state.messages.filter(message=>turns.includes(message.turnId??'')&&message.text.trim()).map(message=>({message,turnId:message.turnId,createdAt:message.createdAt,sequence:message.sequence??0})),
-    ...state.activities.filter(activity=>turns.includes(activity.turnId??'')&&(/^(tool\.|response\.|context-compaction|user-input\.|approval\.)/.test(activity.kind))&&activity.payload?.itemType!=='reasoning').map(activity=>({message:undefined,turnId:activity.turnId,createdAt:activity.createdAt,sequence:activity.sequence??0}))]
-    .sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
-  let group:typeof state.messages=[];
-  const flush=()=>{
-    if(!group.length)return;
-    const first=group[0],id=`thought:${encodeURIComponent(first.turnId??'')}:${encodeURIComponent(first.id)}`;
-    const count=group.length>1?` (×${group.length})`:'';
-    const time=first.createdAt&&Number.isFinite(Date.parse(first.createdAt))?` <span class="send-to-t3-thought-time" data-t3-thought-at="${Date.parse(first.createdAt)}"></span>`:'';
-    const key=` <span class="send-to-t3-fold-key" data-t3-fold="${html(id)}"></span>`;
-    result.push({id:first.id,turnId:first.turnId,createdAt:first.createdAt,sequence:first.sequence??0,active:false,kind:'reasoning',
-      body:separateCallout(`> [!t3-thought]- Thought${count}${time}${key}\n>\n${group.map(message=>markdown(message.text)).join('\n>\n')}`)});
-    group=[];
-  };
-  for(const entry of timeline){
-    if(entry.message?.role!=='reasoning'){flush();continue;}
-    if(group.length&&group[0].turnId!==entry.turnId)flush();
-    group.push(entry.message);
-  }
-  flush();
   for(const activity of state.activities){
     if(!turns.includes(activity.turnId??'')||!['context-compaction','response.plan','response.notification'].includes(activity.kind))continue;
     const p=activity.payload??{};let body:string,active=false;
