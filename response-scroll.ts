@@ -95,6 +95,9 @@ export class ResponseScroll {
   /** Projection updates and late native layout changes share one pending frame. */
   updated=()=>{
     if(this.disposed)return;
+    // Static retained history has no follow intent or guarded height. Avoid
+    // forcing layout on every native viewport mutation in that common case.
+    if(!this.following&&!this.state.following&&!this.positions.size&&!this.height.isActive())return;
     // Native note switches replace the adapter. Keep intent in its pane/note
     // state, while detached or hidden editors must not run scroll jobs.
     if(this.view.file!==this.file||this.view.contentEl?.getClientRects?.().length===0){this.pause();return;}

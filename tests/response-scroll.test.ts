@@ -34,6 +34,13 @@ function fixture(state?:ResponseScrollState){
 test('stream updates and text or synthetic clicks never enable follow',()=>{
   const h=fixture();h.update();h.event('click');h.event('click','follow',{isTrusted:false});h.flush();assert.equal(h.scroller.scrollTop,200);assert.deepEqual(h.scroll.control(key),{active:false,position:'top',moving:false});h.scroll.dispose();
 });
+test('inactive scroll helpers never force layout during native viewport mutations',()=>{
+ const h=fixture();
+ h.view.contentEl.getClientRects=()=>assert.fail('Inactive history must not force a layout read');
+ h.scroller.querySelectorAll=()=>assert.fail('Inactive history must not scan rendered folds');
+ h.scroll.updated();h.collapse();h.event('wheel');h.update();h.flush();
+ assert.equal(h.frames.size,0);assert.equal(h.scroller.scrollTop,200);h.scroll.dispose();
+});
 test('explicit activation aligns immediately without waiting for another response update or changing editor state',()=>{
   const h=fixture(),before=h.view.editor.cm.state;h.scroll.toggle(key);h.flush();assert.equal(h.scroller.scrollTop,608);assert.equal(h.view.editor.cm.state,before);assert.equal(h.effects.length,0);assert.deepEqual(h.scroll.control(key),{active:true,position:'bottom',moving:false});h.scroll.dispose();
 });
