@@ -19,6 +19,9 @@ class ReleaseQueueTests(unittest.TestCase):
         self.root = self.directory / 'canonical'; self.root.mkdir()
         self.store = self.directory / 'queue'
         self.backups = self.directory / 'backups'; self.backups.mkdir()
+        self.schedule_retry = queue.schedule_retry
+        self.timer = patch.object(queue, 'schedule_retry').start()
+        self.addCleanup(patch.stopall)
         subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
         self.git('config', 'user.name', 'Test'); self.git('config', 'user.email', 'test@example.com')
         for name in queue.VERSION_FILES:
@@ -132,7 +135,7 @@ class ReleaseQueueTests(unittest.TestCase):
         queue.write(self.root / 'package.json', value)
         self.git('add', 'package.json'); self.git('commit', '-qm', 'package update')
         result = queue.drain(self.release, queue=self.store)
-        self.assertEqual(result['status'], 'awaiting-smoke')
+        self.assertEqual(result['status'], 'idle')
         self.assertEqual(self.published, ['1.0.1'])
         self.assertFalse(queue.status(job['jobId'], queue=self.store)['jobs'][0]['suppliedBehaviorInputsMatch'])
 
@@ -158,27 +161,26 @@ class ReleaseQueueTests(unittest.TestCase):
         queue.drain(self.release, queue=self.store)
         self.assertEqual(self.published, ['1.0.1'])
 
-    def test_missing_behavior_smoke_holds_the_slot_until_its_receipt_exists(self):
+    def test_missing_behavior_evidence_defers_without_publishing_or_holding_the_lane(self):
         a = self.submit(self.source('first'), evidence=False)
         b = self.submit(self.source('second'))
         result = queue.drain(self.release, queue=self.store)
-        self.assertEqual(result['status'], 'awaiting-smoke')
+        self.assertEqual(result['status'], 'idle')
         self.assertEqual(self.published, ['1.0.1'])
-        self.assertEqual(queue.status(b['jobId'], queue=self.store)['jobs'][0]['status'], 'queued')
-        self.smoke('1.0.1', 'native', self.evidence, 'Verified')
-        queue.drain(self.release, queue=self.store)
-        self.assertEqual(self.published, ['1.0.1', '1.0.2'])
-        self.assertEqual(queue.status(a['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+        self.assertEqual(queue.status(b['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+        self.assertEqual(queue.status(a['jobId'], queue=self.store)['jobs'][0]['status'], 'needs-evidence')
+        self.assertFalse((self.root / 'first.ts').exists())
 
-    def test_install_failure_blocks_following_jobs_and_retry_resumes_the_same_archive(self):
+    def test_install_failure_arms_durable_retry_and_resumes_the_same_archive(self):
         a = self.submit(self.source('first')); self.submit(self.source('second'))
         def fail(bump, dirty, version):
             self.release.archive_path(version).write_text('immutable bytes')
             raise RuntimeError('Sync failed')
-        with patch.object(self.release, 'new_release', side_effect=fail):
-            self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'blocked')
+        with patch.object(self.release, 'new_release', side_effect=fail), patch.object(self.release, 'resume_release', side_effect=RuntimeError('Sync unavailable')):
+            self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'retrying')
         self.assertEqual(self.published, [])
-        self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'blocked')
+        self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'retrying')
+        self.timer.assert_called()
         queue.retry(a['jobId'], queue=self.store)
         with patch.object(self.release, 'resume_release', wraps=self.release.resume_release) as resume:
             queue.drain(self.release, queue=self.store)
@@ -188,10 +190,91 @@ class ReleaseQueueTests(unittest.TestCase):
     def test_dirty_canonical_checkout_is_preserved_and_no_release_is_attempted(self):
         a = self.submit(self.source('first'))
         user_file = self.root / 'unrelated.txt'; user_file.write_text('user work')
-        self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'blocked')
+        self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'retrying')
         self.assertEqual(user_file.read_text(), 'user work')
         self.assertEqual(self.published, [])
         self.assertIn('uncommitted', queue.status(a['jobId'], queue=self.store)['jobs'][0]['error'])
+
+    def test_transient_check_failure_retries_without_an_operator(self):
+        job = self.submit(self.source('first'))
+        calls = []
+        def publish(*args):
+            calls.append(args)
+            if len(calls) == 1:
+                raise SystemExit('ENOTEMPTY during temporary fixture cleanup')
+            self.publish(*args)
+        with patch.object(self.release, 'new_release', side_effect=publish):
+            self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
+        self.assertEqual(len(calls), 2)
+        state = queue.status(job['jobId'], queue=self.store)['jobs'][0]
+        self.assertEqual(state['status'], 'complete')
+        self.assertIsNone(state['error'])
+        self.assertEqual(len(list(queue.job_path(self.store, job['jobId']).glob('failure-*.json'))), 1)
+
+    def test_bad_candidate_is_reverted_and_a_later_independent_job_publishes(self):
+        a = self.submit(self.source('first')); b = self.submit(self.source('second'))
+        def publish(*args):
+            if (self.root / 'first.ts').exists():
+                raise RuntimeError('Deterministic test failure')
+            self.publish(*args)
+        with patch.object(self.release, 'new_release', side_effect=publish):
+            self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
+        self.assertEqual(queue.status(a['jobId'], queue=self.store)['jobs'][0]['status'], 'failed')
+        self.assertEqual(queue.status(b['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+        self.assertFalse((self.root / 'first.ts').exists())
+        self.assertTrue((self.root / 'second.ts').exists())
+        self.assertEqual(self.published, ['1.0.1'])
+        self.assertEqual(self.git('status', '--porcelain=v1'), '')
+
+    def test_legacy_blocked_job_is_recovered_automatically(self):
+        a = self.submit(self.source('first'))
+        directory = queue.job_path(self.store, a['jobId'])
+        queue.write(directory / 'state.json', {'status': 'blocked', 'updatedAt': queue.now(), 'error': 'Old failure'})
+        self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
+        self.assertEqual(queue.status(a['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+
+    def test_pending_smoke_does_not_hold_the_lane_or_claim_completion(self):
+        a = self.submit(self.source('first')); b = self.submit(self.source('second'))
+        with patch.object(queue, 'completed_smoke', return_value=False), patch.object(self.release, 'complete_smoke'):
+            # Evidence is retained, but integration changed the first job's input.
+            request = queue.job_path(self.store, a['jobId']) / 'request.json'
+            value = queue.read(request); value['sourceInputsSha256']['first.ts'] = 'old-input'
+            queue.write(request, value)
+            self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
+        self.assertEqual(self.published, ['1.0.1', '1.0.2'])
+        self.assertEqual(queue.status(a['jobId'], queue=self.store)['jobs'][0]['status'], 'awaiting-smoke')
+        self.assertEqual(queue.status(b['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+        self.smoke('1.0.1', 'native', self.evidence, 'Verified exact archived candidate')
+        queue.drain(self.release, queue=self.store)
+        self.assertEqual(queue.status(a['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+
+    def test_tooling_only_job_validates_without_a_plugin_release(self):
+        source = self.source('first')
+        subprocess.run(['git', 'rm', 'first.ts'], cwd=source, check=True, capture_output=True)
+        (source / 'docs').mkdir(); (source / 'docs/queue.md').write_text('Recovery instructions')
+        subprocess.run(['git', 'add', '.'], cwd=source, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'maintenance'], cwd=source, check=True)
+        a = self.submit(source, evidence=False)
+        validate = SimpleNamespace(run_validation=lambda root: self.evidence)
+        with patch.object(self.release, 'change_checks', validate, create=True):
+            self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
+        state = queue.status(a['jobId'], queue=self.store)['jobs'][0]
+        self.assertEqual(state['delivery'], 'source-only')
+        self.assertEqual(self.published, [])
+
+    def test_retry_timer_is_a_persistent_single_deadline_and_worker_restarts_after_crashes(self):
+        home = self.directory / 'home'
+        units = home / '.config/systemd/user'; units.mkdir(parents=True)
+        with patch.object(queue.Path, 'home', return_value=home), patch.object(queue.subprocess, 'run'):
+            queue.install(self.root, queue=self.store)
+            self.assertIn('Restart=on-failure', (units / (queue.UNIT + '.service')).read_text())
+        with patch.object(queue.Path, 'home', return_value=home), patch.object(queue.subprocess, 'run') as command:
+            self.schedule_retry('2030-01-02T03:04:05+00:00', queue=self.store)
+            timer = (units / (queue.UNIT + '-retry.timer')).read_text()
+            self.assertIn('OnCalendar=2030-01-02 03:04:05 UTC', timer)
+            self.assertIn('Persistent=true', timer)
+            self.assertNotIn('OnUnitInactiveSec', timer)
+            command.assert_any_call(['systemctl', '--user', 'restart', queue.UNIT + '-retry.timer'], check=True, timeout=10)
 
     def test_updated_release_engine_restarts_before_validating_with_old_code(self):
         source = self.source('first')
@@ -209,7 +292,9 @@ class ReleaseQueueTests(unittest.TestCase):
     def test_corrected_source_retries_the_original_slot_and_preserves_the_original_request(self):
         source = self.source('first'); submitted = self.submit(source)
         with patch.object(self.release, 'new_release', side_effect=RuntimeError('test failed')):
-            self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'blocked')
+            self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
+        self.assertEqual(queue.status(submitted['jobId'], queue=self.store)['jobs'][0]['status'], 'failed')
+        self.assertFalse((self.root / 'first.ts').exists())
         directory = queue.job_path(self.store, submitted['jobId'])
         original = (directory / 'request.json').read_bytes()
         (source / 'first.ts').write_text('export const value=2;')
