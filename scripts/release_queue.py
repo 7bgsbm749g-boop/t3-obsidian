@@ -18,7 +18,7 @@ UNIT = 'send-to-t3-release-queue'
 JOB_ID = re.compile(r'^\d{12}-[0-9a-f]{16}$')
 VERSION_FILES = {'package.json', 'package-lock.json', 'manifest.json', 'versions.json'}
 MAX_ATTEMPTS = 3
-FINISHED = {'complete', 'failed', 'needs-evidence', 'awaiting-smoke'}
+FINISHED = {'complete', 'failed', 'needs-evidence', 'awaiting-smoke', 'waiting-for-dependency'}
 
 
 def maintenance_only(names: list[str]) -> bool:
@@ -486,6 +486,10 @@ def drain(release, *, queue: Path = QUEUE) -> dict:
                         for path, item in pending:
                             if item['status'] == 'awaiting-smoke' and completed_smoke(release, item['version']):
                                 update(path, item, status='complete', completedAt=now(), nextAction=None, error=None)
+                            if item['status'] == 'waiting-for-dependency':
+                                parent = read(job_path(queue, item['requiresJobId']) / 'state.json')
+                                if parent['status'] == 'complete':
+                                    update(path, item, status='queued', requiresJobId=None, nextAction=None)
                         directory = next((path for path, item in pending if item['status'] not in FINISHED), None)
                         if directory is None:
                             (queue / 'wake').unlink(missing_ok=True)
@@ -497,6 +501,18 @@ def drain(release, *, queue: Path = QUEUE) -> dict:
                             return {'status': 'retrying', 'jobId': directory.name, 'nextRetryAt': state['nextRetryAt']}
                         state.pop('nextRetryAt', None)
                         request = read(directory / state.get('requestFile', 'request.json'))
+                        dependency = None
+                        for path, item in pending:
+                            if path == directory or not item.get('rollbackCommits'):
+                                continue
+                            parent = read(path / item.get('requestFile', 'request.json'))
+                            if subprocess.run(['git', 'merge-base', '--is-ancestor', parent['commit'], request['commit']], cwd=release.ROOT, capture_output=True).returncode == 0:
+                                dependency = path.name
+                                break
+                        if dependency:
+                            update(directory, state, status='waiting-for-dependency', requiresJobId=dependency,
+                                   nextAction='This candidate includes a reverted job. It resumes after that job is repaired; independent jobs continue.')
+                            continue
                     with (directory / 'worker.log').open('a', buffering=1) as log, redirect_stdout(log), redirect_stderr(log):
                         print(f'Queue attempt {now()}: {directory.name}', flush=True)
                         try:

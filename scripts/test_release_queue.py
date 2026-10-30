@@ -265,6 +265,25 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertEqual((self.root / 'shared.ts').read_text(), 'accepted\n')
         self.assertEqual(self.git('status', '--porcelain=v1'), '')
 
+    def test_descendant_of_reverted_source_waits_while_independent_work_continues(self):
+        first = self.source('first'); a = self.submit(first)
+        dependent = self.source('dependent')
+        subprocess.run(['git', 'merge', '--no-edit', '--no-ff', self.git('rev-parse', 'first')], cwd=dependent, check=True, capture_output=True)
+        b = self.submit(dependent); c = self.submit(self.source('third'))
+        def publish(*args):
+            if (self.root / 'first.ts').exists():
+                raise RuntimeError('Bad parent candidate')
+            self.publish(*args)
+        with patch.object(self.release, 'new_release', side_effect=publish):
+            queue.drain(self.release, queue=self.store)
+        self.assertEqual(queue.status(b['jobId'], queue=self.store)['jobs'][0]['status'], 'waiting-for-dependency')
+        self.assertEqual(queue.status(c['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+        self.assertFalse((self.root / 'dependent.ts').exists())
+        queue.retry(a['jobId'], queue=self.store)
+        queue.drain(self.release, queue=self.store)
+        self.assertEqual(queue.status(b['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+        self.assertEqual(self.published, ['1.0.1', '1.0.2', '1.0.3'])
+
     def test_legacy_blocked_job_is_recovered_automatically(self):
         a = self.submit(self.source('first'))
         directory = queue.job_path(self.store, a['jobId'])
