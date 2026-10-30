@@ -226,6 +226,12 @@ def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) 
                 raise SystemExit('This job already has immutable release bytes. Resume them; submit later code separately.')
             revision = state.get('requestRevision', 0) + 1
             name = f'request-{revision}.json'
+            previous = read(directory / state.get('requestFile', 'request.json'))
+            # A failed integration remains in Git history after its explicit
+            # revert. A merge-base can therefore hide restored product inputs.
+            replacement = {**replacement,
+                           'maintenanceOnly': bool(previous.get('maintenanceOnly')) and bool(replacement.get('maintenanceOnly')),
+                           'sourceInputsSha256': {**previous['sourceInputsSha256'], **replacement['sourceInputsSha256']}}
             save_request(directory, replacement, name)
             state.update(requestRevision=revision, requestFile=name)
         state.update(status='queued', updatedAt=now(), failures=0)
@@ -300,24 +306,32 @@ def resolve_validation_merge(release) -> bool:
     if not matches:
         return False
     for match in reversed(matches):
-        ours = registration_line(match[1].rstrip('\n'))
-        theirs = registration_line(match[2].rstrip('\n'))
-        if not ours or not theirs or (ours[0], ours[2:]) != (theirs[0], theirs[2:]):
+        left, right = match[1].splitlines(), match[2].splitlines()
+        if len(left) != len(right):
             return False
-        original = next((item for item in base if (item[0], item[2:]) == (ours[0], ours[2:])), None)
-        if original is None:
-            return False
-        a, b, before = dict(ours[1]), dict(theirs[1]), dict(original[1])
-        if len(a) != len(ours[1]) or len(b) != len(theirs[1]):
-            return False
-        if any(a.get(key) != value or b.get(key) != value for key, value in before.items()):
-            return False
-        if any(a[key] != b[key] for key in a.keys() & b.keys()):
-            return False
-        combined = {**a, **b}
-        body = (','.join("'" + key + "'" for key in combined) if ours[3] == 'flags' else
-                ''.join(f"process.argv.includes('{key}')?'{value}':" for key, value in combined.items()))
-        source = source[:match.start()] + ours[0] + body + ours[2] + '\n' + source[match.end():]
+        lines = []
+        for left_line, right_line in zip(left, right):
+            if left_line == right_line:
+                lines.append(left_line)
+                continue
+            ours, theirs = registration_line(left_line), registration_line(right_line)
+            if not ours or not theirs or (ours[0], ours[2:]) != (theirs[0], theirs[2:]):
+                return False
+            original = next((item for item in base if (item[0], item[2:]) == (ours[0], ours[2:])), None)
+            if original is None:
+                return False
+            a, b, before = dict(ours[1]), dict(theirs[1]), dict(original[1])
+            if len(a) != len(ours[1]) or len(b) != len(theirs[1]):
+                return False
+            if any(a.get(key) != value or b.get(key) != value for key, value in before.items()):
+                return False
+            if any(a[key] != b[key] for key in a.keys() & b.keys()):
+                return False
+            combined = {**a, **b}
+            body = (','.join("'" + key + "'" for key in combined) if ours[3] == 'flags' else
+                    ''.join(f"process.argv.includes('{key}')?'{value}':" for key, value in combined.items()))
+            lines.append(ours[0] + body + ours[2])
+        source = source[:match.start()] + '\n'.join(lines) + '\n' + source[match.end():]
     if re.search(r'^(<<<<<<<|=======|>>>>>>>)', source, re.M):
         return False
     path.write_text(source)
