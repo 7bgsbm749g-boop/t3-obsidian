@@ -24,6 +24,7 @@ export interface ChatHost {
   busy?:boolean;
   onBusyChange?(listener:()=>void):()=>void;
   runDefaultSend?(send:()=>Promise<void>):Promise<void>;
+  beginSend?(options:ResolvedJobOptions):()=>void;
   getNotePath():string;
   getProjectName(projectKey?:string):string;
   getDefaultProjectKey?():string|undefined;
@@ -187,7 +188,9 @@ class SendDestinationModal extends NoteTabPanel {
     const prompt=this.prompt??'';
     const resolve=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
     const returnToDraft=()=>this.open();
+    let finishPreview:(()=>void)|undefined;
     try{
+      if(target!=='existing')finishPreview=this.host.beginSend?.(resolve());
       const restriction=this.host.getThreadChoiceRestriction?.();
       if(target!=='default'&&restriction)throw new RequestDeliveryError(restriction,false);
       if(target!=='default'&&this.projectKey===undefined&&this.host.steering){
@@ -208,30 +211,33 @@ class SendDestinationModal extends NoteTabPanel {
       logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});
       new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
       if(!this.opened&&!(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)))this.open();
-    }finally{this.choosing=false;this.refreshAvailability?.();}
+    }finally{finishPreview?.();this.choosing=false;this.refreshAvailability?.();}
   }
 }
 
 /** Resolve the same default as the selector, without creating a panel. */
 async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
   const send=async()=>{
-    const key=host.getDefaultProjectKey?.();
-    const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false});
-    const resolve=()=>options;
-    if(!host.getDefaultThread(key)&&!host.steering){
-      if(host.hasNewContent&&!await host.hasNewContent({label:'New thread',projectKey:key},prompt)){new SendDestinationModal(app,host,prompt).open();return;}
-      await host.sendToNew(prompt,key,resolve);return;
-    }
-    let destination:ChatDestination|undefined;
-    if(host.getDefaultDestination){
-      const controller=new AbortController();
-      const timer=setTimeout(()=>controller.abort(Error('The conversation check took too long. Hold Control and send again to retry or choose another thread.')),DESTINATION_CHECK_TIMEOUT_MS);
-      try{destination=await abortableRead(host.getDefaultDestination(key,controller.signal),controller.signal);}
-      finally{clearTimeout(timer);}
-      if(destination.unavailable)throw new RequestDeliveryError(destination.detail??'This conversation is unavailable. Hold Control and send again to choose another thread.',false);
-      if(host.hasNewContent&&!await host.hasNewContent(destination,prompt)){new SendDestinationModal(app,host,prompt).open();return;}
-    }
-    await host.sendChat(prompt,key,resolve,undefined,destination);
+    const finishPreview=host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false}));
+    try{
+      const key=host.getDefaultProjectKey?.();
+      const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false});
+      const resolve=()=>options;
+      if(!host.getDefaultThread(key)&&!host.steering){
+        if(host.hasNewContent&&!await host.hasNewContent({label:'New thread',projectKey:key},prompt)){new SendDestinationModal(app,host,prompt).open();return;}
+        await host.sendToNew(prompt,key,resolve);return;
+      }
+      let destination:ChatDestination|undefined;
+      if(host.getDefaultDestination){
+        const controller=new AbortController();
+        const timer=setTimeout(()=>controller.abort(Error('The conversation check took too long. Hold Control and send again to retry or choose another thread.')),DESTINATION_CHECK_TIMEOUT_MS);
+        try{destination=await abortableRead(host.getDefaultDestination(key,controller.signal),controller.signal);}
+        finally{clearTimeout(timer);}
+        if(destination.unavailable)throw new RequestDeliveryError(destination.detail??'This conversation is unavailable. Hold Control and send again to choose another thread.',false);
+        if(host.hasNewContent&&!await host.hasNewContent(destination,prompt)){new SendDestinationModal(app,host,prompt).open();return;}
+      }
+      await host.sendChat(prompt,key,resolve,undefined,destination);
+    }finally{finishPreview?.();}
   };
   try{
     if(host.busy)throw new RequestDeliveryError('Another send is in progress. Wait for it to finish.',false);
