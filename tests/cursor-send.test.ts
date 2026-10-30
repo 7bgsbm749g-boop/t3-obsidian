@@ -26,6 +26,38 @@ async function fixture(document='First paragraph.\n\nLater paragraph.'){
   return {plugin,app,view,editor,file,exports:module.exports,value:()=>value,cursor:(offset:number)=>{cursor=offset;selection=undefined;},select:(from:number,to:number)=>{selection=[from,to];},active:(yes:boolean)=>{active=yes;},mode:(next:string)=>{mode=next;}};
 }
 
+test('whole-note Send starts the indicator synchronously before project lookup and clears failed preparation',async()=>{
+  const h=await fixture(),document=h.value(),events:string[]=[];
+  h.plugin.sendPreviews={begin:()=>{events.push('show');return ()=>events.push('clear');}};
+  let reject!:(error:Error)=>void;const gate=new Promise((_resolve,fail)=>{reject=fail;});
+  h.plugin.chatTarget=async()=>{events.push('lookup');return gate;};
+  const sending=h.plugin.sendNote(h.file,undefined,undefined,true);
+  assert.deepEqual(events,['show','lookup']);assert.equal(h.value(),document);
+  reject(Error('Synthetic project failure'));await assert.rejects(sending,/Synthetic project failure/);
+  assert.deepEqual(events,['show','lookup','clear']);assert.equal(h.value(),document);
+});
+
+test('Inline Off does not create a preparation block',async()=>{
+  const h=await fixture(),original=h.value();
+  h.plugin.sendPreviews={begin:()=>assert.fail('Disabled inline streaming must not create a preview')};
+  h.plugin.chatTarget=async()=>{throw Error('Synthetic cancellation');};
+  await assert.rejects(h.plugin.sendNote(h.file,undefined,undefined,true,undefined,{inline:{enabled:false,intermediateMode:'collapse',finalAnswerFormat:'formatted'}}),/Synthetic cancellation/);
+  assert.equal(h.value(),original);
+});
+
+test('Ask shows the indicator before preparation and hands off to one real block',async()=>{
+  const h=await fixture(),original=h.value(),events:string[]=[],manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined);
+  h.plugin.sendPreviews={begin:()=>{events.push('show');return ()=>events.push('clear');},hide:()=>events.push('handoff')};
+  manager.prepare=async()=>{};manager.start=()=>{};h.plugin.inlineChat=manager;
+  let ready!:()=>void;const gate=new Promise<void>(resolve=>{ready=resolve;});
+  h.plugin.sendChat=async(_prompt:any,_note:any,options:any)=>{await gate;await options.onPrepared({id:options.requestId,title:'Synthetic'});};
+  const sending=h.plugin.sendInlineChat('Explain',{path:h.file.path},{editor:h.editor,view:h.view,insertion:captureCursorInsertion(original,3)},{newThread:true});
+  assert.deepEqual(events,['show']);assert.equal(h.value(),original);
+  ready();await sending;
+  assert.deepEqual(events,['show','handoff','clear']);assert.equal(h.value().split('<!-- t3-inline:start:').length-1,1);
+  assert.ok(h.value().indexOf('t3-inline:end:')<h.value().indexOf('Later paragraph.'));manager.dispose();
+});
+
 for(const question of ['', 'Why this passage?'])test(`palette selection ${question?'questions':'sends'} stay below the selected occurrence after focus clears it`,async()=>{
   const passage='Repeated passage.',document=passage+'\n\nBetween paragraphs.\n\n'+passage+'\n\nLater paragraph.',h=await fixture(document),start=document.lastIndexOf(passage);
   const manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined),errors:unknown[]=[];
