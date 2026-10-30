@@ -38,6 +38,10 @@ Plain content still reveals Stop; the editable editor ancestor and focusable
 response wrapper do not count as controls. Existing visible Stop controls remain
 usable, and pointer cancellation or keyboard navigation clears gesture state.
 
+Collapsed response blocks hide Follow even while Stop is visible. Collapsing
+also cancels follow and resets its position to the top for re-expansion. Clicking
+Follow to turn it off retains its current position and the viewport.
+
 `npm test` passed its selected checks and required build. Three controller
 regressions cover control clicks/focus, redirected widget focus, and editor
 ancestor boundaries. Native Obsidian 1.13.7 clicks in the isolated test vault

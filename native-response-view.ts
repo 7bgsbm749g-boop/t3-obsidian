@@ -4,7 +4,7 @@ import {completedSelectionDraft,type InlineSteering} from './inline-steering';
 import type {EditorSelection,Extension,Transaction as CMTransaction,TransactionSpec} from '@codemirror/state';
 import {changedEdits,changedInterval,mergeSavedEdits} from './coordinated-merge';
 import {advanceProjection,projectResponses,savedProjection,savedToDisplay,displayToSaved,responseRegion,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
-import {ResponseScroll} from './response-scroll';
+import {ResponseScroll,type ResponseScrollState} from './response-scroll';
 import {presentToolGroups,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,canonicalToolGroup,type ToolPresentation} from './response-tool-presentation';
 import {toolDisplayOffset} from './response-tool-presentation';
 import {responseFrame} from './response-container';
@@ -12,6 +12,9 @@ import {localResponseBindings} from './local-response-binding';
 import {movedResponse,responseMoveEffect,responseMoveHistory,guardResponseMoveHistory,type ResponseMove} from './response-move';
 
 export interface NativeViewConflict {base:string;local:string;incoming:string;reason:string;awaitingCompletion?:boolean;attemptedIncoming?:string;unsafeIncoming?:boolean}
+// A native pane replaces its Markdown view/adapters when navigating. Retain
+// only small runtime control state, keyed by the original vault file identity.
+const scrollStates=new WeakMap<object,Map<TFile,ResponseScrollState>>();
 /** Native rendering with a separate saved projection. */
 export class NativeResponseView {
   private originalGet:MarkdownView['getViewData'];
@@ -52,7 +55,12 @@ export class NativeResponseView {
   private releaseMoveHistory?:()=>void;
   constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[]){
     this.file=view.file;this.base=saved;this.diskBase=saved;this.projection=this.buildProjection(saved,[]);
-    this.scroll=new ResponseScroll(view,()=>this.currentProjection());
+    const pane=view.leaf??view;let notes=scrollStates.get(pane);
+    if(!notes){notes=new Map();scrollStates.set(pane,notes);}
+    let scrollState=this.file?notes.get(this.file):undefined;
+    if(!scrollState){scrollState={positions:new Map()};if(this.file)notes.set(this.file,scrollState);}
+    while(notes.size>64)notes.delete(notes.keys().next().value!);
+    this.scroll=new ResponseScroll(view,()=>this.currentProjection(),scrollState);
     this.originalGet=view.getViewData;this.originalSet=view.setViewData;
     this.originalSave=view.save;
     this.originalRequestSave=view.requestSave;
@@ -603,6 +611,7 @@ export class NativeResponseView {
    * first reach a safe saved projection; unwrapping a blocked view could save bad data. */
   dispose(){
     if(this.disposed)return;
+    this.scroll.dispose();
     if(this.view.file!==this.file){this.unwrap();return;}
     if(this.blocked?.unsafeIncoming){this.unloading=true;this.scroll.dispose();return;}
     // Unload must retain the user's current ordinary buffer, including typing

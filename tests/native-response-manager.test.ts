@@ -30,6 +30,21 @@ function fixture(panes=1,local=new Map<string,unknown>()){
 }
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
 async function start(h:ReturnType<typeof fixture>){await h.manager.receive(record());await h.manager.receive(record(other));for(const frames of h.frames)frames.length=0;}
+test('native note navigation restores the same pane and note follow choice after replacing its adapter',async()=>{
+  for(const active of [true,false]){
+    const h=fixture(),view=h.views[0];Object.assign(view,{leaf:{}});
+    const running=record();running.state!.body='> [!t3-progress]+ Working <span class="send-to-t3-fold-key" data-t3-fold="thread:active"></span>\n>\n> Streaming text';
+    await h.manager.receive(running);const initial=h.manager.view(view as any)!;
+    initial.toggleScroll('thread:active');if(!active)initial.toggleScroll('thread:active');
+    assert.equal(initial.scrollControl('thread:active')?.active,active);
+    view.file={path:'Another note.md'};view.setViewData('# Another note');h.manager.refresh();
+    assert.equal(initial.isDisposed(),true);assert.equal(h.manager.view(view as any),undefined);
+    view.file=h.file;view.setViewData(before);h.manager.refresh();
+    const returned=h.manager.view(view as any)!;assert.notEqual(returned,initial);
+    assert.equal(returned.scrollControl('thread:active')?.active,active);assert.equal(returned.scrollControl('thread:active')?.position,'bottom');
+    assert.equal(returned.saved(),before);h.manager.dispose();
+  }
+});
 
 test('a confirmed local steering update removes source with its quote while the turn is running',async()=>{
  const h=fixture(),active=record();active.request.localOnly=true;
