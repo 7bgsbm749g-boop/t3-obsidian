@@ -206,10 +206,8 @@ def schedule_retry(when: str, *, queue: Path = QUEUE) -> None:
     timestamp = dt.datetime.fromisoformat(when).astimezone(dt.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     (units / (UNIT + '-retry.timer')).write_text(
         '[Unit]\nDescription=Retry an interrupted T3 release\n[Timer]\n'
-        f'OnCalendar={timestamp}\nPersistent=true\nAccuracySec=1s\nUnit={UNIT}.service\n'
-        '[Install]\nWantedBy=timers.target\n')
+        f'OnCalendar={timestamp}\nPersistent=true\nAccuracySec=1s\nUnit={UNIT}.service\n')
     subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True, timeout=10)
-    subprocess.run(['systemctl', '--user', 'enable', UNIT + '-retry.timer'], check=True, timeout=10)
     subprocess.run(['systemctl', '--user', 'restart', UNIT + '-retry.timer'], check=True, timeout=10)
 
 
@@ -252,81 +250,6 @@ def update(directory: Path, state: dict, **values) -> None:
     write(directory / 'state.json', state)
 
 
-def revert_owned(release, commit: str, *, merge: bool = False) -> None:
-    try:
-        release.run(['git', 'revert', '--no-edit', *(['-m', '1'] if merge else []), commit])
-    except subprocess.CalledProcessError:
-        marker = Path(git(release.ROOT, 'rev-parse', '--git-path', 'REVERT_HEAD'))
-        if not marker.is_absolute():
-            marker = release.ROOT / marker
-        if marker.exists():
-            release.run(['git', 'revert', '--abort'])
-        raise
-
-
-def registration_line(line: str):
-    """Parse only the lab builder's flag list or validation entry-point chain."""
-    flags = re.fullmatch(r"(if\(!\[)(.*)(\]\.some.*)", line)
-    if flags:
-        body = flags[2]
-        tokens = re.findall(r"'(--[a-z0-9-]+)'", body)
-        if ','.join("'" + token + "'" for token in tokens) != body:
-            return None
-        return flags[1], [(token, token) for token in tokens], flags[3], 'flags'
-    entries = re.fullmatch(r'(.*entryPoints:\[)(.*)(\],bundle:.*)', line)
-    if entries:
-        pattern = r"process\.argv\.includes\('(--[a-z0-9-]+)'\)\?'(validation/[a-z0-9-]+\.ts)':"
-        tokens = re.findall(pattern, entries[2])
-        remainder = re.sub(pattern, '', entries[2])
-        if not re.fullmatch(r"'validation/[a-z0-9-]+\.ts'", remainder):
-            return None
-        if ''.join(f"process.argv.includes('{key}')?'{value}':" for key, value in tokens) + remainder != entries[2]:
-            return None
-        return entries[1], tokens, remainder + entries[3], 'entries'
-    return None
-
-
-def resolve_validation_merge(release) -> bool:
-    """Union independent additions to the two lab registries, never product code."""
-    name = 'scripts/build-native-response-lab.mjs'
-    if git(release.ROOT, 'diff', '--name-only', '--diff-filter=U').splitlines() != [name]:
-        return False
-    base = [parsed for line in git(release.ROOT, 'show', ':1:' + name).splitlines()
-            if (parsed := registration_line(line))]
-    path = release.ROOT / name
-    source = path.read_text()
-    conflict = re.compile(r'^<<<<<<<[^\n]*\n(.*?)^=======\n(.*?)^>>>>>>>[^\n]*\n', re.M | re.S)
-    matches = list(conflict.finditer(source))
-    if not matches:
-        return False
-    for match in reversed(matches):
-        ours = registration_line(match[1].rstrip('\n'))
-        theirs = registration_line(match[2].rstrip('\n'))
-        if not ours or not theirs or (ours[0], ours[2:]) != (theirs[0], theirs[2:]):
-            return False
-        original = next((item for item in base if (item[0], item[2:]) == (ours[0], ours[2:])), None)
-        if original is None:
-            return False
-        a, b, before = dict(ours[1]), dict(theirs[1]), dict(original[1])
-        if len(a) != len(ours[1]) or len(b) != len(theirs[1]):
-            return False
-        if any(a.get(key) != value or b.get(key) != value for key, value in before.items()):
-            return False
-        if any(a[key] != b[key] for key in a.keys() & b.keys()):
-            return False
-        combined = {**a, **b}
-        body = (','.join("'" + key + "'" for key in combined) if ours[3] == 'flags' else
-                ''.join(f"process.argv.includes('{key}')?'{value}':" for key, value in combined.items()))
-        source = source[:match.start()] + ours[0] + body + ours[2] + '\n' + source[match.end():]
-    if re.search(r'^(<<<<<<<|=======|>>>>>>>)', source, re.M):
-        return False
-    path.write_text(source)
-    release.run(['git', 'add', name])
-    release.run(['git', 'commit', '--no-edit'])
-    print('Merged independent validation-mode registrations; no product conflicts were resolved automatically.', flush=True)
-    return True
-
-
 def engine_hash(root: Path) -> dict:
     return {name: hashlib.sha256((root / 'scripts' / name).read_bytes()).hexdigest()
             for name in ('release-qlo2.py', 'release_queue.py', 'change_checks.py', 'plugin_id_migration.py')
@@ -347,7 +270,7 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
         update(directory, state, status='integrating')
         while state.get('rollbackCommits'):
             # Restore only the queue's own reverted merge; never reset history.
-            revert_owned(release, state['rollbackCommits'][-1])
+            release.run(['git', 'revert', '--no-edit', state['rollbackCommits'][-1]])
             update(directory, state, rollbackCommits=state['rollbackCommits'][:-1],
                    ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': git(root, 'rev-parse', 'HEAD'), 'merge': False}])
         ancestor = subprocess.run(['git', 'merge-base', '--is-ancestor', request['commit'], 'HEAD'], cwd=root)
@@ -357,17 +280,9 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
             except subprocess.CalledProcessError:
                 # This merge began in a clean checkout. Abort only our own
                 # conflicted merge; preserve all submitted commits and logs.
-                resolved = False
-                try:
-                    resolved = resolve_validation_merge(release)
-                finally:
-                    marker = Path(git(root, 'rev-parse', '--git-path', 'MERGE_HEAD'))
-                    if not marker.is_absolute():
-                        marker = root / marker
-                    if not resolved and marker.exists():
-                        release.run(['git', 'merge', '--abort'])
-                if not resolved:
-                    raise
+                if (root / '.git').is_dir() and (root / '.git/MERGE_HEAD').exists():
+                    release.run(['git', 'merge', '--abort'])
+                raise
             update(directory, state, ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': git(root, 'rev-parse', 'HEAD'), 'merge': True}])
         update(directory, state, integratedCommit=git(root, 'rev-parse', 'HEAD'))
         if engine_hash(root) != loaded_engine:
@@ -449,7 +364,10 @@ def isolate_failure(release, directory: Path, state: dict) -> bool:
         if git(release.ROOT, 'rev-parse', 'HEAD') != owned[-1]['commit']:
             return False
         for integration in reversed(owned):
-            revert_owned(release, integration['commit'], merge=integration['merge'])
+            command = ['git', 'revert', '--no-edit']
+            if integration['merge']:
+                command += ['-m', '1']
+            release.run([*command, integration['commit']])
             update(directory, state, rollbackCommits=[*state.get('rollbackCommits', []), git(release.ROOT, 'rev-parse', 'HEAD')],
                    ownedIntegrations=state['ownedIntegrations'][:-1])
     elif state.get('integratedCommit'):

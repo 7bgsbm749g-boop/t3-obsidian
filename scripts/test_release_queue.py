@@ -226,45 +226,6 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertEqual(self.published, ['1.0.1'])
         self.assertEqual(self.git('status', '--porcelain=v1'), '')
 
-    def test_independent_validation_registrations_merge_without_losing_a_mode(self):
-        name = 'scripts/build-native-response-lab.mjs'
-        (self.root / 'scripts').mkdir()
-        def builder(extra=''):
-            return ("if(!['--base'" + (",'--" + extra + "'" if extra else '') + "].some(flag=>process.argv.includes(flag)))throw Error('mode');\n" +
-                    "await build({entryPoints:[process.argv.includes('--base')?'validation/base.ts':" +
-                    (f"process.argv.includes('--{extra}')?'validation/{extra}.ts':" if extra else '') +
-                    "'validation/fallback.ts'],bundle:true});\n")
-        (self.root / name).write_text(builder())
-        self.git('add', '.'); self.git('commit', '-qm', 'lab baseline')
-        first = self.source('first'); second = self.source('second')
-        for source, mode in [(first, 'first'), (second, 'second')]:
-            (source / name).write_text(builder(mode))
-            subprocess.run(['git', 'add', '.'], cwd=source, check=True)
-            subprocess.run(['git', 'commit', '-qm', 'add mode'], cwd=source, check=True)
-            self.submit(source)
-        self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
-        combined = (self.root / name).read_text()
-        self.assertIn("'--base','--first','--second'", combined)
-        self.assertIn("?'validation/first.ts':", combined)
-        self.assertIn("?'validation/second.ts':", combined)
-        self.assertEqual(self.published, ['1.0.1', '1.0.2'])
-        self.assertEqual(self.git('status', '--porcelain=v1'), '')
-
-    def test_product_conflict_is_not_resolved_automatically_and_a_later_job_runs(self):
-        (self.root / 'shared.ts').write_text('base\n')
-        self.git('add', '.'); self.git('commit', '-qm', 'shared baseline')
-        first = self.source('first'); second = self.source('second'); third = self.source('third')
-        for source, text in [(first, 'accepted'), (second, 'conflict')]:
-            (source / 'shared.ts').write_text(text + '\n')
-            subprocess.run(['git', 'add', '.'], cwd=source, check=True)
-            subprocess.run(['git', 'commit', '-qm', text], cwd=source, check=True)
-        a = self.submit(first); b = self.submit(second); c = self.submit(third)
-        self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
-        self.assertEqual(queue.status(b['jobId'], queue=self.store)['jobs'][0]['status'], 'failed')
-        self.assertEqual(queue.status(c['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
-        self.assertEqual((self.root / 'shared.ts').read_text(), 'accepted\n')
-        self.assertEqual(self.git('status', '--porcelain=v1'), '')
-
     def test_legacy_blocked_job_is_recovered_automatically(self):
         a = self.submit(self.source('first'))
         directory = queue.job_path(self.store, a['jobId'])
@@ -312,23 +273,8 @@ class ReleaseQueueTests(unittest.TestCase):
             timer = (units / (queue.UNIT + '-retry.timer')).read_text()
             self.assertIn('OnCalendar=2030-01-02 03:04:05 UTC', timer)
             self.assertIn('Persistent=true', timer)
-            self.assertIn('WantedBy=timers.target', timer)
             self.assertNotIn('OnUnitInactiveSec', timer)
             command.assert_any_call(['systemctl', '--user', 'restart', queue.UNIT + '-retry.timer'], check=True, timeout=10)
-
-    def test_conflicting_restore_aborts_its_own_revert_and_preserves_later_source(self):
-        self.git('checkout', '-qb', 'fixture')
-        (self.root / 'first.ts').write_text('original')
-        self.git('add', '.'); self.git('commit', '-qm', 'original')
-        original = self.git('rev-parse', 'HEAD')
-        self.git('revert', '--no-edit', original)
-        removal = self.git('rev-parse', 'HEAD')
-        (self.root / 'first.ts').write_text('later independent change')
-        self.git('add', '.'); self.git('commit', '-qm', 'later')
-        with self.assertRaises(subprocess.CalledProcessError):
-            queue.revert_owned(self.release, removal)
-        self.assertEqual((self.root / 'first.ts').read_text(), 'later independent change')
-        self.assertEqual(self.git('status', '--porcelain=v1'), '')
 
     def test_updated_release_engine_restarts_before_validating_with_old_code(self):
         source = self.source('first')
