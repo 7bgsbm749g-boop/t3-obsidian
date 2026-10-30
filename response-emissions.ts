@@ -1,4 +1,5 @@
 import type {InlineThreadState} from './inline-thread';
+import {renderWorktreeSetup} from './worktree-setup';
 
 export interface ResponseEmission {id:string;turnId:string|null;createdAt?:string;sequence:number;body:string;active:boolean;kind:string}
 const html=(text:string)=>text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\n/g,'&#10;');
@@ -10,6 +11,12 @@ const separateCallout=(body:string)=>`<!-- t3-display-block -->\n\n${body}\n\n<!
 export function responseEmissions(state:InlineThreadState,turns:string[],markdown:(text:string)=>string,activeTurn?:string):ResponseEmission[] {
   const result:ResponseEmission[]=[];
   for(const activity of state.activities){
+    if(turns.includes(activity.turnId??'')&&activity.kind==='response.worktree-setup'){
+      const active=activity.turnId===activeTurn;
+      const body=renderWorktreeSetup(activity,state.worktreeSetup,active);
+      result.push({id:activity.id,turnId:activity.turnId,createdAt:activity.createdAt,sequence:activity.sequence??0,body,active:active&&body.includes('data-worktree-setup-phase="running"'),kind:activity.kind});
+      continue;
+    }
     if(!turns.includes(activity.turnId??'')||!['context-compaction','response.plan','response.notification'].includes(activity.kind))continue;
     const p=activity.payload??{};let body:string,active=false;
     if(activity.kind==='context-compaction'){

@@ -1,6 +1,7 @@
 import type {InlineActivity,InlineMessage,InlineThreadState,InlineTurn,InlineSubagent} from './inline-thread';
 import {htmlRenderFromToolItem} from './html-results';
 import {worktreeHandoff,mergeWorktreeHandoffs} from './inline-worktree';
+import {workspacePreparation} from './worktree-setup';
 
 export const T3_PROTOCOL_VERSION=2;
 export const T3_PROTOCOL_HEADER='x-t3-orchestration-protocol';
@@ -46,6 +47,7 @@ export function normalizeV2ShellThread(thread:any){
 
 export function itemActivities(item:any,requests:Record<string,any>={}):InlineActivity[]{
   const at=item.startedAt??item.updatedAt,base={turnId:item.runId??null,createdAt:at,sequence:item.ordinal};
+  if(workspacePreparation(item))return [{...base,id:`v2:${item.id}`,kind:'response.worktree-setup',summary:'Worktree setup',payload:{status:terminal(item.status)?item.status==='completed'?'completed':item.status==='failed'?'failed':'stopped':'inProgress',completedAt:item.completedAt,output:item.output}}];
   const htmlRender=htmlRenderFromToolItem(item);
   if(htmlRender)return [{...base,id:`v2:${item.id}`,kind:'response.html',summary:htmlRender.title,payload:{itemId:item.id,revision:item.updatedAt,htmlRender}}];
   if(item.type==='user_input_request'||item.type==='approval_request'){

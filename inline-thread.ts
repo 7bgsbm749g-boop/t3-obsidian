@@ -14,6 +14,7 @@ import {responseHtmlResults,renderHtmlResult} from './html-results';
 import {containerStart,responseFrame,responseIds,responseBoundaries} from './response-container';
 import {delegatedWork} from './inline-delegation';
 import {mergeWorktreeHandoffs,resolveWorktreeHandoffs,type InlineWorktreeHandoff} from './inline-worktree';
+import {readWorktreeSetup,type WorktreeSetup} from './worktree-setup';
 
 export interface SelectionAnchor {text:string;start:number;end:number;before:string;after:string}
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;itemId?:string;sequence?:number;updatedAt?:string;createdAt?:string;context?:unknown;createdBy?:string;creationSource?:string;senderThreadId?:string|null;senderThreadTitle?:string;delegatedCompletion?:{parentRunId:string;generation:number;taskIds:string[]}}
@@ -22,7 +23,7 @@ export interface InlineTurn {turnId:string;state:string;messageId?:string;reques
 export interface InlineSubagent {id:string;runId:string;title?:string;status:string;origin?:string;completionWake?:string;completionDelivery?:{state:string;observedByRunId?:string}}
 export interface InlineStartRequest {messageId:string;requestedAt:string;sequence:number;activeTurnId?:string;turnId?:string;failed?:boolean}
 export interface InlineBinding {turnId:string;kind:'explicit'|'timestamp'|'start'|'steer';sequence?:number}
-export interface InlineBindingCheckpoint {protocolVersion?:2;bindings?:Record<string,InlineBinding>;starts?:Record<string,InlineStartRequest>;turns?:Record<string,InlineTurn>;subagents?:Record<string,InlineSubagent>;worktreeHandoffs?:Record<string,InlineWorktreeHandoff>;sequence?:number;inputBoundaries?:Record<string,InlineMessage[]>;inputTurns?:Record<string,string>;session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;htmlResults?:InlineActivity[]}
+export interface InlineBindingCheckpoint {worktreeSetup?:WorktreeSetup;protocolVersion?:2;bindings?:Record<string,InlineBinding>;starts?:Record<string,InlineStartRequest>;turns?:Record<string,InlineTurn>;subagents?:Record<string,InlineSubagent>;worktreeHandoffs?:Record<string,InlineWorktreeHandoff>;sequence?:number;inputBoundaries?:Record<string,InlineMessage[]>;inputTurns?:Record<string,string>;session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;htmlResults?:InlineActivity[]}
 export interface InlineThreadState extends InlineBindingCheckpoint {title?:string;messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;legacyMessageIds?:string[];v2Requests?:Record<string,any>;v2Controls?:Record<string,any>;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {
@@ -155,7 +156,7 @@ export function finalizeRegion(document:string,id:string,expectedHash:string,fin
 /** Keep exact prompt evidence independently of a snapshot's recent transcript. */
 export function inlineBindingCheckpoint(state:InlineThreadState):InlineBindingCheckpoint {
   const htmlResults=state.activities.filter(activity=>activity.kind==='response.html');
-  return {protocolVersion:state.protocolVersion,bindings:state.bindings,starts:state.starts,turns:{...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})},subagents:state.subagents,worktreeHandoffs:state.worktreeHandoffs,sequence:state.sequence,inputBoundaries:state.inputBoundaries,inputTurns:state.inputTurns,session:state.session?{status:state.session.status,activeTurnId:state.session.activeTurnId}:undefined,latestTurn:state.latestTurn,...(htmlResults.length?{htmlResults}:{})};
+  return {worktreeSetup:state.worktreeSetup,protocolVersion:state.protocolVersion,bindings:state.bindings,starts:state.starts,turns:{...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})},subagents:state.subagents,worktreeHandoffs:state.worktreeHandoffs,sequence:state.sequence,inputBoundaries:state.inputBoundaries,inputTurns:state.inputTurns,session:state.session?{status:state.session.status,activeTurnId:state.session.activeTurnId}:undefined,latestTurn:state.latestTurn,...(htmlResults.length?{htmlResults}:{})};
 }
 function retiredV1Turn(turn:InlineTurn):InlineTurn {
   return ['preparing','starting','running','waiting','queued'].includes(turn.state)?{...turn,state:'interrupted'}:turn;
@@ -177,7 +178,7 @@ export function restoreInlineBindings(state:InlineThreadState,saved?:InlineBindi
   const latestTurn=state.latestTurn??saved?.latestTurn;
   const bindings={...saved?.bindings,...state.bindings};
   const activities=state.historyComplete===true?state.activities:[...saved?.htmlResults?.filter(activity=>validActivity(activity)&&activity.kind==='response.html'&&!state.activities.some(current=>current.id===activity.id))??[],...state.activities];
-  return establishBindings({...state,worktreeHandoffs:mergeWorktreeHandoffs(saved?.worktreeHandoffs,state.worktreeHandoffs),activities,messages:legacyMessages(state,turns,bindings),subagents:{...saved?.subagents,...state.subagents},session:state.session??saved?.session,inputBoundaries:{...saved?.inputBoundaries,...state.inputBoundaries},inputTurns:{...saved?.inputTurns,...state.inputTurns},sequence:state.sequence??saved?.sequence,latestTurn:latestTurn?turns[latestTurn.turnId]??latestTurn:undefined,turns,bindings,starts:{...saved?.starts,...state.starts}});
+  return establishBindings({...state,worktreeSetup:state.worktreeSetup??saved?.worktreeSetup,worktreeHandoffs:mergeWorktreeHandoffs(saved?.worktreeHandoffs,state.worktreeHandoffs),activities,messages:legacyMessages(state,turns,bindings),subagents:{...saved?.subagents,...state.subagents},session:state.session??saved?.session,inputBoundaries:{...saved?.inputBoundaries,...state.inputBoundaries},inputTurns:{...saved?.inputTurns,...state.inputTurns},sequence:state.sequence??saved?.sequence,latestTurn:latestTurn?turns[latestTurn.turnId]??latestTurn:undefined,turns,bindings,starts:{...saved?.starts,...state.starts}});
 }
 function establishBindings(state:InlineThreadState):InlineThreadState {
   const bindings={...state.bindings},turns={...state.turns},starts={...state.starts};
@@ -251,6 +252,11 @@ export function applyThreadItem(previous:InlineThreadState,item:any):{state:Inli
   }
   if(item?.kind!=='event')return {state:previous};
   const event=item.event,p=event?.payload;
+  if(event.type==='thread.worktree-setup'){
+    const setup=readWorktreeSetup(p,event.aggregateId);
+    if(!setup||state.worktreeSetup&&setup.sequence<=state.worktreeSetup.sequence)return {state:previous};
+    return finish({...state,worktreeSetup:setup});
+  }
   if(event.type==='thread.run-updated'&&typeof p?.id==='string'){
     const turn={...state.turns?.[p.id],...responseRun(p,state.messages)},turns:Record<string,InlineTurn>={...state.turns,[p.id]:turn};
     const queued=p.status==='queued',newest=!queued&&(!state.latestTurn||p.ordinal>=(state.latestTurn.ordinal??0));

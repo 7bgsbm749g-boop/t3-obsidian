@@ -4,6 +4,7 @@ import {contentHash} from './completion';
 import {applyThreadItem,turnForMessage,type InlineThreadState} from './inline-thread';
 import {T3_PROTOCOL_VERSION,normalizeV2StreamItem,normalizeV2Snapshot,normalizeV2TitleItem} from './orchestration-v2';
 import {responseTooLarge} from './t3-response-limits';
+import {readWorktreeSetup,workspacePreparation} from './worktree-setup';
 
 export type ThreadAccessCloseReason='cache-expired'|'auth-rejected'|'host-disposed'|'stop-complete'|'stop-timeout'|'stream-reconnect'|'stream-stopped'|'late-access'|'caller-closed';
 export interface ThreadAccess {origin:string;api:(path:string,payload?:any,options?:{signal?:AbortSignal})=>Promise<any>;expiresAt?:number;close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
@@ -87,6 +88,13 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       if(stopped){await ready.close?.('late-access');return;}
       access=ready;
       let ws:WebSocket|undefined,ended=false,polling=false,pollDue=0,pollDelay=1200,activityVersion=0,lastSnapshotHash:string|undefined;
+      let setupSubscribed=false,setupWanted=false,socketOpen=false;
+      const subscribeSetup=()=>{if(setupWanted&&!setupSubscribed&&socketOpen&&ws){setupSubscribed=true;ws.send(JSON.stringify({_tag:'Request',id:'2',tag:'subscribeWorktreeSetup',payload:{threadId},headers:[]}));}};
+      const deliver=(item:ThreadStreamItem)=>{
+        callbacks.item(item);
+        const preparation=item.kind==='snapshot'?item.snapshot?.thread?.activities?.some((a:any)=>a.kind==='response.worktree-setup'):item.kind==='event'&&item.event?.type==='v2.turn-item.updated'&&workspacePreparation(item.event.payload);
+        if(preparation&&!replay?.titleOnly){setupWanted=true;subscribeSetup();}
+      };
       const fail=(error:Error)=>{if(ended||stopped)return;ended=true;ws?.close();retry(error);};
       const schedulePoll=(delay:number)=>{
         if(stopped||ended||access!==ready||!pollEnabled())return;
@@ -107,7 +115,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
             // so replay cursors and binding evidence continue to advance.
             const hash=contentHash(JSON.stringify({thread:snapshot.thread,historyComplete:snapshot.historyComplete}));
             pollDelay=beforeActivity===activityVersion&&hash===lastSnapshotHash?Math.min(5000,pollDelay*2):1200;
-            lastSnapshotHash=hash;callbacks.item({kind:'snapshot',snapshot});
+            lastSnapshotHash=hash;deliver({kind:'snapshot',snapshot});
           }else pollDelay=1200;
         }catch(error){pollDelay=1200;logFailure('stream.poll.failed',error,{threadId});if(!stopped&&!ended&&access===ready){if(responseTooLarge(error)){snapshotBlocked=true;callbacks.failure?.(error as Error);}else callbacks.reconnecting(error instanceof Error?error:Error('Cannot read the T3 response.'));}}
         finally{polling=false;schedulePoll(pollDelay);}
@@ -124,9 +132,11 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       const opening=setTimeout(()=>fail(Error('T3 thread stream did not connect.')),15_000);
       openedSocket.onopen=()=>{
         clearTimeout(opening);if(stopped){openedSocket.close();return;}
+        socketOpen=true;
         logEvent('stream.connected',{threadId});attempt=0;
         rotation=setTimeout(()=>fail(Error('Refreshing the T3 stream session.')),4*60_000);
         openedSocket.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,acceptBoundedSnapshot:true,acceptCompactTurnItems:true,...(replay?{afterSequence:replay.afterSequence(),requestCompletionMarker:true}:{})},headers:[]}));
+        subscribeSetup();
         // Subscription hosts already own a full canonical polling loop. A second
         // recent-history poll would repeatedly replace it with partial history.
         if(replay?.pollImmediately&&pollEnabled())void poll();else schedulePoll(1200);
@@ -137,6 +147,17 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
           const decoded=JSON.parse(message.data),frames=Array.isArray(decoded)?decoded:[decoded];
           for(const frame of frames){
             if(frame._tag==='Ping'){openedSocket.send(JSON.stringify({_tag:'Pong'}));continue;}
+            // Optional setup progress must not fail the transcript on older hosts.
+            if(String(frame.requestId)==='2'){
+              if(frame._tag==='Chunk'){
+                for(const value of Array.isArray(frame.values)?frame.values:[]){
+                  const setup=readWorktreeSetup(value,threadId);
+                  if(setup)callbacks.item({kind:'event',event:{type:'thread.worktree-setup',aggregateId:threadId,payload:setup}});
+                }
+                openedSocket.send(JSON.stringify({_tag:'Ack',requestId:'2'}));
+              }
+              continue;
+            }
             if(frame._tag==='Defect')throw Error('T3 thread stream failed.');
             if(String(frame.requestId)!=='1')continue;
             if(frame._tag==='Chunk'){
@@ -146,7 +167,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
                 if(value.kind==='event'||value.kind==='snapshot'){
                   activityVersion++;pollDelay=1200;lastSnapshotHash=undefined;schedulePoll(1200);
                 }
-                callbacks.item(replay?.titleOnly?normalizeV2TitleItem(value):normalizeV2StreamItem(value));
+                deliver(replay?.titleOnly?normalizeV2TitleItem(value):normalizeV2StreamItem(value));
               }
               openedSocket.send(JSON.stringify({_tag:'Ack',requestId:'1'}));
             }else if(frame._tag==='Exit'){
