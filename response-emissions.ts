@@ -7,6 +7,13 @@ const html=(text:string)=>text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replac
 // block makes each native callout a separate block, including inside progress.
 const separateCallout=(body:string)=>`<!-- t3-display-block -->\n\n${body}\n\n<!-- t3-display-block -->`;
 
+/** Provider messages are plain text, as in T3's timeline, never Markdown/HTML. */
+export function renderProviderError(id:string,text:string,createdAt?:string):string {
+  const at=Date.parse(createdAt??'');
+  const time=Number.isFinite(at)?`<time class="send-to-t3-notification-time" data-t3-notification-at="${at}" datetime="${html(new Date(at).toISOString())}"></time>`:'';
+  return `<div class="send-to-t3-provider-error" data-t3-emission-id="${html(id)}"><div class="send-to-t3-provider-error-header"><span data-t3-tool-icon="circle-alert" aria-hidden="true"></span><span>Provider error</span>${time}</div><div class="send-to-t3-provider-error-message">${html(text.replace(/\r\n?/g,'\n'))}</div></div>`;
+}
+
 /** Public timeline emissions are display data, never run completion evidence. */
 export function responseEmissions(state:InlineThreadState,turns:string[],markdown:(text:string)=>string,activeTurn?:string):ResponseEmission[] {
   const result:ResponseEmission[]=[];
@@ -30,7 +37,7 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
       body=separateCallout(`> [!t3-plan]- Plan\n>\n${markdown(text)}`);
     }else{
       const text=typeof p.text==='string'?p.text:activity.summary;if(!text.trim())continue;
-      body=separateCallout(`> [!t3-notification] ${p.error?'Error':'Notice'}\n>\n${markdown(text)}`);
+      body=p.error?renderProviderError(activity.id,text,activity.createdAt):separateCallout(`> [!t3-notification] Notice\n>\n${markdown(text)}`);
     }
     result.push({id:activity.id,turnId:activity.turnId,createdAt:activity.createdAt,sequence:activity.sequence??0,body,active,kind:activity.kind});
   }

@@ -422,6 +422,20 @@
 .send-to-t3-response-activity[role="status"] { display: inline-flex; align-items: center; gap: .5em; }
 .send-to-t3-response-activity > summary > strong { font-weight: inherit; }
 .send-to-t3-context { display: inline-flex; align-items: center; gap: .5em; color: var(--text-muted); font-size: var(--font-smaller); }
+.send-to-t3-provider-error {
+  margin: .65em 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+  line-height: 1.5;
+}
+.send-to-t3-provider-error-header { display: flex; align-items: center; gap: 8px; color: var(--text-error); font-weight: 500; }
+.send-to-t3-provider-error-header > [data-t3-tool-icon] { display: inline-flex; flex: 0 0 16px; }
+.send-to-t3-provider-error-header .svg-icon { width: 14px; height: 14px; }
+.send-to-t3-notification-time { margin-inline-start: auto; color: var(--text-muted); font-size: var(--font-ui-smaller); font-weight: normal; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.send-to-t3-provider-error-message { margin-block-start: 6px; padding-inline-start: 24px; color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .callout[data-callout="t3-thought"], .callout[data-callout="t3-plan"] { background: transparent; border: 0; padding: .35em 0; }
 .callout[data-callout="t3-thought"] { --callout-icon: lucide-brain; }
 .callout[data-callout="t3-plan"] { --callout-icon: lucide-list-checks; }
