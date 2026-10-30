@@ -63,8 +63,8 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
       const text=elapsedRun({startedAt:new Date(start).toISOString(),...(end&&Number.isFinite(Number(end))?{finishedAt:new Date(Number(end)).toISOString()}:{})});
       if(timer.textContent!==text)timer.textContent=text;
     }
-    for(const time of Array.from(root.querySelectorAll<HTMLElement>('.send-to-t3-thought-time[data-t3-thought-at]'))){
-      const at=Number(time.dataset.t3ThoughtAt);if(!Number.isFinite(at))continue;
+    for(const time of Array.from(root.querySelectorAll<HTMLElement>('.send-to-t3-thought-time[data-t3-thought-at], .send-to-t3-notification-time[data-t3-notification-at]'))){
+      const at=Number(time.dataset.t3ThoughtAt??time.dataset.t3NotificationAt);if(!Number.isFinite(at))continue;
       const date=new Date(at),text=date.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
       if(time.textContent!==text)time.textContent=text;
       time.title=date.toLocaleString();
