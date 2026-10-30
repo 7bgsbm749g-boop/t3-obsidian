@@ -11,6 +11,8 @@ export interface DisplayDestination {id:string;path:string;section?:string;remov
 export interface DisplayBinding {messageId:string;turnId?:string;destinationId:string;request?:ResponseRequest;bindingId?:string;status:'planned'|'attached'|'skipped';error?:string}
 export interface ThreadDisplay extends EventTarget {id:string;scope:'thread';enabled:boolean;cancelled?:boolean;createdAt:string;boundary:string[];destinations:DisplayDestination[];bindings:DisplayBinding[];error?:string}
 export interface DisplayHost {
+  validateRelation?(target:EventTarget,paths:string[]):Promise<void>;
+  confirmRelation?(target:EventTarget,paths:string[]):Promise<void>;
   readThread(target:EventTarget):Promise<InlineThreadState>;
   validateDestination(path:string):Promise<void>;
   /** Existing bindings include completed records, steering and continuations. */
@@ -37,6 +39,7 @@ export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisp
   if(command.kind==='thread-streams')return {displays};
   if(command.kind==='stream-thread'){
     if(displays.length>=256)throw Error('Thread streaming registration limit reached.');
+    await host.validateRelation?.(command.source!,command.destinations!);
     for(const path of command.destinations!)await host.validateDestination(path);
     const state=await host.readThread(command.source!);
     if(!state.historyComplete)throw Error('A complete canonical history is required to establish the streaming boundary.');
@@ -44,6 +47,7 @@ export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisp
     if(command.start==='after'&&selected<0)throw Error('The selected prompt is no longer in the T3 history.');
     const boundary=command.start==='history'?[]:(command.start==='after'?prompts.slice(0,selected+1):prompts).map(m=>m.id);
     const display:ThreadDisplay={...command.source!,id:command.id,scope:'thread',enabled:true,createdAt:new Date(now).toISOString(),boundary,destinations:command.destinations!.map(path=>({id:commandId(command.id,`destination:${path}`),path,...(command.destinationSection?{section:command.destinationSection}:{})})),bindings:[]};
+    await host.confirmRelation?.(display,command.destinations!);
     displays.push(display);return {subscriptionId:display.id,display};
   }
   const display=displays.find(d=>d.id===command.subscriptionId);if(!display)throw Error('Thread streaming registration not found.');
@@ -51,7 +55,10 @@ export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisp
   if(command.kind==='pause-thread-stream')display.enabled=false;
   if(command.kind==='cancel-thread-stream'){display.enabled=false;display.cancelled=true;}
   if(command.kind==='resume-thread-stream'){
+    const paths=display.destinations.filter(destination=>!destination.removed).map(destination=>destination.path);
+    await host.validateRelation?.(display,paths);
     const state=await host.readThread(display);if(!state.historyComplete)throw Error('A complete canonical history is required to resume.');
+    await host.confirmRelation?.(display,paths);
     // Paused runs are skipped. Active child bindings continue independently.
     display.boundary=[...new Set([...display.boundary,...state.messages.filter(isRunInput).map(m=>m.id)])];display.enabled=true;
   }
@@ -62,6 +69,7 @@ export async function displayCommand(displays:ThreadDisplay[],command:ThreadDisp
 }
 export async function tickDisplay(display:ThreadDisplay,host:DisplayHost){
   if(!display.enabled||display.cancelled)return;
+  await host.validateRelation?.(display,display.destinations.filter(destination=>!destination.removed).map(destination=>destination.path));
   const state=await host.readThread(display);
   if(!state.historyComplete)throw Error('Waiting for canonical thread history.');
   // Completed attachments and future-start boundaries need no private lease

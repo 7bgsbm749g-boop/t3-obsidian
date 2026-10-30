@@ -121,3 +121,14 @@ test('a note with no source also opens only New and Existing when no previous th
  const h=await fixture(undefined,false,false,true,false,false);await h.opening;
  assert.equal(h.modals.length,1);assert.equal(h.calls.length,0);assert.equal(h.sent.length,0);assert.equal(h.modals[0].defaultButton,undefined);h.modals[0].close();
 });
+
+test('1:1 linked-note chooser keeps continuation and overrides while blocking new thread and project changes',async()=>{
+ const h=await fixture();(h.host as any).getThreadChoiceRestriction=()=> '1:1 mode: continue the linked thread.';
+ h.modal.onOpen();await Promise.resolve();
+ assert.equal(h.modal.actions.buttons[1].buttonEl.hidden,true);assert.equal(h.modal.actions.buttons[2].buttonEl.hidden,true);
+ assert.equal(h.modal.contentEl.children[0].children[0].disabled,true);assert.equal(h.modal.contentEl.children[0].children[1].disabled,false);
+ h.setBusy(true);h.setBusy(false);assert.equal(h.modal.actions.buttons[1].buttonEl.disabled,true);
+ await h.modal.choose('new');assert.equal(h.sent.length,0);assert.match(h.notices[0],/1:1 mode/);
+ h.calls[0].resolve({label:'Continue thread',threadId:'one',projectKey:'project'});await h.modal.ready;
+ await h.modal.choose('default');assert.equal(h.sent.length,1);assert.equal(h.sent[0].d.threadId,'one');
+});

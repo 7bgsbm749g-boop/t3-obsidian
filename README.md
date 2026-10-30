@@ -810,3 +810,22 @@ source path, binding IDs, creation time and the wait preference; they merge
 through normal settings Sync and retain the latest 256 sends. Several matches
 require exact filters; no newest-send guess is made. Subscription notifications
 also use the clean footer and retain observed event data as their message body.
+
+### Thread and note modes
+
+In **Settings → T3 Code → Replies → Thread and note mode**, choose:
+
+- **1:1**: each note continues one thread, and each thread belongs to one note.
+  An unlinked note can create a thread or choose an unlinked existing thread.
+  Linked notes show only their current thread in the send chooser. Replies go
+  to the source note. Send, Ask, run imports, agent commands, and thread streams
+  follow the same rule.
+- **Free**: retain many-to-many links, thread choices, and multiple reply destinations.
+  This is the default for existing installations.
+
+Switching modes keeps saved replies and link history. When existing links overlap,
+1:1 selects pairs by most recent confirmed use, with a stable tie break. A note
+left without a pair can start a new thread. To change an existing pair, switch to
+Free, send or import using the desired thread, then return to 1:1. Thread streams
+that conflict with 1:1 wait until Free is selected again; already attached replies
+finish normally. This mode applies across the vault and syncs with plugin settings.
