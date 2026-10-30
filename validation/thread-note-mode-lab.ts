@@ -2,6 +2,7 @@ import {MarkdownView,Modal,Notice,Setting} from 'obsidian';
 import SendToT3 from '../main';
 import {desktopDefaults,desktopEnvironment,desktopThreadAccess,uuid5} from '../desktop';
 import type {ThreadAccess} from '../thread-stream';
+import {responseFrame} from '../response-container';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 
@@ -40,8 +41,22 @@ export default class ThreadNoteModeLab extends SendToT3 {
   private async expectRefusal(action:()=>Promise<unknown>){try{await action();throw Error('Mode guard did not refuse the request.');}catch(error){if(!String(error).includes('1:1 mode'))throw error;}}
   private async waitSaved(ids:string[],marker:string){
     const p=this as any;
-    for(const id of ids){const result=await p.deviceInline.waitForSave(id,120_000);if(!result.saved)throw Error('Reply not saved: '+result.reason);}
-    for(const note of this.labNotes){const file=this.app.vault.getFileByPath(note)!;if(note==='Fixture/A.md'||ids.length>1){await this.untilLab(async()=>(await this.app.vault.read(file)).includes(marker),'saved '+note);}}
+    for(const id of ids){
+      const result=await p.deviceInline.waitForSave(id,120_000),record=p.deviceInline.localResponse(id)?.record;
+      const notePath=record?.request.notePath,status=p.deviceInline.responseStatus(id);
+      const file=notePath&&this.app.vault.getFileByPath(notePath),saved=file?await this.app.vault.read(file):'';
+      const output=new RegExp('^>\\s*'+marker+'\\s*$','m').test(saved),finished=!responseFrame(saved,id);
+      const receipt={id,notePath,apiResult:result,status,exactSavedOutput:output,responseFrameRemoved:finished};
+      this.writeLab('SAVE-'+id+'.json',receipt);
+      fs.writeFileSync(path.join(this.labRoot,'SAVED-'+id+'.md'),saved);
+      // An editor can adopt the verified final write before this wait observes
+      // its local runtime. Keep that API result as evidence and require the
+      // exact assistant output on disk, a removed frame, and a terminal run.
+      if(!output||!finished||!result.saved&&!status?.runTerminal){
+        this.writeLab('SAVE-FAILURE.json',{receipt,record,editors:this.app.workspace.getLeavesOfType('markdown').map(leaf=>({notePath:(leaf.view as MarkdownView).file?.path,text:(leaf.view as MarkdownView).getViewData()}))});
+        throw Error('Reply not saved: '+(result.saved?'missing exact saved output':result.reason));
+      }
+    }
   }
   private async runLab(){
     await this.app.vault.createFolder('Fixture');
