@@ -790,7 +790,16 @@ def dispatch(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    global ROOT
     args = parser().parse_args()
+    if args.complete_smoke:
+        # Receipts always belong to the canonical publisher, including when
+        # the reviewed CLI is invoked from a task checkout. Historical proof
+        # reads immutable archives/client checks and never touches live bytes.
+        ROOT = CANONICAL_ROOT
+        if parse_version(read_json(QLO2_PLUGIN / 'manifest.json')['version']) > parse_version(args.complete_smoke):
+            dispatch(args)
+            return
     if args.prepare or args.enqueue or args.queue_status or args.install_queue or args.drain_queue or args.retry_queued:
         dispatch(args)
     else:
