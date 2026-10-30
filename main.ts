@@ -2726,6 +2726,17 @@ export default class SendToT3 extends Plugin {
     this.settings.noteContexts=mergeNoteContexts(this.settings.noteContexts,[{messageId,threadId,projectId:request.project.id,environmentId,notePath:request.noteThread?.notePath??request.completion?.notePath,bindingIds,createdAt:new Date().toISOString()}]);
     await this.save();
   }
+  private async reserveResponseStreams(request:Request){
+    const responses=new Map<string,string>();
+    const reserve=(path:string|undefined,bindingId:string)=>{if(!path)throw Error('The reply stream has no destination note.');const prior=responses.get(path);if(prior&&prior!==bindingId)throw Error('Several reply streams target the same note.');responses.set(path,bindingId);};
+    for(const binding of request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]))reserve(binding.notePath,binding.id);
+    if(request.inlineSteering)for(const target of request.inlineSteering.targets??[{...request.inlineSteering,notePath:request.noteThread?.notePath??request.completion?.notePath}])reserve(target.notePath,target.jobId);
+    if(request.inlineFollow)reserve(request.inlineFollow.notePath??request.noteThread?.notePath??request.completion?.notePath,request.inlineFollow.jobId);
+    // Without a vault connection machine there can be no future-run watcher.
+    if(!responses.size||!this.vaultConnection())return;
+    const result=await this.executeAgentCommand({version:1,id:commandId(request.id,'reserve-thread-response'),kind:'reserve-thread-response',source:{threadId:request.threadId??commandId(request.id,'thread'),projectId:request.project.id,environmentId:request.connection.environmentId??await this.localInlineEnvironment()},messageId:commandId(request.id,'message'),responses:[...responses].map(([path,bindingId])=>({path,bindingId}))});
+    if(!result.ok)throw Error(result.error??'The vault connection machine could not reserve the reply stream.');
+  }
   async dispatch(request:Request,quiet=false) {
     const startedAt=Date.now();let stage='response-registration';
     await this.assertRequestMode(request);
@@ -2751,6 +2762,9 @@ export default class SendToT3 extends Plugin {
       if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');
       for(const binding of request.inlineBindings??[request.inlineHost])await this.deviceInline.register(binding);
     }else if(request.inlineHost)throw Error('This legacy reply was cancelled. Create a new local reply.');
+    // The watcher must acknowledge these exact identities before T3 can expose
+    // the new message. Synced settings can arrive after the canonical run.
+    stage='stream-reservation';await this.reserveResponseStreams(request);
     stage='dispatch';const result=await sendRequest(request);
     for(const binding of request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]))await this.responseGuard(binding,'accepted');
     stage='delivery-evidence';

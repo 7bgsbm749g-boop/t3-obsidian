@@ -143,6 +143,52 @@ test('steering, explicit continuation and late question answers already attached
   const ids=[randomUUID(),randomUUID(),`async-answer:${randomUUID()}`];const runs=ids.map((id,i)=>run(id,'follow-'+i));h.setThread({...runs.at(-1)!,messages:runs.flatMap(s=>s.messages),turns:Object.fromEntries(runs.map(s=>[s.latestTurn!.turnId,s.latestTurn!]))});
   for(const path of ['A.md','B.md'])h.existing.push({id:randomUUID(),path,messageIds:ids,turnIds:['original','follow-0','follow-1','follow-2']});await h.service.tick();assert.equal(h.requests.length,0);assert.equal(h.saved.displays![0].bindings.length,6);
 });
+
+test('a pre-dispatch reservation prevents duplicate streams before settings Sync, across restart and later registration',async()=>{
+  const h=await harness(),messageId=randomUUID(),bindingId=randomUUID(),reservation={version:1 as const,id:randomUUID(),kind:'reserve-thread-response' as const,source:worker,messageId,responses:[{path:'A.md',bindingId}]};
+  try{
+    await h.service.command(stream());
+    const result=await h.service.command(reservation);
+    assert.equal(result.ok,true);assert.equal(h.existing.length,0,'The sending device metadata has not synced');
+    const state=run(messageId,'reserved-turn');h.setThread(state);await h.service.tick();
+    assert.deepEqual(h.requests.map(request=>request.notePath),['B.md'],'Other destinations still receive the reply');
+    assert.equal(h.saved.displays![0].bindings.find(binding=>binding.destinationId===h.saved.displays![0].destinations[0].id)?.bindingId,bindingId);
+    assert.deepEqual(await h.service.command(reservation),result);
+    await assert.rejects(h.service.command({...reservation,responses:[{path:'A.md',bindingId:randomUUID()}]}),/different input/);
+    await assert.rejects(h.service.command({...reservation,id:randomUUID(),responses:[{path:'A.md',bindingId:randomUUID()}]}),/already has a stream/);
+    const restarted=await harness(h.saved);
+    try{
+      restarted.setThread(state);
+      await restarted.service.command({...stream(worker,['A.md']),start:'history'});
+      await restarted.service.tick();assert.equal(restarted.requests.length,0,'Reservations cover registrations created after the send');
+      await restarted.service.command({...stream({...worker,threadId:'another-thread'},['A.md']),start:'history'});
+      await restarted.service.tick();assert.equal(restarted.requests.length,1,'Reservations belong only to the exact source thread');
+    }finally{restarted.service.stop();}
+  }finally{h.service.stop();}
+});
+
+test('reservation acknowledgement waits for durable storage, and failed storage leaves no in-memory claim',async()=>{
+  let fail=true,saved:EventState|undefined;
+  const service=new EventSubscriptions({load:async()=>saved,save:async state=>{if(fail)throw Error('storage unavailable');saved=structuredClone(state);},notes:async()=>[],validateTarget:async()=>{},isBusy:async()=>false,prepare:async()=>{},deliver:async()=>'delivered',recording:()=>{},now:()=>0,id:randomUUID});
+  const reservation={version:1 as const,id:randomUUID(),kind:'reserve-thread-response' as const,source:worker,messageId:randomUUID(),responses:[{path:'A.md',bindingId:randomUUID()}]};
+  try{
+    await service.initialize();await assert.rejects(service.command(reservation),/storage unavailable/);
+    assert.equal(service.snapshot.responseReservations,undefined);assert.equal(service.snapshot.commands[reservation.id],undefined);
+    fail=false;assert.equal((await service.command(reservation)).ok,true);assert.equal(saved!.responseReservations![0].messageId,reservation.messageId);
+  }finally{service.stop();}
+});
+
+test('reservation locations follow note and folder moves before any watcher exists',async()=>{
+  const h=await harness(),messageId=randomUUID();
+  try{
+    await h.service.command({version:1,id:randomUUID(),kind:'reserve-thread-response',source:worker,messageId,responses:[{path:'A.md',bindingId:randomUUID()}]});
+    assert.equal(h.service.interested('Folder/A.md','A.md'),true);
+    await h.service.observe('rename','Folder/A.md',{path:'Folder/A.md',content:'Synthetic',properties:{}},'A.md');
+    assert.equal(h.service.interestedFolder('Moved','Folder'),true);await h.service.renameFolder('Folder','Moved',[]);
+    h.setThread(run(messageId,'moved-turn'));
+    await h.service.command({...stream(worker,['Moved/A.md']),start:'history'});await h.service.tick();assert.equal(h.requests.length,0);
+  }finally{h.service.stop();}
+});
 test('pause/resume skips paused runs; removal/cancellation affects future bindings without stopping T3 or active children',async()=>{
   const h=await harness(),command=stream();await h.service.command(command);h.setThread(run(randomUUID(),'first'));await h.service.tick();assert.equal(h.requests.length,2);
   await h.service.command(manage('pause-thread-stream',command.id));h.setThread(run(randomUUID(),'paused'));await h.service.tick();assert.equal(h.requests.length,2);
