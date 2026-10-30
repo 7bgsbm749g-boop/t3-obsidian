@@ -358,6 +358,9 @@
    Keep its editor from clamping to that false bottom during the redraw. */
 .cm-content[data-t3-response-height-guard="true"] { min-height: var(--send-to-t3-response-min-height) !important; }
 .send-to-t3-stream-follow { cursor: pointer; color: var(--text-muted); }
+/* A collapsed response has no visible output to follow, even while Stop is shown. */
+.cm-embed-block:has(> .callout[data-callout="t3-progress"].is-collapsed, > .markdown-rendered > .callout[data-callout="t3-progress"].is-collapsed) > .send-to-t3-stream-actions .send-to-t3-stream-follow,
+.callout[data-callout="t3-progress"].is-collapsed > .send-to-t3-reading-actions .send-to-t3-stream-follow { display: none !important; }
 .send-to-t3-stream-follow svg { width: 20px; height: 20px; }
 .send-to-t3-stream-follow[aria-pressed="true"],
 .markdown-source-view.mod-cm6 .edit-block-button.send-to-t3-stream-follow[aria-pressed="true"] {

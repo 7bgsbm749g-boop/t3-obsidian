@@ -49,9 +49,13 @@ export default class StreamStopLab extends Plugin {
         const view=leaf.view as MarkdownView;
         const foldState=Array.from(view.contentEl.querySelectorAll<HTMLElement>('.callout[data-callout="t3-progress"]')).map(fold=>{
           const key=fold.querySelector<HTMLElement>('.send-to-t3-fold-key')?.dataset.t3Fold,button=fold.querySelector<HTMLButtonElement>('.send-to-t3-stream-stop'),rect=button?.getBoundingClientRect(),box=fold.getBoundingClientRect();
-          return {key,text:fold.innerText,stop:button?{hidden:button.hidden,disabled:button.disabled,label:button.getAttribute('aria-label'),focused:document.activeElement===button,rect:rect&&{x:rect.x,y:rect.y,width:rect.width,height:rect.height}}:null,box:{x:box.x,y:box.y,width:box.width,height:box.height}};
+          const actions=fold.querySelector<HTMLElement>(':scope > .send-to-t3-reading-actions')??fold.closest('.cm-embed-block')?.querySelector<HTMLElement>(':scope > .send-to-t3-stream-actions'),follow=actions?.querySelector<HTMLElement>('.send-to-t3-stream-follow');
+          const followBox=follow?.getBoundingClientRect();
+          return {key,text:fold.innerText,collapsed:fold.classList.contains('is-collapsed'),parent:fold.parentElement?.className,follow:follow?{hidden:follow.hidden,visible:follow.getClientRects().length>0,display:getComputedStyle(follow).display,active:follow.getAttribute('aria-pressed'),control:key?manager.view(view)?.scrollControl(key):undefined,rect:followBox&&{x:followBox.x,y:followBox.y,width:followBox.width,height:followBox.height}}:null,stop:button?{hidden:button.hidden,disabled:button.disabled,label:button.getAttribute('aria-label'),focused:document.activeElement===button,rect:rect&&{x:rect.x,y:rect.y,width:rect.width,height:rect.height}}:null,box:{x:box.x,y:box.y,width:box.width,height:box.height}};
         });
-        evidence('state.json',{label,mode:view.getMode(),saved:view.getViewData(),display:view.editor.getValue(),disk:await this.app.vault.read(file),selection:window.getSelection()?.toString(),folds:foldState,commands,events,active:document.activeElement?.outerHTML.slice(0,500)});
+        const scroller=view.getMode()==='preview'?view.contentEl.querySelector('.markdown-preview-view'):(view.editor as any).cm?.scrollDOM;
+        const state={label,notePath:view.file?.path,mode:view.getMode(),scrollTop:scroller?.scrollTop,saved:view.getViewData(),display:view.editor.getValue(),disk:await this.app.vault.read(file),selection:window.getSelection()?.toString(),folds:foldState,commands,events,active:document.activeElement?.outerHTML.slice(0,500)};
+        evidence('state.json',state);return state;
       };
       for(const type of ['click','pointerdown','pointerup','keydown','focusin'])this.registerDomEvent(document,type as any,(event:any)=>{
         events.push({type,pointerType:event.pointerType,key:event.key,trusted:event.isTrusted,target:event.target?.className});if(events.length>100)events.shift();
@@ -60,11 +64,12 @@ export default class StreamStopLab extends Plugin {
       const timer=setInterval(()=>{if(working||cleaned)return;working=true;void(async()=>{
         const mailbox=path.join(root,'action.json');if(fs.existsSync(mailbox)){
           const action=JSON.parse(fs.readFileSync(mailbox,'utf8'));fs.unlinkSync(mailbox);
-          if(action.kind==='update'){output[action.index]+='\n\nNew independent tokens.';await update(action.index);}
+          if(action.kind==='update'){output[action.index]+='\n\nNew independent tokens.'.repeat(Math.max(1,Math.min(80,action.paragraphs??1)));await update(action.index);}
           if(action.kind==='terminal'){records[action.index].revision++;records[action.index].state!.status='complete';await manager.receive(records[action.index]);}
           if(action.kind==='mode')await leaf.setViewState({type:'markdown',state:{file:name,mode:action.mode,source:false}});
           if(action.kind==='mobile-style')document.body.classList.toggle('is-mobile',true);
           if(action.kind==='capture'&&/^[a-z0-9-]+$/.test(action.name)){
+            evidence(`${action.name}.json`,await snapshot(action.name));
             const frame=await require('electron').remote.getCurrentWindow().webContents.capturePage();fs.writeFileSync(path.join(root,`${action.name}.png`),frame.toPNG());
           }
           if(action.kind==='cleanup'){
