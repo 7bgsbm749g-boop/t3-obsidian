@@ -1,3 +1,66 @@
+.t3-settings { container-type: inline-size; }
+.t3-settings-header h2 { margin: 0 0 8px; }
+.t3-settings-header p { color: var(--text-muted); margin: 0 0 20px; }
+.t3-settings-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 20px;
+}
+.t3-settings-tabs button {
+  min-width: 0;
+  padding: 8px 4px;
+  height: auto;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+.t3-settings-tabs button:hover { background: var(--background-modifier-hover); }
+.t3-settings-tabs button[aria-selected="true"] {
+  background: var(--background-modifier-hover);
+  color: var(--text-accent);
+  font-weight: var(--font-semibold);
+}
+.t3-settings-tabs button:focus-visible,
+.t3-settings-details > summary:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+.t3-settings-panel { min-width: 0; }
+.t3-settings-panel > .setting-item:first-child { padding-top: 0; }
+.t3-settings-panel p { color: var(--text-muted); font-size: var(--font-ui-small); line-height: 1.5; }
+.t3-settings-panel .setting-item-info { min-width: 0; }
+.t3-settings-panel .setting-item-name,
+.t3-settings-panel .setting-item-description { overflow-wrap: anywhere; }
+.t3-settings-panel .t3-settings-hint { margin: 12px 0 20px; }
+.t3-settings-panel .t3-error { color: var(--text-error); }
+.t3-settings-details {
+  margin-top: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.t3-settings-details > summary { cursor: pointer; font-weight: var(--font-medium); }
+.t3-settings-details[open] > summary { margin-bottom: 16px; }
+.t3-settings-details > .setting-item:last-child { padding-bottom: 0; }
+@container (max-width: 420px) {
+  .t3-settings-panel .setting-item:not(.setting-item-heading) {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .t3-settings-panel .setting-item-info { margin-inline-end: 0; }
+  .t3-settings-panel .setting-item-control {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .t3-settings-panel .setting-item-control > :is(input, select) { width: 100%; }
+  .t3-settings-panel .setting-item-control > button { height: auto; min-height: 32px; white-space: normal; }
+}
+
 .send-to-t3-linked-folder-badge {
   align-items: center;
   align-self: center;

@@ -115,6 +115,7 @@ interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;inte
 type PreparedNote={content:string;images:Awaited<ReturnType<typeof collectImages>>};
 interface Settings {projectCreationLocations:ProjectCreationLocation[];noteContexts?:NoteContextRecord[];smartSend?:SmartSendData;responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; vaultHost?:VaultHost; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
 export default class SendToT3 extends Plugin {
+  private settingsTab?:T3Settings;
   declare settings: Settings;
   mode: 'desktop'|'direct' = 'desktop';
   private smartReplica=loadSmartSend(undefined);
@@ -520,7 +521,7 @@ export default class SendToT3 extends Plugin {
     if(typeof data?.vaultId!=='string'||!data.vaultId)await this.save(true);
     else if(migratedNoteThreads||restoreFolderLinks||restoreResponseBindings||restoreSmartSend)await this.save(true);
     await this.publishVaultIdentity();
-    this.addSettingTab(new T3Settings(this.app,this));
+    this.settingsTab=new T3Settings(this.app,this);this.addSettingTab(this.settingsTab);
     this.app.workspace.onLayoutReady(()=>{
       if(this.stopped)return;
       if(Platform.isMobile&&typeof document!=='undefined'&&typeof this.registerDomEvent==='function'){
@@ -1119,7 +1120,9 @@ export default class SendToT3 extends Plugin {
   }
   openSettings(){
     const settings=(this.app as App & {setting?:{open():void;openTabById(id:string):void}}).setting;
-    if(settings){settings.open();settings.openTabById(this.manifest.id);}
+    if(settings){
+      this.settingsTab?.showConnection();settings.open();settings.openTabById(this.manifest.id);
+    }
     else new Notice('Open Settings → T3 Code to sign in.');
   }
   chatReadinessError():string|undefined {
@@ -2855,10 +2858,21 @@ class FolderLinkModal extends Modal{
 export class T3Settings extends PluginSettingTab {
   constructor(app:App,private plugin:SendToT3){super(app,plugin);}
   private selectedMachine:CloudMachine|null=null;
+  private section:'connection'|'replies'|'projects'|'advanced'='connection';
+  private readonly tabId=`t3-settings-${randomId()}`;
+  private readonly expanded=new Set<string>();
+  showConnection(){this.section='connection';}
+  private details(el:HTMLElement,title:string){
+    const details=el.createEl('details',{cls:'t3-settings-details'});
+    details.open=this.expanded.has(title);
+    details.createEl('summary',{text:title});
+    details.addEventListener('toggle',()=>{if(details.open)this.expanded.add(title);else this.expanded.delete(title);});
+    return details;
+  }
   cloudUI(el:HTMLElement){
     const p=this.plugin;p.cloudChanged=()=>this.display();
-    new Setting(el).setName(p.nativeAccount?'T3 connection on this device':p.signInExpired?'Refresh authentication':'Sign in on this device').setHeading();
-    el.createEl('p',{text:p.nativeAccount?'Your account is stored only on this device. Projects and saved folder links appear after T3 finishes connecting your computers.':p.signInExpired?REAUTHENTICATE_MESSAGE:'This device is not signed in to T3. Verify your T3 email here, or use advanced manual pairing below.'});
+    new Setting(el).setName(p.nativeAccount?'T3 account':p.signInExpired?'Refresh authentication':'Sign in to T3').setHeading();
+    el.createEl('p',{text:p.nativeAccount?'Sign in on each device. Credentials stay on this device.':p.signInExpired?REAUTHENTICATE_MESSAGE:'Use your T3 account to connect your computers and discover projects.'});
     if(p.nativeAccount){
       new Setting(el).setName(p.nativeAccount.identity).setDesc(p.connecting?'Connecting computers and discovering projects…':'Signed in. Connections renew automatically.').addButton(b=>b.setButtonText('Refresh connections').setDisabled(p.connecting).onClick(async()=>{try{await p.refreshMachines();}catch(e){p.cloudError=message(e);}this.display();})).addButton(b=>b.setButtonText('Sign out').onClick(async()=>{await p.signOutCloud();this.display();}));
       if(p.connecting)el.createEl('p',{text:'Connecting to T3 and syncing project information…'});
@@ -2883,63 +2897,110 @@ export class T3Settings extends PluginSettingTab {
     if(p.cloudError)el.createEl('p',{text:p.cloudError,cls:'t3-error'});
   }
   display(){
-    const el=this.containerEl; el.empty();
-    el.createEl('p',{text:'Send full Markdown notes and embedded images to your T3 projects. Sending starts a turn using the project’s model and permission defaults.'});
-    new Setting(el).setName('Connection on this device').setDesc('T3 Connect works on desktop and mobile. This computer only is available for local desktop use.').addDropdown(d=>{d.addOptions({...(!Platform.isMobile?{desktop:'This computer only (advanced)'}:{}),direct:'T3 Connect (recommended)'});d.setValue(this.plugin.mode).onChange(async value=>{this.plugin.mode=value as 'desktop'|'direct';await this.plugin.save();this.plugin.refreshMachines().catch(error=>new Notice(message(error)));this.display();});});
+    const el=this.containerEl;el.empty();el.addClass('t3-settings');
+    this.plugin.cloudChanged=()=>this.display();
+    const header=el.createDiv({cls:'t3-settings-header'});
+    header.createEl('h2',{text:'T3 Code'});
+    header.createEl('p',{text:'Connect T3, choose how replies appear, and link your projects.'});
+    const tabs=el.createDiv({cls:'t3-settings-tabs',attr:{role:'tablist','aria-label':'T3 Code settings'}});
+    const panel=el.createDiv({cls:'t3-settings-panel',attr:{role:'tabpanel',id:`${this.tabId}-panel`,tabindex:'0'}});
+    const sections=[['connection','Connection'],['replies','Replies'],['projects','Projects'],['advanced','Advanced']] as const;
+    const buttons:HTMLButtonElement[]=[];
+    const select=(section:typeof this.section)=>{
+      this.section=section;
+      for(let i=0;i<buttons.length;i++){
+        const active=sections[i][0]===section;
+        buttons[i].setAttribute('aria-selected',String(active));
+        buttons[i].tabIndex=active?0:-1;
+      }
+      panel.setAttribute('aria-labelledby',`${this.tabId}-${section}`);
+      panel.empty();
+      if(section==='connection')this.connectionUI(panel);
+      else if(section==='replies')this.repliesUI(panel);
+      else if(section==='projects')this.projectsUI(panel);
+      else this.advancedUI(panel);
+    };
+    for(const [section,label] of sections){
+      const button=tabs.createEl('button',{text:label,attr:{type:'button',role:'tab',id:`${this.tabId}-${section}`,'aria-controls':`${this.tabId}-panel`}});
+      buttons.push(button);
+      button.addEventListener('click',()=>select(section));
+      button.addEventListener('keydown',event=>{
+        const index=sections.findIndex(([id])=>id===section);
+        const next=event.key==='Home'?0:event.key==='End'?sections.length-1:event.key==='ArrowRight'?(index+1)%sections.length:event.key==='ArrowLeft'?(index+sections.length-1)%sections.length:-1;
+        if(next<0)return;
+        event.preventDefault();select(sections[next][0]);buttons[next].focus();
+      });
+    }
+    select(this.section);
+  }
+  private connectionUI(el:HTMLElement){
+    new Setting(el).setName('Connect with').setDesc('Choose how this device reaches T3.').addDropdown(d=>{d.addOptions({direct:'T3 Connect (recommended)',...(!Platform.isMobile?{desktop:'This computer only'}:{})});d.setValue(this.plugin.mode).onChange(async value=>{this.plugin.mode=value as 'desktop'|'direct';await this.plugin.save();this.plugin.refreshMachines().catch(error=>new Notice(message(error)));this.display();});});
     if(this.plugin.mode==='direct'){
       this.cloudUI(el);
-      const advanced=el.createEl('details');advanced.createEl('summary',{text:'Advanced: manual pairing'});
-      advanced.createEl('p',{text:'In T3 Settings → Connections, create a fresh pairing link using an HTTPS address this device can reach. Paste it below. This connects to T3 itself, with no companion, Python, SSH, or Tailscale requirement in the plugin.'});
+      el.createEl('p',{cls:'t3-settings-hint',text:'Computers must be online to receive notes. For a pairing link, open Advanced → Manual pairing.'});
+    }else{
+      new Setting(el).setName('Local T3').setHeading();
+      el.createEl('p',{text:'Use the T3 installation on this computer. Custom paths are optional.'});
+      new Setting(el).setName('Official T3 executable').setDesc('Leave blank to find t3 automatically, or enter the full executable path.').addText(t=>t.setValue(this.plugin.settings.connection.executable).onChange(async value=>{this.plugin.settings.connection.executable=value.trim();await this.plugin.save();}));
+      new Setting(el).setName('T3 data directory').setDesc('Usually ~/.t3. Must match the running T3 installation.').addText(t=>t.setValue(this.plugin.settings.connection.baseDir??'').onChange(async value=>{this.plugin.settings.connection.baseDir=value.trim();await this.plugin.save();}));
+    }
+  }
+  private advancedUI(el:HTMLElement){
+    new Setting(el).setName('Troubleshooting').setHeading();
+    new Setting(el).setName('Send failure log').setDesc('View failed sends on this device. Failed sends are not queued for retry.').addButton(button=>button.setButtonText('View log').onClick(()=>this.plugin.exportDiagnostics()));
+    if(this.plugin.mode==='direct'){
+      const advanced=this.details(el,'Manual pairing');
+      advanced.createEl('p',{text:'In T3 Settings → Connections, create a fresh pairing link with an HTTPS address this device can reach.'});
       let name=this.selectedMachine?.name??'',address=this.selectedMachine?.url??'',code='';
       new Setting(advanced).setName('Connection name').addText(t=>t.setPlaceholder('My laptop').setValue(name).onChange(v=>name=v));
       new Setting(advanced).setName('T3 address or pairing link').setDesc('Not the old companion URL. Pairing links contain a one-time secret and are never synced or retained.').addText(t=>{t.inputEl.type='password';t.inputEl.autocomplete='off';t.setValue(address).onChange(v=>address=v);});
       new Setting(advanced).setName('Pairing code (if separate)').addText(t=>{t.inputEl.type='password';t.inputEl.autocomplete='off';t.onChange(v=>code=v);});
       new Setting(advanced).addButton(b=>b.setButtonText('Pair and discover projects').setCta().onClick(async()=>{b.setDisabled(true);try{await this.plugin.pairConnection(name,address,code,this.selectedMachine?.environmentId);this.selectedMachine=null;new Notice('Paired directly with T3. Projects appear automatically.');this.display();}catch(e){new Notice(message(e),12000);b.setDisabled(false);}}));
+      if(this.plugin.settings.paired.length){
+      const connections=this.details(el,'Manage connections');
       for(const c of this.plugin.settings.paired){
         const status=c.managed&&this.plugin.nativeAccount?'T3 account connection · renews automatically':this.plugin.pairingStatus(c);
-        const setting=new Setting(el).setName(c.name).setDesc(status);
+        const setting=new Setting(connections).setName(c.name).setDesc(status);
         if(!c.managed)setting.addButton(b=>b.setButtonText('Forget pairing').onClick(async()=>{await this.plugin.forgetPairing(c.id);this.display();}));
         setting.addButton(b=>b.setButtonText('Remove connection').onClick(async()=>{try{await this.plugin.removeConnection(c.id);this.display();}catch(e){new Notice(message(e));}}));
       }
-      el.createEl('p',{text:'Projects are discovered automatically on this device. Sign in once on each device; credentials stay on that device. Computers must be online to receive a note. Unconfirmed sends require manual retry.'});
-    } else {
-    new Setting(el).setName('Official T3 executable').setDesc('Leave blank to discover t3 automatically. Otherwise enter the full path to the official T3 CLI executable, not a Fleet adapter or shell command.').addText(t=>t.setValue(this.plugin.settings.connection.executable).onChange(async value=>{this.plugin.settings.connection.executable=value.trim();await this.plugin.save();}));
-    new Setting(el).setName('T3 data directory').setDesc('Usually your home directory followed by .t3. Must match the running T3 installation.').addText(t=>t.setValue(this.plugin.settings.connection.baseDir??'').onChange(async value=>{this.plugin.settings.connection.baseDir=value.trim();await this.plugin.save();}));
-
+      }
     }
-    new Setting(el).setName('Threads').setHeading();
-    new Setting(el).setName('Thread title generation').setDesc('Send and Ask use the note title by default. Let T3 name untitled notes, or generate titles for every new thread. Existing threads keep their titles.').addDropdown(d=>d.addOption('untitled-only','Only for untitled notes').addOption('always','Always use T3').setValue(this.plugin.settings.threadTitleGeneration).onChange(async value=>{this.plugin.settings.threadTitleGeneration=threadTitleGeneration(value);await this.plugin.save();}));
-    new Setting(el).setName('Settle completed threads').setDesc('Move Obsidian threads out of T3 Code’s active list after a successful turn and its inline reply finish. Sending to a settled thread wakes it again. Checks run while Obsidian is open.').addToggle(t=>t.setValue(this.plugin.settings.autoSettleThreads).onChange(async enabled=>{this.plugin.settings.autoSettleThreads=enabled;if(!enabled)this.plugin.settings.settlementJobs=[];await this.plugin.save();}));
-    new Setting(el).setName('Command palette').setDesc(this.plugin.paletteChatStatus()==='active'?'Use the first T3 Code row to send the current note or ask a question about it.':'The live T3 Code row is unavailable in this Obsidian version or the core Command palette is disabled.');
-    el.createEl('p',{text:'Sending includes the current note and its embedded images. Asking sends the question and note location. A selected passage and its embedded images are included with the question.'});
+    const legacy=this.details(el,'Legacy cleanup');
+    new Setting(legacy).setName('Legacy cleanup defaults').setDesc('Only for previously queued jobs. Manual sends and questions always keep their notes. Changed or renamed notes are kept.').addDropdown(d=>d.addOptions({keep:'Keep note',archive:'Archive note',delete:'Delete note (vault trash)'}).setValue(this.plugin.settings.completion.action).onChange(async value=>{this.plugin.settings.completion.action=value as CompletionAction;await this.plugin.save();this.display();}));
+    if(this.plugin.settings.completion.action==='archive')new Setting(legacy).setName('Archive folder').setDesc('Folder inside this vault. Original subfolders are preserved; existing notes are never overwritten.').addText(t=>t.setValue(this.plugin.settings.completion.archiveFolder).onChange(async value=>{this.plugin.settings.completion.archiveFolder=value;await this.plugin.save();}));
+    if(this.plugin.settings.completionJobs.length){
+      new Setting(el).setName('Task completion monitoring').setHeading();
+      el.createEl('p',{text:'Checks queued jobs every 30 seconds while Obsidian is open. Mobile background checks are not guaranteed.'});
+      for(const job of this.plugin.settings.completionJobs)new Setting(el).setName(job.notePath).setDesc(`${job.action} · ${job.threadId} · ${job.detail || 'Waiting for successful completion'}`).addButton(b=>b.setButtonText(job.status==='watching'?'Stop monitoring':'Dismiss').onClick(async()=>{this.plugin.settings.completionJobs=this.plugin.settings.completionJobs.filter(j=>j!==job);await this.plugin.save();this.display();}));
+      new Setting(el).addButton(b=>b.setButtonText('Check now').onClick(async()=>{b.setDisabled(true);await this.plugin.monitorCompletions();this.display();}));
+    }
+  }
+  private repliesUI(el:HTMLElement){
     new Setting(el).setName('Inline responses').setHeading();
-    new Setting(el).setName('Stream replies into the editor').setDesc('For every manual Send or Ask, insert the reply into the note. Selection questions appear below the selection; other replies use the cursor position captured for Send, or follow the paragraph when the cursor is inside it.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));
-    new Setting(el).setName('Final answer format').setDesc('Choose how the completed final answer appears. Intermediate responses keep their formatting in the progress box. Images and files are handled in both formats. Applies to new responses.').addDropdown(dropdown=>dropdown.addOptions({formatted:'Current formatting','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));
-    new Setting(el).setName('Intermediate agent responses').setDesc('Progress stays in an open box while the agent works. The box closes when the final answer is complete. Click the header to open or close it.');
-    new Setting(el).setName('Project files').setHeading();
-    el.createEl('p',{text:'Project files stay in their T3 workspaces. Codebase view opens them in Obsidian. Reply attachments are not copied into the vault.'});
-    new Setting(el).setName('Codebase view').addButton(b=>b.setButtonText('Open').onClick(()=>{void (this.app as any).commands.executeCommandById(`${this.plugin.manifest.id}:codebase-view`);}));
-    new Setting(el).setName('Legacy cleanup').setHeading();
-    new Setting(el).setName('Legacy cleanup defaults').setDesc('Applies only to previously queued cleanup jobs. Manual sends and questions always keep their notes. Changed or renamed notes are kept.').addDropdown(d=>d.addOptions({keep:'Keep note',archive:'Archive note',delete:'Delete note (vault trash)'}).setValue(this.plugin.settings.completion.action).onChange(async value=>{this.plugin.settings.completion.action=value as CompletionAction;await this.plugin.save();this.display();}));
-    if(this.plugin.settings.completion.action==='archive') new Setting(el).setName('Archive folder').setDesc('Folder inside this vault. Original subfolders are preserved; existing notes are never overwritten.').addText(t=>t.setValue(this.plugin.settings.completion.archiveFolder).onChange(async value=>{this.plugin.settings.completion.archiveFolder=value;await this.plugin.save();}));
+    new Setting(el).setName('Stream replies into the editor').setDesc('Insert Send and Ask replies into the note. Selection replies appear below the selection; other replies use the captured cursor position or follow its paragraph.').addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));
+    new Setting(el).setName('Final answer format').setDesc('Applies to new responses. Both formats support images and files.').addDropdown(dropdown=>dropdown.addOptions({formatted:'Current formatting','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));
+    el.createEl('p',{cls:'t3-settings-hint',text:'Progress appears in an open box while T3 works. The box closes when the final answer is complete. Click its header to reopen it.'});
+    new Setting(el).setName('Threads').setHeading();
+    new Setting(el).setName('Thread title generation').setDesc('Use note titles by default, or let T3 name every new thread. Existing titles stay the same.').addDropdown(d=>d.addOption('untitled-only','Only for untitled notes').addOption('always','Always use T3').setValue(this.plugin.settings.threadTitleGeneration).onChange(async value=>{this.plugin.settings.threadTitleGeneration=threadTitleGeneration(value);await this.plugin.save();}));
+    new Setting(el).setName('Settle completed threads').setDesc('Move threads to Settled after a successful turn and saved reply. Sending again wakes the thread. Checks run while Obsidian is open.').addToggle(t=>t.setValue(this.plugin.settings.autoSettleThreads).onChange(async enabled=>{this.plugin.settings.autoSettleThreads=enabled;if(!enabled)this.plugin.settings.settlementJobs=[];await this.plugin.save();}));
+    el.createEl('p',{cls:'t3-settings-hint',text:this.plugin.paletteChatStatus()==='active'?'Use the first T3 Code row in the command palette to send the note or ask a question.':'The live T3 Code row is unavailable. Check that the core Command palette is enabled.'});
+  }
+  private projectsUI(el:HTMLElement){
     new Setting(el).setName('Linked folders').setHeading();
-    el.createEl('p',{text:'Folder links route questions and manual note sends. Create T3 project lets you choose its workspace location.'});
+    el.createEl('p',{text:'Link a folder from its right-click menu to route notes and questions to a T3 project.'});
     const root=this.plugin.vaultConnection();
     const machine=root?.connectionId?this.plugin.settings.paired.find(c=>c.id===root.connectionId)?.name:undefined;
     new Setting(el).setName('Vault connection').setDesc(root?`${machine??(Platform.isMobile?'Linked computer':'This computer')} · ${root.workspaceRoot} · Hosts subscriptions and staged note edits.`:'Choose the synced vault location for subscriptions and staged note edits. New unlinked conversations use No project.').addButton(b=>b.setButtonText(root?'Change machine':'Connect vault').onClick(async()=>{try{await this.plugin.configureVaultConnection();this.display();}catch(e){if(!(e instanceof VaultSetupCancelled))new Notice(message(e),10000);}}));
-    if(!this.plugin.settings.folderLinks.length)el.createEl('p',{text:'No folders are linked.'});
-    for(const link of this.plugin.settings.folderLinks.filter(link=>link.folderPath!=='/')){
+    const links=this.plugin.settings.folderLinks.filter(link=>link.folderPath!=='/');
+    if(!links.length)el.createEl('p',{cls:'t3-settings-hint',text:'No folders are linked. Right-click a folder and choose Link to T3 Code.'});
+    for(const link of links){
       const setting=new Setting(el).setName(link.folderPath==='/'?'Vault root':link.folderPath).setDesc(`${link.self?'Self · ':''}${link.projectTitle} · ${link.workspaceRoot}`);
 
       setting.addButton(b=>b.setButtonText('Unlink').onClick(async()=>{await this.plugin.unlinkFolder(link.folderPath);this.display();}));
     }
-    if(this.plugin.settings.completionJobs.length){
-      new Setting(el).setName('Task completion monitoring').setHeading();
-      el.createEl('p',{text:'Checks every 30 seconds while Obsidian is active and resumes after restart or reopening on this device. Mobile background checks are not guaranteed. A completed T3 turn is the completion signal; this does not judge whether the answer fully solved the task.'});
-      for(const job of this.plugin.settings.completionJobs) new Setting(el).setName(job.notePath).setDesc(`${job.action} · ${job.threadId} · ${job.detail || 'Waiting for successful completion'}`).addButton(b=>b.setButtonText(job.status==='watching'?'Stop monitoring':'Dismiss').onClick(async()=>{this.plugin.settings.completionJobs=this.plugin.settings.completionJobs.filter(j=>j!==job);await this.plugin.save();this.display();}));
-      new Setting(el).addButton(b=>b.setButtonText('Check now').onClick(async()=>{b.setDisabled(true);await this.plugin.monitorCompletions();this.display();}));
-    }
-    new Setting(el).setName('Send failure log').setDesc('Failed sends end immediately. No requests are queued for Retry.').addButton(button=>button.setButtonText('View log').onClick(()=>this.plugin.exportDiagnostics()));
+    new Setting(el).setName('Project files').setHeading();
+    new Setting(el).setName('Codebase view').setDesc('Open project files in Obsidian. Files stay in their T3 workspace.').addButton(b=>b.setButtonText('Open').onClick(()=>{void (this.app as any).commands.executeCommandById(`${this.plugin.manifest.id}:codebase-view`);}));
   }
 }
 
