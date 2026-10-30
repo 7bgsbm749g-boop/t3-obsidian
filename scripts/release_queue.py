@@ -363,6 +363,9 @@ def next_version(release, directory: Path, request: dict) -> str:
 
 def run_job(release, directory: Path, request: dict, state: dict, loaded_engine: dict) -> bool:
     root = release.ROOT
+    if 'maintenanceOnly' not in request:
+        request = {**request, 'maintenanceOnly': maintenance_only(
+            git(root, 'diff', '--name-only', '--no-renames', request['mergeBase'], request['commit']).splitlines())}
     version = state.get('version')
     deployed = version and (release.release_receipt_dir(version) / 'deployment.json').is_file()
     if not request.get('maintenanceOnly') and not request.get('evidence') and not version:

@@ -315,6 +315,9 @@ class ReleaseQueueTests(unittest.TestCase):
         subprocess.run(['git', 'add', '.'], cwd=source, check=True)
         subprocess.run(['git', 'commit', '-qm', 'maintenance'], cwd=source, check=True)
         a = self.submit(source, evidence=False)
+        request_path = queue.job_path(self.store, a['jobId']) / 'request.json'
+        legacy = queue.read(request_path); legacy.pop('maintenanceOnly')
+        queue.write(request_path, legacy)
         validate = SimpleNamespace(run_validation=lambda root: self.evidence)
         with patch.object(self.release, 'change_checks', validate, create=True):
             self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')

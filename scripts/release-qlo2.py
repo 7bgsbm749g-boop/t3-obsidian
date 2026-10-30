@@ -694,7 +694,7 @@ def parser() -> argparse.ArgumentParser:
     action.add_argument('--queue-status', nargs='?', const='all', metavar='JOB_ID', help='Read queue state without contacting other threads.')
     action.add_argument('--drain-queue', action='store_true', help='Run the single queue worker in the canonical checkout.')
     action.add_argument('--install-queue', action='store_true', help='Install the event-driven local queue worker once.')
-    action.add_argument('--retry-queued', metavar='JOB_ID', help='Retry the same blocked job and immutable release.')
+    action.add_argument('--retry-queued', metavar='JOB_ID', help='Resume recovery or retry a repaired candidate; retain immutable release bytes.')
     result.add_argument('--prepare', action='store_true', help='With --bump/--version: prepare and check a task-worktree candidate without deployment.')
     result.add_argument('--validation', type=Path, help='Exact successful validation proof for --publish.')
     result.add_argument('--base', help='Affected-test baseline; default: installed release source.')
@@ -715,7 +715,7 @@ def dispatch(args: argparse.Namespace) -> None:
         if args.prepare or args.allow_dirty or args.skip_tests_reason or args.skip_laptop_reload or args.base or args.device:
             raise SystemExit('--enqueue accepts a commit, optional --validation, and optional --evidence/--notes.')
         if bool(args.evidence) != bool(args.notes):
-            raise SystemExit('Supply --evidence and --notes together, or verify changed behavior when the job owns its release slot.')
+            raise SystemExit('Supply --evidence and --notes together. Product jobs without evidence wait before publication.')
         if git_state()[1]:
             raise SystemExit('Commit the reviewed task changes before enqueueing; uncommitted edits are not submitted.')
         result = release_queue.enqueue(ROOT, CANONICAL_ROOT, args.enqueue,
