@@ -1,5 +1,5 @@
 import type {InlineThreadState} from './inline-thread';
-import {renderWorktreeSetup} from './worktree-setup';
+import {renderWorktreeSetup,worktreeSetupPhase} from './worktree-setup';
 
 export interface ResponseEmission {id:string;turnId:string|null;createdAt?:string;sequence:number;body:string;active:boolean;kind:string}
 const html=(text:string)=>text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\n/g,'&#10;');
@@ -13,6 +13,12 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
   for(const activity of state.activities){
     if(turns.includes(activity.turnId??'')&&activity.kind==='response.worktree-setup'){
       const active=activity.turnId===activeTurn;
+      const phase=worktreeSetupPhase(activity,state.worktreeSetup);
+      const turn=state.turns?.[activity.turnId??'']??(state.latestTurn?.turnId===activity.turnId?state.latestTurn:undefined);
+      const agentStarted=Number.isFinite(Date.parse(turn?.startedAt??''))&&Date.parse(turn!.startedAt!)>=Date.parse(activity.createdAt??'');
+      // Preparation is transient. Keep failures visible, but remove a ready
+      // panel from both the live row and saved history when the agent starts.
+      if(phase==='done'||agentStarted&&phase==='running')continue;
       const body=renderWorktreeSetup(activity,state.worktreeSetup,active);
       result.push({id:activity.id,turnId:activity.turnId,createdAt:activity.createdAt,sequence:activity.sequence??0,body,active:active&&body.includes('data-worktree-setup-phase="running"'),kind:activity.kind});
       continue;

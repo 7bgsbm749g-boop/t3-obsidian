@@ -55,13 +55,18 @@ export default class WorktreeSetupLab extends Plugin {
   await until(()=>leaves.every(leaf=>panel(leaf)?.textContent?.includes('42%')===true));
   check('stage changes retain panel and open Details',leaves.every((leaf,i)=>panel(leaf)===held[i]&&details[i]?.open&&details[i]?.isConnected));await this.capture('setup-running.png');
   const done={...completedSetup,sequence:3,startedAt:at(0),endedAt:at(2000),stages:completedSetup.stages.map(s=>({...s,startedAt:s.startedAt?at(Date.parse(s.startedAt)-Date.parse(completedSetup.startedAt)):null,endedAt:s.endedAt?at(Date.parse(s.endedAt)-Date.parse(completedSetup.startedAt)):null}))};
-  update(done);await until(()=>leaves.every(leaf=>panel(leaf)?.dataset.worktreeSetupPhase==='done'));
+  update({...done,phase:'running',endedAt:null});await until(()=>leaves.every(leaf=>panel(leaf)?.querySelectorAll('.lucide-check').length===3));
   check('exact labels, skipped script, icons and durations',leaves.every(leaf=>['Fetch base branch','Check out files','Run setup script','Start agent','756ms','1.1s','54ms','skipped'].every(t=>panel(leaf)?.textContent?.includes(t))&&panel(leaf)?.querySelectorAll('.lucide-check').length===3));
   check('Details shows branch, base and path',details.every(d=>d?.textContent?.includes('test/worktree')&&d.textContent.includes('/synthetic/worktree')));
-  details.forEach(d=>d?.querySelector('summary')?.click());await pause(100);await this.capture('setup-complete.png');
-  check('completed panel has no active stage or shine',leaves.every(leaf=>!panel(leaf)?.querySelector('[data-worktree-setup-status="running"], [data-t3-shine="true"]')));
+  details.forEach(d=>d?.querySelector('summary')?.click());await pause(100);await this.capture('setup-ready.png');
+  callbacks.item({kind:'event',event:{sequence:++sequence,type:'thread.run-updated',payload:{id:'run',ordinal:1,userMessageId:'prompt',status:'running',requestedAt:at(0),startedAt:at(2000)}}});
+  await until(()=>leaves.every(leaf=>!panel(leaf)));
+  check('agent start removes the panel from editor and Reading even before the final setup event',leaves.every(leaf=>!panel(leaf))&&!lastBody.includes('data-t3-worktree-setup'));
+  update({...done,sequence:4});await pause(150);
+  check('final setup event does not restore the panel in live output or history',leaves.every(leaf=>!panel(leaf))&&!lastBody.includes('data-t3-worktree-setup'));await this.capture('setup-complete.png');
   check('generated display leaves note and editor save data clean',await app.vault.read(file)===saved&&leaves.every(leaf=>(leaf.view as MarkdownView).getViewData()===saved));
   callbacks.item({kind:'event',event:{sequence:++sequence,type:'thread.message-sent',payload:{messageId:'final',role:'assistant',turnId:'run',text:'Worktree ready.',streaming:false,createdAt:at(3000)}}});callbacks.item({kind:'event',event:{sequence:++sequence,type:'thread.session-set',payload:{session:{status:'ready',activeTurnId:null}}}});await pause(200);
+  check('completed reply history contains no setup panel',!lastBody.includes('data-t3-worktree-setup'));
   this.write('RESULT.json',{pass:rows.every(r=>r.pass),rows,body:lastBody,temporaryThreads:[],coverage:['VPS desktop Live Preview','VPS desktop Reading'],nativeMobileTested:false});
  }
  onunload(){this.preview?.dispose();nativeResponses(this.app).dispose();}
