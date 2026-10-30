@@ -10,14 +10,40 @@ const empty=():InlineThreadState=>({messages:[],activities:[]});
 const snapshot=(item=preparationItem)=>normalizeV2Snapshot({snapshotSequence:20,projection:{thread:{id:'fixture-thread',projectId:'project'},messages:[{id:'prompt',role:'user',runId:'run',text:'Task',streaming:false,createdAt:setupAt}],runs:[{id:'run',ordinal:1,userMessageId:'prompt',status:'running',requestedAt:setupAt}],turnItems:[item],runtimeRequests:[]}});
 const setup=(state:InlineThreadState,value=completedSetup)=>applyThreadItem(state,{kind:'event',event:{type:'thread.worktree-setup',aggregateId:'fixture-thread',payload:value}}).state;
 
-test('canonical preparation becomes one visible setup panel, never a shell command group',()=>{
- const state=setup(applyThreadItem(empty(),{kind:'snapshot',snapshot:snapshot()}).state),body=renderInlineTurn(state,'run','fixture-thread','running','collapse');
+test('canonical preparation stays visible while starting the agent, never a shell command group',()=>{
+ const state=setup(applyThreadItem(empty(),{kind:'snapshot',snapshot:snapshot()}).state,{...completedSetup,phase:'running',endedAt:null}),body=renderInlineTurn(state,'run','fixture-thread','running','collapse');
  assert.equal(responseTools(state,['run']).length,0);assert.doesNotMatch(body,/Ran 1 command|Ran Preparing|Exit code/);
  for(const text of ['Fetch base branch','Check out files','Run setup script','Start agent','756ms','1.1s','54ms','skipped','Details'])assert.ok(body.includes(text),text);
  assert.equal((body.match(/data-t3-worktree-setup=/g)??[]).length,1);
- assert.match(body,/data-worktree-setup-phase="done"/);assert.doesNotMatch(body,/setup-details[^>]* open/);
+ assert.match(body,/data-worktree-setup-phase="running"/);assert.doesNotMatch(body,/setup-details[^>]* open/);
  const ordinary={...preparationItem,id:'ordinary',input:'Preparing workspace'};
  assert.equal(responseTools(applyThreadItem(empty(),{kind:'snapshot',snapshot:snapshot(ordinary)}).state,['run']).length,1,'Labels alone cannot hide a real command');
+});
+test('successful setup disappears from the live stream and history in every presentation mode',()=>{
+ const initial=applyThreadItem(empty(),{kind:'snapshot',snapshot:snapshot()}).state;
+ for(const value of [setup(initial),initial])for(const mode of ['collapse','keep','remove'] as const)for(const phase of ['running','complete','interrupted'] as const){
+  const body=renderInlineTurn(value,'run','fixture-thread',phase,mode);
+  assert.doesNotMatch(body,/data-t3-worktree-setup|Worktree ready|Ran Preparing|Ran 1 command/);
+ }
+});
+test('the canonical agent start removes a stale running setup snapshot and survives recovery',()=>{
+ let state=setup(applyThreadItem(empty(),{kind:'snapshot',snapshot:snapshot()}).state,{...completedSetup,phase:'running',endedAt:null});
+ assert.match(renderInlineTurn(state,'run','fixture-thread','running','collapse'),/data-t3-worktree-setup/);
+ const startedAt='2026-10-30T00:00:02.000Z';
+ state=applyThreadItem(state,normalizeV2StreamItem({kind:'event',sequence:21,event:{type:'run.updated',payload:{id:'run',ordinal:1,userMessageId:'prompt',status:'running',requestedAt:setupAt,startedAt}}})).state;
+ assert.equal(state.turns?.run.startedAt,startedAt);
+ for(const phase of ['running','complete'] as const)assert.doesNotMatch(renderInlineTurn(state,'run','fixture-thread',phase,'collapse'),/data-t3-worktree-setup/);
+ const recovered=restoreInlineBindings({...empty(),sequence:state.sequence,activities:state.activities},inlineBindingCheckpoint(state));
+ assert.equal(recovered.activities.length,1);assert.equal(recovered.turns?.run.startedAt,startedAt);
+ assert.doesNotMatch(renderInlineTurn(recovered,'run','fixture-thread','running','collapse'),/data-t3-worktree-setup/);
+ const finished=setup(state,{...completedSetup,sequence:9});
+ assert.doesNotMatch(renderInlineTurn(finished,'run','fixture-thread','running','collapse'),/data-t3-worktree-setup/);
+});
+test('failed and cancelled setup remains visible for diagnosis',()=>{
+ for(const phase of ['failed','cancelled'] as const){
+  const state=setup(applyThreadItem(empty(),{kind:'snapshot',snapshot:snapshot()}).state,{...completedSetup,phase});
+  assert.match(renderInlineTurn(state,'run','fixture-thread','running','collapse'),/data-t3-worktree-setup/);
+ }
 });
 test('setup updates use a separate cursor and survive canonical polls and restart checkpoints',()=>{
  let state=setup(applyThreadItem(empty(),{kind:'snapshot',snapshot:snapshot()}).state);

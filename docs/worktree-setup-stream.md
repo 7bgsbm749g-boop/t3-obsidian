@@ -6,6 +6,11 @@ checkout percentage, elapsed times, script-output tail, and a closed Details
 disclosure for branch, base, path, and setup command. The normal tool groups no
 longer list the server's synthetic `Preparing workspace` command.
 
+The panel is transient: successful completion or the canonical agent-start
+timestamp removes it from both the live stream and retained response history.
+The start timestamp also handles a delayed final setup snapshot. Failed and
+cancelled setup remains available for diagnosis.
+
 The orchestration transcript identifies preparation by its reserved
 `workspace-preparation` item ID and exact command input. A normal command with
 the same label remains a normal tool. `watchThread` lazily subscribes to T3's
@@ -20,8 +25,9 @@ Stage clocks update in each client's DOM without rewriting note text. Details
 and stage nodes retain their identities during streaming. Stop and terminal
 rendering remove active effects and freeze clocks. A retained snapshot is used
 only for an overlapping preparation interval. If an older thread has no retained
-setup snapshot (for example after a server restart), the panel shows the known
-overall outcome and transcript details without inventing stages or durations.
+setup snapshot (for example after a server restart), completed preparation is
+omitted. Pending or failed preparation uses the known transcript details without
+inventing stages or durations.
 
 ## Verification
 

@@ -22,12 +22,16 @@ function timer(start:string|null,end:string|null){
   const from=Date.parse(start),to=end&&date(end)?Date.parse(end):undefined;
   return `<span class="send-to-t3-setup-time" data-t3-setup-start="${from}"${to!==undefined?` data-t3-setup-end="${to}"`:''}>${setupDuration((to??from)-from)}</span>`;
 }
+function matchingSetup(activity:InlineActivity,snapshot:WorktreeSetup|undefined):WorktreeSetup|undefined {
+  // A thread can prepare again. A later snapshot must not replace an older run.
+  return snapshot&&(!activity.payload?.completedAt||Date.parse(snapshot.startedAt)<=Date.parse(activity.payload.completedAt))&&(!snapshot.endedAt||Date.parse(snapshot.endedAt)>=Date.parse(activity.createdAt??''))?snapshot:undefined;
+}
+export function worktreeSetupPhase(activity:InlineActivity,snapshot?:WorktreeSetup):WorktreeSetup['phase'] {
+  return matchingSetup(activity,snapshot)?.phase??(activity.payload?.status==='inProgress'?'running':activity.payload?.status==='failed'?'failed':activity.payload?.status==='stopped'?'cancelled':'done');
+}
 /** Keep the complete stage list visible, with only metadata behind Details. */
 export function renderWorktreeSetup(activity:InlineActivity,snapshot:WorktreeSetup|undefined,active:boolean):string {
-  const p=activity.payload??{};
-  // A thread can prepare again. A later snapshot must not replace an older run.
-  const setup=snapshot&&(!p.completedAt||Date.parse(snapshot.startedAt)<=Date.parse(p.completedAt))&&(!snapshot.endedAt||Date.parse(snapshot.endedAt)>=Date.parse(activity.createdAt??''))?snapshot:undefined;
-  const phase=setup?.phase??(p.status==='inProgress'?'running':p.status==='failed'?'failed':p.status==='stopped'?'cancelled':'done');
+  const p=activity.payload??{},setup=matchingSetup(activity,snapshot),phase=worktreeSetupPhase(activity,snapshot);
   const running=phase==='running'&&active;
   const label=phase==='running'?(running?'Setting up worktree…':'Worktree setup stopped'):phase==='done'?(setup?.stages.some(s=>s.status==='failed')?'Worktree ready, setup script failed':'Worktree ready'):phase==='failed'?'Worktree setup failed':'Worktree setup cancelled';
   const labelSpan=(text:string,live:boolean)=>`<span class="send-to-t3-setup-label">${escape(text)}</span>${live?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':''}`;
