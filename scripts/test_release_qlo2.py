@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import subprocess
+import sys
 import base64
 import gzip
 import zipfile
@@ -193,7 +194,24 @@ class ReleasePipelineTests(unittest.TestCase):
                         release.complete_smoke('3.4.5','native',evidence,'Verified exact archived candidate')
                     self.assertFalse((deployed / 'smoke-native.json').exists())
                 (deployed / 'client-check.json').write_text(json.dumps(client))
-                release.complete_smoke('3.4.5','native',evidence,'Verified exact archived candidate')
+                # A busy publisher must not block proof for an older release.
+                child = f'''import importlib.util, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('release_fixture', {str(SCRIPT.resolve())!r})
+module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+root = Path({str(root)!r})
+module.CANONICAL_ROOT = root
+module.BACKUPS = root / 'evidence'
+module.RECEIPTS = root / 'releases'
+module.QLO2_PLUGIN = root / 'plugin'
+module.archive_path = lambda version: root / 'archive.zip'
+module.release_queue.QUEUE = root / 'unused-queue'
+sys.argv = ['release-qlo2.py', '--complete-smoke', '3.4.5', '--device', 'native', '--evidence', {str(evidence)!r}, '--notes', 'Verified exact archived candidate']
+module.main()
+'''
+                with release.change_checks.lock(root / 'evidence/release.lock'):
+                    completed = subprocess.run([sys.executable, '-c', child], capture_output=True, text=True, timeout=3)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
                 receipt = json.loads((deployed / 'smoke-native.json').read_text())
                 self.assertTrue(receipt['historicalClientProof'])
                 self.assertEqual(receipt['installedMainSha256'], hashes['main.js'])
