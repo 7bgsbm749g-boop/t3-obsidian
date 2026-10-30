@@ -4,6 +4,29 @@ import {safeNotePath,type ResponseRequest} from './response-model';
 import {turnForMessage,type InlineMessage,type InlineThreadState} from './inline-thread';
 import type {EventTarget} from './event-subscriptions';
 import {isRunInput} from './run-input';
+import {isT3MessageId} from './t3-message-id';
+
+export interface ThreadResponseReservation extends EventTarget {messageId:string;responses:Array<{path:string;bindingId:string}>}
+export interface ThreadResponseReservationCommand {version:1;id:string;kind:'reserve-thread-response';source:EventTarget;messageId:string;responses:ThreadResponseReservation['responses']}
+export function validateResponseReservation(value:any):ThreadResponseReservationCommand {
+  const uuid=(id:unknown)=>typeof id==='string'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id);
+  if(value?.version!==1||!uuid(value.id)||value.kind!=='reserve-thread-response'||!value.source||![value.source.threadId,value.source.projectId,value.source.environmentId].every(id=>typeof id==='string'&&id.length>0&&id.length<=200&&!/[\x00-\x1f]/.test(id))||!isT3MessageId(value.messageId))throw Error('Invalid response stream reservation.');
+  if(!Array.isArray(value.responses)||!value.responses.length||value.responses.length>32||value.responses.some((response:any)=>!response||!safeNotePath(response.path)||!uuid(response.bindingId))||new Set(value.responses.map((response:any)=>response.path)).size!==value.responses.length)throw Error('Reserve 1–32 unique response destinations and binding IDs.');
+  return value;
+}
+export function reserveThreadResponse(reservations:ThreadResponseReservation[],command:ThreadResponseReservationCommand){
+  const prior=reservations.find(reservation=>reservation.environmentId===command.source.environmentId&&reservation.projectId===command.source.projectId&&reservation.threadId===command.source.threadId&&reservation.messageId===command.messageId);
+  if(!prior){reservations.push({...command.source,messageId:command.messageId,responses:command.responses.map(response=>({...response}))});return;}
+  for(const response of command.responses){const existing=prior.responses.find(item=>item.path===response.path);if(existing&&existing.bindingId!==response.bindingId)throw Error('This reply already has a stream reserved in that note.');}
+  if(prior.responses.length+command.responses.filter(response=>!prior.responses.some(item=>item.path===response.path)).length>32)throw Error('A reply can reserve at most 32 destination notes.');
+  for(const response of command.responses)if(!prior.responses.some(item=>item.path===response.path))prior.responses.push({...response});
+}
+export function reservedResponseBindings(reservations:ThreadResponseReservation[],target:EventTarget){
+  return reservations.filter(reservation=>reservation.environmentId===target.environmentId&&reservation.projectId===target.projectId&&reservation.threadId===target.threadId).flatMap(reservation=>reservation.responses.map(response=>({id:response.bindingId,path:response.path,messageIds:[reservation.messageId],turnIds:[] as string[]})));
+}
+export function renameResponseReservations(reservations:ThreadResponseReservation[],before:string,after:string){
+  for(const reservation of reservations)for(const response of reservation.responses)if(response.path===before||response.path.startsWith(before+'/'))response.path=after+response.path.slice(before.length);
+}
 
 export const STREAM_COMMANDS=['stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination'] as const;
 export interface ThreadDisplayCommand {version:1;id:string;kind:typeof STREAM_COMMANDS[number];source?:EventTarget;destinationSection?:string;destinations?:string[];subscriptionId?:string;destination?:string;scope?:'thread';start?:'future'|'history'|'after';afterMessageId?:string}
