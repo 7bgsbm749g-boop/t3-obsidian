@@ -27,6 +27,14 @@ function fixture(binding=request(),initial?:string,records:ResponseBindingData={
 }
 const drain=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
 
+test('a refresh between final note replacement and save completion waits for the in-flight commit',async()=>{
+ const h=fixture();await h.manager.register(h.binding);await drain();
+ let release!:()=>void,entered=false;const pending=new Promise<void>(resolve=>release=resolve),save=h.notes.compareAndSet;
+ h.notes.compareAndSet=async(...args)=>{const result=await save(...args);entered=true;h.manager.tick();await pending;return result;};
+ h.emit();await drain();assert.equal(entered,true);assert.equal(h.writes(),1);assert.equal(h.manager.status(h.binding.id)?.finalSaved,false);
+ const result=h.manager.waitForSave(h.binding.id,1000);release();assert.deepEqual(await result,{saved:true});assert.equal(h.writes(),1);h.manager.dispose();
+});
+
 test('staged edits persist their Smart Send exclusions before final write and keep later user additions',async()=>{
   const h=fixture(),data=loadSmartSend(undefined),events:string[]=[];
   await h.manager.register(h.binding);
