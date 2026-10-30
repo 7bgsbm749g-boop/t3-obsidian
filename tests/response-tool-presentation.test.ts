@@ -9,6 +9,15 @@ test('large nested generated groups leave CodeMirror while exact canonical bytes
  const original=html('large','🎯 private detail '.repeat(1500),20),canonical='Before.\n\n> '+original+'\n\nFinal prose.\n',p=presentToolGroups(canonical);
  assert.ok(canonical.length>300_000);assert.ok(p.display.length<800);assert.equal(p.canonical,canonical);assert.equal(p.groups.length,1);assert.equal(p.groups[0].ref.length,64);assert.equal(canonicalToolGroup(p,p.groups[0].ref),original);assert.equal(p.groups[0].canonicalTo-p.groups[0].canonicalFrom,original.length);assert.match(p.display,/Ran 20 commands/);assert.doesNotMatch(p.display,/private detail/);assert.equal(restoreToolGroups(p.display,p),canonical);assert.deepEqual(toolDisplayOffset(p,2),{kind:'canonical',offset:2});assert.deepEqual(toolDisplayOffset(p,p.groups[0].displayFrom+10),{kind:'tool',ref:p.groups[0].ref,from:p.groups[0].canonicalFrom,to:p.groups[0].canonicalTo});assert.deepEqual(toolDisplayOffset(p,p.display.length),{kind:'canonical',offset:canonical.length});
 });
+test('compact groups have no instructional text while details wait to load',()=>{
+ const g=group(),completed=renderResponseToolGroup(g),running=renderResponseToolGroup(g,{tool:g.tools[0],active:true});
+ for(const canonical of [completed,running]){
+  const p=presentToolGroups(canonical);
+  assert.equal(p.groups.length,1);assert.doesNotMatch(p.display,/Open to view tool details\./);
+  assert.match(p.display,/<div class="send-to-t3-tool-group-content"><\/div><\/details>$/);
+  assert.equal(canonicalToolGroup(p,p.groups[0].ref),canonical);assert.equal(restoreToolGroups(p.display,p),canonical);
+ }
+});
 test('tool bytes are restored exactly while ordinary edits stay on both sides',()=>{
  const first=html('first','one'),second=html('second','two'),canonical='Before\n'+first+'\nBetween\n'+second+'\nAfter',p=presentToolGroups(canonical),edited=p.display.replace('Before','Edited before').replace('Between','New middle').replace('After','Edited after');
  assert.equal(restoreToolGroups(edited,p),'Edited before\n'+first+'\nNew middle\n'+second+'\nEdited after');assert.equal(p.groups.length,2);assert.deepEqual(toolDisplayOffset(p,p.groups[1].displayFrom-1),{kind:'canonical',offset:p.groups[1].canonicalFrom-1});
@@ -39,7 +48,7 @@ test('unmatched generated summaries are rejected while literal copies remain ord
  for(const changed of [compact.replace(' data-t3-tool-ref=',' data-custom="changed" data-t3-tool-ref='),compact.replace(`data-t3-tool-ref="${p.groups[0].ref}"`,`data-t3-tool-ref='${p.groups[0].ref}'`)])assert.throws(()=>assertCanonicalToolGroups(changed),/no canonical/);
 });
 test('damaged known summaries recover exact backing and surrounding edits, while changed identities stay unresolved',()=>{
- const canonical='Before\n'+html('first','retained first')+'\nAfter',p=presentToolGroups(canonical),damaged=p.display.replace('Before','Incoming before').replace('After','Incoming after').replace('Open to view tool details.','Changed summary');
+ const canonical='Before\n'+html('first','retained first')+'\nAfter',p=presentToolGroups(canonical),damaged=p.display.replace('Before','Incoming before').replace('After','Incoming after').replace('Ran 2 commands','Changed summary');
  assert.throws(()=>restoreToolGroups(damaged,p),/changed/);assert.equal(recoverToolGroups(damaged,p),canonical.replace('Before','Incoming before').replace('After','Incoming after'));
  for(const ref of ['', 'f'.repeat(64),'unknown']){
   const changed=damaged.replace(p.groups[0].ref,ref);assert.equal(compactToolGroups(changed).length,1);assert.throws(()=>recoverToolGroups(changed,p),/identity/);assert.throws(()=>restoreToolGroups(changed,p),/changed/);

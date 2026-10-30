@@ -89,7 +89,7 @@ export function presentToolGroups(canonical:string):ToolPresentation{
  let cursor=0,displayLength=0;
  for(const {from,found} of candidates){
   const original=canonical.slice(from,found.to),ref=contentHash(original);
-  const placeholder=found.first.raw.slice(0,-1)+` data-t3-tool-ref="${ref}">`+found.summary+'<div class="send-to-t3-tool-group-content"><p>Open to view tool details.</p></div></details>';
+  const placeholder=found.first.raw.slice(0,-1)+` data-t3-tool-ref="${ref}">`+found.summary+'<div class="send-to-t3-tool-group-content"></div></details>';
   const ordinary=canonical.slice(cursor,from);parts.push(ordinary,placeholder);displayLength+=ordinary.length;
   groups.push({ref,canonicalFrom:from,canonicalTo:found.to,displayFrom:displayLength,displayTo:displayLength+placeholder.length,placeholder});displayLength+=placeholder.length;cursor=found.to;
  }
