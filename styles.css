@@ -499,6 +499,17 @@
 
 /* The unfinished paragraph keeps a stable text node until a block boundary. */
 .send-to-t3-stream-tail { white-space: pre-wrap; overflow-wrap: anywhere; }
+.send-to-t3-tasks { margin: .5em 0; font-size: var(--font-smaller); }
+.send-to-t3-tasks > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); }
+.send-to-t3-tasks > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
+.send-to-t3-tasks[open] > summary::before { transform: rotate(90deg); }
+.send-to-t3-tasks-content { padding-inline-start: 1.7em; }
+.send-to-t3-task { display: flex; align-items: baseline; gap: .6em; margin: .35em 0; }
+.send-to-t3-task-mark { position: relative; display: inline-block; flex: 0 0 .85em; width: .85em; height: .85em; border: 1.5px solid var(--text-muted); border-radius: 2px; box-sizing: border-box; pointer-events: none; }
+.send-to-t3-task[data-t3-task-state="in_progress"] > .send-to-t3-task-mark::after { content: ''; position: absolute; width: 1.5px; height: 85%; background: var(--text-muted); left: 45%; top: 8%; transform: rotate(35deg); }
+.send-to-t3-task[data-t3-task-state="completed"] > .send-to-t3-task-mark::after { content: ''; position: absolute; width: 35%; height: 65%; border: solid var(--text-muted); border-width: 0 1.5px 1.5px 0; left: 28%; top: 0; transform: rotate(45deg); }
+.send-to-t3-task-text { min-width: 0; overflow-wrap: anywhere; }
+.send-to-t3-task-text > p { margin: 0; }
 .send-to-t3-tool, .send-to-t3-thought, .send-to-t3-tool-group, .send-to-t3-response-activity, .send-to-t3-answer { margin: .5em 0; font-size: var(--font-smaller); }
 .send-to-t3-tool > summary, .send-to-t3-thought > summary, details[data-t3-tool-group] > summary, .send-to-t3-answer > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); }
 .send-to-t3-tool > summary::before, .send-to-t3-thought > summary::before, details[data-t3-tool-group] > summary::before, .send-to-t3-answer > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
