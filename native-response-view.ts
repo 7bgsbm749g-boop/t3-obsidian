@@ -1,7 +1,7 @@
 import type {MarkdownView,TFile} from 'obsidian';
 import {regionBody,selectionAnchor} from './inline-thread';
 import {completedSelectionDraft,type InlineSteering} from './inline-steering';
-import type {Extension,Transaction as CMTransaction,TransactionSpec} from '@codemirror/state';
+import type {EditorSelection,Extension,Transaction as CMTransaction,TransactionSpec} from '@codemirror/state';
 import {changedEdits,changedInterval,mergeSavedEdits} from './coordinated-merge';
 import {advanceProjection,projectResponses,savedProjection,savedToDisplay,displayToSaved,responseRegion,type LocalResponse,type ResponseProjection,ProjectionConflict} from './native-response-projection';
 import {ResponseScroll} from './response-scroll';
@@ -300,7 +300,8 @@ export class NativeResponseView {
       // becoming user undo steps. Native rendering and folds stay in place.
       const edit={from:change.from,to:change.to,insert:change.text},changes=cm.state?.changes?.(edit);
       const heightEffect=this.scroll.preserveHeight(display,changes);
-      cm.dispatch({changes:changes??edit,effects:heightEffect?[heightEffect]:[],annotations:[Transaction.addToHistory.of(false),Transaction.userEvent.of('send-to-t3-projection')],filter:false,scrollIntoView:false});
+      const mapped=changes&&cm.state.selection.map(changes),selection=mapped&&this.outsideResponseSelection(mapped,cm.state.selection,this.projection);
+      cm.dispatch({changes:changes??edit,...(selection?{selection}:{}),effects:heightEffect?[heightEffect]:[],annotations:[Transaction.addToHistory.of(false),Transaction.userEvent.of('send-to-t3-projection')],filter:false,scrollIntoView:false});
     }else {this.scroll.clearHeight();this.originalSet.call(this.view,display,clear);}
     this.scroll.updated();
   }
@@ -547,11 +548,42 @@ export class NativeResponseView {
       return {changes:edits,selection,annotations:[Transaction.addToHistory.of(false),Transaction.userEvent.of('send-to-t3-projection')],filter:false,scrollIntoView:false};
     }catch{return;}
   }
+  private outsideResponseSelection(selection:EditorSelection,previous:EditorSelection,projection:ResponseProjection):EditorSelection|undefined {
+    if(!projection.ranges.length||(this.view as any).getState?.().source===true)return;
+    const {EditorSelection}=require('@codemirror/state') as typeof import('@codemirror/state');
+    let changed=false;
+    const ranges=selection.ranges.map((caret,index)=>{
+      const containing=(position:number)=>projection.ranges.find(range=>position>range.displayFrom&&position<range.displayTo);
+      const response=containing(caret.head),anchorResponse=containing(caret.anchor);
+      if(!response&&!anchorResponse)return caret;
+      const old=previous.ranges[index]?.head??previous.main.head;
+      changed=true;
+      // Native callout editing selects the whole body, rather than placing a
+      // cursor. Keep that path outside too. Browser text selection remains
+      // independent; note-wide selections with endpoints outside still work.
+      if(response&&response===anchorResponse){
+        const head=old<=response.displayFrom?response.displayTo:old>=response.displayTo?response.displayFrom:caret.head-response.displayFrom<response.displayTo-caret.head?response.displayFrom:response.displayTo;
+        return EditorSelection.cursor(head);
+      }
+      const forward=caret.anchor<caret.head;
+      return EditorSelection.range(anchorResponse?(forward?anchorResponse.displayFrom:anchorResponse.displayTo):caret.anchor,response?(forward?response.displayTo:response.displayFrom):caret.head);
+    });
+    return changed?EditorSelection.create(ranges,selection.mainIndex):undefined;
+  }
   filterTransaction(transaction:CMTransaction):CMTransaction|TransactionSpec[] {
     if(this.disposed)return transaction;
     const cm=(this.view.editor as any)?.cm;
     if(!cm?.state||cm.state!==transaction.startState)return transaction;
-    if(!transaction.docChanged)return transaction;
+    if(!transaction.docChanged){
+      if(!transaction.selection||!this.responses.length)return transaction;
+      try{
+        const projection=this.checkedDocuments.get(transaction.startState.doc)??this.currentProjection();
+        const selection=this.outsideResponseSelection(transaction.newSelection,transaction.startState.selection,projection);
+        // A caret inside a native callout makes Live Preview expose its HTML.
+        // Correct it in the same transaction, before Obsidian can render it.
+        return selection?[transaction,{selection,sequential:true}]:transaction;
+      }catch{return transaction;}
+    }
     if(this.unloading)return [];
     try{
       // A compact shell is presentation, not editable output. Ordinary edits
@@ -563,7 +595,8 @@ export class NativeResponseView {
       const next=this.canonicalProjection(advanceProjection(transaction,projection));
       this.checkedDocuments.set(transaction.newDoc,next);
       if(this.blocked)this.blocked={...this.blocked,local:next.saved};
-      return transaction;
+      const selection=this.outsideResponseSelection(transaction.newSelection,transaction.startState.selection.map(transaction.changes),next);
+      return selection?[transaction,{selection,sequential:true}]:transaction;
     }catch{return [];}
   }
   /** Remove local output before unwrapping the save boundary. A conflict must
