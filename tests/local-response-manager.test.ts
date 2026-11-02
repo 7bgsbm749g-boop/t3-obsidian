@@ -17,15 +17,96 @@ import type {DirectInlineUpdate} from '../direct-inline-preview';
 import {loadSmartSend,rememberNoteEdits,rememberResponse,prepareSmartSend} from '../smart-send';
 
 function request():ResponseRequest{return {version:4,localOnly:true,nativeProjection:true,responseContainer:true,independent:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},notePath:'Test.md',threadId:randomUUID(),projectId:randomUUID(),messageId:randomUUID(),threadEnvironmentId:'env',initialHash:contentHash(''),createdAt:'2026-10-14T00:00:00Z'};}
-function fixture(binding=request(),initial?:string,records:ResponseBindingData={}){
+function fixture(binding=request(),initial?:string,records:ResponseBindingData={},stops?:unknown){
   let document=initial??`Before\n\n${responseAnchor(binding.id)}\n\nAfter`,open=true,ready=true,now=0,writes=0;
   const callbacks=new Map<string,(update:DirectInlineUpdate)=>void>(),registered:any[]=[],errors:any[]=[],finished:string[]=[];
   const io:any={localBindings:()=>responseBindingRequests(records),saveLocalBinding:async(request:ResponseRequest)=>{records=updateResponseBindingData(records,request,'test');},openedNotes:()=>open?[{path:binding.notePath,document}]:[],readNote:async()=>document,updateNote:async(_path:string,change:(text:string)=>string)=>document=change(document),saveLocalNote:async()=>{},syncReady:()=>ready,isOpen:()=>open,access:async()=>{throw Error('No host or T3 access needed by this replay.');},receiveCoordinated:(record:any)=>registered.push(record),receiveDirect:()=>{},localCompleted:(id:string)=>finished.push(id),completionFailed:(error:any)=>errors.push(error)};
+  io.loadStops=()=>stops;
   const notes={read:async()=>document,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean)=>{if(document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
   const manager=new LocalResponseManager(randomUUID(),'vault',io,notes,()=>now,(record,_access,receive)=>{callbacks.set(record.request.id,receive);return {tick:()=>{},update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{}} as any;});
   return {binding,manager,io,notes,records:()=>records,receiveRecords:(value:ResponseBindingData)=>records=value,callbacks,registered,errors,finished,read:()=>document,write:(text:string)=>document=text,open:(value:boolean)=>open=value,ready:(value:boolean)=>ready=value,advance:()=>now+=1100,writes:()=>writes,emit:(body='Final answer',verified=true,messageId=binding.messageId)=>callbacks.get(binding.id)!({request:binding,messageId,sequence:5,body,turnId:'exact-turn',phase:'complete',completionVerified:verified})};
 }
 const drain=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
+const recover=async(h:ReturnType<typeof fixture>)=>{h.manager.resume();await (h.manager as any).recoveryWork;await drain();};
+
+test('reload restores Working and its watch before the saved note is opened',async()=>{
+  const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'A'));h.open(false);
+  let ticks=0;await recover(h);
+  const runtime=(h.manager as any).jobs.get(binding.id);runtime.preview.tick=()=>ticks++;
+  assert.equal(h.registered.length,1);assert.equal(h.manager.responses()[0].active,true);assert.equal(h.writes(),0);
+  h.manager.tick();assert.equal(ticks,1,'The recovered closed reply retains its background watch');
+  h.emit('Final answer');await drain();assert.equal(h.manager.responses()[0].active,false);assert.equal(h.manager.responses()[0].complete,true);assert.equal(h.writes(),0,'Closed ordinary notes retain the final-save boundary');
+  h.open(true);h.manager.resume();await drain();assert.equal(h.writes(),1);h.manager.dispose();
+});
+
+test('closed recovery reads a shared note once and skips historical, missing and stopped anchors',async()=>{
+  const active=request(),second={...request(),notePath:active.notePath},historical={...request(),notePath:active.notePath},missing={...request(),notePath:'Missing.md'},stopped={...request(),notePath:'Stopped.md'};
+  let records:ResponseBindingData={};for(const binding of [active,second,historical,missing,stopped])records=updateResponseBindingData(records,binding,'A');
+  const document=responseAnchor(active.id)+'\n'+responseAnchor(second.id),h=fixture(active,document,records);h.open(false);h.io.loadStops=()=>[stopped.id];
+  // Stops recorded after construction are also honored before an in-flight read attaches.
+  h.manager.stopLocally(stopped.id);
+  const reads:string[]=[];h.io.readNote=async(path:string)=>{reads.push(path);return path===active.notePath?document:undefined;};
+  await recover(h);assert.deepEqual(reads,[active.notePath,missing.notePath]);
+  assert.deepEqual(h.manager.responses().map(response=>response.id).sort(),[active.id,second.id].sort());
+  for(let n=0;n<30;n++)h.manager.tick();await recover(h);assert.equal(reads.length,2,'Frequent timer ticks must not rescan old records');
+  assert.equal(h.writes(),0);h.manager.dispose();
+});
+
+test('persisted stops prevent startup recovery and malformed stop storage uses an empty list',async()=>{
+  for(const stopped of [true,false]){
+    const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'A'),stopped?[binding.id]:{});h.open(false);
+    await recover(h);assert.equal(h.registered.length,stopped?0:1);h.manager.dispose();
+  }
+});
+
+test('closed recovery rejects duplicate, fenced and nonempty anchors without rewriting notes',async()=>{
+  const binding=request(),anchor=responseAnchor(binding.id);
+  for(const document of [anchor+'\n'+anchor,'```\n'+anchor+'\n```',anchor.replace('\n\n','\nEdited content\n')]){
+    const h=fixture(binding,document,updateResponseBindingData({},binding,'A'));h.open(false);await recover(h);
+    assert.equal(h.registered.length,0);assert.equal(h.writes(),0);assert.equal(h.read(),document);h.manager.dispose();
+  }
+});
+
+test('closed note changes invalidate one cached path and incoming completion retires its watch',async()=>{
+  const binding=request(),h=fixture(binding,'Before',updateResponseBindingData({},binding,'A'));h.open(false);
+  let reads=0;h.io.readNote=async()=>{reads++;return h.read();};await recover(h);assert.equal(h.registered.length,0);
+  h.write(responseAnchor(binding.id));h.manager.changed(binding.notePath);await recover(h);assert.equal(h.registered.length,1);assert.equal(reads,2);
+  h.write('Final answer received through Sync');h.manager.changed(binding.notePath);await recover(h);
+  assert.equal(reads,3);assert.equal(h.manager.responses().length,0);assert.deepEqual(h.finished,[binding.id]);h.manager.dispose();
+});
+
+test('closed bindings arriving after startup recover without reopening the note',async()=>{
+  const binding=request(),h=fixture(binding);h.open(false);await recover(h);assert.equal(h.registered.length,0);
+  h.receiveRecords(updateResponseBindingData({},binding,'A'));await recover(h);assert.equal(h.registered.length,1);h.manager.dispose();
+});
+
+test('closed recovery discards a read invalidated by a note change or plugin disposal',async()=>{
+  for(const action of ['changed','deleted','dispose'] as const){
+    const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'A'));h.open(false);
+    const before=h.read();let release!:(value:string)=>void,reads=0;
+    h.io.readNote=async()=>{if(reads++===0)return new Promise<string>(resolve=>release=resolve);return 'Anchor removed';};
+    h.manager.resume();const pending=(h.manager as any).recoveryWork;
+    if(action==='changed')h.manager.changed(binding.notePath);else if(action==='deleted')h.manager.deleted(binding.notePath);else h.manager.dispose();
+    release(before);await pending;await drain();assert.equal(h.registered.length,0);assert.equal(h.manager.responses().length,0);h.manager.dispose();
+  }
+});
+
+test('closed recovery replaces an in-flight stale settings read and limits file reads to one at a time',async()=>{
+  const binding=request(),other={...request(),notePath:'Other.md'},h=fixture(binding,undefined,updateResponseBindingData({},binding,'A'));h.open(false);
+  let release!:(value:string)=>void,reading=0,peak=0,reads=0;
+  h.io.readNote=async(path:string)=>{reading++;peak=Math.max(peak,reading);try{if(reads++===0)return await new Promise<string>(resolve=>release=resolve);return path===binding.notePath?h.read():responseAnchor(other.id);}finally{reading--;}};
+  h.manager.resume();const next={...binding,localMessageId:randomUUID()};
+  h.receiveRecords(updateResponseBindingData(updateResponseBindingData({},next,'B'),other,'B'));h.manager.resume();release(h.read());await recover(h);
+  assert.equal(peak,1);assert.equal(h.manager.request(binding.id)?.localMessageId,next.localMessageId);assert.equal(h.registered.length,2);h.manager.dispose();
+});
+
+test('closed read failures back off and saved note checks never run again on unchanged timer ticks',async()=>{
+  const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'A'));h.open(false);let reads=0;
+  h.io.readNote=async()=>{reads++;throw Error('Transient vault read failure');};await recover(h);
+  for(let n=0;n<20;n++)h.manager.tick();await recover(h);assert.equal(reads,1);
+  for(let n=0;n<5;n++)h.advance();h.io.readNote=async()=>{reads++;return h.read();};await recover(h);
+  assert.equal(reads,2);assert.equal(h.registered.length,1);h.manager.dispose();
+});
 
 test('a refresh between final note replacement and save completion waits for the in-flight commit',async()=>{
  const h=fixture();await h.manager.register(h.binding);await drain();

@@ -594,7 +594,8 @@ export default class SendToT3 extends Plugin {
       const refreshNative=()=>{
         if(this.stopped)return;
         const manager=nativeResponses(this.app);manager.refresh();
-        // Reconnect only bindings present in the open local notes.
+        // Loaded editors reconnect immediately; recorded closed destinations
+        // recover through a cached, serial background check.
         this.deviceInline?.resume();
         nextNativeRefresh=performance.now()+1000;
       };
