@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EditorState} from '@codemirror/state';
 import {ResponseScroll,type ResponseScrollState} from '../response-scroll';
-import {projectResponses,responseAnchor} from '../native-response-projection';
+import {projectResponses,responseAnchor,type LocalResponse} from '../native-response-projection';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 const key='thread:active',otherKey='other:active';
@@ -15,7 +15,7 @@ function fixture(state?:ResponseScrollState){
   const remove=(type:string,fn:any)=>handlers.get(type)?.delete(fn);
   const window={MutationObserver:class{constructor(callback:(records:any[])=>void){mutations=callback;}observe(_target:any,options:MutationObserverInit){observed=options;}disconnect(){mutations=undefined;}},Event:class{constructor(public type:string){}},getSelection:()=>({isCollapsed:!selected,anchorNode:{kind:'response'}}),addEventListener:add,removeEventListener:remove,matchMedia:()=>({matches:reduced}),requestAnimationFrame:(fn:(time:number)=>void)=>{frames.set(++sequence,fn);return sequence;},cancelAnimationFrame:(id:number)=>frames.delete(id),visualViewport:{offsetTop:0,height:900,addEventListener:add,removeEventListener:remove}};
   const saved=`Before\n\n${responseAnchor(id)}\n\nBetween\n\n${responseAnchor(other)}\n\nAfter`;
-  let responses=[{id,body:body(key)},{id:other,body:body(otherKey)}],projection=projectResponses(saved,responses);
+  let responses:LocalResponse[]=[{id,body:body(key)},{id:other,body:body(otherKey)}],projection=projectResponses(saved,responses);
   const scroller={scrollTop:200,scrollLeft:0,clientTop:0,clientHeight:600,getBoundingClientRect:()=>({top:100,bottom:700}),querySelectorAll:(selector:string)=>rendered?folds.filter(fold=>!selector.includes('is-collapsed')||fold.collapsed):[]};
   const fold=(key:string)=>({collapsed:false,matches:(selector:string)=>selector==='.callout[data-callout="t3-progress"]',getBoundingClientRect:()=>({bottom:tail-(scroller.scrollTop-200),left:100,right:700}),querySelector:()=>({dataset:{t3Fold:key}})});
   const folds=[fold(key),fold(otherKey)];
@@ -29,8 +29,13 @@ function fixture(state?:ResponseScrollState){
   const event=(type:string,kind:Parameters<typeof target>[0]='response',extra:any={})=>{for(const fn of handlers.get(type)??[])fn({isTrusted:true,button:0,target:target(kind),...extra});};
   const update=(binding=id,text='New response tail')=>{responses=responses.map(response=>response.id===binding?{id:binding,body:body(binding===id?key:otherKey,text)}:response);projection=projectResponses(saved,responses);cm.state=EditorState.create({doc:projection.display});scroll.updated();};
   const flush=(at=time+=16)=>{const pending=[...frames.values()];frames.clear();for(const fn of pending)fn(at);};
-  return {scroll,view,event,update,flush,effects,frames,handlers,scroller,notifications,observed:()=>observed,collapse:(index=0,value=true)=>{folds[index].collapsed=value;mutations?.([{type:'attributes',attributeName:'class',target:folds[index]}]);},mode:(value:string)=>{mode=value;},selected:(value:boolean)=>{selected=value;},rendered:(value:boolean)=>{rendered=value;},reduced:(value:boolean)=>{reduced=value;},grow:(pixels:number)=>{tail+=pixels;scroll.updated();},remove:()=>{projection=projectResponses(saved,[]);scroll.updated();}};
+  return {scroll,view,event,update,flush,effects,frames,handlers,scroller,notifications,observed:()=>observed,terminal:()=>{responses=responses.map(response=>response.id===id?{...response,followable:false}:response);projection=projectResponses(saved,responses);scroll.updated();},collapse:(index=0,value=true)=>{folds[index].collapsed=value;mutations?.([{type:'attributes',attributeName:'class',target:folds[index]}]);},mode:(value:string)=>{mode=value;},selected:(value:boolean)=>{selected=value;},rendered:(value:boolean)=>{rendered=value;},reduced:(value:boolean)=>{reduced=value;},grow:(pixels:number)=>{tail+=pixels;scroll.updated();},remove:()=>{projection=projectResponses(saved,[]);scroll.updated();}};
 }
+test('interruption cancels a pending follow frame even when its active key and preview text are unchanged',()=>{
+ const state:ResponseScrollState={positions:new Map()},h=fixture(state);h.reduced(false);h.scroll.toggle(key);assert.ok(h.frames.size);
+ h.terminal();assert.equal(h.scroll.control(key),undefined);assert.equal(state.following,undefined);assert.equal(h.frames.size,0);
+ h.scroll.toggle(key);h.grow(100);h.flush();assert.equal(h.scroller.scrollTop,200);assert.ok(h.scroll.control(otherKey));h.scroll.dispose();
+});
 test('stream updates and text or synthetic clicks never enable follow',()=>{
   const h=fixture();h.update();h.event('click');h.event('click','follow',{isTrusted:false});h.flush();assert.equal(h.scroller.scrollTop,200);assert.deepEqual(h.scroll.control(key),{active:false,position:'top',moving:false});h.scroll.dispose();
 });

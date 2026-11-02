@@ -10,6 +10,7 @@ import {toolDisplayOffset} from './response-tool-presentation';
 import {responseFrame} from './response-container';
 import {localResponseBindings} from './local-response-binding';
 import {movedResponse,responseMoveEffect,responseMoveHistory,guardResponseMoveHistory,type ResponseMove} from './response-move';
+import {registerNativeDocumentState} from './native-document-state';
 
 export interface NativeViewConflict {base:string;local:string;incoming:string;reason:string;awaitingCompletion?:boolean;attemptedIncoming?:string;unsafeIncoming?:boolean}
 // A native pane replaces its Markdown view/adapters when navigating. Retain
@@ -56,6 +57,7 @@ export class NativeResponseView {
   private scroll:ResponseScroll;
   private moveEditor?:object;
   private releaseMoveHistory?:()=>void;
+  private releaseDocumentState?:()=>void;
   constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[],initial?:{set:MarkdownView['setViewData'];clear:boolean}){
     this.file=view.file;this.base=saved;this.diskBase=saved;this.projection=this.buildProjection(saved,[]);
     const pane=view.leaf??view;let notes=scrollStates.get(pane);
@@ -109,6 +111,11 @@ export class NativeResponseView {
       if(!this.blocked&&view.file===file&&disk===intended){this.diskBase=disk;if(this.base===previousBase)this.base=intended;if(this.ownSave?.text===intended)this.ownSave=undefined;}
     };
     view.getViewData=this.getWrapper;view.setViewData=this.setWrapper;view.save=this.saveWrapper;view.requestSave=this.requestSaveWrapper;
+    this.releaseDocumentState=registerNativeDocumentState(view,{
+      read:()=>this.getWrapper(),
+      baseline:()=>this.blocked?undefined:this.diskBase,
+      adopt:text=>{this.reconcileDisk(text);return !this.blocked&&this.diskBase===text;}
+    });
     // Install the save boundary before native parsing. Large retained tool
     // output never needs to enter the Live Preview editor merely to be hidden
     // by the next layout event. The canonical file remains the save source.
@@ -328,7 +335,7 @@ export class NativeResponseView {
     if(cm?.dispatch&&cm!==this.moveEditor){this.releaseMoveHistory?.();this.moveEditor=cm;this.releaseMoveHistory=guardResponseMoveHistory(cm,(transaction,move)=>this.moveTransaction(transaction,move));}
     const before=this.saved();let saved=before;
     for(const input of inputs)if(responses.some(response=>response.id===input.id))saved=completedSelectionDraft(saved,input.id,input.steering);
-    if(saved===before&&this.compactTools===((this.view as any).getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable&&response.stoppable===this.responses[index].stoppable)&&this.displayed()===this.projection.display)return;
+    if(saved===before&&this.compactTools===((this.view as any).getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable&&response.stoppable===this.responses[index].stoppable&&response.followable===this.responses[index].followable)&&this.displayed()===this.projection.display)return;
     const projection=this.buildProjection(saved,responses);
     this.responses=responses.map(response=>({...response}));this.projection=projection;
     for(const response of responses)this.materialized.delete(response.id);
@@ -337,7 +344,7 @@ export class NativeResponseView {
   }
   private render(display:string,clear:boolean){
     const current=this.displayed(),change=changedInterval(current,display);
-    if(!change)return;
+    if(!change){this.scroll.updated();return;}
     const cm=(this.view.editor as any)?.cm;
     if(!clear&&this.view.getMode()!=='preview'&&cm){
       const {Transaction}=require('@codemirror/state') as typeof import('@codemirror/state');
@@ -502,6 +509,7 @@ export class NativeResponseView {
   }
   isDisposed(){return this.disposed;}
   private unwrap(){
+    this.releaseDocumentState?.();this.releaseDocumentState=undefined;
     this.scroll.dispose();
     this.releaseMoveHistory?.();this.releaseMoveHistory=undefined;this.moveEditor=undefined;
     if(this.view.getViewData===this.getWrapper)this.view.getViewData=this.originalGet;
