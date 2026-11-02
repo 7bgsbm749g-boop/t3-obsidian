@@ -86,6 +86,53 @@ class ReleaseQueueTests(unittest.TestCase):
         queue.write(self.root / 'package.json', package)
         queue.write(self.root / 'package-lock.json', lock)
 
+    def tooling_source(self, name='repair'):
+        source = self.source(name)
+        (source / 'scripts').mkdir(exist_ok=True)
+        (source / 'scripts/plugin_id_migration.py').write_text('# reviewed discovery repair\n')
+        subprocess.run(['git', 'add', '.'], cwd=source, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'repair release loader'], cwd=source, check=True)
+        return source
+
+    def test_bootstrap_integrates_only_the_exact_fifo_tooling_repair_then_restarts(self):
+        source = self.tooling_source()
+        submitted = self.submit(source)
+        self.release.ROOT = source
+        result = queue.bootstrap(self.release, self.root, submitted['jobId'], queue=self.store)
+        self.assertEqual(result, {'status': 'worker-restart', 'jobId': submitted['jobId'], 'publicationStarted': False})
+        self.assertEqual(self.release.ROOT, source)
+        self.assertEqual(self.published, [])
+        state = queue.read(self.store / 'jobs' / submitted['jobId'] / 'state.json')
+        self.assertEqual(state['status'], 'queued')
+        self.assertNotIn('version', state)
+        self.assertEqual((self.root / 'scripts/plugin_id_migration.py').read_bytes(), (source / 'scripts/plugin_id_migration.py').read_bytes())
+        self.release.ROOT = self.root
+        queue.drain(self.release, queue=self.store)
+        self.assertEqual(self.published, ['1.0.1'])
+
+    def test_bootstrap_cannot_overtake_an_earlier_job_or_use_dirty_source(self):
+        earlier = self.source('earlier')
+        self.submit(earlier)
+        source = self.tooling_source()
+        submitted = self.submit(source)
+        self.release.ROOT = source
+        with self.assertRaisesRegex(SystemExit, 'overtake'):
+            queue.bootstrap(self.release, self.root, submitted['jobId'], queue=self.store)
+        (source / 'unreviewed.ts').write_text('uncommitted')
+        with self.assertRaisesRegex(SystemExit, 'clean'):
+            queue.bootstrap(self.release, self.root, submitted['jobId'], queue=self.store)
+        self.assertEqual(self.published, [])
+        self.assertFalse((self.root / 'scripts/plugin_id_migration.py').exists())
+
+    def test_integration_only_worker_cannot_publish_even_if_the_engine_hash_matches(self):
+        source = self.source('product')
+        submitted = self.submit(source)
+        directory = self.store / 'jobs' / submitted['jobId']
+        state, request = queue.read(directory / 'state.json'), queue.read(directory / 'request.json')
+        self.assertTrue(queue.run_job(self.release, directory, request, state, queue.engine_hash(self.root), integration_only=True))
+        self.assertEqual(self.published, [])
+        self.assertNotIn('version', queue.read(directory / 'state.json'))
+
     def test_dependency_install_is_cached_but_lock_changes_require_a_new_install(self):
         self.dependency_fixture()
         with patch.object(queue.subprocess, 'run', side_effect=lambda *args, **kwargs: (self.root / 'node_modules').mkdir(exist_ok=True)) as install:
