@@ -11,6 +11,23 @@ LEGACY_ID = 'send-to-t3-code'
 def installed_plugin(plugins: Path) -> Path:
     current, legacy = plugins / PLUGIN_ID, plugins / LEGACY_ID
     if current.exists() and legacy.exists():
+        # Sync can recreate the former directory with settings alone after the
+        # runtime has moved. This is still one installation. Leave both private
+        # settings files exactly where they are; never merge or remove them.
+        if (current.is_dir() and not current.is_symlink() and
+                legacy.is_dir() and not legacy.is_symlink() and
+                {path.name for path in legacy.iterdir()} == {'data.json'} and
+                (legacy / 'data.json').is_file() and not (legacy / 'data.json').is_symlink() and
+                all((current / name).is_file() and not (current / name).is_symlink()
+                    for name in ('main.js', 'manifest.json', 'styles.css'))):
+            try:
+                manifest = json.loads((current / 'manifest.json').read_text(encoding='utf-8-sig'))
+                enabled_path = plugins.parent / 'community-plugins.json'
+                enabled = json.loads(enabled_path.read_text(encoding='utf-8-sig')) if enabled_path.exists() else []
+                if manifest.get('id') == PLUGIN_ID and isinstance(enabled, list) and LEGACY_ID not in enabled:
+                    return current
+            except (OSError, ValueError, AttributeError):
+                pass
         raise SystemExit(f'Both plugin installations exist; inspect before publishing: {plugins}')
     return current if current.exists() or not legacy.exists() else legacy
 

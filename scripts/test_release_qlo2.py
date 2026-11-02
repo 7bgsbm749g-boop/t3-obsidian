@@ -21,6 +21,25 @@ SPEC.loader.exec_module(release)
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    def test_bootstrap_owns_its_lock_and_restarts_the_worker_without_an_outer_publication_lock(self) -> None:
+        job_id = '202611022300-0123456789abcdef'
+        with patch.object(sys, 'argv', [str(SCRIPT), '--bootstrap-queue', job_id]), \
+                patch.dict(sys.modules, {release.__name__: release}), \
+                patch.object(release.change_checks, 'lock') as outer_lock, \
+                patch.object(release.release_queue, 'bootstrap', return_value={'status': 'worker-restart'}) as bootstrap, \
+                patch.object(release.release_queue, 'kick') as kick:
+            release.main()
+            bootstrap.assert_called_once_with(release, release.CANONICAL_ROOT, job_id)
+            outer_lock.assert_not_called()
+            kick.assert_called_once_with()
+
+    def test_release_commands_follow_the_current_canonical_root_during_queue_bootstrap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(release.subprocess, 'run') as command:
+            root = Path(directory)
+            with patch.object(release, 'ROOT', root):
+                release.run(['git', 'status'])
+            self.assertEqual(command.call_args.kwargs['cwd'], root)
+
     def test_id_migration_holds_the_queue_slot_before_installing_over_an_enabled_client(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
