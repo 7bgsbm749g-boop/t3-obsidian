@@ -679,7 +679,7 @@ export default class SendToT3 extends Plugin {
       for(const id of cursorId?[cursorId]:ids){
         if(this.deviceInline?.responseStatus(id)?.runTerminal)continue;
         const failed=active.find(job=>job.id===id)?.phase==='error'||failedInlineIds(editor.getValue()).includes(id);
-        const label=/^(?:> \[!t3-progress\][+-] )?\*\*(.+) · (?:Working|Reconnecting|Error)\*\*/m.exec(regionBody(editor.getValue(),id)?.body??'')?.[1];
+        const label=/^(?:> \[!t3-progress\][+-] )?\*\*(.+) · (?:Sending…?|Working|Reconnecting|Error)\*\*/m.exec(regionBody(editor.getValue(),id)?.body??'')?.[1];
         const suffix=ids.length>1?` (${label&&label!=='T3'?label+' · ':''}${id.slice(0,8)})`:'';
         if(failed){
           menu.addItem(item=>item.setTitle('Continue T3 response'+suffix).setIcon('rotate-cw').setDisabled(this.busy).onClick(()=>this.continueInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000))));
@@ -2745,7 +2745,7 @@ export default class SendToT3 extends Plugin {
       request.inlineBindings.push(binding);
       for(const leaf of this.app.workspace.getLeavesOfType('markdown')){
         const view=leaf.view as MarkdownView;if(view.file?.path!==path)continue;
-        const initial=initialRegion(binding.id,binding.initialInput,binding.threadTitle,binding.intermediateMode,{startedAt:binding.createdAt});
+        const initial=initialRegion(binding.id,binding.initialInput,view.file!.basename,binding.intermediateMode,{startedAt:binding.createdAt},'sending');
         nativeResponses(this.app).preview(view,binding.id,regionBody(initial.text,binding.id)!.body);
       }
     }

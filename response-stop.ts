@@ -35,8 +35,8 @@ export function stoppedResponseBody(body:string):string {
       const summary=/data-t3-tool-summary="([^"]+)"/.exec(line)?.[1]??`Used ${count} ${count===1?'tool':'tools'}`;
       line=line.replace('class="send-to-t3-response-activity"','class="send-to-t3-tool-group"').replace(' data-t3-live-tool="true"','').replace(/<summary>[\s\S]*?<\/summary>/,`<summary><span data-t3-tool-icon="hammer" aria-hidden="true"></span><span>${summary} · stopped</span></summary>`);
     }
-    if(!/^> \[!t3-progress\][+-] \*\*[^\n]+ · (?:Working|Reconnecting|Moving to worktree|Waiting for subagents|Waiting for answer|Error)\*\*/.test(line))return line;
-    return line.replace(/ · (?:Working|Reconnecting|Moving to worktree|Waiting for subagents|Waiting for answer|Error)\*\*/, ' · Interrupted**').replace(/ <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>/,'').replace(/<span class="send-to-t3-run-timer" data-t3-start="(\d+)"(?: data-t3-end="\d+")? aria-label="Elapsed run time">[^<]*<\/span>/,(_match,start)=>{
+    if(!/^> \[!t3-progress\][+-] \*\*[^\n]+ · (?:Sending…?|Working|Reconnecting|Moving to worktree|Waiting for subagents|Waiting for answer|Error)\*\*/.test(line))return line;
+    return line.replace(/ · (?:Sending…?|Working|Reconnecting|Moving to worktree|Waiting for subagents|Waiting for answer|Error)\*\*/, ' · Interrupted**').replace(/ <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>/,'').replace(/<span class="send-to-t3-run-timer" data-t3-start="(\d+)"(?: data-t3-end="\d+")? aria-label="Elapsed run time">[^<]*<\/span>/,(_match,start)=>{
       const end=Date.now(),timing={startedAt:new Date(Number(start)).toISOString(),finishedAt:new Date(end).toISOString()};
       return `<span class="send-to-t3-run-timer" data-t3-start="${start}" data-t3-end="${end}" aria-label="Elapsed run time">${elapsedRun(timing)}</span>`;
     });
@@ -45,7 +45,7 @@ export function stoppedResponseBody(body:string):string {
   let offset=0;
   const lines=body.split('\n').filter(line=>{
     const position=offset;offset+=line.length+1;
-    return code.some(([from,to])=>position>=from&&position<to)||!(/^(?:> )?<span class="send-to-t3-response-activity" role="status" aria-live="polite">.*<\/span>$/.test(line)||/^\*\*[^\n]+ · (?:Sending…|Working|Reconnecting|Moving to worktree|Waiting for subagents|Stopped|Interrupted|Error)\*\*(?: <span class="send-to-t3-run-timer"[^>]*>[^<]*<\/span>)?(?: <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>)?\s*$/.test(line));
+    return code.some(([from,to])=>position>=from&&position<to)||!(/^(?:> )?<span class="send-to-t3-response-activity" role="status" aria-live="polite">.*<\/span>$/.test(line)||/^\*\*[^\n]+ · (?:Sending…?|Working|Reconnecting|Moving to worktree|Waiting for subagents|Stopped|Interrupted|Error)\*\*(?: <span class="send-to-t3-run-timer"[^>]*>[^<]*<\/span>)?(?: <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>)?\s*$/.test(line));
   });
   // Rendered replies normally already close fences; also repair old/broken output.
   let fence:{mark:string;prefix:string}|undefined;

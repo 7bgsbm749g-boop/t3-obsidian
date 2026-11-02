@@ -87,6 +87,34 @@ class PluginIdMigrationTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 installed_plugin(plugin.parent)
 
+    def test_sync_recreated_legacy_settings_are_not_a_second_runtime_and_remain_untouched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config, legacy = self.fixture(root)
+            (legacy / 'main.js').unlink()
+            (config / 'community-plugins.json').write_text(json.dumps([PLUGIN_ID]))
+            current = legacy.with_name(PLUGIN_ID)
+            current.mkdir()
+            for name, contents in {'main.js': b'current bundle', 'manifest.json': json.dumps({'id': PLUGIN_ID}).encode(),
+                                   'styles.css': b'current styles', 'data.json': b'{"different":"current settings"}'}.items():
+                (current / name).write_bytes(contents)
+            before = {path: path.read_bytes() for path in config.rglob('*') if path.is_file()}
+            self.assertEqual(installed_plugin(legacy.parent), current)
+            self.assertEqual({path: path.read_bytes() for path in config.rglob('*') if path.is_file()}, before)
+            for name in ('main.js', 'manifest.json', 'unexpected.txt'):
+                extra = legacy / name
+                extra.write_text('old or unknown runtime content')
+                with self.assertRaisesRegex(SystemExit, 'Both plugin installations'):
+                    installed_plugin(legacy.parent)
+                extra.unlink()
+            (config / 'community-plugins.json').write_text(json.dumps([PLUGIN_ID, LEGACY_ID]))
+            with self.assertRaises(SystemExit):
+                installed_plugin(legacy.parent)
+            (config / 'community-plugins.json').write_text(json.dumps([PLUGIN_ID]))
+            (current / 'main.js').unlink()
+            with self.assertRaises(SystemExit):
+                installed_plugin(legacy.parent)
+
     def test_failed_directory_move_restores_original_configuration_and_data(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
