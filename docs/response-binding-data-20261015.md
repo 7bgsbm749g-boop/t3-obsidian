@@ -18,8 +18,16 @@ Streaming events do not write shared settings.
 
 A loaded note reconnects when its exact empty anchor and settings record are
 both available. Either may arrive first. The manager caches unchanged loaded
-notes and indexes records by response ID. It does not scan closed notes or
-retained legacy records each tick. A stale anchor can recover using its retained
+notes and indexes records by response ID. On startup it also checks recorded
+closed destinations one file at a time, without opening an editor. Only a
+matching empty response anchor restores a watch and its Working indicator;
+completed notes, missing anchors and stopped responses do not start watches.
+Closed note text is discarded after each check. Unchanged timer ticks reuse the
+check; a file event or changed binding invalidates only the affected path, and
+read failures retry after a five-second delay. Completion releases its watch
+while ordinary final saves still wait for an open note and the existing Sync
+and compare-and-set checks. This does not delete retained routing records.
+A stale anchor can recover using its retained
 routing record. Completion does not immediately erase that routing information.
 
 For an old `t3-response-binding` comment, the plugin stores the settings record

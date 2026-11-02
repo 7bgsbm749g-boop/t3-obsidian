@@ -73,7 +73,7 @@ export class DeviceResponseManager {
   explorerResponses(){return (this.local?.responses()??[]).filter(response=>!this.stops.has(response.id));}
   stoppableResponses(path:string){return this.explorerResponses().filter(response=>response.notePath===path&&response.active).map(response=>({id:response.id,hostTarget:this.local!.record(response.id)!.request.host}));}
   tick(){if(!this.stopped)this.local?.tick();}
-  changed(path:string){this.io.noteChanged?.(path);this.local?.resume();}
+  changed(path:string){this.io.noteChanged?.(path);this.local?.changed(path);}
   renamed(before:string,after:string){this.io.noteRenamed?.(before,after);this.local?.renamed(before,after);}
   deleted(path:string){this.io.noteDeleted?.(path);this.local?.deleted(path);}
   dispose(){this.stopped=true;this.local?.dispose();}

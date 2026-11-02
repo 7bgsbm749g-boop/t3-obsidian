@@ -4,10 +4,82 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts.plugin_id_migration import PLUGIN_ID, LEGACY_ID, installed_plugin, migrate_installation
+from scripts.plugin_id_migration import PLUGIN_ID, LEGACY_ID, installed_plugin, migrate_installation, archive_legacy_settings
 
 
 class PluginIdMigrationTests(unittest.TestCase):
+    def current_fixture(self, root):
+        plugins = root / 'vault/.obsidian/plugins'
+        current, legacy = plugins / PLUGIN_ID, plugins / LEGACY_ID
+        current.mkdir(parents=True); legacy.mkdir()
+        (current / 'manifest.json').write_text(json.dumps({'id': PLUGIN_ID}))
+        (current / 'main.js').write_bytes(b'current runtime')
+        (current / 'styles.css').write_bytes(b'current styles')
+        (current / 'data.json').write_bytes(b'{"current":"preserved"}\n')
+        (legacy / 'data.json').write_bytes(b'\xef\xbb\xbf{ "old": "preserved separately" }\n')
+        return plugins, current, legacy
+
+    def test_discovery_uses_the_current_plugin_without_mutating_a_legacy_settings_remnant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plugins, current, legacy = self.current_fixture(Path(directory))
+            before = {path: path.read_bytes() for path in plugins.rglob('*') if path.is_file()}
+            self.assertEqual(installed_plugin(plugins), current)
+            self.assertEqual({path: path.read_bytes() for path in plugins.rglob('*') if path.is_file()}, before)
+
+    def test_cleanup_retains_both_settings_and_removes_only_the_legacy_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); plugins, current, legacy = self.current_fixture(root)
+            current_before = {path: path.read_bytes() for path in current.iterdir()}
+            old = (legacy / 'data.json').read_bytes(); backup = root / 'evidence/cleanup'
+            result = archive_legacy_settings(plugins, backup)
+            self.assertFalse(legacy.exists())
+            self.assertEqual((backup / 'plugin/data.json').read_bytes(), old)
+            self.assertEqual((backup / 'removed-directory/data.json').read_bytes(), old)
+            self.assertEqual({path: path.read_bytes() for path in current.iterdir()}, current_before)
+            self.assertEqual(json.loads((backup / 'receipt.json').read_text()), result)
+            self.assertIsNone(archive_legacy_settings(plugins, root / 'unused'))
+
+    def test_discovery_and_cleanup_refuse_actual_duplicate_runtime_or_unknown_contents(self):
+        for name in ['main.js', 'manifest.json', 'styles.css', 'unknown.txt', 'nested']:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); plugins, current, legacy = self.current_fixture(root)
+                extra = legacy / name
+                if name == 'nested': extra.mkdir()
+                else: extra.write_bytes(b'preserve')
+                with self.assertRaises(SystemExit): installed_plugin(plugins)
+                with self.assertRaises(SystemExit): archive_legacy_settings(plugins, root / 'evidence')
+                self.assertTrue(extra.exists())
+
+    def test_cleanup_refuses_symlinks_missing_current_runtime_and_backups_inside_the_vault(self):
+        for problem in ['legacy-symlink', 'settings-symlink', 'no-runtime', 'wrong-id', 'backup-in-vault']:
+            with self.subTest(problem=problem), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); plugins, current, legacy = self.current_fixture(root)
+                if problem == 'legacy-symlink':
+                    moved = legacy.with_name('original'); legacy.rename(moved); legacy.symlink_to(moved, target_is_directory=True)
+                elif problem == 'settings-symlink':
+                    data = legacy / 'data.json'; moved = root / 'private.json'; data.rename(moved); data.symlink_to(moved)
+                elif problem == 'no-runtime': (current / 'main.js').unlink()
+                elif problem == 'wrong-id': (current / 'manifest.json').write_text('{"id":"other"}')
+                backup = plugins.parent / 'backup' if problem == 'backup-in-vault' else root / 'evidence'
+                with self.assertRaises(SystemExit): archive_legacy_settings(plugins, backup)
+                self.assertTrue(legacy.exists())
+
+    def test_changed_settings_during_backup_and_failed_move_leave_the_source_directory(self):
+        for problem in ['changed', 'move-failed']:
+            with self.subTest(problem=problem), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); plugins, current, legacy = self.current_fixture(root)
+                if problem == 'changed':
+                    import shutil
+                    copy = shutil.copytree
+                    def racing_copy(*args, **kwargs):
+                        result = copy(*args, **kwargs); (legacy / 'data.json').write_bytes(b'new user settings'); return result
+                    with patch('scripts.plugin_id_migration.shutil.copytree', side_effect=racing_copy):
+                        with self.assertRaises(SystemExit): archive_legacy_settings(plugins, root / 'backup')
+                else:
+                    with patch.object(Path, 'rename', side_effect=OSError('move failed')):
+                        with self.assertRaises(OSError): archive_legacy_settings(plugins, root / 'backup')
+                self.assertTrue(legacy.exists())
+
     def test_synced_legacy_settings_only_directory_is_preserved_beside_current_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             plugins = Path(directory)

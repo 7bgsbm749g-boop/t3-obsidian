@@ -21,6 +21,68 @@ SPEC.loader.exec_module(release)
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    def cleanup_fixture(self, root):
+        plugin = root / 'vault/.obsidian/plugins/t-three-code'; plugin.mkdir(parents=True)
+        legacy = plugin.with_name('send-to-t3-code'); legacy.mkdir()
+        (plugin / 'manifest.json').write_text('{"id":"t-three-code","version":"3.4.4"}')
+        (plugin / 'main.js').write_bytes(b'current runtime')
+        (plugin / 'styles.css').write_bytes(b'current styles')
+        (plugin / 'data.json').write_bytes(b'{ "current": "keep exact bytes" }\n')
+        (legacy / 'data.json').write_bytes(b'{ "legacy": "keep separately" }\n')
+        return plugin, legacy
+
+    def test_explicit_legacy_cleanup_preserves_settings_and_restarts_sync_even_after_scan_failure(self):
+        for fail in [False, True]:
+            with self.subTest(fail=fail), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); plugin, legacy = self.cleanup_fixture(root)
+                current = (plugin / 'data.json').read_bytes(); old = (legacy / 'data.json').read_bytes()
+                with patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'DEV_PLUGIN', root / 'dev/plugins/t-three-code'), patch.object(release, 'BACKUPS', root / 'evidence'), patch.object(release, 'run') as run, patch.object(release, 'sync_release', side_effect=RuntimeError('scan failed') if fail else None) as sync:
+                    if fail:
+                        with self.assertRaisesRegex(RuntimeError, 'scan failed'): release.cleanup_legacy_plugin_settings()
+                    else:
+                        result = release.cleanup_legacy_plugin_settings(); self.assertEqual(result['status'], 'complete')
+                    self.assertFalse(legacy.exists()); self.assertEqual((plugin / 'data.json').read_bytes(), current)
+                    copies = list((root / 'evidence').glob('legacy-settings-*/qlo2/plugin/data.json'))
+                    self.assertEqual(len(copies), 1); self.assertEqual(copies[0].read_bytes(), old)
+                    sync.assert_called_once()
+                    self.assertEqual(run.call_args_list[-1].args[0], ['systemctl', '--user', 'start', release.SYNC_SERVICE])
+                    self.assertIn(unittest.mock.call(['systemctl', '--user', 'stop', release.SYNC_SERVICE]), run.call_args_list)
+
+    def test_cleanup_refuses_a_real_old_plugin_before_sync_or_file_changes_and_noops_when_clean(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); plugin, legacy = self.cleanup_fixture(root)
+            (legacy / 'main.js').write_bytes(b'preserve old runtime')
+            with patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'DEV_PLUGIN', root / 'dev/plugins/t-three-code'), patch.object(release, 'run') as run:
+                with self.assertRaisesRegex(SystemExit, 'more than stale settings'): release.cleanup_legacy_plugin_settings()
+                run.assert_not_called(); self.assertTrue((legacy / 'main.js').exists())
+            empty = root / 'empty/plugins/t-three-code'
+            with patch.object(release, 'QLO2_PLUGIN', empty), patch.object(release, 'DEV_PLUGIN', empty):
+                self.assertEqual(release.cleanup_legacy_plugin_settings()['status'], 'already-clean')
+
+    def test_publication_archives_recreated_legacy_settings_before_fresh_sync(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); plugin, legacy = self.cleanup_fixture(root)
+            current = (plugin / 'data.json').read_bytes(); old = (legacy / 'data.json').read_bytes()
+            archive = root / 'release.zip'; hashes = {}
+            with zipfile.ZipFile(archive, 'w') as bundle:
+                for name in release.RELEASE_FILES:
+                    value = b'{"id":"t-three-code","version":"3.4.5"}' if name == 'manifest.json' else name.encode()
+                    bundle.writestr('send-to-t3-code/' + name, value); hashes[name] = release.sha256_bytes(value)
+            def synced():
+                self.assertFalse(legacy.exists()); self.assertEqual((plugin / 'data.json').read_bytes(), current)
+                return []
+            with patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'BACKUPS', root / 'evidence'), patch.object(release, 'run') as run, patch.object(release, 'sync_release', side_effect=synced):
+                result = release.deploy_qlo2(archive, '3.4.5', hashes)
+            self.assertEqual((Path(result['legacySettingsCleanup']['backup']) / 'data.json').read_bytes(), old)
+            self.assertEqual((plugin / 'data.json').read_bytes(), current)
+            self.assertEqual(json.loads((plugin / 'manifest.json').read_text())['version'], '3.4.5')
+
+    def test_cleanup_cli_refuses_dirty_source(self):
+        with patch.object(release, 'git_state', return_value=('head', [' M unrelated'])), patch.object(release, 'cleanup_legacy_plugin_settings') as cleanup:
+            with self.assertRaisesRegex(SystemExit, 'committed reviewed source'):
+                release.dispatch(release.parser().parse_args(['--cleanup-legacy-settings']))
+            cleanup.assert_not_called()
+
     def test_bootstrap_owns_its_lock_and_restarts_the_worker_without_an_outer_publication_lock(self) -> None:
         job_id = '202611022300-0123456789abcdef'
         with patch.object(sys, 'argv', [str(SCRIPT), '--bootstrap-queue', job_id]), \

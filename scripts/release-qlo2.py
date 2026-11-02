@@ -25,7 +25,7 @@ import re
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import change_checks
 import release_queue
-from plugin_id_migration import LEGACY_ID, installed_plugin, needs_migration, migrate_installation
+from plugin_id_migration import LEGACY_ID, installed_plugin, needs_migration, migrate_installation, legacy_settings_remnant, archive_legacy_settings
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -246,6 +246,44 @@ def sync_release() -> list[str]:
     ]
 
 
+def cleanup_legacy_plugin_settings() -> dict:
+    """Explicit maintenance under release.lock; runtime files are never touched."""
+    locations = [('development', DEV_PLUGIN.parent), ('qlo2', QLO2_PLUGIN.parent)]
+    pending = [(name, plugins) for name, plugins in locations
+               if (plugins / LEGACY_ID).exists() or (plugins / LEGACY_ID).is_symlink()]
+    for _, plugins in pending:
+        if not legacy_settings_remnant(plugins):
+            raise SystemExit(f'Legacy folder contains more than stale settings; cleanup refused: {plugins / LEGACY_ID}')
+    if not pending:
+        return {'status': 'already-clean', 'cleanups': []}
+    settings = {plugins / 't-three-code/data.json': sha256_file(plugins / 't-three-code/data.json')
+                for _, plugins in pending if (plugins / 't-three-code/data.json').is_file()}
+    sync_needed = any(name == 'qlo2' for name, _ in pending)
+    if sync_needed:
+        run(['systemctl', '--user', 'is-active', '--quiet', SYNC_SERVICE])
+    BACKUPS.mkdir(parents=True, exist_ok=True)
+    backup = Path(tempfile.mkdtemp(prefix='legacy-settings-', dir=BACKUPS))
+    cleanups = []
+    try:
+        if sync_needed:
+            run(['systemctl', '--user', 'stop', SYNC_SERVICE])
+        for name, plugins in pending:
+            cleanups.append(archive_legacy_settings(plugins, backup / name))
+        if sync_needed:
+            sync_release()
+        if any((plugins / LEGACY_ID).exists() for _, plugins in pending):
+            raise SystemExit('An old client or Sync recreated the legacy folder; inspect the retained backup before retrying.')
+        if any(sha256_file(path) != checksum for path, checksum in settings.items()):
+            raise SystemExit('Current plugin settings changed during legacy cleanup; retained settings were not merged.')
+    finally:
+        if sync_needed:
+            run(['systemctl', '--user', 'start', SYNC_SERVICE])
+    result = {'status': 'complete', 'backup': str(backup), 'fullySynced': sync_needed, 'cleanups': cleanups}
+    with (backup / 'cleanup.json').open('x') as output:
+        json.dump(result, output, indent=2)
+    return result
+
+
 def deploy_qlo2(
     archive: Path,
     version: str,
@@ -286,6 +324,7 @@ def deploy_qlo2(
             activation = migration_activation(version)
             QLO2_PLUGIN = migrate_installation(QLO2_PLUGIN, identifier, backup / 'id-migration',
                                                restore_enabled=activation.get(str(QLO2_PLUGIN), False))
+            legacy_cleanup = archive_legacy_settings(QLO2_PLUGIN.parent, backup / 'legacy-settings')
             data_path = QLO2_PLUGIN / 'data.json'
             for name in RELEASE_FILES:
                 atomic_write(QLO2_PLUGIN / name, bundle.read(f'send-to-t3-code/{name}'))
@@ -308,6 +347,7 @@ def deploy_qlo2(
         'backup': str(backup),
         'settingsSha256': sha256_bytes(settings),
         'uploadedPluginFiles': uploaded,
+        **({'legacySettingsCleanup': legacy_cleanup} if legacy_cleanup else {}),
     }
 
 
@@ -379,6 +419,7 @@ def publish_release(
                 raise SystemExit(f'Plugin ID migration: disable T3 Code in {plugin.parents[2]} while this queue slot is held, then retry this job. Re-enable T3 Code after installation before completing smoke.')
     DEV_PLUGIN = migrate_installation(DEV_PLUGIN, identifier, BACKUPS / f'id-migration-{version}-development',
                                      restore_enabled=migration_activation(version).get(str(DEV_PLUGIN), False))
+    dev_legacy_cleanup = archive_legacy_settings(DEV_PLUGIN.parent, BACKUPS / f'legacy-settings-{version}-development')
     dev_hashes = install_runtime(DEV_PLUGIN, strict_dev=True, runtime=runtime)
     deployment = deploy_qlo2(
         archive,
@@ -402,6 +443,7 @@ def publish_release(
         'releaseFileSha256': archive_hashes,
         'developmentInstall': str(DEV_PLUGIN),
         'developmentRuntimeSha256': dev_hashes,
+        **({'developmentLegacySettingsCleanup': dev_legacy_cleanup} if dev_legacy_cleanup else {}),
         'qlo2Install': str(QLO2_PLUGIN),
         **deployment,
         **({'backgroundResponseHost': background_host} if background_host else {}),
@@ -688,6 +730,7 @@ def parser() -> argparse.ArgumentParser:
     action.add_argument('--version', metavar='VERSION', help='Create a strictly newer exact version.')
     action.add_argument('--resume', metavar='VERSION')
     action.add_argument('--complete-smoke', metavar='VERSION')
+    action.add_argument('--cleanup-legacy-settings', action='store_true', help='Back up and remove a settings-only legacy plugin folder under the release lock; require fresh QLO2 Sync.')
     action.add_argument('--publish', metavar='VERSION', help='Publish exact prepared bytes without repeating checks.')
     action.add_argument('--check-client', metavar='VERSION', help='Retry the real QLO2 reload/loaded-version check.')
     action.add_argument('--enqueue', metavar='COMMIT', help='Submit reviewed committed work to the FIFO publisher.')
@@ -712,6 +755,12 @@ def parser() -> argparse.ArgumentParser:
 def dispatch(args: argparse.Namespace) -> None:
     if args.replacement and not args.retry_queued:
         raise SystemExit('--replacement is valid only with --retry-queued.')
+    if args.cleanup_legacy_settings:
+        if any([args.prepare, args.allow_dirty, args.skip_tests_reason, args.skip_laptop_reload, args.base,
+                args.device, args.evidence, args.notes, args.validation]) or git_state()[1]:
+            raise SystemExit('--cleanup-legacy-settings requires committed reviewed source and no other options.')
+        print(json.dumps(cleanup_legacy_plugin_settings(), indent=2))
+        return
     if args.enqueue:
         if args.prepare or args.allow_dirty or args.skip_tests_reason or args.skip_laptop_reload or args.base or args.device:
             raise SystemExit('--enqueue accepts a commit, optional --validation, and optional --evidence/--notes.')
