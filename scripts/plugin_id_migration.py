@@ -15,10 +15,14 @@ def legacy_settings_remnant(plugins: Path) -> bool:
     if any(path.is_symlink() or not path.is_dir() for path in (current, legacy)):
         return False
     manifest = current / 'manifest.json'
-    if any(path.is_symlink() or not path.is_file() for path in (manifest, current / 'main.js')):
+    if any(path.is_symlink() or not path.is_file() for path in (manifest, current / 'main.js', current / 'styles.css')):
         return False
     try:
         if json.loads(manifest.read_text(encoding='utf-8-sig')).get('id') != PLUGIN_ID:
+            return False
+        enabled_path = plugins.parent / 'community-plugins.json'
+        enabled = json.loads(enabled_path.read_text(encoding='utf-8-sig')) if enabled_path.exists() else []
+        if not isinstance(enabled, list) or LEGACY_ID in enabled:
             return False
     except (ValueError, OSError, AttributeError):
         return False

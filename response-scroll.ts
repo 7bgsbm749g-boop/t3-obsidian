@@ -64,7 +64,7 @@ export class ResponseScroll {
   private range(key:string){
     if(!key.endsWith(':active'))return;
     const projection=this.projection(),matches=projection.ranges.filter(range=>projection.display.slice(range.displayFrom,range.displayTo).includes(`data-t3-fold="${key}"`));
-    return matches.length===1?matches[0]:undefined;
+    return matches.length===1&&matches[0].followable!==false?matches[0]:undefined;
   }
   control(key:string):ScrollControl|undefined {
     const range=this.range(key);if(!range)return;
@@ -95,6 +95,8 @@ export class ResponseScroll {
   /** Projection updates and late native layout changes share one pending frame. */
   updated=()=>{
     if(this.disposed)return;
+    const retainedFollow=this.state.following;
+    if(retainedFollow&&this.range(retainedFollow.key)?.id!==retainedFollow.id)this.stop();
     // Static retained history has no follow intent or guarded height. Avoid
     // forcing layout on every native viewport mutation in that common case.
     if(!this.following&&!this.state.following&&!this.positions.size&&!this.height.isActive())return;

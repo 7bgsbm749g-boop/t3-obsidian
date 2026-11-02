@@ -67,6 +67,19 @@ successor retires only the heads it observed. Merge retains independent
 confirmed branches and unions their coverage on the next send. Retirement IDs
 prevent stale settings from restoring superseded heads. A local replica repairs
 stale whole-settings replacements. Note identities follow rename and deletion.
+Thread history now uses the same stable note identity. Send and Ask recover the
+identity before selecting their default conversation, including in 1:1 mode.
+Once a note is linked, the plugin retains a small hidden `t3-note-id` comment at
+the end of its Markdown. This identity travels with file and folder renames,
+moves and offline edits, even when there is no streamed reply. It is excluded
+from prompts and Smart Send coverage. Literal code examples are not identities.
+Known locations need no vault scan. A missed move requires a bounded uniqueness
+check; copies with an existing original get an independent identity, and several
+possible moved copies block sending until their identities are separated. A
+missing synced identity record also blocks automatic creation of a new thread.
+Older notes can recover their existing conversation from uniquely located live
+response bindings, imported-run receipts or completed progress records when the
+original path is absent. Recovery preserves historical links and last-use order.
 Rename records retain a separate move revision, so a receiving client's later
 deletion of the old Sync path cannot overwrite the rename. If a client missed
 the move, a uniquely located response binding can reconnect its confirmed
@@ -82,8 +95,8 @@ be accepted before either device receives the other's receipt.
 Completed and frozen response bodies are recorded before their checked native
 write. Rendered output, including progress and input echoes, is stored once by
 SHA-256; gzip is used when its base64 form is smaller than the original text.
-Current source snapshots use the same encoding. No new markers, comments or
-boundaries are written to Markdown. Full body matches exclude saved responses;
+Current source snapshots use the same encoding. Response text records add no
+response markers or boundaries to Markdown. Full body matches exclude saved responses;
 unique spans of the stored reply locate edited responses and retain user
 additions. Substantive surrounding text can recover a changed reply edge;
 blank-line separators do not establish a response boundary. Ambiguous copies

@@ -13,6 +13,7 @@ import {NativeLanguageViews} from './language-views';
 import {contentHash} from './completion';
 import {nativeMediaSource,originalMediaSource,codebaseMediaExtension} from './codebase-media';
 import {installCodebaseAdapter} from './codebase-adapter';
+import {nativeDocumentState} from './native-document-state';
 export {CodebaseView} from './codebase-view';
 export interface CodebaseState {version:1;references:Record<string,SavedReference>;choices:Record<string,string>;automaticChoices?:Record<string,string[]>;vaultAliases?:Record<string,string>}
 export interface CodebaseStorage {environments?():string[];load():CodebaseState|undefined;save(state:CodebaseState):Promise<void>;projectChanged?(scope:CodebaseScope,change:{title?:string;deleted?:boolean}):Promise<void>}
@@ -89,7 +90,25 @@ export class CodebaseBridge {
       const item=this.files.get(file.path);if(item){this.captureBases(item);await this.prepare(item);const before=item.document.base;item.text=await item.document.read();this.synchronizePeers(item,before,item.text);return item.text;}
       return original(file);
     });
-    this.patch(vault,'modify',(original:any)=>async(file:TFile,text:string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,text,options);if(text===item.document.base)return;await this.prepare(item);const before=item.document.base,peers=this.editorLeaves().map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===file.path),matching=peers.filter(view=>this.viewText(view)===text),origins=peers.map(view=>({view,basis:this.viewBase(view,item)})).filter(({view,basis})=>{const native=view as MarkdownView&{lastSavedData?:string;saving?:unknown};return basis?.text===before&&!!native.saving&&native.data===text&&native.lastSavedData===text;});if(text===before)return;try{if(matching.some(view=>{const basis=this.viewBase(view,item);return basis&&basis.text!==before;})){item.document.uncertain=true;item.document.draft=text;this.retain(file.path,text);}await item.document.save(text);for(const {view,basis} of origins)if(view.file?.path===file.path&&this.viewBase(view,item)===basis)this.setViewBase(view,item,text);}catch(error){new Notice(`${error instanceof Error?error.message:String(error)} Use Review unsaved project edit to compare versions.`,10000);throw error;}item.text=text;this.synchronizePeers(item,before,text);file.stat.mtime=Date.now();file.stat.size=new TextEncoder().encode(text).length;});
+    this.patch(vault,'modify',(original:any)=>async(file:TFile,text:string,options:any)=>{
+      const item=this.files.get(file.path);if(!item)return original(file,text,options);
+      this.captureBases(item);if(text===item.document.base)return;
+      await this.prepare(item);this.captureBases(item);
+      const before=item.document.base,peers=this.editorLeaves().map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===file.path);
+      const matching=peers.filter(view=>this.viewText(view)===text),origins=peers.map(view=>({view,basis:this.viewBase(view,item)})).filter(({view,basis})=>{
+        const native=view as MarkdownView&{lastSavedData?:string;saving?:unknown};
+        return basis?.text===before&&!!native.saving&&native.data===text&&native.lastSavedData===text;
+      });
+      if(text===before)return;
+      try{
+        if(matching.some(view=>{const basis=this.viewBase(view,item);return basis&&basis.text!==before;})){
+          item.document.uncertain=true;item.document.draft=text;this.retain(file.path,text);
+        }
+        await item.document.save(text);
+        for(const {view,basis} of origins)if(view.file?.path===file.path&&this.viewBase(view,item)===basis)this.setViewBase(view,item,text);
+      }catch(error){new Notice(`${error instanceof Error?error.message:String(error)} Use Review unsaved project edit to compare versions.`,10000);throw error;}
+      item.text=text;this.synchronizePeers(item,before,text);file.stat.mtime=Date.now();file.stat.size=new TextEncoder().encode(text).length;
+    });
     this.patch(vault,'process',(original:any)=>async(file:TFile,change:(text:string)=>string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,change,options);const text=change(await vault.read(file));await vault.modify(file,text);return text;});
     this.patch(vault,'append',(original:any)=>async(file:TFile,text:string,options:any)=>{const item=this.files.get(file.path);if(!item)return original(file,text,options);await vault.process(file,old=>old+text);});
     this.patch(vault,'readBinary',(original:any)=>async(file:TFile)=>{const item=this.files.get(file.path);if(!item)return original(file);await this.prepare(item,true);const response=await fetch(item.resource!.url,{credentials:'omit'});if(!response.ok)throw Error('The project file is unavailable.');return response.arrayBuffer();});
@@ -139,7 +158,7 @@ export class CodebaseBridge {
       };
       return tracked?this.withFileOpeningNotice(link,source,open):open();
     });
-    this.plugin.registerEvent(workspace.on('editor-change',(editor,view)=>{const file=view.file,item=file?this.files.get(file.path):undefined;if(!item||item.document.base===undefined||(view as MarkdownView).getMode?.()==='preview')return;const text=editor.getValue(),basis=this.viewBase(view as MarkdownView,item);if(!basis)return;if(text!==item.document.base){if(basis.text!==item.document.base)item.document.uncertain=true;item.document.draft=text;this.retain(item.file.path,text);}}));
+    this.plugin.registerEvent(workspace.on('editor-change',(_editor,view)=>{const file=view.file,item=file?this.files.get(file.path):undefined;if(!item||item.document.base===undefined||(view as MarkdownView).getMode?.()==='preview')return;this.captureBases(item);const text=this.viewText(view as MarkdownView),basis=this.viewBase(view as MarkdownView,item);if(text===undefined||!basis)return;if(text!==item.document.base){if(basis.text!==item.document.base)item.document.uncertain=true;item.document.draft=text;this.retain(item.file.path,text);}}));
     this.plugin.registerEvent(workspace.on('file-open',file=>{this.app.workspace.iterateAllLeaves?.(leaf=>this.nativeChrome(leaf.view));const item=file?this.files.get(file.path):undefined;if(!item)return;this.captureBases(item);}));
     this.plugin.registerEditorSuggest(new CodebaseLinkSuggest(this.app,this));
     this.plugin.registerView(VIEW,leaf=>new CodebaseView(leaf,this));
@@ -174,16 +193,22 @@ export class CodebaseBridge {
   }
   private editorLeaves(){return [...new Set(['markdown',...this.languageViews.types()].flatMap(type=>this.app.workspace.getLeavesOfType(type)))];}
   private canRead(path:string){return !this.editorLeaves().some(leaf=>{const view=leaf.view as MarkdownView&{saving?:unknown};return view.file?.path===path&&!!view.saving;});}
-  private viewText(view:MarkdownView){return view.getMode?.()==='preview'?view.getViewData():view.editor?.getValue();}
+  private viewText(view:MarkdownView){try{const native=nativeDocumentState(view);return native?native.read():view.getMode?.()==='preview'?view.getViewData():view.editor?.getValue();}catch{return undefined;}}
   private viewBase(view:MarkdownView,item:RegisteredFile){const basis=this.viewBases.get(view);return basis?.path===item.file.path?basis:undefined;}
   private setViewBase(view:MarkdownView,item:RegisteredFile,text:string){this.viewBases.set(view,{path:item.file.path,text});}
-  private captureBases(item:RegisteredFile){if(item.document.base===undefined)return;for(const leaf of this.editorLeaves()){const view=leaf.view as MarkdownView;if(view.file?.path!==item.file.path)continue;const basis=this.viewBase(view,item),text=this.viewText(view),saved=(view as MarkdownView&{lastSavedData?:string}).lastSavedData;
+  private captureBases(item:RegisteredFile){if(item.document.base===undefined)return;for(const leaf of this.editorLeaves()){const view=leaf.view as MarkdownView;if(view.file?.path!==item.file.path)continue;const basis=this.viewBase(view,item),text=this.viewText(view);if(text===undefined)continue;
+    // A checked response commit can adopt its canonical result without a
+    // native autosave. Its storage baseline is proof even after the next edit.
+    if(nativeDocumentState(view)?.baseline()===item.document.base){if(basis?.text!==item.document.base)this.setViewBase(view,item,item.document.base);continue;}
+    const saved=(view as MarkdownView&{lastSavedData?:string}).lastSavedData;
     if(text===item.document.base&&(!basis||saved===item.document.base))this.setViewBase(view,item,item.document.base);
     else if(!basis&&item.text!==undefined&&text===item.text&&saved===item.text)this.setViewBase(view,item,item.text);
   }}
   private savedViewText(view:MarkdownView,item:RegisteredFile,before:string|undefined,text:string){
     if(view.file?.path!==item.file.path)return false;
     const value=this.viewText(view);if(value!==before&&value!==text)return false;
+    const managed=nativeDocumentState(view);
+    if(managed)return managed.adopt(text)&&this.viewText(view)===text;
     const native=view as MarkdownView&{lastSavedData?:string;saving?:unknown};
     const canSync='data' in native&&'lastSavedData' in native&&!native.saving&&(native.data===before||native.data===text)&&(native.lastSavedData===before||native.lastSavedData===text);
     // A verified own save already has these buffers; advance its basis without changing core state.

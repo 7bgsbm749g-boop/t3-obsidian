@@ -66,11 +66,11 @@ def atomic_write(path: Path, value: bytes) -> None:
     os.replace(temporary, path)
 
 
-def run(command: list[str], *, cwd: Path = ROOT, capture: bool = False, timeout: int = 240) -> subprocess.CompletedProcess[str]:
+def run(command: list[str], *, cwd: Path | None = None, capture: bool = False, timeout: int = 240) -> subprocess.CompletedProcess[str]:
     print('+', ' '.join(command), flush=True)
     return subprocess.run(
         command,
-        cwd=cwd,
+        cwd=cwd or ROOT,
         check=True,
         text=True,
         capture_output=capture,
@@ -736,6 +736,7 @@ def parser() -> argparse.ArgumentParser:
     action.add_argument('--enqueue', metavar='COMMIT', help='Submit reviewed committed work to the FIFO publisher.')
     action.add_argument('--queue-status', nargs='?', const='all', metavar='JOB_ID', help='Read queue state without contacting other threads.')
     action.add_argument('--drain-queue', action='store_true', help='Run the single queue worker in the canonical checkout.')
+    action.add_argument('--bootstrap-queue', metavar='JOB_ID', help='Integrate a queued, reviewed tooling repair when the canonical worker cannot start; never publish here.')
     action.add_argument('--install-queue', action='store_true', help='Install the event-driven local queue worker once.')
     action.add_argument('--retry-queued', metavar='JOB_ID', help='Resume recovery or retry a repaired candidate; retain immutable release bytes.')
     result.add_argument('--prepare', action='store_true', help='With --bump/--version: prepare and check a task-worktree candidate without deployment.')
@@ -773,7 +774,7 @@ def dispatch(args: argparse.Namespace) -> None:
         print(json.dumps(result, indent=2))
         release_queue.kick()
         return
-    if args.queue_status or args.install_queue or args.drain_queue or args.retry_queued:
+    if args.queue_status or args.install_queue or args.drain_queue or args.retry_queued or args.bootstrap_queue:
         if args.prepare or args.allow_dirty or args.skip_tests_reason or args.skip_laptop_reload or args.base or args.device:
             raise SystemExit('Queue management accepts only its action and job ID.')
         if (args.validation or args.evidence or args.notes) and not (args.retry_queued and args.replacement):
@@ -783,6 +784,9 @@ def dispatch(args: argparse.Namespace) -> None:
         elif args.install_queue:
             canonical_root_required()
             release_queue.install(CANONICAL_ROOT)
+        elif args.bootstrap_queue:
+            print(json.dumps(release_queue.bootstrap(sys.modules[__name__], CANONICAL_ROOT, args.bootstrap_queue), indent=2))
+            release_queue.kick()
         elif args.retry_queued:
             replacement = None
             if args.replacement:
@@ -849,7 +853,7 @@ def main() -> None:
         if parse_version(read_json(QLO2_PLUGIN / 'manifest.json')['version']) > parse_version(args.complete_smoke):
             dispatch(args)
             return
-    if args.prepare or args.enqueue or args.queue_status or args.install_queue or args.drain_queue or args.retry_queued:
+    if args.prepare or args.enqueue or args.queue_status or args.install_queue or args.drain_queue or args.retry_queued or args.bootstrap_queue:
         dispatch(args)
     else:
         with change_checks.lock(BACKUPS / 'release.lock'):

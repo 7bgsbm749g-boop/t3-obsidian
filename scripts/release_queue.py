@@ -354,6 +354,49 @@ def engine_hash(root: Path) -> dict:
             if (root / 'scripts' / name).is_file()}
 
 
+def bootstrap(release, canonical: Path, job_id: str, *, queue: Path = QUEUE) -> dict:
+    """Queue-owned integration only; the freshly integrated worker validates and publishes.
+
+    A canonical loader can fail before normal FIFO integration is available.
+    Use an exact committed repair from its submitting worktree, preserving the
+    same locks, FIFO order, merge checks, and mandatory engine restart.
+    """
+    source = release.ROOT
+    if source.resolve() == canonical.resolve() or git(source, 'status', '--porcelain=v1'):
+        raise SystemExit('Bootstrap requires the clean submitting source worktree.')
+    directory = job_path(queue, job_id)
+    with locked(queue / 'worker.lock', nonblocking=True), locked(release.BACKUPS / 'release.lock'):
+        with locked(queue / 'queue.lock'):
+            first = next((path for path in jobs(queue) if read(path / 'state.json')['status'] not in FINISHED), None)
+            if first != directory:
+                raise SystemExit('Bootstrap cannot overtake an earlier queue job.')
+            state = read(directory / 'state.json')
+            request = read(directory / state.get('requestFile', 'request.json'))
+            if (Path(request['sourceRoot']).resolve() != source.resolve() or
+                    request['commit'] != git(source, 'rev-parse', 'HEAD') or
+                    state.get('version') or state.get('ownedIntegrations') or state.get('rollbackCommits')):
+                raise SystemExit('Bootstrap requires this worktree’s exact queued, unintegrated commit.')
+            if not request.get('maintenanceOnly') and not request.get('evidence'):
+                raise SystemExit('Bootstrap requires the product job’s behavior evidence.')
+            if git(canonical, 'status', '--porcelain=v1'):
+                raise SystemExit('Canonical checkout contains uncommitted work.')
+            loaded_engine = engine_hash(canonical)
+            if engine_hash(source) == loaded_engine:
+                raise SystemExit('Bootstrap requires a reviewed release-tooling change.')
+            if subprocess.run(['git', 'merge-base', '--is-ancestor', request['commit'], 'HEAD'],
+                              cwd=canonical, capture_output=True).returncode == 0:
+                raise SystemExit('The queued commit is already integrated; use the canonical worker.')
+        release.ROOT = canonical
+        try:
+            with (directory / 'worker.log').open('a', buffering=1) as log, redirect_stdout(log), redirect_stderr(log):
+                print(f'Queue tooling bootstrap {now()}: {directory.name}', flush=True)
+                if not run_job(release, directory, request, state, loaded_engine, integration_only=True):
+                    raise SystemExit('The tooling repair did not request its mandatory worker restart.')
+            return {'status': 'worker-restart', 'jobId': job_id, 'publicationStarted': False}
+        finally:
+            release.ROOT = source
+
+
 def next_version(release, directory: Path, request: dict) -> str:
     """An assigned version belongs to its job, even when validation fails."""
     versions = [release.read_json(release.ROOT / 'manifest.json')['version']]
@@ -366,7 +409,7 @@ def next_version(release, directory: Path, request: dict) -> str:
     return release.bump_version(latest, request['bump'])
 
 
-def run_job(release, directory: Path, request: dict, state: dict, loaded_engine: dict) -> bool:
+def run_job(release, directory: Path, request: dict, state: dict, loaded_engine: dict, *, integration_only: bool = False) -> bool:
     root = release.ROOT
     if 'maintenanceOnly' not in request:
         request = {**request, 'maintenanceOnly': maintenance_only(
@@ -406,7 +449,7 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
                     raise
             update(directory, state, ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': git(root, 'rev-parse', 'HEAD'), 'merge': True}])
         update(directory, state, integratedCommit=git(root, 'rev-parse', 'HEAD'))
-        if engine_hash(root) != loaded_engine:
+        if integration_only or engine_hash(root) != loaded_engine:
             # Exit with the wake marker intact. systemd starts a fresh worker,
             # so a tooling change is checked by its newly integrated runner.
             update(directory, state, status='queued', nextAction='Restarting the updated release worker.')

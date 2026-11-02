@@ -1,5 +1,8 @@
 {
   "dependencies": {
+    "tests/codebase-response-save.test.ts": [
+      "validation/codebase-response-save-lab.ts"
+    ],
     "tests/html-result-view.test.ts": [
       "validation/html-result-edit-benchmark.ts"
     ],
@@ -84,6 +87,10 @@
     ],
     "tests/local-response-manager.test.ts": [
       "validation/agent-note-edits-lab.ts"
+    ],
+    "tests/note-identity.test.ts": [
+      "validation/note-thread-moves-lab.ts",
+      "scripts/build-native-response-lab.mjs"
     ]
   }
 }

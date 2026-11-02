@@ -2,6 +2,8 @@ import {SendPreviews} from './send-preview';
 import {savedToDisplay} from './native-response-projection';
 import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,recoverSmartNote,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from './smart-send';
 import {DuplicateResponseLocation} from './response-location';
+import {noteIdentity,noteIdentityRanges,withNoteIdentity,uniqueNoteLocation} from './note-identity';
+import {streamBlocks} from './stream-block';
 import {retainedLocalFinal,restoredLocalFinal} from './local-final-cache';
 import {HtmlResultStore} from './html-result-store';
 import {projectEventNote} from './event-note-projection';
@@ -45,7 +47,7 @@ import {isRecoveryCommand} from './recovery-command';
 import {abortableRead,requestAborted} from './t3-api';
 import {mountToolGroups} from './response-tool-presentation';
 import {importRuns,importBindingId,importFollowId,type ImportRun,type RunImportResult} from './run-import';
-import {findRunImport,runImportReceipt} from './run-import-receipt';
+import {findRunImport,runImportReceipt,runImportReceipts} from './run-import-receipt';
 import {openRunImport,ImportStreamsModal} from './run-import-ui';
 import {type InlineThreadState} from './inline-thread';
 import {nativeResponses} from './native-response-manager';
@@ -78,7 +80,7 @@ import {AskComposer,openChatFlow,openNoteSendFlow,type ChatHost,type ChatDestina
 import {selectionRange} from './inline-steering';
 import {projectThreads,type ThreadChoice} from './thread-target';
 import {assertThreadNoteMode,oneToOneNoteThreads,threadNoteMode,type ThreadNoteMode,type ModeThread} from './thread-note-mode';
-import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,mutateNoteThreads,previousNoteThreads,type NoteThread} from './note-threads';
+import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,mutateNoteThreads,previousNoteThreads,bindNoteThreadIds,resolveNoteThreadPaths,type NoteThread} from './note-threads';
 import {noteIndicators} from './explorer-responses';
 import {CompletionGlow} from './completion-glow';
 import {folderNotePath,type FolderNotesSettings} from './folder-note-adapter';
@@ -316,6 +318,7 @@ export default class SendToT3 extends Plugin {
       changed:()=>this.folderIndicators?.refresh(),
     });
     this.smartReplica=mergeSmartSend(data?.smartSend,await deviceState(`smart-send:${this.deviceId}:${this.settings.vaultId}`));this.settings.smartSend=this.smartReplica;
+    this.settings.noteThreads=bindNoteThreadIds(this.settings.noteThreads,this.smartReplica.notes);
     this.folderLinkReplica=mergeFolderLinkChanges(this.settings.folderLinkChanges,loadFolderLinkChanges(await deviceState(`folder-links:${this.deviceId}:${this.settings.vaultId}`)));
     this.settings.folderLinkChanges=this.folderLinkReplica;
     this.settings.folderLinks=applyFolderLinkChanges(this.settings.folderLinks,this.folderLinkReplica);
@@ -630,8 +633,8 @@ export default class SendToT3 extends Plugin {
       this.registerEvent(this.app.vault.on('delete',file=>{this.inlineChat?.deleted(file.path);this.questionPaths.delete(file.path);}));
       this.registerEvent(this.app.vault.on('modify',file=>{if(file instanceof TFile&&file.extension==='md')void this.app.vault.read(file).then(text=>{if(questionTargets(text).length||approvalTargets(text).length)this.questionPaths.add(file.path);}).catch(()=>{});}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{for(const path of [...this.questionPaths])if(path===oldPath||path.startsWith(oldPath+'/')){this.questionPaths.delete(path);this.questionPaths.add(file.path+path.slice(oldPath.length));}}));
-      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void (async()=>{const moved=this.settings.noteThreads.filter(entry=>!entry.deletedAt&&(entry.notePath===oldPath||file instanceof TFolder&&entry.notePath.startsWith(oldPath+'/')));if(!moved.length&&!Object.values(this.smartData().notes).some(n=>!n.deleted&&(n.path===oldPath||file instanceof TFolder&&n.path.startsWith(oldPath+'/'))))return;moveSmartNotes(this.smartData(),oldPath,file.path,file instanceof TFolder);this.settings.noteThreads=mutateNoteThreads(this.settings.noteThreads,oldPath,file.path,file instanceof TFolder);await this.save();})().catch(error=>new Notice(`T3 thread history: ${message(error)}`,10000));}));
-      this.registerEvent(this.app.vault.on('delete',file=>{void (async()=>{const affected=this.settings.noteThreads.filter(entry=>entry.notePath===file.path||file instanceof TFolder&&entry.notePath.startsWith(file.path+'/'));if(!affected.length&&!Object.values(this.smartData().notes).some(n=>!n.deleted&&(n.path===file.path||file instanceof TFolder&&n.path.startsWith(file.path+'/'))))return;moveSmartNotes(this.smartData(),file.path,undefined,file instanceof TFolder);this.settings.noteThreads=mutateNoteThreads(this.settings.noteThreads,file.path,undefined,file instanceof TFolder);await this.save();})().catch(error=>new Notice(`T3 thread history: ${message(error)}`,10000));}));
+      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void this.relocateNoteThreads(oldPath,file.path,file instanceof TFolder).catch(error=>new Notice(`T3 thread history: ${message(error)}`,10000));}));
+      this.registerEvent(this.app.vault.on('delete',file=>{void this.relocateNoteThreads(file.path,undefined,file instanceof TFolder).catch(error=>new Notice(`T3 thread history: ${message(error)}`,10000));}));
     }
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
@@ -677,7 +680,7 @@ export default class SendToT3 extends Plugin {
       for(const id of cursorId?[cursorId]:ids){
         if(this.deviceInline?.responseStatus(id)?.runTerminal)continue;
         const failed=active.find(job=>job.id===id)?.phase==='error'||failedInlineIds(editor.getValue()).includes(id);
-        const label=/^(?:> \[!t3-progress\][+-] )?\*\*(.+) · (?:Working|Reconnecting|Error)\*\*/m.exec(regionBody(editor.getValue(),id)?.body??'')?.[1];
+        const label=/^(?:> \[!t3-progress\][+-] )?\*\*(.+) · (?:Sending…?|Working|Reconnecting|Error)\*\*/m.exec(regionBody(editor.getValue(),id)?.body??'')?.[1];
         const suffix=ids.length>1?` (${label&&label!=='T3'?label+' · ':''}${id.slice(0,8)})`:'';
         if(failed){
           menu.addItem(item=>item.setTitle('Continue T3 response'+suffix).setIcon('rotate-cw').setDisabled(this.busy).onClick(()=>this.continueInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000))));
@@ -1162,9 +1165,69 @@ export default class SendToT3 extends Plugin {
     return {path:file.path,...(!Platform.isMobile&&typeof adapter?.getFullPath==='function'?{absolutePath:adapter.getFullPath(file.path)}:{})};
   }
   private modeRelations(localEnvironment=this.eventLocalEnvironmentId??this.localNoProjectId){
-    return this.settings.noteThreads.map(entry=>({...entry,environmentId:entry.environmentId??(this.settings.paired??[]).find(connection=>connection.id===entry.connectionId)?.environmentId??(!entry.connectionId?localEnvironment:undefined)}));
+    return this.noteThreadRelations().map(entry=>({...entry,environmentId:entry.environmentId??(this.settings.paired??[]).find(connection=>connection.id===entry.connectionId)?.environmentId??(!entry.connectionId?localEnvironment:undefined)}));
   }
-  private noteThread(path?:string){return path?lastUsedNoteThread(threadNoteMode(this.settings.threadNoteMode)==='one-to-one'?oneToOneNoteThreads(this.modeRelations()):this.settings.noteThreads,path):undefined;}
+  private noteThreadRelations(){return resolveNoteThreadPaths(this.settings.noteThreads,this.settings.smartSend?.notes??{}).filter(entry=>entry.noteId||!this.app?.vault?.getFileByPath||!!this.app.vault.getFileByPath(entry.notePath));}
+  private async relocateNoteThreads(before:string,after?:string,folder=false){
+    const affected=(path:string)=>path===before||folder&&path.startsWith(before+'/'),data=this.smartData();
+    if(!this.settings.noteThreads.some(entry=>!entry.deletedAt&&affected(entry.notePath))&&!Object.values(data.notes).some(note=>!note.deleted&&affected(note.path)))return;
+    this.settings.noteThreads=bindNoteThreadIds(this.settings.noteThreads,data.notes);
+    moveSmartNotes(data,before,after,folder);
+    this.settings.noteThreads=mutateNoteThreads(this.settings.noteThreads,before,after,folder);
+    await this.save();
+  }
+  private noteThread(path?:string){return path?lastUsedNoteThread(threadNoteMode(this.settings.threadNoteMode)==='one-to-one'?oneToOneNoteThreads(this.modeRelations()):this.noteThreadRelations(),path):undefined;}
+  /** Resolve a note before the chooser captures its default destination. No
+   * normal linked send scans the vault; only a missed move needs uniqueness. */
+  private async recoverNoteThread(path?:string){
+    const vault=this.app?.vault,file=path&&vault?.getFileByPath?.(path);if(!path||!file)return;
+    const view=this.app.workspace.getActiveViewOfType?.(MarkdownView);
+    const document=view?.file?.path===path&&view.editor?this.notePromptDocument(view):await vault.read(file);
+    const data=this.smartData(),id=noteIdentity(document),before=JSON.stringify(this.settings.noteThreads),identityBefore=id?JSON.stringify(data.notes[id]):undefined;
+    const migrated=bindNoteThreadIds(this.settings.noteThreads,data.notes);
+    if(before!==JSON.stringify(migrated))this.settings.noteThreads=migrated;
+    if(id){
+      const known=data.notes[id];
+      if(!known)throw Error('The saved T3 note ID has no thread history on this device. Wait for plugin settings to sync before sending.');
+      // A copy never takes the original's identity or conversation.
+      if(known.path!==path&&vault.getFileByPath(known.path))return;
+      if(known.path!==path||known.deleted){
+        const location=await uniqueNoteLocation(text=>noteIdentityRanges(text).some(marker=>marker.id===id),vault.getMarkdownFiles().map(file=>file.path),async candidate=>{const item=vault.getFileByPath(candidate);return item?await vault.read(item):undefined;});
+        if(location!==path||file.path!==path||vault.getFileByPath(path)!==file)throw Error('The note moved while its T3 identity was being checked. Send again from its current location.');
+        const old=known.path;
+        moveSmartNotes(data,old,path);
+        const revision=Math.max(Date.now(),...Object.values(data.notes).map(note=>note.revision+1));data.notes[id]={path,revision,renamedAt:revision};
+        this.settings.noteThreads=mutateNoteThreads(this.settings.noteThreads,old,path);
+        this.settings.noteThreads=this.settings.noteThreads.map(entry=>{if(entry.noteId!==id||!entry.deletedAt)return entry;const {deletedAt,...live}=entry;return {...live,notePath:path,renamedAt:new Date(revision).toISOString()};});
+      }
+    }else if(!this.noteThread(path)){
+      await this.recoverLegacyNoteThread(path,document);
+      await this.recoverSmartSource(path,document);
+    }
+    const resolved=bindNoteThreadIds(resolveNoteThreadPaths(this.settings.noteThreads,data.notes),data.notes);
+    if(JSON.stringify(this.settings.noteThreads)!==JSON.stringify(resolved))this.settings.noteThreads=resolved;
+    if(before!==JSON.stringify(this.settings.noteThreads)||id&&identityBefore!==JSON.stringify(data.notes[id]))await this.save();
+  }
+  private async recoverLegacyNoteThread(path:string,document:string){
+    const vault=this.app.vault,entries=this.settings.noteThreads.filter(entry=>!entry.deletedAt&&!vault.getFileByPath(entry.notePath));
+    if(!entries.length)return;
+    const receipts=[...runImportReceipts(document)].map(value=>value.receipt);
+    const blocks=streamBlocks(document),candidates=new Map<string,(text:string)=>boolean>();
+    for(const entry of entries){
+      const receipt=receipts.find(item=>item.threadId===entry.threadId&&item.projectId===entry.projectId&&(!entry.environmentId||item.environmentId===entry.environmentId));
+      const block=blocks.find(item=>decodeURIComponent(item.key).startsWith(entry.threadId+':'));
+      if(receipt)candidates.set(entry.notePath,text=>[...runImportReceipts(text)].some(({receipt:item})=>item.bindingId===receipt.bindingId));
+      else if(block)candidates.set(entry.notePath,text=>streamBlocks(text).some(item=>item.key===block.key));
+    }
+    if(candidates.size>1)throw Error('This note contains conversations from several missing notes. Choose its existing thread explicitly.');
+    for(const [old,matches] of candidates){
+      const location=await uniqueNoteLocation(matches,vault.getMarkdownFiles().map(file=>file.path),async candidate=>{const file=vault.getFileByPath(candidate);return file?await vault.read(file):undefined;});
+      if(location!==path||vault.getFileByPath(old))throw Error('The original T3 note location is uncertain. Choose its existing thread explicitly.');
+      this.settings.noteThreads=bindNoteThreadIds(this.settings.noteThreads,this.smartData().notes);
+      moveSmartNotes(this.smartData(),old,path);
+      this.settings.noteThreads=mutateNoteThreads(this.settings.noteThreads,old,path);
+    }
+  }
   private async assertNoteMode(notePath:string|undefined,target:ModeThread,destinations:string[]=[]){
     if(threadNoteMode(this.settings.threadNoteMode)!=='one-to-one')return;
     if(!target.environmentId&&!target.connectionId)target={...target,environmentId:await this.localInlineEnvironment()};
@@ -1270,7 +1333,12 @@ export default class SendToT3 extends Plugin {
         catch(error){if(!(error instanceof DuplicateResponseLocation))throw error;}
       }
     }
-    if(recoverSmartNote(data,path,[...candidates],old=>!!this.app.vault.getAbstractFileByPath(old)))await this.save(true);
+    const oldPaths=[...new Set([...candidates].map(id=>data.notes[id].path))];
+    this.settings.noteThreads=bindNoteThreadIds(this.settings.noteThreads,data.notes);
+    if(recoverSmartNote(data,path,[...candidates],old=>!!this.app.vault.getAbstractFileByPath(old))){
+      for(const old of oldPaths)this.settings.noteThreads=mutateNoteThreads(this.settings.noteThreads,old,path);
+      await this.save(true);
+    }
   }
   private openAsk(file:TFile,selection='',captured?:EditorChatContext,choose=false){
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -1281,7 +1349,7 @@ export default class SendToT3 extends Plugin {
     const context=captured?this.canonicalChatContext(captured):undefined;
     new AskComposer(this.app,file.path,this.app.loadLocalStorage(this.chatDraftKey)??'',text=>this.app.saveLocalStorage(this.chatDraftKey,text),(question,selected)=>this.openManualAction(file,question,selection,context,choose||selected)).open();
   }
-  private previousNoteThread(path:string,threadId:string){return previousNoteThreads(this.settings.noteThreads,path).find(entry=>entry.threadId===threadId);}
+  private previousNoteThread(path:string,threadId:string){return previousNoteThreads(this.noteThreadRelations(),path).find(entry=>entry.threadId===threadId);}
   private projectForNoteThread(entry:NoteThread):Project{
     const candidates=[...this.settings.directProjects,...this.settings.projects].filter(item=>item.id===entry.projectId&&sameWorkspacePath(item.workspaceRoot,entry.workspaceRoot)&&(!Platform.isMobile||Boolean(item.connectionId)));
     const sameConnection=candidates.find(item=>(item.connectionId??'')===entry.connectionId);
@@ -1291,7 +1359,7 @@ export default class SendToT3 extends Plugin {
     return project;
   }
   private noteThreadIntent(path:string,project:Project,connection:Connection):NonNullable<Request['noteThread']>{
-    return {notePath:path,projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId??'',...(connection.environmentId?{environmentId:connection.environmentId}:{})};
+    return {notePath:path,noteId:smartNote(this.smartData(),path,this.noteThread(path)?.noteId),projectId:project.id,workspaceRoot:project.workspaceRoot,connectionId:project.connectionId??'',...(connection.environmentId?{environmentId:connection.environmentId}:{})};
   }
   private rememberNoteThread(remembered:NonNullable<Request['noteThread']>,threadId:string){
     const selectedAt=new Date().toISOString(),updatedAt=new Date(Math.max(Date.now(),...this.settings.noteThreads.map(entry=>Date.parse(entry.updatedAt??entry.deletedAt??entry.selectedAt)+1).filter(Number.isFinite))).toISOString();
@@ -1334,7 +1402,10 @@ export default class SendToT3 extends Plugin {
     if(offset===undefined)throw Error('The response at the send cursor changed. Send again from the desired position.');
     return captureCursorInsertion(adapter.saved(),offset);
   }
-  openNoteSend(file:TFile,showSelector=false,insertion=this.noteSendInsertion(file)){
+  async openNoteSend(file:TFile,showSelector=false,insertion=this.noteSendInsertion(file)){
+    const finishPreview=!showSelector?this.previewSend(file.path,undefined,insertion):()=>{};
+    try{
+    await this.recoverNoteThread(file.path);
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(this.noteContext(file)),
       beginSend:options=>this.previewSend(file.path,undefined,insertion,options.inline.enabled),
       hasNewContent:(destination)=>this.hasSmartContent(file,destination),
@@ -1342,7 +1413,8 @@ export default class SendToT3 extends Plugin {
       sendToNew:(_text,key,resolve)=>this.sendNote(file,undefined,undefined,true,key,resolve?.(),insertion),
       sendToExisting:(_text,key,resolve,back)=>this.openNoteThreads(file,key,resolve,back,insertion),
     });
-    return openNoteSendFlow(this.app,host,showSelector);
+    return await openNoteSendFlow(this.app,host,showSelector);
+    }catch(error){new Notice(`T3 Code: ${message(error)}`,10000);}finally{finishPreview();}
   }
   async openNoteThreads(file:TFile,overrideKey?:string,resolve?:()=>ResolvedJobOptions,back?:()=>void,insertion=this.noteSendInsertion(file)){
     if(this.busy)return;
@@ -1408,6 +1480,7 @@ export default class SendToT3 extends Plugin {
     if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
     this.busy=true;
     try{
+      await this.recoverNoteThread(notePath);
       await this.assertNoteMode(notePath,{...this.connection(project),projectId:project.id,threadId});
       const history=await this.readImportHistory(project,threadId),run=importRuns(history.state).find(run=>run.messageId===messageId);
       if(!run||run.unavailable||!run.turnId||!run.turn)throw Error(run?.unavailable??'This response is no longer in the T3 history.');
@@ -1427,6 +1500,7 @@ export default class SendToT3 extends Plugin {
         await this.deviceInline.register(inserted);
         bindingId=id;
       }
+      await this.ensureNoteIdentity(notePath);
       this.rememberNoteThread(this.noteThreadIntent(notePath,project,{...this.connection(project),environmentId:history.source.environmentId}),threadId);
       await this.save(true);
       let save:Pick<RunImportResult,'saveState'|'pendingReason'>={saveState:pending?'streaming':'saved'};
@@ -1443,6 +1517,7 @@ export default class SendToT3 extends Plugin {
     jobOptions??=resolveJobOptions(this.settings.inlineStreaming);
     const finishPreview=this.previewSend(file.path,undefined,insertion,jobOptions.inline.enabled);
     try{
+      await this.recoverNoteThread(file.path);
       const active=this.app.workspace.getActiveViewOfType(MarkdownView);
       const content=active?.file?.path===file.path&&active.editor?this.notePromptDocument(active):await this.app.vault.read(file);
       if(!content.trim()){new Notice('This note is empty. Add Markdown before sending.');return;}
@@ -1608,7 +1683,8 @@ export default class SendToT3 extends Plugin {
       },
     };
   }
-  private openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false,showSelector=false){
+  private async openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false,showSelector=false){
+    try{await this.recoverNoteThread(note?.path);}catch(error){new Notice(`T3 Code: ${message(error)}`,10000);return;}
     // Generated text is captured context, never a source to move. Classify it
     // before the chooser/network waits: streaming may replace its surroundings.
     if(inline?.anchor)inline=this.canonicalChatContext(inline);
@@ -2087,6 +2163,7 @@ export default class SendToT3 extends Plugin {
     this.busy=true;
     const startedAt=Date.now();let request:Request|undefined;
     try{
+      await this.recoverNoteThread(note?.path);
       let smartCapture:SmartCapture|undefined,steeringSource:SteeringSource|undefined;
       let preparedInput=prompt;
       const historical=note&&options?.threadId&&!options.expectedProjectKey?this.previousNoteThread(note.path,options.threadId):undefined;
@@ -2575,6 +2652,7 @@ export default class SendToT3 extends Plugin {
     const startedAt=Date.now();let request:Request|undefined;
     const completion = {...this.settings.completion};
     try {
+      await this.recoverNoteThread(file.path);
       const savedThread=this.noteThread(file.path);
       const remembered=!options?.newThread&&!options?.threadId&&!options?.folderPicker&&(!options?.projectOverrideKey||savedThread&&`${savedThread.connectionId?savedThread.connectionId+':':''}${savedThread.projectId}`===options.projectOverrideKey)?savedThread:undefined;
       const historical=options?.threadId&&!options.folderPicker&&!options.projectOverrideKey?this.previousNoteThread(file.path,options.threadId):undefined;
@@ -2668,7 +2746,7 @@ export default class SendToT3 extends Plugin {
       request.inlineBindings.push(binding);
       for(const leaf of this.app.workspace.getLeavesOfType('markdown')){
         const view=leaf.view as MarkdownView;if(view.file?.path!==path)continue;
-        const initial=initialRegion(binding.id,binding.initialInput,binding.threadTitle,binding.intermediateMode,{startedAt:binding.createdAt});
+        const initial=initialRegion(binding.id,binding.initialInput,view.file!.basename,binding.intermediateMode,{startedAt:binding.createdAt},'sending');
         nativeResponses(this.app).preview(view,binding.id,regionBody(initial.text,binding.id)!.body);
       }
     }
@@ -2720,6 +2798,7 @@ export default class SendToT3 extends Plugin {
       await this.assertRequestMode(request);
       for(const binding of request.inlineBindings!){if(!this.deviceInline)throw Error('Streaming is unavailable.');await this.deviceInline.register(binding);}
       threadId=command.threadId!;
+      await this.ensureNoteIdentity(file.path,request.noteThread?.noteId);
       this.rememberNoteThread(this.noteThreadIntent(file.path,request.project,request.connection),threadId);await this.save(true);
     }else if(request){
       request=this.settings.pending.find(item=>item.id===request!.id)??request;
@@ -2727,6 +2806,7 @@ export default class SendToT3 extends Plugin {
       try{if(!this.settings.pending.some(item=>item.id===request!.id)){this.settings.pending.push(request);await this.save();}threadId=await this.dispatch(request,true);}finally{this.busy=false;}
     }else{
       const file=this.app.vault.getFileByPath(command.notePath);if(!file)throw Error('Source note not found.');
+      await this.recoverNoteThread(file.path);
       const paired=threadNoteMode(this.settings.threadNoteMode)==='one-to-one'?this.noteThread(file.path):undefined;
       const selected=command.threadId??paired?.threadId;
       const {project,link}=await this.chatTarget(file.path,paired,!paired,undefined,false);
@@ -2764,11 +2844,27 @@ export default class SendToT3 extends Plugin {
   private async captureNoteContext(request:Request){
     const messageId=commandId(request.id,'message');
     if(!request.prompt)return;
+    const noteId=request.smartSend?.noteId??request.noteThread?.noteId;
+    await this.ensureNoteIdentity(request.noteThread?.notePath??request.completion?.notePath,noteId);
+    if(request.noteThread&&noteId)request.noteThread.noteId=noteId;
     const threadId=request.threadId??commandId(request.id,'thread'),environmentId=request.connection.environmentId??await this.localInlineEnvironment();
     if(this.settings.noteContexts?.some(record=>record.messageId===messageId&&record.threadId===threadId&&record.environmentId===environmentId))return;
     const bindingIds=contextBindingIds(request);
     this.settings.noteContexts=mergeNoteContexts(this.settings.noteContexts,[{messageId,threadId,projectId:request.project.id,environmentId,notePath:request.noteThread?.notePath??request.completion?.notePath,bindingIds,createdAt:new Date().toISOString()}]);
     await this.save();
+  }
+  private async ensureNoteIdentity(path?:string,id?:string){
+    if(!path||!this.app?.vault?.getFileByPath?.(path))return;
+    id??=smartNote(this.smartData(),path);
+    const io=deviceNoteIO(this.app),document=await io.readNote(path);
+    if(document===undefined)throw Error('Save the note before sending so its T3 identity can be retained.');
+    const previous=noteIdentity(document);if(previous===id)return;
+    if(previous){const original=this.smartData().notes[previous];if(!original||original.path===path||!this.app.vault.getFileByPath(original.path))throw Error('The note identity changed while sending. Send again from its current note.');}
+    const next=await io.updateNote(path,current=>{if(noteIdentity(current)!==previous)throw Error('The note identity changed while sending. Send again.');return withNoteIdentity(current,id!);},()=>!this.stopped);
+    if(next===undefined)throw Error('The note changed before its T3 identity was saved. Send again.');
+    for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===path&&view.editor&&view.getMode?.()!=='preview')await view.save();}
+    const file=this.app.vault.getFileByPath(path);
+    if(!file||noteIdentity(await this.app.vault.read(file))!==id)throw Error('The T3 note identity has not been saved. Save the note and send again.');
   }
   private async reserveResponseStreams(request:Request){
     const responses=new Map<string,string>();

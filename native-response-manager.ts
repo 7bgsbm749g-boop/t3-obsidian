@@ -489,7 +489,9 @@ export class NativeResponseManager {
           const region=responseRegion(saved,id);
           if(!region||saved.slice(region.from,region.to)!==responseAnchor(id,saved))continue;
           if(record.state?.cleanupComplete&&adapter?.hasMaterialized(id))continue;
-          const body=(record.state?.cleanupComplete?record.state.finalBody:undefined)??record.finalWriter?.body??this.streams.get(id)?.body??record.state?.body??regionBody(initialRegion(id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,id)!.body;
+          const preparing=!record.state||record.state.status==='waiting';
+          const initialTitle=preparing?record.request.notePath.split('/').at(-1)!.replace(/\.md$/i,''):record.request.threadTitle;
+          const body=(record.state?.cleanupComplete?record.state.finalBody:undefined)??record.finalWriter?.body??this.streams.get(id)?.body??record.state?.body??regionBody(initialRegion(id,record.request.initialInput,initialTitle,record.request.intermediateMode,{startedAt:record.request.createdAt},preparing?'sending':'running').text,id)!.body;
           const cached=this.cached.get(id),restoring=!record.finalWriter&&cached&&this.reconnecting.has(id)&&previewMatches(cached,record);
           const stream=this.streams.get(id),failure=stream?.completionVerified?undefined:stream?.failure??record.state?.streamFailure;
           const failureBody=restoring?cached.body:body;
@@ -497,12 +499,12 @@ export class NativeResponseManager {
           if(!restoring)this.rememberPreview(record,displayed);
           const terminal=record.finalWriter||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict||['complete','completed','interrupted','error','cancelled','conflict'].includes(record.state?.status??'')||stream?.completionVerified||['complete','interrupted','error'].includes(stream?.phase??'');
           const connection=this.connectionIssues.get(id),visible=restoring&&!failure?this.titled(id,cached.body):displayed;
-          responses.push({id,body:connection?responseConnectionBody(visible,connection,id):visible,movable:!terminal&&!failure&&!connection,stoppable:!terminal});
+          responses.push({id,body:connection?responseConnectionBody(visible,connection,id):visible,movable:!terminal&&!failure&&!connection,stoppable:!terminal,followable:!terminal&&!failure&&!connection});
         }
         for(const stop of this.localStops.values()){
           if(stop.path!==view.file.path||!responseRegion(saved,stop.id)||adapter?.hasMaterialized(stop.id))continue;
           const index=responses.findIndex(response=>response.id===stop.id);
-          const sealed={id:stop.id,body:stop.hidden?'':stop.body};
+          const sealed={id:stop.id,body:stop.hidden?'':stop.body,followable:false};
           if(index>=0)responses[index]=sealed;else responses.push(sealed);
         }
         if(!adapter&&(fence||responses.length||commits.length||retired.length||settled.length||saved.includes('data-t3-tool-group=')&&saved.includes('send-to-t3-tool-group-content'))){
