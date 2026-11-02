@@ -250,6 +250,14 @@ test('live title metadata updates provisional and migrating headers without chan
  h.manager.dispose();
 });
 
+test('an unbound waiting response uses its note name and Sending until the live response arrives',async()=>{
+ const h=fixture(),pending=record();pending.state!.status='waiting';pending.state!.body=undefined;pending.request.threadTitle='New thread';
+ await h.manager.receive(pending);assert.match(h.visible(),/Note · Sending/);assert.doesNotMatch(h.visible(),/New thread ·|Note · Working/);
+ assert.ok(h.views.every(view=>view.getViewData()===before));
+ h.manager.stream({request:pending.request,messageId:id,sequence:1,turnId:'turn',phase:'running',body:'**Generated title · Working**\n\n> Live output'});
+ assert.match(h.visible(),/Generated title · Working/);assert.match(h.visible(),/Live output/);assert.doesNotMatch(h.visible(),/ · Sending/);h.manager.dispose();
+});
+
 test('direct device text wins over delayed host output until the checked final commit and Sync adoption',async()=>{
  const h=fixture(2),active=record();active.migrating=true;active.state!.body=undefined;active.state!.accepted=false;
  await h.manager.receive(active);

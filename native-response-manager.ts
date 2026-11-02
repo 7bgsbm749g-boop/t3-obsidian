@@ -489,7 +489,9 @@ export class NativeResponseManager {
           const region=responseRegion(saved,id);
           if(!region||saved.slice(region.from,region.to)!==responseAnchor(id,saved))continue;
           if(record.state?.cleanupComplete&&adapter?.hasMaterialized(id))continue;
-          const body=(record.state?.cleanupComplete?record.state.finalBody:undefined)??record.finalWriter?.body??this.streams.get(id)?.body??record.state?.body??regionBody(initialRegion(id,record.request.initialInput,record.request.threadTitle,record.request.intermediateMode,{startedAt:record.request.createdAt}).text,id)!.body;
+          const preparing=!record.state||record.state.status==='waiting';
+          const initialTitle=preparing?record.request.notePath.split('/').at(-1)!.replace(/\.md$/i,''):record.request.threadTitle;
+          const body=(record.state?.cleanupComplete?record.state.finalBody:undefined)??record.finalWriter?.body??this.streams.get(id)?.body??record.state?.body??regionBody(initialRegion(id,record.request.initialInput,initialTitle,record.request.intermediateMode,{startedAt:record.request.createdAt},preparing?'sending':'running').text,id)!.body;
           const cached=this.cached.get(id),restoring=!record.finalWriter&&cached&&this.reconnecting.has(id)&&previewMatches(cached,record);
           const stream=this.streams.get(id),failure=stream?.completionVerified?undefined:stream?.failure??record.state?.streamFailure;
           const failureBody=restoring?cached.body:body;
