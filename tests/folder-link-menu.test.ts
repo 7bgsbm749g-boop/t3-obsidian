@@ -71,7 +71,7 @@ async function folderMenuHarness(initial?:any){
   class Plugin {
     app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},
       workspace:{getActiveViewOfType:()=>undefined,onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{if(name==='file-menu')fileMenu=callback;}},
-      vault:{getName:()=> 'QLO2',getAbstractFileByPath:(path:string)=>path===folder.path?folder:undefined},
+      vault:{getName:()=> 'QLO2',read:async()=> '# Synthetic note',getAbstractFileByPath:(path:string)=>path===folder.path?folder:undefined},
     };
     async loadData(){return {...(shared.at(-1)??{}),paired:[{id:'c',name:'Laptop',url:'https://folder.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:project']};}
     async saveData(data:any){if(failSave)throw Error('Simulated settings storage failure');shared.push(data);}
@@ -203,8 +203,7 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
     h.setThreads([{id:'thread',projectId:'nested',title:'Existing',updatedAt:'2026-09-19',session:{status:'running',activeTurnId:'turn'},latestTurn:{state:'running'}},
       {id:'foreign',projectId:h.project.id,title:'Remembered project',updatedAt:'2026-09-20'},
       {id:'archived',projectId:'nested',title:'Archived',archivedAt:'2026-09-19'}]);
-    if(mobile){h.plugin.openNoteSend(file,true);await h.button(h.modals.at(-1),'Existing thread…').click();}
-    else {h.plugin.openNoteSend(file,true);await h.button(h.modals.at(-1),'Existing thread…').click();}
+    await h.plugin.openNoteSend(file,true);await h.button(h.modals.at(-1),'Existing thread…').click();
     const picker=h.modals.at(-1);assert.equal(picker.getItems().length,1);
     assert.equal(picker.getItems()[0].id,'foreign');
     assert.match(picker.getItemText(picker.getItems()[0]),/Remembered project · Idle/);

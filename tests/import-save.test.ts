@@ -19,7 +19,7 @@ async function fixture(){
   const module={exports:{} as any};
   runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(id:string)=>{assert.equal(id,'obsidian');return api;},crypto:webcrypto,URL,TextEncoder,TextDecoder,console,setTimeout,clearTimeout,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})}});
   const plugin=new module.exports.default();
-  plugin.app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:(path:string)=>path===file.path?file:undefined,read:async()=>document,process:async(_file:any,change:(value:string)=>string)=>document=change(document)}};
+  plugin.app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:(path:string)=>path===file.path?file:undefined,getMarkdownFiles:()=>[file],read:async()=>document,process:async(_file:any,change:(value:string)=>string)=>document=change(document)}};
   plugin.settings={vaultId:randomUUID(),inlineStreaming:{enabled:true},responseBindings:{},noteThreads:[]};
   plugin.save=async()=>{};
   let saveResult:any={saved:false,reason:'sync'};

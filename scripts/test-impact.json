@@ -84,6 +84,10 @@
     ],
     "tests/local-response-manager.test.ts": [
       "validation/agent-note-edits-lab.ts"
+    ],
+    "tests/note-identity.test.ts": [
+      "validation/note-thread-moves-lab.ts",
+      "scripts/build-native-response-lab.mjs"
     ]
   }
 }
