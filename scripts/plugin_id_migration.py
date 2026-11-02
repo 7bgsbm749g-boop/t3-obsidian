@@ -11,6 +11,20 @@ LEGACY_ID = 'send-to-t3-code'
 def installed_plugin(plugins: Path) -> Path:
     current, legacy = plugins / PLUGIN_ID, plugins / LEGACY_ID
     if current.exists() and legacy.exists():
+        # Sync or an older still-open device can recreate the old settings
+        # directory after ID migration. It is not a second installed plugin.
+        # Keep those settings intact; never merge or remove them here.
+        if not current.is_symlink() and not legacy.is_symlink() and legacy.is_dir():
+            contents = list(legacy.iterdir())
+            if (len(contents) == 1 and contents[0].name == 'data.json'
+                    and contents[0].is_file() and not contents[0].is_symlink()
+                    and all((current / name).is_file() and not (current / name).is_symlink()
+                            for name in ('main.js', 'manifest.json', 'styles.css'))):
+                try:
+                    if json.loads((current / 'manifest.json').read_text(encoding='utf-8-sig')).get('id') == PLUGIN_ID:
+                        return current
+                except (OSError, ValueError, AttributeError):
+                    pass
         raise SystemExit(f'Both plugin installations exist; inspect before publishing: {plugins}')
     return current if current.exists() or not legacy.exists() else legacy
 

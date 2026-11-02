@@ -6,6 +6,7 @@ import {runImportReceipts} from './run-import-receipt';
 import {markdownCodeRanges} from './reply-html';
 import {markdownText,mergeSpans as union,subtractSpans} from './smart-markdown';
 import {changedEdits} from './coordinated-merge';
+import {noteIdentity,noteIdentityRanges} from './note-identity';
 
 export type Span=[number,number];
 export interface PackedText {hash:string;encoding:'text'|'gzip';data:string}
@@ -65,7 +66,8 @@ export function mergeSmartSend(...values:unknown[]):SmartSendData{
   for(const h of Object.values(out.heads))for(const id of h.parents)retired.add(id);
   for(const id of retired)delete out.heads[id];out.retired=[...retired].sort();return out;
 }
-export function smartNote(data:SmartSendData,path:string){
+export function smartNote(data:SmartSendData,path:string,preferred?:string){
+  if(preferred&&data.notes[preferred]?.path===path&&!data.notes[preferred].deleted)return preferred;
   const existing=Object.entries(data.notes).find(([,n])=>n.path===path&&!n.deleted);if(existing)return existing[0];
   let id=contentHash(path);while(data.notes[id]){const old=data.notes[id];id=contentHash(JSON.stringify([id,old.path,old.revision,old.deleted]));}
   data.notes[id]={path,revision:Date.now()};return id;
@@ -174,6 +176,7 @@ function editedResponseRange(document:string,body:string,record:ResponseText):Sp
 }
 export async function sourceProjection(data:SmartSendData,noteId:string,document:string){
   const removed:Span[]=[],known:Span[]=[],identities=noteIdentities(data,noteId);
+  removed.push(...noteIdentityRanges(document).map(({from,to})=>[from,to] as Span));
   let comparison:ReturnType<typeof markdownText>|undefined;
   for(const edit of Object.values(data.noteEdits??{}))if(identities.has(edit.noteId))removed.push(...mappedCoverage(await unpackText(edit.source),document,edit.added));
   const receipts=[...runImportReceipts(document)],code=receipts.length?markdownCodeRanges(document):[];
@@ -217,7 +220,7 @@ export async function sourceProjection(data:SmartSendData,noteId:string,document
   return {text,segments};
 }
 export async function prepareSmartSend(data:SmartSendData,path:string,destination:string,document:string,scope?:Span){
-  const noteId=smartNote(data,path),projection=await sourceProjection(data,noteId,document),current=projection.text;
+  const noteId=smartNote(data,path,noteIdentity(document)),projection=await sourceProjection(data,noteId,document),current=projection.text;
   const identities=noteIdentities(data,noteId),heads=Object.entries(data.heads).filter(([,h])=>identities.has(h.noteId)&&h.destination===destination);
   let covered:Span[]=[];for(const [,head] of heads)covered.push(...mappedCoverage(await unpackText(head.source),current,head.covered));covered=union(covered);
   const requested:Span[]=scope?projection.segments.flatMap(segment=>{const from=Math.max(scope[0],segment.rawFrom),to=Math.min(scope[1],segment.rawTo);return to>from?[[segment.from+from-segment.rawFrom,segment.from+to-segment.rawFrom] as Span]:[];}):[[0,current.length]];

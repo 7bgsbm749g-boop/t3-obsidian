@@ -8,6 +8,43 @@ from scripts.plugin_id_migration import PLUGIN_ID, LEGACY_ID, installed_plugin, 
 
 
 class PluginIdMigrationTests(unittest.TestCase):
+    def test_synced_legacy_settings_only_directory_is_preserved_beside_current_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plugins = Path(directory)
+            legacy = plugins / LEGACY_ID
+            current = plugins / PLUGIN_ID
+            legacy.mkdir()
+            current.mkdir()
+            settings = b'{"retained":"old device settings"}\n'
+            (legacy / 'data.json').write_bytes(settings)
+            (current / 'manifest.json').write_text(json.dumps({'id': PLUGIN_ID}))
+            (current / 'main.js').write_text('current runtime')
+            (current / 'styles.css').write_text('current styles')
+            before = {str(path): path.read_bytes() for path in plugins.rglob('*') if path.is_file()}
+            self.assertEqual(installed_plugin(plugins), current)
+            self.assertEqual({str(path): path.read_bytes() for path in plugins.rglob('*') if path.is_file()}, before)
+            (legacy / 'manifest.json').write_text(json.dumps({'id': LEGACY_ID}))
+            with self.assertRaises(SystemExit):
+                installed_plugin(plugins)
+
+    def test_settings_only_exception_refuses_symlinks_and_incomplete_current_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plugins = Path(directory)
+            legacy = plugins / LEGACY_ID
+            current = plugins / PLUGIN_ID
+            legacy.mkdir()
+            current.mkdir()
+            (legacy / 'data.json').write_text('{}')
+            (current / 'manifest.json').write_text(json.dumps({'id': PLUGIN_ID}))
+            (current / 'main.js').write_text('runtime')
+            with self.assertRaises(SystemExit):
+                installed_plugin(plugins)
+            (current / 'styles.css').write_text('styles')
+            (legacy / 'data.json').unlink()
+            (legacy / 'data.json').symlink_to(current / 'manifest.json')
+            with self.assertRaises(SystemExit):
+                installed_plugin(plugins)
+
     def fixture(self, root):
         config = root / 'vault/.obsidian'
         plugin = config / 'plugins' / LEGACY_ID
