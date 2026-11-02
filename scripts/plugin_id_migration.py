@@ -3,16 +3,70 @@ from pathlib import Path
 import json
 import os
 import shutil
+import hashlib
 
 PLUGIN_ID = 't-three-code'
 LEGACY_ID = 'send-to-t3-code'
 
 
+def legacy_settings_remnant(plugins: Path) -> bool:
+    """A stale client/Sync may recreate data.json after the runtime ID moved."""
+    current, legacy = plugins / PLUGIN_ID, plugins / LEGACY_ID
+    if any(path.is_symlink() or not path.is_dir() for path in (current, legacy)):
+        return False
+    manifest = current / 'manifest.json'
+    if any(path.is_symlink() or not path.is_file() for path in (manifest, current / 'main.js')):
+        return False
+    try:
+        if json.loads(manifest.read_text(encoding='utf-8-sig')).get('id') != PLUGIN_ID:
+            return False
+    except (ValueError, OSError, AttributeError):
+        return False
+    return all(path.name == 'data.json' and path.is_file() and not path.is_symlink() for path in legacy.iterdir())
+
+
 def installed_plugin(plugins: Path) -> Path:
     current, legacy = plugins / PLUGIN_ID, plugins / LEGACY_ID
     if current.exists() and legacy.exists():
-        raise SystemExit(f'Both plugin installations exist; inspect before publishing: {plugins}')
+        if not legacy_settings_remnant(plugins):
+            raise SystemExit(f'Both plugin installations exist; inspect before publishing: {plugins}')
     return current if current.exists() or not legacy.exists() else legacy
+
+
+def archive_legacy_settings(plugins: Path, backup: Path) -> dict | None:
+    """Caller holds release.lock and pauses QLO2 Sync. Never merge settings."""
+    legacy, current = plugins / LEGACY_ID, plugins / PLUGIN_ID
+    if not legacy.exists() and not legacy.is_symlink():
+        return None
+    if not legacy_settings_remnant(plugins):
+        raise SystemExit(f'Legacy folder is not a settings-only remnant; inspect before cleanup: {legacy}')
+    if backup.resolve().is_relative_to(plugins.parent.parent.resolve()):
+        raise SystemExit('Legacy settings backups must be outside the vault.')
+    active = current / 'data.json'
+    active_bytes = active.read_bytes() if active.exists() else None
+    settings = legacy / 'data.json'
+    old_bytes = settings.read_bytes() if settings.exists() else None
+    backup.mkdir(parents=True, mode=0o700, exist_ok=False)
+    saved = backup / 'plugin'
+    shutil.copytree(legacy, saved)
+    # Validate again after the copy. A real second plugin, changed settings,
+    # or a symlink introduced during backup cannot be silently removed.
+    if (not legacy_settings_remnant(plugins) or
+            (settings.read_bytes() if settings.exists() else None) != old_bytes or
+            ((saved / 'data.json').read_bytes() if (saved / 'data.json').exists() else None) != old_bytes or
+            (active.read_bytes() if active.exists() else None) != active_bytes):
+        raise SystemExit('Plugin settings changed during legacy backup; cleanup refused.')
+    # Keep the copied settings immutable even if an old process still has the
+    # removed directory's data.json open. The original directory is retained too.
+    legacy.rename(backup / 'removed-directory')
+    if (active.read_bytes() if active.exists() else None) != active_bytes:
+        raise SystemExit('Current plugin settings changed during legacy cleanup.')
+    result = {'removedDirectory': str(legacy), 'backup': str(saved),
+              'legacySettingsSha256': hashlib.sha256(old_bytes).hexdigest() if old_bytes is not None else None,
+              'currentSettingsSha256': hashlib.sha256(active_bytes).hexdigest() if active_bytes is not None else None}
+    with (backup / 'receipt.json').open('x') as output:
+        json.dump(result, output, indent=2)
+    return result
 
 
 def needs_migration(plugin: Path, identifier: str) -> bool:
