@@ -78,7 +78,7 @@ function safeInsertionOffset(document:string,initialOffset:number):number {
 export function startMarker(id:string){return `<!-- t3-inline:start:${id} -->`;}
 export function endMarker(id:string){return `<!-- t3-inline:end:${id} -->`;}
 export function activeInlineIds(document:string):string[]{
-  return responseIds(document).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Sending…|Working|Waiting for subagents|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
+  return responseIds(document).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Sending…?|Working|Waiting for subagents|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
 }
 export function failedInlineIds(document:string):string[]{
   return responseIds(document).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · Error\*\*/m.test(regionBody(document,id)?.body??''));
@@ -92,10 +92,10 @@ export function renderInlineInput(text:string,label='You'):string {
   return `> [!t3-steering] ${heading}\n${closeOpenFence(visibleInlineInput(text)).split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
 }
 
-export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming):{text:string;bodyHash:string} {
+export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming,phase:'running'|'sending'='running'):{text:string;bodyHash:string} {
   const status=`${mode==='collapse'?'> [!t3-progress]+ ':''}**${inlineThreadLabel(threadTitle)} · Working**${timing?' '+runTimer(timing):''} <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
   const contents=[...(initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[]),responseActivityRow()].join('\n\n');
-  const body=status+(mode==='collapse'?'\n>\n'+contents.split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'\n\n'+contents);
+  const body=phase==='sending'?renderInlineTurn({messages:[],activities:[]},'',id,'sending',mode,undefined,undefined,initialInput,threadTitle,timing).trimEnd():status+(mode==='collapse'?'\n>\n'+contents.split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'\n\n'+contents);
   // The final blank line also closes the quote in Obsidian Live Preview when
   // this response is the last block in the note.
   return {text:`\n${startMarker(id)}\n${body}\n${endMarker(id)}\n\n`,bodyHash:contentHash(body)};
@@ -103,7 +103,7 @@ export function initialRegion(id:string,initialInput?:InitialInlineInput,threadT
 
 /** Update a waiting header without rebuilding an unbound response's contents. */
 export function renameInlineHeader(body:string,title:string):string {
-  return body.replace(/^((?:> \[!t3-progress\][+-] )?\*\*)[^\n]*( · (?:Working|Reconnecting)\*\*)/m,(_match,prefix,suffix)=>`${prefix}${inlineThreadLabel(title)}${suffix}`);
+  return body.replace(/^((?:> \[!t3-progress\][+-] )?\*\*)[^\n]*( · (?:Sending…?|Working|Reconnecting)\*\*)/m,(_match,prefix,suffix)=>`${prefix}${inlineThreadLabel(title)}${suffix}`);
 }
 
 export function regionBody(document:string,id:string):{from:number;to:number;body:string}|null {
@@ -548,7 +548,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const label=inlineThreadLabel(state.title??threadTitle);
   const delegated=delegatedWork(state,[turnId]),waiting=phase==='running'&&delegated.paused;
   const handoffError=phase==='error'&&delegated.handoffFailed?'Worktree continuation failed. The response output has been kept.':'';
-  const heading=`**${label} · ${delegated.moving&&phase==='running'?'Moving to worktree':waiting?'Waiting for subagents':phase==='running'||phase==='sending'?'Working':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
+  const heading=`**${label} · ${phase==='sending'?'Sending':delegated.moving&&phase==='running'?'Moving to worktree':waiting?'Waiting for subagents':phase==='running'?'Working':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const timer=timing?' '+runTimer(timing):'';
   const spinner=['running','sending'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const displayedTurns=[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])];
@@ -578,7 +578,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const workRows=historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
   const historyRows=[...workRows,
     ...timelineEmissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
-  const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??(currentTool?renderResponseToolGroup(currentTool.group,currentTool):responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Thinking'))}`:'';
+  const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??(currentTool?renderResponseToolGroup(currentTool.group,currentTool):responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Sending'))}`:'';
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;

@@ -74,7 +74,7 @@ export class InlineChatManager {
       if(status.finalSaved&&!job.finalized){job.finalized=true;changed=true;}
     }
     if(job.finalized||job.phase==='cancelled'||job.stopRunTerminal)continue;
-    const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region){job.finalized=true;changed=true;}else if(/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · Error\*\*/m.test(region.body)&&job.phase!=='error'){job.phase='error';changed=true;}else if(/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Working|Reconnecting)\*\*/m.test(region.body)&&job.phase==='error'){job.phase='running';changed=true;}
+    const editor=this.editorFor(job);if(!editor)continue;const region=regionBody(editor.getValue(),job.id);if(!region){job.finalized=true;changed=true;}else if(/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · Error\*\*/m.test(region.body)&&job.phase!=='error'){job.phase='error';changed=true;}else if(/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Sending…?|Working|Reconnecting)\*\*/m.test(region.body)&&job.phase==='error'){job.phase='running';changed=true;}
   }if(changed)this.persist();}
   follow(job:InlineJob,messageId:string){
     if(job.hosted)throw Error('Hosted responses need their owner to attach the continuation.');
@@ -123,7 +123,7 @@ export class InlineChatManager {
   private reserveAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,offset:number,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string,options?:ResolvedJobOptions,paragraphBreak=false):InlineJob {
     if(this.stopped)throw Error('The plugin was disabled.');
     const file=info.file;if(!file||file.path!==expectedPath||file.extension.toLowerCase()!=='md')throw Error('The original Markdown note is no longer open. Reopen it and ask T3 again.');
-    const id=requestId,createdAt=new Date().toISOString(),mode=options?.inline.intermediateMode??intermediateMode(this.keepIntermediate()),region=initialRegion(id,initialInput,threadTitle,mode,{startedAt:createdAt});
+    const id=requestId,createdAt=new Date().toISOString(),mode=options?.inline.intermediateMode??intermediateMode(this.keepIntermediate()),region=initialRegion(id,initialInput,file.basename??file.path.split('/').at(-1)!.replace(/\.md$/i,''),mode,{startedAt:createdAt},'sending');
     const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt,keepIntermediate:mode!=='remove',intermediateMode:mode,finalAnswerFormat:options?.inline.finalAnswerFormat??finalAnswerFormat(this.answerFormat()),...(initialInput?{initialInput}:{})};
     this.jobs.push(job);this.runtime(job).source={editor,info};
     try{this.persist();replaceInlineEditorText(editor,(paragraphBreak&&offset>0&&editor.getValue()[offset-1]!=='\n'?'\n':'')+region.text,offset);}
