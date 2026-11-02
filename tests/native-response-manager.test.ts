@@ -31,6 +31,15 @@ function fixture(panes=1,local=new Map<string,unknown>()){
 }
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
 async function start(h:ReturnType<typeof fixture>){await h.manager.receive(record());await h.manager.receive(record(other));for(const frames of h.frames)frames.length=0;}
+test('terminal state removes Follow before the interrupted preview reaches the saved file',async()=>{
+ const h=fixture(),active=record(),key='thread:active';
+ active.state!.body=`> [!t3-progress]+ **Thread · Working** <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>\n>\n> Retained text`;
+ await h.manager.receive(active);const adapter=h.manager.view(h.views[0] as any)!;
+ adapter.toggleScroll(key);assert.equal(adapter.scrollControl(key)?.active,true);
+ h.manager.stream({request:active.request,messageId:id,sequence:10,phase:'interrupted',completionVerified:true,body:active.state!.body!});
+ assert.equal(adapter.scrollControl(key),undefined);assert.equal(adapter.saved(),before);
+ assert.ok(h.visible().includes('Retained text'));h.manager.dispose();
+});
 test('native note navigation restores the same pane and note follow choice after replacing its adapter',async()=>{
   for(const active of [true,false]){
     const h=fixture(),view=h.views[0];Object.assign(view,{leaf:{}});

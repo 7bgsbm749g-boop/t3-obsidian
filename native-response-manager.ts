@@ -499,12 +499,12 @@ export class NativeResponseManager {
           if(!restoring)this.rememberPreview(record,displayed);
           const terminal=record.finalWriter||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict||['complete','completed','interrupted','error','cancelled','conflict'].includes(record.state?.status??'')||stream?.completionVerified||['complete','interrupted','error'].includes(stream?.phase??'');
           const connection=this.connectionIssues.get(id),visible=restoring&&!failure?this.titled(id,cached.body):displayed;
-          responses.push({id,body:connection?responseConnectionBody(visible,connection,id):visible,movable:!terminal&&!failure&&!connection,stoppable:!terminal});
+          responses.push({id,body:connection?responseConnectionBody(visible,connection,id):visible,movable:!terminal&&!failure&&!connection,stoppable:!terminal,followable:!terminal&&!failure&&!connection});
         }
         for(const stop of this.localStops.values()){
           if(stop.path!==view.file.path||!responseRegion(saved,stop.id)||adapter?.hasMaterialized(stop.id))continue;
           const index=responses.findIndex(response=>response.id===stop.id);
-          const sealed={id:stop.id,body:stop.hidden?'':stop.body};
+          const sealed={id:stop.id,body:stop.hidden?'':stop.body,followable:false};
           if(index>=0)responses[index]=sealed;else responses.push(sealed);
         }
         if(!adapter&&(fence||responses.length||commits.length||retired.length||settled.length||saved.includes('data-t3-tool-group=')&&saved.includes('send-to-t3-tool-group-content'))){
