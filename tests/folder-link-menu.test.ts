@@ -607,6 +607,28 @@ test('newly paired machines keep their selection when their discovery ID becomes
   }finally{h.plugin.onunload();}
 });
 
+test('first-send selection waits for confirmation and follows the note identity after rename',async()=>{
+ const h=await folderMenuHarness();
+ try{
+  const {file}=h.fileMenu('Notes/Fresh.md',false);Object.assign(file,{basename:'Fresh',stat:{ctime:123}});
+  let document='First instruction.';const sent:any[]=[];
+  h.plugin.app.vault.read=async()=>document;h.plugin.app.vault.getFileByPath=(path:string)=>path===file.path?file:undefined;
+  h.plugin.settings.autoSettleThreads=false;h.plugin.settings.inlineStreaming.enabled=false;
+  h.plugin.settings.folderLinks=[{id:'link',folderPath:'Notes',connectionId:'c',environmentId:'env',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot}];
+  h.plugin.requestTitle=async()=> 'Fresh';
+  h.plugin.readChatThread=async()=>({id:'confirmed-thread',projectId:h.project.id,title:'Fresh',session:{status:'ready',activeTurnId:null},latestTurn:{state:'completed'}});
+  h.plugin.dispatch=async(request:any)=>{sent.push(request);h.plugin.rememberStarted(request,'confirmed-thread');await h.plugin.save();return 'confirmed-thread';};
+  await h.plugin.openNoteSend(file);assert.equal(h.modals.length,1);assert.equal(sent.length,0);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),false);
+  h.modals[0].close();await h.plugin.openNoteSend(file);assert.equal(h.modals.length,2);assert.equal(sent.length,0);
+  await h.modals[1].choose('new');assert.equal(sent.length,1);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),true);
+  moveSmartNotes(h.plugin.smartData(),file.path,'Notes/Renamed.md');file.path='Notes/Renamed.md';document+='\nFollow-up.';
+  assert.equal(h.plugin.hasConfirmedNoteSend('Notes/Fresh.md'),false);assert.equal(h.plugin.hasConfirmedNoteSend('Notes/Copy.md'),false);
+  await h.plugin.openNoteSend(file);assert.equal(h.modals.length,2);assert.equal(sent.length,2);assert.equal(sent[1].threadId,'confirmed-thread');
+  assert.match(sent[1].prompt,/Follow-up/);assert.doesNotMatch(sent[1].prompt,/First instruction/);
+  moveSmartNotes(h.plugin.smartData(),file.path);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),false);
+ }finally{h.plugin.onunload();}
+});
+
 test('whole-note sends, command-bar asks and confirmed receipts use one Smart Send history',async()=>{
  const h=await folderMenuHarness();
  try{
@@ -636,7 +658,7 @@ test('whole-note sends, command-bar asks and confirmed receipts use one Smart Se
  }finally{h.plugin.onunload();}
 });
 
-for(const confirmed of [false,true])test(`import selects its source for automatic Smart Send (existing coverage=${confirmed})`,async()=>{
+for(const confirmed of [false,true])test(`import selects its source but only confirmed sends permit automatic Smart Send (existing coverage=${confirmed})`,async()=>{
  const h=await folderMenuHarness();
  try{
   const {file}=h.fileMenu('Notes/Import.md',false);Object.assign(file,{basename:'Import',stat:{ctime:123}});
@@ -666,7 +688,12 @@ for(const confirmed of [false,true])test(`import selects its source for automati
   assert.equal(h.shared.at(-1).noteThreads.find((entry:any)=>entry.threadId===threadId).environmentId,'env');
   document+='\nFresh follow-up.';const modalCount=h.modals.length;
   await h.plugin.openNoteSend(file);
-  assert.equal(h.modals.length,modalCount,'automatic continuation must not open the selector');assert.equal(sent.length,before+1);
+  if(confirmed)assert.equal(h.modals.length,modalCount,'confirmed continuation must not open the selector');
+  else{
+   assert.equal(h.modals.length,modalCount+1,'import alone must leave the first-send selector enabled');assert.equal(sent.length,before);
+   const chooser=h.modals.at(-1);await chooser.ready;await chooser.choose('default');
+  }
+  assert.equal(sent.length,before+1);
   assert.equal(sent.at(-1).threadId,threadId);assert.equal(sent.at(-1).project.id,h.project.id);
   assert.match(sent.at(-1).prompt,/Fresh follow-up/);assert.doesNotMatch(sent.at(-1).prompt,/Earlier instruction|Imported prompt|Imported answer|t3-run-import/);
   const heads=JSON.stringify(h.plugin.smartData().heads);

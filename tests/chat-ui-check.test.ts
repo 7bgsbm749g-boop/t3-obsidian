@@ -35,7 +35,7 @@ test('selector shows no block until Send, then shows it while the exact check is
 
 test('no new content and destination timeout clear the pending block',async()=>{
  const empty=await fixture(undefined,false,false,true,false,false);await empty.opening;
- assert.deepEqual(empty.previews,['show','clear']);assert.equal(empty.sent.length,0);empty.modals[0].close();
+ assert.deepEqual(empty.previews,[]);assert.equal(empty.sent.length,0);empty.modals[0].close();
  const timeout=await fixture(undefined,false,false,true);await timeout.opening;
  assert.deepEqual(timeout.previews,['show','clear']);assert.equal(timeout.sent.length,0);
 });
@@ -106,9 +106,29 @@ test('automatic default checks and sends the exact previous thread without openi
  assert.equal(h.modals.length,0);assert.equal(h.sent.length,1);assert.equal(h.sent[0].d.threadId,'checked');
 });
 
-test('automatic sending creates a new thread only when no default exists',async()=>{
+test('first send opens the chooser without a preview or dispatch and cancellation keeps it fresh',async()=>{
  const h=await fixture(undefined,false,false,true,false);await h.opening;
- assert.equal(h.modals.length,0);assert.equal(h.calls.length,0);assert.deepEqual(h.sent,[{target:'new',key:'project'}]);
+ assert.equal(h.modals.length,1);assert.equal(h.calls.length,0);assert.deepEqual(h.sent,[]);assert.deepEqual(h.previews,[]);
+ h.modals[0].close();await h.exports.openNoteSendFlow({},h.host);
+ assert.equal(h.modals.length,2);assert.deepEqual(h.sent,[]);
+ await h.modals[1].choose('new');assert.deepEqual(h.sent,[{target:'new',key:'project'}]);
+});
+
+test('a first typed Ask or selection uses the chooser and retains its captured prompt',async()=>{
+ const h=await fixture(undefined,false,false,true,false);await h.opening;h.modals[0].close();
+ const prompts:string[]=[];h.host.sendToExisting=async(prompt:string)=>{prompts.push(prompt);};
+ await h.exports.openChatFlow({},h.host,'Selected passage.\n\n**USER ASKS:**\nExplain it.');
+ assert.equal(h.modals.length,2);assert.equal(h.sent.length,0);assert.deepEqual(h.previews,[]);
+ await h.modals[1].choose('existing');assert.deepEqual(prompts,['Selected passage.\n\n**USER ASKS:**\nExplain it.']);
+});
+
+test('a remembered imported thread still requires a first-send choice',async()=>{
+ const h=await fixture(undefined,false,false,false);h.modals[0].close();
+ (h.host as any).hasConfirmedNoteSend=()=>false;
+ await h.exports.openNoteSendFlow({},h.host);
+ assert.equal(h.modals.length,2);assert.equal(h.sent.length,0);assert.deepEqual(h.previews,[]);
+ h.calls.at(-1)!.resolve({label:'Continue thread',threadId:'imported',projectKey:'project'});await h.modals[1].ready;
+ await h.modals[1].choose('default');assert.equal(h.sent[0].d.threadId,'imported');
 });
 
 test('an unavailable or timed-out automatic default sends nothing and never falls back to New thread',async()=>{

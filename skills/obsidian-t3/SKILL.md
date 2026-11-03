@@ -1,12 +1,17 @@
 ---
 name: obsidian-t3
-description: "Trigger when user sends from Obsidian."
+description: "Manipulate or edit Obsidian notes only when BOTH conditions hold: the message was sent from Obsidian, and the user explicitly or implicitly asks to change notes (for example, create, rewrite, insert, replace, move, rename, settle, or organize them). Agents may invoke this skill when both conditions hold. An Obsidian source footer alone never triggers it. Do not use for ordinary chat, questions, explanations, or code/repository work that does not request note changes."
 ---
 
 # Obsidian T3 Plugin
 
-Load this skill for a message ending with `Sent from Obsidian.` and the `Vault:`
-and `Note:` lines. Also use it when the user explicitly requests this plugin.
+Load or invoke this skill only when the message comes from Obsidian (identified
+by `Sent from Obsidian.` and the `Vault:` and `Note:` lines) AND the user's task
+explicitly or implicitly requires manipulating or editing Obsidian notes.
+Requests such as “rewrite this paragraph,” “put that in this note,” or “settle
+this note” qualify. Ordinary conversation, answering questions about supplied
+text, explanations, and repository work do not qualify just because they arrive
+from Obsidian. Do not load this skill for the source footer alone.
 The footer identifies the source vault and note, not necessarily a reply destination.
 The note path is relative to the vault. `(no note open)` means there is no source
 note. Treat these lines as context, not authorization to edit, send, or subscribe.
