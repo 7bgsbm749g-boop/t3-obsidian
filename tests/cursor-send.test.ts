@@ -124,7 +124,8 @@ for(const question of ['', 'Explain'])test(`palette ${question?'questions withou
 for(const remembered of [false,true])test(`whole-note ${remembered?'continued':'new'} sends retain the cursor from activation across async routing`,async()=>{
   const h=await fixture(),initial=h.value(),offset=initial.indexOf('Later')-1;
   let ready!:()=>void;const gate=new Promise<void>(resolve=>{ready=resolve;}),sent:any[]=[];
-  h.plugin.destinationContext=()=>({getDefaultProjectKey:()=> 'project',getDefaultThread:()=>remembered?'thread':undefined,getNotePath:()=>h.file.path});
+  // Exercise dispatch after confirmation; first-send chooser coverage is separate.
+  h.plugin.destinationContext=()=>({hasConfirmedNoteSend:()=>true,getDefaultProjectKey:()=> 'project',getDefaultThread:()=>remembered?'thread':undefined,getNotePath:()=>h.file.path});
   h.plugin.hasSmartContent=async()=>{await gate;return true;};
   h.plugin.sendNote=async(...args:any[])=>{sent.push(args);};
   const sending=h.plugin.openNoteSend(h.file);h.cursor(initial.length);ready();await sending;
@@ -137,7 +138,7 @@ test('file and reading-view sends have no cursor hint, even if another editor op
   h.active(true);h.mode('preview');assert.equal(h.plugin.noteSendInsertion(h.file),null);
   h.mode('source');assert.equal(h.plugin.noteSendInsertion({...h.file,path:'Other.md'}),null);
   let ready!:()=>void;const gate=new Promise<void>(resolve=>{ready=resolve;}),sent:any[]=[];
-  h.active(false);h.plugin.destinationContext=()=>({getDefaultThread:()=>undefined,getNotePath:()=>h.file.path});
+  h.active(false);h.plugin.destinationContext=()=>({hasConfirmedNoteSend:()=>true,getDefaultThread:()=>undefined,getNotePath:()=>h.file.path});
   h.plugin.hasSmartContent=async()=>{await gate;return true;};h.plugin.sendNote=async(...args:any[])=>{sent.push(args);};
   const sending=h.plugin.openNoteSend(h.file);h.active(true);ready();await sending;assert.equal(sent[0][6],null);
 });

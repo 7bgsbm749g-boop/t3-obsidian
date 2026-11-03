@@ -5,6 +5,18 @@ selection and typed Ask uses the same confirmed source record for its note,
 destination machine, project and thread. The command bar remains a direct Ask
 surface. Note and editor menus also provide the bottom Ask composer.
 
+The first Send or Ask from a note opens the destination selector. Automatic
+sending is available only after T3 confirms a send from that stable note identity.
+Preparation, cancellation, folder links, and imported runs do not establish that
+confirmation. An imported thread can still be chosen explicitly in the selector.
+Later sends use the previous thread, unless Control or Choose destination requests
+the selector, or there is no new source for the previous thread. Notes with no
+retained confirmed-send record use the first-send selector. The native fixture
+`node scripts/build-native-response-lab.mjs evidence/TASK/native --first-send`
+checks cancellation, explicit thread choice, confirmed continuation, selection
+Ask, and import-only history in a separate vault. It uses synthetic acceptance
+and creates no external T3 threads; QLO2 delivery has separate client/Sync checks.
+
 Only additions are sent, in current note order. Removals produce no message;
 replacement text is added text with no correction/deletion labels. Preparing a
 request does not confirm coverage. The immutable request captures its source
@@ -19,7 +31,11 @@ type/folding markers for both sent source and saved replies. New text retains
 its Markdown wrappers. Custom callout titles, code, escapes, link destinations,
 numbers, and task states remain meaningful; changing a task state sends its
 complete checkbox marker. Existing receipts keep their original source offsets.
-Explicit selections cover only their requested intervals. New destinations
+Editor and palette selections limit source context to their requested intervals;
+they do not attach the rest of the note. A typed Ask without a selection uses
+eligible unsent note text plus the question. The Files sidebar Send considers
+the whole note regardless of editor selection. This source scope is separate
+from the per-thread filter for already delivered text. New destinations
 start with no coverage. Typed questions always send independently of source
 coverage. An Ask about already delivered selected source includes a bounded
 160-character reference. An explicitly selected generated reply remains

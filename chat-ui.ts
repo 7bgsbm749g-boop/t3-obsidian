@@ -32,6 +32,8 @@ export interface ChatHost {
   onProjectChange?(listener:()=>void):()=>void;
   getProjectChoices():{key:string;label:string}[];
   getDefaultThread(projectKey?:string):string|undefined;
+  /** Imports and folder links do not establish a confirmed send from a note. */
+  hasConfirmedNoteSend?():boolean;
   getDefaultDestination?(projectKey?:string,signal?:AbortSignal):Promise<ChatDestination>;
   hasNewContent?(destination:ChatDestination,prompt:string):Promise<boolean>;
   /** Captured routing metadata, not an active-turn authorization. */
@@ -218,9 +220,12 @@ class SendDestinationModal extends NoteTabPanel {
 /** Resolve the same default as the selector, without creating a panel. */
 async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
   const send=async()=>{
+    const key=host.getDefaultProjectKey?.();
+    if(!(host.hasConfirmedNoteSend?.()??Boolean(host.getDefaultThread(key)||host.steering))){
+      new SendDestinationModal(app,host,prompt).open();return;
+    }
     const finishPreview=host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false}));
     try{
-      const key=host.getDefaultProjectKey?.();
       const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false});
       const resolve=()=>options;
       if(!host.getDefaultThread(key)&&!host.steering){

@@ -1266,6 +1266,11 @@ export default class SendToT3 extends Plugin {
     if(!connection.environmentId)connection.environmentId=connection.connectionId?this.settings.paired.find(c=>c.id===connection.connectionId)?.environmentId:await this.localInlineEnvironment();
     return smartDestination(connection.environmentId??connection.connectionId??'local',project.id,threadId);
   }
+  private hasConfirmedNoteSend(path?:string):boolean {
+    if(!path)return true;
+    const data=this.smartData();
+    return Object.values(data.heads).some(head=>{const note=data.notes[head.noteId];return note?.path===path&&!note.deleted;});
+  }
   private async hasSmartContent(file:TFile,destination:ChatDestination,context?:EditorChatContext){
     if(context?.smartQuestion?.trim()||context?.referenceSelection)return true;
     if(!file)return true;
@@ -1403,7 +1408,7 @@ export default class SendToT3 extends Plugin {
     return captureCursorInsertion(adapter.saved(),offset);
   }
   async openNoteSend(file:TFile,showSelector=false,insertion=this.noteSendInsertion(file)){
-    const finishPreview=!showSelector?this.previewSend(file.path,undefined,insertion):()=>{};
+    const finishPreview=!showSelector&&this.hasConfirmedNoteSend(file.path)?this.previewSend(file.path,undefined,insertion):()=>{};
     try{
     await this.recoverNoteThread(file.path);
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(this.noteContext(file)),
@@ -1570,7 +1575,7 @@ export default class SendToT3 extends Plugin {
     }
     if(context?.anchor)context=this.canonicalChatContext(context);
     const canonicalSelected=context?.canonicalAnchor?.text??selection;
-    const finishPreview=!showSelector?this.previewSend(file.path,context):()=>{};
+    const finishPreview=!showSelector&&this.hasConfirmedNoteSend(file.path)?this.previewSend(file.path,context):()=>{};
     try{
       if(view&&editor){
         const document=this.notePromptDocument(view),anchor=context?.canonicalAnchor;
@@ -1625,7 +1630,7 @@ export default class SendToT3 extends Plugin {
     const project=[...this.projects(),...this.settings.directProjects,...this.settings.projects].find(project=>project.id===projectId&&(job?.connection?.connectionId?project.connectionId===job.connection.connectionId:environment?project.connectionId?this.settings.paired.find(connection=>connection.id===project.connectionId)?.environmentId===environment:this.eventLocalEnvironmentId===environment:!cached&&!!job?.connection&&!job.connection.connectionId&&!project.connectionId));
     return project&&projectKey(project);
   }
-  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'getThreadChoiceRestriction'|'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getDefaultProjectKey'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'getDefaultDestination'|'getAlternativeProjectKey'|'onProjectChange'>{
+  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'hasConfirmedNoteSend'|'getThreadChoiceRestriction'|'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getDefaultProjectKey'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'getDefaultDestination'|'getAlternativeProjectKey'|'onProjectChange'>{
     // Capture the destination once. A later editor update must not redirect a send.
     const responseId=inline&&inlineSteeringTarget(inline.editor.getValue(),inline.editor.posToOffset(inline.editor.getCursor()),inline.responseId);
     const remembered=this.noteThread(note?.path);
@@ -1644,6 +1649,7 @@ export default class SendToT3 extends Plugin {
       return link?.projectTitle??this.app.vault.getName();
     };
     return {
+      hasConfirmedNoteSend:()=>this.hasConfirmedNoteSend(note?.path),
       getThreadChoiceRestriction:()=>threadNoteMode(this.settings.threadNoteMode)==='one-to-one'&&this.noteThread(note?.path)?'1:1 mode keeps this note in its linked thread. Switch to Free mode to choose another.':undefined,
       getInlineDefaults:()=>({...this.settings.inlineStreaming}),
       steering:!!responseId,
