@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {failedContinuations} from '../failed-continuation';
-import {inlineBindingCheckpoint,restoreInlineBindings,type InlineThreadState} from '../inline-thread';
+import {failedContinuations} from '../src/responses/failed-continuation';
+import {inlineBindingCheckpoint,restoreInlineBindings,type InlineThreadState} from '../src/conversations/inline-thread';
 
 const at=(n:number)=>new Date(n*1000).toISOString();
 function fixture():InlineThreadState{return {protocolVersion:2,messages:[{id:'retry-input',role:'user',turnId:'retry',createdBy:'user',creationSource:'web',text:'Continue.',streaming:false,createdAt:at(3)}],activities:[],turns:{source:{turnId:'source',messageId:'original',state:'error',ordinal:1,requestedAt:at(1),completedAt:at(2)},retry:{turnId:'retry',messageId:'retry-input',state:'running',ordinal:2,requestedAt:at(3)}}};}

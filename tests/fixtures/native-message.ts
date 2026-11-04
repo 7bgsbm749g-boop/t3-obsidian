@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import type {ResponseRequest} from '../../response-model';
+import type {ResponseRequest} from '../../src/responses/response-model';
 
 export const nativeLaunchId='mcp:11111111-1111-4111-8111-111111111111';
 export const nativeFollowUpId='message:mcp:11111111-1111-4111-8111-111111111111:thread-send:22222222-2222-4222-8222-222222222222';

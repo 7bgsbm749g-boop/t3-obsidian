@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {EventJournal,configureDiagnostics,redact,type DiagnosticState} from '../diagnostics';
-import {SyncedEventLogs,EVENT_LOG_PATH,EVENT_LOG_FOLDER} from '../synced-event-logs';
-import {instrumentOperations} from '../diagnostic-operations';
+import {EventJournal,configureDiagnostics,redact,type DiagnosticState} from '../src/app/diagnostics';
+import {SyncedEventLogs,EVENT_LOG_PATH,EVENT_LOG_FOLDER} from '../src/storage/synced-event-logs';
+import {instrumentOperations} from '../src/app/diagnostic-operations';
 function fixture(deviceId='device',data=new Map<string,string>()){
   let time=Date.parse('2026-10-01T12:00:00Z'),serial=0,saved:any,fail=false,writes=0;
   const files={exists:async(path:string)=>data.has(path),mkdir:async(path:string)=>{data.set(path,'');},read:async(path:string)=>{if(!data.has(path))throw Error('missing');return data.get(path)!;},write:async(path:string,text:string)=>{if(fail)throw Error('offline');writes++;data.set(path,text);},remove:async(path:string)=>{data.delete(path);}};

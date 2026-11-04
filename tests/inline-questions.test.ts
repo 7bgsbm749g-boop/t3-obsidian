@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs} from '../inline-questions';
-import {steeringSegments,type InlineSteering} from '../inline-steering';
-import type {InlineThreadState,InlineMessage} from '../inline-thread';
+import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs} from '../src/interaction/inline-questions';
+import {steeringSegments,type InlineSteering} from '../src/conversations/inline-steering';
+import type {InlineThreadState,InlineMessage} from '../src/conversations/inline-thread';
 
 const message=(id:string,text:string,turnId:string|null='turn',role='assistant'):InlineMessage=>({id,text,turnId,role,streaming:false});
 const requested=(requestId:string,responseMode='message')=>({id:requestId,kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId,responseMode}});

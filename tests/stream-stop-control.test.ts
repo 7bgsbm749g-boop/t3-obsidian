@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {installStreamStopControls,type StreamStopTarget} from '../stream-stop-control';
-import {NativeResponseView} from '../native-response-view';
-import {responseAnchor} from '../native-response-projection';
+import {installStreamStopControls,type StreamStopTarget} from '../src/responses/stream-stop-control';
+import {NativeResponseView} from '../src/responses/native-response-view';
+import {responseAnchor} from '../src/responses/native-response-projection';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 const body=(key:string)=>`> [!t3-progress]+ Working <span data-t3-fold="${key}"></span>\n> Streamed text.`;

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {CodebaseBrowseCache,folderKey,type BrowseState} from '../codebase-cache';
-import type {CodebaseIO} from '../codebase-core';
+import {CodebaseBrowseCache,folderKey,type BrowseState} from '../src/projects/codebase-cache';
+import type {CodebaseIO} from '../src/projects/codebase-core';
 const scope={environmentId:'env',projectId:'project',root:'/outside',title:'Project'};
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(r=>resolve=r);return {promise,resolve};}
 function fixture(){let time=20000,calls=0,active=0,max=0,fail=false;let saved:BrowseState|undefined;const pending=deferred<void>();const io:CodebaseIO={list:async(_s,path)=>{calls++;active++;max=Math.max(max,active);await pending.promise;active--;if(fail)throw Error('offline');return {entries:[{path:path?path+'/file.md':'file.md',kind:'file'}],truncated:false};},search:async()=>[],read:async()=>'',write:async()=>{},resource:async()=>({url:'',expiresAt:0})};const cache=new CodebaseBrowseCache(io,()=>{},state=>saved=state,()=>time);return {cache,pending,get calls(){return calls;},get max(){return max;},get saved(){return saved;},advance(){time+=16000;},fail(){fail=true;}};}

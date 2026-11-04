@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {ThreadTitleFeed,type TitleDestination} from '../thread-title-feed';
-import type {ThreadStreamCallbacks} from '../thread-stream';
+import {ThreadTitleFeed,type TitleDestination} from '../src/conversations/thread-title-feed';
+import type {ThreadStreamCallbacks} from '../src/conversations/thread-stream';
 
 const destination:TitleDestination={id:'one',threadId:'thread',projectId:'project',threadEnvironmentId:'host'};
 function fixture(){

@@ -1,11 +1,11 @@
 import {randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
-import {contentHash} from '../completion';
-import {responseAnchor} from '../native-response-projection';
-import {LocalResponseManager} from '../local-response-manager';
-import {mergeResponseBindingData,updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../response-binding-data';
-import type {ResponseRequest} from '../response-model';
-import type {DirectInlineUpdate} from '../direct-inline-preview';
+import {contentHash} from '../src/responses/completion';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {LocalResponseManager} from '../src/responses/local-response-manager';
+import {mergeResponseBindingData,updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../src/responses/response-binding-data';
+import type {ResponseRequest} from '../src/responses/response-model';
+import type {DirectInlineUpdate} from '../src/responses/direct-inline-preview';
 
 const request=():ResponseRequest=>({version:4,localOnly:true,nativeProjection:true,responseContainer:true,independent:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'synthetic-sync-lab',host:{environmentId:'synthetic',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},notePath:'Synthetic.md',threadId:randomUUID(),projectId:randomUUID(),messageId:randomUUID(),threadEnvironmentId:'synthetic',initialHash:contentHash(''),createdAt:'2026-10-15T00:00:00Z'});
 const drain=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};

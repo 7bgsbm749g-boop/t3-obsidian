@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
-import {markdownCodeRanges,markdownCodeCacheStatus} from '../reply-html';
+import {markdownCodeRanges,markdownCodeCacheStatus} from '../src/responses/reply-html';
 
 const reference=unified().use(remarkParse);
 function originalRanges(source:string){

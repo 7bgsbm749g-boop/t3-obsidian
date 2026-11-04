@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {localSyncReady} from '../local-sync-state';
+import {localSyncReady} from '../src/storage/local-sync-state';
 
 const path='Notes/Test.md',baseline='a'.repeat(64),newer='b'.repeat(64);
 function fixture(){

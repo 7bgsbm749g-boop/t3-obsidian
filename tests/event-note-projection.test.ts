@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {EventSubscriptions,type NoteEventSnapshot} from '../event-subscriptions';
-import {projectEventNote} from '../event-note-projection';
-import {loadSmartSend,rememberResponse,rememberNoteEdits} from '../smart-send';
-import {responseAnchor} from '../native-response-projection';
-import type {ResponseRequest} from '../response-model';
+import {EventSubscriptions,type NoteEventSnapshot} from '../src/app/event-subscriptions';
+import {projectEventNote} from '../src/app/event-note-projection';
+import {loadSmartSend,rememberResponse,rememberNoteEdits} from '../src/notes/smart-send';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import type {ResponseRequest} from '../src/responses/response-model';
 
 function fixture(bindingAvailable=true){
   const binding={id:randomUUID(),notePath:'Synthetic.md'} as ResponseRequest,anchor=responseAnchor(binding.id),before='User opening.\n\n'+anchor+'\n\nUser ending.',body='Generated final answer.';

@@ -1,8 +1,8 @@
 import {Plugin,MarkdownView} from 'obsidian';
-import {openRunImport} from '../run-import-ui';
-import {importRuns} from '../run-import';
-import {applyThreadItem} from '../inline-thread';
-import {normalizeV2Snapshot} from '../orchestration-v2';
+import {openRunImport} from '../src/conversations/run-import-ui';
+import {importRuns} from '../src/conversations/run-import';
+import {applyThreadItem} from '../src/conversations/inline-thread';
+import {normalizeV2Snapshot} from '../src/connection/orchestration-v2';
 
 const fs=require('node:fs'),path=require('node:path');
 

@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {EventSubscriptions,type EventState,type EventSubscriptionCommand,type NoteEventSnapshot} from '../event-subscriptions';
-import {applyThreadItem,type InlineThreadState} from '../inline-thread';
+import {EventSubscriptions,type EventState,type EventSubscriptionCommand,type NoteEventSnapshot} from '../src/app/event-subscriptions';
+import {applyThreadItem,type InlineThreadState} from '../src/conversations/inline-thread';
 
 const source={threadId:'worker',projectId:'project',environmentId:'machine'};
 const origin=randomUUID(),turn='original';

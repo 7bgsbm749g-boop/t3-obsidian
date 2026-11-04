@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {CompletionJob, CleanupIO, archiveFolder, cleanCompletedNote, completionState, contentHash, initialMessageId, isOriginalCompletedTurn} from '../completion';
+import {CompletionJob, CleanupIO, archiveFolder, cleanCompletedNote, completionState, contentHash, initialMessageId, isOriginalCompletedTurn} from '../src/responses/completion';
 function job(action:'archive'|'delete'='archive'):CompletionJob {return {requestId:'50b38c2e-24bf-47fc-a934-461977de14d1',threadId:'t',projectId:'p',connection:{executable:'adapter',host:'vps'},notePath:'Tasks/a.md',contentHash:contentHash('original'),ctime:10,action,archiveFolder:'Archive/T3 Code',status:'watching'};}
 function fixture() {
  const files=new Map([['Tasks/a.md',{path:'Tasks/a.md',ctime:10,text:'original'}]]);const folders=new Set(['Tasks']);const trash:string[]=[];let saved=0;let unsaved=false;let enabled=true;

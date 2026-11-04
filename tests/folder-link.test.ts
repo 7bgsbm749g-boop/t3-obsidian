@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {loadFolderLinks,normalizeFolderLink,normalizeFolderPath,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from '../folder-link';
+import {loadFolderLinks,normalizeFolderLink,normalizeFolderPath,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from '../src/projects/folder-link';
 
 const link:FolderLink={id:'one',folderPath:'Projects/App',connectionId:'laptop',projectId:'project',projectTitle:'App',workspaceRoot:'C:/vault/Projects/App',self:false};
 

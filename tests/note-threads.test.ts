@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,mutateNoteThreads,previousNoteThreads,type NoteThread} from '../note-threads';
+import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,mutateNoteThreads,previousNoteThreads,type NoteThread} from '../src/notes/note-threads';
 
 const first:NoteThread={notePath:'Notes/a.md',threadId:'one',projectId:'project',workspaceRoot:'/vault',connectionId:'connection',selectedAt:'2026-09-27T10:00:00.000Z'};
 

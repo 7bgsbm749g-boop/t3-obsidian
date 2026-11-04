@@ -1,14 +1,14 @@
-import {compactToolGroups} from '../response-tool-presentation';
+import {compactToolGroups} from '../src/responses/response-tool-presentation';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EditorState} from '@codemirror/state';
 import {history,undo,redo} from '@codemirror/commands';
-import {NativeResponseView} from '../native-response-view';
-import {removeStreamBlockFromEditor} from '../stream-block-edit';
-import {streamBlock,removeStreamBlock} from '../stream-block';
-import {responseAnchor} from '../native-response-projection';
-import {renderInlineTurn} from '../inline-thread';
-import {renderResponseToolGroup} from '../response-tools';
+import {NativeResponseView} from '../src/responses/native-response-view';
+import {removeStreamBlockFromEditor} from '../src/responses/stream-block-edit';
+import {streamBlock,removeStreamBlock} from '../src/responses/stream-block';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {renderInlineTurn} from '../src/conversations/inline-thread';
+import {renderResponseToolGroup} from '../src/responses/response-tools';
 import {historyFixture,interruptedHistoryFixture} from './fixtures/stream-history';
 
 function editor(document:string){

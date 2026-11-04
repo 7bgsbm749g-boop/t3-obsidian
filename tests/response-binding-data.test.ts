@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {compactResponseBinding,loadResponseBindingData,mergeResponseBindingData,updateResponseBindingData,responseBindingRequests} from '../response-binding-data';
-import type {ResponseRequest} from '../response-model';
-import {selectionAnchor} from '../inline-thread';
+import {compactResponseBinding,loadResponseBindingData,mergeResponseBindingData,updateResponseBindingData,responseBindingRequests} from '../src/responses/response-binding-data';
+import type {ResponseRequest} from '../src/responses/response-model';
+import {selectionAnchor} from '../src/conversations/inline-thread';
 
 const request=():ResponseRequest=>({version:4,localOnly:true,nativeProjection:true,responseContainer:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',notePath:'A.md',host:{environmentId:'env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},threadId:randomUUID(),messageId:randomUUID(),projectId:randomUUID(),threadEnvironmentId:'env',initialHash:'0'.repeat(64),createdAt:'2026-10-15T00:00:00Z'});
 test('multiple steering source anchors and their originating response survive settings recovery',()=>{

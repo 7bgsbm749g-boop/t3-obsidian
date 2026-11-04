@@ -2,8 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
-import {CodebaseBrowseCache,folderKey} from '../codebase-cache';
-import type {CodebaseIO} from '../codebase-core';
+import {CodebaseBrowseCache,folderKey} from '../src/projects/codebase-cache';
+import type {CodebaseIO} from '../src/projects/codebase-core';
 class El {
   children:El[]=[];attrs=new Map<string,string>();classes=new Set<string>();parent?:El;textContent='';hidden=false;tabIndex=-1;scrollTop=0;focused=false;onclick?:(event:any)=>void;onkeydown?:(event:any)=>void;
   constructor(public tag='div'){}
@@ -13,7 +13,7 @@ class El {
   querySelectorAll(selector:string){const found:El[]=[];const visit=(el:El)=>{if(selector==='[role="treeitem"]'&&el.attrs.get('role')==='treeitem')found.push(el);for(const child of el.children)visit(child);};for(const child of this.children)visit(child);return found;}
 }
 const scope={environmentId:'env',projectId:'project',title:'Project',root:'/outside'};
-const bundle=build({entryPoints:['codebase-view.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian']});
+const bundle=build({entryPoints:['src/projects/codebase-view.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian']});
 async function fixture(){class ItemView{contentEl:El;containerEl={offsetWidth:300,offsetHeight:600};constructor(leaf:any){this.contentEl=leaf.contentEl;}}const module={exports:{} as any};runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:()=>({ItemView,Notice:class{},setIcon:()=>{}}),performance,console});let calls:string[]=[];let pending:Promise<void>=Promise.resolve();let release!:()=>void;const io:CodebaseIO={list:async(_s,path)=>{calls.push(path);await pending;return {entries:path?[]:[{path:'docs',kind:'directory'},{path:'report.md',kind:'file'}],truncated:false};},search:async()=>[],read:async()=>'',write:async()=>{},resource:async()=>({url:'',expiresAt:0})};const local=new Map<string,any>([['expanded',[folderKey(scope,'')]]]);let view:any;const bridge:any={scopes:()=>[scope],local:(key:string,value?:any)=>{if(value===undefined)return local.get(key);local.set(key,value);},register:()=>({file:{name:'report.md'}}),open:async()=>{},attach:()=>{},detach:()=>{}};bridge.browse=new CodebaseBrowseCache(io,key=>{view?.invalidate(key);view?.render();},()=>{});const contentEl=new El();view=new module.exports.CodebaseView({contentEl},bridge);return {view,contentEl,bridge,local,get calls(){return calls;},reset(){calls=[];},hold(){pending=new Promise(r=>release=r);},release(){release();}};}
 test('unchanged refresh retains native rows, focus, scroll and cached rows before network completion',async()=>{const f=await fixture();await f.view.refresh();const rows=f.contentEl.querySelectorAll('[role="treeitem"]');assert.equal(rows.length,3);assert.ok(rows.every(row=>row.classes.has('tree-item-self')));assert.equal(rows[0].tag,'div');rows[0].focus();f.contentEl.scrollTop=42;f.hold();const refresh=f.view.refresh(true);assert.deepEqual(f.contentEl.querySelectorAll('[role="treeitem"]'),rows);assert.equal(f.contentEl.scrollTop,42);assert.equal(rows[0].focused,true);f.release();await refresh;assert.deepEqual(f.contentEl.querySelectorAll('[role="treeitem"]'),rows);f.reset();await Promise.all(Array.from({length:20},()=>f.view.refresh()));assert.equal(f.calls.length,0);});
 test('cold restored nested expansion loads immediately and collapsed ancestors suppress background reads',async()=>{const f=await fixture();f.view.expanded.add(folderKey(scope,'docs'));await f.view.refresh();assert.deepEqual(f.calls,['','docs']);f.reset();f.view.expanded.delete(folderKey(scope,''));f.view.invalidate();await f.view.refresh(true);assert.deepEqual(f.calls,[]);});

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {win32,posix} from 'node:path';
-import {isPathInsideDirectory} from '../desktop-path';
+import {isPathInsideDirectory} from '../src/connection/desktop-path';
 
 test('Windows private mailbox and journal paths outside a vault are permitted',()=>{
   const vault='C:\\Users\\jacks\\Documents\\QLO2';

@@ -1,11 +1,11 @@
 import { indexedDB } from 'fake-indexeddb';
-import { deviceState } from '../device-state';
+import { deviceState } from '../src/storage/device-state';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {webcrypto,createHash} from 'node:crypto';
-import {contentHash,initialMessageId} from '../completion';
+import {contentHash,initialMessageId} from '../src/responses/completion';
 import {settingsSocket} from './rpc-fixture';
 
 test('mobile upgrade removes old credentials and ends uncertain sends without replay or note cleanup',async()=>{

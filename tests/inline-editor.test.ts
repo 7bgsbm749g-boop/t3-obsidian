@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EditorState,EditorSelection} from '@codemirror/state';
-import {replaceInlineEditorText} from '../inline-editor';
+import {replaceInlineEditorText} from '../src/conversations/inline-editor';
 
 test('stream updates map multiple selections without requesting a cursor scroll',()=>{
   let state=EditorState.create({doc:'Intro\nOld reply\nReading here',selection:EditorSelection.create([EditorSelection.cursor(0),EditorSelection.range(16,23)],1),extensions:EditorState.allowMultipleSelections.of(true)});

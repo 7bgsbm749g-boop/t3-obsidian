@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,readFile,rename,rm,lstat,utimes,symlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {DesktopInlineReadCache,inlineFileVersion} from '../inline-file-cache-desktop';
+import {DesktopInlineReadCache,inlineFileVersion} from '../src/conversations/inline-file-cache-desktop';
 
 test('fresh file versions detect same-size rewrites, replacements, deletion and symlink targets',async()=>{
  const root=await mkdtemp(join(tmpdir(),'inline-file-version-')),path=join(root,'record.json'),other=join(root,'other.json'),date=new Date('2026-01-01T00:00:00Z');

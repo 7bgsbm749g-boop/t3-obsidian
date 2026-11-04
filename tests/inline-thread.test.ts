@@ -1,8 +1,8 @@
-import {responseActivityRow} from '../response-activity';
+import {responseActivityRow} from '../src/responses/response-activity';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {contentHash} from '../completion';
-import {activeInlineIds,applyThreadItem,endInsertionOffset,failedInlineIds,finalizeRegion,initialRegion,insertionOffset,inlineSteeringTarget,selectionOverlapsInlineResponse,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../inline-thread';
+import {contentHash} from '../src/responses/completion';
+import {activeInlineIds,applyThreadItem,endInsertionOffset,failedInlineIds,finalizeRegion,initialRegion,insertionOffset,inlineSteeringTarget,selectionOverlapsInlineResponse,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,turnForMessage,turnPhase} from '../src/conversations/inline-thread';
 
 test('async-answer replay requires message-mode resolution and exact timestamp, and refuses competing starts',()=>{
  const at='2026-10-03T14:40:50Z';

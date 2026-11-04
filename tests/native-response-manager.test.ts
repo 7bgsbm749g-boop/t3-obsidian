@@ -1,15 +1,15 @@
-import {renderResponseToolGroup} from '../response-tools';
+import {renderResponseToolGroup} from '../src/responses/response-tools';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {NativeResponseManager} from '../native-response-manager';
-import {responseAnchor,projectResponses} from '../native-response-projection';
-import {initialRegion,regionBody,selectionAnchor} from '../inline-thread';
-import {contentHash} from '../completion';
-import {readNativeCommitProof,type NativeCommitProof} from '../native-response-commit';
-import type {ResponseRecord} from '../response-record';
+import {NativeResponseManager} from '../src/responses/native-response-manager';
+import {responseAnchor,projectResponses} from '../src/responses/native-response-projection';
+import {initialRegion,regionBody,selectionAnchor} from '../src/conversations/inline-thread';
+import {contentHash} from '../src/responses/completion';
+import {readNativeCommitProof,type NativeCommitProof} from '../src/responses/native-response-commit';
+import type {ResponseRecord} from '../src/responses/response-record';
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
-import {RESPONSE_SIZE_FAILURE} from '../t3-response-limits';
+import {RESPONSE_SIZE_FAILURE} from '../src/connection/t3-response-limits';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',commitId='cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee';
 const body='> Final answer',otherBody='> Independent response';

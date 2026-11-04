@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {reconcileResponseDOM} from '../response-dom';
+import {reconcileResponseDOM} from '../src/responses/response-dom';
 
 class Element {
   tagName='STRONG';attrs=new Map<string,string>();childNodes=[];children=[];firstChild=null;

@@ -23,6 +23,6 @@ export function desktopTimersPlugin(){
 async function main(){
   await mkdir('dist',{recursive:true});
   const notices=await readFile('THIRD_PARTY_NOTICES.md','utf8');
-  await build({entryPoints:['main.ts'],bundle:true,external:['obsidian',...editorExternals,'node:*',...builtinModules.filter(n=>n!=='buffer')],platform:'browser',format:'cjs',target:'es2022',outfile:'dist/main.js',banner:{js:'/*\n'+notices.replaceAll('*/','* /')+'\n*/'},plugins:[desktopTimersPlugin()]});
+  await build({entryPoints:['src/app/main.ts'],bundle:true,external:['obsidian',...editorExternals,'node:*',...builtinModules.filter(n=>n!=='buffer')],platform:'browser',format:'cjs',target:'es2022',outfile:'dist/main.js',banner:{js:'/*\n'+notices.replaceAll('*/','* /')+'\n*/'},plugins:[desktopTimersPlugin()]});
 }
 if(process.argv[1]===fileURLToPath(import.meta.url))void main().catch(error=>{console.error(error);process.exitCode=1;});

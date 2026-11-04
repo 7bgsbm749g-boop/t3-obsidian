@@ -1,14 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {NativeResponseView} from '../native-response-view';
-import {NativeResponseManager} from '../native-response-manager';
-import {responseAnchor} from '../native-response-projection';
-import type {ResponseRecord} from '../response-record';
-import type {NativeStoppedResponse,NativeStoppedStore} from '../native-stop-store';
-import {deviceFinalNoteIO,deviceNoteIO} from '../inline-note-io';
-import {nativeResponses} from '../native-response-manager';
-import {renderResponseToolGroup} from '../response-tools';
-import {presentToolGroups} from '../response-tool-presentation';
+import {NativeResponseView} from '../src/responses/native-response-view';
+import {NativeResponseManager} from '../src/responses/native-response-manager';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import type {ResponseRecord} from '../src/responses/response-record';
+import type {NativeStoppedResponse,NativeStoppedStore} from '../src/responses/native-stop-store';
+import {deviceFinalNoteIO,deviceNoteIO} from '../src/conversations/inline-note-io';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {renderResponseToolGroup} from '../src/responses/response-tools';
+import {presentToolGroups} from '../src/responses/response-tool-presentation';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const body='> Final reply\n\n<details><summary>Tool output</summary><pre>'+ 'retained output '.repeat(1000)+'</pre></details>';

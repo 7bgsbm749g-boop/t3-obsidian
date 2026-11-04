@@ -1,11 +1,11 @@
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
-import {nativeResponses} from '../native-response-manager';
-import {responseAnchor} from '../native-response-projection';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
-import {installResponsePresentation} from '../response-presentation';
-import {contentHash} from '../completion';
-import {renderResponseToolGroup} from '../response-tools';
-import {installStreamBlockControls} from '../stream-block-controls';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {hiddenInlineMarkerExtension} from '../src/conversations/inline-markers';
+import {installResponsePresentation} from '../src/responses/response-presentation';
+import {contentHash} from '../src/responses/completion';
+import {renderResponseToolGroup} from '../src/responses/response-tools';
+import {installStreamBlockControls} from '../src/responses/stream-block-controls';
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 /** Interactive unsynced fixture. Native input comes from the driver; this
  * mailbox only sets up test state and records application-owned observations. */

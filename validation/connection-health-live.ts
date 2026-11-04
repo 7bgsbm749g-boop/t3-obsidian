@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
-import {connectT3Rpc,T3ConnectionTimeoutError} from '../t3-rpc';
-import {environmentApi} from '../direct';
+import {connectT3Rpc,T3ConnectionTimeoutError} from '../src/connection/t3-rpc';
+import {environmentApi} from '../src/connection/direct';
 
 async function main(){
  const evidence=resolve(process.argv[2]??'');if(!evidence.startsWith('/home/ubuntu/projects/send-to-t3-code/evidence/'))throw Error('Private evidence directory required.');await mkdir(evidence,{recursive:true});

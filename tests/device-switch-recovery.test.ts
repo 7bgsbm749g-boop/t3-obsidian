@@ -1,11 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {LocalResponseManager} from '../local-response-manager';
-import {responseAnchor} from '../native-response-projection';
-import {updateResponseBindingData,responseBindingRequests} from '../response-binding-data';
-import {SignInRequiredError,responseConnectionBody,type ResponseConnectionIssue} from '../sign-in-state';
-import type {ResponseRequest} from '../response-model';
+import {LocalResponseManager} from '../src/responses/local-response-manager';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {updateResponseBindingData,responseBindingRequests} from '../src/responses/response-binding-data';
+import {SignInRequiredError,responseConnectionBody,type ResponseConnectionIssue} from '../src/connection/sign-in-state';
+import type {ResponseRequest} from '../src/responses/response-model';
 
 const settle=async()=>{for(let n=0;n<16;n++)await new Promise(resolve=>setImmediate(resolve));};
 

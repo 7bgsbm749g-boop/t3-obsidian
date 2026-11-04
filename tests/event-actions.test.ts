@@ -1,10 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {prepareEventAction,executeEventAction,validateEventAction,type ActionIO,type EventAction,type ActionPlan} from '../event-actions';
-import {EventSubscriptions,eventContent,type EventState,type NoteEventSnapshot,type NoteEventSubscriptionCommand} from '../event-subscriptions';
-import {projectEventNote} from '../event-note-projection';
-import {loadSmartSend,rememberResponse} from '../smart-send';
+import {prepareEventAction,executeEventAction,validateEventAction,type ActionIO,type EventAction,type ActionPlan} from '../src/app/event-actions';
+import {EventSubscriptions,eventContent,type EventState,type NoteEventSnapshot,type NoteEventSubscriptionCommand} from '../src/app/event-subscriptions';
+import {projectEventNote} from '../src/app/event-note-projection';
+import {loadSmartSend,rememberResponse} from '../src/notes/smart-send';
 
 function ioHarness(entries:Array<[string,string]>=[['Jobs/A.md','body']]){
   const files=new Map(entries);let writes=0,moves=0;

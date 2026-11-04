@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {SendGesture} from '../send-gesture';
+import {SendGesture} from '../src/responses/send-gesture';
 
 function windowFixture(){
   const listeners=new Map<string,Function>();

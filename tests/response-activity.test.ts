@@ -2,9 +2,9 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
-import {responseActivityLabel,responseActivityRow} from '../response-activity';
-import {applyThreadItem,initialRegion,renderInlineTurn,type InlineActivity,type InlineThreadState} from '../inline-thread';
-import {stoppedResponseBody} from '../response-stop';
+import {responseActivityLabel,responseActivityRow} from '../src/responses/response-activity';
+import {applyThreadItem,initialRegion,renderInlineTurn,type InlineActivity,type InlineThreadState} from '../src/conversations/inline-thread';
+import {stoppedResponseBody} from '../src/responses/response-stop';
 
 const activity=(id:string,kind='tool.started',payload:Record<string,any>={},turnId='turn',sequence=1):InlineActivity=>({id,kind,turnId,sequence,summary:'Tool',payload:{toolCallId:id,...payload}});
 const state=(activities:InlineActivity[]=[]):InlineThreadState=>({messages:[],activities,session:{status:'running',activeTurnId:'turn'},latestTurn:{turnId:'turn',state:'running'}});

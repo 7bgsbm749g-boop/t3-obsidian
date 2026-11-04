@@ -1,10 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EditorState} from '@codemirror/state';
-import {hiddenInlineMarkerExtension,inlineMarkerRegex} from '../inline-markers';
-import {responseBindingComment} from '../local-response-binding';
-import {containerBody} from '../response-container';
-import {runImportReceipt} from '../run-import-receipt';
+import {hiddenInlineMarkerExtension,inlineMarkerRegex} from '../src/conversations/inline-markers';
+import {responseBindingComment} from '../src/responses/local-response-binding';
+import {containerBody} from '../src/responses/response-container';
+import {runImportReceipt} from '../src/conversations/run-import-receipt';
 
 const id='25158e9b-7a9b-40bb-9866-e777549652b4';
 const start=`<!-- t3-inline:start:${id} -->`;

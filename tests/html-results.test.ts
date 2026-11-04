@@ -1,10 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {htmlRenderFromToolItem,readHtmlRenderReference,readHtmlResult,htmlResultBlocks,htmlResultFrameHeight,renderHtmlResult,type HtmlResultReference} from '../html-results';
-import {itemActivities,normalizeV2Snapshot,normalizeV2StreamItem} from '../orchestration-v2';
-import {applyThreadItem,renderInlineTurn,inlineBindingCheckpoint,restoreInlineBindings,type InlineThreadState} from '../inline-thread';
-import {responseTools} from '../response-tools';
-import {streamBlocks} from '../stream-block';
+import {htmlRenderFromToolItem,readHtmlRenderReference,readHtmlResult,htmlResultBlocks,htmlResultFrameHeight,renderHtmlResult,type HtmlResultReference} from '../src/responses/html-results';
+import {itemActivities,normalizeV2Snapshot,normalizeV2StreamItem} from '../src/connection/orchestration-v2';
+import {applyThreadItem,renderInlineTurn,inlineBindingCheckpoint,restoreInlineBindings,type InlineThreadState} from '../src/conversations/inline-thread';
+import {responseTools} from '../src/responses/response-tools';
+import {streamBlocks} from '../src/responses/stream-block';
 import {reference,tool} from './fixtures/html-result';
 
 test('recognizes T3 HTML across structured, text and provider result wrappers',()=>{

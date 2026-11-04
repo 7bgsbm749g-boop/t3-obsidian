@@ -1,16 +1,16 @@
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
-import SendToT3 from '../main';
-import {LocalResponseManager} from '../local-response-manager';
-import {deviceNoteIO,deviceFinalNoteIO} from '../inline-note-io';
-import {nativeResponses} from '../native-response-manager';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
-import {installResponsePresentation} from '../response-presentation';
-import {updateResponseBindingData,responseBindingRequests} from '../response-binding-data';
-import {localSyncReady} from '../local-sync-state';
-import {contentHash} from '../completion';
-import type {ThreadAccess} from '../thread-stream';
-import {configureDiagnostics} from '../diagnostics';
-import {t3Api} from '../t3-api';
+import SendToT3 from '../src/app/main';
+import {LocalResponseManager} from '../src/responses/local-response-manager';
+import {deviceNoteIO,deviceFinalNoteIO} from '../src/conversations/inline-note-io';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {hiddenInlineMarkerExtension} from '../src/conversations/inline-markers';
+import {installResponsePresentation} from '../src/responses/response-presentation';
+import {updateResponseBindingData,responseBindingRequests} from '../src/responses/response-binding-data';
+import {localSyncReady} from '../src/storage/local-sync-state';
+import {contentHash} from '../src/responses/completion';
+import type {ThreadAccess} from '../src/conversations/thread-stream';
+import {configureDiagnostics} from '../src/app/diagnostics';
+import {t3Api} from '../src/connection/t3-api';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 

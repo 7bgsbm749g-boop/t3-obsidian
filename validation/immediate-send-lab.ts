@@ -1,12 +1,12 @@
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
-import SendToT3 from '../main';
-import {InlineChatManager} from '../inline-chat';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
-import {nativeResponses} from '../native-response-manager';
-import {captureCursorInsertion} from '../cursor-insertion';
-import {installActivityShine} from '../activity-shine';
-import {installResponsePresentation} from '../response-presentation';
-import {commandId} from '../direct';
+import SendToT3 from '../src/app/main';
+import {InlineChatManager} from '../src/conversations/inline-chat';
+import {hiddenInlineMarkerExtension} from '../src/conversations/inline-markers';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {captureCursorInsertion} from '../src/notes/cursor-insertion';
+import {installActivityShine} from '../src/ui/activity-shine';
+import {installResponsePresentation} from '../src/responses/response-presentation';
+import {commandId} from '../src/connection/direct';
 
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));

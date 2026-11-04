@@ -1,13 +1,13 @@
-import {markdownCodeCacheStatus} from '../reply-html';
+import {markdownCodeCacheStatus} from '../src/responses/reply-html';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {displayToSaved,savedToDisplay,responseAnchor,responseRegion,projectResponses,savedProjection,editableDisplayRange} from '../native-response-projection';
-import {containerBody,containerEnd} from '../response-container';
-import {renderInlineTurn,selectionAnchor,insertionOffset} from '../inline-thread';
-import {NativeResponseView} from '../native-response-view';
+import {displayToSaved,savedToDisplay,responseAnchor,responseRegion,projectResponses,savedProjection,editableDisplayRange} from '../src/responses/native-response-projection';
+import {containerBody,containerEnd} from '../src/responses/response-container';
+import {renderInlineTurn,selectionAnchor,insertionOffset} from '../src/conversations/inline-thread';
+import {NativeResponseView} from '../src/responses/native-response-view';
 import {EditorState,EditorSelection,StateEffect,Transaction} from '@codemirror/state';
-import {renderResponseToolGroup,type ResponseToolGroup} from '../response-tools';
-import {presentToolGroups} from '../response-tool-presentation';
+import {renderResponseToolGroup,type ResponseToolGroup} from '../src/responses/response-tools';
+import {presentToolGroups} from '../src/responses/response-tool-presentation';
 import {heightFixture} from './fixtures/response-height';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';

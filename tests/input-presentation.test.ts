@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {visibleInlineInput,INLINE_REPLY_INSTRUCTION,THREAD_REPLY_INSTRUCTION} from '../input-presentation';
-import {renderInlineTurn,type InlineThreadState} from '../inline-thread';
-import {observeIncoming} from '../inline-steering';
-import {obsidianFooter} from '../obsidian-prompt';
+import {visibleInlineInput,INLINE_REPLY_INSTRUCTION,THREAD_REPLY_INSTRUCTION} from '../src/responses/input-presentation';
+import {renderInlineTurn,type InlineThreadState} from '../src/conversations/inline-thread';
+import {observeIncoming} from '../src/conversations/inline-steering';
+import {obsidianFooter} from '../src/notes/obsidian-prompt';
 
 const footer='\n\nSent from Obsidian.\nObsidian vault: "QLO2"\nDestination note path: "/vault/Jobs/Note.md"';
 

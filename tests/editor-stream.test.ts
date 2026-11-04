@@ -1,13 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {editorStream} from '../editor-stream';
-import {initialRegion,inlineTargetAt,regionBody,completionProof,hasCompletionProof} from '../inline-thread';
-import {validateNoteCommand} from '../note-command';
-import type {ResponseRequest} from '../response-model';
-import {eventContent} from '../event-subscriptions';
-import {captureCursorInsertion} from '../cursor-insertion';
-import {responseAnchor} from '../native-response-projection';
+import {editorStream} from '../src/responses/editor-stream';
+import {initialRegion,inlineTargetAt,regionBody,completionProof,hasCompletionProof} from '../src/conversations/inline-thread';
+import {validateNoteCommand} from '../src/notes/note-command';
+import type {ResponseRequest} from '../src/responses/response-model';
+import {eventContent} from '../src/app/event-subscriptions';
+import {captureCursorInsertion} from '../src/notes/cursor-insertion';
+import {responseAnchor} from '../src/responses/native-response-projection';
 
 const source=():ResponseRequest=>({version:2,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'machine',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:'A.md',threadId:randomUUID(),messageId:randomUUID(),projectId:'project',threadEnvironmentId:'machine',initialHash:initialRegion(randomUUID()).bodyHash,createdAt:new Date().toISOString()});
 test('native replies use the captured cursor, preserve both sides, and remain separate Markdown blocks',async()=>{

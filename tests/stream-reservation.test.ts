@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {webcrypto,randomUUID} from 'node:crypto';
-import {commandId} from '../direct';
-import {validateAgentCommand,isEventCommand} from '../note-command';
+import {commandId} from '../src/connection/direct';
+import {validateAgentCommand,isEventCommand} from '../src/notes/note-command';
 
 const source={threadId:'thread',projectId:'project',environmentId:'machine'};
 const command=()=>({version:1,id:randomUUID(),kind:'reserve-thread-response',source,messageId:randomUUID(),responses:[{path:'Note.md',bindingId:randomUUID()}]});

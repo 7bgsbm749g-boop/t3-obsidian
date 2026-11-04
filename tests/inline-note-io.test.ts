@@ -1,11 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {deviceNoteIO,deviceFinalNoteIO} from '../inline-note-io';
-import {nativeResponses} from '../native-response-manager';
+import {deviceNoteIO,deviceFinalNoteIO} from '../src/conversations/inline-note-io';
+import {nativeResponses} from '../src/responses/native-response-manager';
 import {randomUUID} from 'node:crypto';
-import {completionProof,initialRegion} from '../inline-thread';
-import {responseAnchor} from '../native-response-projection';
-import {contentHash} from '../completion';
+import {completionProof,initialRegion} from '../src/conversations/inline-thread';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {contentHash} from '../src/responses/completion';
 
 function localFinalFixture(panes=1){
  const id=randomUUID(),file={path:'Note.md'},before='Before\n\n'+responseAnchor(id)+'\n\nAfter\n';let disk=before,writes=0,saves=0;

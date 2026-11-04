@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {nativeMediaSource,originalMediaSource,codebaseMediaExtension,mediaSourceCacheStatus} from '../codebase-media';
+import {nativeMediaSource,originalMediaSource,codebaseMediaExtension,mediaSourceCacheStatus} from '../src/projects/codebase-media';
 
 test('native image paths resolve on desktop, iOS and Android without treating web images as local files',()=>{
   for(const value of ['app://obsidian.md/home/ubuntu/project/chart.png','capacitor://localhost/_capacitor_file_/home/ubuntu/project/chart.png','http://localhost/_app_file_/home/ubuntu/project/chart.png','https://localhost/_capacitor_file_/home/ubuntu/project/chart.png'])assert.equal(nativeMediaSource(value)?.link,'/home/ubuntu/project/chart.png');

@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
-const bundle=build({entryPoints:['codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian']});
+const bundle=build({entryPoints:['src/projects/codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian']});
 const scope={environmentId:'env',projectId:'project',root:'/outside',title:'Project'};
 async function fixture(){
  class Base{}class Element{children:Element[]=[];textContent='';createEl(_tag:string,options:any={}){const e=new Element();e.textContent=options.text??'';this.children.push(e);return e;}setText(text:string){this.textContent=text;}}
