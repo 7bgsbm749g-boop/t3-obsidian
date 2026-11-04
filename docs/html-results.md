@@ -31,7 +31,7 @@ T3. It does not include uncached remote libraries, fonts, images or live APIs.
 Each device must fetch a page before offline use; Obsidian Sync carries the small
 note reference, not this cache. Eviction, missing bytes or unavailable connections
 produce a compact Retry placeholder. Loading and failed cards use content height
-instead of reserving the page's 80–2000 pixel height. The message distinguishes a
+instead of reserving the page's estimated height. The message distinguishes a
 required sign-in, connection failure, HTTP failure, source verification failure,
 and invalid attachment content. No vault attachment directory is created.
 
@@ -88,7 +88,12 @@ the render copy adds this policy and Escape handling.
 T3's existing bootstrap receives the Obsidian theme before first paint through
 the `t3-theme` fragment, then follows CSS changes through its normal host-context
 messages. T3 role variables map to native Obsidian colors and fonts. Width and
-reported content height use T3's fit/cap rule, bounded to 80–2000 CSS pixels.
+reported content height let the inline frame fit the complete page, with an
+80-pixel minimum and no maximum height. Saved heights and width measurements
+are initial estimates, including older references with T3 scroll caps; a live
+content-height report replaces them without retaining those caps. The note
+owns vertical scrolling for ordinary page content. Panels made scrollable by
+the HTML itself retain their own scrolling.
 The Expand action opens an Obsidian modal with zoom. Inline controls appear on
 hover, focus and touch. Authored HTML, scripts, SVG, canvas and page controls stay
 inside the isolated document; general assistant HTML remains escaped.
@@ -118,6 +123,15 @@ Build an isolated real-client fixture outside all source and synced vaults:
 ```sh
 node scripts/build-native-response-lab.mjs NEW_PRIVATE_EVIDENCE_DIRECTORY --html
 ```
+
+For full-height and scrolling checks, use `--html-height` instead. This fixture
+checks a page taller than 4,000 pixels before interaction, dynamic growth and
+shrinkage, and an old 200-pixel saved height. Once `READY.json` appears, click
+**HTML focus check**, then scroll down over the page in the native client.
+`RESULT.json` records the real wheel event, note movement, absence of frame
+overflow, and deletion of all fixture notes. Screenshots and source hashes stay
+in the selected project `evidence/` directory. This desktop fixture does not
+establish native mobile behavior.
 
 Launch its returned profile using Cua Driver. The fixture verifies Live Preview,
 Reading mode, Source mode, frame identity during surrounding edits, sandbox/Node

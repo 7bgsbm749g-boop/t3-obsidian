@@ -17,9 +17,10 @@ test('ignores failed, incomplete, unrelated, malformed and oversized tool result
  for(const item of [{...tool(),status:'running'},{...tool(),toolName:'mcp__other__html_render'},{...tool(),type:'command_execution'},tool({isError:true,htmlRender:reference}),tool({content:[{text:JSON.stringify({htmlRender:reference})}],error:{message:'failed'}}),tool('x'.repeat(16_385)),tool({htmlRender:{...reference,height:NaN}})])assert.equal(htmlRenderFromToolItem(item),undefined);
  assert.equal(htmlRenderFromToolItem(tool({content:[{text:JSON.stringify({htmlRender:reference})},{text:JSON.stringify({is_error:true})}]})),undefined);
 });
-test('reference validation bounds identity, title, sizes and measured widths',()=>{
+test('reference validation bounds identity, title and measured widths, and preserves full heights',()=>{
  assert.equal(readHtmlRenderReference({...reference,title:'\n hello\t',height:20})?.title,'hello');
- assert.equal(readHtmlRenderReference({...reference,height:10_000})?.height,2000);
+ assert.equal(readHtmlRenderReference({...reference,height:10_000,heights:[[728,12_000]]})?.height,10_000);
+ assert.deepEqual(readHtmlRenderReference({...reference,heights:[[728,12_000]]})?.heights,[[728,12_000]]);
  for(const update of [{attachmentId:'../secret'},{runId:''},{version:2},{revision:'x\ny'}])assert.equal(readHtmlResult({...reference,...update}),undefined);
  assert.equal(readHtmlRenderReference({...reference,heights:[[0,4]]})?.heights,undefined);
 });
@@ -28,11 +29,17 @@ test('only top-level complete generated fences become editor widgets',()=>{
  const found=htmlResultBlocks(doc);assert.equal(found.length,1);assert.equal(doc.slice(found[0].from,found[0].to),block);
  for(const example of ['````md\n'+block+'\n````','> '+block.split('\n').join('\n> '),'<pre>\n'+block+'\n</pre>','```t3-html\n'+JSON.stringify(reference),'```t3-html\n{}\n```'])assert.equal(htmlResultBlocks(example).length,0,example);
 });
-test('sizing follows T3 at narrow widths, dynamic content and deliberate scroll caps',()=>{
+test('inline sizing fits full content at narrow widths and ignores saved scroll caps',()=>{
  assert.equal(htmlResultFrameHeight(reference,375),500);assert.equal(htmlResultFrameHeight(reference,375,640),640);
- assert.equal(htmlResultFrameHeight({...reference,height:200},375,640),200);
- assert.equal(htmlResultFrameHeight({...reference,heights:undefined},375,640),300);
- assert.equal(htmlResultFrameHeight(reference,375,10_000),2000);
+ assert.equal(htmlResultFrameHeight({...reference,height:200},375,640),640);
+ assert.equal(htmlResultFrameHeight({...reference,heights:undefined},375,640),640);
+ assert.equal(htmlResultFrameHeight(reference,375,10_000),10_000);
+ assert.equal(htmlResultFrameHeight({...reference,height:200},375),500);
+ assert.equal(htmlResultFrameHeight({...reference,height:12_000,heights:undefined},375),12_000);
+ assert.equal(htmlResultFrameHeight({...reference,heights:[[375,15_000],[728,9000]]},375),15_000);
+ assert.equal(htmlResultFrameHeight(reference,375,640.2),641);
+ assert.equal(htmlResultFrameHeight(reference,375,20),80);
+ for(const invalid of [0,-1,NaN,Infinity])assert.equal(htmlResultFrameHeight(reference,375,invalid),500);
 });
 function state():InlineThreadState{return {protocolVersion:2,messages:[{id:'answer',itemId:'answer-item',role:'assistant',text:'Final answer',turnId:'run',streaming:false,createdAt:'2026-10-15T15:01:00.000Z'}],activities:itemActivities(tool()),turns:{run:{turnId:'run',state:'completed',completedAt:reference.revision}},latestTurn:{turnId:'run',state:'completed'}};}
 test('HTML is a separate result, stays outside tool folds and survives final-only preferences',()=>{
