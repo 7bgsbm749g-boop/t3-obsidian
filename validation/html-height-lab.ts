@@ -1,6 +1,6 @@
 import {Plugin,MarkdownView,TFile} from 'obsidian';
-import {HtmlResultViews} from '../html-result-view';
-import {renderHtmlResult} from '../html-results';
+import {HtmlResultViews} from '../src/responses/html-result-view';
+import {renderHtmlResult} from '../src/responses/html-results';
 import {reference} from '../tests/fixtures/html-result';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
