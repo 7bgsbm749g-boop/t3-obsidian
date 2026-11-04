@@ -82,24 +82,6 @@ test('two mounted viewers share recovery; sign-in uses only the explicit host ca
  views.dispose();assert.equal(document.blobs.size,0);
 });
 
-test('inline frames grow and shrink to live content beyond saved caps without needing focus',async()=>{
- const module=await production(),document=documentFixture();
- const views=new module.HtmlResultViews({},{get:async()=>page,dispose(){}});
- const mounted=views.mount({...reference,height:200,heights:undefined},document.doc),root=mounted.root as Element;
- await loaded(root);const frame=root.find('iframe')!,receive=document.listeners.get('message');
- const report=(height:number,source:any=frame.contentWindow)=>receive({source,data:{jsonrpc:'2.0',method:'ui/notifications/size-changed',params:{height}}});
- assert.equal(root.style.height,'200px');
- report(6000,{});assert.equal(root.style.height,'200px','other frames cannot resize this result');
- report(6000.2);assert.equal(root.style.height,'6001px');
- report(1200);assert.equal(root.style.height,'1200px','shorter content releases the extra note space');
- for(const invalid of [0,-1,NaN,Infinity]){report(invalid);assert.equal(root.style.height,'1200px');}
- mounted.dispose();
- const expanded=views.mount(reference,document.doc,true);await loaded(expanded.root);
- document.listeners.get('message')({source:expanded.root.find('iframe').contentWindow,data:{jsonrpc:'2.0',method:'ui/notifications/size-changed',params:{height:9000}}});
- assert.equal(expanded.root.style.height,'100%','the separate expanded viewer retains its viewport');
- views.dispose();
-});
-
 test('manual Retry works without a sign-in callback and verification failures never auto-retry',async()=>{
  const module=await production(),receiver=device(module),document=documentFixture();receiver.signIn(true);
  const views=new module.HtmlResultViews({},receiver.store),mounted=views.mount(reference,document.doc),root=mounted.root as Element;

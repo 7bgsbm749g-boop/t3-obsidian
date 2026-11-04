@@ -10,7 +10,7 @@ export const HTML_RESULT_LANGUAGE='t3-html';
 export const HTML_RESULT_MAX_BYTES=25*1024*1024;
 const record=(value:any):value is Record<string,any>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const id=(value:any,max=1024):value is string=>typeof value==='string'&&value.length>0&&value.length<=max&&!/[\x00-\x1f]/.test(value);
-export const htmlResultHeight=(height:number)=>Math.max(80,Math.ceil(height));
+export const htmlResultHeight=(height:number)=>Math.max(80,Math.min(2000,Math.round(height)));
 
 export function readHtmlRenderReference(value:any):HtmlRenderReference|undefined {
   if(!record(value)||!id(value.attachmentId,256)||!/^[a-z0-9_-]+$/i.test(value.attachmentId)||typeof value.title!=='string'||typeof value.height!=='number'||!Number.isFinite(value.height))return;
@@ -73,13 +73,14 @@ export function responseHtmlResults(activities:InlineActivity[],turns:string[],e
   return [...found.values()];
 }
 
-/** Fit the complete page in the note; saved T3 heights are estimates, not caps. */
+/** T3's sizing rule: prefer the live report, retain deliberate scroll caps. */
 export function htmlResultFrameHeight(reference:HtmlRenderReference,width:number,reported?:number){
-  if(reported!==undefined&&Number.isFinite(reported)&&reported>0)return htmlResultHeight(reported);
   const rows=reference.heights;
-  if(!rows?.length)return htmlResultHeight(reference.height);
   const measured=(width:number)=>{const above=rows!.findIndex(row=>row[0]>=width),high=above<0?rows!.length-1:above,low=rows![high][0]===width?high:Math.max(0,high-1);return Math.max(rows![low][1],rows![high][1]);};
-  return htmlResultHeight(measured(width));
+  const live=reported!==undefined&&Number.isFinite(reported)&&reported>0?reported:undefined;
+  if(!rows?.length)return htmlResultHeight(Math.min(reference.height,live??reference.height));
+  const cap=measured(728)>reference.height?reference.height:2000;
+  return htmlResultHeight(Math.min(cap,live??measured(width)));
 }
 
 /** Source-mode references stay ordinary Markdown. Live Preview replaces only
