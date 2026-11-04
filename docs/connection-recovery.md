@@ -112,7 +112,7 @@ unsaved edits, changed runtime files, and reload limits across app instances.
 Failure records include method, connection ID, elapsed time, pending count and
 last-reply age, without storing prompts or credentials.
 
-The read-only `validation/connection-health-live.ts` check uses a short-lived
+The read-only `tests/native/connection-health-live.ts` check uses a short-lived
 scoped session against the actual relay and revokes it in a finally block. It
 confirms the server responds to Ping, drops incoming frames on its test socket,
 and checks confirmed closure followed by a successful fresh read.

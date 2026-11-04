@@ -2,37 +2,37 @@
   "dependencies": {
     "src/conversations/run-import-ui.ts": ["styles.css"],
     "tests/codebase-response-save.test.ts": [
-      "validation/codebase-response-save-lab.ts"
+      "tests/native/codebase-response-save-lab.ts"
     ],
     "tests/html-result-view.test.ts": [
-      "validation/html-result-edit-benchmark.ts"
+      "tests/native/html-result-edit-benchmark.ts"
     ],
     "tests/response-height.test.ts": [
-      "validation/scroll-follow-lab.ts"
+      "tests/native/scroll-follow-lab.ts"
     ],
     "tests/native-response-projection.test.ts": [
-      "validation/steering-consumption-lab.ts"
+      "tests/native/steering-consumption-lab.ts"
     ],
     "tests/inline-worktree.test.ts": [
-      "validation/worktree-continuation-lab.ts"
+      "tests/native/worktree-continuation-lab.ts"
     ],
     "tests/response-emissions.test.ts": [
-      "validation/thought-stream-lab.ts"
+      "tests/native/thought-stream-lab.ts"
     ],
     "tests/native-save-barrier.test.ts": [
-      "validation/autosave-recovery-lab.ts"
+      "tests/native/autosave-recovery-lab.ts"
     ],
     "tests/cursor-send.test.ts": [
-      "validation/palette-selection-lab.ts"
+      "tests/native/palette-selection-lab.ts"
     ],
     "tests/import-save.test.ts": [
-      "validation/import-save-lab.ts"
+      "tests/native/import-save-lab.ts"
     ],
     "tests/stream-block-edit.test.ts": [
-      "validation/interrupted-stream-close-lab.ts"
+      "tests/native/interrupted-stream-close-lab.ts"
     ],
     "tests/run-import.test.ts": [
-      "validation/run-import-lab.ts",
+      "tests/native/run-import-lab.ts",
       "scripts/build-native-response-lab.mjs"
     ],
     "dist/main.js": [
@@ -76,36 +76,36 @@
       "scripts/obsidian-sync-lab.py",
       "scripts/prepare-remote-delivery-lab.mjs",
       "scripts/prepare-smart-send-rename-lab.mjs",
-      "validation/connection-health-live.ts",
-      "validation/remote-delivery-api.ts",
-      "validation/remote-delivery-results.ts"
+      "tests/native/connection-health-live.ts",
+      "tests/native/remote-delivery-api.ts",
+      "tests/native/remote-delivery-results.ts"
     ],
     "tests/completion-glow.test.ts": [
-      "validation/completion-read-lab.ts"
+      "tests/native/completion-read-lab.ts"
     ],
     "tests/question-continuation.test.ts": [
-      "validation/unified-questions-lab.ts"
+      "tests/native/unified-questions-lab.ts"
     ],
     "tests/local-response-manager.test.ts": [
-      "validation/agent-note-edits-lab.ts",
-      "validation/local-response-sync-case.ts"
+      "tests/native/agent-note-edits-lab.ts",
+      "tests/native/local-response-sync-case.ts"
     ],
     "tests/note-identity.test.ts": [
-      "validation/note-thread-moves-lab.ts",
+      "tests/native/note-thread-moves-lab.ts",
       "scripts/build-native-response-lab.mjs"
     ],
     "tests/response-container.test.ts": [
-      "validation/container-typing-lab.ts"
+      "tests/native/container-typing-lab.ts"
     ],
     "tests/html-results.test.ts": [
-      "validation/html-result-live.ts"
+      "tests/native/html-result-live.ts"
     ],
     "tests/native-response-manager.test.ts": [
-      "validation/native-response-handoff.ts",
-      "validation/native-view-trace.ts"
+      "tests/native/native-response-handoff.ts",
+      "tests/native/native-view-trace.ts"
     ],
     "tests/orchestration-v2.test.ts": [
-      "validation/orchestration-v2-live.ts"
+      "tests/native/orchestration-v2-live.ts"
     ],
     "scripts/release_policy.py": [
       "release-policy.json"

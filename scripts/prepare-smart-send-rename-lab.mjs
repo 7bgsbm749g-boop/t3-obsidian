@@ -68,7 +68,7 @@ for(const role of ['a','b']){
   await writeFile(join(evidence,`credential-${role}.json`),JSON.stringify({deviceId:randomUUID(),mode:'direct',pairedSessions:{[connectionId]:{url:origin,environmentId:descriptor.environmentId,token:issued.token,expiresAt:Date.parse(issued.expiresAt),permissions}}}),{mode:0o600});
   await writeFile(join(observer,'manifest.json'),JSON.stringify({id:'smart-send-rename-lab',name:'Synthetic Smart Send rename observer',version:'0.0.1',minAppVersion:'1.8.7',description:'Test vault only',author:'Local validation',isDesktopOnly:true}));
   await writeFile(join(observer,'config.json'),JSON.stringify({evidence,role,prefix}));
-  await build({entryPoints:['validation/smart-send-rename-lab.ts'],bundle:true,external:['obsidian','node:*'],platform:'browser',format:'cjs',target:'es2022',outfile:join(observer,'main.js')});
+  await build({entryPoints:['tests/native/smart-send-rename-lab.ts'],bundle:true,external:['obsidian','node:*'],platform:'browser',format:'cjs',target:'es2022',outfile:join(observer,'main.js')});
 }
 await writeFile(record,JSON.stringify({projectId,connectionId,vaultId,prefix,sessionId:issued.sessionId,workspace,environmentId:descriptor.environmentId},null,2));
 console.log('Prepared both synthetic clients; private setup receipt retained outside Sync.');

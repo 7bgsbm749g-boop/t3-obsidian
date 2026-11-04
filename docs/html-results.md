@@ -113,7 +113,7 @@ still has differential parser coverage, but is not an installed rendering path.
 Native fixtures verify Live Preview rendering and lifecycle. Pending-load tests cover late auth
 failures, shared recovery, one retry, successful loads, verification failures
 and disposal. The asset adapter has a focused RPC check. Run the synthetic edit
-benchmark with `npx tsx validation/html-result-edit-benchmark.ts LABEL OUTPUT.json`;
+benchmark with `npx tsx tests/native/html-result-edit-benchmark.ts LABEL OUTPUT.json`;
 it records transactions at three positions in a 52 KiB note, with and without
 one reference, and verifies that no extra plugin widgets are installed. It does
 not measure Obsidian's native code-block rendering or paint.

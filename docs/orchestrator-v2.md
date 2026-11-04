@@ -105,7 +105,7 @@ generic linked folder in the VPS test vaults and verify the returned replies.
 The bounded local server check is:
 
 ```sh
-npx tsx validation/orchestration-v2-live.ts /path/outside/vault/live-api.json
+npx tsx tests/native/orchestration-v2-live.ts /path/outside/vault/live-api.json
 ```
 
 It creates one synthetic thread in the canonical plugin project and verifies
