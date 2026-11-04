@@ -1,8 +1,8 @@
 import type {App,MarkdownView} from 'obsidian';
-import {nativeResponses} from '../native-response-manager';
-import {responseAnchor} from '../native-response-projection';
-import {contentHash} from '../completion';
-import type {ResponseRecord} from '../response-record';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {contentHash} from '../src/responses/completion';
+import type {ResponseRecord} from '../src/responses/response-record';
 
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 /** Deliberately separate host completion from local note arrival in a real,

@@ -4,9 +4,9 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {EventHostServer} from '../event-host-desktop';
-import {forwardEventCommand,eventRequest,eventCanonical} from '../event-host';
-import {EventSubscriptions,type EventSubscriptionCommand} from '../event-subscriptions';
+import {EventHostServer} from '../src/app/event-host-desktop';
+import {forwardEventCommand,eventRequest,eventCanonical} from '../src/app/event-host';
+import {EventSubscriptions,type EventSubscriptionCommand} from '../src/app/event-subscriptions';
 const pause=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 test('two origins share one host, immutable IDs, durable state and restart authority',{timeout:15000},async()=>{
   const root=await mkdtemp(join(tmpdir(),'t3-event-host-'));

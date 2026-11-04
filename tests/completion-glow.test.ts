@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {CompletionGlow,COMPLETION_READ_INTERVAL_MS,unreadCompletionFolders} from '../completion-glow';
-import type {ExplorerResponse} from '../explorer-responses';
+import {CompletionGlow,COMPLETION_READ_INTERVAL_MS,unreadCompletionFolders} from '../src/responses/completion-glow';
+import type {ExplorerResponse} from '../src/responses/explorer-responses';
 
 const before='2026-10-20T10:00:00.000Z',completed='2026-10-20T10:01:00.000Z',later='2026-10-20T10:02:00.000Z';
 const source={environmentId:'machine',projectId:'project',threadId:'thread',runId:'run',completedAt:completed};

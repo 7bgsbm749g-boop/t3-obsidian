@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {codebaseTransport} from '../codebase-transport';
-import {CodebaseDocument} from '../codebase-core';
+import {codebaseTransport} from '../src/projects/codebase-transport';
+import {CodebaseDocument} from '../src/projects/codebase-core';
 const scope={environmentId:'env',projectId:'project',root:'/outside',title:'Project'};
 function fixture(){let connects=0,catalogs=0,accesses=0,closes=0,remote='original',root='/outside',time=0;const calls:string[]=[];let closed=false;const io=codebaseTransport(async()=>{accesses++;return {origin:'http://localhost',api:async path=>{assert.equal(path,'/api/orchestration/shell');catalogs++;return {projects:[{id:'project',workspaceRoot:root}],threads:[]};},close:()=>{closes++;}};},{now:()=>time,connect:async()=>{connects++;closed=false;return {get closed(){return closed;},close(){closed=true;},call:async(tag,payload:any)=>{calls.push(tag);if(tag==='projects.readFile')return {contents:remote,byteLength:remote.length,truncated:false};if(tag==='projects.writeFile'){remote=payload.contents;return {};}return {entries:[],truncated:false};}};}});return {io,calls,get connects(){return connects;},get catalogs(){return catalogs;},get accesses(){return accesses;},get closes(){return closes;},setRoot(value:string){root=value;},closeSocket(){closed=true;},advance(ms:number){time+=ms;}};}
 test('100 concurrent folders share one credential, catalog fetch, and socket; closed sockets reconnect',async()=>{const f=fixture();await Promise.all(Array.from({length:100},(_,i)=>f.io.list(scope,`folder${i}`)));assert.equal(f.connects,1);assert.equal(f.catalogs,1);assert.equal(f.accesses,1);assert.equal(f.calls.length,100);f.closeSocket();await f.io.list(scope,'');assert.equal(f.connects,2);assert.equal(f.catalogs,1);f.io.dispose!();await Promise.resolve();assert.equal(f.closes,1);await assert.rejects(f.io.list(scope,''),/stopped/);});

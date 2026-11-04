@@ -9,8 +9,8 @@ import {ensureSyntaxTree,language,syntaxTree} from '@codemirror/language';
 import {javascript} from '@codemirror/lang-javascript';
 const runtime=createRequire(process.cwd()+'/package.json');
 const external=['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight'];
-const bundled=build({entryPoints:['language-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external});
-const registryBundle=build({entryPoints:['language-views.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external});
+const bundled=build({entryPoints:['src/projects/language-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external});
+const registryBundle=build({entryPoints:['src/projects/language-views.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external});
 class GenericEdit {buildLocalExtensions(){return [];}getDynamicExtensions(){return [];}getLocalExtensions(){return this.buildLocalExtensions();}updateOptions(){}set(text:string,clear=false){const edit=this as any;if(clear||!edit.cmInit)edit.cm.state=EditorState.create({doc:text,extensions:[edit.getLocalExtensions(),edit.getDynamicExtensions()]});else edit.cm.dispatch({changes:{from:0,to:edit.cm.state.doc.length,insert:text.split(/\r?\n/).join('\n')}});}}
 class MarkdownEdit extends GenericEdit {buildLocalExtensions():never{throw Error('Markdown local layer must not run');}getDynamicExtensions():never{throw Error('Markdown dynamic layer must not run');}}
 class BaseView {

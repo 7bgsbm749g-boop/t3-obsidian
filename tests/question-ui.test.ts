@@ -4,8 +4,8 @@ import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 import {EditorState} from '@codemirror/state';
-import {questionUrl,renderQuestion,pendingQuestions} from '../questions';
-import {projectResponses,responseAnchor} from '../native-response-projection';
+import {questionUrl,renderQuestion,pendingQuestions} from '../src/interaction/questions';
+import {projectResponses,responseAnchor} from '../src/responses/native-response-projection';
 
 class Element {
   children:Element[]=[];textContent='';value='';checked=false;disabled=false;hidden=false;name='';type='';selectionStart=0;dataset:Record<string,string>={};onclick?:()=>void;oninput?:()=>void;onchange?:()=>void;onfocus?:()=>void;
@@ -18,7 +18,7 @@ class Element {
 }
 const target={environmentId:'environment',threadId:'thread',requestId:'request'};
 async function harness(){
-  const result=await build({stdin:{contents:"export * from './question-ui'; export * from './question-controller';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian','@codemirror/state','@codemirror/view']});
+  const result=await build({stdin:{contents:"export * from './src/interaction/question-ui'; export * from './src/interaction/question-controller';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian','@codemirror/state','@codemirror/view']});
   const module={exports:{} as any},realRequire=createRequire(import.meta.url),notices:string[]=[];
   class Modal {contentEl=new Element();isOpen=false;closeCount=0;constructor(public app:any){}open(){this.isOpen=true;(this as any).onOpen();}close(){this.app.restoreFocus?.();this.isOpen=false;this.closeCount++;(this as any).onClose();}}
   runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal,Notice:class{constructor(text:string){notices.push(text);}}}:realRequire(id),document:{createElement:(tag:string)=>new Element(tag)},console,setTimeout,clearTimeout,AbortController,DOMException,MutationObserver:class{constructor(_callback:any){}observe(){}disconnect(){}}});

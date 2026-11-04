@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {webcrypto,randomUUID} from 'node:crypto';
-import {applyThreadItem} from '../inline-thread';
-import {findRunImport} from '../run-import-receipt';
-import {responseAnchor} from '../native-response-projection';
-import {localResponseRange} from '../local-response-binding';
-import {updateResponseBindingData} from '../response-binding-data';
-import {runImportResultMessage} from '../run-import';
+import {applyThreadItem} from '../src/conversations/inline-thread';
+import {findRunImport} from '../src/conversations/run-import-receipt';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {localResponseRange} from '../src/responses/local-response-binding';
+import {updateResponseBindingData} from '../src/responses/response-binding-data';
+import {runImportResultMessage} from '../src/conversations/run-import';
 
 const drain=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
 async function fixture(){

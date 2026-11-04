@@ -1,6 +1,6 @@
 import {Plugin,MarkdownView} from 'obsidian';
-import {NativeLanguageViews} from '../language-views';
-import {CODE_VIEW_TYPES,MAX_CODE_PARSE_LENGTH,codeLanguage} from '../code-language';
+import {NativeLanguageViews} from '../src/projects/language-views';
+import {CODE_VIEW_TYPES,MAX_CODE_PARSE_LENGTH,codeLanguage} from '../src/projects/code-language';
 
 import {language,syntaxTree,ensureSyntaxTree} from '@codemirror/language';
 import {undo,redo} from '@codemirror/commands';

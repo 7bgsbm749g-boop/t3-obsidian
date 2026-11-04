@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {followInlineQuestions,questionConversationInputs} from '../inline-questions';
-import {renderInlineTurn,type InlineThreadState} from '../inline-thread';
-import {renderSubmittedAnswer,submittedAnswers} from '../response-answers';
-import {presentToolGroups,restoreToolGroups} from '../response-tool-presentation';
+import {followInlineQuestions,questionConversationInputs} from '../src/interaction/inline-questions';
+import {renderInlineTurn,type InlineThreadState} from '../src/conversations/inline-thread';
+import {renderSubmittedAnswer,submittedAnswers} from '../src/responses/response-answers';
+import {presentToolGroups,restoreToolGroups} from '../src/responses/response-tool-presentation';
 
 const at=(seconds:number)=>`2026-10-06T19:52:${String(seconds).padStart(2,'0')}.000Z`;
 const question={id:'device',header:'Device',question:'Which device and vault did you reload?',options:[],multiSelect:false};

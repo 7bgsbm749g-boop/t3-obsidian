@@ -2,7 +2,7 @@
 import {Plugin,MarkdownView} from 'obsidian';
 import {readFileSync,writeFileSync,existsSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
-import {deviceState} from '../device-state';
+import {deviceState} from '../src/storage/device-state';
 
 export default class RemoteDeliveryLab extends Plugin {
   async onload(){

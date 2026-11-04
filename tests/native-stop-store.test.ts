@@ -2,11 +2,11 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {indexedDB,IDBObjectStore} from 'fake-indexeddb';
-import {NativeResponseManager} from '../native-response-manager';
-import {responseAnchor} from '../native-response-projection';
-import {nativeStoppedStore} from '../native-stop-store';
-import {deviceState} from '../device-state';
-import {contentHash} from '../completion';
+import {NativeResponseManager} from '../src/responses/native-response-manager';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {nativeStoppedStore} from '../src/responses/native-stop-store';
+import {deviceState} from '../src/storage/device-state';
+import {contentHash} from '../src/responses/completion';
 
 globalThis.indexedDB=indexedDB;
 function fixture(){

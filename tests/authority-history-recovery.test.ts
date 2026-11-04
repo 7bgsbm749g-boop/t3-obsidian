@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {applyThreadItem,restoreInlineBindings,inlineBindingCheckpoint,turnPhase,type InlineThreadState} from '../inline-thread';
-import {followInlineQuestions,inlineQuestionPhase} from '../inline-questions';
-import {mergeProse} from '../inline-steering';
+import {applyThreadItem,restoreInlineBindings,inlineBindingCheckpoint,turnPhase,type InlineThreadState} from '../src/conversations/inline-thread';
+import {followInlineQuestions,inlineQuestionPhase} from '../src/interaction/inline-questions';
+import {mergeProse} from '../src/conversations/inline-steering';
 const fixture=JSON.parse(readFileSync(new URL('./fixtures/authority-recovery.json',import.meta.url),'utf8'));
 const empty=():InlineThreadState=>({messages:[],activities:[]});
 const apply=(s:InlineThreadState,item:any)=>applyThreadItem(s,item).state;

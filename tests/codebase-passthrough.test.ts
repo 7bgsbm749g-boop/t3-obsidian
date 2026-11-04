@@ -2,10 +2,10 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
-import {catalogCodebases,virtualPath} from '../codebase-core';
+import {catalogCodebases,virtualPath} from '../src/projects/codebase-core';
 class MockNotice {messageEl={classList:{add(){}},setAttribute(){}};hide(){}}
 const scope={environmentId:'env',projectId:'scratch',root:'/machine/scratch',title:'No project'},workspace={...scope,root:'/machine/thread-folder',threadId:'thread'};
-const bundled=build({entryPoints:['codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight']});
+const bundled=build({entryPoints:['src/projects/codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight']});
 async function fixture(){
   class Base{}class File{constructor(public vault:any,public path:string){}}
   let environments=['env'],catalogs=0,resources=0,opened:any,postprocess:any;const local=new Map<string,any>(),physical={path:'Assets/chart.png'};

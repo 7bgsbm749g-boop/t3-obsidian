@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
-import {renderInlineTurn,initialRegion,type InlineThreadState} from '../inline-thread';
-import {finalAnswerFormat,type IntermediateMode} from '../response-presentation';
-import {validateResponseRequest,responseRequestHash,type ResponseRequest} from '../response-model';
-import {rewriteReplyReferences} from '../reply-assets';
+import {renderInlineTurn,initialRegion,type InlineThreadState} from '../src/conversations/inline-thread';
+import {finalAnswerFormat,type IntermediateMode} from '../src/responses/response-presentation';
+import {validateResponseRequest,responseRequestHash,type ResponseRequest} from '../src/responses/response-model';
+import {rewriteReplyReferences} from '../src/responses/reply-assets';
 
 const state:InlineThreadState={messages:[
   {id:'progress',role:'assistant',turnId:'turn',text:'Checking the result.\n\nA second paragraph.',streaming:false,createdAt:'2026-10-02T10:00:00Z'},

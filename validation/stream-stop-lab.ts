@@ -1,13 +1,13 @@
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
-import {nativeResponses} from '../native-response-manager';
-import {responseAnchor} from '../native-response-projection';
-import {installStreamBlockControls} from '../stream-block-controls';
-import {installResponsePresentation} from '../response-presentation';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
-import {renderInlineTurn} from '../inline-thread';
-import {InlineChatManager} from '../inline-chat';
-import {interruptStoppedResponse} from '../response-stop';
-import type {ResponseRecord} from '../response-record';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {installStreamBlockControls} from '../src/responses/stream-block-controls';
+import {installResponsePresentation} from '../src/responses/response-presentation';
+import {hiddenInlineMarkerExtension} from '../src/conversations/inline-markers';
+import {renderInlineTurn} from '../src/conversations/inline-thread';
+import {InlineChatManager} from '../src/conversations/inline-chat';
+import {interruptStoppedResponse} from '../src/responses/response-stop';
+import type {ResponseRecord} from '../src/responses/response-record';
 const fs=require('node:fs'),path=require('node:path');
 const ids=['aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee','bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee'];
 /** Real native editor with synthetic provider snapshots and a recording-only

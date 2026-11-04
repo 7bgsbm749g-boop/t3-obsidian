@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {timingSummaries} from '../codebase-performance';
+import {timingSummaries} from '../src/projects/codebase-performance';
 
 test('performance summaries bound each operation and contain finite numeric data only',()=>{
   const input=Array.from({length:150},(_,i)=>({operation:'render',milliseconds:i}));

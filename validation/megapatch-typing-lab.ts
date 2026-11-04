@@ -1,11 +1,11 @@
 import {Plugin,MarkdownView,MarkdownRenderer,MarkdownRenderChild} from 'obsidian';
-import {NativeResponseView} from '../native-response-view';
-import {responseAnchor} from '../native-response-projection';
-import {renderResponseToolGroup,type ResponseToolGroup} from '../response-tools';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
-import {installResponsePresentation} from '../response-presentation';
-import {contentHash} from '../completion';
-import {mountToolGroups} from '../response-tool-presentation';
+import {NativeResponseView} from '../src/responses/native-response-view';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {renderResponseToolGroup,type ResponseToolGroup} from '../src/responses/response-tools';
+import {hiddenInlineMarkerExtension} from '../src/conversations/inline-markers';
+import {installResponsePresentation} from '../src/responses/response-presentation';
+import {contentHash} from '../src/responses/completion';
+import {mountToolGroups} from '../src/responses/response-tool-presentation';
 const fs=require('node:fs'),path=require('node:path');
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 /** Synthetic isolated measurement. Edits must come from native desktop keys. */

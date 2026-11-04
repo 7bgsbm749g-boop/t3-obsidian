@@ -6,11 +6,11 @@ import {createRequire} from 'node:module';
 import {randomUUID,webcrypto} from 'node:crypto';
 import {promises as fs} from 'node:fs';
 import {dirname} from 'node:path';
-import {responseAnchor} from '../native-response-projection';
-import type {ResponseRequest} from '../response-model';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import type {ResponseRequest} from '../src/responses/response-model';
 
 test('browser bundle stages through desktop require without a native dynamic import loader',async()=>{
-  const bundle=await build({entryPoints:['local-response-staging.ts'],bundle:true,external:['node:*'],platform:'browser',format:'cjs',target:'es2022',write:false});
+  const bundle=await build({entryPoints:['src/responses/local-response-staging.ts'],bundle:true,external:['node:*'],platform:'browser',format:'cjs',target:'es2022',write:false});
   const required:string[]=[],realRequire=createRequire(import.meta.url),module={exports:{} as any};
   // Electron's CommonJS plugin evaluator has require, but no browser resolution
   // for import('node:fs'). This VM deliberately has no importModuleDynamically.

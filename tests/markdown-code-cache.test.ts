@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {markdownCodeRanges,escapeReplyHtml,markdownCodeCacheStatus} from '../reply-html';
+import {markdownCodeRanges,escapeReplyHtml,markdownCodeCacheStatus} from '../src/responses/reply-html';
 import {randomUUID} from 'node:crypto';
 
 test('cached code ranges remain independent of caller mutation and changed source',()=>{

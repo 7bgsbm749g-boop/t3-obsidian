@@ -4,11 +4,11 @@ import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
-import {initialRegion} from '../inline-thread';
-import {normalizeV2Snapshot} from '../orchestration-v2';
+import {initialRegion} from '../src/conversations/inline-thread';
+import {normalizeV2Snapshot} from '../src/connection/orchestration-v2';
 
 test('a legacy local response automatically follows an exact human retry and retains it through reload',async()=>{
- const result=await build({entryPoints:['inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+ const result=await build({entryPoints:['src/conversations/inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
  const module={exports:{} as any},realRequire=createRequire(import.meta.url);
  runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Notice:class{}}:realRequire(id),console,setTimeout,clearTimeout,TextEncoder,Uint8Array});
  const id=randomUUID(),initial=initialRegion(id),at=(n:number)=>new Date(n*1000).toISOString();let value='User text\n'+initial.text,saved:any[]=[{id,path:'Note.md',requestId:id,threadId:'thread',messageId:'original',bodyHash:initial.bodyHash,phase:'running',createdAt:at(1),intermediateMode:'collapse'}];
@@ -23,7 +23,7 @@ test('a legacy local response automatically follows an exact human retry and ret
 });
 
 for(const format of [undefined,'raw-markdown'])for(const text of [undefined,'Explain the selection.'])test(`${format??'legacy'} device-local jobs retain progress and ${text?'initial input':'legacy behavior'} across follow, reload and completion`,async()=>{
-  const result=await build({entryPoints:['inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+  const result=await build({entryPoints:['src/conversations/inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
   const module={exports:{} as any},realRequire=createRequire(import.meta.url);
   runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Notice:class{}}:realRequire(id),console,setTimeout,clearTimeout,TextEncoder,Uint8Array});
   const id=randomUUID(),initialInput=text?{messageId:randomUUID(),text}:undefined,initial=initialRegion(id,initialInput),oldTime='2026-09-30T04:00:00Z',nextTime='2026-09-30T04:01:00Z';
@@ -53,7 +53,7 @@ for(const format of [undefined,'raw-markdown'])for(const text of [undefined,'Exp
 });
 
 for(const dismiss of [false,true])test(`local async ${dismiss?'dismissal':'answer'} after completion keeps watching through reload`,async()=>{
-  const result=await build({entryPoints:['inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+  const result=await build({entryPoints:['src/conversations/inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
   const module={exports:{} as any},realRequire=createRequire(import.meta.url);
   runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Notice:class{}}:realRequire(id),console,setTimeout,clearTimeout,TextEncoder,Uint8Array});
   const id=randomUUID(),initial=initialRegion(id),time='2026-10-01T19:00:00Z';
@@ -78,7 +78,7 @@ for(const dismiss of [false,true])test(`local async ${dismiss?'dismissal':'answe
 });
 
 test('local completed async steering clears Working from a persisted unbound answer',async()=>{
-  const result=await build({entryPoints:['inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+  const result=await build({entryPoints:['src/conversations/inline-chat.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
   const module={exports:{} as any},realRequire=createRequire(import.meta.url);
   runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Notice:class{}}:realRequire(id),console,setTimeout,clearTimeout,TextEncoder,Uint8Array});
   const id=randomUUID(),initial=initialRegion(id),at=(seconds:number)=>`2026-10-02T08:42:${String(seconds).padStart(2,'0')}.000Z`;

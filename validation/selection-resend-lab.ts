@@ -1,9 +1,9 @@
 import {Plugin,MarkdownView} from 'obsidian';
-import SendToT3 from '../main';
-import {desktopDefaults,desktopEnvironment,desktopThreadAccess,uuid5} from '../desktop';
-import {readInlineSnapshot,type ThreadAccess} from '../thread-stream';
-import {applyThreadItem} from '../inline-thread';
-import {closeNoteTabPanel} from '../note-tab-panel';
+import SendToT3 from '../src/app/main';
+import {desktopDefaults,desktopEnvironment,desktopThreadAccess,uuid5} from '../src/connection/desktop';
+import {readInlineSnapshot,type ThreadAccess} from '../src/conversations/thread-stream';
+import {applyThreadItem} from '../src/conversations/inline-thread';
+import {closeNoteTabPanel} from '../src/notes/note-tab-panel';
 
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));

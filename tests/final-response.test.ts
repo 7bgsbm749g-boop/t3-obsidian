@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {checkFinalResponse,finalResponseKey} from '../final-response';
-import type {InlineThreadState} from '../inline-thread';
-import {t3Api} from '../t3-api';
+import {checkFinalResponse,finalResponseKey} from '../src/responses/final-response';
+import type {InlineThreadState} from '../src/conversations/inline-thread';
+import {t3Api} from '../src/connection/t3-api';
 import {settingsSocket} from './rpc-fixture';
 
 const at='2026-10-11T12:00:00.000Z';

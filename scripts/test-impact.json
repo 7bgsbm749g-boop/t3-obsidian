@@ -35,33 +35,33 @@
       "scripts/build-native-response-lab.mjs"
     ],
     "dist/main.js": [
-      "main.ts",
+      "src/app/main.ts",
       "esbuild.config.mjs",
       "manifest.json",
       "THIRD_PARTY_NOTICES.md"
     ],
-    "main.ts": [
+    "src/app/main.ts": [
       "styles.css"
     ],
-    "native-response-view.ts": [
+    "src/responses/native-response-view.ts": [
       "styles.css"
     ],
-    "activity-shine.ts": [
+    "src/ui/activity-shine.ts": [
       "styles.css"
     ],
-    "folder-indicator.ts": [
+    "src/projects/folder-indicator.ts": [
       "styles.css"
     ],
-    "codebase-view.ts": [
+    "src/projects/codebase-view.ts": [
       "styles.css"
     ],
-    "approval-ui.ts": [
+    "src/interaction/approval-ui.ts": [
       "styles.css"
     ],
-    "question-ui.ts": [
+    "src/interaction/question-ui.ts": [
       "styles.css"
     ],
-    "html-result-view.ts": [
+    "src/responses/html-result-view.ts": [
       "styles.css"
     ],
     "scripts/release-qlo2.py": [
@@ -86,11 +86,25 @@
       "validation/unified-questions-lab.ts"
     ],
     "tests/local-response-manager.test.ts": [
-      "validation/agent-note-edits-lab.ts"
+      "validation/agent-note-edits-lab.ts",
+      "validation/local-response-sync-case.ts"
     ],
     "tests/note-identity.test.ts": [
       "validation/note-thread-moves-lab.ts",
       "scripts/build-native-response-lab.mjs"
+    ],
+    "tests/response-container.test.ts": [
+      "validation/container-typing-lab.ts"
+    ],
+    "tests/html-results.test.ts": [
+      "validation/html-result-live.ts"
+    ],
+    "tests/native-response-manager.test.ts": [
+      "validation/native-response-handoff.ts",
+      "validation/native-view-trace.ts"
+    ],
+    "tests/orchestration-v2.test.ts": [
+      "validation/orchestration-v2-live.ts"
     ]
   }
 }

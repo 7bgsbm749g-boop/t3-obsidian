@@ -1,8 +1,8 @@
-import {responseActivityRow} from '../response-activity';
+import {responseActivityRow} from '../src/responses/response-activity';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {escapeReplyHtml} from '../reply-html';
-import {renderInlineTurn} from '../inline-thread';
+import {escapeReplyHtml} from '../src/responses/reply-html';
+import {renderInlineTurn} from '../src/conversations/inline-thread';
 
 test('HTML becomes literal while code, autolinks and link destinations retain exact bytes',()=>{
   const input='**<folder name>** <br> <span class="x">text</span>\n\n<!-- comment -->\n\n`<tag>` and ``<tag ` attr>``\n\n```html\n<div>example</div>\n```\n\n<https://example.com> <person@example.com> [site](<https://example.com>) ![image](<https://example.com/img>)\n\n[<tag>](<https://example.com>)';

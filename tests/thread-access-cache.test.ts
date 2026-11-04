@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
 import {randomUUID} from 'node:crypto';
-import {T3HttpError,ThreadAccessCache} from '../thread-access-cache';
-import {requestJson} from '../desktop';
-import {interruptStoppedResponse} from '../response-stop';
+import {T3HttpError,ThreadAccessCache} from '../src/conversations/thread-access-cache';
+import {requestJson} from '../src/connection/desktop';
+import {interruptStoppedResponse} from '../src/responses/response-stop';
 
 const rejected=()=>new T3HttpError(401,'T3 API returned HTTP 401.');
 const path='/api/orchestration/threads/test?turnLimit=20';

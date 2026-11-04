@@ -1,10 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {pair, pairingInput,sendDirect,readDirect,commandId,jsonHttp} from '../direct';
-import type {Request} from '../bridge';
+import {pair, pairingInput,sendDirect,readDirect,commandId,jsonHttp} from '../src/connection/direct';
+import type {Request} from '../src/app/bridge';
 import {modelConfig,settingsSocket} from './rpc-fixture';
-import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../environment-permissions';
-import {noteThreadTitle} from '../thread-title';
+import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../src/connection/environment-permissions';
+import {noteThreadTitle} from '../src/conversations/thread-title';
 const eid='environment';const url='https://t3.example';const now=Date.now();
 const session={url,environmentId:eid,token:'device-token',expiresAt:now+600000};
 const descriptor={environmentId:eid,label:'Computer',orchestrationProtocolVersion:2};

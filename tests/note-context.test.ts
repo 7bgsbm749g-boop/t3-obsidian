@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {noteContext,mergeNoteContexts,type NoteContextRecord} from '../note-context';
-import {validateAgentCommand} from '../note-command';
-import type {ResponseRequest} from '../response-model';
+import {noteContext,mergeNoteContexts,type NoteContextRecord} from '../src/notes/note-context';
+import {validateAgentCommand} from '../src/notes/note-command';
+import type {ResponseRequest} from '../src/responses/response-model';
 
 const record=():NoteContextRecord=>({messageId:randomUUID(),threadId:randomUUID(),projectId:randomUUID(),environmentId:'env',notePath:'Source.md',bindingIds:[randomUUID(),randomUUID()],createdAt:'2026-10-16T12:00:00Z'});
 function bindings(send:NoteContextRecord):ResponseRequest[]{return send.bindingIds.map((id,i)=>({version:4,localOnly:true,nativeProjection:true,responseContainer:true,initialOwner:randomUUID(),id,vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:`Destination ${i}.md`,threadId:send.threadId,messageId:send.messageId,projectId:send.projectId,threadEnvironmentId:send.environmentId,initialHash:'a'.repeat(64),createdAt:send.createdAt}));}

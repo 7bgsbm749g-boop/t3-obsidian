@@ -2,10 +2,10 @@
  * is dispatched. Short-lived local credentials and signed URLs stay in memory. */
 import assert from 'node:assert/strict';
 import {writeFile} from 'node:fs/promises';
-import {desktopThreadAccess} from '../desktop';
-import {HtmlResultStore} from '../html-result-store';
-import {htmlRenderFromToolItem,readHtmlResult,renderHtmlResult} from '../html-results';
-import {contentHash} from '../completion';
+import {desktopThreadAccess} from '../src/connection/desktop';
+import {HtmlResultStore} from '../src/responses/html-result-store';
+import {htmlRenderFromToolItem,readHtmlResult,renderHtmlResult} from '../src/responses/html-results';
+import {contentHash} from '../src/responses/completion';
 async function main(){
  const [threadId,itemId,evidence]=process.argv.slice(2);if(!threadId||!itemId||!evidence)throw Error('Supply thread ID, HTML tool item ID and a private evidence JSON path.');
  const access=await desktopThreadAccess({host:'local',executable:'/home/ubuntu/.local/bin/t3'});

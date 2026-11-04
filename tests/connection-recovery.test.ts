@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {ConnectionRecovery,type ConnectionReloadState} from '../connection-recovery';
-import {T3ConnectionTimeoutError,T3RequestTimeoutError} from '../t3-rpc';
+import {ConnectionRecovery,type ConnectionReloadState} from '../src/connection/connection-recovery';
+import {T3ConnectionTimeoutError,T3RequestTimeoutError} from '../src/connection/t3-rpc';
 const timeout=(id:string)=>new T3ConnectionTimeoutError(id,'projects.readFile',8000,1,8000);
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 function fixture(){

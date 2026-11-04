@@ -1,14 +1,14 @@
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
-import SendToT3,{T3Settings} from '../main';
-import {nativeResponses} from '../native-response-manager';
-import {LocalResponseManager} from '../local-response-manager';
-import {deviceNoteIO,deviceFinalNoteIO} from '../inline-note-io';
-import {responseAnchor} from '../native-response-projection';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
-import {installResponsePresentation} from '../response-presentation';
-import {installStreamBlockControls} from '../stream-block-controls';
-import {SignInRequiredError} from '../sign-in-state';
-import type {ResponseRequest} from '../response-model';
+import SendToT3,{T3Settings} from '../src/app/main';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {LocalResponseManager} from '../src/responses/local-response-manager';
+import {deviceNoteIO,deviceFinalNoteIO} from '../src/conversations/inline-note-io';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {hiddenInlineMarkerExtension} from '../src/conversations/inline-markers';
+import {installResponsePresentation} from '../src/responses/response-presentation';
+import {installStreamBlockControls} from '../src/responses/stream-block-controls';
+import {SignInRequiredError} from '../src/connection/sign-in-state';
+import type {ResponseRequest} from '../src/responses/response-model';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 /** Synthetic authentication in an unsynced native client. No credentials,

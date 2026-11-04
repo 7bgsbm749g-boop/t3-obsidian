@@ -4,10 +4,10 @@ import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
-import {initialRegion,replaceRegion} from '../inline-thread';
+import {initialRegion,replaceRegion} from '../src/conversations/inline-thread';
 
 async function harness(hosted=false){
-  const result=await build({stdin:{contents:"export {InlineChatManager} from './inline-chat'; export {nativeResponses} from './native-response-manager';",resolveDir:process.cwd(),sourcefile:'local-stop-harness.ts'},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+  const result=await build({stdin:{contents:"export {InlineChatManager} from './src/conversations/inline-chat'; export {nativeResponses} from './src/responses/native-response-manager';",resolveDir:process.cwd(),sourcefile:'local-stop-harness.ts'},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
   const module={exports:{} as any},realRequire=createRequire(import.meta.url);
   runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Notice:class{}}:realRequire(id),console,setTimeout,clearTimeout,TextEncoder,Uint8Array});
   const id=randomUUID(),initial=initialRegion(id),change=replaceRegion(initial.text,id,initial.bodyHash,'**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n\n> Partial answer edited in the note.')!;

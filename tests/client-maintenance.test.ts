@@ -4,10 +4,10 @@ import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID,createHash} from 'node:crypto';
-import {DesktopClientMaintenance} from '../client-maintenance-desktop';
-import {validateClientCommand,type ClientCommand} from '../client-command';
-import {NoteCommandServer} from '../note-command-desktop';
-import {existingPrivateStorage} from '../private-storage-desktop';
+import {DesktopClientMaintenance} from '../src/app/client-maintenance-desktop';
+import {validateClientCommand,type ClientCommand} from '../src/app/client-command';
+import {NoteCommandServer} from '../src/notes/note-command-desktop';
+import {existingPrivateStorage} from '../src/storage/private-storage-desktop';
 
 async function fixture(){
   const root=await mkdtemp(join(tmpdir(),'t3-native-reload-')),directory=join(root,'.obsidian/plugins/send-to-t3-code');await mkdir(directory,{recursive:true});

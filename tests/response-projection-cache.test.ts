@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {ResponseProjectionCache} from '../response-projection-cache';
-import {responseAnchor,savedProjection} from '../native-response-projection';
-import {markdownCodeCacheStatus} from '../reply-html';
-import {containerEnd} from '../response-container';
+import {ResponseProjectionCache} from '../src/responses/response-projection-cache';
+import {responseAnchor,savedProjection} from '../src/responses/native-response-projection';
+import {markdownCodeCacheStatus} from '../src/responses/reply-html';
+import {containerEnd} from '../src/responses/response-container';
 
 const id='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222';
 const saved='Ordinary before\n'+responseAnchor(id)+'\nBetween\n'+responseAnchor(other)+'\nOrdinary after';
