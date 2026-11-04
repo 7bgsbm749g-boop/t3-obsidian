@@ -12,7 +12,9 @@
 - `src/storage/`: private storage and device/synced state.
 - `src/ui/`: shared activity effects.
 - `tests/`: automated regression checks and fixtures.
-- `validation/`: native Obsidian test fixtures.
+- `tests/native/`: native Obsidian test fixtures. Keep lab-only code here so
+  the directory scanner applies its documented test exclusions; ship all runtime
+  code from `src/`.
 - `scripts/`: build, validation, and release tools.
 - `docs/`: design notes, reference material, and product screenshots.
 

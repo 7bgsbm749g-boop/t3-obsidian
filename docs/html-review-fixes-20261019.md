@@ -6,7 +6,7 @@ identity, hash, size, MIME, UTF-8 and cache checks remain in place.
 
 ## Edit delay
 
-`validation/html-result-edit-benchmark.ts` runs the production Live Preview
+`tests/native/html-result-edit-benchmark.ts` runs the production Live Preview
 extension with real CodeMirror state transactions. The synthetic note contains
 52 KiB of Markdown prose. The reference case adds one 286-character generated
 HTML fence near its middle. Each location has four warmup transactions and 24

@@ -439,10 +439,10 @@ def registration_line(line: str):
         return flags[1], [(token, token) for token in tokens], flags[3], 'flags'
     entries = re.fullmatch(r'(.*entryPoints:\[)(.*)(\],bundle:.*)', line)
     if entries:
-        pattern = r"process\.argv\.includes\('(--[a-z0-9-]+)'\)\?'(validation/[a-z0-9-]+\.ts)':"
+        pattern = r"process\.argv\.includes\('(--[a-z0-9-]+)'\)\?'(tests/native/[a-z0-9-]+\.ts)':"
         tokens = re.findall(pattern, entries[2])
         remainder = re.sub(pattern, '', entries[2])
-        if not re.fullmatch(r"'validation/[a-z0-9-]+\.ts'", remainder):
+        if not re.fullmatch(r"'tests/native/[a-z0-9-]+\.ts'", remainder):
             return None
         if ''.join(f"process.argv.includes('{key}')?'{value}':" for key, value in tokens) + remainder != entries[2]:
             return None

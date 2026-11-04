@@ -42,7 +42,7 @@ Generated question cleanup waits for the recovery intent so it cannot remove
 that exact saved-text evidence prematurely. Resolved cleanup removes only valid
 generated sections outside live responses and preserves literal code examples.
 
-The native validation fixture is `validation/unified-questions-lab.ts`, built
+The native validation fixture is `tests/native/unified-questions-lab.ts`, built
 with `node scripts/build-native-response-lab.mjs EVIDENCE_DIRECTORY --questions`.
 Supply `TEST-CONFIG.json` with the current source thread ID. It runs one bounded
 real T3 async question, waits for source completion, restarts the local response
