@@ -330,6 +330,28 @@ module.main()
         with self.assertRaises(ValueError):
             release.parse_version('v2.12.1')
 
+    def test_enqueue_preserves_the_selected_semantic_release_type(self) -> None:
+        for selection, expected in [(None, 'patch'), ('patch', 'patch'), ('minor', 'minor'), ('major', 'major')]:
+            arguments = ['--enqueue', 'HEAD'] + (['--release-type', selection] if selection else [])
+            args = release.parser().parse_args(arguments)
+            with patch.object(release, 'git_state', return_value=('commit', [])), \
+                    patch.object(release.release_queue, 'enqueue', return_value={'jobId': 'test'}) as enqueue, \
+                    patch.object(release.release_queue, 'kick') as kick, patch('builtins.print'):
+                release.dispatch(args)
+                self.assertEqual(enqueue.call_args.kwargs['bump'], expected)
+                self.assertEqual(enqueue.call_args.args, (release.ROOT, release.CANONICAL_ROOT, 'HEAD'))
+                kick.assert_called_once()
+
+    def test_release_type_cannot_override_another_action_or_a_prepared_version(self) -> None:
+        for arguments in [
+                ['--bump', 'patch', '--release-type', 'major'],
+                ['--queue-status', '--release-type', 'minor'],
+                ['--enqueue', 'HEAD', '--validation', 'exact-proof.json', '--release-type', 'major']]:
+            with patch.object(release.release_queue, 'enqueue') as enqueue:
+                with self.assertRaisesRegex(SystemExit, 'release-type'):
+                    release.dispatch(release.parser().parse_args(arguments))
+                enqueue.assert_not_called()
+
     def test_exact_version_option_and_old_version_preflight(self) -> None:
         args = release.parser().parse_args(['--version', '2.28.1'])
         self.assertEqual(args.version, '2.28.1')

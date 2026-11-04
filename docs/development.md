@@ -32,6 +32,9 @@ The installed plugin needs `main.js`, `manifest.json`, and `styles.css` in the
 releases use **t3-obsidian VERSION**; the release title does not set the
 Obsidian display name.
 
+Choose the release type using the [version policy](versioning.md). The release
+queue accepts `--release-type patch`, `minor`, or `major` with `--enqueue`.
+
 ## References
 
 - [Response delivery](coordinated-response-delivery.md)

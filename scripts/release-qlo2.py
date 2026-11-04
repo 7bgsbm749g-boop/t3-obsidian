@@ -741,6 +741,8 @@ def parser() -> argparse.ArgumentParser:
     action.add_argument('--retry-queued', metavar='JOB_ID', help='Resume recovery or retry a repaired candidate; retain immutable release bytes.')
     result.add_argument('--prepare', action='store_true', help='With --bump/--version: prepare and check a task-worktree candidate without deployment.')
     result.add_argument('--validation', type=Path, help='Exact successful validation proof for --publish.')
+    result.add_argument('--release-type', choices=('patch', 'minor', 'major'),
+                        help='With --enqueue: let the queue assign the next semantic version (default: patch).')
     result.add_argument('--base', help='Affected-test baseline; default: installed release source.')
     result.add_argument('--replacement', metavar='COMMIT', help='With --retry-queued: replace an uninstalled failed candidate with a corrected reviewed commit.')
     result.add_argument('--allow-dirty', action='store_true')
@@ -753,6 +755,10 @@ def parser() -> argparse.ArgumentParser:
 
 
 def dispatch(args: argparse.Namespace) -> None:
+    if args.release_type and not args.enqueue:
+        raise SystemExit('--release-type is valid only with --enqueue.')
+    if args.release_type and args.validation:
+        raise SystemExit('--validation fixes an exact prepared version; omit --release-type.')
     if args.replacement and not args.retry_queued:
         raise SystemExit('--replacement is valid only with --retry-queued.')
     if args.cleanup_legacy_settings:
@@ -768,7 +774,7 @@ def dispatch(args: argparse.Namespace) -> None:
             raise SystemExit('Supply --evidence and --notes together. Product jobs without evidence wait before publication.')
         if git_state()[1]:
             raise SystemExit('Commit the reviewed task changes before enqueueing; uncommitted edits are not submitted.')
-        result = release_queue.enqueue(ROOT, CANONICAL_ROOT, args.enqueue,
+        result = release_queue.enqueue(ROOT, CANONICAL_ROOT, args.enqueue, bump=args.release_type or 'patch',
                                        validation=args.validation.resolve() if args.validation else None,
                                        evidence=args.evidence.resolve() if args.evidence else None, notes=args.notes)
         print(json.dumps(result, indent=2))
