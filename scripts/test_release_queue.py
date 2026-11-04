@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import json
+import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
@@ -10,6 +11,10 @@ import unittest
 from unittest.mock import patch
 
 from scripts import release_queue as queue
+
+SPEC = importlib.util.spec_from_file_location('queue_publisher', Path(__file__).with_name('release-qlo2.py'))
+publisher = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(publisher)
 
 
 class ReleaseQueueTests(unittest.TestCase):
@@ -24,13 +29,17 @@ class ReleaseQueueTests(unittest.TestCase):
         self.addCleanup(patch.stopall)
         subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
         self.git('config', 'user.name', 'Test'); self.git('config', 'user.email', 'test@example.com')
-        for name in queue.VERSION_FILES:
-            (self.root / name).write_text(json.dumps({'version': '1.0.0'}))
+        documents = {'package.json': {'version': '1.0.0'},
+                     'package-lock.json': {'version': '1.0.0', 'packages': {'': {'version': '1.0.0'}}},
+                     'manifest.json': {'version': '1.0.0', 'minAppVersion': '1.8.7'},
+                     'versions.json': {'1.0.0': '1.8.7'}}
+        for name, value in documents.items():
+            queue.write(self.root / name, value)
         self.git('add', '.'); self.git('commit', '-qm', 'base')
         self.published = []
         self.evidence = self.directory / 'behavior.json'; self.evidence.write_text('{"realFixture":"retained"}')
         self.release = SimpleNamespace(ROOT=self.root, BACKUPS=self.backups,
-            canonical_root_required=lambda: None, read_json=queue.read,
+            canonical_root_required=lambda: None, read_json=queue.read, version_updates=publisher.version_updates,
             bump_version=lambda value, part: '.'.join([*value.split('.')[:2], str(int(value.split('.')[2])+1)]),
             release_receipt_dir=lambda version: self.backups / 'releases' / version,
             archive_path=lambda version: self.backups / (version + '.zip'),
@@ -58,16 +67,13 @@ class ReleaseQueueTests(unittest.TestCase):
         return queue.enqueue(source, self.root, 'HEAD', queue=self.store,
                              evidence=self.evidence if evidence else None, notes='Verified fixture' if evidence else '')
 
-    def publish(self, bump, dirty, version):
+    def publish(self, bump, dirty, version, *, committed_version=False):
+        self.assertEqual(queue.read(self.root / 'manifest.json')['version'], version)
+        self.assertEqual(self.git('status', '--porcelain=v1'), '')
         self.published.append(version)
         self.release.archive_path(version).write_text('immutable bytes')
-        for name in queue.VERSION_FILES:
-            value = queue.read(self.root / name); value['version'] = version
-            if name == 'package-lock.json':
-                value.get('packages', {}).get('', {}).update(version=version)
-            (self.root / name).write_text(json.dumps(value))
         path = self.release.release_receipt_dir(version); path.mkdir(parents=True)
-        queue.write(path / 'deployment.json', {'version': version})
+        queue.write(path / 'deployment.json', {'version': version, 'gitCommit': self.git('rev-parse', 'HEAD')})
         self.client(version)
 
     def client(self, version):
@@ -121,7 +127,8 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertEqual(self.published, [])
         state = queue.read(self.store / 'jobs' / submitted['jobId'] / 'state.json')
         self.assertEqual(state['status'], 'queued')
-        self.assertNotIn('version', state)
+        self.assertEqual(state['version'], '1.0.1')
+        self.assertFalse(self.release.archive_path('1.0.1').exists())
         self.assertEqual((self.root / 'scripts/plugin_id_migration.py').read_bytes(), (source / 'scripts/plugin_id_migration.py').read_bytes())
         self.release.ROOT = self.root
         queue.drain(self.release, queue=self.store)
@@ -148,7 +155,8 @@ class ReleaseQueueTests(unittest.TestCase):
         state, request = queue.read(directory / 'state.json'), queue.read(directory / 'request.json')
         self.assertTrue(queue.run_job(self.release, directory, request, state, queue.engine_hash(self.root), integration_only=True))
         self.assertEqual(self.published, [])
-        self.assertNotIn('version', queue.read(directory / 'state.json'))
+        self.assertEqual(queue.read(directory / 'state.json')['version'], '1.0.1')
+        self.assertFalse(self.release.archive_path('1.0.1').exists())
 
     def test_dependency_install_is_cached_but_lock_changes_require_a_new_install(self):
         self.dependency_fixture()
@@ -187,8 +195,8 @@ class ReleaseQueueTests(unittest.TestCase):
     def test_worker_installs_dependencies_before_publication(self):
         source = self.source('first'); self.submit(source)
         events = []
-        def publish(*args):
-            events.append('publish'); self.publish(*args)
+        def publish(*args, **kwargs):
+            events.append('publish'); self.publish(*args, **kwargs)
         with patch.object(queue, 'ensure_dependencies', side_effect=lambda root: events.append('dependencies')), patch.object(self.release, 'new_release', side_effect=publish):
             queue.drain(self.release, queue=self.store)
         self.assertEqual(events, ['dependencies', 'publish'])
@@ -212,6 +220,102 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertEqual([job['status'] for job in queue.status(queue=self.store)['jobs']], ['complete', 'complete'])
         self.assertLess(a['jobId'], b['jobId'])
         self.assertEqual(self.git('status', '--porcelain=v1'), '')
+
+    def test_each_release_has_one_public_commit_with_source_and_exact_version_bytes(self):
+        base = self.git('rev-parse', 'HEAD')
+        first = self.source('first'); second = self.source('second')
+        (first / 'first.ts').write_text('export const value=2;')
+        subprocess.run(['git', 'commit', '-qam', 'Improve first change'], cwd=first, check=True)
+        a = queue.enqueue(first, self.root, 'HEAD', queue=self.store, evidence=self.evidence,
+                          notes='Verified fixture', summary='Improve first change')
+        b = self.submit(second)
+        queue.drain(self.release, queue=self.store)
+        commits = self.git('rev-list', '--reverse', base + '..HEAD').splitlines()
+        self.assertEqual(len(commits), 2)
+        for job, commit, version, name in [(a, commits[0], '1.0.1', 'first'), (b, commits[1], '1.0.2', 'second')]:
+            state = queue.status(job['jobId'], queue=self.store)['jobs'][0]
+            self.assertEqual(state['releaseCommit'], commit)
+            self.assertEqual(len(self.git('rev-list', '--parents', '-n', '1', commit).split()), 2)
+            self.assertFalse(queue.ancestor(self.root, state['sourceCommit'], 'HEAD'))
+            self.assertEqual(json.loads(self.git('show', commit + ':manifest.json'))['version'], version)
+            self.assertEqual(self.git('show', commit + ':' + name + '.ts'), (self.root / (name + '.ts')).read_text())
+            self.assertEqual(queue.read(self.release.release_receipt_dir(version) / 'deployment.json')['gitCommit'], commit)
+        self.assertEqual(self.git('show', '-s', '--format=%s', commits[0]), 'Release 1.0.1: Improve first change')
+        self.assertEqual(self.git('rev-parse', 'refs/t3-release-queue/sources/' + state['sourceCommit']), state['sourceCommit'])
+
+    def test_later_commit_on_an_old_task_branch_can_edit_its_already_released_source(self):
+        source = self.source('first'); self.submit(source)
+        queue.drain(self.release, queue=self.store)
+        original_source = queue.git(source, 'rev-parse', 'HEAD')
+        (source / 'first.ts').write_text('export const value=2;')
+        subprocess.run(['git', 'commit', '-qam', 'Improve released source'], cwd=source, check=True)
+        second = self.submit(source)
+        request = queue.read(queue.job_path(self.store, second['jobId']) / 'request.json')
+        self.assertEqual(request['mergeBase'], original_source)
+        queue.drain(self.release, queue=self.store)
+        self.assertEqual(self.published, ['1.0.1', '1.0.2'])
+        self.assertEqual((self.root / 'first.ts').read_text(), 'export const value=2;')
+
+    def test_task_can_build_on_multiple_squashed_sources_without_reapplying_them(self):
+        first = self.source('first'); second = self.source('second'); combined = self.source('combined')
+        for source in (first, second):
+            self.submit(source)
+            subprocess.run(['git', 'merge', '--no-edit', '--no-ff', queue.git(source, 'rev-parse', 'HEAD')],
+                           cwd=combined, check=True, capture_output=True)
+        for name in ('first', 'second'):
+            (combined / (name + '.ts')).write_text('export const value=2;')
+        subprocess.run(['git', 'commit', '-qam', 'Build on both sources'], cwd=combined, check=True)
+        job = self.submit(combined)
+        queue.drain(self.release, queue=self.store)
+        self.assertEqual(self.published, ['1.0.1', '1.0.2', '1.0.3'])
+        self.assertEqual(queue.status(job['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+        for name in ('first', 'second'):
+            self.assertEqual((self.root / (name + '.ts')).read_text(), 'export const value=2;')
+
+    def test_documentation_followup_on_old_task_is_maintenance_and_keeps_later_product_edits(self):
+        source = self.source('first'); self.submit(source)
+        queue.drain(self.release, queue=self.store)
+        removal = self.source('removal')
+        subprocess.run(['git', 'rm', 'first.ts'], cwd=removal, check=True, capture_output=True)
+        subprocess.run(['git', 'commit', '-qm', 'Remove first feature'], cwd=removal, check=True)
+        self.submit(removal); queue.drain(self.release, queue=self.store)
+        (source / 'docs').mkdir(); (source / 'docs/followup.md').write_text('Updated instructions')
+        subprocess.run(['git', 'add', '.'], cwd=source, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'Document followup'], cwd=source, check=True)
+        job = self.submit(source, evidence=False)
+        request = queue.read(queue.job_path(self.store, job['jobId']) / 'request.json')
+        self.assertTrue(request['maintenanceOnly'])
+        with patch.object(self.release, 'change_checks', SimpleNamespace(run_validation=lambda root: self.evidence), create=True):
+            queue.drain(self.release, queue=self.store)
+        self.assertFalse((self.root / 'first.ts').exists())
+        self.assertEqual(self.published, ['1.0.1', '1.0.2'])
+        self.assertEqual(queue.status(job['jobId'], queue=self.store)['jobs'][0]['delivery'], 'source-only')
+
+    def test_crash_on_either_side_of_fast_forward_resumes_the_same_single_commit(self):
+        class WorkerCrash(BaseException):
+            pass
+        for after_move in (False, True):
+            with self.subTest(after_move=after_move):
+                base = self.git('rev-parse', 'HEAD')
+                source = self.source('crash-' + str(after_move)); job = self.submit(source)
+                original_run = self.release.run
+                def interrupted(command):
+                    if command[:3] == ['git', 'merge', '--ff-only']:
+                        if after_move:
+                            original_run(command)
+                        raise WorkerCrash()
+                    return original_run(command)
+                with patch.object(self.release, 'run', side_effect=interrupted):
+                    with self.assertRaises(WorkerCrash):
+                        queue.drain(self.release, queue=self.store)
+                state = queue.status(job['jobId'], queue=self.store)['jobs'][0]
+                candidate = state['pendingIntegration']['commit']
+                self.assertEqual(self.git('rev-parse', 'HEAD'), candidate if after_move else base)
+                self.assertEqual(self.git('status', '--porcelain=v1'), '')
+                queue.drain(self.release, queue=self.store)
+                self.assertEqual(self.git('rev-parse', 'HEAD'), candidate)
+                self.assertEqual(self.git('rev-list', '--count', base + '..HEAD'), '1')
+                self.assertIsNone(queue.status(job['jobId'], queue=self.store)['jobs'][0]['pendingIntegration'])
 
     def test_concurrent_submissions_are_idempotent_and_a_second_worker_cannot_publish(self):
         source = self.source('first')
@@ -237,7 +341,7 @@ class ReleaseQueueTests(unittest.TestCase):
 
     def test_install_failure_arms_durable_retry_and_resumes_the_same_archive(self):
         a = self.submit(self.source('first')); self.submit(self.source('second'))
-        def fail(bump, dirty, version):
+        def fail(bump, dirty, version, **kwargs):
             self.release.archive_path(version).write_text('immutable bytes')
             raise RuntimeError('Sync failed')
         with patch.object(self.release, 'new_release', side_effect=fail), patch.object(self.release, 'resume_release', side_effect=RuntimeError('Sync unavailable')):
@@ -262,11 +366,11 @@ class ReleaseQueueTests(unittest.TestCase):
     def test_transient_check_failure_retries_without_an_operator(self):
         job = self.submit(self.source('first'))
         calls = []
-        def publish(*args):
+        def publish(*args, **kwargs):
             calls.append(args)
             if len(calls) == 1:
                 raise SystemExit('ENOTEMPTY during temporary fixture cleanup')
-            self.publish(*args)
+            self.publish(*args, **kwargs)
         with patch.object(self.release, 'new_release', side_effect=publish):
             self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
         self.assertEqual(len(calls), 2)
@@ -277,10 +381,10 @@ class ReleaseQueueTests(unittest.TestCase):
 
     def test_bad_candidate_is_reverted_and_a_later_independent_job_publishes(self):
         a = self.submit(self.source('first')); b = self.submit(self.source('second'))
-        def publish(*args):
+        def publish(*args, **kwargs):
             if (self.root / 'first.ts').exists():
                 raise RuntimeError('Deterministic test failure')
-            self.publish(*args)
+            self.publish(*args, **kwargs)
         with patch.object(self.release, 'new_release', side_effect=publish):
             self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
         self.assertEqual(queue.status(a['jobId'], queue=self.store)['jobs'][0]['status'], 'failed')
@@ -342,10 +446,10 @@ class ReleaseQueueTests(unittest.TestCase):
         dependent = self.source('dependent')
         subprocess.run(['git', 'merge', '--no-edit', '--no-ff', self.git('rev-parse', 'first')], cwd=dependent, check=True, capture_output=True)
         b = self.submit(dependent); c = self.submit(self.source('third'))
-        def publish(*args):
+        def publish(*args, **kwargs):
             if (self.root / 'first.ts').exists():
                 raise RuntimeError('Bad parent candidate')
-            self.publish(*args)
+            self.publish(*args, **kwargs)
         with patch.object(self.release, 'new_release', side_effect=publish):
             queue.drain(self.release, queue=self.store)
         self.assertEqual(queue.status(b['jobId'], queue=self.store)['jobs'][0]['status'], 'waiting-for-dependency')
@@ -394,6 +498,49 @@ class ReleaseQueueTests(unittest.TestCase):
         state = queue.status(a['jobId'], queue=self.store)['jobs'][0]
         self.assertEqual(state['delivery'], 'source-only')
         self.assertEqual(self.published, [])
+
+    def test_upgrade_keeps_an_already_integrated_legacy_maintenance_commit(self):
+        source = self.source('maintenance-upgrade')
+        subprocess.run(['git', 'rm', 'maintenance-upgrade.ts'], cwd=source, check=True, capture_output=True)
+        (source / 'docs').mkdir(); (source / 'docs/queue.md').write_text('New release rules')
+        subprocess.run(['git', 'add', '.'], cwd=source, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'Update release rules'], cwd=source, check=True)
+        job = self.submit(source, evidence=False)
+        self.git('merge', '--no-edit', '--no-ff', queue.git(source, 'rev-parse', 'HEAD'))
+        existing = self.git('rev-parse', 'HEAD')
+        directory = queue.job_path(self.store, job['jobId'])
+        queue.write(directory / 'state.json', {'status': 'queued', 'integratedCommit': existing,
+                    'ownedIntegrations': [{'commit': existing, 'merge': True}]})
+        with patch.object(self.release, 'change_checks', SimpleNamespace(run_validation=lambda root: self.evidence), create=True):
+            queue.drain(self.release, queue=self.store)
+        self.assertEqual(self.git('rev-parse', 'HEAD'), existing)
+        self.assertEqual(queue.status(job['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+        self.assertEqual(self.published, [])
+
+    def test_upgrade_finishes_a_legacy_archive_without_changing_its_source_commit(self):
+        source = self.source('legacy-archive'); job = self.submit(source)
+        self.git('merge', '--no-edit', '--no-ff', queue.git(source, 'rev-parse', 'HEAD'))
+        legacy_commit = self.git('rev-parse', 'HEAD')
+        for name, value in publisher.version_updates('1.0.1', {name: (self.root / name).read_bytes() for name in queue.VERSION_FILES}).items():
+            (self.root / name).write_bytes(value)
+        archive = self.release.archive_path('1.0.1'); archive.write_bytes(b'legacy immutable archive')
+        directory = queue.job_path(self.store, job['jobId'])
+        queue.write(directory / 'state.json', {'status': 'retrying', 'version': '1.0.1',
+                    'integratedCommit': legacy_commit, 'archive': str(archive),
+                    'ownedIntegrations': [{'commit': legacy_commit, 'merge': True}]})
+        def resume(version, dirty):
+            self.assertEqual(self.git('rev-parse', 'HEAD'), legacy_commit)
+            queue.write(self.release.release_receipt_dir(version) / 'deployment.json',
+                        {'version': version, 'gitCommit': legacy_commit})
+            self.client(version)
+        with patch.object(self.release, 'resume_release', side_effect=resume) as resumed, \
+             patch.object(self.release, 'new_release') as rebuilt:
+            queue.drain(self.release, queue=self.store)
+            resumed.assert_called_once_with('1.0.1', False); rebuilt.assert_not_called()
+        self.assertEqual(archive.read_bytes(), b'legacy immutable archive')
+        self.assertEqual(self.git('status', '--porcelain=v1'), '')
+        self.assertEqual(queue.read(self.release.release_receipt_dir('1.0.1') / 'deployment.json')['gitCommit'], legacy_commit)
+        self.assertEqual(queue.status(job['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
 
     def test_retry_timer_is_a_persistent_single_deadline_and_worker_restarts_after_crashes(self):
         home = self.directory / 'home'
@@ -466,7 +613,7 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertEqual(ready['recoveryTaskId'], 'native-watch-memory-first')
         self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
         self.assertEqual(self.published, [])
-        replacement = queue.submission(source, self.root, 'HEAD', evidence=self.evidence, notes='Verified after memory recovery')
+        replacement = queue.submission(source, self.root, 'HEAD', queue=self.store, evidence=self.evidence, notes='Verified after memory recovery')
         queue.retry(job, replacement=replacement, queue=self.store)
         queue.drain(self.release, queue=self.store)
         self.assertEqual(queue.status(job, queue=self.store)['jobs'][0]['status'], 'complete')
@@ -526,9 +673,30 @@ class ReleaseQueueTests(unittest.TestCase):
                 queue.drain(self.release, queue=self.store)
         self.assertEqual(self.published, ['1.0.1', '1.0.2'])
 
+    def test_memory_wait_before_fast_forward_keeps_the_recorded_candidate_and_fifo_lane(self):
+        first = self.submit(self.source('pending-memory')); self.submit(self.source('pending-later'))
+        original_run = self.release.run
+        def refuse_move(command):
+            if command[:3] == ['git', 'merge', '--ff-only']:
+                raise SystemExit('Resource manager: insufficient_host_headroom')
+            return original_run(command)
+        with patch.object(queue, 'now', return_value='2030-01-01T00:00:00+00:00') as clock:
+            with patch.object(self.release, 'run', side_effect=refuse_move):
+                self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'waiting-for-memory')
+            state = queue.status(first['jobId'], queue=self.store)['jobs'][0]
+            candidate = state['pendingIntegration']['commit']
+            self.assertFalse(state.get('integratedCommit'))
+            self.assertEqual(state.get('failures', 0), 0)
+            self.assertEqual(self.published, [])
+            clock.return_value = state['memoryWait']['nextProbeAt']
+            with patch.object(queue.release_memory, 'probe', return_value={'allowed': True}):
+                queue.drain(self.release, queue=self.store)
+        self.assertEqual(queue.status(first['jobId'], queue=self.store)['jobs'][0]['releaseCommit'], candidate)
+        self.assertEqual(self.published, ['1.0.1', '1.0.2'])
+
     def test_worker_reads_only_this_attempt_for_admission_refusal(self):
         job = self.submit(self.source('bounded-log')); calls = []
-        def fail(*_):
+        def fail(*_, **kwargs):
             calls.append(1)
             if len(calls) == 1:
                 print('Resource manager: command not started (host_memory_pressure).')
@@ -546,7 +714,7 @@ class ReleaseQueueTests(unittest.TestCase):
 
     def test_memory_recovery_resumes_the_same_immutable_archive(self):
         job = self.submit(self.source('memory-archive'))
-        def packaged_then_refused(_bump, _dirty, version):
+        def packaged_then_refused(_bump, _dirty, version, **kwargs):
             self.release.archive_path(version).write_text('immutable bytes')
             raise SystemExit('Resource manager: insufficient_host_headroom')
         with patch.object(queue, 'now', return_value='2030-01-01T00:00:00+00:00') as clock:
@@ -612,7 +780,7 @@ class ReleaseQueueTests(unittest.TestCase):
         (source / 'first.ts').write_text('export const value=2;')
         subprocess.run(['git', 'add', '.'], cwd=source, check=True)
         subprocess.run(['git', 'commit', '-qm', 'correct source'], cwd=source, check=True)
-        replacement = queue.submission(source, self.root, 'HEAD', evidence=self.evidence, notes='Verified correction')
+        replacement = queue.submission(source, self.root, 'HEAD', queue=self.store, evidence=self.evidence, notes='Verified correction')
         # A replacement with only a tooling diff must retain the original
         # product job and all restored behavior-evidence dependencies.
         replacement['maintenanceOnly'] = True
@@ -630,8 +798,8 @@ class ReleaseQueueTests(unittest.TestCase):
 
     def test_prepared_candidate_keeps_its_checked_version_and_does_not_run_new_checks(self):
         source = self.source('first')
-        for name in queue.VERSION_FILES:
-            (source / name).write_text(json.dumps({'version': '1.0.1'}))
+        for name, value in publisher.version_updates('1.0.1', {name: (source / name).read_bytes() for name in queue.VERSION_FILES}).items():
+            (source / name).write_bytes(value)
         subprocess.run(['git', 'add', '.'], cwd=source, check=True)
         subprocess.run(['git', 'commit', '-qm', 'prepared version'], cwd=source, check=True)
         proof = self.directory / 'proof.json'; proof.write_text('{"checked":"final bytes"}')

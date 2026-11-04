@@ -346,6 +346,59 @@ module.main()
         with self.assertRaises(ValueError):
             release.parse_version('v2.12.1')
 
+    def test_committed_candidate_packages_and_resumes_exactly_its_release_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'dist').mkdir()
+            (root / '.gitignore').write_text('/release/\n/receipts/\n')
+            for name in release.RELEASE_FILES:
+                (root / ('dist/main.js' if name == 'main.js' else name)).write_bytes(name.encode())
+            (root / 'package.json').write_text('{"version":"1.0.0"}')
+            (root / 'package-lock.json').write_text('{"version":"1.0.0","packages":{"":{"version":"1.0.0"}}}')
+            (root / 'manifest.json').write_text('{"version":"1.0.0","minAppVersion":"1.8.7"}')
+            (root / 'versions.json').write_text('{"1.0.0":"1.8.7"}')
+            for name, value in release.version_updates('1.0.1', {name: (root / name).read_bytes() for name in release.release_queue.VERSION_FILES}).items():
+                (root / name).write_bytes(value)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'add', '.'], check=True)
+            subprocess.run(['git', '-C', str(root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com',
+                            'commit', '-qm', 'Release 1.0.1: Example change'], check=True)
+            commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+            with patch.object(release, 'ROOT', root), patch.object(release, 'CANONICAL_ROOT', root), \
+                 patch.object(release, 'RECEIPTS', root / 'receipts'), patch.object(release, 'QLO2_PLUGIN', root / 'missing-plugin'), \
+                 patch.object(release, 'release_checks', return_value={'status': 'passed', 'scope': 'affected'}) as checks, \
+                 patch.object(release, 'publish_release', side_effect=RuntimeError('Sync unavailable')):
+                with self.assertRaisesRegex(RuntimeError, 'Sync unavailable'):
+                    release.new_release(None, False, '1.0.1', committed_version=True)
+                checks.assert_called_once()
+                archive = release.archive_path('1.0.1')
+                checksum = release.sha256_file(archive)
+                provenance = release.read_json(archive.with_suffix('.provenance.json'))
+                self.assertEqual(provenance['gitCommit'], commit)
+                self.assertFalse(provenance['dirtySourceAuthorized'])
+                self.assertEqual(provenance['versionFileSha256'], provenance['originalVersionFileSha256'])
+                self.assertEqual(subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain=v1']), b'')
+                with patch.object(release, 'publish_release') as publish, patch.object(release, 'release_checks') as recheck:
+                    release.resume_release('1.0.1', False)
+                    publish.assert_called_once_with('1.0.1', archive, commit, [], resumed=True, skip_laptop_reload=False)
+                    recheck.assert_not_called()
+                self.assertEqual(release.sha256_file(archive), checksum)
+                self.assertEqual(release.validate_archive(archive, '1.0.1')['manifest.json'],
+                                 release.sha256_file(root / 'manifest.json'))
+
+    def test_committed_candidate_requires_exact_clean_version_and_keeps_legacy_preflight_strict(self):
+        with patch.object(release, 'canonical_root_required'), patch.object(release, 'git_state', return_value=('commit', [])), \
+             patch.object(release, 'read_json', return_value={'version': '1.0.1'}), patch.object(release, 'set_version') as mutate, \
+             patch.object(release.release_policy, 'policy', return_value=None):
+            for version in (None, '1.0.2', '1.0.0'):
+                with self.assertRaisesRegex(SystemExit, 'clean committed candidate'):
+                    release.new_release(None, False, version, committed_version=True)
+            with self.assertRaisesRegex(SystemExit, 'strictly newer than the source'):
+                release.new_release(None, False, '1.0.1')
+            with patch.object(release, 'git_state', return_value=('commit', [' M styles.css'])):
+                with self.assertRaisesRegex(SystemExit, 'dirty'):
+                    release.new_release(None, True, '1.0.1', committed_version=True)
+            mutate.assert_not_called()
+
     def test_enqueue_preserves_the_selected_semantic_release_type(self) -> None:
         for selection, expected in [(None, 'patch'), ('patch', 'patch'), ('minor', 'minor'), ('major', 'major'), ('none', 'none')]:
             arguments = ['--enqueue', 'HEAD'] + (['--release-type', selection] if selection else [])

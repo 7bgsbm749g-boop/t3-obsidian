@@ -63,6 +63,40 @@ def git(root: Path, *args: str) -> str:
     return subprocess.check_output(['git', *args], cwd=root, text=True).strip()
 
 
+def ancestor(root: Path, before: str, after: str) -> bool:
+    return subprocess.run(['git', 'merge-base', '--is-ancestor', before, after],
+                          cwd=root, capture_output=True, check=False).returncode == 0
+
+
+def commit_tree(root: Path, tree: str, parents: list[str], message: str) -> str:
+    return subprocess.check_output(['git', 'commit-tree', tree, *[arg for parent in parents for arg in ('-p', parent)]],
+                                   cwd=root, input=message, text=True).strip()
+
+
+def integration_context(root: Path, head: str, queue: Path) -> str:
+    """Keep source ancestry private, while the public branch stays linear.
+
+    The tree is always the current canonical tree. Extra parents describe
+    already integrated task sources, so a later task can edit their changes
+    without reapplying them or treating them as independent conflicting edits.
+    Reverted candidates are deliberately excluded until repaired.
+    """
+    parents = [head]
+    with locked(queue / 'queue.lock'):
+        states = [read(directory / 'state.json') for directory in jobs(queue)]
+    for state in states:
+        if (state.get('integrationStyle') != 'squash' or state.get('rollbackCommits')
+                or not state.get('integratedCommit') or not ancestor(root, state['integratedCommit'], head)):
+            continue
+        source = state.get('integratedSourceCommit')
+        if source and source not in parents and not ancestor(root, source, head):
+            parents.append(source)
+    if len(parents) == 1:
+        return head
+    return commit_tree(root, git(root, 'rev-parse', head + '^{tree}'), parents,
+                       'Private release queue source ancestry\n')
+
+
 def dependency_inputs(root: Path, commit: str | None = None) -> str:
     """Ignore release versions while retaining all package and lockfile inputs."""
     documents = {}
@@ -109,10 +143,11 @@ def job_path(queue: Path, job_id: str) -> Path:
 
 def submission(root: Path, canonical: Path, commit: str, *, bump: str = 'patch', validation: Path | None = None,
                evidence: Path | None = None, notes: str = '', history_seed: Path | None = None,
-               summary: str = '', thread_id: str | None = None) -> dict:
+               summary: str = '', thread_id: str | None = None, queue: Path = QUEUE) -> dict:
     commit = git(root, 'rev-parse', '--verify', '--end-of-options', commit + '^{commit}')
     canonical_commit = git(canonical, 'rev-parse', 'HEAD')
-    base = git(root, 'merge-base', canonical_commit, commit)
+    context = integration_context(root, canonical_commit, queue)
+    base = git(root, 'merge-base', context, commit)
     # Requests contain committed source only; no task can deploy another task's
     # uncommitted checkout. Identical submissions are idempotent.
     proof_hash = hashlib.sha256(validation.read_bytes()).hexdigest() if validation else None
@@ -160,9 +195,11 @@ def enqueue(root: Path, canonical: Path, commit: str, *, bump: str = 'patch', va
             evidence: Path | None = None, notes: str = '', history_seed: Path | None = None,
             summary: str = '', thread_id: str | None = None, queue: Path = QUEUE) -> dict:
     request = submission(root, canonical, commit, bump=bump, validation=validation, evidence=evidence, notes=notes,
-                         history_seed=history_seed, summary=summary, thread_id=thread_id)
+                         history_seed=history_seed, summary=summary, thread_id=thread_id, queue=queue)
     key = hashlib.sha256(request['commit'].encode()).hexdigest()[:16]
     with locked(queue / 'queue.lock'):
+        # A removed task branch must not allow Git GC to erase reviewed source.
+        git(root, 'update-ref', 'refs/t3-release-queue/sources/' + request['commit'], request['commit'])
         existing = next((path for path in jobs(queue) if path.name.endswith('-' + key) or
                          read(path / read(path / 'state.json').get('requestFile', 'request.json'))['commit'] == request['commit']), None)
         if existing:
@@ -261,6 +298,8 @@ def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) 
                            'maintenanceOnly': bool(previous.get('maintenanceOnly')) and bool(replacement.get('maintenanceOnly')),
                            'sourceInputsSha256': inputs}
             save_request(directory, replacement, name)
+            git(Path(replacement['sourceRoot']), 'update-ref',
+                'refs/t3-release-queue/sources/' + replacement['commit'], replacement['commit'])
             state.update(requestRevision=revision, requestFile=name)
         waiting = state.get('memoryWait')
         if waiting and not (replacement and replacement.get('evidence')):
@@ -355,7 +394,7 @@ def probe_memory(job_id: str, *, queue: Path = QUEUE) -> dict:
 
 def memory_holds_lane(state: dict) -> bool:
     return (state['status'] == 'waiting-for-memory' and state['memoryWait']['phase'] == 'worker'
-            and bool(state.get('integratedCommit') or state.get('archive')))
+            and bool(state.get('pendingIntegration') or state.get('integratedCommit') or state.get('archive')))
 
 
 def next_memory_probe(pending: list[tuple[Path, dict]]) -> str | None:
@@ -411,23 +450,17 @@ def registration_line(line: str):
     return None
 
 
-def resolve_validation_merge(release) -> bool:
+def resolve_validation_source(original_source: str, source: str) -> str | None:
     """Union independent additions to the two lab registries, never product code."""
-    name = 'scripts/build-native-response-lab.mjs'
-    if git(release.ROOT, 'diff', '--name-only', '--diff-filter=U').splitlines() != [name]:
-        return False
-    base = [parsed for line in git(release.ROOT, 'show', ':1:' + name).splitlines()
-            if (parsed := registration_line(line))]
-    path = release.ROOT / name
-    source = path.read_text()
+    base = [parsed for line in original_source.splitlines() if (parsed := registration_line(line))]
     conflict = re.compile(r'^<<<<<<<[^\n]*\n(.*?)^=======\n(.*?)^>>>>>>>[^\n]*\n', re.M | re.S)
     matches = list(conflict.finditer(source))
     if not matches:
-        return False
+        return None
     for match in reversed(matches):
         left, right = match[1].splitlines(), match[2].splitlines()
         if len(left) != len(right):
-            return False
+            return None
         lines = []
         for left_line, right_line in zip(left, right):
             if left_line == right_line:
@@ -435,29 +468,63 @@ def resolve_validation_merge(release) -> bool:
                 continue
             ours, theirs = registration_line(left_line), registration_line(right_line)
             if not ours or not theirs or (ours[0], ours[2:]) != (theirs[0], theirs[2:]):
-                return False
+                return None
             original = next((item for item in base if (item[0], item[2:]) == (ours[0], ours[2:])), None)
             if original is None:
-                return False
+                return None
             a, b, before = dict(ours[1]), dict(theirs[1]), dict(original[1])
             if len(a) != len(ours[1]) or len(b) != len(theirs[1]):
-                return False
+                return None
             if any(a.get(key) != value or b.get(key) != value for key, value in before.items()):
-                return False
+                return None
             if any(a[key] != b[key] for key in a.keys() & b.keys()):
-                return False
+                return None
             combined = {**a, **b}
             body = (','.join("'" + key + "'" for key in combined) if ours[3] == 'flags' else
                     ''.join(f"process.argv.includes('{key}')?'{value}':" for key, value in combined.items()))
             lines.append(ours[0] + body + ours[2])
         source = source[:match.start()] + '\n'.join(lines) + '\n' + source[match.end():]
     if re.search(r'^(<<<<<<<|=======|>>>>>>>)', source, re.M):
-        return False
-    path.write_text(source)
-    release.run(['git', 'add', name])
-    release.run(['git', 'commit', '--no-edit'])
-    print('Merged independent validation-mode registrations; no product conflicts were resolved automatically.', flush=True)
-    return True
+        return None
+    return source
+
+
+def tree_bytes(root: Path, tree: str, name: str) -> bytes:
+    return subprocess.check_output(['git', 'show', tree + ':' + name], cwd=root)
+
+
+def update_tree(root: Path, tree: str, files: dict[str, bytes], directory: Path) -> str:
+    """Build a tree in an owned temporary index; never stage canonical edits."""
+    with tempfile.TemporaryDirectory(dir=directory, prefix='index-') as temporary:
+        environment = {**os.environ, 'GIT_INDEX_FILE': str(Path(temporary) / 'index')}
+        subprocess.run(['git', 'read-tree', tree], cwd=root, env=environment, check=True)
+        for name, value in files.items():
+            mode = git(root, 'ls-tree', tree, '--', name).split()[0]
+            blob = subprocess.check_output(['git', 'hash-object', '-w', '--stdin'], cwd=root, input=value).decode().strip()
+            subprocess.run(['git', 'update-index', '--add', '--cacheinfo', mode, blob, name],
+                           cwd=root, env=environment, check=True)
+        return subprocess.check_output(['git', 'write-tree'], cwd=root, env=environment, text=True).strip()
+
+
+def merged_tree(root: Path, context: str, source: str, directory: Path) -> str:
+    command = ['git', 'merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', context, source]
+    result = subprocess.run(command, cwd=root, capture_output=True, check=False)
+    if result.returncode not in (0, 1):
+        raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
+    fields = result.stdout.decode().split('\0')
+    tree = fields[0]
+    if result.returncode == 0:
+        return tree
+    name = 'scripts/build-native-response-lab.mjs'
+    if [field for field in fields[1:] if field] == [name]:
+        bases = git(root, 'merge-base', '--all', context, source).splitlines()
+        if len(bases) == 1:
+            resolved = resolve_validation_source(tree_bytes(root, bases[0], name).decode(),
+                                                 tree_bytes(root, tree, name).decode())
+            if resolved is not None:
+                print('Merged independent validation-mode registrations; no product conflicts were resolved automatically.', flush=True)
+                return update_tree(root, tree, {name: resolved.encode()}, directory)
+    raise SystemExit('Queued source conflicts with the canonical tree: ' + ', '.join(field for field in fields[1:] if field))
 
 
 def engine_hash(root: Path) -> dict:
@@ -510,21 +577,97 @@ def bootstrap(release, canonical: Path, job_id: str, *, queue: Path = QUEUE) -> 
             release.ROOT = source
 
 
-def next_version(release, directory: Path, request: dict) -> str:
+def next_version(release, directory: Path, request: dict, *, root: Path | None = None) -> str:
     """An assigned version belongs to its job, even when validation fails."""
-    versions = [release.read_json(release.ROOT / 'manifest.json')['version']]
-    for path in jobs(directory.parent.parent):
-        item = read(path / 'state.json')
+    root = root or release.ROOT
+    versions = [release.read_json(root / 'manifest.json')['version']]
+    queue = directory.parent.parent
+    with locked(queue / 'queue.lock'):
+        states = [read(path / 'state.json') for path in jobs(queue)]
+    for item in states:
         versions.extend(item.get('reservedVersions', []))
         if item.get('version'):
             versions.append(item['version'])
-    policy = release_policy.policy(release.ROOT)
+    policy = release_policy.policy(root)
     if policy and policy['stage'] == 'alpha':
-        alphas = [value for value in versions if release_policy.is_alpha_version(release.ROOT, value)]
-        latest = max(alphas, key=lambda value: release_policy.order_key(release.ROOT, value)) if alphas else versions[0]
-        return release_policy.bump(release.ROOT, latest, request['bump'])
-    latest = max(versions, key=lambda value: release_policy.order_key(release.ROOT, value))
+        alphas = [value for value in versions if release_policy.is_alpha_version(root, value)]
+        latest = max(alphas, key=lambda value: release_policy.order_key(root, value)) if alphas else versions[0]
+        return release_policy.bump(root, latest, request['bump'])
+    latest = max(versions, key=lambda value: release_policy.order_key(root, value))
     return release.bump_version(latest, request['bump'])
+
+
+def apply_pending_integration(release, directory: Path, state: dict) -> None:
+    """Complete the journalled fast-forward, including after a worker crash."""
+    pending = state['pendingIntegration']
+    if git(release.ROOT, 'status', '--porcelain=v1'):
+        raise SystemExit('Canonical checkout contains uncommitted work. The queue will not alter it.')
+    head = git(release.ROOT, 'rev-parse', 'HEAD')
+    if head == pending['baseCommit']:
+        release.run(['git', 'merge', '--ff-only', pending['commit']])
+    elif head != pending['commit']:
+        raise SystemExit('Canonical HEAD moved outside the pending queue integration; recovery stopped.')
+    values = dict(integrationStyle='squash', integratedCommit=pending['commit'],
+                  integratedSourceCommit=pending['sourceCommit'], pendingIntegration=None,
+                  ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': pending['commit'], 'merge': False}],
+                  pastRollbacks=[*state.get('pastRollbacks', []), *state.get('rollbackCommits', [])], rollbackCommits=[])
+    if pending.get('version'):
+        values.update(version=pending['version'], releaseCommit=pending['commit'])
+    update(directory, state, **values)
+
+
+def integrate_job(release, directory: Path, request: dict, state: dict) -> None:
+    root = release.ROOT
+    if state.get('pendingIntegration'):
+        if state['pendingIntegration']['sourceCommit'] != request['commit']:
+            raise SystemExit('Pending integration belongs to another request revision.')
+        apply_pending_integration(release, directory, state)
+        return
+    if (state.get('integratedSourceCommit') == request['commit'] and not state.get('rollbackCommits')
+            and ancestor(root, state['integratedCommit'], 'HEAD')):
+        return
+    if (request['maintenanceOnly'] and state.get('integratedCommit') and not state.get('rollbackCommits')
+            and ancestor(root, request['commit'], 'HEAD')):
+        # A pre-upgrade worker may have already merged this tooling update.
+        update(directory, state, integratedSourceCommit=request['commit'])
+        return
+    # Older queued failures have real merge parents. Restore only their owned
+    # reverts. Squashed candidates are instead recreated from reviewed source.
+    if state.get('integrationStyle') != 'squash':
+        while state.get('rollbackCommits'):
+            revert_owned(release, state['rollbackCommits'][-1])
+            update(directory, state, rollbackCommits=state['rollbackCommits'][:-1],
+                   ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': git(root, 'rev-parse', 'HEAD'), 'merge': False}])
+    head = git(root, 'rev-parse', 'HEAD')
+    context = integration_context(root, head, directory.parent.parent)
+    tree = merged_tree(root, context, request['commit'], directory)
+    version = None
+    if not request['maintenanceOnly']:
+        # The submitted change can itself update the version policy. Read the
+        # merged policy without checking out or staging any canonical files.
+        with tempfile.TemporaryDirectory(dir=directory, prefix='policy-') as temporary:
+            policy_root = Path(temporary)
+            (policy_root / 'manifest.json').write_bytes(tree_bytes(root, tree, 'manifest.json'))
+            policy_file = subprocess.run(['git', 'show', tree + ':release-policy.json'], cwd=root, capture_output=True)
+            if policy_file.returncode == 0:
+                (policy_root / 'release-policy.json').write_bytes(policy_file.stdout)
+            source_version = read(policy_root / 'manifest.json')['version']
+            version = source_version if request.get('validation') else state.get('version')
+            if not request.get('validation'):
+                if not version or not release_policy.newer(policy_root, version, source_version):
+                    version = next_version(release, directory, request, root=policy_root)
+                documents = {name: tree_bytes(root, tree, name) for name in VERSION_FILES}
+                tree = update_tree(root, tree, release.version_updates(version, documents), directory)
+    summary = ' '.join(request.get('summary', '').split())[:160] or 'Reviewed changes'
+    title = f'Release {version}: {summary}' if version else f'Maintenance: {summary}'
+    message = f"{title}\n\nSource-Commit: {request['commit']}\nRelease-Queue-Job: {directory.name}\n"
+    candidate = commit_tree(root, tree, [head], message)
+    git(root, 'update-ref', f'refs/t3-release-queue/candidates/{directory.name}/{candidate}', candidate)
+    # Save ownership before moving the branch. An interruption on either side
+    # of the fast-forward resumes this exact commit, never a second release.
+    update(directory, state, pendingIntegration={'baseCommit': head, 'commit': candidate,
+                                                'sourceCommit': request['commit'], 'version': version})
+    apply_pending_integration(release, directory, state)
 
 
 def run_job(release, directory: Path, request: dict, state: dict, loaded_engine: dict, *, integration_only: bool = False) -> bool:
@@ -542,31 +685,8 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
         if git(root, 'status', '--porcelain=v1'):
             raise SystemExit('Canonical checkout contains uncommitted work. The queue will not alter it.')
         update(directory, state, status='integrating')
-        while state.get('rollbackCommits'):
-            # Restore only the queue's own reverted merge; never reset history.
-            revert_owned(release, state['rollbackCommits'][-1])
-            update(directory, state, rollbackCommits=state['rollbackCommits'][:-1],
-                   ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': git(root, 'rev-parse', 'HEAD'), 'merge': False}])
-        ancestor = subprocess.run(['git', 'merge-base', '--is-ancestor', request['commit'], 'HEAD'], cwd=root)
-        if ancestor.returncode:
-            try:
-                release.run(['git', 'merge', '--no-edit', '--no-ff', request['commit']])
-            except subprocess.CalledProcessError:
-                # This merge began in a clean checkout. Abort only our own
-                # conflicted merge; preserve all submitted commits and logs.
-                resolved = False
-                try:
-                    resolved = resolve_validation_merge(release)
-                finally:
-                    marker = Path(git(root, 'rev-parse', '--git-path', 'MERGE_HEAD'))
-                    if not marker.is_absolute():
-                        marker = root / marker
-                    if not resolved and marker.exists():
-                        release.run(['git', 'merge', '--abort'])
-                if not resolved:
-                    raise
-            update(directory, state, ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': git(root, 'rev-parse', 'HEAD'), 'merge': True}])
-        update(directory, state, integratedCommit=git(root, 'rev-parse', 'HEAD'))
+        integrate_job(release, directory, request, state)
+        version = state.get('version')
         if integration_only or engine_hash(root) != loaded_engine:
             # Exit with the wake marker intact. systemd starts a fresh worker,
             # so a tooling change is checked by its newly integrated runner.
@@ -579,7 +699,7 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
                    delivery='source-only', error=None, nextAction=None)
             return False
         source_version = release.read_json(root / 'manifest.json')['version']
-        if version and not request.get('validation') and release_policy.order_key(root, version) <= release_policy.order_key(root, source_version):
+        if version and not state.get('releaseCommit') and not request.get('validation') and release_policy.order_key(root, version) <= release_policy.order_key(root, source_version):
             # Older task checkouts can retry without clearing a stale version.
             version = None
         version = version or (source_version if request.get('validation') else next_version(release, directory, request))
@@ -600,7 +720,9 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
                 release_history.refresh(release, directory, request, version)
         else:
             try:
-                release.new_release(None, False, version)
+                if state.get('releaseCommit') != git(root, 'rev-parse', 'HEAD'):
+                    raise SystemExit('The committed release candidate changed before packaging.')
+                release.new_release(None, False, version, committed_version=True)
             finally:
                 release_history.refresh(release, directory, request, version)
     elif not deployed:
@@ -609,10 +731,12 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
             release.resume_release(version, False)
         finally:
             release_history.refresh(release, directory, request, version)
-    # Commit only generated version files. The publisher's immutable provenance
-    # still identifies the source commit and exact generated bytes.
+    # Only legacy in-flight archives can have separate generated version edits.
+    # New releases already committed their exact version bytes before packaging.
     dirty = release.git_state()[1]
     if dirty:
+        if state.get('integrationStyle') == 'squash':
+            raise SystemExit('Committed release inputs changed during publication; no extra commit will be created.')
         if any(line[:3] != ' M ' or line[3:] not in VERSION_FILES for line in dirty):
             raise SystemExit('Unexpected canonical edits appeared; release queue stopped.')
         release.run(['git', 'add', *sorted(VERSION_FILES)])
@@ -653,6 +777,8 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
 
 def isolate_failure(release, directory: Path, state: dict) -> bool:
     """Remove only this job's unshipped integration, retaining commits and logs."""
+    if state.get('pendingIntegration'):
+        apply_pending_integration(release, directory, state)
     version = state.get('version')
     if version and (release.archive_path(version).exists() or
                     (release.release_receipt_dir(version) / 'deployment.json').exists()):

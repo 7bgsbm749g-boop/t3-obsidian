@@ -127,11 +127,12 @@ def version_documents() -> dict[Path, bytes]:
     return {path: path.read_bytes() for path in paths}
 
 
-def set_version(version: str) -> None:
-    package = read_json(ROOT / 'package.json')
-    package_lock = read_json(ROOT / 'package-lock.json')
-    manifest = read_json(ROOT / 'manifest.json')
-    versions = read_json(ROOT / 'versions.json')
+def version_updates(version: str, documents: dict[str, bytes]) -> dict[str, bytes]:
+    """Generate the same version bytes for a worktree or a private Git index."""
+    package = json.loads(documents['package.json'].decode('utf-8-sig'))
+    package_lock = json.loads(documents['package-lock.json'].decode('utf-8-sig'))
+    manifest = json.loads(documents['manifest.json'].decode('utf-8-sig'))
+    versions = json.loads(documents['versions.json'].decode('utf-8-sig'))
 
     package['version'] = version
     package_lock['version'] = version
@@ -141,13 +142,15 @@ def set_version(version: str) -> None:
         raise SystemExit(f'versions.json already contains immutable release {version}.')
     versions[version] = manifest['minAppVersion']
 
-    for path, value in (
-        (ROOT / 'package.json', package),
-        (ROOT / 'package-lock.json', package_lock),
-        (ROOT / 'manifest.json', manifest),
-        (ROOT / 'versions.json', versions),
-    ):
-        atomic_write(path, (json.dumps(value, indent=2) + '\n').encode())
+    return {name: (json.dumps(value, indent=2) + '\n').encode() for name, value in (
+        ('package.json', package), ('package-lock.json', package_lock),
+        ('manifest.json', manifest), ('versions.json', versions))}
+
+
+def set_version(version: str) -> None:
+    documents = {str(path.relative_to(ROOT)): value for path, value in version_documents().items()}
+    for name, value in version_updates(version, documents).items():
+        atomic_write(ROOT / name, value)
 
 
 def validate_version_alignment(expected: str) -> None:
@@ -647,17 +650,23 @@ def publish_prepared(version: str, proof: Path, *, skip_laptop_reload: bool = Fa
     publish_release(version, archive, commit, [], resumed=False, skip_laptop_reload=skip_laptop_reload)
 
 
-def new_release(bump: str | None, allow_dirty: bool, requested_version: str | None = None, *, skip_laptop_reload: bool = False, skip_tests_reason: str | None = None, base: str | None = None) -> None:
+def new_release(bump: str | None, allow_dirty: bool, requested_version: str | None = None, *, skip_laptop_reload: bool = False, skip_tests_reason: str | None = None, base: str | None = None, committed_version: bool = False) -> None:
     canonical_root_required()
     commit, dirty = git_state()
-    if dirty and not allow_dirty:
+    if dirty and (not allow_dirty or committed_version):
         raise SystemExit(
             'The worktree is dirty. Commit/stash it, or use --allow-dirty only when the user explicitly '
             'authorized deploying the reviewed dirty worktree.'
         )
+    if committed_version and not requested_version:
+        raise SystemExit('The queue release version must match its clean committed candidate.')
     current = read_json(ROOT / 'manifest.json')['version']
     version = requested_version or (release_policy.bump(ROOT, current, bump) if release_policy.policy(ROOT) else bump_version(current, bump))
-    if not release_policy.newer(ROOT, version, current):
+    if committed_version and version != current:
+        raise SystemExit('The queue release version must match its clean committed candidate.')
+    if committed_version:
+        release_policy.require_target(ROOT, version)
+    if not committed_version and not release_policy.newer(ROOT, version, current):
         raise SystemExit('The requested release must be strictly newer than the source version.')
     if (QLO2_PLUGIN / 'manifest.json').exists() and not release_policy.newer(ROOT, version, read_json(QLO2_PLUGIN / 'manifest.json')['version']):
         raise SystemExit('The requested release must be strictly newer than the QLO2 installation.')
@@ -667,7 +676,8 @@ def new_release(bump: str | None, allow_dirty: bool, requested_version: str | No
     originals = version_documents()
     archive: Path | None = None
     try:
-        set_version(version)
+        if not committed_version:
+            set_version(version)
         validate_version_alignment(version)
         test_suite = release_checks(skip_tests_reason, base=base)
         archive = create_archive(version)
@@ -747,7 +757,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument('--release-type', choices=('patch', 'minor', 'major', 'none'),
                         help='With --enqueue: classify comparison counters; alpha releases always advance BUILD (default: patch).')
     result.add_argument('--history-seed', type=Path, help='With --enqueue: reviewed private comparison seed for the first alpha release.')
-    result.add_argument('--summary', default='', help='Change description retained in the private version table.')
+    result.add_argument('--summary', default='', help='Change description used in the release commit and private version table.')
     result.add_argument('--thread-id', help='Native T3 source thread for the private version table.')
     result.add_argument('--base', help='Affected-test baseline; default: installed release source.')
     result.add_argument('--replacement', metavar='COMMIT', help='With --retry-queued: replace an uninstalled failed candidate with a corrected reviewed commit.')
