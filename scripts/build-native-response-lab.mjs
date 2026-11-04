@@ -19,7 +19,8 @@ if(!evidenceRelative||isAbsolute(evidenceRelative)||evidenceRelative==='..'||evi
 try{await access(root);throw Error('Use a new evidence directory; previous evidence is immutable.');}catch(error){if(error.code!=='ENOENT')throw error;}
 const vault=join(root,'vault'),plugin=join(vault,'.obsidian/plugins/coordinated-response-lab'),profile=join(root,'profile');
 await mkdir(plugin,{recursive:true});await mkdir(profile);
-const inputs=[...(await readdir('.')).filter(name=>name.endsWith('.ts')),...(await readdir('validation')).filter(name=>name.endsWith('.ts')).map(name=>'validation/'+name),'styles.css'];
+const sourceModules=(await readdir('src',{recursive:true})).filter(name=>name.endsWith('.ts')).map(name=>'src/'+name);
+const inputs=[...sourceModules,...(await readdir('validation')).filter(name=>name.endsWith('.ts')).map(name=>'validation/'+name),'styles.css'];
 const hashes={};for(const file of inputs)hashes[file]=createHash('sha256').update(await readFile(file)).digest('hex');
 await writeFile(join(root,'BUILD-SOURCE.json'),JSON.stringify({files:hashes},null,2));
 await writeFile(join(root,'ISOLATED-NATIVE-LAB'),'Source-only native response validation. No Obsidian Sync configured.\n');

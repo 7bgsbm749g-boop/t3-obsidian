@@ -4,10 +4,10 @@ import {mkdtemp,rm,writeFile,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
-import {uuid5,canonical,start,cli,parseOperation,requestJson} from '../desktop';
-import {resolveNewThreadDefaults} from '../model-defaults';
+import {uuid5,canonical,start,cli,parseOperation,requestJson} from '../src/connection/desktop';
+import {resolveNewThreadDefaults} from '../src/conversations/model-defaults';
 import {modelConfig} from './rpc-fixture';
-import {noteThreadTitle} from '../thread-title';
+import {noteThreadTitle} from '../src/conversations/thread-title';
 const id='98e4d70e-cbd5-4a23-aad0-a50732a59bf2';
 test('native IDs and fingerprints match old durable requests',()=>{
  assert.equal(uuid5(id,'thread'),'6732c96c-84e7-5252-8c8a-ce9bb2d9ad50');

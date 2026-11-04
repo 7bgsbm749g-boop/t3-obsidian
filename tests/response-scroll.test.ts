@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EditorState} from '@codemirror/state';
-import {ResponseScroll,type ResponseScrollState} from '../response-scroll';
-import {projectResponses,responseAnchor,type LocalResponse} from '../native-response-projection';
+import {ResponseScroll,type ResponseScrollState} from '../src/responses/response-scroll';
+import {projectResponses,responseAnchor,type LocalResponse} from '../src/responses/native-response-projection';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 const key='thread:active',otherKey='other:active';

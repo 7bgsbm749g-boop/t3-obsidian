@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {watchThread,readInlineEvents} from '../thread-stream';
-import {T3ResponseTooLargeError} from '../t3-response-limits';
+import {watchThread,readInlineEvents} from '../src/conversations/thread-stream';
+import {T3ResponseTooLargeError} from '../src/connection/t3-response-limits';
 import {completedSetup,preparationItem} from './fixtures/worktree-setup';
 
 test('setup uses the native optional subscription, its own cursor, bounded payloads and reconnect',async()=>{

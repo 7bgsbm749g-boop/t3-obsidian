@@ -1,20 +1,20 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {contentHash} from '../completion';
-import {updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../response-binding-data';
-import {LocalResponseManager} from '../local-response-manager';
-import {localResponseBindings,localResponseRange,withLocalResponseBinding} from '../local-response-binding';
-import {localSyncReady} from '../local-sync-state';
-import {responseAnchor} from '../native-response-projection';
-import {NativeResponseView} from '../native-response-view';
-import {localStageCommand,localStagedDraft} from '../local-response-staging';
+import {contentHash} from '../src/responses/completion';
+import {updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../src/responses/response-binding-data';
+import {LocalResponseManager} from '../src/responses/local-response-manager';
+import {localResponseBindings,localResponseRange,withLocalResponseBinding} from '../src/responses/local-response-binding';
+import {localSyncReady} from '../src/storage/local-sync-state';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {NativeResponseView} from '../src/responses/native-response-view';
+import {localStageCommand,localStagedDraft} from '../src/responses/local-response-staging';
 import {promises as fs} from 'node:fs';
 import {dirname} from 'node:path';
-import {retainedLocalFinal,restoredLocalFinal} from '../local-final-cache';
-import type {ResponseRequest} from '../response-model';
-import type {DirectInlineUpdate} from '../direct-inline-preview';
-import {loadSmartSend,rememberNoteEdits,rememberResponse,prepareSmartSend} from '../smart-send';
+import {retainedLocalFinal,restoredLocalFinal} from '../src/responses/local-final-cache';
+import type {ResponseRequest} from '../src/responses/response-model';
+import type {DirectInlineUpdate} from '../src/responses/direct-inline-preview';
+import {loadSmartSend,rememberNoteEdits,rememberResponse,prepareSmartSend} from '../src/notes/smart-send';
 
 function request():ResponseRequest{return {version:4,localOnly:true,nativeProjection:true,responseContainer:true,independent:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},notePath:'Test.md',threadId:randomUUID(),projectId:randomUUID(),messageId:randomUUID(),threadEnvironmentId:'env',initialHash:contentHash(''),createdAt:'2026-10-14T00:00:00Z'};}
 function fixture(binding=request(),initial?:string,records:ResponseBindingData={},stops?:unknown){

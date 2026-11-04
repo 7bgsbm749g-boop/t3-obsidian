@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {parseProjects,runBridge,configureBridge} from '../bridge';
-import {ThreadAccessCache} from '../thread-access-cache';
+import {parseProjects,runBridge,configureBridge} from '../src/app/bridge';
+import {ThreadAccessCache} from '../src/conversations/thread-access-cache';
 test('discovery validates projects and allows an empty environment',()=>{
  assert.deepEqual(parseProjects({projects:[]}),[]);
  assert.throws(()=>parseProjects({projects:[{id:'x'}]}));

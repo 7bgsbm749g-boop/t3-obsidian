@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {importRuns,importBindingId,importFollowId} from '../run-import';
-import {applyThreadItem,restoreInlineBindings,type InlineThreadState} from '../inline-thread';
-import {normalizeV2Snapshot,normalizeV2StreamItem} from '../orchestration-v2';
+import {importRuns,importBindingId,importFollowId} from '../src/conversations/run-import';
+import {applyThreadItem,restoreInlineBindings,type InlineThreadState} from '../src/conversations/inline-thread';
+import {normalizeV2Snapshot,normalizeV2StreamItem} from '../src/connection/orchestration-v2';
 const old='2026-10-06T10:00:00Z',recent='2026-10-06T11:00:00Z';
 function history():InlineThreadState{return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:{messages:[
   {id:'old',role:'user',text:'Old prompt',createdAt:old,turnId:null,streaming:false},

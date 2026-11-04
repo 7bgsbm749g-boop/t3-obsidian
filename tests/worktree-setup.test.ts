@@ -1,10 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applyThreadItem,inlineBindingCheckpoint,renderInlineTurn,restoreInlineBindings,type InlineThreadState} from '../inline-thread';
-import {normalizeV2Snapshot,normalizeV2StreamItem} from '../orchestration-v2';
-import {responseTools} from '../response-tools';
-import {renderWorktreeSetup,readWorktreeSetup,setupDuration} from '../worktree-setup';
-import {stoppedResponseBody} from '../response-stop';
+import {applyThreadItem,inlineBindingCheckpoint,renderInlineTurn,restoreInlineBindings,type InlineThreadState} from '../src/conversations/inline-thread';
+import {normalizeV2Snapshot,normalizeV2StreamItem} from '../src/connection/orchestration-v2';
+import {responseTools} from '../src/responses/response-tools';
+import {renderWorktreeSetup,readWorktreeSetup,setupDuration} from '../src/projects/worktree-setup';
+import {stoppedResponseBody} from '../src/responses/response-stop';
 import {completedSetup,preparationItem,setupAt} from './fixtures/worktree-setup';
 const empty=():InlineThreadState=>({messages:[],activities:[]});
 const snapshot=(item=preparationItem)=>normalizeV2Snapshot({snapshotSequence:20,projection:{thread:{id:'fixture-thread',projectId:'project'},messages:[{id:'prompt',role:'user',runId:'run',text:'Task',streaming:false,createdAt:setupAt}],runs:[{id:'run',ordinal:1,userMessageId:'prompt',status:'running',requestedAt:setupAt}],turnItems:[item],runtimeRequests:[]}});

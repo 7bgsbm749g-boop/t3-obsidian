@@ -1,14 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {responseAnchor} from '../native-response-projection';
-import {initialRegion} from '../inline-thread';
-import type {ResponseRequest} from '../response-model';
-import {contentHash} from '../completion';
-import {coordinatedDeliveryLimitations} from '../coordinated-delivery-gates';
-import {eventContent} from '../event-subscriptions';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {initialRegion} from '../src/conversations/inline-thread';
+import type {ResponseRequest} from '../src/responses/response-model';
+import {contentHash} from '../src/responses/completion';
+import {coordinatedDeliveryLimitations} from '../src/responses/coordinated-delivery-gates';
+import {eventContent} from '../src/app/event-subscriptions';
 import {historyFixture} from './fixtures/stream-history';
-import {streamBlock} from '../stream-block';
-import {nativeCommitMatches,readNativeCommitProof} from '../native-response-commit';
+import {streamBlock} from '../src/responses/stream-block';
+import {nativeCommitMatches,readNativeCommitProof} from '../src/responses/native-response-commit';
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 function request(response=id,path='Arms.md'):ResponseRequest{return {version:2,id:response,initialOwner:id,vaultId:'vault',host:{environmentId:'host',workspaceRoot:'/test/vault',directory:'.obsidian/t3-code/inline/v1'},notePath:path,threadId:'thread',messageId:id,projectId:'project',threadEnvironmentId:'host',initialHash:initialRegion(response).bodyHash,createdAt:'2026-10-02T20:00:00Z',independent:true};}
 const staged=(text:string)=>text.replace('| Exercise | 20kg |','| Exercise | 20kg | 25kg |').replace('| --- | ---: |','| --- | ---: | ---: |').replace('| Barb | 20 |','| Barb | 20 | |');

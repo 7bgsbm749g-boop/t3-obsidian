@@ -1,13 +1,13 @@
 import {Plugin,MarkdownView,TFile} from 'obsidian';
-import {LocalResponseManager} from '../local-response-manager';
-import {responseAnchor} from '../native-response-projection';
-import {noteIndicators} from '../explorer-responses';
-import {activityLeafPath,decorateActivityTabs} from '../activity-titles';
-import {installActivityShine} from '../activity-shine';
-import {installFolderIndicators,type FolderIndicatorController} from '../folder-indicator';
-import {contentHash} from '../completion';
-import type {ResponseRequest} from '../response-model';
-import type {DirectInlineUpdate} from '../direct-inline-preview';
+import {LocalResponseManager} from '../src/responses/local-response-manager';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {noteIndicators} from '../src/responses/explorer-responses';
+import {activityLeafPath,decorateActivityTabs} from '../src/ui/activity-titles';
+import {installActivityShine} from '../src/ui/activity-shine';
+import {installFolderIndicators,type FolderIndicatorController} from '../src/projects/folder-indicator';
+import {contentHash} from '../src/responses/completion';
+import type {ResponseRequest} from '../src/responses/response-model';
+import type {DirectInlineUpdate} from '../src/responses/direct-inline-preview';
 
 const fs=require('node:fs'),path=require('node:path'),{randomUUID}=require('node:crypto');
 const pause=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));

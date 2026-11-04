@@ -13,6 +13,12 @@ import shutil
 import subprocess
 import tempfile
 
+try:
+    from . import release_policy, release_history
+except ImportError:
+    import release_policy
+    import release_history
+
 QUEUE = Path('/home/ubuntu/projects/send-to-t3-code/evidence/release-queue')
 UNIT = 'send-to-t3-release-queue'
 JOB_ID = re.compile(r'^\d{12}-[0-9a-f]{16}$')
@@ -101,7 +107,8 @@ def job_path(queue: Path, job_id: str) -> Path:
 
 
 def submission(root: Path, canonical: Path, commit: str, *, bump: str = 'patch', validation: Path | None = None,
-               evidence: Path | None = None, notes: str = '') -> dict:
+               evidence: Path | None = None, notes: str = '', history_seed: Path | None = None,
+               summary: str = '', thread_id: str | None = None) -> dict:
     commit = git(root, 'rev-parse', '--verify', '--end-of-options', commit + '^{commit}')
     canonical_commit = git(canonical, 'rev-parse', 'HEAD')
     base = git(root, 'merge-base', canonical_commit, commit)
@@ -109,8 +116,9 @@ def submission(root: Path, canonical: Path, commit: str, *, bump: str = 'patch',
     # uncommitted checkout. Identical submissions are idempotent.
     proof_hash = hashlib.sha256(validation.read_bytes()).hexdigest() if validation else None
     evidence_hash = hashlib.sha256(evidence.read_bytes()).hexdigest() if evidence else None
+    seed_hash = hashlib.sha256(history_seed.read_bytes()).hexdigest() if history_seed else None
     identity = {'commit': commit, 'bump': bump, 'validationSha256': proof_hash,
-                'evidenceSha256': evidence_hash, 'notes': notes}
+                'evidenceSha256': evidence_hash, 'notes': notes, 'historySeedSha256': seed_hash}
     changed = git(root, 'diff', '--name-only', '--no-renames', base, commit).splitlines()
     inputs = {}
     for name in changed:
@@ -120,6 +128,8 @@ def submission(root: Path, canonical: Path, commit: str, *, bump: str = 'patch',
         inputs[name] = hashlib.sha256(item.stdout).hexdigest() if item.returncode == 0 else None
     return {**identity, 'createdAt': now(), 'sourceRoot': str(root), 'mergeBase': base,
             'maintenanceOnly': maintenance_only(changed),
+            'historySeed': str(history_seed) if history_seed else None, 'threadId': thread_id,
+            'summary': summary or ' | '.join(git(root, 'log', '--format=%s', base + '..' + commit).splitlines()[:12]),
             'dependencyInputsSha256': dependency_inputs(root, commit),
             'sourceInputsSha256': inputs, 'validation': str(validation) if validation else None,
             'evidence': str(evidence) if evidence else None}
@@ -133,14 +143,23 @@ def save_request(directory: Path, request: dict, name: str = 'request.json') -> 
         if hashlib.sha256(copied.read_bytes()).hexdigest() != request['evidenceSha256']:
             raise SystemExit('Behavior evidence changed during submission.')
         request = {**request, 'evidence': str(copied)}
+    if request.get('historySeed'):
+        original_seed = Path(request['historySeed'])
+        copied_seed = directory / (name.removesuffix('.json') + '-history-seed.json')
+        shutil.copy2(original_seed, copied_seed)
+        if hashlib.sha256(copied_seed.read_bytes()).hexdigest() != request['historySeedSha256']:
+            raise SystemExit('History seed changed during submission.')
+        request = {**request, 'historySeed': str(copied_seed)}
     if (directory / name).exists():
         raise SystemExit('Queue requests are immutable.')
     write(directory / name, request)
 
 
 def enqueue(root: Path, canonical: Path, commit: str, *, bump: str = 'patch', validation: Path | None = None,
-            evidence: Path | None = None, notes: str = '', queue: Path = QUEUE) -> dict:
-    request = submission(root, canonical, commit, bump=bump, validation=validation, evidence=evidence, notes=notes)
+            evidence: Path | None = None, notes: str = '', history_seed: Path | None = None,
+            summary: str = '', thread_id: str | None = None, queue: Path = QUEUE) -> dict:
+    request = submission(root, canonical, commit, bump=bump, validation=validation, evidence=evidence, notes=notes,
+                         history_seed=history_seed, summary=summary, thread_id=thread_id)
     key = hashlib.sha256(request['commit'].encode()).hexdigest()[:16]
     with locked(queue / 'queue.lock'):
         existing = next((path for path in jobs(queue) if path.name.endswith('-' + key) or
@@ -350,7 +369,7 @@ def resolve_validation_merge(release) -> bool:
 
 def engine_hash(root: Path) -> dict:
     return {name: hashlib.sha256((root / 'scripts' / name).read_bytes()).hexdigest()
-            for name in ('release-qlo2.py', 'release_queue.py', 'change_checks.py', 'plugin_id_migration.py')
+            for name in ('release-qlo2.py', 'release_queue.py', 'release_policy.py', 'release_history.py', 'change_checks.py', 'plugin_id_migration.py')
             if (root / 'scripts' / name).is_file()}
 
 
@@ -405,7 +424,12 @@ def next_version(release, directory: Path, request: dict) -> str:
         versions.extend(item.get('reservedVersions', []))
         if item.get('version'):
             versions.append(item['version'])
-    latest = max(versions, key=lambda value: tuple(int(part) for part in value.split('.')))
+    policy = release_policy.policy(release.ROOT)
+    if policy and policy['stage'] == 'alpha':
+        alphas = [value for value in versions if release_policy.ALPHA.fullmatch(value)]
+        latest = max(alphas, key=lambda value: release_policy.order_key(release.ROOT, value)) if alphas else versions[0]
+        return release_policy.bump(release.ROOT, latest, request['bump'])
+    latest = max(versions, key=lambda value: release_policy.order_key(release.ROOT, value))
     return release.bump_version(latest, request['bump'])
 
 
@@ -461,23 +485,36 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
                    delivery='source-only', error=None, nextAction=None)
             return False
         source_version = release.read_json(root / 'manifest.json')['version']
-        if version and not request.get('validation') and tuple(map(int, version.split('.'))) <= tuple(map(int, source_version.split('.'))):
+        if version and not request.get('validation') and release_policy.order_key(root, version) <= release_policy.order_key(root, source_version):
             # Older task checkouts can retry without clearing a stale version.
             version = None
         version = version or (source_version if request.get('validation') else next_version(release, directory, request))
         update(directory, state, version=version, status='releasing',
                archive=str(release.archive_path(version)),
                deploymentReceipt=str(release.release_receipt_dir(version) / 'deployment.json'))
+        seed = Path(request['historySeed']) if request.get('historySeed') else None
+        if seed and release.sha256_file(seed) != request['historySeedSha256']:
+            raise SystemExit('Queued history seed changed; release stopped.')
+        release_history.refresh(release, directory, request, version, seed=seed)
         if request.get('validation'):
             proof = Path(request['validation'])
             if release.sha256_file(proof) != request['validationSha256']:
                 raise SystemExit('Prepared validation changed after submission.')
-            release.publish_prepared(version, proof)
+            try:
+                release.publish_prepared(version, proof)
+            finally:
+                release_history.refresh(release, directory, request, version)
         else:
-            release.new_release(None, False, version)
+            try:
+                release.new_release(None, False, version)
+            finally:
+                release_history.refresh(release, directory, request, version)
     elif not deployed:
         update(directory, state, status='publishing')
-        release.resume_release(version, False)
+        try:
+            release.resume_release(version, False)
+        finally:
+            release_history.refresh(release, directory, request, version)
     # Commit only generated version files. The publisher's immutable provenance
     # still identifies the source commit and exact generated bytes.
     dirty = release.git_state()[1]
@@ -491,6 +528,7 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
         release.check_client(version)
     update(directory, state, status='verifying-evidence')
     if completed_smoke(release, version):
+        release_history.refresh(release, directory, request, version)
         update(directory, state, status='complete', completedAt=now(), error=None, nextAction=None)
         return False
     matches = all((release.sha256_file(root / name) if (root / name).is_file() else None) == checksum
@@ -509,6 +547,7 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
                              'clientCheck': str(evidence), 'clientCheckSha256': release.sha256_file(evidence),
                              'notes': request['notes'], 'queueJobId': directory.name, 'workerLog': str(directory / 'worker.log')})
         release.complete_smoke(version, 'vps-qlo2-queue', combined, request['notes'])
+        release_history.refresh(release, directory, request, version)
         update(directory, state, status='complete', completedAt=now(), error=None, nextAction=None)
     else:
         update(directory, state, status='awaiting-smoke',
@@ -553,6 +592,8 @@ def drain(release, *, queue: Path = QUEUE) -> dict:
                         # remains visible without owning the installation lane.
                         for path, item in pending:
                             if item['status'] == 'awaiting-smoke' and completed_smoke(release, item['version']):
+                                completed_request = read(path / item.get('requestFile', 'request.json'))
+                                release_history.refresh(release, path, completed_request, item['version'])
                                 update(path, item, status='complete', completedAt=now(), nextAction=None, error=None)
                             if item['status'] == 'waiting-for-dependency':
                                 parent = read(job_path(queue, item['requiresJobId']) / 'state.json')

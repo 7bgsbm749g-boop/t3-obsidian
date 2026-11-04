@@ -4,10 +4,10 @@ import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID,createHash} from 'node:crypto';
-import {DesktopClientMaintenance} from '../client-maintenance-desktop';
-import {validateClientCommand,type ClientCommand} from '../client-command';
-import {NoteCommandServer} from '../note-command-desktop';
-import {existingPrivateStorage} from '../private-storage-desktop';
+import {DesktopClientMaintenance} from '../src/app/client-maintenance-desktop';
+import {validateClientCommand,type ClientCommand} from '../src/app/client-command';
+import {NoteCommandServer} from '../src/notes/note-command-desktop';
+import {existingPrivateStorage} from '../src/storage/private-storage-desktop';
 
 async function fixture(){
   const root=await mkdtemp(join(tmpdir(),'t3-native-reload-')),directory=join(root,'.obsidian/plugins/send-to-t3-code');await mkdir(directory,{recursive:true});
@@ -78,4 +78,10 @@ test('reload does not inspect editors or wait for response recovery',async()=>{
     const result=await maintenance.execute(h.command);
     assert.equal(await maintenance.acknowledged(h.command,result),true);assert.equal(h.reloads(),1);
   }finally{await h.close();}
+});
+
+test('native reload commands accept the exact shared alpha version and reject alternate stages',()=>{
+ const command={version:1,id:randomUUID(),kind:'reload-client',releaseVersion:'0.0.377-alpha',runtimeSha256:{'main.js':'a'.repeat(64),'manifest.json':'b'.repeat(64),'styles.css':'c'.repeat(64)}};
+ assert.equal(validateClientCommand(command).releaseVersion,'0.0.377-alpha');
+ for(const releaseVersion of ['0.0.377-alpha.1','0.0.377-beta','0.1.377-alpha','0.0.0377-alpha'])assert.throws(()=>validateClientCommand({...command,releaseVersion}));
 });

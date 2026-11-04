@@ -4,7 +4,7 @@ import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 import {EditorState} from '@codemirror/state';
-import {approvalUrl,renderApproval} from '../approvals';
+import {approvalUrl,renderApproval} from '../src/interaction/approvals';
 
 const target={environmentId:'env',threadId:'thread',requestId:'request'};
 class Element {
@@ -14,7 +14,7 @@ class Element {
   click(){if(!this.disabled)this.events.click({preventDefault(){},stopPropagation(){}});}
 }
 async function harness(){
-  const result=await build({stdin:{contents:"export * from './approval-ui'; export * from './approval-controller';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian','@codemirror/state','@codemirror/view']});
+  const result=await build({stdin:{contents:"export * from './src/interaction/approval-ui'; export * from './src/interaction/approval-controller';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian','@codemirror/state','@codemirror/view']});
   const module={exports:{} as any},realRequire=createRequire(import.meta.url),notices:string[]=[];
   runInNewContext(result.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Notice:class{constructor(text:string){notices.push(text);}}}:realRequire(id),document:{createElement:()=>new Element()},console});
   const activities:any[]=[{id:'opened',kind:'approval.requested',summary:'Command approval requested',turnId:'turn',payload:{requestId:'request',requestKind:'command',detail:'printf hello'}}];

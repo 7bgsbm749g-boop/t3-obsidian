@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {ResponseNoteLocator,DuplicateResponseLocation} from '../response-location';
-import {contentHash} from '../completion';
-import {initialRegion,completionProof} from '../inline-thread';
+import {ResponseNoteLocator,DuplicateResponseLocation} from '../src/responses/response-location';
+import {contentHash} from '../src/responses/completion';
+import {initialRegion,completionProof} from '../src/conversations/inline-thread';
 
 function harness(){
   const id=randomUUID(),notes=new Map<string,string>([['Old.md',initialRegion(id).text]]);

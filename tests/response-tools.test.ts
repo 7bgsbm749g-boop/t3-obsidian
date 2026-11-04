@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {commandProgram,responseTools,renderResponseTool,responseToolGroups,currentResponseToolGroup,summarizeResponseTools} from '../response-tools';
-import {responseActivityLabel} from '../response-activity';
-import {stoppedResponseBody} from '../response-stop';
-import {renderInlineTurn,type InlineThreadState,type InlineActivity} from '../inline-thread';
+import {commandProgram,responseTools,renderResponseTool,responseToolGroups,currentResponseToolGroup,summarizeResponseTools} from '../src/responses/response-tools';
+import {responseActivityLabel} from '../src/responses/response-activity';
+import {stoppedResponseBody} from '../src/responses/response-stop';
+import {renderInlineTurn,type InlineThreadState,type InlineActivity} from '../src/conversations/inline-thread';
 const a=(id:string,sequence:number,kind:string,payload:any):InlineActivity=>({id,turnId:'turn',sequence,kind,summary:'Tool',createdAt:new Date(sequence*1000).toISOString(),payload});
 test('Windows tool output stays inside one HTML line without losing visible line breaks',()=>{
  const state={messages:[],activities:[a('windows',1,'tool.completed',{toolCallId:'windows',status:'completed',data:{toolName:'exec_command',command:'ssh laptop',output:'first\r\n** second\rthird <script>'}})]};

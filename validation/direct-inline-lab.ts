@@ -1,12 +1,12 @@
 import {Plugin,MarkdownView} from 'obsidian';
-import {DirectInlinePreview} from '../direct-inline-preview';
-import {nativeResponses} from '../native-response-manager';
-import {responseAnchor} from '../native-response-projection';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
-import {installResponsePresentation} from '../response-presentation';
-import {contentHash} from '../completion';
-import type {ResponseRecord} from '../response-record';
-import type {ThreadStreamCallbacks,watchThread} from '../thread-stream';
+import {DirectInlinePreview} from '../src/responses/direct-inline-preview';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {hiddenInlineMarkerExtension} from '../src/conversations/inline-markers';
+import {installResponsePresentation} from '../src/responses/response-presentation';
+import {contentHash} from '../src/responses/completion';
+import type {ResponseRecord} from '../src/responses/response-record';
+import type {ThreadStreamCallbacks,watchThread} from '../src/conversations/thread-stream';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 /** Synthetic, unsynced fixture only. Production verification uses the normal

@@ -9,9 +9,9 @@ import {runInNewContext} from 'node:vm';
 import {setTimeout as pause} from 'node:timers/promises';
 import lockfile from 'proper-lockfile';
 import {promises as fs} from 'node:fs';
-import {existingPrivateStorage,ensurePrivateStorage} from '../private-storage-desktop';
-import {contentHash} from '../completion';
-import {responseAnchor} from '../native-response-projection';
+import {existingPrivateStorage,ensurePrivateStorage} from '../src/storage/private-storage-desktop';
+import {contentHash} from '../src/responses/completion';
+import {responseAnchor} from '../src/responses/native-response-projection';
 
 async function fixture(){
   const root=await mkdtemp(join(tmpdir(),'t3-host-lifecycle-')),module={exports:{} as any};

@@ -1,12 +1,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {EventSubscriptions,type EventState,type EventNotification,type EventSubscriptionCommand} from '../event-subscriptions';
-import {jobEvents,type JobWatch,type JobObservation} from '../job-lifecycle';
-import {validateDisplayCommand,type ThreadDisplay,type ThreadDisplayCommand} from '../thread-display';
-import {commandId} from '../direct';
-import {initialRegion,type InlineThreadState} from '../inline-thread';
-import type {ResponseRequest} from '../response-model';
+import {EventSubscriptions,type EventState,type EventNotification,type EventSubscriptionCommand} from '../src/app/event-subscriptions';
+import {jobEvents,type JobWatch,type JobObservation} from '../src/conversations/job-lifecycle';
+import {validateDisplayCommand,type ThreadDisplay,type ThreadDisplayCommand} from '../src/conversations/thread-display';
+import {commandId} from '../src/connection/direct';
+import {initialRegion,type InlineThreadState} from '../src/conversations/inline-thread';
+import type {ResponseRequest} from '../src/responses/response-model';
 
 const worker={threadId:'worker',projectId:'project',environmentId:'machine'},target={...worker,threadId:'orchestrator'};
 const job:JobWatch={...worker,jobId:'task-1',requestId:randomUUID(),messageId:randomUUID()};

@@ -1,10 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,renderInlineTurn,activeInlineIds,initialRegion,replaceRegion,type InlineThreadState} from '../inline-thread';
-import {normalizeV2Snapshot,normalizeV2StreamItem} from '../orchestration-v2';
-import {delegatedTurnIds,delegatedWork} from '../inline-delegation';
-import {followInlineQuestions,inlineQuestionPhase} from '../inline-questions';
-import {finalResponseKey} from '../final-response';
+import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,renderInlineTurn,activeInlineIds,initialRegion,replaceRegion,type InlineThreadState} from '../src/conversations/inline-thread';
+import {normalizeV2Snapshot,normalizeV2StreamItem} from '../src/connection/orchestration-v2';
+import {delegatedTurnIds,delegatedWork} from '../src/conversations/inline-delegation';
+import {followInlineQuestions,inlineQuestionPhase} from '../src/interaction/inline-questions';
+import {finalResponseKey} from '../src/responses/final-response';
 
 const at='2026-10-19T01:00:00.000Z';
 const run={id:'source',ordinal:1,status:'completed',userMessageId:'prompt',requestedAt:at,completedAt:at,delegatedCompletion:{disposition:'open',delivery:null}};

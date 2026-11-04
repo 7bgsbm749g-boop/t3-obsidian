@@ -5,7 +5,7 @@ import {runInNewContext} from 'node:vm';
 import {settingsSocket} from './rpc-fixture';
 import {webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
-import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../environment-permissions';
+import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../src/connection/environment-permissions';
 
 test('mobile account sign-in connects all machines, preserves selections, survives restart, renews, and signs out without replay',async()=>{
  let local:any={deviceId:'account-mobile-device',mode:'direct',pairedSessions:{manual:{url:'https://manual.example',environmentId:'manual',token:'manual-private',expiresAt:Date.now()+600000}}};

@@ -6,7 +6,7 @@ import {createRequire} from 'node:module';
 import {reference,tool} from './fixtures/html-result';
 
 const runtime=createRequire(import.meta.url);
-const bundled=build({stdin:{contents:"export * from './html-result-view'; export * from './html-result-store';",resolveDir:process.cwd()},bundle:true,write:false,format:'cjs',platform:'node',external:['obsidian','@codemirror/*']});
+const bundled=build({stdin:{contents:"export * from './src/responses/html-result-view'; export * from './src/responses/html-result-store';",resolveDir:process.cwd()},bundle:true,write:false,format:'cjs',platform:'node',external:['obsidian','@codemirror/*']});
 async function production(){
  const module={exports:{} as any};
  runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal:class{},MarkdownRenderChild:class{cleanup?:()=>void;register(cleanup:()=>void){this.cleanup=cleanup;}},setIcon:()=>{}}:runtime(id),TextEncoder,TextDecoder,URL,console});

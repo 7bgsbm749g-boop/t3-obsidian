@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
 
-const compiled=build({entryPoints:['note-tab-panel.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+const compiled=build({entryPoints:['src/notes/note-tab-panel.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
 async function fixture(){
   const callbacks=new Map<string,Function>(),events=new Map<string,Function>();
   class Element {

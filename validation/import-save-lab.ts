@@ -1,15 +1,15 @@
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
-import SendToT3 from '../main';
-import {LocalResponseManager} from '../local-response-manager';
-import {DirectInlinePreview} from '../direct-inline-preview';
-import {deviceNoteIO,deviceFinalNoteIO} from '../inline-note-io';
-import {nativeResponses} from '../native-response-manager';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
-import {installResponsePresentation} from '../response-presentation';
-import {applyThreadItem} from '../inline-thread';
-import {updateResponseBindingData,responseBindingRequests} from '../response-binding-data';
-import {importRuns,runImportResultMessage,type RunImportResult} from '../run-import';
-import {ImportRunModal} from '../run-import-ui';
+import SendToT3 from '../src/app/main';
+import {LocalResponseManager} from '../src/responses/local-response-manager';
+import {DirectInlinePreview} from '../src/responses/direct-inline-preview';
+import {deviceNoteIO,deviceFinalNoteIO} from '../src/conversations/inline-note-io';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {hiddenInlineMarkerExtension} from '../src/conversations/inline-markers';
+import {installResponsePresentation} from '../src/responses/response-presentation';
+import {applyThreadItem} from '../src/conversations/inline-thread';
+import {updateResponseBindingData,responseBindingRequests} from '../src/responses/response-binding-data';
+import {importRuns,runImportResultMessage,type RunImportResult} from '../src/conversations/run-import';
+import {ImportRunModal} from '../src/conversations/run-import-ui';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 

@@ -1,5 +1,5 @@
 import {EditorState} from '@codemirror/state';
-import {responseHeightAttribute,responseHeightProperty} from '../../response-height';
+import {responseHeightAttribute,responseHeightProperty} from '../../src/responses/response-height';
 import {EditorView} from '@codemirror/view';
 
 export function heightFixture(document='Before\n\nAfter'){

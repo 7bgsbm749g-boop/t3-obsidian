@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {captureCursorInsertion,cursorInsertionOffset,resolveCursorInsertion} from '../cursor-insertion';
-import {responseAnchor} from '../native-response-projection';
-import {initialRegion} from '../inline-thread';
+import {captureCursorInsertion,cursorInsertionOffset,resolveCursorInsertion} from '../src/notes/cursor-insertion';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {initialRegion} from '../src/conversations/inline-thread';
 
 test('a cursor between blocks, at paragraph edges, or on a blank line stays there',()=>{
   const document='First paragraph.\n\nSecond paragraph.\n\n';

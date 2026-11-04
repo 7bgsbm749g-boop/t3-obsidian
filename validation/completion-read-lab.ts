@@ -1,7 +1,7 @@
 import {Plugin,MarkdownView,TFile} from 'obsidian';
-import {CompletionGlow} from '../completion-glow';
-import {completionSource,noteIndicators,type ExplorerResponse} from '../explorer-responses';
-import {installFolderIndicators,type FolderIndicatorController} from '../folder-indicator';
+import {CompletionGlow} from '../src/responses/completion-glow';
+import {completionSource,noteIndicators,type ExplorerResponse} from '../src/responses/explorer-responses';
+import {installFolderIndicators,type FolderIndicatorController} from '../src/projects/folder-indicator';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 const before='2026-10-20T10:00:00Z',completed='2026-10-20T10:01:00Z',later='2026-10-20T10:02:00Z';

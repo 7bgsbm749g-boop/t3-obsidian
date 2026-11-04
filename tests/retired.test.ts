@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {configureBridge,runBridge,sendRequest} from '../bridge';
+import {configureBridge,runBridge,sendRequest} from '../src/app/bridge';
 
 test('retired transports fail without calling network or a subprocess; mobile refuses local sends',async()=>{
  configureBridge({mobile:true});

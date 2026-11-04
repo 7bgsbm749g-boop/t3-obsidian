@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {interruptStoppedResponse,stopResponseEdit,stoppedResponseBody} from '../response-stop';
-import {initialRegion,replaceRegion} from '../inline-thread';
-import {normalizeV2Snapshot} from '../orchestration-v2';
+import {interruptStoppedResponse,stopResponseEdit,stoppedResponseBody} from '../src/responses/response-stop';
+import {initialRegion,replaceRegion} from '../src/conversations/inline-thread';
+import {normalizeV2Snapshot} from '../src/connection/orchestration-v2';
 import {handoffProjection,handoffSource,handoffRun,interruptedHandoffItem} from './fixtures/worktree-handoff';
 
 test('Stop resolves the verified replacement run instead of accepting the interrupted source as finished',async()=>{
@@ -83,7 +83,7 @@ test('interrupt deadline releases access even when dispatch never resolves',asyn
 });
 
 test('stopping removes pending question controls while preserving the prompt and code examples',async()=>{
-  const {renderQuestion}=await import('../questions');
+  const {renderQuestion}=await import('../src/interaction/questions');
   const question=renderQuestion({requestId:'q',turnId:'turn',createdAt:'',questions:[{id:'choice',header:'Choice',question:'Which approach?',options:[],multiSelect:false}]},{environmentId:'env',threadId:'thread',requestId:'q'});
   const stopped=stoppedResponseBody('**T3 · Working**\n\n'+question+'\n\n```text\n'+question+'\n```');
   assert.match(stopped,/<p class="send-to-t3-question-prompt">Which approach\?<\/p>/);assert.ok(stopped.startsWith('<p'));

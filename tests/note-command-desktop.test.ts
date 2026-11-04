@@ -6,8 +6,8 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {promises as fs} from 'node:fs';
-import {NoteCommandServer} from '../note-command-desktop';
-import {existingPrivateStorage} from '../private-storage-desktop';
+import {NoteCommandServer} from '../src/notes/note-command-desktop';
+import {existingPrivateStorage} from '../src/storage/private-storage-desktop';
 const cleanup=async(root:string,configDir='.obsidian')=>{const route=await existingPrivateStorage(root,configDir);if(route)await rm(route.storageRoot,{recursive:true,force:true});await rm(root,{recursive:true,force:true});};
 
 const run=(args:string[])=>new Promise<{code:number|null;out:string}>(resolve=>{const child=spawn('python3',['scripts/obsidian-command.py',...args]);let out='';child.stdout.on('data',data=>out+=data);child.stderr.on('data',data=>out+=data);child.on('close',code=>resolve({code,out}));});

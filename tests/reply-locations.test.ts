@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {DEFAULT_REPLY_FOLDERS,loadReplyFolders,replyFolder,resolveReplyFolders,validateReplyFolders} from '../reply-locations';
-import {normalizeFolderLink,type FolderLink} from '../folder-link';
-import {changedFolderLinks,applyFolderLinkChanges,loadFolderLinkChanges} from '../folder-link-sync';
+import {DEFAULT_REPLY_FOLDERS,loadReplyFolders,replyFolder,resolveReplyFolders,validateReplyFolders} from '../src/responses/reply-locations';
+import {normalizeFolderLink,type FolderLink} from '../src/projects/folder-link';
+import {changedFolderLinks,applyFolderLinkChanges,loadFolderLinkChanges} from '../src/projects/folder-link-sync';
 const link=(folderPath:string,replyFolders?:FolderLink['replyFolders']):FolderLink=>({id:folderPath,folderPath,projectId:'project',projectTitle:'Project',connectionId:'local',workspaceRoot:'/workspace',self:false,replyFolders});
 test('unlinked notes use general folders; linked notes use their nearest project subfolders',()=>{
   const general={images:'Media/T3',files:'Documents/T3'},links=[link('/'),link('Projects/App',{images:'Pictures',files:'Files'}),link('Projects/App/Nested')];

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Buffer} from 'node:buffer';
-import {jsonHttp} from '../direct';
+import {jsonHttp} from '../src/connection/direct';
 
 test('a valid response larger than the former 4 MB limit is accepted',async()=>{
  const text='x'.repeat(4_100_000),fetcher=async()=>new Response(JSON.stringify({text}));

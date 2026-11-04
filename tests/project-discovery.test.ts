@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {ProjectDiscovery,projectFingerprint,type ProjectSource,type ProjectSnapshot} from '../project-discovery';
-import type {Project} from '../bridge';
+import {ProjectDiscovery,projectFingerprint,type ProjectSource,type ProjectSnapshot} from '../src/projects/project-discovery';
+import type {Project} from '../src/app/bridge';
 const project=(id:string,connectionId='a',title='Repository'):Project=>({id,title,workspaceRoot:'/work/'+id,connectionId,connectionName:connectionId});
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(r=>{resolve=r;});return {promise,resolve};}
 function fixture(){let now=0,notifications=0;const writes:ProjectSnapshot[][]=[];const discovery=new ProjectDiscovery(async s=>{writes.push(s);},()=>{notifications++;},()=>now);return {discovery,writes,notifications:()=>notifications,advance:(ms:number)=>{now+=ms;}};}

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {noteThreadTitle,threadTitleGeneration} from '../thread-title';
+import {noteThreadTitle,threadTitleGeneration} from '../src/conversations/thread-title';
 
 test('default generates only whole untitled basenames and preserves named notes',()=>{
   for(const path of ['Untitled.md','Folder/Untitled 1.md','Untitled 202.md',' untitled 2 .md'])assert.equal(noteThreadTitle(path,'untitled-only'),'New thread');

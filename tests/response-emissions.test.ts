@@ -1,12 +1,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeV2Snapshot,normalizeV2StreamItem} from '../orchestration-v2';
-import {applyThreadItem,renderInlineTurn,turnPhase} from '../inline-thread';
+import {normalizeV2Snapshot,normalizeV2StreamItem} from '../src/connection/orchestration-v2';
+import {applyThreadItem,renderInlineTurn,turnPhase} from '../src/conversations/inline-thread';
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
-import {stoppedResponseBody} from '../response-stop';
-import {responseEmissions,renderProviderError} from '../response-emissions';
-import {responseToolGroups,renderResponseToolGroup} from '../response-tools';
+import {stoppedResponseBody} from '../src/responses/response-stop';
+import {responseEmissions,renderProviderError} from '../src/responses/response-emissions';
+import {responseToolGroups,renderResponseToolGroup} from '../src/responses/response-tools';
 
 const at=(n:number)=>new Date(n*1000).toISOString();
 function fixture(items:any[]){return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:normalizeV2Snapshot({snapshotSequence:1,projection:{

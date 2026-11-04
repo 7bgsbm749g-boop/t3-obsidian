@@ -1,10 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {pendingQuestions,questionAnswers,questionTargets,questionToken,parseQuestionToken,renderQuestion,clearResolvedQuestion,removeDismissedQuestions,questionSections,type QuestionTarget} from '../questions';
-import {QuestionController,type QuestionRecord} from '../question-controller';
-import {applyThreadItem,renderInlineTurn,initialRegion,finalizeRegion} from '../inline-thread';
-import {contentHash} from '../completion';
-import {markdownCodeCacheStatus} from '../reply-html';
+import {pendingQuestions,questionAnswers,questionTargets,questionToken,parseQuestionToken,renderQuestion,clearResolvedQuestion,removeDismissedQuestions,questionSections,type QuestionTarget} from '../src/interaction/questions';
+import {QuestionController,type QuestionRecord} from '../src/interaction/question-controller';
+import {applyThreadItem,renderInlineTurn,initialRegion,finalizeRegion} from '../src/conversations/inline-thread';
+import {contentHash} from '../src/responses/completion';
+import {markdownCodeCacheStatus} from '../src/responses/reply-html';
 const target:QuestionTarget={environmentId:'original-machine',threadId:'original-thread',requestId:'native:123'};
 const questions=[{id:' exact id ',header:'Choice',question:'Which option?',multiSelect:false,options:[{label:' Label ',description:'Description',value:' exact value '},{label:'Second',description:''}]}];
 const opened=(requestId=target.requestId,responseMode?:'message')=>({id:'opened-'+requestId,kind:'user-input.requested',summary:'Input needed',turnId:'turn',createdAt:'2026-09-30T00:00:00Z',payload:{requestId,questions,...(responseMode?{responseMode}:{})}});

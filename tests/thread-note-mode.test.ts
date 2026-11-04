@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {webcrypto} from 'node:crypto';
-import {assertThreadNoteMode,oneToOneNoteThreads,threadNoteMode} from '../thread-note-mode';
-import {mutateNoteThreads,type NoteThread} from '../note-threads';
-import {displayCommand,tickDisplay,type DisplayHost,type ThreadDisplay} from '../thread-display';
+import {assertThreadNoteMode,oneToOneNoteThreads,threadNoteMode} from '../src/conversations/thread-note-mode';
+import {mutateNoteThreads,type NoteThread} from '../src/notes/note-threads';
+import {displayCommand,tickDisplay,type DisplayHost,type ThreadDisplay} from '../src/conversations/thread-display';
 
 const pair=(notePath='A.md',threadId='one',selectedAt='2026-10-30T12:00:00.000Z'):NoteThread=>({notePath,threadId,selectedAt,projectId:'project',environmentId:'machine',connectionId:'connection',workspaceRoot:'/project'});
 const target={threadId:'one',projectId:'project',environmentId:'machine'};
