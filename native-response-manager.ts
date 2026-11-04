@@ -16,6 +16,9 @@ import {loadNativePreviews,checkedNativePreview,sameNativePreview,previewMatches
 interface DeviceCompletionReceipt {version:1;id:string;actor:string;vaultId:string;notePath:string;commitId:string;hash:string;token:string;requestHash:string;at:number}
 import type {NativeStoppedResponse,NativeStoppedStore,NativeStoppedReference} from './native-stop-store';
 import {retainedLease,isCompletedLeaseIndex,canCompactLease} from './completed-lease-index';
+import {streamBlocks} from './stream-block';
+
+const hasSavedHistory=(document:string)=>streamBlocks(document).some(block=>block.complete&&!block.tracked);
 
 const managers=new WeakMap<App,NativeResponseManager>();
 export function nativeResponses(app:App){let manager=managers.get(app);if(!manager){manager=new NativeResponseManager(app);managers.set(app,manager);}return manager;}
@@ -417,7 +420,7 @@ export class NativeResponseManager {
     if(typeof original!=='function')return ()=>{};
     let active=true;
     const wrapped:MarkdownView['setViewData']=function(this:MarkdownView,incoming,clear){
-      if(active&&!manager.view(this)&&this.file&&(this as any).getState?.().source!==true&&incoming.includes('data-t3-tool-group=')&&incoming.includes('send-to-t3-tool-group-content')){
+      if(active&&!manager.view(this)&&this.file&&(this as any).getState?.().source!==true&&(incoming.includes('data-t3-tool-group=')&&incoming.includes('send-to-t3-tool-group-content')||hasSavedHistory(incoming))){
         try{manager.wrap(this,incoming,{set:original,clear});return;}
         catch(error){
           // A damaged pre-existing note must remain readable. Fall back only
@@ -507,7 +510,7 @@ export class NativeResponseManager {
           const sealed={id:stop.id,body:stop.hidden?'':stop.body,followable:false};
           if(index>=0)responses[index]=sealed;else responses.push(sealed);
         }
-        if(!adapter&&(fence||responses.length||commits.length||retired.length||settled.length||saved.includes('data-t3-tool-group=')&&saved.includes('send-to-t3-tool-group-content'))){
+        if(!adapter&&(fence||responses.length||commits.length||retired.length||settled.length||saved.includes('data-t3-tool-group=')&&saved.includes('send-to-t3-tool-group-content')||hasSavedHistory(saved))){
           const file=view.file;
           adapter=this.wrap(view,saved);
           opened.add(file.path);

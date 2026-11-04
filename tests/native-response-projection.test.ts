@@ -9,6 +9,8 @@ import {EditorState,EditorSelection,StateEffect,Transaction} from '@codemirror/s
 import {renderResponseToolGroup,type ResponseToolGroup} from '../response-tools';
 import {presentToolGroups} from '../response-tool-presentation';
 import {heightFixture} from './fixtures/response-height';
+import {streamBlocks} from '../stream-block';
+import {historyFixture} from './fixtures/stream-history';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 const saved=`Before\n\n${responseAnchor(id)}\n\nBetween\n\n${responseAnchor(other)}\n\nAfter`;
@@ -333,6 +335,72 @@ test('unfiltered stream redraws move a stale caret out before rendering and leav
   let redraw:any;h.cm.onDispatch=(spec:any)=>{redraw=spec;};adapter.setResponses([{id,body:'> More growing stream'}]);
   assert.equal(redraw.annotations.some((annotation:any)=>annotation.type===Transaction.addToHistory&&annotation.value===false),true);
   adapter.dispose();assert.equal(h.jobs.size,0);
+});
+test('saved history uses the same caret guard without an active response and keeps the answer editable',()=>{
+  const {body}=historyFixture(),document='Before\n\n'+body+'\n\nAfter',h=fakeView(document);
+  h.view.getMode=()=> 'source';h.view.getState=()=>({source:false});h.adapter.setResponses([]);
+  let state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});
+  const dispatch=(spec:any)=>{const tr=state.update(spec);state=tr.state;h.edit(state.doc.toString());return tr;};
+  h.view.editor={cm:{get state(){return state;},dispatch}};
+  const block=streamBlocks(h.read())[0];
+  dispatch({selection:{anchor:block.from}});assert.equal(state.selection.main.head,block.to+1);
+  dispatch({selection:{anchor:block.to}});assert.equal(state.selection.main.head,block.from-1);
+  dispatch({selection:{anchor:block.from+5,head:block.from+12}});assert.equal(state.selection.main.empty,true);
+  const answer=h.read().indexOf('Final answer stays.');dispatch({selection:{anchor:answer+5}});assert.equal(state.selection.main.head,answer+5);
+  dispatch({changes:{from:answer,to:answer+5,insert:'Edited'}});assert.ok(h.adapter.saved().includes('Edited answer stays.'));
+  dispatch({selection:{anchor:0,head:state.doc.length}});assert.equal(state.selection.main.to,state.doc.length);
+  h.view.getState=()=>({source:true});dispatch({selection:{anchor:block.from+5}});assert.equal(state.selection.main.head,block.from+5);
+  h.adapter.dispose();
+});
+test('opening or restoring the caret at zero and unchanged view refreshes protect first-line saved history',async()=>{
+  for(const expanded of [false,true]){
+    const {body}=historyFixture(),document=expanded?body.replace('[!t3-progress]-','[!t3-progress]+'):body,h=fakeView(document);
+    h.view.getMode=()=> 'source';h.view.getState=()=>({source:false});
+    h.adapter.setResponses([]);
+    let state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});
+    h.view.editor={cm:{get state(){return state;},dispatch(spec:any){state=state.update(spec).state;h.edit(state.doc.toString());}}};
+    await Promise.resolve();
+    assert.equal(state.selection.main.head,streamBlocks(h.read())[0].to+1);assert.equal(h.adapter.saved(),document);
+    h.view.editor.cm.dispatch({selection:{anchor:0},filter:false});h.adapter.setResponses([]);
+    assert.equal(state.selection.main.head,streamBlocks(h.read())[0].to+1);assert.equal(h.adapter.saved(),document);
+    h.view.editor.cm.dispatch({selection:{anchor:0}});assert.notEqual(state.selection.main.head,0);
+    h.adapter.dispose();
+  }
+});
+test('running responses at the start protect initial and restored carets through the same guard',async()=>{
+  const document=responseAnchor(id)+'\n\nAfter',h=heightFixture(document);
+  const adapter=new NativeResponseView(h.view,document,()=>assert.fail('No conflict'),async()=>document);
+  adapter.setResponses([{id,body:'> [!t3-progress]+ Working\n> Active response'}]);
+  h.cm.dispatch({effects:StateEffect.appendConfig.of(adapter.extension())});
+  const inside=h.cm.state.doc.toString().indexOf('Working');
+  h.cm.dispatch({selection:{anchor:inside},filter:false});await Promise.resolve();
+  assert.ok([0,responseRegion(h.cm.state.doc.toString(),id)!.to].includes(h.cm.state.selection.main.head));
+  h.cm.dispatch({selection:{anchor:inside},filter:false});adapter.setResponses([{id,body:'> [!t3-progress]+ Working\n> Active response'}]);
+  assert.ok([0,responseRegion(h.cm.state.doc.toString(),id)!.to].includes(h.cm.state.selection.main.head));
+  assert.equal(adapter.saved(),document);adapter.dispose();assert.equal(h.jobs.size,0);
+});
+test('a note containing only saved history keeps native text focus outside it without changing saved bytes',async()=>{
+  const document='> [!t3-progress]- **Only · Completed** <span class="send-to-t3-fold-key" data-t3-fold="only:complete"></span>\n> History.',h=fakeView(document);
+  h.view.getMode=()=> 'source';let source=false;h.view.getState=()=>({source});
+  h.adapter.setResponses([]);let state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]}),focused=true;
+  const listeners=new Set<Function>(),contentDOM={addEventListener:(_name:string,fn:Function)=>listeners.add(fn),removeEventListener:(_name:string,fn:Function)=>listeners.delete(fn),blur:()=>{focused=false;}};
+  h.view.editor={cm:{contentDOM,get state(){return state;},dispatch(spec:any){state=state.update(spec).state;h.edit(state.doc.toString());}}};
+  await Promise.resolve();assert.equal(focused,false);assert.equal(h.adapter.saved(),document);
+  focused=true;for(const focus of listeners)focus();assert.equal(focused,false);
+  source=true;focused=true;for(const focus of listeners)focus();assert.equal(focused,true);
+  h.adapter.dispose();assert.equal(listeners.size,0);assert.equal(h.read(),document);
+});
+test('the shared guard keeps protecting history after the final save removes the running projection',()=>{
+  const document='Before\n\n'+responseAnchor(id)+'\n\nAfter',h=fakeView(document),{body}=historyFixture();
+  h.view.getMode=()=> 'source';h.view.getState=()=>({source:false});h.adapter.setResponses([{id,body:'> [!t3-progress]+ Working\n> Progress'}]);
+  let state=EditorState.create({doc:h.read(),extensions:[h.adapter.extension()]});
+  const dispatch=(spec:any)=>{state=state.update(spec).state;h.edit(state.doc.toString());};
+  h.view.editor={cm:{get state(){return state;},dispatch}};
+  const final=document.replace(responseAnchor(id),body);h.adapter.prepareMaterialization(document,final,[id]);h.view.setViewData(final,false);
+  assert.deepEqual(h.adapter.responseIds(),[]);assert.equal(h.adapter.saved(),final);
+  const block=streamBlocks(h.read())[0];dispatch({selection:{anchor:block.from+5}});
+  assert.equal(state.selection.main.head,block.to+1);assert.equal(h.adapter.saved(),final);
+  h.adapter.dispose();
 });
 test('typing beside either tracking comment remains editable and survives save, stream updates and reopen',async()=>{
   for(const side of ['before','after'] as const){
