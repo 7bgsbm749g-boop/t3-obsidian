@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {importRuns,importBindingId,importFollowId} from '../src/conversations/run-import';
+import {availableImportRun,importPreviewText,IMPORT_PREVIEW_TEXT_LIMIT,importRunPreview,importRuns,importBindingId,importFollowId} from '../src/conversations/run-import';
 import {applyThreadItem,restoreInlineBindings,type InlineThreadState} from '../src/conversations/inline-thread';
 import {normalizeV2Snapshot,normalizeV2StreamItem} from '../src/connection/orchestration-v2';
 const old='2026-10-06T10:00:00Z',recent='2026-10-06T11:00:00Z';
@@ -58,4 +58,25 @@ test('repeated imports use one identity; machines, source runs and destination n
   assert.notEqual(importBindingId({...source,environmentId:'other'},'message','A.md'),first);
   assert.notEqual(importBindingId(source,'other','A.md'),first);assert.notEqual(importBindingId(source,'message','B.md'),first);
   assert.notEqual(importFollowId(source,'A.md'),first);
+});
+test('the picker excludes all unavailable reasons and inconsistent availability flags',()=>{
+ const good=importRuns(history())[0];assert.equal(availableImportRun(good),true);
+ for(const reason of ['missing association','incomplete history','steering','invalid date','unknown completion','a future reason','']){
+  assert.equal(availableImportRun({...good,unavailable:reason}),false);
+ }
+ assert.equal(availableImportRun({...good,status:'Unavailable'}),false);
+ assert.equal(availableImportRun({...good,turn:undefined}),false);
+ const state=history();state.historyComplete=false;assert.deepEqual(importRuns(state).filter(availableImportRun),[]);
+});
+test('previews select only this run’s final prose, excluding other runs and tool history',()=>{
+ const state=history(),run=importRuns(state)[0];
+ state.messages.push({id:'other',role:'assistant',text:'Unrelated reply',turnId:'elsewhere',streaming:false});
+ state.activities.push({id:'tool',kind:'tool.completed',turnId:run.turnId!,summary:'Huge output'});
+ const preview=importRunPreview(state,run,'machine','thread');assert.equal(preview.body,'Live answer');assert.deepEqual(preview.html,[]);
+});
+test('huge final prose is bounded only in its preview, with a paragraph boundary when possible',()=>{
+ const state=history(),body=('A paragraph of final prose.\n\n').repeat(100_000);state.messages.at(-1)!.text=body;
+ const preview=importRunPreview(state,importRuns(state)[0],'machine','thread');
+ assert.ok(preview.body.length<=IMPORT_PREVIEW_TEXT_LIMIT);assert.ok(body.startsWith(preview.body));assert.equal(state.messages.at(-1)!.text,body);
+ assert.equal(importPreviewText('short'),'short');assert.equal(importPreviewText('x'.repeat(1_000_000)).length,IMPORT_PREVIEW_TEXT_LIMIT);
 });
