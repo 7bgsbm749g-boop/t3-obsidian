@@ -512,7 +512,7 @@ export class CodebaseBridge {
     else new Setting(modal.contentEl).setName('Project name').addText(input=>input.setValue(title).onChange(value=>{title=value;confirm.setDisabled(!title.trim()||title.trim()===scope.title);}));
     const error=modal.contentEl.createEl('p',{attr:{role:'status'}});let confirm:ButtonComponent;
     new Setting(modal.contentEl).addButton(button=>button.setButtonText('Cancel').onClick(()=>modal.close())).addButton(button=>{
-      confirm=button;button.setButtonText(deleting?'Delete project':'Rename');if(deleting){if(typeof requireApiVersion==='function'){if(requireApiVersion('1.13.0'))button.setDestructive();else button.setClass('mod-warning');}else button.setClass('mod-warning');}else button.setCta().setDisabled(true);
+      confirm=button;button.setButtonText(deleting?'Delete project':'Rename');if(deleting){if(typeof requireApiVersion==='function'&&requireApiVersion('1.13.0'))button.setDestructive();else button.setClass('mod-warning');}else button.setCta().setDisabled(true);
       button.onClick(async()=>{button.setDisabled(true);error.setText('');try{
         if(!applied&&!this.allowed(scope))throw Error('This project is no longer linked to the vault.');
         if(!applied){

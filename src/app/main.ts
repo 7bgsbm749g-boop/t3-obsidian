@@ -2474,7 +2474,7 @@ export default class SendToT3 extends Plugin {
     if(!this.eventLocalEnvironmentId&&!Platform.isMobile)this.eventLocalEnvironmentId=await this.localInlineEnvironment();
     const previous=this.settings.folderLinks;
     this.settings.folderLinks=changeCodebaseProjectLinks(previous,scope,change,link=>link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??(!link.connectionId||link.connectionId==='local'?this.eventLocalEnvironmentId:undefined));
-    try{await this.save();this.refreshFolderIndicators();this.refreshProjectsInBackground(true);}catch{this.settings.folderLinks=previous;this.refreshFolderIndicators();throw Error('The project changed in T3, but its folder links could not be saved. The link update will be tried again after reload.');}
+    try{await this.save();this.refreshFolderIndicators();this.refreshProjectsInBackground(true);}catch(_error){this.settings.folderLinks=previous;this.refreshFolderIndicators();throw Error('The project changed in T3, but its folder links could not be saved. The link update will be tried again after reload.');}
   }
   async unlinkFolder(path:string){
     const previous=this.settings.folderLinks;
@@ -3105,9 +3105,7 @@ export class T3Settings extends PluginSettingTab {
     ];
   }
   refresh(){
-    if(typeof requireApiVersion!=='function'){this.renderLegacy();return;}
-    if(requireApiVersion('1.13.0')){this.update();return;}
-    this.renderLegacy();
+    if(typeof requireApiVersion==='function'&&requireApiVersion('1.13.0'))this.update();else this.display();
   }
   private connectionDefinitions():Array<SettingDefinitionRender&{render:(setting:Setting)=>void}>{
     const rows:Array<SettingDefinitionRender&{render:(setting:Setting)=>void}>=[{name:'Connect with',desc:'Choose how this device reaches T3.',render:setting=>{setting.addDropdown(d=>{d.addOptions({direct:'T3 Connect (recommended)',...(!Platform.isMobile?{desktop:'This computer only'}:{})});d.setValue(this.plugin.mode).onChange(async value=>{this.plugin.mode=value as 'desktop'|'direct';await this.plugin.save();void this.plugin.refreshMachines().catch(error=>new Notice(message(error)));this.refresh();});});}}];
@@ -3157,8 +3155,7 @@ export class T3Settings extends PluginSettingTab {
     }
     if(p.cloudError)el.createEl('p',{text:p.cloudError,cls:'t3-error'});
   }
-  display(){this.renderLegacy();}
-  private renderLegacy(){
+  display(){
     const el=this.containerEl;el.empty();el.addClass('t3-settings');
     this.plugin.cloudChanged=()=>this.refresh();
     const header=el.createDiv({cls:'t3-settings-header'});

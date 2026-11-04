@@ -1,9 +1,9 @@
 {
   "id": "t-three-code",
   "name": "T3 Code",
-  "version": "0.0.389",
+  "version": "0.0.388",
   "minAppVersion": "1.8.7",
-  "description": "Bring T3 Code into your vault. Send notes as prompts, stream replies into the editor, and more.",
+  "description": "Bring T3 Code into Obsidian. Send notes as prompts, stream replies into the editor, and more.",
   "author": "jslepx, 7bgsbm749g-boop",
   "authorUrl": "https://github.com/7bgsbm749g-boop",
   "isDesktopOnly": false

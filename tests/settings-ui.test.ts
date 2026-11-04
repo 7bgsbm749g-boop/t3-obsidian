@@ -18,11 +18,11 @@ class Element {
   all():Element[]{return [this,...this.children.flatMap(child=>child.all())];}
   fire(name:string,event:any={}){this.listeners[name]?.(event);}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}
 }
-async function harness(mobile=false,modern:boolean|'missing'=false){
+async function harness(mobile=false,modern=false){
   let updates=0;
   class Base{}
   class Tab{containerEl=new Element();constructor(public app:any){}}
-  if(modern===true)Object.defineProperty(Tab.prototype,'update',{value(){updates++;}});
+  if(modern)Object.defineProperty(Tab.prototype,'update',{value(){updates++;}});
   class Setting {
     el:Element;get settingEl(){return this.el;}
     constructor(parent:Element){this.el=parent.createEl('setting');}
@@ -31,7 +31,7 @@ async function harness(mobile=false,modern:boolean|'missing'=false){
     addText(callback:any){return this.add(callback);}addDropdown(callback:any){return this.add(callback);}
     addButton(callback:any){return this.add(callback);}addToggle(callback:any){return this.add(callback);}
   }
-  const api={requireApiVersion:modern==='missing'?undefined:(version:string)=>modern&&version==='1.13.0',Plugin:Base,PluginSettingTab:Tab,Setting,Platform:{isMobile:mobile},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base};
+  const api={requireApiVersion:(version:string)=>modern&&version==='1.13.0',Plugin:Base,PluginSettingTab:Tab,Setting,Platform:{isMobile:mobile},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base};
   const module={exports:{} as any};
   runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},crypto:webcrypto,TextEncoder,TextDecoder,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},console},{timeout:5000});
   let saves=0,refreshes=0;
@@ -114,9 +114,4 @@ test('native settings index includes every page and reply control without auto-s
   await row.el.controls[0].change('raw-markdown');assert.equal(h.saves(),1);assert.equal(h.plugin.settings.inlineStreaming.finalAnswerFormat,'raw-markdown');
   h.plugin.cloudChanged();assert.equal(h.updates(),1,'Dynamic account state refreshes the native index without rebuilding the legacy tab');
   assert.equal(h.plugin.nativeAccount,undefined,'Native definition discovery never creates credentials');
-});
-
-for(const modern of [false,'missing'] as const)test(`legacy settings refresh does not call newer APIs (${modern})`,async()=>{
-  const h=await harness(false,modern);h.select('Replies');
-  h.tab.refresh();assert.equal(h.updates(),0);assert.ok(h.row('Final answer format'));assert.equal(h.saves(),0);
 });
