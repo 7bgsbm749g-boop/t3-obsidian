@@ -1,5 +1,6 @@
 import {connectT3Rpc,type T3Api,type SocketFactory} from './t3-rpc';
 import {normalizeV2Snapshot,restoreCompactSnapshot,v2Command} from './orchestration-v2';
+import {htmlRenderFromToolItem} from './html-results';
 
 export interface T3RequestOptions {signal?:AbortSignal}
 export type AbortableT3Api=(path:string,payload?:any,options?:T3RequestOptions)=>Promise<any>;
@@ -148,7 +149,10 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         // projection is the supported API for the complete run/prompt index.
         const full=await request(root,payload),p=full?.projection;
         requestAborted(options?.signal);
-        return normalizeV2Snapshot(p?{...full,hasMoreHistory:false,projection:{...p,turnItems:[],visibleTurnItems:[]}}:full);
+        // Preserve only tiny HTML references for previews. Never hydrate tools
+        // or retain the multi-megabyte HTML inputs in the import picker.
+        const html=p?[...new Map([...(p.turnItems??[]),...(p.visibleTurnItems??[]).filter((row:any)=>row.sourceThreadId===p.thread.id).map((row:any)=>row.item)].filter((item:any)=>htmlRenderFromToolItem(item)).map((item:any)=>[item.id,{...item,input:undefined}])).values()]:[];
+        return normalizeV2Snapshot(p?{...full,hasMoreHistory:false,projection:{...p,turnItems:html,visibleTurnItems:[]}}:full);
       }
       const snapshot=restoreCompactSnapshot(await request(root+'/bounded?compactTurnItems=1',payload));
       requestAborted(options?.signal);

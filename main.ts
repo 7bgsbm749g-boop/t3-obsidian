@@ -46,7 +46,8 @@ import {readInlineSnapshot,watchThread,type ThreadAccess} from './thread-stream'
 import {isRecoveryCommand} from './recovery-command';
 import {abortableRead,requestAborted} from './t3-api';
 import {mountToolGroups} from './response-tool-presentation';
-import {importRuns,importBindingId,importFollowId,type ImportRun,type RunImportResult} from './run-import';
+import {availableImportRun,importRunPreview,importRuns,importBindingId,importFollowId,type ImportRun,type RunImportResult} from './run-import';
+import {renderRunImportPreview} from './run-import-preview';
 import {findRunImport,runImportReceipt,runImportReceipts} from './run-import-receipt';
 import {openRunImport,ImportStreamsModal} from './run-import-ui';
 import {type InlineThreadState} from './inline-thread';
@@ -1440,7 +1441,8 @@ export default class SendToT3 extends Plugin {
     openRunImport(this.app,file.path,{
       projects:()=>this.projects(),projectLabel:project=>this.projectChoiceLabel(project),
       threads:async project=>this.availableModeThreads(file.path,project,projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id)),
-      runs:async(project,thread)=>importRuns((await this.readImportHistory(project,thread.id)).state),
+      runs:async(project,thread)=>{const history=await this.readImportHistory(project,thread.id);return importRuns(history.state).filter(availableImportRun).map(run=>({...run,preview:importRunPreview(history.state,run,history.source.environmentId,thread.id)}));},
+      preview:(_project,_thread,run,el,child,signal)=>renderRunImportPreview(this.app,run,el,child,signal,this.htmlResults),
       attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow,insertion),
     });
   }

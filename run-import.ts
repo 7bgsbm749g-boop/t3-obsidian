@@ -1,5 +1,6 @@
 import {commandId} from './direct';
-import {turnForMessage,turnPhase,type InlineThreadState,type InlineTurn} from './inline-thread';
+import {inlineTurnMessages,turnForMessage,turnPhase,type InlineThreadState,type InlineTurn} from './inline-thread';
+import {responseHtmlResults,type HtmlResultReference} from './html-results';
 import {visibleInlineInput} from './input-presentation';
 import type {ResponseRecord} from './response-record';
 import type {ResponseState} from './response-model';
@@ -27,6 +28,21 @@ export interface ImportRun {
   messageId:string;turnId?:string;prompt:string;createdAt:string;
   status:'Running'|'Completed'|'Interrupted'|'Failed'|'Unavailable';
   unavailable?:string;turn?:InlineTurn;
+  preview?:{body:string;html:HtmlResultReference[]};
+}
+/** Availability is one rule, independent of the reason text. Keep diagnostics
+ * in importRuns so a stale selection can still explain an attachment failure. */
+export function availableImportRun(run:ImportRun){return run.status!=='Unavailable'&&run.unavailable===undefined&&!!run.turnId&&!!run.turn;}
+export const IMPORT_PREVIEW_TEXT_LIMIT=24_000;
+/** The display crop never needs an entire multi-megabyte Markdown document.
+ * This limit affects the preview only; the imported response is unchanged. */
+export function importPreviewText(body:string){
+  if(body.length<=IMPORT_PREVIEW_TEXT_LIMIT)return body;
+  const prefix=body.slice(0,IMPORT_PREVIEW_TEXT_LIMIT),paragraph=prefix.lastIndexOf('\n\n');
+  return paragraph>IMPORT_PREVIEW_TEXT_LIMIT/2?prefix.slice(0,paragraph):prefix;
+}
+export function importRunPreview(state:InlineThreadState,run:ImportRun,environmentId:string,threadId:string){
+  return {body:run.turnId?importPreviewText(inlineTurnMessages(state,run.turnId).map(message=>message.text).join('\n\n')):'',html:responseHtmlResults(state.activities,run.turnId?[run.turnId]:[],environmentId,threadId)};
 }
 /** Only exact source associations can attach a response; prose is not evidence. */
 export function importRuns(state:InlineThreadState):ImportRun[]{

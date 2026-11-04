@@ -37,7 +37,7 @@ function viewerDocument(html:string,doc:Document):string {
   const policy=parsed.createElement('meta');policy.httpEquiv='Content-Security-Policy';policy.content="default-src http: https: data: blob:; script-src http: https: data: blob: 'unsafe-inline' 'unsafe-eval'; style-src http: https: data: blob: 'unsafe-inline'; connect-src http: https: ws: wss:; base-uri http: https:; form-action http: https:";
   // This fixed inline handler has no src and is never attached to Obsidian's
   // document. It is serialized into the opaque-origin sandboxed blob below.
-  const bridge=parsed.createElement('script');bridge.textContent='window.addEventListener("keydown",function(e){if(e.isTrusted&&e.key==="Escape"&&!e.defaultPrevented){window.parent.postMessage({jsonrpc:"2.0",method:"t3/notifications/escape"},"*");}},false);';
+  const bridge=parsed.createElement('script');bridge.textContent='window.addEventListener("keydown",function(e){if(e.isTrusted&&e.key==="Escape"&&!e.defaultPrevented){window.parent.postMessage({jsonrpc:"2.0",method:"t3/notifications/escape"},"*");}},false);window.addEventListener("load",function(){Promise.resolve(document.fonts&&document.fonts.ready).then(function(){window.parent.postMessage({jsonrpc:"2.0",method:"t3/notifications/preview-ready"},"*");requestAnimationFrame(function(){requestAnimationFrame(function(){window.parent.postMessage({jsonrpc:"2.0",method:"t3/notifications/preview-painted"},"*");});});});},{once:true});';
   parsed.head.prepend(policy,bridge);
   return '<!doctype html>\n'+parsed.documentElement.outerHTML;
 }
@@ -72,19 +72,23 @@ export class HtmlResultViews {
     if(this.stopped)return;
     await Promise.all([...this.mounted].filter(mounted=>!environmentId||mounted.reference.environmentId===environmentId).map(mounted=>mounted.recover()));
   }
-  mount(reference:HtmlResultReference,doc:Document,expanded=false,onEscape?:()=>void):Mounted {
+  mount(reference:HtmlResultReference,doc:Document,expanded=false,onEscape?:()=>void,options:{passive?:boolean}={}):Mounted {
     const win=doc.defaultView! as Window&typeof globalThis,root=doc.createElement('div');root.className='send-to-t3-html-result';root.dataset.t3HtmlKey=htmlResultKey(reference);root.setAttribute('aria-label',reference.title);
     const surface=root.createDiv({cls:'send-to-t3-html-surface'}),controls=root.createDiv({cls:'send-to-t3-html-controls'});
     let disposed=false,generation=0,frame:HTMLIFrameElement|undefined,blob:string|undefined,reported:number|undefined;
     let state:'loading'|'ready'|'failed'='loading',failure:HtmlResultError|undefined,loading:Promise<void>|undefined,recovery:Promise<void>|undefined;
     const height=()=>{root.style.height=state!=='ready'?'auto':expanded?'100%':htmlResultFrameHeight(reference,root.clientWidth||728,reported)+'px';};
     const showState=(next:typeof state)=>{state=next;root.dataset.t3HtmlState=next;root.setAttribute('aria-busy',String(next==='loading'));controls.hidden=next!=='ready';height();};showState('loading');
-    if(!expanded){const expand=controls.createEl('button',{attr:{'aria-label':'Expand HTML','title':'Expand HTML'}});setIcon(expand,'maximize-2');expand.addEventListener('click',()=>new HtmlResultModal(this.app,this,reference).open());}
+    if(!expanded&&!options.passive){const expand=controls.createEl('button',{attr:{'aria-label':'Expand HTML','title':'Expand HTML'}});setIcon(expand,'maximize-2');expand.addEventListener('click',()=>new HtmlResultModal(this.app,this,reference).open());}
+    if(options.passive){root.classList.add('send-to-t3-html-passive');controls.remove();}
     const postTheme=()=>frame?.contentWindow?.postMessage(themeMessage(themeFor(doc)),'*');
     const receive=(event:MessageEvent)=>{
       if(disposed||!frame||event.source!==frame.contentWindow||!event.data||event.data.jsonrpc!=='2.0')return;
       const {method,params,id}=event.data;
+      if(method==='t3/notifications/preview-ready'){root.dataset.t3HtmlPrepared='true';return;}
+      if(method==='t3/notifications/preview-painted'){root.dataset.t3HtmlPainted='true';return;}
       if(method==='ui/notifications/size-changed'&&typeof params?.height==='number'&&Number.isFinite(params.height)&&params.height>0){reported=params.height;height();return;}
+      if(options.passive)return;
       if(doc.activeElement!==frame||win.navigator.userActivation?.isActive===false)return;
       if(method==='t3/notifications/escape'){if(onEscape)onEscape();else {frame.blur();root.closest<HTMLElement>('.cm-editor')?.querySelector<HTMLElement>('.cm-content')?.focus();}return;}
       if(method==='ui/open-link'&&typeof params?.url==='string'&&/^https?:\/\//i.test(params.url)&&(typeof id==='string'||typeof id==='number')){
@@ -100,7 +104,8 @@ export class HtmlResultViews {
       loading=(async()=>{
       try{
         const html=await this.store.get(reference);if(disposed||this.stopped||current!==generation)return;
-        const next=doc.createElement('iframe');next.title=reference.title;next.setAttribute('sandbox','allow-scripts allow-forms');next.referrerPolicy='no-referrer';next.loading='lazy';next.className='send-to-t3-html-frame';
+        const next=doc.createElement('iframe');next.title=reference.title;next.setAttribute('sandbox',options.passive?'allow-scripts':'allow-scripts allow-forms');next.referrerPolicy='no-referrer';next.loading=options.passive?'eager':'lazy';next.className='send-to-t3-html-frame';
+        if(options.passive){next.inert=true;next.tabIndex=-1;}
         const theme=themeFor(doc);next.style.colorScheme=theme.appearance;
         blob=win.URL.createObjectURL(new win.Blob([this.prepare(html,doc)],{type:'text/html;charset=utf-8'}));
         next.src=blob+'#t3-theme='+encodeURIComponent(JSON.stringify(theme));next.addEventListener('load',postTheme);frame=next;surface.replaceChildren(next);showState('ready');
@@ -110,6 +115,7 @@ export class HtmlResultViews {
         failure=error instanceof HtmlResultError?error:new HtmlResultError('unavailable','reference');
         root.dataset.t3HtmlError=failure.code;showState('failed');
         surface.empty();const status=surface.createDiv({cls:'send-to-t3-html-loading',attr:{role:'status'}});status.createSpan({text:failure.message});
+        if(options.passive)return;
         if(failure.code==='sign-in'&&this.options.onSignIn){
           const signIn=status.createEl('button',{text:'Sign in'});signIn.addEventListener('click',()=>{
             if(signIn.disabled||disposed||this.stopped)return;signIn.disabled=true;

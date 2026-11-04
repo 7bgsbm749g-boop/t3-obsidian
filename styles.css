@@ -572,6 +572,23 @@
 .send-to-t3-setup-tail { margin: 2px 0 4px 28px; padding: 6px 10px; max-height: 7em; overflow: auto; font-size: 11px; white-space: pre; }
 @media (prefers-reduced-motion: reduce) { .send-to-t3-setup-stage[data-worktree-setup-status="running"] > .send-to-t3-setup-icon { animation: none; } }
 .send-to-t3-import-prompt { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.send-to-t3-run-picker { height: min(500px, calc(100dvh - 100px)); display: flex; flex-direction: column; }
+.send-to-t3-run-picker .prompt-results { flex: 1; min-height: 0; max-height: none; overflow-y: auto; overflow-anchor: none; }
+.send-to-t3-run-row { padding: 10px 12px; }
+.send-to-t3-run-heading { display: flex; align-items: center; gap: 10px; min-height: 24px; }
+.send-to-t3-run-status { display: inline-flex; flex: 0 0 17px; width: 17px; height: 17px; border: 1.5px dashed currentColor; border-radius: 50%; align-items: center; justify-content: center; color: var(--text-warning); }
+.send-to-t3-run-status[data-status="Completed"] { color: var(--color-green); }
+.send-to-t3-run-status[data-status="Running"] { color: var(--color-blue); }
+.send-to-t3-run-status[data-status="Failed"] { color: var(--color-red); }
+.send-to-t3-run-status svg { width: 11px; height: 11px; stroke-width: 2.5; }
+.send-to-t3-run-name { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; line-height: 1.4; }
+.send-to-t3-run-preview { height: 0; overflow: hidden; pointer-events: none; }
+.send-to-t3-run-preview-body { height: var(--t3-run-preview-height, 280px); overflow: hidden; font-size: var(--font-smaller); font-weight: normal; color: var(--text-normal); padding: 12px; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); contain: layout paint; }
+.is-previewing > .send-to-t3-run-preview { height: var(--t3-run-preview-height, 280px); margin-top: 10px; }
+.send-to-t3-run-preview-body > .markdown-rendered > :first-child { margin-top: 0; }
+.send-to-t3-run-preview-body::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 22px; background: linear-gradient(transparent, var(--background-primary)); pointer-events: none; }
+.send-to-t3-run-preview-loading { color: var(--text-muted); }
+.send-to-t3-html-passive { pointer-events: none; }
 
 /* Existing spaces and tabs have the same display policy in both code modes. */
 .t3-code-language-view .cm-scroller,

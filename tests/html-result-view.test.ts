@@ -18,6 +18,7 @@ async function production(){
 class Element {
  children:Element[]=[];parent?:Element;dataset:Record<string,string>={};attrs:Record<string,string>={};events:Record<string,()=>void>={};
  style={height:'',colorScheme:''};className='';hidden=false;disabled=false;clientWidth=728;contentWindow={postMessage(){}};private text='';
+ classList={add:(_name:string)=>{}};
  constructor(readonly tagName:string,readonly ownerDocument:any){}
  set textContent(text:string){this.text=text;this.empty();}get textContent():string{return this.text+this.children.map(child=>child.textContent).join(' ');}
  setAttribute(key:string,value:string){this.attrs[key]=value;}
@@ -151,4 +152,13 @@ test('remounting a verified page reuses its prepared document and retains separa
  const second=views.mount(reference,document.doc);await loaded(second.root);assert.equal(document.parses,1);assert.notEqual(second.root.find('iframe').src,firstUrl);assert.equal(document.blobs.size,1);
  html=page+'<p>New bytes</p>';const changed=views.mount(reference,document.doc);await loaded(changed.root);assert.equal(document.parses,2,'Changed verified bytes cannot reuse a different document');
  views.dispose();assert.equal(document.blobs.size,0);
+});
+test('passive previews cannot take focus, submit forms, open links or expand the viewer',async()=>{
+ const module=await production(),document=documentFixture(),receiver=device(module);
+ const views=new module.HtmlResultViews({},receiver.store),mounted=views.mount(reference,document.doc,false,undefined,{passive:true}),root=mounted.root as Element;
+ await loaded(root);const frame=root.find('iframe') as any;
+ assert.equal(frame.attrs.sandbox,'allow-scripts');assert.equal(frame.inert,true);assert.equal(frame.tabIndex,-1);assert.equal(frame.loading,'eager');
+ assert.equal(root.find('button'),undefined);assert.equal(root.dataset.t3HtmlPainted,undefined,'mounting is not paint evidence');
+ document.listeners.get('message')({source:frame.contentWindow,data:{jsonrpc:'2.0',method:'t3/notifications/preview-painted'}});
+ assert.equal(root.dataset.t3HtmlPainted,'true');views.dispose();assert.equal(document.blobs.size,0);assert.equal(document.listeners.size,0);
 });

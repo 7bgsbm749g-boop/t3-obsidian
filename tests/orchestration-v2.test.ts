@@ -222,6 +222,14 @@ test('selected imports reconstruct compact display items and hydrate only the ex
  assert.equal(result.snapshotSequence,10);assert.equal(result.page.hasMore,false);assert.equal(calls.length,1);assert.equal(result.thread.activities.length,1);assert.equal(result.thread.activities[0].payload.data.output,'SELECTED OUTPUT');
  const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:result}).state;assert.equal(turnForMessage(state,'prompt'),run.id);
 });
+test('import previews retain HTML references without retaining huge tool inputs or hydrating unrelated output',async()=>{
+ const htmlRender={attachmentId:'attachment',title:'Five-app fixture',height:900};
+ const item={id:'html',threadId:'thread',runId:run.id,type:'dynamic_tool',toolName:'t3-code.html_render',status:'completed',updatedAt:at,input:{html:'x'.repeat(1_000_000)},output:{htmlRender}};
+ const api=t3Api(async()=>snapshot({turnItems:[item,{id:'huge',type:'command_execution',outputOmitted:true}]}),'https://fixture',()=>{throw Error('No hydration');});
+ const result=await api('/api/orchestration/threads/thread?importRuns=true');
+ assert.equal(result.thread.activities.length,1);assert.equal(result.thread.activities[0].kind,'response.html');assert.equal(result.thread.activities[0].payload.htmlRender.attachmentId,'attachment');
+ assert.ok(JSON.stringify(result).length<5000);assert.equal(result.thread.activities[0].payload.itemId,'html');
+});
 
 test('a saved v1 request with a lost receipt checks migrated history before any resend',async()=>{
   const command={type:'thread.turn.start',commandId:'command',threadId:'thread',__legacyV1:true,message:{messageId:'old',text:'Original',attachments:[]}};

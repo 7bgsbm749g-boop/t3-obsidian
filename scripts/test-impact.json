@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "run-import-ui.ts": ["styles.css"],
     "tests/codebase-response-save.test.ts": [
       "validation/codebase-response-save-lab.ts"
     ],
