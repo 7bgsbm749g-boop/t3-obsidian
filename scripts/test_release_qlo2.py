@@ -71,7 +71,7 @@ class ReleasePipelineTests(unittest.TestCase):
             def synced():
                 self.assertFalse(legacy.exists()); self.assertEqual((plugin / 'data.json').read_bytes(), current)
                 return []
-            with patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'BACKUPS', root / 'evidence'), patch.object(release, 'run') as run, patch.object(release, 'sync_release', side_effect=synced):
+            with patch.object(release, 'ROOT', root), patch.object(release, 'QLO2_PLUGIN', plugin), patch.object(release, 'BACKUPS', root / 'evidence'), patch.object(release, 'run') as run, patch.object(release, 'sync_release', side_effect=synced):
                 result = release.deploy_qlo2(archive, '3.4.5', hashes)
             self.assertEqual((Path(result['legacySettingsCleanup']['backup']) / 'data.json').read_bytes(), old)
             self.assertEqual((plugin / 'data.json').read_bytes(), current)
@@ -331,7 +331,7 @@ module.main()
             release.parse_version('v2.12.1')
 
     def test_enqueue_preserves_the_selected_semantic_release_type(self) -> None:
-        for selection, expected in [(None, 'patch'), ('patch', 'patch'), ('minor', 'minor'), ('major', 'major')]:
+        for selection, expected in [(None, 'patch'), ('patch', 'patch'), ('minor', 'minor'), ('major', 'major'), ('none', 'none')]:
             arguments = ['--enqueue', 'HEAD'] + (['--release-type', selection] if selection else [])
             args = release.parser().parse_args(arguments)
             with patch.object(release, 'git_state', return_value=('commit', [])), \
@@ -342,15 +342,21 @@ module.main()
                 self.assertEqual(enqueue.call_args.args, (release.ROOT, release.CANONICAL_ROOT, 'HEAD'))
                 kick.assert_called_once()
 
-    def test_release_type_cannot_override_another_action_or_a_prepared_version(self) -> None:
+    def test_release_type_cannot_override_another_action(self) -> None:
         for arguments in [
                 ['--bump', 'patch', '--release-type', 'major'],
-                ['--queue-status', '--release-type', 'minor'],
-                ['--enqueue', 'HEAD', '--validation', 'exact-proof.json', '--release-type', 'major']]:
+                ['--queue-status', '--release-type', 'minor']]:
             with patch.object(release.release_queue, 'enqueue') as enqueue:
                 with self.assertRaisesRegex(SystemExit, 'release-type'):
                     release.dispatch(release.parser().parse_args(arguments))
                 enqueue.assert_not_called()
+
+    def test_alpha_prepared_candidate_keeps_independent_comparison_classification(self) -> None:
+        args = release.parser().parse_args(['--enqueue', 'HEAD', '--validation', 'proof.json', '--release-type', 'minor'])
+        with patch.object(release, 'git_state', return_value=('commit', [])), patch.object(release.release_queue, 'enqueue', return_value={}) as enqueue, patch.object(release.release_queue, 'kick'), patch('builtins.print'):
+            release.dispatch(args)
+        self.assertEqual(enqueue.call_args.kwargs['bump'], 'minor')
+        self.assertEqual(enqueue.call_args.kwargs['validation'], Path('proof.json').resolve())
 
     def test_exact_version_option_and_old_version_preflight(self) -> None:
         args = release.parser().parse_args(['--version', '2.28.1'])

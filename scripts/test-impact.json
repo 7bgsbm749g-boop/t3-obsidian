@@ -105,6 +105,9 @@
     ],
     "tests/orchestration-v2.test.ts": [
       "validation/orchestration-v2-live.ts"
+    ],
+    "scripts/release_policy.py": [
+      "release-policy.json"
     ]
   }
 }

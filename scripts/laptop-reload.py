@@ -10,6 +10,9 @@ import json
 from pathlib import Path
 import subprocess
 import uuid
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import release_policy
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = Path.home() / '.config/send-to-t3-code/laptop-reload.json'
@@ -29,13 +32,16 @@ def latest_release() -> dict | None:
     releases = []
     for path in RECEIPTS.glob('*/deployment.json'):
         value = json.loads(path.read_text())
-        parts = value.get('version', '').split('.')
-        if value.get('status') != 'awaiting-live-smoke' or len(parts) != 3 or not all(p.isdigit() for p in parts):
+        try:
+            key = release_policy.order_key(ROOT, value.get('version', ''))
+        except ValueError:
+            continue
+        if value.get('status') != 'awaiting-live-smoke':
             continue
         hashes = value.get('releaseFileSha256', {})
         if not all(name in hashes for name in RUNTIME):
             continue
-        releases.append((tuple(map(int, parts)), {'version': value['version'], 'hashes': {n: hashes[n] for n in RUNTIME}}))
+        releases.append((key, {'version': value['version'], 'hashes': {n: hashes[n] for n in RUNTIME}}))
     return max(releases, key=lambda item: item[0])[1] if releases else None
 
 
@@ -102,12 +108,12 @@ def attempt(config: dict, release: dict, state: dict) -> dict:
     state.pop('statusId', None)
     if client['loadedVersion'] == release['version'] and (not state.get('beforeInstanceId') or client['instanceId'] != state['beforeInstanceId']):
         return {**state, 'status': 'complete', 'client': client, 'completedAt': dt.datetime.now(dt.timezone.utc).isoformat()}
-    if tuple(map(int, client['loadedVersion'].split('.'))) > tuple(map(int, release['version'].split('.'))):
+    if release_policy.order_key(ROOT, client['loadedVersion']) > release_policy.order_key(ROOT, release['version']):
         return {**state, 'status': 'complete', 'client': client, 'reason': 'client already newer'}
     state.setdefault('beforeInstanceId', client['instanceId'])
     state.setdefault('reloadId', str(uuid.uuid4()))
     atomic_json(STATE / 'pending.json', state)
-    command = {'version': 1, 'id': state['reloadId'], 'kind': 'reload-client', 'releaseVersion': release['version'], 'runtimeSha256': release['hashes']}
+    command = {'version': 1, 'id': state['reloadId'], 'kind': 'reload-client', 'releaseVersion': release_policy.reload_request_version(ROOT, release['version'], client['loadedVersion']), 'runtimeSha256': release['hashes']}
     scheduled = mailbox(config, command, retry=True)
     return {**state, 'status': 'pending', 'reason': 'waiting for a new loaded client' if scheduled.get('ok') else scheduled.get('error', 'waiting for Sync')}
 

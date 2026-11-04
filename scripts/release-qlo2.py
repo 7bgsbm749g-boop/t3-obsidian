@@ -25,6 +25,7 @@ import re
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import change_checks
 import release_queue
+import release_policy
 from plugin_id_migration import LEGACY_ID, installed_plugin, needs_migration, migrate_installation, legacy_settings_remnant, archive_legacy_settings
 
 
@@ -81,14 +82,13 @@ def run(command: list[str], *, cwd: Path | None = None, capture: bool = False, t
 
 
 def parse_version(value: str) -> tuple[int, int, int]:
-    pieces = value.split('.')
-    if len(pieces) != 3 or any(not piece.isdigit() for piece in pieces):
-        raise ValueError(f'Expected a numeric MAJOR.MINOR.PATCH version, got {value!r}.')
-    return tuple(int(piece) for piece in pieces)  # type: ignore[return-value]
+    return release_policy.parse(value)
 
 
 def bump_version(value: str, part: str) -> str:
     major, minor, patch = parse_version(value)
+    if release_policy.ALPHA.fullmatch(value):
+        return f'0.0.{patch + 1}-alpha'
     if part == 'major':
         return f'{major + 1}.0.0'
     if part == 'minor':
@@ -297,9 +297,7 @@ def deploy_qlo2(
         raise SystemExit(f'QLO2 plugin installation is missing: {QLO2_PLUGIN}')
 
     installed_version = read_json(QLO2_PLUGIN / 'manifest.json')['version']
-    installed_parsed = parse_version(installed_version)
-    requested_parsed = parse_version(version)
-    if installed_parsed > requested_parsed or (installed_parsed == requested_parsed and not allow_same_version):
+    if not release_policy.newer(ROOT, version, installed_version, allow_equal=allow_same_version):
         raise SystemExit(
             f'QLO2 already has {installed_version}; new deployments require a strictly newer version than {version}.'
         )
@@ -495,7 +493,8 @@ def check_client(version: str) -> Path:
         raise SystemExit('QLO2 is recovering a connection; retry the client check when it is idle.')
     settings = {str(plugin): sha256_file(plugin / 'data.json') for plugin in (DEV_PLUGIN, QLO2_PLUGIN)}
     runtime = {name: deployment['releaseFileSha256'][name] for name in RUNTIME_FILES}
-    acknowledgement = client_command('reload-client', '--release-version', version, '--runtime-hashes', json.dumps(runtime))
+    request_version = release_policy.reload_request_version(ROOT, version, before['client']['loadedVersion'])
+    acknowledgement = client_command('reload-client', '--release-version', request_version, '--runtime-hashes', json.dumps(runtime))
     if not acknowledgement.get('reloadScheduled'):
         raise SystemExit('QLO2 did not schedule its native reload.')
     deadline = time.monotonic() + 45
@@ -514,7 +513,7 @@ def check_client(version: str) -> Path:
     if any(sha256_file(QLO2_PLUGIN / name) != checksum for name, checksum in deployment['releaseFileSha256'].items()):
         raise SystemExit('QLO2 release bytes changed during the client check.')
     value = {'version': version, 'verifiedAt': utc_now(), 'device': 'vps-qlo2',
-             'nativeReloadCommand': 'app:reload', 'before': before, 'acknowledgement': acknowledgement,
+             'nativeReloadCommand': 'app:reload', 'reloadCommandVersion': request_version, 'before': before, 'acknowledgement': acknowledgement,
              'after': after, 'settingsSha256': settings, 'runtimeSha256': runtime,
              'testNotesCreated': [], 'testThreadsCreated': [],
              'scope': 'Real QLO2 reload and loaded version. Changed behavior requires separate evidence.'}
@@ -537,7 +536,7 @@ def complete_smoke(version: str, device: str, evidence: Path, notes: str) -> Non
     current_version = read_json(QLO2_PLUGIN / 'manifest.json')['version']
     historical = current_version != version
     if historical:
-        if parse_version(current_version) <= parse_version(version):
+        if release_policy.order_key(ROOT, current_version) <= release_policy.order_key(ROOT, version):
             raise SystemExit(f'QLO2 has not advanced beyond {version}.')
         client = read_json(directory / 'client-check.json')
         before = client.get('before', {}).get('client', {})
@@ -600,10 +599,10 @@ def release_checks(skip_tests_reason: str | None = None, *, base: str | None = N
 def prepare_release(bump: str | None, requested_version: str | None, *, base: str | None = None) -> Path:
     """Prepare final version bytes in the task worktree; never install or package."""
     current = read_json(ROOT / 'manifest.json')['version']
-    version = requested_version or bump_version(current, bump)
-    if parse_version(version) < parse_version(current):
+    version = requested_version or (release_policy.bump(ROOT, current, bump) if release_policy.policy(ROOT) else bump_version(current, bump))
+    if not release_policy.newer(ROOT, version, current, allow_equal=True):
         raise SystemExit('The prepared version cannot be older than the source version.')
-    if parse_version(version) <= parse_version(read_json(QLO2_PLUGIN / 'manifest.json')['version']):
+    if not release_policy.newer(ROOT, version, read_json(QLO2_PLUGIN / 'manifest.json')['version']):
         raise SystemExit('Prepare a version strictly newer than QLO2.')
     originals = version_documents()
     try:
@@ -627,7 +626,7 @@ def publish_prepared(version: str, proof: Path, *, skip_laptop_reload: bool = Fa
     if dirty:
         raise SystemExit('Commit and integrate the prepared candidate before publishing.')
     validate_version_alignment(version)
-    if parse_version(version) <= parse_version(read_json(QLO2_PLUGIN / 'manifest.json')['version']):
+    if not release_policy.newer(ROOT, version, read_json(QLO2_PLUGIN / 'manifest.json')['version']):
         raise SystemExit('The prepared release must be strictly newer than QLO2.')
     if release_receipt_dir(version).exists() or archive_path(version).exists():
         raise SystemExit(f'Immutable release {version} already exists; retry its queue job to resume publication.')
@@ -657,10 +656,10 @@ def new_release(bump: str | None, allow_dirty: bool, requested_version: str | No
             'authorized deploying the reviewed dirty worktree.'
         )
     current = read_json(ROOT / 'manifest.json')['version']
-    version = requested_version or bump_version(current, bump)
-    if parse_version(version) <= parse_version(current):
+    version = requested_version or (release_policy.bump(ROOT, current, bump) if release_policy.policy(ROOT) else bump_version(current, bump))
+    if not release_policy.newer(ROOT, version, current):
         raise SystemExit('The requested release must be strictly newer than the source version.')
-    if (QLO2_PLUGIN / 'manifest.json').exists() and parse_version(version) <= parse_version(read_json(QLO2_PLUGIN / 'manifest.json')['version']):
+    if (QLO2_PLUGIN / 'manifest.json').exists() and not release_policy.newer(ROOT, version, read_json(QLO2_PLUGIN / 'manifest.json')['version']):
         raise SystemExit('The requested release must be strictly newer than the QLO2 installation.')
     if release_receipt_dir(version).exists() or archive_path(version).exists():
         raise SystemExit(f'Immutable release {version} already exists; choose a newer version.')
@@ -741,8 +740,11 @@ def parser() -> argparse.ArgumentParser:
     action.add_argument('--retry-queued', metavar='JOB_ID', help='Resume recovery or retry a repaired candidate; retain immutable release bytes.')
     result.add_argument('--prepare', action='store_true', help='With --bump/--version: prepare and check a task-worktree candidate without deployment.')
     result.add_argument('--validation', type=Path, help='Exact successful validation proof for --publish.')
-    result.add_argument('--release-type', choices=('patch', 'minor', 'major'),
-                        help='With --enqueue: let the queue assign the next semantic version (default: patch).')
+    result.add_argument('--release-type', choices=('patch', 'minor', 'major', 'none'),
+                        help='With --enqueue: classify comparison counters; alpha releases always advance BUILD (default: patch).')
+    result.add_argument('--history-seed', type=Path, help='With --enqueue: reviewed private comparison seed for the first alpha release.')
+    result.add_argument('--summary', default='', help='Change description retained in the private version table.')
+    result.add_argument('--thread-id', help='Native T3 source thread for the private version table.')
     result.add_argument('--base', help='Affected-test baseline; default: installed release source.')
     result.add_argument('--replacement', metavar='COMMIT', help='With --retry-queued: replace an uninstalled failed candidate with a corrected reviewed commit.')
     result.add_argument('--allow-dirty', action='store_true')
@@ -755,9 +757,13 @@ def parser() -> argparse.ArgumentParser:
 
 
 def dispatch(args: argparse.Namespace) -> None:
+    if (args.history_seed or args.summary or args.thread_id) and not (args.enqueue or args.retry_queued and args.replacement):
+        raise SystemExit('History metadata is valid only with --enqueue or a queued replacement.')
+    if args.thread_id and any(c.isspace() or c in '()[]' for c in args.thread_id):
+        raise SystemExit('Use an exact native T3 thread ID.')
     if args.release_type and not args.enqueue:
         raise SystemExit('--release-type is valid only with --enqueue.')
-    if args.release_type and args.validation:
+    if args.release_type and args.validation and not (release_policy.policy(ROOT) or {}).get('stage') == 'alpha':
         raise SystemExit('--validation fixes an exact prepared version; omit --release-type.')
     if args.replacement and not args.retry_queued:
         raise SystemExit('--replacement is valid only with --retry-queued.')
@@ -776,7 +782,9 @@ def dispatch(args: argparse.Namespace) -> None:
             raise SystemExit('Commit the reviewed task changes before enqueueing; uncommitted edits are not submitted.')
         result = release_queue.enqueue(ROOT, CANONICAL_ROOT, args.enqueue, bump=args.release_type or 'patch',
                                        validation=args.validation.resolve() if args.validation else None,
-                                       evidence=args.evidence.resolve() if args.evidence else None, notes=args.notes)
+                                       evidence=args.evidence.resolve() if args.evidence else None, notes=args.notes,
+                                       history_seed=args.history_seed.resolve() if args.history_seed else None,
+                                       summary=args.summary, thread_id=args.thread_id)
         print(json.dumps(result, indent=2))
         release_queue.kick()
         return
@@ -800,7 +808,9 @@ def dispatch(args: argparse.Namespace) -> None:
                     raise SystemExit('Commit replacement source first; supply evidence and notes together.')
                 replacement = release_queue.submission(ROOT, CANONICAL_ROOT, args.replacement,
                     validation=args.validation.resolve() if args.validation else None,
-                    evidence=args.evidence.resolve() if args.evidence else None, notes=args.notes)
+                    evidence=args.evidence.resolve() if args.evidence else None, notes=args.notes,
+                    history_seed=args.history_seed.resolve() if args.history_seed else None,
+                    summary=args.summary, thread_id=args.thread_id)
             print(json.dumps(release_queue.retry(args.retry_queued, replacement=replacement), indent=2))
             release_queue.kick()
         else:
@@ -856,7 +866,7 @@ def main() -> None:
         # the reviewed CLI is invoked from a task checkout. Historical proof
         # reads immutable archives/client checks and never touches live bytes.
         ROOT = CANONICAL_ROOT
-        if parse_version(read_json(QLO2_PLUGIN / 'manifest.json')['version']) > parse_version(args.complete_smoke):
+        if release_policy.order_key(ROOT, read_json(QLO2_PLUGIN / 'manifest.json')['version']) > release_policy.order_key(ROOT, args.complete_smoke):
             dispatch(args)
             return
     if args.prepare or args.enqueue or args.queue_status or args.install_queue or args.drain_queue or args.retry_queued or args.bootstrap_queue:

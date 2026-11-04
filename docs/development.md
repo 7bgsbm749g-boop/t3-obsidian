@@ -32,8 +32,15 @@ The installed plugin needs `main.js`, `manifest.json`, and `styles.css` in the
 releases use **t3-obsidian VERSION**; the release title does not set the
 Obsidian display name.
 
-Choose the release type using the [version policy](versioning.md). The release
-queue accepts `--release-type patch`, `minor`, or `major` with `--enqueue`.
+Follow the [alpha policy](versioning.md): versions are `0.0.BUILD-alpha` until
+the user explicitly leaves alpha. With `--enqueue`, supply `--thread-id ID` and
+`--summary "CHANGE"`; choose `--release-type patch`, `minor`, `major`, or `none`
+for the private comparison table. The queue always advances the alpha build.
+
+After delivery, publish GitHub assets from the exact immutable release archive,
+using its version as the tag, `t3-obsidian VERSION` as the title, and GitHub
+prerelease status while the alpha policy is active. Never rebuild the published
+assets or include private evidence in release notes.
 
 ## References
 
