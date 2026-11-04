@@ -407,9 +407,9 @@ class ReleaseQueueTests(unittest.TestCase):
         (self.root / 'scripts').mkdir()
         def builder(extra=''):
             return ("if(!['--base'" + (",'--" + extra + "'" if extra else '') + "].some(flag=>process.argv.includes(flag)))throw Error('mode');\n" +
-                    "await build({entryPoints:[process.argv.includes('--base')?'tests/native/base.ts':" +
-                    (f"process.argv.includes('--{extra}')?'tests/native/{extra}.ts':" if extra else '') +
-                    "'tests/native/fallback.ts'],bundle:true});\n")
+                    "await build({entryPoints:[process.argv.includes('--base')?'validation/base.ts':" +
+                    (f"process.argv.includes('--{extra}')?'validation/{extra}.ts':" if extra else '') +
+                    "'validation/fallback.ts'],bundle:true});\n")
         (self.root / name).write_text(builder())
         self.git('add', '.'); self.git('commit', '-qm', 'lab baseline')
         first = self.source('first'); second = self.source('second')
@@ -421,8 +421,8 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
         combined = (self.root / name).read_text()
         self.assertIn("'--base','--first','--second'", combined)
-        self.assertIn("?'tests/native/first.ts':", combined)
-        self.assertIn("?'tests/native/second.ts':", combined)
+        self.assertIn("?'validation/first.ts':", combined)
+        self.assertIn("?'validation/second.ts':", combined)
         self.assertEqual(self.published, ['1.0.1', '1.0.2'])
         self.assertEqual(self.git('status', '--porcelain=v1'), '')
 

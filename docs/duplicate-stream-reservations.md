@@ -23,6 +23,6 @@ their existing path. Existing duplicate response blocks are preserved.
 Regression tests cover missing synced metadata, durable restart, later
 registration, exact source/destination isolation, storage failure, command
 validation, moves and the dispatch acknowledgement boundary.
-`tests/native/stream-reservation-lab.ts` exercises real imports, note sends,
+`validation/stream-reservation-lab.ts` exercises real imports, note sends,
 future-run attachment and saved/native editor output in an isolated vault,
 while withholding watcher settings discovery to reproduce the timing gap.

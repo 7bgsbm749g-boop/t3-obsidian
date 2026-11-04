@@ -1,5 +1,5 @@
 .t3-settings { container-type: inline-size; }
-.t3-settings-header .setting-item-heading { padding: 0; margin: 0 0 8px; border: 0; }
+.t3-settings-header h2 { margin: 0 0 8px; }
 .t3-settings-header p { color: var(--text-muted); margin: 0 0 20px; }
 .t3-settings-tabs {
   display: grid;

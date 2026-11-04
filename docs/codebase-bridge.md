@@ -34,7 +34,7 @@ Right-click a project root for **Rename project…** or **Delete project…**. T
 
 ## Verification
 
-The isolated `tests/native/codebase-lab.ts` runs against external synthetic files through the production bridge. It checks native MarkdownView/code opening, native autosave, bare link routing, conflict preservation, an unchanged physical file inventory, paired native editor refresh, and cached sidebar timing. Build with `node scripts/build-native-response-lab.mjs NEW_PRIVATE_EVIDENCE_DIR --codebase`; launch the returned independent profile. Full product delivery additionally requires the immutable QLO2 release, fresh Sync scan, native client reload and retained live smoke evidence.
+The isolated `validation/codebase-lab.ts` runs against external synthetic files through the production bridge. It checks native MarkdownView/code opening, native autosave, bare link routing, conflict preservation, an unchanged physical file inventory, paired native editor refresh, and cached sidebar timing. Build with `node scripts/build-native-response-lab.mjs NEW_PRIVATE_EVIDENCE_DIR --codebase`; launch the returned independent profile. Full product delivery additionally requires the immutable QLO2 release, fresh Sync scan, native client reload and retained live smoke evidence.
 
 Native iPhone/Android coverage is not available on this VPS. The bridge uses internal Obsidian compatibility hooks; future Obsidian updates need the native regression checks. Third-party vault-wide enumeration continues to see only physical vault files; project links are resolved by this plugin.
 

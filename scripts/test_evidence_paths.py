@@ -38,9 +38,9 @@ class EvidencePathTests(unittest.TestCase):
         for script, extra, message in [
             ('scripts/prepare-remote-delivery-lab.mjs', [], 'Private evidence directory required.'),
             ('scripts/prepare-smart-send-rename-lab.mjs', [], 'Private evidence directory required.'),
-            ('tests/native/connection-health-live.ts', [], 'Private evidence directory required.'),
-            ('tests/native/remote-delivery-api.ts', ['before'], 'Supply a private lab directory'),
-            ('tests/native/remote-delivery-results.ts', [], 'Private lab evidence directory required.'),
+            ('validation/connection-health-live.ts', [], 'Private evidence directory required.'),
+            ('validation/remote-delivery-api.ts', ['before'], 'Supply a private lab directory'),
+            ('validation/remote-delivery-results.ts', [], 'Private lab evidence directory required.'),
         ]:
             with self.subTest(script=script):
                 result = subprocess.run(

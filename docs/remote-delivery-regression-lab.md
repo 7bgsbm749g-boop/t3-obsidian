@@ -30,7 +30,7 @@ two lab Sync services if necessary. Read `LAB.json` for the generated connection
 environment and project IDs. Use `scripts/obsidian-command.py link-folder` in
 both vaults to link `Remote delivery regression` to that isolated project.
 
-Run `tests/native/remote-delivery-api.ts EVIDENCE before`. It requires real read
+Run `validation/remote-delivery-api.ts EVIDENCE before`. It requires real read
 truncation, absence of the small identity record, rejection of the old host,
 and denial of a token that lacks filesystem access. First send the note with
 `--no-stream` to establish a bounded synthetic previous thread. Then send with
