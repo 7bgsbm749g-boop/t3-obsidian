@@ -24,8 +24,8 @@ export default class RunImportLab extends Plugin {
   this.app.workspace.onLayoutReady(()=>void this.run().catch(async error=>{this.write('ERROR.json',{error:String(error),stack:error.stack});await this.capture('error.png');await this.cleanup();}));
  }
  private write(name:string,value:unknown){fs.writeFileSync(path.join(this.root,name),JSON.stringify(value,null,2));}
- private async capture(name:string){const image=await require('@electron/remote').getCurrentWebContents().capturePage();fs.writeFileSync(path.join(this.root,name),image.toPNG());}
- private async nativeCapture(){this.write('NATIVE.json',{expanded:document.querySelector('.send-to-t3-run-row.is-previewing')?.getAttribute('data-t3-import-run'),frames:document.querySelectorAll('.send-to-t3-run-preview iframe').length,modalText:document.querySelector('.send-to-t3-run-picker')?.textContent});await this.capture('native-check.png');}
+ private async capture(name:string){const doc=this.picker?.modalEl.ownerDocument??document,win=doc.defaultView as any,remote=win.require?win.require('@electron/remote'):require('@electron/remote');const image=await remote.getCurrentWebContents().capturePage();fs.writeFileSync(path.join(this.root,name),image.toPNG());}
+ private async nativeCapture(){const doc=this.picker?.modalEl.ownerDocument??document;this.write('NATIVE.json',{expanded:doc.querySelector('.send-to-t3-run-row.is-previewing')?.getAttribute('data-t3-import-run'),frames:doc.querySelectorAll('.send-to-t3-run-preview iframe').length,modalText:doc.querySelector('.send-to-t3-run-picker')?.textContent});await this.capture('native-check.png');}
  private makeViews(){const cache=new Map();return new HtmlResultViews(this.app,new HtmlResultStore({read:async key=>cache.get(key),write:async(key,value)=>{cache.set(key,value);}},async()=>({origin:'https://fixture.test',api:async(route,payload)=>{
   if(route==='/api/orchestration/turn-item'){const ref=this.references.find(r=>r.itemId===payload.itemId)!;return {id:ref.itemId,threadId:ref.threadId,runId:ref.runId,type:'dynamic_tool',toolName:'t3-code.html_render',status:'completed',updatedAt:ref.revision,output:{htmlRender:ref}};}
   return {relativeUrl:'/api/assets/'+payload.resource.attachmentId,expiresAt:Date.now()+60000};
@@ -36,7 +36,7 @@ export default class RunImportLab extends Plugin {
   this.picker=new RunImportPicker(this.app,this.runs,run=>new ImportRunModal(this.app,'Reference.md',{id:'source',projectId:'fixture',updatedAt:'2026-10-27T22:42:06.279Z',title:'Logile fixture',status:'Idle'},run,async()=>{throw Error('Fixture never imports or dispatches');}).open(),async(run,el,child,signal)=>{
    if(!baseline)return renderRunImportPreview(this.app,run,el,child,signal,views);
    el.empty();await MarkdownRenderer.render(this.app,run.preview!.body,el,'',child);
-   for(const ref of run.preview!.html){if(signal.aborted)return;const mounted=views.mount(ref,document,false,undefined,{passive:true});el.append(mounted.root);child.register(()=>mounted.dispose());}
+   for(const ref of run.preview!.html){if(signal.aborted)return;const mounted=views.mount(ref,el.ownerDocument,false,undefined,{passive:true});el.append(mounted.root);child.register(()=>mounted.dispose());}
   });this.picker.scope.register([],'F12',()=>{void this.nativeCapture();return false;});this.picker.open();return this.picker;
  }
  private async trial(baseline:boolean,cold:boolean){
@@ -54,7 +54,7 @@ export default class RunImportLab extends Plugin {
   if(before.height!==after.height||before.width!==after.width||below<2)throw Error('Popup resized or lost following rows');
   const result={preparedMs:prepared,paintMs:paint,revealMs:performance.now()-start,frames,downloads:this.downloads-downloads,followingRows:below,modalHeight:after.height};
   if(!baseline&&!cold)await this.capture('preview-'+Date.now()+'.png');
-  this.picker!.close();this.picker=undefined;await pause(300);if(document.querySelector('.send-to-t3-run-preview'))throw Error('Preview was not disposed');return result;
+  this.picker!.close();this.picker=undefined;await pause(300);if(modal.ownerDocument.querySelector('.send-to-t3-run-preview'))throw Error('Preview was not disposed');return result;
  }
  private async run(){
   const fixtures=path.join(this.root,'fixtures');

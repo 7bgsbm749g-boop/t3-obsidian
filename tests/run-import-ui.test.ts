@@ -62,17 +62,18 @@ test('run preview dwell, stale work, search names and modal cleanup share one li
  const timers=new Map<number,()=>void>();let timer=0,unloads=0;
  class Element {
   children:Element[]=[];events:Record<string,Function>={};dataset:Record<string,string>={};classes=new Set<string>();isConnected=true;clientHeight=440;scrollTop=0;nextElementSibling?:Element;
-  attrs:Record<string,string>={};style={setProperty(){}};text='';
+  attrs:Record<string,string>={};style={setProperty(){}};text='';ownerDocument:any;
   setText(text:string){this.text=text;}setAttribute(k:string,v:string){this.attrs[k]=v;}removeAttribute(k:string){delete this.attrs[k];}
   addClass(name:string){this.classes.add(name);}removeClass(name:string){this.classes.delete(name);}
   addEventListener(k:string,v:Function){this.events[k]=v;}removeEventListener(k:string){delete this.events[k];}
-  createDiv(options:any={}){const el=new Element();el.text=options.text??'';this.children.push(el);return el;}
+  createDiv(options:any={}){const el=new Element();el.ownerDocument=this.ownerDocument;el.text=options.text??'';this.children.push(el);return el;}
   createSpan(options:any={}){return this.createDiv(options);}remove(){this.isConnected=false;}
   getBoundingClientRect(){return {top:0,bottom:440,height:44};}querySelector(){return undefined;}
  }
  class Component {load(){}unload(){unloads++;}}
  const panel=new Element(),modal=new Element() as any;
- modal.ownerDocument={defaultView:{MutationObserver:class{observe(){}disconnect(){}}}};modal.querySelector=()=>panel;
+ const keyEvents:Record<string,Function>={};
+ modal.ownerDocument={defaultView:{MutationObserver:class{observe(){}disconnect(){}},addEventListener:(key:string,callback:Function)=>{keyEvents[key]=callback;},removeEventListener:(key:string)=>{delete keyEvents[key];},setTimeout:(callback:()=>void)=>{timers.set(++timer,callback);return timer;},clearTimeout:(id:number)=>timers.delete(id)}};modal.querySelector=()=>panel;
  class Suggest {modalEl=modal;inputEl=new Element();emptyStateText='';setPlaceholder(){}onOpen(){}onClose(){}}
  const module={exports:{} as any},realRequire=createRequire(import.meta.url);
  runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Component,FuzzySuggestModal:Suggest,Modal:Suggest,setIcon(){}}:realRequire(id),AbortController,queueMicrotask,
@@ -81,11 +82,13 @@ test('run preview dwell, stale work, search names and modal cleanup share one li
  const late=deferred<void>(),requests:any[]=[],picked:any[]=[];
  const picker=new module.exports.RunImportPicker({},[base,{...base,messageId:'second'},{...base,status:'Unavailable'},{...base,unavailable:'New reason'}],(run:any)=>picked.push(run),async(run:any,el:any,child:any,signal:any)=>{requests.push({run,el,child,signal});if(requests.length===1)await late.promise;});
  picker.onOpen();assert.equal(picker.getItems().length,2);assert.equal(picker.getItemText(base),base.prompt.trimEnd());
- const first=new Element(),second=new Element();picker.renderSuggestion({item:base},first);picker.renderSuggestion({item:{...base,messageId:'second'}},second);
+ const first=new Element(),second=new Element();first.ownerDocument=second.ownerDocument=modal.ownerDocument;picker.renderSuggestion({item:base},first);picker.renderSuggestion({item:{...base,messageId:'second'}},second);
  first.events.pointerenter();assert.equal(requests.length,1);assert.equal(first.classes.has('is-previewing'),false);
  second.events.pointerenter();assert.equal(requests.length,2);assert.equal(requests[0].signal.aborted,true);assert.equal(unloads,1);
  for(const callback of [...timers.values()])callback();assert.equal(first.classes.has('is-previewing'),false);assert.equal(second.classes.has('is-previewing'),true);
  late.resolve();await drain();assert.equal(first.classes.has('is-previewing'),false);
+ keyEvents.keydown({key:'ArrowDown'});await drain();first.events.pointerenter();assert.equal(requests.length,2,'layout hover cannot replace keyboard selection');
+ first.events.pointermove({movementX:2,movementY:0});assert.equal(requests.length,3,'actual pointer movement restores hover control');
  picker.onChooseItem({...base,unavailable:'Late failure'});assert.equal(picked.length,0);
- picker.onClose();assert.equal(requests[1].signal.aborted,true);assert.equal(unloads,2);assert.equal(second.classes.has('is-previewing'),false);assert.equal(timers.size,0);
+ picker.onClose();assert.equal(requests[2].signal.aborted,true);assert.equal(unloads,3);assert.equal(second.classes.has('is-previewing'),false);assert.equal(timers.size,0);assert.equal(keyEvents.keydown,undefined);
 });

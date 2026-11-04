@@ -16,10 +16,11 @@ export const RUN_PREVIEW_DELAY=500;
  * Only its run rows and the owned preview have a custom presentation. */
 export class RunImportPicker extends FuzzySuggestModal<ImportRun>{
   private active?:{run:ImportRun;row:HTMLElement;root:HTMLElement;child:Component;abort:AbortController};
-  private timer?:ReturnType<typeof setTimeout>;
-  private exitTimer?:ReturnType<typeof setTimeout>;
+  private timer?:number;
+  private exitTimer?:number;
   private observer?:MutationObserver;
   private closed=false;
+  private keyboardPreview=false;
   constructor(app:App,private runs:ImportRun[],private choose:(run:ImportRun)=>void,private preview:(run:ImportRun,el:HTMLElement,child:Component,signal:AbortSignal)=>Promise<void>){
     super(app);this.setPlaceholder('Choose a T3 response');this.emptyStateText='No available runs.';
   }
@@ -31,8 +32,9 @@ export class RunImportPicker extends FuzzySuggestModal<ImportRun>{
     icon.dataset.status=run.status;
     if(run.status!=='Running')setIcon(icon,run.status==='Completed'?'check':run.status==='Failed'?'x':'pause');
     heading.createSpan({cls:'send-to-t3-run-name',text:this.getItemText(run)});
-    el.addEventListener('pointerenter',()=>this.prepare(run,el));
-    el.addEventListener('pointerleave',()=>{this.exitTimer=setTimeout(()=>this.clear(),140);});
+    el.addEventListener('pointerenter',()=>{if(!this.keyboardPreview)this.prepare(run,el);});
+    el.addEventListener('pointermove',event=>{if(event.movementX||event.movementY){this.keyboardPreview=false;this.prepare(run,el);}});
+    el.addEventListener('pointerleave',()=>{if(!this.keyboardPreview)this.exitTimer=el.ownerDocument.defaultView!.setTimeout(()=>this.clear(),140);});
     el.addEventListener('focusin',()=>this.prepare(run,el));
   }
   onOpen(){
@@ -43,17 +45,19 @@ export class RunImportPicker extends FuzzySuggestModal<ImportRun>{
       // Arrow keys change the native selected class. Pointer selection is
       // handled by pointerenter, so layout changes never restart the dwell.
     });this.observer.observe(this.modalEl,{childList:true,subtree:true});
-    this.inputEl.addEventListener('keydown',this.keyboard);
+    win.addEventListener('keydown',this.keyboard,true);
   }
   private keyboard=(event:KeyboardEvent)=>{
     if(!['ArrowDown','ArrowUp'].includes(event.key))return;
+    this.keyboardPreview=true;
     queueMicrotask(()=>{
       const row=this.modalEl.querySelector<HTMLElement>('.suggestion-item.is-selected'),id=row?.dataset.t3ImportRun,run=this.runs.find(item=>item.messageId===id);
       if(row&&run)this.prepare(run,row);
     });
   };
   private prepare(run:ImportRun,row:HTMLElement){
-    if(this.exitTimer)clearTimeout(this.exitTimer);this.exitTimer=undefined;
+    const win=row.ownerDocument.defaultView!;
+    if(this.exitTimer)win.clearTimeout(this.exitTimer);this.exitTimer=undefined;
     if(this.closed||this.active?.row===row)return;
     this.clear();const child=new Component();child.load();const abort=new AbortController();
     const root=row.createDiv({cls:'send-to-t3-run-preview'}),body=root.createDiv({cls:'send-to-t3-run-preview-body'});
@@ -64,7 +68,7 @@ export class RunImportPicker extends FuzzySuggestModal<ImportRun>{
     const active={run,row,root,child,abort};this.active=active;
     body.createDiv({cls:'send-to-t3-run-preview-loading',text:'Loading preview…'});
     void this.preview(run,body,child,abort.signal).catch(()=>{if(!abort.signal.aborted)body.setText('Preview could not be loaded. You can still import this run.');});
-    this.timer=setTimeout(()=>{
+    this.timer=win.setTimeout(()=>{
       if(this.active!==active||!row.isConnected)return;
       row.addClass('is-previewing');row.setAttribute('aria-expanded','true');
       // Keep up to two following rows in view, within the existing scroll box.
@@ -76,12 +80,13 @@ export class RunImportPicker extends FuzzySuggestModal<ImportRun>{
     },RUN_PREVIEW_DELAY);
   }
   private clear(){
-    if(this.timer)clearTimeout(this.timer);if(this.exitTimer)clearTimeout(this.exitTimer);this.timer=undefined;this.exitTimer=undefined;
+    const win=this.modalEl.ownerDocument.defaultView!;
+    if(this.timer)win.clearTimeout(this.timer);if(this.exitTimer)win.clearTimeout(this.exitTimer);this.timer=undefined;this.exitTimer=undefined;
     const previous=this.active;this.active=undefined;
     if(previous){previous.abort.abort();previous.child.unload();previous.root.remove();previous.row.removeClass('is-previewing');previous.row.removeAttribute('aria-expanded');}
   }
   onChooseItem(run:ImportRun){if(availableImportRun(run))this.choose(run);}
-  onClose(){this.closed=true;this.clear();this.observer?.disconnect();this.inputEl.removeEventListener('keydown',this.keyboard);super.onClose();}
+  onClose(){this.closed=true;this.clear();this.observer?.disconnect();this.modalEl.ownerDocument.defaultView!.removeEventListener('keydown',this.keyboard,true);super.onClose();}
 }
 class ImportPicker<T> extends FuzzySuggestModal<T>{
   constructor(app:App,private items:T[],private label:(item:T)=>string,private choose:(item:T)=>Promise<void>,placeholder:string){super(app);this.setPlaceholder(placeholder);this.emptyStateText='No available items. Check the T3 connection.';}
