@@ -39,3 +39,26 @@ class AlphaPolicyTests(unittest.TestCase):
         self.assertEqual(policy.reload_request_version(self.root, '0.0.377-alpha', '2.45.80'), '2.45.80')
 
         self.assertEqual(policy.reload_request_version(self.root, '0.0.378-alpha', '2.45.55'), '2.45.55')
+
+    def test_numeric_manifest_keeps_alpha_stage_and_orders_after_legacy_receipts(self):
+        path = self.root / 'release-policy.json'
+        value = json.loads(path.read_text())
+        path.write_text(json.dumps({**value, 'versionFormat': '0.0.BUILD'}))
+        self.assertEqual(policy.policy(self.root)['stage'], 'alpha')
+        for kind in ['patch', 'minor', 'major', 'none']:
+            self.assertEqual(policy.bump(self.root, '0.0.381-alpha', kind), '0.0.382')
+            self.assertEqual(policy.bump(self.root, '0.0.382', kind), '0.0.383')
+        self.assertTrue(policy.newer(self.root, '0.0.382', '0.0.381-alpha'))
+        self.assertFalse(policy.newer(self.root, '0.0.380', '0.0.381-alpha'))
+        self.assertFalse(policy.newer(self.root, '0.0.382', '2.45.81'))
+        with self.assertRaises(ValueError):
+            policy.bump(self.root, '2.45.81', 'patch')
+        self.assertFalse(policy.newer(self.root, '0.0.382', '0.0.382'))
+        self.assertGreater(policy.order_key(self.root, '0.0.382'), policy.order_key(self.root, '2.45.81'))
+        self.assertEqual(policy.release_title(self.root, '0.0.382'), 't3-obsidian 0.0.382 (Alpha)')
+        self.assertEqual(policy.release_title(self.root, '0.0.381-alpha'), 't3-obsidian 0.0.381-alpha')
+        self.assertEqual(policy.reload_request_version(self.root, '0.0.382', '2.45.81'), '0.0.382')
+        self.assertEqual(policy.reload_request_version(self.root, '0.0.382', '0.0.381-alpha'), '0.0.382')
+        for target in ['0.0.382-alpha', '0.0.382-beta', '0.1.0', '1.0.0', '0.0.0382', '0.0.1']:
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                policy.require_target(self.root, target)

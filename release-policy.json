@@ -1,7 +1,9 @@
 {
   "schemaVersion": 1,
   "stage": "alpha",
-  "versionFormat": "0.0.BUILD-alpha",
+  "versionFormat": "0.0.BUILD",
+  "releaseTitle": "t3-obsidian VERSION (Alpha)",
+  "githubPrerelease": false,
   "firstAlphaVersion": "0.0.377-alpha",
   "transitionFrom": "2.45.81",
   "graduation": "Requires an explicit user instruction to leave alpha.",

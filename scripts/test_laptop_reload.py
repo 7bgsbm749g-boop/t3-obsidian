@@ -61,6 +61,24 @@ class LaptopReloadTests(unittest.TestCase):
                 path.write_text(json.dumps({'version': version, 'status': 'awaiting-live-smoke', 'releaseFileSha256': {n: 'a' * 64 for n in reload.RUNTIME}}))
             self.assertEqual(reload.latest_release()['version'], '3.4.7')
 
+    def test_numeric_alpha_receipt_wins_and_uses_exact_numeric_reload_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'release-policy.json').write_text(json.dumps({'schemaVersion': 1, 'stage': 'alpha', 'versionFormat': '0.0.BUILD', 'firstAlphaVersion': '0.0.377-alpha', 'transitionFrom': '2.45.81'}))
+            receipts = root / 'receipts'
+            for version in ['2.45.81', '0.0.381-alpha', '0.0.382']:
+                path = receipts / version / 'deployment.json'; path.parent.mkdir(parents=True)
+                path.write_text(json.dumps({'version': version, 'status': 'awaiting-live-smoke', 'releaseFileSha256': {n: 'a' * 64 for n in reload.RUNTIME}}))
+            calls = []
+            def mailbox(config, command, **kwargs):
+                calls.append(command)
+                return {'ok': True, 'client': {'loadedVersion': '2.45.81', 'instanceId': 'legacy'}} if command['kind'] == 'client-status' else {'ok': True, 'reloadScheduled': True}
+            with patch.object(reload, 'ROOT', root), patch.object(reload, 'RECEIPTS', receipts), patch.object(reload, 'STATE', root), patch.object(reload, 'mailbox', mailbox):
+                latest = reload.latest_release()
+                self.assertEqual(latest['version'], '0.0.382')
+                self.assertEqual(reload.attempt({'host': 'laptop', 'vault': 'vault'}, latest, {})['status'], 'pending')
+                self.assertEqual(calls[-1]['releaseVersion'], '0.0.382')
+
 
 if __name__ == '__main__':
     unittest.main()

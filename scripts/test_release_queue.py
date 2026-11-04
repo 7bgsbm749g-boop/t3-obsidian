@@ -102,6 +102,15 @@ class ReleaseQueueTests(unittest.TestCase):
         queue.write(directory / 'state.json', {'status': 'queued', 'version': '0.0.377-alpha', 'reservedVersions': ['0.0.378-alpha']})
         self.assertEqual(queue.next_version(self.release, directory, {'bump': 'minor'}), '0.0.379-alpha')
 
+    def test_numeric_alpha_assignment_counts_both_formats_and_reserved_builds(self):
+        queue.write(self.root / 'release-policy.json', {'schemaVersion': 1, 'stage': 'alpha', 'versionFormat': '0.0.BUILD', 'firstAlphaVersion': '0.0.377-alpha', 'transitionFrom': '2.45.81'})
+        source = self.source('numeric-alpha-work'); job = self.submit(source)
+        directory = queue.job_path(self.store, job['jobId'])
+        queue.write(self.root / 'manifest.json', {'version': '0.0.381-alpha'})
+        self.assertEqual(queue.next_version(self.release, directory, {'bump': 'major'}), '0.0.382')
+        queue.write(directory / 'state.json', {'status': 'queued', 'version': '0.0.382', 'reservedVersions': ['0.0.383', '2.45.81']})
+        self.assertEqual(queue.next_version(self.release, directory, {'bump': 'none'}), '0.0.384')
+
     def test_bootstrap_integrates_only_the_exact_fifo_tooling_repair_then_restarts(self):
         source = self.tooling_source()
         submitted = self.submit(source)
