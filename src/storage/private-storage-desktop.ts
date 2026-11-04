@@ -1,5 +1,4 @@
 import {Buffer} from 'node:buffer';
-/* eslint obsidianmd/no-nodejs-modules: ["warn", {"isDesktopOnly": true}] -- This desktop adapter is lazy-loaded; scripts/check-platform-boundaries.mjs and mobile bundle tests prohibit Node imports in the portable entry graph. */
 import {errorCode,toError,isRecord,parseJson} from '../shared/values';
 import {promises as fs} from 'node:fs';
 import {join,resolve,dirname,isAbsolute} from 'node:path';

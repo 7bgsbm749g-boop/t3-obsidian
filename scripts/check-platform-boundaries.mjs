@@ -7,7 +7,9 @@ async function walk(directory){for(const file of await readdir(directory,{withFi
 await walk(join(root,'src'));
 const known=new Set(files),graph=new Map(),nodeFiles=new Set();
 for(const file of files){
- const text=await readFile(file,'utf8'),source=ts.createSourceFile(file,text,ts.ScriptTarget.Latest,true),edges=[];
+ const text=await readFile(file,'utf8');
+ if(/eslint[^\n]*obsidianmd\/no-nodejs-modules/.test(text))throw Error(`Unsupported inline desktop-rule options in ${relative(root,file)}`);
+ const source=ts.createSourceFile(file,text,ts.ScriptTarget.Latest,true),edges=[];
  for(const declaration of source.statements){
   if(!ts.isImportDeclaration(declaration)&&!ts.isExportDeclaration(declaration)||!declaration.moduleSpecifier||!ts.isStringLiteral(declaration.moduleSpecifier)||declaration.isTypeOnly)continue;
   const clause=declaration.importClause;
@@ -15,7 +17,7 @@ for(const file of files){
   const name=declaration.moduleSpecifier.text;
   if(isBuiltin(name)){
    if(name==='buffer')throw Error(`${relative(root,file)} must select the browser buffer/ package explicitly`);
-   if(!/(?:^|\/)desktop(?:-|\.)|\-desktop\.ts$/.test(relative(root,file))||!text.includes('"isDesktopOnly": true'))throw Error(`${relative(root,file)} has no explicit desktop boundary`);
+   if(!/(?:^|\/)desktop(?:-|\.)|\-desktop\.ts$/.test(relative(root,file)))throw Error(`${relative(root,file)} has no explicit desktop boundary`);
    nodeFiles.add(file);
   }
   if(name.startsWith('.')){const prefix=resolve(dirname(file),name),target=[prefix,prefix+'.ts',join(prefix,'index.ts')].find(candidate=>known.has(candidate));if(target)edges.push(target)}

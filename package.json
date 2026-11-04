@@ -1,8 +1,8 @@
 {
   "name": "t3-obsidian",
-  "version": "0.0.388",
+  "version": "0.0.390",
   "private": true,
-  "description": "Bring T3 Code into Obsidian. Send notes as prompts, stream replies into the editor, and more.",
+  "description": "Bring T3 Code into your vault. Send notes as prompts, stream replies into the editor, and more.",
   "license": "MIT",
   "repository": {
     "type": "git",

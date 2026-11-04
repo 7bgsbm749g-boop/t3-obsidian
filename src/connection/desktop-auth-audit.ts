@@ -1,5 +1,4 @@
 import {errorCode} from '../shared/values';
-/* eslint obsidianmd/no-nodejs-modules: ["warn", {"isDesktopOnly": true}] -- This desktop adapter is lazy-loaded; scripts/check-platform-boundaries.mjs and mobile bundle tests prohibit Node imports in the portable entry graph. */
 import {promises as fs} from 'node:fs';
 import {join} from 'node:path';
 import type {ThreadAccessCloseReason} from '../conversations/thread-stream';

@@ -3,7 +3,6 @@ import {isRecord,parseJson} from '../shared/values';
 import type {WireProject} from './wire-types';
 import type {T3Api} from './t3-rpc';
 import {readWireProjects,readThreadList,readMetadataSnapshot} from './wire-readers';
-/* eslint obsidianmd/no-nodejs-modules: ["warn", {"isDesktopOnly": true}] -- This desktop adapter is lazy-loaded; scripts/check-platform-boundaries.mjs and mobile bundle tests prohibit Node imports in the portable entry graph. */
 import {clearTimeout,setTimeout} from 'node:timers';
 import {errorCode,toError} from '../shared/values';
 import {T3_RESPONSE_MAX_BYTES,T3ResponseTooLargeError} from './t3-response-limits';
