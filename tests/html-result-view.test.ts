@@ -38,7 +38,7 @@ function documentFixture(){
  const doc:any={createElement:(tag:string)=>new Element(tag,doc),body:{classList:{contains:()=>false}}};
  doc.defaultView={getComputedStyle:()=>({getPropertyValue:()=>'',fontFamily:'sans-serif'}),navigator:{},addEventListener:(type:string,handler:any)=>listeners.set(type,handler),removeEventListener:(type:string)=>listeners.delete(type),
   ResizeObserver:class{observe(){}disconnect(){}},Blob,URL:{createObjectURL:(blob:Blob)=>{const url='blob:html-test-'+ ++created;blobs.set(url,blob);return url;},revokeObjectURL:(url:string)=>{blobs.delete(url);revoked.push(url);}},
-  DOMParser:class{parseFromString(html:string){parses++;return {head:{prepend(){}},createElement:()=>({}),documentElement:{outerHTML:html}};}}};
+  DOMParser:class{parseFromString(html:string){parses++;return {head:{children:[],prepend(){}},documentElement:{outerHTML:html}};}}};
  return {doc,blobs,revoked,listeners,get parses(){return parses;}};
 }
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
@@ -167,8 +167,8 @@ test('remounting a verified page reuses its prepared document and retains separa
  const module=await production(),document=documentFixture();let html=page;
  const views=new module.HtmlResultViews({},{get:async()=>html,dispose(){}});
  const first=views.mount(reference,document.doc);await loaded(first.root);const firstUrl=first.root.find('iframe').src;first.dispose();
- const second=views.mount(reference,document.doc);await loaded(second.root);assert.equal(document.parses,1);assert.notEqual(second.root.find('iframe').src,firstUrl);assert.equal(document.blobs.size,1);
- html=page+'<p>New bytes</p>';const changed=views.mount(reference,document.doc);await loaded(changed.root);assert.equal(document.parses,2,'Changed verified bytes cannot reuse a different document');
+ const second=views.mount(reference,document.doc);await loaded(second.root);assert.equal(document.parses,2);assert.notEqual(second.root.find('iframe').src,firstUrl);assert.equal(document.blobs.size,1);
+ html=page+'<p>New bytes</p>';const changed=views.mount(reference,document.doc);await loaded(changed.root);assert.equal(document.parses,4,'Changed verified bytes cannot reuse a different document');
  views.dispose();assert.equal(document.blobs.size,0);
 });
 test('passive previews cannot take focus, submit forms, open links or expand the viewer',async()=>{

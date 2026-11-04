@@ -83,7 +83,11 @@ The parent recognizes only size, theme, bounded Escape, and HTTP(S) link message
 Link and Escape requests must come from that exact focused frame while the host
 has user activation. No plugin or Node API is exposed. A local content policy
 excludes file and Obsidian protocols. The original HTML remains cached unchanged;
-the render copy adds this policy and Escape handling.
+the render copy adds this policy and Escape handling from a fixed, source-visible
+HTML bootstrap. Both documents are parsed while inert, then serialized together
+into the sandboxed blob. The host creates no script element in a running document
+and fetches no bridge code. The fixed bridge also reports readiness after fonts
+load and two animation frames; authored page scripts remain inside the sandbox.
 
 T3's existing bootstrap receives the Obsidian theme before first paint through
 the `t3-theme` fragment, then follows CSS changes through its normal host-context

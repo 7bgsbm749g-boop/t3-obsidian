@@ -28,17 +28,37 @@ function themeFor(doc:Document):Theme {
 }
 const themeMessage=(theme:Theme)=>({jsonrpc:'2.0',method:'ui/notifications/host-context-changed',params:{theme:theme.appearance,styles:{variables:theme.variables}}});
 
-/** Adds only a bounded Escape bridge. The stored T3 bootstrap owns document
- * sizing, theme and link messages. No Obsidian API is exposed inside the page. */
+// Source-visible, fixed bootstrap for the standalone sandbox document. It has
+// no remote src and is never inserted into the Obsidian document. Authored HTML
+// retains its own sizing, theme and link bootstrap; this adds only viewer events.
+const viewerHead=`<meta http-equiv="Content-Security-Policy" content="default-src http: https: data: blob:; script-src http: https: data: blob: 'unsafe-inline' 'unsafe-eval'; style-src http: https: data: blob: 'unsafe-inline'; connect-src http: https: ws: wss:; base-uri http: https:; form-action http: https:">
+<script>
+window.addEventListener('keydown', function(event) {
+  if (event.isTrusted && event.key === 'Escape' && !event.defaultPrevented) {
+    window.parent.postMessage({jsonrpc:'2.0', method:'t3/notifications/escape'}, '*');
+  }
+}, false);
+window.addEventListener('load', function() {
+  Promise.resolve(document.fonts && document.fonts.ready).then(function() {
+    window.parent.postMessage({jsonrpc:'2.0', method:'t3/notifications/preview-ready'}, '*');
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        window.parent.postMessage({jsonrpc:'2.0', method:'t3/notifications/preview-painted'}, '*');
+      });
+    });
+  });
+}, {once:true});
+</script>`;
+
+/** Prepare an inert render copy, then load it as one sandboxed blob document.
+ * No script elements are created or injected into a running document. */
 function viewerDocument(html:string,doc:Document):string {
-  const parsed=new (doc.defaultView! as Window&typeof globalThis).DOMParser().parseFromString(html,'text/html');
+  const parser=new (doc.defaultView! as Window&typeof globalThis).DOMParser();
+  const parsed=parser.parseFromString(html,'text/html');
   // A blob document has no vault-relative base. Keep its own hash links while
   // excluding Obsidian/file protocols from subresource and form requests.
-  const policy=parsed.createElement('meta');policy.httpEquiv='Content-Security-Policy';policy.content="default-src http: https: data: blob:; script-src http: https: data: blob: 'unsafe-inline' 'unsafe-eval'; style-src http: https: data: blob: 'unsafe-inline'; connect-src http: https: ws: wss:; base-uri http: https:; form-action http: https:";
-  // This fixed inline handler has no src and is never attached to Obsidian's
-  // document. It is serialized into the opaque-origin sandboxed blob below.
-  const bridge=parsed.createElement('script');bridge.textContent='window.addEventListener("keydown",function(e){if(e.isTrusted&&e.key==="Escape"&&!e.defaultPrevented){window.parent.postMessage({jsonrpc:"2.0",method:"t3/notifications/escape"},"*");}},false);window.addEventListener("load",function(){Promise.resolve(document.fonts&&document.fonts.ready).then(function(){window.parent.postMessage({jsonrpc:"2.0",method:"t3/notifications/preview-ready"},"*");requestAnimationFrame(function(){requestAnimationFrame(function(){window.parent.postMessage({jsonrpc:"2.0",method:"t3/notifications/preview-painted"},"*");});});});},{once:true});';
-  parsed.head.prepend(policy,bridge);
+  const bootstrap=parser.parseFromString(viewerHead,'text/html');
+  parsed.head.prepend(...Array.from(bootstrap.head.children));
   return '<!doctype html>\n'+parsed.documentElement.outerHTML;
 }
 
