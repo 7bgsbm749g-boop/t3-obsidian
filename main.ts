@@ -1,6 +1,6 @@
 import {SendPreviews} from './send-preview';
 import {savedToDisplay} from './native-response-projection';
-import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,recoverSmartNote,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from './smart-send';
+import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,explicitSelectionText,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,recoverSmartNote,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from './smart-send';
 import {DuplicateResponseLocation} from './response-location';
 import {noteIdentity,noteIdentityRanges,withNoteIdentity,uniqueNoteLocation} from './note-identity';
 import {streamBlocks} from './stream-block';
@@ -1272,7 +1272,7 @@ export default class SendToT3 extends Plugin {
     return Object.values(data.heads).some(head=>{const note=data.notes[head.noteId];return note?.path===path&&!note.deleted;});
   }
   private async hasSmartContent(file:TFile,destination:ChatDestination,context?:EditorChatContext){
-    if(context?.smartQuestion?.trim()||context?.referenceSelection)return true;
+    if(context?.smartQuestion?.trim()||context?.referenceSelection||context?.smartScope&&context.smartScope[1]>context.smartScope[0])return true;
     if(!file)return true;
     const selected=isNoProjectKey(destination.projectKey)?this.noProjectProjects.get(noProjectMachine(destination.projectKey!)??this.defaultNoProjectMachine()??''):undefined;
     const project=selected??[...this.settings.projects,...this.settings.directProjects].find(project=>projectKey(project)===destination.projectKey);
@@ -2185,10 +2185,10 @@ export default class SendToT3 extends Plugin {
         await this.recoverSmartReplies(note.path,context.smartDocument!);
         const plan=await prepareSmartSend(this.smartData(),note.path,await this.smartKey(project,connection,threadId??''),context.smartDocument!,context.smartScope);
         const question=context.smartQuestion??'';
-        const reference=context.referenceSelection?context.canonicalAnchor?.text??context.anchor?.text:'';
-        const selected=context.canonicalAnchor?.text??context.anchor?.text??(context.smartScope?context.smartDocument!.slice(...context.smartScope):'');
-        const selectionReference=!reference&&!plan.text.trim()&&question.trim()&&selected?`Selection reference: ${selected.slice(0,160)}${selected.length>160?'…':''}`:'';
-        const material=reference?`Selected text:\n${reference}`:plan.text||selectionReference;
+        const selected=context.smartScope?explicitSelectionText(context.snapshot??context.smartDocument!,context.smartScope):context.canonicalAnchor?.text??context.anchor?.text??'';
+        // Explicit selections are deliberate input, including text delivered
+        // before. Keep the normal capture/ranges for coverage and safe cleanup.
+        const material=context.referenceSelection&&selected?`Selected text:\n${selected}`:context.smartScope?selected:plan.text;
         if(!material.trim()&&!question.trim()){new Notice('Nothing new to send.');return;}
         preparedInput=[material,question.trim()?`**USER ASKS:**\n${question}`:''].filter(Boolean).join('\n\n');
         prompt=preparedInput;smartCapture=plan.capture;

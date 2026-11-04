@@ -17,7 +17,15 @@ checks cancellation, explicit thread choice, confirmed continuation, selection
 Ask, and import-only history in a separate vault. It uses synthetic acceptance
 and creates no external T3 threads; QLO2 delivery has separate client/Sync checks.
 
-Only additions are sent, in current note order. Removals produce no message;
+The `--selection-resend` native fixture sends one long selection twice, then
+resends it with a question, through three real T3 deliveries in a dedicated
+temporary project. It checks exact canonical messages and completed provider
+responses, and deletes the temporary thread and notes. Streaming is disabled
+for that fixture; regression tests cover running-response steering separately.
+
+Automatic note context sends only additions, in current note order. Explicit
+selections send their complete captured text every time, with or without a
+question, even when the same thread has already received that text. Removals produce no message;
 replacement text is added text with no correction/deletion labels. Preparing a
 request does not confirm coverage. The immutable request captures its source
 and covered character intervals before dispatch; confirmed T3 acceptance
@@ -31,17 +39,18 @@ type/folding markers for both sent source and saved replies. New text retains
 its Markdown wrappers. Custom callout titles, code, escapes, link destinations,
 numbers, and task states remain meaningful; changing a task state sends its
 complete checkbox marker. Existing receipts keep their original source offsets.
-Editor and palette selections limit source context to their requested intervals;
-they do not attach the rest of the note. A typed Ask without a selection uses
+Editor and palette selections send all text in their requested intervals;
+they bypass sent-text filtering and do not attach the rest of the note. Private
+tracking comments remain excluded; literal examples inside code remain text. A typed Ask without a selection uses
 eligible unsent note text plus the question. The Files sidebar Send considers
 the whole note regardless of editor selection. This source scope is separate
 from the per-thread filter for already delivered text. New destinations
 start with no coverage. Typed questions always send independently of source
-coverage. An Ask about already delivered selected source includes a bounded
-160-character reference. An explicitly selected generated reply remains
+coverage. An Ask about already delivered selected source includes that full selection,
+without a length-limited reference. An explicitly selected generated reply remains
 available as quoted Ask context, including when choosing another thread.
-No new source for the default destination opens the selector and
-hides its previous/continue action; an explicit empty submission shows the
+With no explicit selection or question, no new source for the default
+destination opens the selector and hides its previous/continue action; an explicit empty submission shows the
 short no-content notice.
 
 Attaching an imported run sets that source as the note's previous thread, even
@@ -55,7 +64,9 @@ machine, project, thread, and active provider turn against the responses still
 attached to the destination note. A matching response is steered in place and
 keeps its original streaming and formatting choices, including when the new
 draft has streaming switched off. The steering transcript uses the same
-prepared source delta and question as the delivered message. Mirrored notes
+prepared source text and question as the delivered message. Explicit selections
+remain complete in both; cleanup ranges still include only newly delivered
+ordinary source, so a repeated selection cannot remove previously sent text. Mirrored notes
 reuse their own matching streams; only new destinations receive new blocks.
 Completed responses and explicit new threads receive independent blocks.
 Confirmed steering moves its newly sent source out of the editor as soon as

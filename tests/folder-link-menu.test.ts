@@ -651,7 +651,7 @@ test('whole-note sends, command-bar asks and confirmed receipts use one Smart Se
   assert.equal(sent.length,3);assert.match(sent[2].prompt,/\*\*USER ASKS:\*\*\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Second instruction|Agent final/);
   const selected='First instruction.',firstAnchor={text:selected,start:0,end:selected.length,before:'',after:document.slice(selected.length,selected.length+80)};
   await h.plugin.openManualAction(file,'Which passage?',selected,{editor,view,anchor:firstAnchor,canonicalAnchor:firstAnchor,snapshot:document},false);
-  assert.equal(sent.length,4);assert.match(sent[3].prompt,/Selection reference: First instruction\./);assert.doesNotMatch(sent[3].prompt,/Second instruction|Agent final/);
+  assert.equal(sent.length,4);assert.match(sent[3].prompt,/First instruction\./);assert.doesNotMatch(sent[3].prompt,/Selection reference:|Second instruction|Agent final/);
   const start=document.indexOf(response),replyAnchor={text:response,start,end:start+response.length,before:document.slice(Math.max(0,start-80),start),after:document.slice(start+response.length,start+response.length+80)};
   await h.plugin.openManualAction(file,'Explain this reply.',response,{editor,view,anchor:replyAnchor,canonicalAnchor:replyAnchor,snapshot:document},false);
   assert.equal(sent.length,5);assert.match(sent[4].prompt,/Selected text:\nAgent final answer\./);assert.doesNotMatch(sent[4].prompt,/First instruction|Second instruction/);
@@ -732,6 +732,38 @@ test('bundled Send and Ask recover a source renamed through delete/create before
  }finally{h.plugin.onunload();}
 });
 
+test('explicit selections always send in full while automatic note context keeps its coverage',async()=>{
+ const h=await folderMenuHarness();
+ try{
+  const {file}=h.fileMenu('Notes/Selections.md',false);Object.assign(file,{basename:'Selections',stat:{ctime:123}});
+  const selected='**Repeat this complete selected passage.** '.repeat(9)+'Final selected sentence.';
+  let document='Unsent opening outside the selection.\n\n'+selected+'\n\nUnsent ending outside the selection.';
+  const sent:any[]=[],editor={getValue:()=>document,getSelection:()=>selected,getCursor:()=>({line:0,ch:0}),posToOffset:()=>0},view={file,editor};
+  h.plugin.app.workspace.getActiveViewOfType=()=>view;h.plugin.app.vault.read=async()=>document;h.plugin.app.vault.getFileByPath=()=>file;
+  h.plugin.settings.autoSettleThreads=false;h.plugin.settings.inlineStreaming.enabled=false;
+  h.plugin.settings.folderLinks=[{id:'link',folderPath:'Notes',connectionId:'c',environmentId:'env',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot}];
+  h.plugin.requestTitle=async()=> 'Selections';
+  h.plugin.readChatThread=async()=>({id:'selection-thread',projectId:h.project.id,title:'Selections',session:{status:'ready',activeTurnId:null},latestTurn:{state:'completed'}});
+  h.plugin.dispatch=async(request:any)=>{sent.push(request);h.plugin.rememberStarted(request,request.threadId??'selection-thread');await h.plugin.save();return request.threadId??'selection-thread';};
+  const select=async(text:string,question='')=>{
+   const start=document.indexOf(text),end=start+text.length,anchor={text,start,end,before:document.slice(Math.max(0,start-80),start),after:document.slice(end,end+80)};
+   await h.plugin.openManualAction(file,question,text,{editor,view,anchor,canonicalAnchor:anchor,snapshot:document},false);
+  };
+  await select(selected);assert.equal(sent.length,0);await h.modals.at(-1).choose('new');assert.equal(sent.length,1);
+  const modals=h.modals.length;
+  await select(selected);assert.equal(sent.length,2);assert.equal(h.modals.length,modals,'Repeated selection must not be treated as an empty send');
+  await select(selected,'Explain the final selected sentence.');assert.equal(sent.length,3);assert.equal(h.modals.length,modals);
+  for(const request of sent){assert.equal(request.prompt.slice(0,selected.length),selected);assert.doesNotMatch(request.prompt,/Unsent opening|Unsent ending|Selection reference:/);}
+  assert.match(sent[2].prompt,/\*\*USER ASKS:\*\*\nExplain the final selected sentence\./);
+  const extended=selected+'\nA newly selected addition.';document=document.replace(selected,extended);
+  await select(extended);assert.equal(sent.length,4);assert.equal(sent[3].prompt.slice(0,extended.length),extended);
+  await h.plugin.send(file,h.project,{streamReply:false,throwOnError:true});assert.equal(sent.length,5);
+  assert.match(sent[4].prompt,/Unsent opening/);assert.match(sent[4].prompt,/Unsent ending/);assert.doesNotMatch(sent[4].prompt,/Repeat this|Final selected|newly selected/);
+  await h.plugin.send(file,h.project,{streamReply:false,throwOnError:true});assert.equal(sent.length,5);
+  await select(extended,'Repeat the explanation.');assert.equal(sent.length,6);assert.equal(sent[5].prompt.slice(0,extended.length),extended);
+ }finally{h.plugin.onunload();}
+});
+
 async function runningSmartSendHarness(){
  const h=await folderMenuHarness();
  const {file}=h.fileMenu('Notes/Steering.md',false);Object.assign(file,{basename:'Steering',stat:{ctime:123}});
@@ -789,7 +821,7 @@ for(const enabled of [true,false])test(`explicit existing-thread Ask reuses the 
  }finally{h.plugin.onunload();}
 });
 
-test('selected source uses the same delta in steering and delivery',async()=>{
+test('selected source uses the same text in steering and delivery',async()=>{
  const h=await runningSmartSendHarness();
  try{
   const document=h.document(),start=document.indexOf('Second instruction.'),end=start+'Second instruction.'.length;
@@ -798,6 +830,31 @@ test('selected source uses the same delta in steering and delivery',async()=>{
   await h.plugin.sendResolvedChat('First instruction.\nSecond instruction.',{path:h.file.path},context,true,{threadId:'smart-thread',expectedProjectKey:'c:project'});
   const request=h.sent.at(-1);assert.equal(request.inlineSteering.jobId,h.id);assert.equal(request.inlineSteering.input.text,'Second instruction.');
   assert.equal(request.inlineSteering.input.selection.text,'Second instruction.');assert.equal(h.newBlocks(),0);
+ }finally{h.plugin.onunload();}
+});
+
+for(const question of ['', 'Explain this again.'])test(`already-sent selection steers in full ${question?'with':'without'} a question without removing its old source`,async()=>{
+ const h=await runningSmartSendHarness();
+ try{
+  const document=h.document(),start=document.indexOf('First instruction.'),end=start+'First instruction.'.length;
+  const anchor={text:'First instruction.',start,end,before:'',after:document.slice(end,end+24)};
+  await h.plugin.openManualAction(h.file,question,anchor.text,{editor:h.editor,view:h.view,anchor,canonicalAnchor:anchor,snapshot:document});
+  const request=h.sent.at(-1);assert.equal(h.sent.length,2);assert.equal(request.inlineSteering.jobId,h.id);assert.equal(h.newBlocks(),0);
+  assert.equal(request.inlineSteering.input.text,'First instruction.'+(question?'\n\n**USER ASKS:**\n'+question:''));
+  assert.match(request.prompt,/First instruction\./);assert.doesNotMatch(request.prompt,/Second instruction|Selection reference:/);
+  assert.equal(request.inlineSteering.input.selection,undefined);assert.equal(h.document(),document);
+ }finally{h.plugin.onunload();}
+});
+
+test('a mixed old/new selection sends all selected text while steering cleanup targets only new source',async()=>{
+ const h=await runningSmartSendHarness();
+ try{
+  const frame=h.document().slice(h.document().indexOf(':::send-to-t3-response'),h.document().indexOf(':::/send-to-t3-response')+':::/send-to-t3-response'.length);
+  const selected='First instruction.\nSecond instruction.';h.setDocument(selected+'\n'+frame);
+  const document=h.document(),anchor={text:selected,start:0,end:selected.length,before:'',after:document.slice(selected.length)};
+  await h.plugin.openManualAction(h.file,'',selected,{editor:h.editor,view:h.view,anchor,canonicalAnchor:anchor,snapshot:document});
+  const request=h.sent.at(-1);assert.equal(request.inlineSteering.input.text,selected);assert.equal(request.inlineSteering.input.selection.text.trim(),'Second instruction.');
+  assert.equal(h.newBlocks(),0);
  }finally{h.plugin.onunload();}
 });
 

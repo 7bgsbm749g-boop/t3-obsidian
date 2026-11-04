@@ -1,12 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {loadSmartSend,mergeSmartSend,prepareSmartSend,confirmSmartSend,rememberResponse,rememberNoteEdits,smartNote,sourceProjection,moveSmartNotes,recoverSmartNote,packText,unpackText} from '../smart-send';
+import {loadSmartSend,mergeSmartSend,prepareSmartSend,explicitSelectionText,confirmSmartSend,rememberResponse,rememberNoteEdits,smartNote,sourceProjection,moveSmartNotes,recoverSmartNote,packText,unpackText} from '../smart-send';
 import {responseAnchor} from '../native-response-projection';
 import {findRunImport,runImportReceipt} from '../run-import-receipt';
 const path='Jobs/Smart.md',destination='machine/project/thread';
 const fresh=()=>loadSmartSend(undefined);
 const importSource={environmentId:'machine',projectId:'project',threadId:'thread'};
 const importReceipt=runImportReceipt({version:1,...importSource,bindingId:'11111111-1111-4111-8111-111111111111',messageId:'prompt',runId:'run'});
+
+test('explicit selection keeps exact Markdown and generated text while excluding private receipts',()=>{
+ const identity='<!-- t3-note-id:'+'a'.repeat(64)+' -->';
+ const source='**Selected user text.**\n> Selected agent reply.\n'+importReceipt+'\n'+identity+'\nTail.';
+ assert.equal(explicitSelectionText(source,[0,source.length]),'**Selected user text.**\n> Selected agent reply.\n\n\nTail.');
+ const from=source.indexOf(importReceipt)+7,to=source.indexOf('Tail.');assert.equal(explicitSelectionText(source,[from,to]),'\n\n');
+});
+test('explicit selections preserve receipt examples even when the surrounding code fences are not selected',()=>{
+ const source='```md\n'+importReceipt+'\n<!-- t3-note-id:'+'b'.repeat(64)+' -->\n```';
+ assert.equal(explicitSelectionText(source,[6,source.length-4]),source.slice(6,-4));
+});
 
 test('staged agent additions and replacements are excluded for every destination, preserving unsent user text',async()=>{
   const data=fresh(),before='Unsent user opening.\n\nOld wording.\n\nUnsent user ending.',after=before.replace('Old wording.','Agent replacement.\n\nAgent addition.');
