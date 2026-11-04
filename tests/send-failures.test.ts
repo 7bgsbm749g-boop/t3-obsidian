@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {appendSendFailure,sendFailureLog,type SendFailure} from '../send-failures';
-import {T3RpcError,T3ConnectionTimeoutError} from '../t3-rpc';
+import {appendSendFailure,sendFailureLog,type SendFailure} from '../src/responses/send-failures';
+import {T3RpcError,T3ConnectionTimeoutError} from '../src/connection/t3-rpc';
 test('failure log bounds retention, keeps nested transport causes and RPC kinds, and removes credentials',()=>{
   const error=Object.assign(Error('socket failed at https://private.example/?token=secret'),{kind:'ProjectReadFileError',cause:Error('Bearer secret-token ticket=secret')});
   const failure:SendFailure={at:'now',stage:'response-registration',elapsedMs:17,delivery:'not-started',requestId:'request',error};

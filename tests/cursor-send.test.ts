@@ -4,14 +4,14 @@ import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 import {webcrypto,randomUUID} from 'node:crypto';
-import {captureCursorInsertion,resolveCursorInsertion} from '../cursor-insertion';
-import {responseAnchor} from '../native-response-projection';
-import {applyThreadItem} from '../inline-thread';
-import {installPaletteChat} from '../palette-chat';
-import {loadSmartSend} from '../smart-send';
+import {captureCursorInsertion,resolveCursorInsertion} from '../src/notes/cursor-insertion';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {applyThreadItem} from '../src/conversations/inline-thread';
+import {installPaletteChat} from '../src/conversations/palette-chat';
+import {loadSmartSend} from '../src/notes/smart-send';
 
 const require=createRequire(import.meta.url);
-const compiled=build({stdin:{contents:"export {default} from './main'; export {nativeResponses} from './native-response-manager'; export {InlineChatManager} from './inline-chat';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
+const compiled=build({stdin:{contents:"export {default} from './src/app/main'; export {nativeResponses} from './src/responses/native-response-manager'; export {InlineChatManager} from './src/conversations/inline-chat';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
 async function fixture(document='First paragraph.\n\nLater paragraph.'){
   class Base{}
   const api={Plugin:Base,MarkdownView:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,Platform:{isMobile:false}};

@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
-import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,renderInlineTurn,type InlineThreadState,type InlineMessage} from '../inline-thread';
-import {observeIncoming,incomingLabel,steeringSegments,type InlineSteering} from '../inline-steering';
+import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,renderInlineTurn,type InlineThreadState,type InlineMessage} from '../src/conversations/inline-thread';
+import {observeIncoming,incomingLabel,steeringSegments,type InlineSteering} from '../src/conversations/inline-steering';
 const at=(n:number)=>`2026-10-02T20:00:${String(n).padStart(2,'0')}.000Z`;
 const assistant=(text:string):InlineMessage=>({id:'answer',role:'assistant',text,turnId:'turn',streaming:true,createdAt:at(0)});
 const sender={version:1,records:[{version:1,kind:'fleet-sender',contextId:'fleet-sender-v1',label:'Ignored label',payload:{version:1,kind:'agent',environmentId:'3630e7fa-f1df-4631-b5a2-6086ddaf28a1',threadId:'2801be1c-a9f2-5106-bf29-242a97eee8fe',title:'Source agent'}}]};

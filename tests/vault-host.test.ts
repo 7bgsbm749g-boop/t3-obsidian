@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {loadVaultHost,vaultHost,mergeVaultHost} from '../vault-host';
+import {loadVaultHost,vaultHost,mergeVaultHost} from '../src/app/vault-host';
 
 const root={id:'root',folderPath:'/',connectionId:'c',environmentId:'env',projectId:'old-project',projectTitle:'Vault',workspaceRoot:'/vault',self:true};
 

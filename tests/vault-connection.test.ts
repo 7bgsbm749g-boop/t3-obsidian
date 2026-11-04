@@ -1,11 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {connectVaultRemote,discoverVaultRoots,vaultRegistration,vaultIdentity,waitForVaultNote,type VaultRemote} from '../vault-connection';
+import {connectVaultRemote,discoverVaultRoots,vaultRegistration,vaultIdentity,waitForVaultNote,type VaultRemote} from '../src/connection/vault-connection';
 import {randomUUID} from 'node:crypto';
-import {pair} from '../direct';
-import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../environment-permissions';
-import {T3RpcError} from '../t3-rpc';
-import {vaultIdentityPath} from '../vault-identity';
+import {pair} from '../src/connection/direct';
+import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../src/connection/environment-permissions';
+import {T3RpcError} from '../src/connection/t3-rpc';
+import {vaultIdentityPath} from '../src/app/vault-identity';
 
 function harness(initialPermissions:readonly string[]=PLUGIN_PERMISSIONS){
   let permissions=initialPermissions;

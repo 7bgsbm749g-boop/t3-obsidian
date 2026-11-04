@@ -8,12 +8,12 @@ import {history,undo,redo} from '@codemirror/commands';
 
 const require=createRequire(import.meta.url);
 const bundled=build({stdin:{contents:`
-  export {CodebaseBridge} from './codebase-native';
-  export {NativeResponseView} from './native-response-view';
-  export {responseAnchor} from './native-response-projection';
-  export {removeStreamBlockFromEditor} from './stream-block-edit';
+  export {CodebaseBridge} from './src/projects/codebase-native';
+  export {NativeResponseView} from './src/responses/native-response-view';
+  export {responseAnchor} from './src/responses/native-response-projection';
+  export {removeStreamBlockFromEditor} from './src/responses/stream-block-edit';
   export {interruptedHistoryFixture} from './tests/fixtures/stream-history';
-  export {renderResponseToolGroup} from './response-tools';
+  export {renderResponseToolGroup} from './src/responses/response-tools';
 `,resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight']});
 const scope={environmentId:'env',projectId:'project',root:'/synthetic',title:'Synthetic'};
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';

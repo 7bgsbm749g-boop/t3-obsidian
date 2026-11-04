@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {EventSubscriptions,notificationPrompt,eventContent,inEventScope,validateEventCommand,validateEventFilter,validateEventScope,type EventState,type NoteEventSubscriptionCommand as EventSubscriptionCommand,type NoteEventSnapshot,type EventNotification} from '../event-subscriptions';
+import {EventSubscriptions,notificationPrompt,eventContent,inEventScope,validateEventCommand,validateEventFilter,validateEventScope,type EventState,type NoteEventSubscriptionCommand as EventSubscriptionCommand,type NoteEventSnapshot,type EventNotification} from '../src/app/event-subscriptions';
 
 const target={threadId:'thread',projectId:'project',environmentId:'machine'};
 const note=(path='Gym/A.md',content='old',properties:Record<string,unknown>|null={}):NoteEventSnapshot=>({path,content,properties});

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {steeringBoundary,steeringSegments,mergeProse,selectionRange} from '../inline-steering';
-import {renderInlineTurn,selectionAnchor,type InlineMessage} from '../inline-thread';
+import {steeringBoundary,steeringSegments,mergeProse,selectionRange} from '../src/conversations/inline-steering';
+import {renderInlineTurn,selectionAnchor,type InlineMessage} from '../src/conversations/inline-thread';
 const message=(id:string,text:string,streaming=false,turnId='turn'):InlineMessage=>({id,text,streaming,turnId,role:'assistant'});
 
 test('steering boundaries retain complete paragraphs and do not split a live fence',()=>{

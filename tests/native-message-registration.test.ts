@@ -1,19 +1,19 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {isT3MessageId} from '../t3-message-id';
-import {validateResponseRequest} from '../response-model';
-import {compactResponseBinding,loadResponseBindingData,updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../response-binding-data';
-import {normalizeV2Snapshot} from '../orchestration-v2';
-import {applyThreadItem,turnForMessage} from '../inline-thread';
-import {displayCommand,tickDisplay,type ThreadDisplay,type DisplayHost} from '../thread-display';
-import {LocalResponseManager} from '../local-response-manager';
-import {editorStream} from '../editor-stream';
-import {responseAnchor} from '../native-response-projection';
-import {localResponseBindings} from '../local-response-binding';
-import {validateNoteCommand} from '../note-command';
-import {noteContext,mergeNoteContexts} from '../note-context';
-import {validSteeringInput} from '../inline-steering';
+import {isT3MessageId} from '../src/connection/t3-message-id';
+import {validateResponseRequest} from '../src/responses/response-model';
+import {compactResponseBinding,loadResponseBindingData,updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../src/responses/response-binding-data';
+import {normalizeV2Snapshot} from '../src/connection/orchestration-v2';
+import {applyThreadItem,turnForMessage} from '../src/conversations/inline-thread';
+import {displayCommand,tickDisplay,type ThreadDisplay,type DisplayHost} from '../src/conversations/thread-display';
+import {LocalResponseManager} from '../src/responses/local-response-manager';
+import {editorStream} from '../src/responses/editor-stream';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {localResponseBindings} from '../src/responses/local-response-binding';
+import {validateNoteCommand} from '../src/notes/note-command';
+import {noteContext,mergeNoteContexts} from '../src/notes/note-context';
+import {validSteeringInput} from '../src/conversations/inline-steering';
 import {nativeRequest,nativeLaunchId,nativeFollowUpId,nativeAt} from './fixtures/native-message';
 
 test('native message IDs remain bounded opaque tokens, distinct from local async answers',()=>{

@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {streamBlocks,streamBlock,removeStreamBlock,streamBlockCacheStatus} from '../stream-block';
-import {initialRegion} from '../inline-thread';
-import {contentHash} from '../completion';
-import {validateResponseCommand} from '../response-command';
+import {streamBlocks,streamBlock,removeStreamBlock,streamBlockCacheStatus} from '../src/responses/stream-block';
+import {initialRegion} from '../src/conversations/inline-thread';
+import {contentHash} from '../src/responses/completion';
+import {validateResponseCommand} from '../src/responses/response-command';
 import {historyFixture,interruptedHistoryFixture} from './fixtures/stream-history';
 test('saved interrupted history can close with its existing active fold identity',()=>{
   for(const title of ['New thread','A *marked* title · Interrupted','Title with \\ slashes']){

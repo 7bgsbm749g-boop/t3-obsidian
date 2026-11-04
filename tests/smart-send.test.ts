@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {loadSmartSend,mergeSmartSend,prepareSmartSend,explicitSelectionText,confirmSmartSend,rememberResponse,rememberNoteEdits,smartNote,sourceProjection,moveSmartNotes,recoverSmartNote,packText,unpackText} from '../smart-send';
-import {responseAnchor} from '../native-response-projection';
-import {findRunImport,runImportReceipt} from '../run-import-receipt';
+import {loadSmartSend,mergeSmartSend,prepareSmartSend,explicitSelectionText,confirmSmartSend,rememberResponse,rememberNoteEdits,smartNote,sourceProjection,moveSmartNotes,recoverSmartNote,packText,unpackText} from '../src/notes/smart-send';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {findRunImport,runImportReceipt} from '../src/conversations/run-import-receipt';
 const path='Jobs/Smart.md',destination='machine/project/thread';
 const fresh=()=>loadSmartSend(undefined);
 const importSource={environmentId:'machine',projectId:'project',threadId:'thread'};

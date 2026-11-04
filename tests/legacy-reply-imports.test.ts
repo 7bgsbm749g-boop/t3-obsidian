@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {promises as fs} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {archiveLegacyReplyImports} from '../legacy-reply-imports-desktop';
-import {validateClientCommand} from '../client-command';
+import {archiveLegacyReplyImports} from '../src/connection/legacy-reply-imports-desktop';
+import {validateClientCommand} from '../src/app/client-command';
 
 async function fixture(){
  const root=await fs.mkdtemp(join(tmpdir(),'t3-reply-archive-')),vaultRoot=join(root,'vault'),projectRoot=join(root,'project'),path='T3 Code Attachments/12345678-1234-1234-1234-123456789abc/0123456789abcdef-report.json';

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {settlementState,type ThreadSettlementJob} from '../thread-settlement';
+import {settlementState,type ThreadSettlementJob} from '../src/conversations/thread-settlement';
 
 const job:ThreadSettlementJob={requestId:'request',messageId:'message',threadId:'thread',projectId:'project',connection:{executable:'',host:'local'}};
 function completed(overrides:any={}){

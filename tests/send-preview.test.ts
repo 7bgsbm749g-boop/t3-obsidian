@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EditorState} from '@codemirror/state';
 import {EditorView,type DecorationSet} from '@codemirror/view';
-import {sendPreviewBody,sendPreviewField,SendPreviews,type SendPreview} from '../send-preview';
-import {activeInlineIds,initialRegion,renameInlineHeader} from '../inline-thread';
-import {stoppedResponseBody} from '../response-stop';
-import {responseConnectionBody} from '../sign-in-state';
+import {sendPreviewBody,sendPreviewField,SendPreviews,type SendPreview} from '../src/responses/send-preview';
+import {activeInlineIds,initialRegion,renameInlineHeader} from '../src/conversations/inline-thread';
+import {stoppedResponseBody} from '../src/responses/response-stop';
+import {responseConnectionBody} from '../src/connection/sign-in-state';
 
 const preview:SendPreview={app:{} as any,path:'Folder/Note.md',title:'Note',id:'pending-send',startedAt:'2026-10-30T00:00:00Z'};
 

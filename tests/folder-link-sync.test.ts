@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applyFolderLinkChanges,changedFolderLinks,loadFolderLinkChanges,mergeFolderLinkChanges,mergeLegacyFolderLinks,type FolderLinkChange} from '../folder-link-sync';
-import type {FolderLink} from '../folder-link';
+import {applyFolderLinkChanges,changedFolderLinks,loadFolderLinkChanges,mergeFolderLinkChanges,mergeLegacyFolderLinks,type FolderLinkChange} from '../src/projects/folder-link-sync';
+import type {FolderLink} from '../src/projects/folder-link';
 const link=(folderPath:string,projectId='project'):FolderLink=>({id:folderPath,folderPath,projectId,projectTitle:projectId,connectionId:'c',workspaceRoot:'/repo',self:false});
 test('link, relink and unlink records survive stale whole-file Sync snapshots',()=>{
   const original=link('Notes'),created=changedFolderLinks([], [original],[],()=> 'create',1000);

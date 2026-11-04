@@ -1,4 +1,4 @@
-import type {NativeResponseView} from '../native-response-view';
+import type {NativeResponseView} from '../src/responses/native-response-view';
 /** Isolated-fixture diagnostics only; never registered in the product. */
 export function traceNativeView(adapter:NativeResponseView,events:unknown[],label:string){
   const internal=adapter as any;

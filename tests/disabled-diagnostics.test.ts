@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {indexedDB} from 'fake-indexeddb';
-import {clearDeviceDiagnostics,deviceState} from '../device-state';
-import {clearVaultDiagnostics} from '../disabled-diagnostics';
+import {clearDeviceDiagnostics,deviceState} from '../src/storage/device-state';
+import {clearVaultDiagnostics} from '../src/app/disabled-diagnostics';
 
 test('clearing diagnostics preserves requests, credentials, and another vault',async()=>{
   globalThis.indexedDB=indexedDB;

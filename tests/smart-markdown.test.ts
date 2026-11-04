@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {loadSmartSend,prepareSmartSend,confirmSmartSend,rememberResponse,mergeSmartSend} from '../smart-send';
+import {loadSmartSend,prepareSmartSend,confirmSmartSend,rememberResponse,mergeSmartSend} from '../src/notes/smart-send';
 
 const path='Formatting.md',destination='machine/project/thread',original='Check playlist order.\nCheck repeated tracks.\nCheck failed reads.';
 const formats={

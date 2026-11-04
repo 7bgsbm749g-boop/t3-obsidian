@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {CodebaseDocument,changeCodebaseProjectLinks,codebaseRootLabels,scopeKey,linkedCodebases,contextualCandidates,relativeCodebasePath,virtualPath,type CodebaseIO,type CodebaseScope} from '../codebase-core';
+import {CodebaseDocument,changeCodebaseProjectLinks,codebaseRootLabels,scopeKey,linkedCodebases,contextualCandidates,relativeCodebasePath,virtualPath,type CodebaseIO,type CodebaseScope} from '../src/projects/codebase-core';
 const scope:CodebaseScope={environmentId:'machine',projectId:'project',root:'/external/project',title:'Project'};
 const link={id:'link',connectionId:'local',folderPath:'Linked',projectId:'project',environmentId:'machine',workspaceRoot:'/external/project',projectTitle:'Project',self:false};
 function fixture(){let remote='original',writes=0,draft:string|undefined;const io:CodebaseIO={list:async()=>({entries:[],truncated:false}),search:async()=>[],resource:async()=>({url:'https://example.invalid',expiresAt:0}),read:async()=>remote,write:async(_s,_p,text)=>{writes++;remote=text;}};return {io,document:new CodebaseDocument(scope,'file.md',io,value=>draft=value),get remote(){return remote;},set remote(value:string){remote=value;},get writes(){return writes;},get draft(){return draft;}};}

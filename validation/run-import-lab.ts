@@ -1,10 +1,10 @@
 import {Component,Plugin,MarkdownRenderer,MarkdownView} from 'obsidian';
-import {ImportRunModal,RunImportPicker,RUN_PREVIEW_DELAY} from '../run-import-ui';
-import {availableImportRun,type ImportRun} from '../run-import';
-import {renderRunImportPreview} from '../run-import-preview';
-import {HtmlResultViews} from '../html-result-view';
-import {HtmlResultStore} from '../html-result-store';
-import type {HtmlResultReference} from '../html-results';
+import {ImportRunModal,RunImportPicker,RUN_PREVIEW_DELAY} from '../src/conversations/run-import-ui';
+import {availableImportRun,type ImportRun} from '../src/conversations/run-import';
+import {renderRunImportPreview} from '../src/conversations/run-import-preview';
+import {HtmlResultViews} from '../src/responses/html-result-view';
+import {HtmlResultStore} from '../src/responses/html-result-store';
+import type {HtmlResultReference} from '../src/responses/html-results';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check:()=>boolean,timeout=8000){const start=performance.now();while(!check()){if(performance.now()-start>timeout)throw Error('Native lab condition timed out');await pause(10);}}

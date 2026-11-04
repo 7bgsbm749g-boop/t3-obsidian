@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {pendingApprovals,closedThreadApprovals,approvalTargets,approvalUrl,parseApprovalUrl,renderApproval,clearApprovalControls,type ApprovalTarget} from '../approvals';
-import {ApprovalController,type ApprovalRecord} from '../approval-controller';
-import {renderInlineTurn} from '../inline-thread';
-import {stoppedResponseBody} from '../response-stop';
+import {pendingApprovals,closedThreadApprovals,approvalTargets,approvalUrl,parseApprovalUrl,renderApproval,clearApprovalControls,type ApprovalTarget} from '../src/interaction/approvals';
+import {ApprovalController,type ApprovalRecord} from '../src/interaction/approval-controller';
+import {renderInlineTurn} from '../src/conversations/inline-thread';
+import {stoppedResponseBody} from '../src/responses/response-stop';
 
 const target:ApprovalTarget={environmentId:'original-machine',threadId:'original-thread',requestId:'command:123'};
 const opened=(requestId=target.requestId,turnId='turn',kind='command')=>({id:'opened-'+requestId,kind:'approval.requested',summary:'Command approval requested',turnId,payload:{requestId,requestKind:kind,detail:'printf "hello"'}});

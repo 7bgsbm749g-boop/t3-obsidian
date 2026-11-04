@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {findRunImport,runImportReceipt} from '../run-import-receipt';
+import {findRunImport,runImportReceipt} from '../src/conversations/run-import-receipt';
 const source={threadId:'thread',projectId:'project',environmentId:'environment'};
 const receipt={version:1 as const,...source,bindingId:'b4d892bf-5100-4521-b65f-1837e115d091',messageId:'prompt',runId:'run'};
 test('an import receipt identifies the exact source after final text replacement, reload and note rename',()=>{

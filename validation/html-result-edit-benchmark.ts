@@ -5,7 +5,7 @@ import {writeFile} from 'node:fs/promises';
 import {performance} from 'node:perf_hooks';
 import {EditorState,StateField} from '@codemirror/state';
 import {EditorView} from '@codemirror/view';
-import {renderHtmlResult} from '../html-results';
+import {renderHtmlResult} from '../src/responses/html-results';
 import {reference} from '../tests/fixtures/html-result';
 
 // Synthetic CodeMirror transactions only: no native client, vault, network,
@@ -13,7 +13,7 @@ import {reference} from '../tests/fixtures/html-result';
 // separately in Obsidian; this probe measures plugin editor-extension overhead.
 async function main(){
  const runtime=createRequire(import.meta.url),live=StateField.define({create:()=>true,update:value=>value}),module={exports:{} as any};
- const bundle=await build({stdin:{contents:"export {HtmlResultViews} from './html-result-view';",resolveDir:process.cwd()},bundle:true,write:false,format:'cjs',platform:'node',external:['obsidian','@codemirror/*','@lezer/common']});
+ const bundle=await build({stdin:{contents:"export {HtmlResultViews} from './src/responses/html-result-view';",resolveDir:process.cwd()},bundle:true,write:false,format:'cjs',platform:'node',external:['obsidian','@codemirror/*','@lezer/common']});
  runInNewContext(bundle.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal:class{},MarkdownRenderChild:class{},editorLivePreviewField:live}:runtime(id),TextEncoder,TextDecoder,URL,console});
  const views=new module.exports.HtmlResultViews({workspace:{on:()=>({})}},{dispose(){}});const extensions:any[]=[];let processor=false;
  views.install({registerMarkdownCodeBlockProcessor(){processor=true;},registerEditorExtension:(value:any)=>{extensions.push(value);},registerEvent(){},register(){}});

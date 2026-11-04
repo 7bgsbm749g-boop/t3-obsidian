@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {completionSource,leaseExplorerResponse,noteIndicators,relocateExplorerResponses,loadExplorerResponses} from '../explorer-responses';
-import {folderNotePath} from '../folder-note-adapter';
-import type {ResponseRecord} from '../response-record';
+import {completionSource,leaseExplorerResponse,noteIndicators,relocateExplorerResponses,loadExplorerResponses} from '../src/responses/explorer-responses';
+import {folderNotePath} from '../src/projects/folder-note-adapter';
+import type {ResponseRecord} from '../src/responses/response-record';
 const record=(state?:any):ResponseRecord=>({request:{id:'binding',notePath:'Note.md'} as any,epoch:1,revision:2,owner:'writer',expiresAt:0,state});
 test('completion sources require exact successful run evidence and never invent a timestamp',()=>{
   const request={threadEnvironmentId:'machine',projectId:'project',threadId:'thread'};

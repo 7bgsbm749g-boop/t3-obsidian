@@ -1,13 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {restoreCompactSnapshot,normalizeV2Snapshot,normalizeV2StreamItem,normalizeV2TitleItem,v2Command} from '../orchestration-v2';
-import {applyThreadItem,restoreInlineBindings,inlineBindingCheckpoint,turnForMessage,turnPhase} from '../inline-thread';
-import {pendingQuestions} from '../questions';
-import {pendingApprovals} from '../approvals';
-import {t3Api} from '../t3-api';
-import {environmentApi} from '../direct';
+import {restoreCompactSnapshot,normalizeV2Snapshot,normalizeV2StreamItem,normalizeV2TitleItem,v2Command} from '../src/connection/orchestration-v2';
+import {applyThreadItem,restoreInlineBindings,inlineBindingCheckpoint,turnForMessage,turnPhase} from '../src/conversations/inline-thread';
+import {pendingQuestions} from '../src/interaction/questions';
+import {pendingApprovals} from '../src/interaction/approvals';
+import {t3Api} from '../src/connection/t3-api';
+import {environmentApi} from '../src/connection/direct';
 import {settingsSocket} from './rpc-fixture';
-import {incomingLabel} from '../inline-steering';
+import {incomingLabel} from '../src/conversations/inline-steering';
 
 const at='2026-10-09T12:00:00.000Z';
 const run={id:'app-run',ordinal:1,userMessageId:'prompt',status:'running',requestedAt:at,completedAt:null};

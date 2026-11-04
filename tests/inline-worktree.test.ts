@@ -1,10 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,renderInlineTurn,type InlineThreadState} from '../inline-thread';
-import {normalizeV2Snapshot,normalizeV2StreamItem} from '../orchestration-v2';
-import {delegatedTurnIds,delegatedWork} from '../inline-delegation';
-import {followInlineQuestions,inlineQuestionPhase} from '../inline-questions';
-import {finalResponseKey} from '../final-response';
+import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,renderInlineTurn,type InlineThreadState} from '../src/conversations/inline-thread';
+import {normalizeV2Snapshot,normalizeV2StreamItem} from '../src/connection/orchestration-v2';
+import {delegatedTurnIds,delegatedWork} from '../src/conversations/inline-delegation';
+import {followInlineQuestions,inlineQuestionPhase} from '../src/interaction/inline-questions';
+import {finalResponseKey} from '../src/responses/final-response';
 import {handoffProjection,handoffSource,handoffRun,handoffMessage,handoffItem,handoffPrompt,handoffMessageId,interruptedHandoffItem} from './fixtures/worktree-handoff';
 
 const snapshot=(overrides:any={})=>applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:normalizeV2Snapshot(handoffProjection(overrides))}).state;

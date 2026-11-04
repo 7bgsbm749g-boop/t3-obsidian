@@ -1,14 +1,14 @@
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
-import {CodebaseBridge} from '../codebase-native';
-import {nativeResponses} from '../native-response-manager';
-import {deviceFinalNoteIO} from '../inline-note-io';
-import {responseAnchor} from '../native-response-projection';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
-import {installStreamBlockControls} from '../stream-block-controls';
-import {installResponsePresentation} from '../response-presentation';
-import {renderInlineTurn} from '../inline-thread';
-import {renderResponseToolGroup} from '../response-tools';
-import type {ResponseRecord} from '../response-record';
+import {CodebaseBridge} from '../src/projects/codebase-native';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {deviceFinalNoteIO} from '../src/conversations/inline-note-io';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {hiddenInlineMarkerExtension} from '../src/conversations/inline-markers';
+import {installStreamBlockControls} from '../src/responses/stream-block-controls';
+import {installResponsePresentation} from '../src/responses/response-presentation';
+import {renderInlineTurn} from '../src/conversations/inline-thread';
+import {renderResponseToolGroup} from '../src/responses/response-tools';
+import type {ResponseRecord} from '../src/responses/response-record';
 const fs=require('node:fs'),path=require('node:path');
 const ids=['aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee','bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee'];
 /** Isolated native project editor; synthetic streams, no credentials or dispatch. */

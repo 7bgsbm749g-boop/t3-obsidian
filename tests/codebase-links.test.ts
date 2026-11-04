@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {projectLink,projectMarkdownLink,projectPathRoutes} from '../codebase-links';
-import {replyReferences} from '../reply-assets';
+import {projectLink,projectMarkdownLink,projectPathRoutes} from '../src/projects/codebase-links';
+import {replyReferences} from '../src/responses/reply-assets';
 const main={environmentId:'a',projectId:'p',title:'Project',root:'/home/ubuntu/projects/code'};
 const worktree={...main,root:'/home/ubuntu/worktrees/code',threadId:'thread'};
 test('copied project Markdown links round-trip exact paths without using wiki syntax',()=>{

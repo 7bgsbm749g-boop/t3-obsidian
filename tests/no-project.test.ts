@@ -1,12 +1,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {ensureNoProject,NO_PROJECT,noProjectKey,noProjectMachine,isNoProjectKey} from '../no-project';
-import {t3Api} from '../t3-api';
-import {readDirect,sendDirect,commandId} from '../direct';
-import type {Request} from '../bridge';
-import {noteThreadTitle} from '../thread-title';
+import {ensureNoProject,NO_PROJECT,noProjectKey,noProjectMachine,isNoProjectKey} from '../src/projects/no-project';
+import {t3Api} from '../src/connection/t3-api';
+import {readDirect,sendDirect,commandId} from '../src/connection/direct';
+import type {Request} from '../src/app/bridge';
+import {noteThreadTitle} from '../src/conversations/thread-title';
 import {settingsSocket} from './rpc-fixture';
-import {availableDesktopEnvironment} from '../desktop';
+import {availableDesktopEnvironment} from '../src/connection/desktop';
 import {createServer} from 'node:http';
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';

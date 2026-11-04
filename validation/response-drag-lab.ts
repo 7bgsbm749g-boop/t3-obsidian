@@ -1,9 +1,9 @@
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
-import {nativeResponses} from '../native-response-manager';
-import {responseAnchor} from '../native-response-projection';
-import {installStreamBlockControls} from '../stream-block-controls';
-import {renderInlineTurn} from '../inline-thread';
-import {responseMoveHistory} from '../response-move';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {installStreamBlockControls} from '../src/responses/stream-block-controls';
+import {renderInlineTurn} from '../src/conversations/inline-thread';
+import {responseMoveHistory} from '../src/responses/response-move';
 const fs=require('node:fs'),path=require('node:path');
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 /** Synthetic real-editor fixture. External control changes provider output

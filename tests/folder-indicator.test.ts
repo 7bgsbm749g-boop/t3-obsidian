@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {decorateLinkedFolders,decorateNoteIndicators} from '../folder-indicator';
+import {decorateLinkedFolders,decorateNoteIndicators} from '../src/projects/folder-indicator';
 
 class FakeElement{
   className='';textContent='';title='';parent?:FakeElement;children:FakeElement[]=[];attrs=new Map<string,string>();
@@ -56,7 +56,7 @@ test('completion glow follows collapsed branches and exact folder-note adapters,
 });
 
 test('badge observers bind only explorer containers and rebind after layout changes',async()=>{
-  const {installFolderIndicators}=await import('../folder-indicator');
+  const {installFolderIndicators}=await import('../src/projects/folder-indicator');
   const previous=globalThis.MutationObserver,instances:any[]=[];
   class Observer{
     target:any;disconnected=false;

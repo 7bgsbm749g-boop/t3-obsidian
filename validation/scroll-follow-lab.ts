@@ -1,11 +1,11 @@
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
-import {nativeResponses} from '../native-response-manager';
-import {responseAnchor} from '../native-response-projection';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
-import {installResponsePresentation} from '../response-presentation';
-import {installStreamBlockControls} from '../stream-block-controls';
-import {installActivityShine} from '../activity-shine';
-import {responseHeightAttribute,responseHeightProperty} from '../response-height';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {hiddenInlineMarkerExtension} from '../src/conversations/inline-markers';
+import {installResponsePresentation} from '../src/responses/response-presentation';
+import {installStreamBlockControls} from '../src/responses/stream-block-controls';
+import {installActivityShine} from '../src/ui/activity-shine';
+import {responseHeightAttribute,responseHeightProperty} from '../src/responses/response-height';
 const fs=require('node:fs/promises'),path=require('node:path');
 /** Synthetic setup and observation only. Activation and manual cancellation
  * require trusted native input. No Sync or external work is dispatched. */

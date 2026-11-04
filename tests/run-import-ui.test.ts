@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
-import type {RunImportResult} from '../run-import';
+import type {RunImportResult} from '../src/conversations/run-import';
 
-const bundle=build({stdin:{contents:"export {ImportRunModal,RunImportPicker} from './run-import-ui';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+const bundle=build({stdin:{contents:"export {ImportRunModal,RunImportPicker} from './src/conversations/run-import-ui';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
 const drain=async()=>{for(let i=0;i<4;i++)await Promise.resolve();};
 function deferred<T>(){let resolve!:(value:T)=>void,reject!:(error:Error)=>void;const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 async function fixture(attach:(follow:boolean)=>Promise<RunImportResult>){

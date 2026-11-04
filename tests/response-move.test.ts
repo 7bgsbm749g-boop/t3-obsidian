@@ -2,12 +2,12 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EditorState} from '@codemirror/state';
 import {history,undo,redo,undoDepth} from '@codemirror/commands';
-import {movedResponse} from '../response-move';
-import {responseAnchor,responseRegion,renderResponse} from '../native-response-projection';
-import {NativeResponseView} from '../native-response-view';
-import {applySavedEdits} from '../coordinated-merge';
-import {renderResponseToolGroup} from '../response-tools';
-import {withLocalResponseBinding,localResponseBindings} from '../local-response-binding';
+import {movedResponse} from '../src/responses/response-move';
+import {responseAnchor,responseRegion,renderResponse} from '../src/responses/native-response-projection';
+import {NativeResponseView} from '../src/responses/native-response-view';
+import {applySavedEdits} from '../src/responses/coordinated-merge';
+import {renderResponseToolGroup} from '../src/responses/response-tools';
+import {withLocalResponseBinding,localResponseBindings} from '../src/responses/local-response-binding';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',key='thread:active';
 const body=(text='First streamed paragraph.')=>`> [!t3-progress]+ **Thread · Working** <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>\n>\n> ${text}`;

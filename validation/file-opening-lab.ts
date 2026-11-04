@@ -1,6 +1,6 @@
 import {MarkdownView,type Plugin} from 'obsidian';
-import {CodebaseBridge} from '../codebase-native';
-import type {CodebaseIO} from '../codebase-core';
+import {CodebaseBridge} from '../src/projects/codebase-native';
+import type {CodebaseIO} from '../src/projects/codebase-core';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 

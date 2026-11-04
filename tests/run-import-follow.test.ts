@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {webcrypto,randomUUID} from 'node:crypto';
-import {displayCommand,type ThreadDisplay} from '../thread-display';
-import type {InlineThreadState} from '../inline-thread';
+import {displayCommand,type ThreadDisplay} from '../src/conversations/thread-display';
+import type {InlineThreadState} from '../src/conversations/inline-thread';
 
 const source={threadId:'thread',projectId:'project',environmentId:'machine'},notePath='Import.md';
 const state:InlineThreadState={historyComplete:true,activities:[],messages:['earlier','selected','later','running'].map(id=>({id,role:'user',text:id,turnId:id,streaming:false}))};

@@ -5,7 +5,7 @@ import {insertNewlineAndIndent} from '@codemirror/commands';
 import {language,ensureSyntaxTree,indentUnit} from '@codemirror/language';
 import {highlightTree,classHighlighter} from '@lezer/highlight';
 import {grammarRuntime} from './language-grammar-runtime';
-import {codeLanguage,codeReadingFence} from '../code-language';
+import {codeLanguage,codeReadingFence} from '../src/projects/code-language';
 
 test('Python grammar handles type stubs, annotations, strings and nested indentation',async()=>{
   const support=await (await grammarRuntime()).loadCodeGrammar('python');

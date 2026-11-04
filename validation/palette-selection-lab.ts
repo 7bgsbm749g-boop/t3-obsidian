@@ -1,9 +1,9 @@
 import {Plugin,MarkdownView} from 'obsidian';
-import SendToT3Code from '../main';
-import {installPaletteChat} from '../palette-chat';
-import {InlineChatManager,type InlineJob} from '../inline-chat';
-import {loadSmartSend} from '../smart-send';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
+import SendToT3Code from '../src/app/main';
+import {installPaletteChat} from '../src/conversations/palette-chat';
+import {InlineChatManager,type InlineJob} from '../src/conversations/inline-chat';
+import {loadSmartSend} from '../src/notes/smart-send';
+import {hiddenInlineMarkerExtension} from '../src/conversations/inline-markers';
 
 const fs=require('node:fs'),path=require('node:path');
 const note='Palette selection fixture.md';

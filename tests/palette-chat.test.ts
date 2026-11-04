@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { installPaletteChat } from '../palette-chat';
+import { installPaletteChat } from '../src/conversations/palette-chat';
 
 function fixture() {
   const calls: { method: string; receiver: unknown; args: unknown[] }[] = [];

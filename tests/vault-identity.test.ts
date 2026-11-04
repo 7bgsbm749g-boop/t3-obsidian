@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {ensureVaultIdentityRecord,identityPathForSettings,readVaultIdentityRecord,vaultIdentityPath} from '../vault-identity';
+import {ensureVaultIdentityRecord,identityPathForSettings,readVaultIdentityRecord,vaultIdentityPath} from '../src/app/vault-identity';
 
 test('host identity publishes once, follows adopted vault identity, and supports custom configuration folders',async()=>{
   const entries=new Map<string,string>([['Custom/Config','']]);let writes=0;

@@ -3,10 +3,10 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {writeFile} from 'node:fs/promises';
-import {desktopThreadAccess} from '../desktop';
-import {readNewThreadDefaults} from '../model-defaults';
-import {watchThread,readInlineSnapshot} from '../thread-stream';
-import {applyThreadItem,turnForMessage,turnPhase,type InlineThreadState} from '../inline-thread';
+import {desktopThreadAccess} from '../src/connection/desktop';
+import {readNewThreadDefaults} from '../src/conversations/model-defaults';
+import {watchThread,readInlineSnapshot} from '../src/conversations/thread-stream';
+import {applyThreadItem,turnForMessage,turnPhase,type InlineThreadState} from '../src/conversations/inline-thread';
 
 async function main(){
   const evidence=process.argv[2];if(!evidence)throw Error('Supply an evidence JSON path outside the vault.');

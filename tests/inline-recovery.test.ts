@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applyThreadItem,restoreInlineBindings,inlineTurnMessages,renderInlineTurn,turnForMessage,turnPhase,type InlineThreadState} from '../inline-thread';
-import {readInlineSnapshot,type ThreadAccess} from '../thread-stream';
+import {applyThreadItem,restoreInlineBindings,inlineTurnMessages,renderInlineTurn,turnForMessage,turnPhase,type InlineThreadState} from '../src/conversations/inline-thread';
+import {readInlineSnapshot,type ThreadAccess} from '../src/conversations/thread-stream';
 
 const message=(id:string,role:string,turnId:string|null,text=id)=>({id,role,turnId,text,streaming:false});
 function history():InlineThreadState {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {installCodebaseAdapter} from '../codebase-adapter';
-import {CODEBASE_PREFIX} from '../codebase-core';
+import {installCodebaseAdapter} from '../src/projects/codebase-adapter';
+import {CODEBASE_PREFIX} from '../src/projects/codebase-core';
 
 test('reloads reuse one guard, release old handlers, and preserve physical adapter calls',()=>{
   const physical:any[]=[],adapter={read(path:string){physical.push({owner:this,path});return 'physical';},write(path:string,text:string){physical.push({owner:this,path,text});}};

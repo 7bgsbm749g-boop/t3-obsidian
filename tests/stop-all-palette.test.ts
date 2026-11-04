@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {randomUUID,webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
-import {initialRegion} from '../inline-thread';
+import {initialRegion} from '../src/conversations/inline-thread';
 
 test('mobile palette stop all works without selection, while sending is busy, and reports an empty note',async()=>{
   const id=randomUUID(),failed=randomUUID(),commands=new Map<string,any>(),storage=new Map<string,any>(),notices:string[]=[];

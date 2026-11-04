@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {changedInterval,mergeSavedEdits,applySavedEdits} from '../coordinated-merge';
+import {changedInterval,mergeSavedEdits,applySavedEdits} from '../src/responses/coordinated-merge';
 test('conservative three-way merge preserves compatible edits before and after a staged patch',()=>{
   const original='Head\n\n| 20kg |\n\nTail',staged=original.replace('20kg','25kg'),edit=changedInterval(original,staged)!;
   for(const latest of [original.replace('Head','User head'),original.replace('Tail','User tail')]){

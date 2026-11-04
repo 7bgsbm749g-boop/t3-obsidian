@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {activityCircleTarget,activityShineTargets,installActivityShine} from '../activity-shine';
+import {activityCircleTarget,activityShineTargets,installActivityShine} from '../src/ui/activity-shine';
 
 class Element {
   attrs=new Map<string,string>();properties=new Map<string,string>();textContent='';isConnected=true;

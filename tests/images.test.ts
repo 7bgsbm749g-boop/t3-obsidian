@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {collectImages,findImageEmbeds,MAX_IMAGE_BYTES} from '../images';
+import {collectImages,findImageEmbeds,MAX_IMAGE_BYTES} from '../src/notes/images';
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=','base64');
 test('finds ordered wiki, Markdown and reference images while ignoring code, escapes, notes and frontmatter',()=>{
  const md='---\na: "![[metadata.png]]"\n---\n![[photo.png|300]]\n![alt](folder/a%20b.png "title")\n![reference][pic]\n\n[pic]: other.png\n\n`![[inline.png]]`\n\n```md\n![code](bad.png)\n```\n\\![[escaped.png]]\n![[Other note]]\n';

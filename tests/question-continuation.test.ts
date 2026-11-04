@@ -1,15 +1,15 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {continueQuestionAnswer,type QuestionContinuationIO} from '../question-continuation';
-import {QuestionController,type QuestionAnswerFollow} from '../question-controller';
-import {renderQuestion,type QuestionTarget} from '../questions';
-import {contentHash} from '../completion';
-import {responseAnchor} from '../native-response-projection';
-import {LocalResponseManager} from '../local-response-manager';
-import {responseBindingRequests,updateResponseBindingData,type ResponseBindingData} from '../response-binding-data';
-import type {ResponseRequest} from '../response-model';
-import type {DirectInlineUpdate} from '../direct-inline-preview';
+import {continueQuestionAnswer,type QuestionContinuationIO} from '../src/interaction/question-continuation';
+import {QuestionController,type QuestionAnswerFollow} from '../src/interaction/question-controller';
+import {renderQuestion,type QuestionTarget} from '../src/interaction/questions';
+import {contentHash} from '../src/responses/completion';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {LocalResponseManager} from '../src/responses/local-response-manager';
+import {responseBindingRequests,updateResponseBindingData,type ResponseBindingData} from '../src/responses/response-binding-data';
+import type {ResponseRequest} from '../src/responses/response-model';
+import type {DirectInlineUpdate} from '../src/responses/direct-inline-preview';
 
 const at=(second:number)=>`2026-10-16T00:00:${String(second).padStart(2,'0')}.000Z`;
 const drain=async()=>{for(let n=0;n<10;n++)await new Promise(resolve=>setImmediate(resolve));};

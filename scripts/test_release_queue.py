@@ -94,6 +94,14 @@ class ReleaseQueueTests(unittest.TestCase):
         subprocess.run(['git', 'commit', '-qm', 'repair release loader'], cwd=source, check=True)
         return source
 
+    def test_alpha_assignment_ignores_old_numeric_history_and_respects_reserved_builds(self):
+        queue.write(self.root / 'release-policy.json', {'schemaVersion': 1, 'stage': 'alpha', 'firstAlphaVersion': '0.0.377-alpha', 'transitionFrom': '1.0.0'})
+        source = self.source('alpha-work'); job = self.submit(source)
+        directory = queue.job_path(self.store, job['jobId'])
+        self.assertEqual(queue.next_version(self.release, directory, {'bump': 'major'}), '0.0.377-alpha')
+        queue.write(directory / 'state.json', {'status': 'queued', 'version': '0.0.377-alpha', 'reservedVersions': ['0.0.378-alpha']})
+        self.assertEqual(queue.next_version(self.release, directory, {'bump': 'minor'}), '0.0.379-alpha')
+
     def test_bootstrap_integrates_only_the_exact_fifo_tooling_repair_then_restarts(self):
         source = self.tooling_source()
         submitted = self.submit(source)
