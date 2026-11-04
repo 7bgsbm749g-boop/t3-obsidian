@@ -400,6 +400,170 @@ class ReleaseQueueTests(unittest.TestCase):
             self.assertIn('WantedBy=timers.target', timer)
             self.assertNotIn('OnUnitInactiveSec', timer)
             command.assert_any_call(['systemctl', '--user', 'restart', queue.UNIT + '-retry.timer'], check=True, timeout=10)
+            self.schedule_retry('2030-01-02T03:04:05.999999+00:00', queue=self.store)
+            self.assertIn('OnCalendar=2030-01-02 03:04:06 UTC', (units / (queue.UNIT + '-retry.timer')).read_text())
+
+    def memory_job(self, name='memory-first'):
+        source = self.source(name)
+        job = queue.enqueue(source, self.root, 'HEAD', thread_id='owning-thread', queue=self.store)
+        queue.drain(self.release, queue=self.store)
+        clock = patch.object(queue, 'now', return_value='2030-01-01T00:00:00+00:00').start()
+        queue.wait_for_memory(job['jobId'], '768M', 'native-watch-' + name, queue=self.store)
+        return source, job['jobId'], clock
+
+    def test_verification_memory_wait_requires_a_native_owner_and_watch(self):
+        source = self.source('missing-owner'); job = self.submit(source, evidence=False)
+        queue.drain(self.release, queue=self.store)
+        with self.assertRaisesRegex(ValueError, 'owning native T3 thread'):
+            queue.wait_for_memory(job['jobId'], '768M', 'watch', queue=self.store)
+        with self.assertRaisesRegex(ValueError, 'scheduledTaskId'):
+            queue.wait_for_memory(job['jobId'], '768M', '', queue=self.store)
+
+    def test_registration_cannot_race_a_job_the_worker_can_still_take(self):
+        source = self.source('not-paused')
+        job = queue.enqueue(source, self.root, 'HEAD', thread_id='owning-thread', queue=self.store)
+        with self.assertRaisesRegex(ValueError, 'needs-evidence first'):
+            queue.wait_for_memory(job['jobId'], '768M', 'native-watch', queue=self.store)
+        self.assertEqual(queue.status(job['jobId'], queue=self.store)['jobs'][0]['status'], 'queued')
+
+    def test_later_release_does_not_reset_probe_deadline_or_block_behind_verification(self):
+        _, first, clock = self.memory_job()
+        second = self.submit(self.source('memory-second'))
+        clock.return_value = '2030-01-01T00:00:10+00:00'
+        with patch.object(queue.release_memory, 'probe') as probe:
+            self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'waiting-for-memory')
+            probe.assert_not_called()
+        self.assertEqual(self.published, ['1.0.1'])
+        state = queue.status(first, queue=self.store)['jobs'][0]
+        self.assertEqual(state['memoryWait']['nextProbeAt'], '2030-01-01T00:00:30+00:00')
+        self.assertEqual(state['memoryWait']['failedProbes'], 0)
+        self.assertEqual(queue.status(second['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+        self.timer.assert_called_with('2030-01-01T00:00:30+00:00', queue=self.store)
+
+    def test_probe_backoff_survives_reloads_and_ready_still_requires_evidence(self):
+        source, job, clock = self.memory_job()
+        for seconds in [60, 120, 240, 480, 900, 900]:
+            state = queue.status(job, queue=self.store)['jobs'][0]
+            clock.return_value = state['memoryWait']['nextProbeAt']
+            with patch.object(queue.release_memory, 'probe', return_value={'allowed': False, 'reason': 'insufficient_host_headroom'}):
+                state = queue.probe_memory(job, queue=self.store)
+            self.assertEqual(state['memoryWait']['nextProbeDelaySeconds'], seconds)
+            self.assertEqual(state.get('failures', 0), 0)
+        clock.return_value = state['memoryWait']['nextProbeAt']
+        with patch.object(queue.release_memory, 'probe', return_value={'allowed': True}):
+            ready = queue.probe_memory(job, queue=self.store)
+        self.assertEqual(ready['status'], 'needs-evidence')
+        self.assertTrue(ready['memoryWait']['ready'])
+        self.assertEqual(ready['recoveryTaskId'], 'native-watch-memory-first')
+        self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
+        self.assertEqual(self.published, [])
+        replacement = queue.submission(source, self.root, 'HEAD', evidence=self.evidence, notes='Verified after memory recovery')
+        queue.retry(job, replacement=replacement, queue=self.store)
+        queue.drain(self.release, queue=self.store)
+        self.assertEqual(queue.status(job, queue=self.store)['jobs'][0]['status'], 'complete')
+
+    def test_not_due_probe_does_not_contact_manager_and_refusal_race_keeps_backoff(self):
+        _, job, clock = self.memory_job()
+        with patch.object(queue.release_memory, 'probe') as probe:
+            queue.probe_memory(job, queue=self.store);probe.assert_not_called()
+        clock.return_value = '2030-01-01T00:00:30+00:00'
+        with patch.object(queue.release_memory, 'probe', return_value={'allowed': False}):
+            state = queue.probe_memory(job, queue=self.store)
+        clock.return_value = state['memoryWait']['nextProbeAt']
+        with patch.object(queue.release_memory, 'probe', return_value={'allowed': True}):
+            queue.probe_memory(job, queue=self.store)
+        repeated = queue.wait_for_memory(job, '768M', 'same-watch', queue=self.store)
+        self.assertEqual(repeated['memoryWait']['failedProbes'], 2)
+        self.assertEqual(repeated['memoryWait']['nextProbeDelaySeconds'], 120)
+
+    def test_repeated_wait_registration_does_not_push_the_deadline(self):
+        _, job, clock = self.memory_job()
+        clock.return_value = '2030-01-01T00:00:10+00:00'
+        state = queue.wait_for_memory(job, '768M', 'native-watch-memory-first', queue=self.store)
+        self.assertEqual(state['memoryWait']['nextProbeAt'], '2030-01-01T00:00:30+00:00')
+        self.assertEqual(state['memoryWait']['failedProbes'], 0)
+
+    def test_memory_helper_changes_require_a_fresh_worker(self):
+        path = self.root / 'scripts/release_memory.py'; path.parent.mkdir()
+        path.write_text('first input')
+        before = queue.engine_hash(self.root)
+        path.write_text('new input')
+        self.assertNotEqual(before['release_memory.py'], queue.engine_hash(self.root)['release_memory.py'])
+
+    def test_tooling_bootstrap_cannot_overtake_an_integrated_memory_wait(self):
+        first = self.submit(self.source('held-installation'))
+        directory = queue.job_path(self.store, first['jobId'])
+        state = queue.read(directory / 'state.json')
+        state['integratedCommit'] = self.git('rev-parse', 'HEAD')
+        queue.defer_memory(directory, state, '2G', phase='worker', reason='host_memory_pressure')
+        source = self.tooling_source(); submitted = self.submit(source)
+        self.release.ROOT = source
+        with self.assertRaisesRegex(SystemExit, 'overtake'):
+            queue.bootstrap(self.release, self.root, submitted['jobId'], queue=self.store)
+
+    def test_worker_refusal_preserves_candidate_and_recovers_without_failure_or_rollback(self):
+        first = self.submit(self.source('worker-memory')); self.submit(self.source('worker-later'))
+        with patch.object(queue, 'now', return_value='2030-01-01T00:00:00+00:00') as clock:
+            with patch.object(self.release, 'new_release', side_effect=RuntimeError('insufficient_host_headroom')):
+                result = queue.drain(self.release, queue=self.store)
+            self.assertEqual(result['status'], 'waiting-for-memory')
+            state = queue.status(first['jobId'], queue=self.store)['jobs'][0]
+            self.assertEqual(state.get('failures', 0), 0)
+            self.assertFalse(state.get('rollbackCommits'))
+            self.assertTrue((self.root / 'worker-memory.ts').exists())
+            self.assertEqual(self.published, [])
+            clock.return_value = state['memoryWait']['nextProbeAt']
+            with patch.object(queue.release_memory, 'probe', return_value={'allowed': True}):
+                queue.drain(self.release, queue=self.store)
+        self.assertEqual(self.published, ['1.0.1', '1.0.2'])
+
+    def test_worker_reads_only_this_attempt_for_admission_refusal(self):
+        job = self.submit(self.source('bounded-log')); calls = []
+        def fail(*_):
+            calls.append(1)
+            if len(calls) == 1:
+                print('Resource manager: command not started (host_memory_pressure).')
+            raise subprocess.CalledProcessError(75, ['temporary-command'])
+        with patch.object(queue, 'now', return_value='2030-01-01T00:00:00+00:00') as clock:
+            with patch.object(self.release, 'new_release', side_effect=fail):
+                queue.drain(self.release, queue=self.store)
+                state = queue.status(job['jobId'], queue=self.store)['jobs'][0]
+                clock.return_value = state['memoryWait']['nextProbeAt']
+                with patch.object(queue.release_memory, 'probe', return_value={'allowed': True}):
+                    queue.drain(self.release, queue=self.store)
+        state = queue.status(job['jobId'], queue=self.store)['jobs'][0]
+        self.assertEqual(state['status'], 'failed')
+        self.assertEqual(state['failures'], 3)
+
+    def test_memory_recovery_resumes_the_same_immutable_archive(self):
+        job = self.submit(self.source('memory-archive'))
+        def packaged_then_refused(_bump, _dirty, version):
+            self.release.archive_path(version).write_text('immutable bytes')
+            raise SystemExit('Resource manager: insufficient_host_headroom')
+        with patch.object(queue, 'now', return_value='2030-01-01T00:00:00+00:00') as clock:
+            with patch.object(self.release, 'new_release', side_effect=packaged_then_refused) as create:
+                queue.drain(self.release, queue=self.store)
+                create.assert_called_once()
+            state = queue.status(job['jobId'], queue=self.store)['jobs'][0]
+            self.assertEqual(state['version'], '1.0.1')
+            clock.return_value = state['memoryWait']['nextProbeAt']
+            with patch.object(queue.release_memory, 'probe', return_value={'allowed': True}), \
+                 patch.object(self.release, 'new_release') as create, \
+                 patch.object(self.release, 'resume_release', wraps=self.release.resume_release) as resume:
+                queue.drain(self.release, queue=self.store)
+                create.assert_not_called();resume.assert_called_once_with('1.0.1', False)
+        self.assertEqual(self.release.archive_path('1.0.1').read_text(), 'immutable bytes')
+        self.assertEqual(queue.status(job['jobId'], queue=self.store)['jobs'][0]['status'], 'complete')
+
+    def test_earliest_memory_probe_is_not_hidden_by_an_install_retry(self):
+        _, waiting, clock = self.memory_job()
+        second = self.submit(self.source('install-wait'))
+        directory = queue.job_path(self.store, second['jobId'])
+        state = queue.read(directory / 'state.json')
+        queue.update(directory, state, status='retrying', nextRetryAt='2030-01-01T00:05:00+00:00')
+        self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'retrying')
+        self.timer.assert_called_with('2030-01-01T00:00:30+00:00', queue=self.store)
+        self.assertEqual(self.published, [])
 
     def test_conflicting_restore_aborts_its_own_revert_and_preserves_later_source(self):
         self.git('checkout', '-qb', 'fixture')

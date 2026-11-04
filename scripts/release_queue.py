@@ -14,17 +14,18 @@ import subprocess
 import tempfile
 
 try:
-    from . import release_policy, release_history
+    from . import release_policy, release_history, release_memory
 except ImportError:
     import release_policy
     import release_history
+    import release_memory
 
 QUEUE = Path('/home/ubuntu/projects/send-to-t3-code/evidence/release-queue')
 UNIT = 'send-to-t3-release-queue'
 JOB_ID = re.compile(r'^\d{12}-[0-9a-f]{16}$')
 VERSION_FILES = {'package.json', 'package-lock.json', 'manifest.json', 'versions.json'}
 MAX_ATTEMPTS = 3
-FINISHED = {'complete', 'failed', 'needs-evidence', 'awaiting-smoke', 'waiting-for-dependency'}
+FINISHED = {'complete', 'failed', 'needs-evidence', 'awaiting-smoke', 'waiting-for-dependency', 'waiting-for-memory'}
 
 
 def maintenance_only(names: list[str]) -> bool:
@@ -222,7 +223,10 @@ def schedule_retry(when: str, *, queue: Path = QUEUE) -> None:
     units = Path.home() / '.config/systemd/user'
     if not (units / (UNIT + '.service')).is_file():
         return
-    timestamp = dt.datetime.fromisoformat(when).astimezone(dt.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    deadline = dt.datetime.fromisoformat(when).astimezone(dt.timezone.utc)
+    if deadline.microsecond:
+        deadline = (deadline + dt.timedelta(seconds=1)).replace(microsecond=0)
+    timestamp = deadline.strftime('%Y-%m-%d %H:%M:%S UTC')
     (units / (UNIT + '-retry.timer')).write_text(
         '[Unit]\nDescription=Retry an interrupted T3 release\n[Timer]\n'
         f'OnCalendar={timestamp}\nPersistent=true\nAccuracySec=1s\nUnit={UNIT}.service\n'
@@ -236,7 +240,7 @@ def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) 
     with locked(queue / 'queue.lock'):
         directory = job_path(queue, job_id)
         state = read(directory / 'state.json')
-        if state['status'] not in {'blocked', 'failed', 'awaiting-smoke', 'needs-evidence', 'retrying'}:
+        if state['status'] not in {'blocked', 'failed', 'awaiting-smoke', 'needs-evidence', 'retrying', 'waiting-for-memory'}:
             raise SystemExit('Only a failed, blocked, or smoke-waiting job can be retried.')
         if state['status'] == 'retrying' and not state.get('nextRetryAt'):
             raise SystemExit('This job is already recovering in the active worker.')
@@ -258,7 +262,13 @@ def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) 
                            'sourceInputsSha256': inputs}
             save_request(directory, replacement, name)
             state.update(requestRevision=revision, requestFile=name)
-        state.update(status='queued', updatedAt=now(), failures=0)
+        waiting = state.get('memoryWait')
+        if waiting and not (replacement and replacement.get('evidence')):
+            waiting.update(ready=False, nextProbeAt=now())
+            state.update(status='waiting-for-memory', updatedAt=now())
+        else:
+            state.pop('memoryWait', None)
+            state.update(status='queued', updatedAt=now(), failures=0)
         for key in ('error', 'nextAction', 'nextRetryAt'):
             state.pop(key, None)
         if state.get('rollbackCommits'):
@@ -268,6 +278,89 @@ def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) 
         write(directory / 'state.json', state)
         (queue / 'wake').touch()
     return {'jobId': job_id, **state}
+
+
+def defer_memory(directory: Path, state: dict, memory: str, *, phase: str,
+                 reason: str, resume_task_id: str | None = None) -> None:
+    previous = state.get('memoryWait', {})
+    attempts = previous.get('failedProbes', 0) + int(bool(previous.get('ready')))
+    seconds = release_memory.delay(attempts)
+    deadline = (dt.datetime.fromisoformat(now()) + dt.timedelta(seconds=seconds)).isoformat()
+    waiting = {'memory': release_memory.budget(memory), 'phase': phase, 'failedProbes': attempts,
+               'nextProbeAt': deadline, 'nextProbeDelaySeconds': seconds, 'ready': False,
+               'reason': reason, 'since': previous.get('since', now())}
+    if resume_task_id:
+        state['recoveryTaskId'] = resume_task_id
+    state.pop('nextRetryAt', None)
+    update(directory, state, status='waiting-for-memory', memoryWait=waiting, error=reason,
+           nextAction='Automatic memory probes are active; verification still requires real evidence.')
+
+
+def wait_for_memory(job_id: str, memory: str, resume_task_id: str, *, queue: Path = QUEUE) -> dict:
+    """Register an agent-owned verification wait with a native recovery watch."""
+    memory = release_memory.budget(memory)
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', resume_task_id):
+        raise ValueError('Supply the returned native scheduledTaskId for this job’s recovery watch.')
+    with locked(queue / 'queue.lock'):
+        directory = job_path(queue, job_id)
+        state = read(directory / 'state.json')
+        request = read(directory / state.get('requestFile', 'request.json'))
+        if state['status'] not in {'needs-evidence', 'waiting-for-memory'} or state.get('integratedCommit') or state.get('version'):
+            raise ValueError('Only paused unintegrated verification can be deferred; wait for needs-evidence first.')
+        if not request.get('threadId'):
+            raise ValueError('The queued request must identify its owning native T3 thread.')
+        waiting = state.get('memoryWait', {})
+        if (state['status'] == 'waiting-for-memory' and waiting.get('phase') == 'verification'
+                and waiting.get('memory') == memory and state.get('recoveryTaskId') == resume_task_id):
+            schedule_retry(waiting['nextProbeAt'], queue=queue)
+            return {'jobId': job_id, **state}
+        defer_memory(directory, state, memory, phase='verification', resume_task_id=resume_task_id,
+                     reason='Native verification was refused by memory admission.')
+        schedule_retry(state['memoryWait']['nextProbeAt'], queue=queue)
+        return {'jobId': job_id, **state}
+
+
+def probe_memory_entry(directory: Path, state: dict) -> None:
+    waiting = state['memoryWait']
+    if waiting['ready'] or waiting['nextProbeAt'] > now():
+        return
+    decision = release_memory.probe(waiting['memory'])
+    waiting['lastProbeAt'] = now()
+    if decision['allowed']:
+        waiting.update(ready=True, readyAt=now(), lastDecision=decision)
+        waiting.pop('nextProbeAt', None)
+        update(directory, state, memoryWait=waiting,
+               status='needs-evidence' if waiting['phase'] == 'verification' else 'queued', error=None,
+               nextAction='The native recovery watch resumes verification; evidence is still required.'
+                          if waiting['phase'] == 'verification' else 'Memory admission passed; resuming the same candidate.')
+        return
+    waiting['failedProbes'] += 1
+    seconds = release_memory.delay(waiting['failedProbes'])
+    waiting.update(nextProbeAt=(dt.datetime.fromisoformat(now()) + dt.timedelta(seconds=seconds)).isoformat(),
+                   nextProbeDelaySeconds=seconds, lastDecision=decision)
+    update(directory, state, memoryWait=waiting, error=decision.get('reason'),
+           nextAction='Automatic memory probes remain active. No publication or rollback was attempted.')
+
+
+def probe_memory(job_id: str, *, queue: Path = QUEUE) -> dict:
+    with locked(queue / 'queue.lock'):
+        directory = job_path(queue, job_id)
+        state = read(directory / 'state.json')
+        if state.get('memoryWait') and state['status'] == 'waiting-for-memory':
+            probe_memory_entry(directory, state)
+        if state.get('memoryWait', {}).get('nextProbeAt'):
+            schedule_retry(state['memoryWait']['nextProbeAt'], queue=queue)
+        return {'jobId': job_id, **state}
+
+
+def memory_holds_lane(state: dict) -> bool:
+    return (state['status'] == 'waiting-for-memory' and state['memoryWait']['phase'] == 'worker'
+            and bool(state.get('integratedCommit') or state.get('archive')))
+
+
+def next_memory_probe(pending: list[tuple[Path, dict]]) -> str | None:
+    return min((item['memoryWait']['nextProbeAt'] for _, item in pending
+                if item['status'] == 'waiting-for-memory' and item.get('memoryWait', {}).get('nextProbeAt')), default=None)
 
 
 def completed_smoke(release, version: str) -> bool:
@@ -369,7 +462,7 @@ def resolve_validation_merge(release) -> bool:
 
 def engine_hash(root: Path) -> dict:
     return {name: hashlib.sha256((root / 'scripts' / name).read_bytes()).hexdigest()
-            for name in ('release-qlo2.py', 'release_queue.py', 'release_policy.py', 'release_history.py', 'change_checks.py', 'plugin_id_migration.py')
+            for name in ('release-qlo2.py', 'release_queue.py', 'release_memory.py', 'release_policy.py', 'release_history.py', 'change_checks.py', 'plugin_id_migration.py')
             if (root / 'scripts' / name).is_file()}
 
 
@@ -386,7 +479,8 @@ def bootstrap(release, canonical: Path, job_id: str, *, queue: Path = QUEUE) -> 
     directory = job_path(queue, job_id)
     with locked(queue / 'worker.lock', nonblocking=True), locked(release.BACKUPS / 'release.lock'):
         with locked(queue / 'queue.lock'):
-            first = next((path for path in jobs(queue) if read(path / 'state.json')['status'] not in FINISHED), None)
+            first = next((path for path in jobs(queue) if
+                          (item := read(path / 'state.json'))['status'] not in FINISHED or memory_holds_lane(item)), None)
             if first != directory:
                 raise SystemExit('Bootstrap cannot overtake an earlier queue job.')
             state = read(directory / 'state.json')
@@ -599,14 +693,26 @@ def drain(release, *, queue: Path = QUEUE) -> dict:
                                 parent = read(job_path(queue, item['requiresJobId']) / 'state.json')
                                 if parent['status'] == 'complete':
                                     update(path, item, status='queued', requiresJobId=None, nextAction=None)
-                        directory = next((path for path, item in pending if item['status'] not in FINISHED), None)
+                            if item['status'] == 'waiting-for-memory':
+                                probe_memory_entry(path, item)
+                        memory_deadline = next_memory_probe(pending)
+                        directory = next((path for path, item in pending
+                                          if item['status'] not in FINISHED or memory_holds_lane(item)), None)
                         if directory is None:
                             (queue / 'wake').unlink(missing_ok=True)
+                            if memory_deadline:
+                                schedule_retry(memory_deadline, queue=queue)
+                                return {'status': 'waiting-for-memory', 'nextProbeAt': memory_deadline}
                             return {'status': 'idle'}
                         state = read(directory / 'state.json')
+                        if state['status'] == 'waiting-for-memory':
+                            (queue / 'wake').unlink(missing_ok=True)
+                            schedule_retry(memory_deadline, queue=queue)
+                            return {'status': 'waiting-for-memory', 'jobId': directory.name,
+                                    'nextProbeAt': state['memoryWait']['nextProbeAt']}
                         if state.get('nextRetryAt') and state['nextRetryAt'] > now():
                             (queue / 'wake').unlink(missing_ok=True)
-                            schedule_retry(state['nextRetryAt'], queue=queue)
+                            schedule_retry(min(state['nextRetryAt'], memory_deadline or state['nextRetryAt']), queue=queue)
                             return {'status': 'retrying', 'jobId': directory.name, 'nextRetryAt': state['nextRetryAt']}
                         state.pop('nextRetryAt', None)
                         request = read(directory / state.get('requestFile', 'request.json'))
@@ -624,11 +730,19 @@ def drain(release, *, queue: Path = QUEUE) -> dict:
                             continue
                     with (directory / 'worker.log').open('a', buffering=1) as log, redirect_stdout(log), redirect_stderr(log):
                         print(f'Queue attempt {now()}: {directory.name}', flush=True)
+                        log_offset = os.fstat(log.fileno()).st_size
                         try:
                             restart = run_job(release, directory, request, state, loaded_engine)
                             if restart:
                                 return {'status': 'worker-restart', 'jobId': directory.name}
                         except (Exception, SystemExit) as error:
+                            log.flush()
+                            with (directory / 'worker.log').open('rb') as current_log:
+                                current_log.seek(max(log_offset, current_log.seek(0, os.SEEK_END) - 16_384))
+                                attempt_output = current_log.read().decode(errors='replace')
+                            if release_memory.refused(error, attempt_output):
+                                defer_memory(directory, state, '2G', phase='worker', reason=str(error))
+                                continue
                             failures = state.get('failures', 0) + 1
                             failed_stage = state['status']
                             attempt = directory / f'failure-{len(list(directory.glob("failure-*.json"))) + 1:04d}.json'

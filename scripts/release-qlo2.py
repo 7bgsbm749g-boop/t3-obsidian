@@ -738,6 +738,10 @@ def parser() -> argparse.ArgumentParser:
     action.add_argument('--bootstrap-queue', metavar='JOB_ID', help='Integrate a queued, reviewed tooling repair when the canonical worker cannot start; never publish here.')
     action.add_argument('--install-queue', action='store_true', help='Install the event-driven local queue worker once.')
     action.add_argument('--retry-queued', metavar='JOB_ID', help='Resume recovery or retry a repaired candidate; retain immutable release bytes.')
+    action.add_argument('--wait-for-memory', metavar='JOB_ID', help='Defer unintegrated native verification with an automatic recovery watch.')
+    action.add_argument('--probe-memory', metavar='JOB_ID', help='Read or run a due memory probe; preserve backoff and evidence requirements.')
+    result.add_argument('--memory-budget', help='With --wait-for-memory: the refused allowance, such as 768M.')
+    result.add_argument('--resume-task-id', help='With --wait-for-memory: native scheduledTaskId bound to the owning T3 thread.')
     result.add_argument('--prepare', action='store_true', help='With --bump/--version: prepare and check a task-worktree candidate without deployment.')
     result.add_argument('--validation', type=Path, help='Exact successful validation proof for --publish.')
     result.add_argument('--release-type', choices=('patch', 'minor', 'major', 'none'),
@@ -757,6 +761,8 @@ def parser() -> argparse.ArgumentParser:
 
 
 def dispatch(args: argparse.Namespace) -> None:
+    if (args.memory_budget or args.resume_task_id) and not args.wait_for_memory:
+        raise SystemExit('Memory budget and recovery task are valid only with --wait-for-memory.')
     if (args.history_seed or args.summary or args.thread_id) and not (args.enqueue or args.retry_queued and args.replacement):
         raise SystemExit('History metadata is valid only with --enqueue or a queued replacement.')
     if args.thread_id and any(c.isspace() or c in '()[]' for c in args.thread_id):
@@ -788,12 +794,20 @@ def dispatch(args: argparse.Namespace) -> None:
         print(json.dumps(result, indent=2))
         release_queue.kick()
         return
-    if args.queue_status or args.install_queue or args.drain_queue or args.retry_queued or args.bootstrap_queue:
+    if args.queue_status or args.install_queue or args.drain_queue or args.retry_queued or args.bootstrap_queue or args.wait_for_memory or args.probe_memory:
         if args.prepare or args.allow_dirty or args.skip_tests_reason or args.skip_laptop_reload or args.base or args.device:
             raise SystemExit('Queue management accepts only its action and job ID.')
         if (args.validation or args.evidence or args.notes) and not (args.retry_queued and args.replacement):
             raise SystemExit('Replacement evidence is valid only with --retry-queued and --replacement.')
-        if args.queue_status:
+        if args.wait_for_memory:
+            if not args.memory_budget or not args.resume_task_id:
+                raise SystemExit('Supply --memory-budget and the returned native --resume-task-id; verification must have an automatic owner.')
+            print(json.dumps(release_queue.wait_for_memory(args.wait_for_memory, args.memory_budget, args.resume_task_id), indent=2))
+            release_queue.kick()
+        elif args.probe_memory:
+            print(json.dumps(release_queue.probe_memory(args.probe_memory), indent=2))
+            release_queue.kick()
+        elif args.queue_status:
             print(json.dumps(release_queue.status(None if args.queue_status == 'all' else args.queue_status), indent=2))
         elif args.install_queue:
             canonical_root_required()
