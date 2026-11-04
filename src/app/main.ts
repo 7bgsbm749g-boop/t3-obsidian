@@ -70,7 +70,7 @@ import {clearVaultDiagnostics} from './disabled-diagnostics';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from '../connection/cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from '../connection/native-account';
 import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from '../connection/direct';
-import { requireApiVersion,setIcon, App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type SettingDefinition,type SettingDefinitionItem,type SettingDefinitionRender,type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer, parseYaml, stringifyYaml,requestUrl } from 'obsidian';
+import { requireApiVersion,setIcon, App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type SettingDefinition,type SettingDefinitionItem,type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer, parseYaml, stringifyYaml,requestUrl } from 'obsidian';
 import { Buffer } from 'buffer/';
 import { deviceState,clearDeviceDiagnostics } from '../storage/device-state';
 import {nativeStoppedStore} from '../responses/native-stop-store';
@@ -3089,6 +3089,8 @@ class FolderLinkModal extends Modal{
   }
 }
 
+// Shared renderer data works on older clients; it is not a new SDK instance.
+interface SettingsRow {name:string;desc?:string;aliases?:string[];render:(setting:Setting)=>void}
 export class T3Settings extends PluginSettingTab {
   constructor(app:App,private plugin:SendToT3){super(app,plugin);}
   /** Obsidian 1.13+ indexes these names, descriptions and aliases. Older
@@ -3109,8 +3111,8 @@ export class T3Settings extends PluginSettingTab {
       if(requireApiVersion('1.13.0'))this.update();else this.display();
     }else this.display();
   }
-  private connectionDefinitions():Array<SettingDefinitionRender&{render:(setting:Setting)=>void}>{
-    const rows:Array<SettingDefinitionRender&{render:(setting:Setting)=>void}>=[{name:'Connect with',desc:'Choose how this device reaches T3.',render:setting=>{setting.addDropdown(d=>{d.addOptions({direct:'T3 Connect (recommended)',...(!Platform.isMobile?{desktop:'This computer only'}:{})});d.setValue(this.plugin.mode).onChange(async value=>{this.plugin.mode=value as 'desktop'|'direct';await this.plugin.save();void this.plugin.refreshMachines().catch(error=>new Notice(message(error)));this.refresh();});});}}];
+  private connectionDefinitions():Array<SettingsRow>{
+    const rows:Array<SettingsRow>=[{name:'Connect with',desc:'Choose how this device reaches T3.',render:setting=>{setting.addDropdown(d=>{d.addOptions({direct:'T3 Connect (recommended)',...(!Platform.isMobile?{desktop:'This computer only'}:{})});d.setValue(this.plugin.mode).onChange(async value=>{this.plugin.mode=value as 'desktop'|'direct';await this.plugin.save();void this.plugin.refreshMachines().catch(error=>new Notice(message(error)));this.refresh();});});}}];
     if(this.plugin.mode==='direct')rows.push({name:'T3 account',aliases:['Sign in','T3 account email','Email verification code','Refresh connections','Sign out'],render:setting=>{setting.settingEl.empty();setting.settingEl.removeClass('setting-item');this.cloudUI(setting.settingEl);}});
     else rows.push(
       {name:'Official T3 executable',desc:'Leave blank to find t3 automatically, or enter the full executable path.',render:setting=>{setting.addText(t=>t.setValue(this.plugin.settings.connection.executable).onChange(async value=>{this.plugin.settings.connection.executable=value.trim();await this.plugin.save();}));}},
@@ -3232,7 +3234,7 @@ export class T3Settings extends PluginSettingTab {
     }
   }
   private replyPageDefinitions():SettingDefinitionItem[]{const fields=this.replyDefinitions();return [...fields.slice(0,-1),{type:'page',name:'Beta',desc:'Optional thread and note behavior.',items:[fields.at(-1)!]}];}
-  private replyDefinitions():Array<SettingDefinitionRender&{render:(setting:Setting)=>void}>{
+  private replyDefinitions():Array<SettingsRow>{
     return [
       {name:'Stream replies into the editor',desc:'Insert Send and Ask replies into the note. Selection replies appear below the selection; other replies use the captured cursor position or follow its paragraph.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));}},
       {name:'Final answer format',desc:'Applies to new responses. Both formats support images and files.',render:setting=>{setting.addDropdown(dropdown=>dropdown.addOptions({formatted:'Current formatting','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));}},
@@ -3241,7 +3243,7 @@ export class T3Settings extends PluginSettingTab {
       {name:'Thread and note mode',desc:'Free is the default and allows many-to-many links. 1:1 keeps one thread per note and one note per thread. The most recent links select existing 1:1 pairs. Saved replies and link history are kept when you switch.',render:setting=>{setting.addDropdown(d=>d.addOptions({free:'Free · Many-to-many','one-to-one':'1:1 · One thread per note'}).setValue(threadNoteMode(this.plugin.settings.threadNoteMode)).onChange(async value=>{this.plugin.settings.threadNoteMode=threadNoteMode(value);await this.plugin.save();}));}},
     ];
   }
-  private renderDefinition(el:HTMLElement,definition:SettingDefinitionRender&{render:(setting:Setting)=>void}){
+  private renderDefinition(el:HTMLElement,definition:SettingsRow){
     const setting=new Setting(el).setName(definition.name);if(definition.desc)setting.setDesc(definition.desc);
     return definition.render(setting);
   }
