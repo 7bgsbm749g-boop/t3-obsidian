@@ -9,8 +9,8 @@ const bundled=build({entryPoints:['src/projects/codebase-native.ts'],bundle:true
 const scope={environmentId:'env',projectId:'project',root:'/outside',title:'Project'};
 
 test('the isolated native opening lab compiles with the production bridge',async()=>{
-  const source=await readFile('validation/codebase-lab.ts','utf8');
-  const result=await build({stdin:{contents:source,resolveDir:process.cwd()+'/validation',loader:'ts'},bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian','node:*','@electron/remote',...editorExternals]});
+  const source=await readFile('tests/native/codebase-lab.ts','utf8');
+  const result=await build({stdin:{contents:source,resolveDir:process.cwd()+'/tests/native',loader:'ts'},bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian','node:*','@electron/remote',...editorExternals]});
   assert.ok(result.outputFiles[0].text.includes('runFileOpeningLab'));
 });
 function deferred<T>(){let resolve!:(value:T)=>void,reject!:(error:Error)=>void;const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}

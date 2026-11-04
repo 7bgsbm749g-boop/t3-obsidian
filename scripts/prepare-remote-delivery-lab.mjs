@@ -55,7 +55,7 @@ for(const role of ['a','b']){
   await writeFile(join(evidence,`credential-${role}.json`),JSON.stringify({deviceId:randomUUID(),mode:'direct',pairedSessions:{[connectionId]:{url:origin,environmentId:descriptor.environmentId,token:issued.token,expiresAt:Date.parse(issued.expiresAt),permissions}}}),{mode:0o600});
   await writeFile(join(observer,'manifest.json'),JSON.stringify({id:'remote-delivery-lab',name:'Synthetic remote delivery lab observer',version:'0.0.1',minAppVersion:'1.8.7',description:'Test vault only',author:'Local validation',isDesktopOnly:true}));
   await writeFile(join(observer,'config.json'),JSON.stringify({evidence,role,note}));
-  await build({entryPoints:['validation/remote-delivery-lab.ts'],bundle:true,external:['obsidian','node:*'],platform:'browser',format:'cjs',target:'es2022',outfile:join(observer,'main.js')});
+  await build({entryPoints:['tests/native/remote-delivery-lab.ts'],bundle:true,external:['obsidian','node:*'],platform:'browser',format:'cjs',target:'es2022',outfile:join(observer,'main.js')});
 }
 const receipt={vaultId,connectionId,environmentId:descriptor.environmentId,projectId,vaultProjectId,workspace,folder,note,hostRoot:root,sourceRoot:'/home/ubuntu/vaults/Sync Test B',sessionId:issued.sessionId,oldVersion,oldArchiveSha256:createHash('sha256').update(await readFile(oldZip)).digest('hex')};
 await writeFile(join(evidence,'LAB.json'),JSON.stringify(receipt,null,2));await writeFile(join(evidence,'CONFIG-BACKUPS.json'),JSON.stringify(backups));console.log(JSON.stringify(receipt));

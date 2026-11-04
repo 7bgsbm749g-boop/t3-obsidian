@@ -37,7 +37,7 @@ canonical assistant messages; native callout replacement was the display problem
 
 ## Verification
 
-The reusable real-editor fixture is `validation/dense-stream-lab.ts`, prepared
+The reusable real-editor fixture is `tests/native/dense-stream-lab.ts`, prepared
 with `scripts/build-native-response-lab.mjs NEW_PRIVATE_DIRECTORY --dense`.
 It runs in an isolated, unsynced Obsidian vault with synthetic events. It is not a
 substitute for a QLO2 release smoke test.

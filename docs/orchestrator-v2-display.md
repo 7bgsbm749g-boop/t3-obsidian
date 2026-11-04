@@ -25,7 +25,7 @@ DOM retention and pane-local fold choices, keyed to the run rather than a plan
 snapshot ID, so commentary, tools, task updates, and completion do not reset its
 choice. The outer history keeps its existing completion fold policy.
 
-`validation/tasks-panel-lab.ts` replays these updates in real desktop Live
+`tests/native/tasks-panel-lab.ts` replays these updates in real desktop Live
 Preview and Reading panes in a separate, unsynced vault. Build it with
 `node scripts/build-native-response-lab.mjs evidence/TASK/native --tasks`.
 The lab checks placement, gray icons, all three states, non-editable indicators,

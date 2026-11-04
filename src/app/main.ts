@@ -3112,7 +3112,7 @@ export class T3Settings extends PluginSettingTab {
     const el=this.containerEl;el.empty();el.addClass('t3-settings');
     this.plugin.cloudChanged=()=>this.display();
     const header=el.createDiv({cls:'t3-settings-header'});
-    header.createEl('h2',{text:'T3 Code'});
+    new Setting(header).setName('T3 Code').setHeading();
     header.createEl('p',{text:'Connect T3, choose how replies appear, and link your projects.'});
     const tabs=el.createDiv({cls:'t3-settings-tabs',attr:{role:'tablist','aria-label':'T3 Code settings'}});
     const panel=el.createDiv({cls:'t3-settings-panel',attr:{role:'tabpanel',id:`${this.tabId}-panel`,tabindex:'0'}});
