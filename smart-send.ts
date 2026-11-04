@@ -219,6 +219,18 @@ export async function sourceProjection(data:SmartSendData,noteId:string,document
   for(const [from,to] of [...ranges,[document.length,document.length] as Span]){if(from>cursor){segments.push({rawFrom:cursor,rawTo:from,from:text.length});text+=document.slice(cursor,from);}cursor=Math.max(cursor,to);}
   return {text,segments};
 }
+/** An explicit selection keeps all selected content and formatting. Private
+ * tracking comments remain excluded; examples inside code stay literal text. */
+export function explicitSelectionText(document:string,[start,end]:Span):string {
+  const code=markdownCodeRanges(document);
+  const hidden=union([...noteIdentityRanges(document),...[...runImportReceipts(document)].filter(receipt=>!code.some(([from,to])=>receipt.from>=from&&receipt.from<to))].map(({from,to})=>[from,to] as Span));
+  let text='',cursor=start;
+  for(const [from,to] of hidden){
+    if(to<=cursor||from>=end)continue;
+    text+=document.slice(cursor,Math.max(cursor,from));cursor=Math.min(end,to);
+  }
+  return text+document.slice(cursor,end);
+}
 export async function prepareSmartSend(data:SmartSendData,path:string,destination:string,document:string,scope?:Span){
   const noteId=smartNote(data,path,noteIdentity(document)),projection=await sourceProjection(data,noteId,document),current=projection.text;
   const identities=noteIdentities(data,noteId),heads=Object.entries(data.heads).filter(([,h])=>identities.has(h.noteId)&&h.destination===destination);
