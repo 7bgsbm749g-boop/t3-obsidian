@@ -1,4 +1,3 @@
-/* eslint obsidianmd/no-nodejs-modules: ["warn", {"isDesktopOnly": true}] -- This desktop adapter is lazy-loaded; scripts/check-platform-boundaries.mjs and mobile bundle tests prohibit Node imports in the portable entry graph. */
 // Browser timers in a background Obsidian renderer can run only once a minute.
 // Desktop coordination and lease renewal must keep their normal deadlines.
 import {setInterval,clearInterval,setTimeout} from 'node:timers';

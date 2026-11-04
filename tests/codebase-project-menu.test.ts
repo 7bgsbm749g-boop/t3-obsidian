@@ -4,10 +4,10 @@ import {build} from 'esbuild';
 import {runInNewContext} from './obsidian-context';
 const bundle=build({entryPoints:['src/projects/codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian']});
 const scope={environmentId:'env',projectId:'project',root:'/outside',title:'Project'};
-async function fixture(){
+async function fixture(modern=false){
  class Base{}class Element{children:Element[]=[];textContent='';createEl(_tag:string,options:any={}){const e=new Element();e.textContent=options.text??'';this.children.push(e);return e;}setText(text:string){this.textContent=text;}createDiv(options:any={}){return Reflect.apply(this.createEl,this,['div',options]);}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}}
  class Modal{titleEl=new Element();contentEl=new Element();buttons:Button[]=[];input?:Text;closed=false;constructor(public app:any){}open(){}close(){this.closed=true;}}
- class Button{disabled=false;text='';cb?:()=>Promise<void>|void;setButtonText(t:string){this.text=t;return this;}setDisabled(v:boolean){this.disabled=v;return this;}setCta(){return this;}setWarning(){return this;}onClick(cb:any){this.cb=cb;return this;}click(){return this.disabled?undefined:this.cb?.();}setClass(_name:string){return this;}}
+ class Button{appearance='';setDestructive(){this.appearance='destructive';return this;}disabled=false;text='';cb?:()=>Promise<void>|void;setButtonText(t:string){this.text=t;return this;}setDisabled(v:boolean){this.disabled=v;return this;}setCta(){return this;}setWarning(){return this;}onClick(cb:any){this.cb=cb;return this;}click(){return this.disabled?undefined:this.cb?.();}setClass(name:string){this.appearance=name;return this;}}
  class Text{value='';cb?:(value:string)=>void;setValue(v:string){this.value=v;return this;}onChange(cb:any){this.cb=cb;return this;}change(v:string){this.value=v;this.cb?.(v);}}
  const buttons:Button[]=[],inputs:Text[]=[];
  class Setting{constructor(_el:Element){}setName(){return this;}addButton(cb:any){const b=new Button();buttons.push(b);cb(b);return this;}addText(cb:any){const t=new Text();inputs.push(t);cb(t);return this;}}
@@ -15,7 +15,7 @@ async function fixture(){
  const io={renameProject:async()=>{renames++;},deleteProject:async()=>{deletes++;}};
  const storage={load:()=>undefined,save:async()=>{},projectChanged:async(_scope:any,change:any)=>{updates++;if(failLinks)throw Error('Link save failed');if(change.deleted)links.length=0;else links[0].projectTitle=change.title;}};
  const app:any={loadLocalStorage:(key:string)=>local.get(key),saveLocalStorage:(key:string,value:any)=>local.set(key,value),vault:{configDir:'.obsidian'},workspace:{iterateAllLeaves:()=>{}}};
- const module={exports:{} as any};runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:()=>({EditorSuggest:Base,ItemView:Base,FuzzySuggestModal:Base,Modal,Setting}),document:{createElement:()=>({})},TextEncoder,URL,crypto,setTimeout,clearTimeout,performance});
+ const module={exports:{} as any};runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:()=>({requireApiVersion:()=>modern,EditorSuggest:Base,ItemView:Base,FuzzySuggestModal:Base,Modal,Setting}),document:{createElement:()=>({})},TextEncoder,URL,crypto,setTimeout,clearTimeout,performance});
  const bridge=new module.exports.CodebaseBridge(app,{},io,()=>links,'menu',storage);
  return {bridge,app,io,storage,local,buttons,inputs,links,get renames(){return renames;},get deletes(){return deletes;},get updates(){return updates;},set failLinks(value:boolean){failLinks=value;}};
 }
@@ -39,4 +39,9 @@ test('concurrent confirmed changes keep a later failed local update durable whil
  const first={id:'first',scope,change:{title:'First'}},second={id:'second',scope:{...scope,projectId:'other'},change:{deleted:true}};
  const key='t3-codebase-browser:menu:project-changes';f.local.set(key,[first]);const a=f.bridge.reconcileProjectChanges();await Promise.resolve();f.local.set(key,[first,second]);const b=f.bridge.reconcileProjectChanges();release();
  await assert.rejects(a,/Second link update failed/);await assert.rejects(b,/Second link update failed/);assert.equal(calls,2);assert.deepEqual(f.local.get(key),[second]);assert.equal(f.renames,0);assert.equal(f.deletes,0);
+});
+
+for(const modern of [false,true])test(`delete project uses the supported destructive style (${modern})`,async()=>{
+ const f=await fixture(modern);f.bridge.projectModal(scope,true);
+ assert.equal(f.buttons[1].appearance,modern?'destructive':'mod-warning');assert.equal(f.deletes,0);
 });

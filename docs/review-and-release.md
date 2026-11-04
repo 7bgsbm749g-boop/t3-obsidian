@@ -4,13 +4,19 @@
 TypeScript checks, SDK compatibility guards, and manifest validation. Both
 errors and warnings fail the command. The upstream rule source, immutable
 commit, build script, license and checksum are retained in `scripts/vendor/`.
-The exact public description is an explicit manifest word-policy exception;
-structural manifest validation stays enabled.
+The manifest description follows the directory word policy without exceptions.
+The README can explain how the plugin brings T3 Code into Obsidian.
 
 The same command checks the static entry graph for eager Node imports and
 checks CSS for expensive `:has()` selectors, partially supported layout
 features, and undocumented priority overrides. Desktop adapters remain lazy;
 mobile does not import their filesystem, process, HTTP-server or timer APIs.
+Desktop-rule metadata belongs in the lint configuration, never source comments:
+older directory scanners do not accept the newer inline option schema. Their
+remaining static-import notices describe these isolated desktop adapters; the
+portable entry graph and mobile bundle checks establish the actual boundary.
+Keep version guards as direct `if (requireApiVersion(...))` branches so both
+older and current directory scanners can verify new API calls.
 `npm test` runs and caches these gates before the affected tests. Cache keys
 include installed dependency bytes, runtime, source and configuration. Passing
 bounded test batches retain their own logs; failed batches have no success

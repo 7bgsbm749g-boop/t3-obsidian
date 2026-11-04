@@ -1,4 +1,3 @@
-/* eslint obsidianmd/no-nodejs-modules: ["warn", {"isDesktopOnly": true}] -- This desktop adapter is lazy-loaded; scripts/check-platform-boundaries.mjs and mobile bundle tests prohibit Node imports in the portable entry graph. */
 import {nativeHost} from '../shared/native-host';
 import {randomUUID} from 'node:crypto';
 import type {App} from 'obsidian';
