@@ -1,4 +1,5 @@
-import {Buffer} from 'buffer';
+import {isRecord,entries} from '../shared/values';
+import {Buffer} from 'buffer/';
 import {contentHash} from '../responses/completion';
 import {responseIds,responseFrame} from '../responses/response-container';
 import {streamBlocks} from '../responses/stream-block';
@@ -42,16 +43,19 @@ export async function unpackText(packed:PackedText){
   if(contentHash(text)!==packed.hash)throw Error('The Smart Send record failed its content check.');
   return cache(packed.hash,text);
 }
-const packed=(p:any):p is PackedText=>p&&/^[0-9a-f]{64}$/.test(p.hash)&&['text','gzip'].includes(p.encoding)&&typeof p.data==='string';
-const spans=(s:any):s is Span[]=>Array.isArray(s)&&s.every(v=>Array.isArray(v)&&v.length===2&&Number.isSafeInteger(v[0])&&Number.isSafeInteger(v[1])&&v[0]>=0&&v[1]>=v[0]);
-export function loadSmartSend(value:any):SmartSendData{
-  const out=empty();if(value?.version!==1)return out;
-  for(const [id,n] of Object.entries(value.notes??{}) as [string,any][])if(typeof n?.path==='string'&&Number.isSafeInteger(n.revision)&&(n.renamedAt===undefined||Number.isSafeInteger(n.renamedAt)&&n.renamedAt<=n.revision))out.notes[id]=n;
-  for(const [id,b] of Object.entries(value.bodies??{}))if(packed(b)&&b.hash===id)out.bodies[id]=b;
-  for(const [id,r] of Object.entries(value.responses??{}) as [string,any][])if(typeof r?.noteId==='string'&&typeof r.body==='string'&&typeof r.before==='string'&&typeof r.after==='string'&&Number.isSafeInteger(r.offset))out.responses[id]=r;
-  for(const [id,e] of Object.entries(value.noteEdits??{}) as [string,any][])if(typeof e?.noteId==='string'&&packed(e.source)&&spans(e.added)&&e.added.every(([,to]:Span)=>e.source.encoding!=='text'||to<=e.source.data.length))out.noteEdits![id]=e;
-  for(const [id,h] of Object.entries(value.heads??{}) as [string,any][])if(typeof h?.noteId==='string'&&typeof h.destination==='string'&&packed(h.source)&&spans(h.covered)&&Array.isArray(h.parents)&&h.parents.every((p:any)=>typeof p==='string')&&(h.bindings===undefined||Array.isArray(h.bindings)&&h.bindings.every((id:any)=>typeof id==='string')))out.heads[id]=h;
-  out.retired=Array.isArray(value.retired)?value.retired.filter((id:any)=>typeof id==='string'):[];return out;
+const packed=(p:unknown):p is PackedText=>isRecord(p)&&typeof p.hash==='string'&&/^[0-9a-f]{64}$/.test(p.hash)&&(p.encoding==='text'||p.encoding==='gzip')&&typeof p.data==='string';
+const spans=(s:unknown):s is Span[]=>Array.isArray(s)&&s.every((v:unknown)=>Array.isArray(v)&&v.length===2&&typeof v[0]==='number'&&typeof v[1]==='number'&&Number.isSafeInteger(v[0])&&Number.isSafeInteger(v[1])&&v[0]>=0&&v[1]>=v[0]);
+const strings=(value:unknown):value is string[]=>Array.isArray(value)&&value.every((part:unknown)=>typeof part==='string');
+export function loadSmartSend(value:unknown):SmartSendData{
+  const out=empty();if(!isRecord(value)||value.version!==1)return out;
+  for(const [id,n] of entries(value.notes))if(isRecord(n)&&typeof n.path==='string'&&typeof n.revision==='number'&&Number.isSafeInteger(n.revision)&&(n.renamedAt===undefined||typeof n.renamedAt==='number'&&Number.isSafeInteger(n.renamedAt)&&n.renamedAt<=n.revision))out.notes[id]=n as unknown as NoteIdentity;
+  for(const [id,b] of entries(value.bodies))if(packed(b)&&b.hash===id)out.bodies[id]=b;
+  for(const [id,r] of entries(value.responses))if(isRecord(r)&&typeof r.noteId==='string'&&typeof r.body==='string'&&typeof r.before==='string'&&typeof r.after==='string'&&typeof r.offset==='number'&&Number.isSafeInteger(r.offset))out.responses[id]=r as unknown as ResponseText;
+  for(const [id,e] of entries(value.noteEdits))if(isRecord(e)&&typeof e.noteId==='string'&&packed(e.source)&&spans(e.added)){
+    const source=e.source;if(e.added.every(([,to])=>source.encoding!=='text'||to<=source.data.length))out.noteEdits![id]={noteId:e.noteId,source,added:e.added};
+  }
+  for(const [id,h] of entries(value.heads))if(isRecord(h)&&typeof h.noteId==='string'&&typeof h.destination==='string'&&packed(h.source)&&spans(h.covered)&&strings(h.parents)&&(h.bindings===undefined||strings(h.bindings)))out.heads[id]=h as unknown as SentText;
+  out.retired=Array.isArray(value.retired)?value.retired.filter((id:unknown):id is string=>typeof id==='string'):[];return out;
 }
 /** Immutable receipts merge by union. A confirmed successor retires only the
  * exact predecessors it read; simultaneous device branches both survive. */
@@ -199,7 +203,7 @@ export async function sourceProjection(data:SmartSendData,noteId:string,document
     known.push([raw[0][0],raw.at(-1)![1]]);
     const matched=current.map(textCoverage(original.text,current.text.slice(left,right),[[0,original.text.length]]).map(([from,to])=>[left+from,left+to] as Span),true);
     // Keep container line endings when removing text from a reformatted reply.
-    for(const [from,to] of matched)for(const match of document.slice(from,to).matchAll(/[^\r\n]+/g))removed.push([from+match.index!,from+match.index!+match[0].length]);
+    for(const [from,to] of matched)for(const match of document.slice(from,to).matchAll(/[^\r\n]+/g))removed.push([from+match.index,from+match.index+match[0].length]);
   }
   // A known edited response is handled by its recorded text, so additions
   // inside its completed history remain ordinary source. Legacy histories

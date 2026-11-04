@@ -1,3 +1,4 @@
+import {isRecord,records as recordValues} from '../shared/values';
 import {turnForMessage,type InlineMessage,type InlineThreadState,type SelectionAnchor} from './inline-thread';
 import {responseRegion} from '../responses/native-response-projection';
 import {responseIds} from '../responses/response-container';
@@ -33,8 +34,10 @@ export interface InlineSteering {
 }
 export interface SteeringInput {messageId:string;text:string;selection?:SelectionAnchor;selections?:SelectionAnchor[];sourceResponseId?:string}
 
-export function validSteeringInput(value:any):value is SteeringInput {
-  const validAnchor=(a:any)=>a&&typeof a.text==='string'&&!!a.text&&Number.isSafeInteger(a.start)&&a.start>=0&&Number.isSafeInteger(a.end)&&a.end===a.start+a.text.length&&typeof a.before==='string'&&typeof a.after==='string';
+export function validSteeringInput(input:unknown):input is SteeringInput {
+  if(!isRecord(input))return false;
+  const value=input as unknown as SteeringInput;
+  const validAnchor=(a:unknown):a is SelectionAnchor=>isRecord(a)&&typeof a.start==='number'&&typeof a.end==='number'&&typeof a.text==='string'&&!!a.text&&Number.isSafeInteger(a.start)&&a.start>=0&&Number.isSafeInteger(a.end)&&a.end===a.start+a.text.length&&typeof a.before==='string'&&typeof a.after==='string';
   return !!value&&isT3MessageId(value.messageId)&&typeof value.text==='string'&&!!value.text.trim()&&value.text.length<=120_000&&
     (!value.selection||validAnchor(value.selection))&&(!value.selections||Array.isArray(value.selections)&&value.selections.length<=120_000&&value.selections.every(validAnchor)&&value.selections.reduce((size:number,a:SelectionAnchor)=>size+a.text.length,0)<=120_000)&&
     (!value.sourceResponseId||/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.sourceResponseId));
@@ -89,11 +92,11 @@ export function incomingLabel(message:InlineMessage,local=false):string {
     const title=message.senderThreadTitle;
     return `Agent · ${typeof title==='string'&&title.trim()&&title.length<=160?title:message.senderThreadId!.slice(0,8)}`;
   }
-  const records=(message.context as any)?.records;
-  const senders=Array.isArray(records)?records.filter(record=>record?.kind==='fleet-sender'):[];
+  const records=isRecord(message.context)?message.context.records:undefined;
+  const senders=recordValues(records).filter(record=>record.kind==='fleet-sender');
   if(senders.length===1){
-    const record=senders[0],p=record.payload;
-    if(record.version===1&&p?.version===1&&p.kind==='agent'&&uuid.test(p.environmentId??'')&&uuid.test(p.threadId??'')&&typeof p.title==='string'&&p.title.trim()&&p.title.length<=160)return `Agent · ${p.title}`;
+    const record=senders[0],p=isRecord(record.payload)?record.payload:undefined;
+    if(record.version===1&&p?.version===1&&p.kind==='agent'&&typeof p.environmentId==='string'&&uuid.test(p.environmentId)&&typeof p.threadId==='string'&&uuid.test(p.threadId)&&typeof p.title==='string'&&p.title.trim()&&p.title.length<=160)return `Agent · ${p.title}`;
   }
   return local?'You':'User';
 }

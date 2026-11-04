@@ -1,12 +1,13 @@
+const EVENT_LOG_PATH=eventLogPath('.obsidian');
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EventJournal,configureDiagnostics,redact,type DiagnosticState} from '../src/app/diagnostics';
-import {SyncedEventLogs,EVENT_LOG_PATH,EVENT_LOG_FOLDER} from '../src/storage/synced-event-logs';
+import {SyncedEventLogs,eventLogPath,EVENT_LOG_FOLDER} from '../src/storage/synced-event-logs';
 import {instrumentOperations} from '../src/app/diagnostic-operations';
 function fixture(deviceId='device',data=new Map<string,string>()){
   let time=Date.parse('2026-10-01T12:00:00Z'),serial=0,saved:any,fail=false,writes=0;
   const files={exists:async(path:string)=>data.has(path),mkdir:async(path:string)=>{data.set(path,'');},read:async(path:string)=>{if(!data.has(path))throw Error('missing');return data.get(path)!;},write:async(path:string,text:string)=>{if(fail)throw Error('offline');writes++;data.set(path,text);},remove:async(path:string)=>{data.delete(path);}};
-  const sync=new SyncedEventLogs(files,deviceId,()=>[...data.keys()],()=>time);
+  const sync=new SyncedEventLogs(files,deviceId,()=>[...data.keys()],()=>time,'.obsidian');
   const io={id:()=>`${deviceId}-${++serial}`,now:()=>time,context:{deviceId},load:async()=>saved,save:async(state:DiagnosticState)=>{saved=structuredClone(state);},publish:(events:any)=>sync.publish(events),readSynced:()=>sync.read()};
   return {io,sync,data,get saved(){return saved;},get writes(){return writes;},setSaved:(value:any)=>saved=value,setFail:(value:boolean)=>fail=value,advance:(ms:number)=>time+=ms};
 }

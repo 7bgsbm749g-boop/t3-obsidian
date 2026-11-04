@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
-import {runInNewContext} from 'node:vm';
+import {runInNewContext} from './obsidian-context';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
 const compiled=build({entryPoints:['src/conversations/chat-ui.ts'],bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
 async function fixture(alternative?:string,closeImmediately=false,initialBusy=false,automatic=false,remembered=true,hasContent?:boolean){
  const modals:any[]=[];
- class Element{value='';text='';style:any={};disabled=false;isConnected=true;children:any[]=[];events:any={};empty(){this.children=[];}setText(t:string){this.text=t;}focus(){}addEventListener(n:string,f:any){this.events[n]=f;}createEl(_tag:string,o:any={}){const el=new Element();el.text=o.text??'';this.children.push(el);return el;}}
+ class Element{value='';text='';style:any={};disabled=false;isConnected=true;children:any[]=[];events:any={};empty(){this.children=[];}setText(t:string){this.text=t;}focus(){}addEventListener(n:string,f:any){this.events[n]=f;}createEl(_tag:string,o:any={}){const el=new Element();el.text=o.text??'';this.children.push(el);return el;}createDiv(options:any={}){return Reflect.apply(this.createEl,this,['div',options]);}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}}
  class Modal{titleEl=new Element();contentEl=new Element();constructor(public app:any){}open(){modals.push(this);(this as any).onOpen?.();}close(){(this as any).onClose?.();}setPlaceholder(){}}
  class Setting{buttons:any[]=[];constructor(_el:any){}setClass(){return this;}setDisabled(v:boolean){this.buttons.forEach(b=>b.buttonEl.disabled=v);return this;}addButton(f:any){const b:any={buttonEl:new Element(),setButtonText(t:string){this.buttonEl.text=t;return this;},setCta(){return this;},setDisabled(v:boolean){this.buttonEl.disabled=v;return this;},onClick(fn:any){this.click=fn;return this;}};f(b);this.buttons.push(b);return this;}}
  const module:any={exports:{}},notices:string[]=[],calls:Array<{key?:string;signal:AbortSignal;resolve:(v:any)=>void}>=[],sent:any[]=[];

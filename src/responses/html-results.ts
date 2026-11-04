@@ -1,3 +1,4 @@
+import {hasControlCharacters,replaceControlCharacters,isRecord as record,parseJson} from '../shared/values';
 import {contentHash} from './completion';
 import type {InlineActivity} from '../conversations/inline-thread';
 import {unified} from 'unified';
@@ -8,33 +9,32 @@ export interface HtmlRenderReference {attachmentId:string;title:string;height:nu
 export interface HtmlResultReference extends HtmlRenderReference {version:1;environmentId:string;threadId:string;runId:string;itemId:string;revision?:string}
 export const HTML_RESULT_LANGUAGE='t3-html';
 export const HTML_RESULT_MAX_BYTES=25*1024*1024;
-const record=(value:any):value is Record<string,any>=>!!value&&typeof value==='object'&&!Array.isArray(value);
-const id=(value:any,max=1024):value is string=>typeof value==='string'&&value.length>0&&value.length<=max&&!/[\x00-\x1f]/.test(value);
+const id=(value:unknown,max=1024):value is string=>typeof value==='string'&&value.length>0&&value.length<=max&&!hasControlCharacters(value);
 export const htmlResultHeight=(height:number)=>Math.max(80,Math.ceil(height));
 
-export function readHtmlRenderReference(value:any):HtmlRenderReference|undefined {
+export function readHtmlRenderReference(value:unknown):HtmlRenderReference|undefined {
   if(!record(value)||!id(value.attachmentId,256)||!/^[a-z0-9_-]+$/i.test(value.attachmentId)||typeof value.title!=='string'||typeof value.height!=='number'||!Number.isFinite(value.height))return;
   const heights=value.heights;
   const measured=Array.isArray(heights)&&heights.length>0&&heights.length<=24&&heights.every(row=>Array.isArray(row)&&row.length===2&&Number.isInteger(row[0])&&row[0]>0&&row[0]<=10_000&&typeof row[1]==='number'&&Number.isFinite(row[1]))
     ? heights.map(([width,height]:[number,number])=>[width,htmlResultHeight(height)] as [number,number]).sort((a,b)=>a[0]-b[0]):undefined;
-  return {attachmentId:value.attachmentId,title:value.title.replace(/[\x00-\x1f]/g,' ').trim().slice(0,200)||'HTML',height:htmlResultHeight(value.height),...(measured?{heights:measured}:{})};
+  return {attachmentId:value.attachmentId,title:replaceControlCharacters(value.title).trim().slice(0,200)||'HTML',height:htmlResultHeight(value.height),...(measured?{heights:measured}:{})};
 }
 
 /** Providers wrap MCP results differently. Match T3's bounded result reader,
  * including error flags in any enclosing content envelope. */
-export function htmlRenderFromToolItem(item:any):HtmlRenderReference|undefined {
-  if(item?.type!=='dynamic_tool'||item.status!=='completed'||typeof item.toolName!=='string'||! /^(?:(?:mcp__t3[-_]code__|t3[-_]code[.]))?html_render$/.test(item.toolName))return;
+export function htmlRenderFromToolItem(item:unknown):HtmlRenderReference|undefined {
+  if(!record(item)||item.type!=='dynamic_tool'||item.status!=='completed'||typeof item.toolName!=='string'||! /^(?:(?:mcp__t3[-_]code__|t3[-_]code[.]))?html_render$/.test(item.toolName))return;
   const budget={bytes:16_384,nodes:128,failed:false,exceeded:false};
-  function read(value:any,depth=0):Record<string,any>|undefined {
+  function read(value:unknown,depth=0):Record<string,unknown>|undefined {
     if(depth>4||--budget.nodes<0){budget.exceeded=true;return;}
     if(typeof value==='string'){
       if(value.length>budget.bytes){budget.exceeded=true;return;}
       budget.bytes-=new TextEncoder().encode(value).byteLength;if(budget.bytes<0){budget.exceeded=true;return;}
-      try{return read(JSON.parse(value),depth+1);}catch{return;}
+      try{return read(parseJson(value),depth+1);}catch{return;}
     }
     if(Array.isArray(value)){
       if(value.length>32){budget.exceeded=true;return;}
-      let found:Record<string,any>|undefined;
+      let found:Record<string,unknown>|undefined;
       for(const block of value){const text=record(block)?block.text:undefined;const next=read(record(text)?text.text??text:text,depth+1);found??=next;if(budget.exceeded)break;}
       return found;
     }
@@ -47,14 +47,14 @@ export function htmlRenderFromToolItem(item:any):HtmlRenderReference|undefined {
   return budget.failed||budget.exceeded?undefined:readHtmlRenderReference(value?.htmlRender);
 }
 
-export function readHtmlResult(value:any):HtmlResultReference|undefined {
+export function readHtmlResult(value:unknown):HtmlResultReference|undefined {
   const page=readHtmlRenderReference(value);
-  if(!page||value.version!==1||![value.environmentId,value.threadId,value.runId,value.itemId].every(part=>id(part))||value.revision!==undefined&&!id(value.revision,128))return;
+  if(!page||!record(value)||value.version!==1||!id(value.environmentId)||!id(value.threadId)||!id(value.runId)||!id(value.itemId)||value.revision!==undefined&&!id(value.revision,128))return;
   return {version:1,environmentId:value.environmentId,threadId:value.threadId,runId:value.runId,itemId:value.itemId,...(value.revision?{revision:value.revision}:{}),...page};
 }
 export function parseHtmlResult(source:string):HtmlResultReference|undefined {
   if(source.length>8192)return;
-  try{return readHtmlResult(JSON.parse(source));}catch{return;}
+  try{return readHtmlResult(parseJson(source));}catch{return;}
 }
 export function htmlResultIdentity(value:HtmlResultReference):string {
   return JSON.stringify([value.environmentId,value.threadId,value.runId,value.itemId,value.attachmentId,value.revision??null]);
@@ -67,7 +67,7 @@ export function responseHtmlResults(activities:InlineActivity[],turns:string[],e
   const found=new Map<string,HtmlResultReference>();
   for(const activity of [...activities].sort((a,b)=>(a.sequence??0)-(b.sequence??0))){
     if(activity.kind!=='response.html'||!activity.turnId||!turns.includes(activity.turnId))continue;
-    const value=readHtmlResult({version:1,environmentId,threadId,runId:activity.turnId,itemId:activity.payload?.itemId,revision:activity.payload?.revision,...activity.payload?.htmlRender});
+    const value=readHtmlResult({version:1,environmentId,threadId,runId:activity.turnId,itemId:activity.payload?.itemId,revision:activity.payload?.revision,...(readHtmlRenderReference(activity.payload?.htmlRender)??{})});
     if(value)found.set(value.itemId,value);
   }
   return [...found.values()];
@@ -78,7 +78,7 @@ export function htmlResultFrameHeight(reference:HtmlRenderReference,width:number
   if(reported!==undefined&&Number.isFinite(reported)&&reported>0)return htmlResultHeight(reported);
   const rows=reference.heights;
   if(!rows?.length)return htmlResultHeight(reference.height);
-  const measured=(width:number)=>{const above=rows!.findIndex(row=>row[0]>=width),high=above<0?rows!.length-1:above,low=rows![high][0]===width?high:Math.max(0,high-1);return Math.max(rows![low][1],rows![high][1]);};
+  const measured=(width:number)=>{const above=rows.findIndex(row=>row[0]>=width),high=above<0?rows.length-1:above,low=rows[high][0]===width?high:Math.max(0,high-1);return Math.max(rows[low][1],rows[high][1]);};
   return htmlResultHeight(measured(width));
 }
 

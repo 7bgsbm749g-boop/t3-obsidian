@@ -1,3 +1,5 @@
+import {isRecord} from '../shared/values';
+import {cancelTimeout as clearTimeout,scheduleTimeout as setTimeout} from '../shared/clock';
 import type {DirectInlineUpdate} from '../responses/direct-inline-preview';
 import {failedContinuations} from '../responses/failed-continuation';
 import {nativeResponses} from '../responses/native-response-manager';
@@ -12,7 +14,7 @@ import {Notice} from 'obsidian';
 import type {Connection,Request} from '../app/bridge';
 import {commandId,endpoint,environmentApi,type PairedSession} from '../connection/direct';
 import {contentHash} from '../responses/completion';
-import {activeInlineIds,failedInlineIds,applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,endInsertionOffset,endMarker,finalizeRegion,hasResponseMarkers,initialRegion,insertionOffset,inlineResponseRange,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,turnPhase,type InitialInlineInput,type InlineThreadState,type InlineTurn,type SelectionAnchor} from './inline-thread';
+import {activeInlineIds,failedInlineIds,applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,rememberInlineTurns,endInsertionOffset,endMarker,finalizeRegion,hasResponseMarkers,initialRegion,insertionOffset,regionBody,renderInlineTurn,replaceRegion,selectionAnchor,startMarker,turnForMessage,type InitialInlineInput,type InlineThreadState,type InlineTurn,type SelectionAnchor} from './inline-thread';
 import {readInlineSnapshot,watchThread,type ThreadAccess,type ThreadStreamItem} from './thread-stream';
 import type {ResponseStorageTarget} from '../responses/response-model';
 import {replaceInlineEditorText} from './inline-editor';
@@ -44,7 +46,7 @@ export class InlineChatManager {
   private runtimes=new Map<string,Runtime>();
   private stopped=false;
   constructor(private app:App,private key:string,private sessionFor:(id:string)=>Promise<PairedSession|undefined>,private hosted?:{prepare(job:InlineJob,request:Request):Promise<void>;stop(job:InlineJob):Promise<void|ResponseStopReceipt>;status?(job:Pick<InlineJob,'id'>):ResponseStopReceipt|undefined},private keepIntermediate:()=>boolean|IntermediateMode=()=>false,private answerFormat:()=>FinalAnswerFormat=()=> 'formatted') {
-    const saved=this.app.loadLocalStorage(key);
+    const saved:unknown=this.app.loadLocalStorage(key);
     if(Array.isArray(saved))this.jobs=saved.filter(validJob).filter(job=>!job.hosted||job.localOnly===true||job.phase==='cancelled').map(job=>{
       if(job.hosted&&!job.localOnly)job.remoteStopPending=false;
       // 2.12.6 mistook the client command ID for T3's provider-assigned turn ID.
@@ -182,8 +184,8 @@ export class InlineChatManager {
     if(this.stopped||job.finalized||job.phase==='cancelled'||!this.jobs.includes(job))return;
     const previousTurnId=job.turnId;
     const runtime=this.runtime(job);
-    if(item.kind==='snapshot'&&Number.isSafeInteger(item.snapshot?.snapshotSequence)&&item.snapshot.snapshotSequence<runtime.sequence){logEvent('stream.snapshot.stale',{jobId:job.id,sequence:item.snapshot.snapshotSequence,lastSequence:runtime.sequence});return;}
-    if(item.kind==='event'&&Number.isSafeInteger(item.event?.sequence)&&item.event.sequence<=runtime.sequence)return;
+    if(item.kind==='snapshot'&&typeof item.snapshot.snapshotSequence==='number'&&Number.isSafeInteger(item.snapshot.snapshotSequence)&&item.snapshot.snapshotSequence<runtime.sequence){logEvent('stream.snapshot.stale',{jobId:job.id,sequence:item.snapshot.snapshotSequence,lastSequence:runtime.sequence});return;}
+    if(item.kind==='event'&&typeof item.event.sequence==='number'&&Number.isSafeInteger(item.event.sequence)&&item.event.sequence<=runtime.sequence)return;
     const applied=applyThreadItem(runtime.state,item);runtime.state=job.finalAnswerFormat==='raw-markdown'?{...applied.state,turns:{...job.presentationTurns,...applied.state.turns}}:applied.state;
     runtime.completionChecked=item.kind==='snapshot';
     const previousBinding=job.messageId?job.bindingCheckpoint?.bindings?.[job.messageId]:undefined;
@@ -352,7 +354,7 @@ export class InlineChatManager {
     try{await this.finishStopped(job);}finally{this.requestRemoteStop(job);}
   }
 }
-function validJob(value:any):value is InlineJob{return value&&typeof value.id==='string'&&typeof value.path==='string'&&typeof value.requestId==='string'&&typeof value.bodyHash==='string'&&typeof value.phase==='string'&&typeof value.createdAt==='string';}
+function validJob(value:unknown):value is InlineJob{return isRecord(value)&&typeof value.id==='string'&&typeof value.path==='string'&&typeof value.requestId==='string'&&typeof value.bodyHash==='string'&&typeof value.phase==='string'&&typeof value.createdAt==='string';}
 
 export function captureEditorSelection(editor:Editor):SelectionAnchor {
   const document=editor.getValue(),from=editor.posToOffset(editor.getCursor('from')),to=editor.posToOffset(editor.getCursor('to'));

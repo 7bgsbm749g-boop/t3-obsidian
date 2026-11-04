@@ -1,3 +1,4 @@
+import {isRecord} from '../shared/values';
 import {App,MarkdownRenderChild,Modal,Plugin,setIcon} from 'obsidian';
 import {HtmlResultError,HtmlResultStore} from './html-result-store';
 import {HTML_RESULT_LANGUAGE,htmlResultFrameHeight,htmlResultKey,parseHtmlResult,type HtmlResultReference} from './html-results';
@@ -53,7 +54,7 @@ window.addEventListener('load', function() {
 /** Prepare an inert render copy, then load it as one sandboxed blob document.
  * No script elements are created or injected into a running document. */
 function viewerDocument(html:string,doc:Document):string {
-  const parser=new (doc.defaultView! as Window&typeof globalThis).DOMParser();
+  const parser=new (doc.defaultView!).DOMParser();
   const parsed=parser.parseFromString(html,'text/html');
   // A blob document has no vault-relative base. Keep its own hash links while
   // excluding Obsidian/file protocols from subresource and form requests.
@@ -79,7 +80,7 @@ export class HtmlResultViews {
     plugin.registerMarkdownCodeBlockProcessor(HTML_RESULT_LANGUAGE,(source,el,ctx)=>{
       const reference=parseHtmlResult(source);if(!reference){el.createEl('p',{text:'Invalid T3 HTML reference.'});return;}
       const mounted=this.mount(reference,el.ownerDocument);el.append(mounted.root);
-      const child=new MarkdownRenderChild(el);child.register(mounted.dispose);ctx.addChild(child);
+      const child=new MarkdownRenderChild(el);child.register(()=>mounted.dispose());ctx.addChild(child);
     });
     // Native code-block processors also own Live Preview widgets.
     plugin.registerEvent(this.app.workspace.on('css-change',()=>this.refreshTheme()));
@@ -93,7 +94,7 @@ export class HtmlResultViews {
     await Promise.all([...this.mounted].filter(mounted=>!environmentId||mounted.reference.environmentId===environmentId).map(mounted=>mounted.recover()));
   }
   mount(reference:HtmlResultReference,doc:Document,expanded=false,onEscape?:()=>void,options:{passive?:boolean}={}):Mounted {
-    const win=doc.defaultView! as Window&typeof globalThis,root=doc.createElement('div');root.className='send-to-t3-html-result';root.dataset.t3HtmlKey=htmlResultKey(reference);root.setAttribute('aria-label',reference.title);
+    const win=doc.defaultView!,root=doc.win.createDiv();root.className='send-to-t3-html-result';root.dataset.t3HtmlKey=htmlResultKey(reference);root.setAttribute('aria-label',reference.title);
     const surface=root.createDiv({cls:'send-to-t3-html-surface'}),controls=root.createDiv({cls:'send-to-t3-html-controls'});
     let disposed=false,generation=0,frame:HTMLIFrameElement|undefined,blob:string|undefined,reported:number|undefined;
     let state:'loading'|'ready'|'failed'='loading',failure:HtmlResultError|undefined,loading:Promise<void>|undefined,recovery:Promise<void>|undefined;
@@ -103,13 +104,25 @@ export class HtmlResultViews {
       const pixels=options.passive?Math.min(2000,reference.height,measured):measured;
       root.style.height=state!=='ready'?'auto':expanded?'100%':pixels+'px';
     };
-    const showState=(next:typeof state)=>{state=next;root.dataset.t3HtmlState=next;root.setAttribute('aria-busy',String(next==='loading'));controls.hidden=next!=='ready';height();};showState('loading');
+    let codeHost:HTMLElement|undefined;
+    const markHost=()=>{
+      if(disposed)return;
+      const host=root.closest<HTMLElement>('.cm-preview-code-block');
+      if(host){codeHost=host;host.classList.add('send-to-t3-html-code-block');}
+      const parent=root.parentElement;
+      if(parent?.classList.contains('send-to-t3-html-expanded'))parent.classList.toggle('send-to-t3-html-expanded-loading',state!=='ready');
+      if(root.isConnected)hostObserver.disconnect();
+    };
+    // Native Markdown processors may attach the widget after mount returns.
+    const hostObserver=new win.MutationObserver(markHost);hostObserver.observe(doc.body,{childList:true,subtree:true});
+    queueMicrotask(markHost);
+    const showState=(next:typeof state)=>{state=next;root.dataset.t3HtmlState=next;root.setAttribute('aria-busy',String(next==='loading'));controls.hidden=next!=='ready';markHost();height();};showState('loading');
     if(!expanded&&!options.passive){const expand=controls.createEl('button',{attr:{'aria-label':'Expand HTML','title':'Expand HTML'}});setIcon(expand,'maximize-2');expand.addEventListener('click',()=>new HtmlResultModal(this.app,this,reference).open());}
     if(options.passive){root.classList.add('send-to-t3-html-passive');controls.remove();}
     const postTheme=()=>frame?.contentWindow?.postMessage(themeMessage(themeFor(doc)),'*');
     const receive=(event:MessageEvent)=>{
-      if(disposed||!frame||event.source!==frame.contentWindow||!event.data||event.data.jsonrpc!=='2.0')return;
-      const {method,params,id}=event.data;
+      if(disposed||!frame||event.source!==frame.contentWindow||!isRecord(event.data)||event.data.jsonrpc!=='2.0')return;
+      const {method,id}=event.data;const params=isRecord(event.data.params)?event.data.params:{};
       if(method==='t3/notifications/preview-ready'){root.dataset.t3HtmlPrepared='true';return;}
       if(method==='t3/notifications/preview-painted'){root.dataset.t3HtmlPainted='true';return;}
       if(method==='ui/notifications/size-changed'&&typeof params?.height==='number'&&Number.isFinite(params.height)&&params.height>0){reported=params.height;height();return;}
@@ -129,7 +142,7 @@ export class HtmlResultViews {
       loading=(async()=>{
       try{
         const html=await this.store.get(reference);if(disposed||this.stopped||current!==generation)return;
-        const next=doc.createElement('iframe');next.title=reference.title;next.setAttribute('sandbox',options.passive?'allow-scripts':'allow-scripts allow-forms');next.referrerPolicy='no-referrer';next.loading=options.passive?'eager':'lazy';next.className='send-to-t3-html-frame';
+        const next=doc.win.createEl('iframe');next.title=reference.title;next.setAttribute('sandbox',options.passive?'allow-scripts':'allow-scripts allow-forms');next.referrerPolicy='no-referrer';next.loading=options.passive?'eager':'lazy';next.className='send-to-t3-html-frame';
         if(options.passive){next.inert=true;next.tabIndex=-1;}
         const theme=themeFor(doc);next.style.colorScheme=theme.appearance;
         blob=win.URL.createObjectURL(new win.Blob([this.prepare(html,doc)],{type:'text/html;charset=utf-8'}));
@@ -159,7 +172,7 @@ export class HtmlResultViews {
       recovery=(loading?loading.then(()=>{if(failure?.recoverable)return load();}):failure?.recoverable?load():Promise.resolve()).finally(()=>{recovery=undefined;});
       return recovery;
     };
-    const mounted:Mounted={root,reference,refreshTheme:postTheme,recover,dispose:()=>{if(disposed)return;disposed=true;generation++;resize.disconnect();win.removeEventListener('message',receive);frame?.remove();if(blob)win.URL.revokeObjectURL(blob);this.mounted.delete(mounted);}};
+    const mounted:Mounted={root,reference,refreshTheme:postTheme,recover,dispose:()=>{if(disposed)return;disposed=true;generation++;resize.disconnect();hostObserver.disconnect();codeHost?.classList.remove('send-to-t3-html-code-block');root.parentElement?.classList.remove('send-to-t3-html-expanded-loading');win.removeEventListener('message',receive);frame?.remove();if(blob)win.URL.revokeObjectURL(blob);this.mounted.delete(mounted);}};
     this.mounted.add(mounted);if(!this.stopped)void load();else mounted.dispose();return mounted;
   }
   dispose(){this.stopped=true;for(const mounted of [...this.mounted])mounted.dispose();this.prepared.clear();this.preparedCharacters=0;this.store.dispose();}

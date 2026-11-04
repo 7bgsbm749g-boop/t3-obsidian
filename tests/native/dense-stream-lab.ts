@@ -1,3 +1,4 @@
+import {readThreadEvent} from '../../src/connection/thread-events';
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
 import {DirectInlinePreview} from '../../src/responses/direct-inline-preview';
 import {nativeResponses} from '../../src/responses/native-response-manager';
@@ -38,7 +39,7 @@ export default class DenseStreamLab extends Plugin {
     const originals=leaves.map(fold),paragraphs=originals.map(node=>node?.querySelector('blockquote p')),rows:any[]=[],failures:string[]=[];
     const check=(name:string,value:boolean)=>{rows.push({name,pass:value});if(!value)failures.push(name);};
     check('initial boxes expanded in both panes',originals.every(node=>node&&!node.classList.contains('is-collapsed')));
-    const event=(type:string,payload:any)=>callbacks.item({kind:'event',event:{sequence:++sequence,aggregateId:'fixture-thread',type,payload}});
+    const event=(type:string,payload:any)=>callbacks.item({kind:'event',event:readThreadEvent({sequence:++sequence,aggregateId:'fixture-thread',type,payload})});
     const tool=(kind:string,toolCallId:string,data:any,status='inProgress',itemType?:string)=>event('thread.activity-appended',{activity:{id:crypto.randomUUID(),turnId:'turn',kind,summary:'Tool',createdAt:at(sequence),payload:{toolCallId,status,data,itemType}}});
     tool('tool.started','npm',{item:{command:"/bin/bash -lc 'npm test > /tmp/dense.log 2>&1'"}});
     tool('tool.started','read',{toolName:'Read',input:{path:'/tmp/synthetic.md'}});await pause(120);

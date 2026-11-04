@@ -1,3 +1,4 @@
+import {readThreadEvent} from '../../src/connection/thread-events';
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
 import {DirectInlinePreview} from '../../src/responses/direct-inline-preview';
 import {nativeResponses} from '../../src/responses/native-response-manager';
@@ -42,7 +43,7 @@ export default class TasksPanelLab extends Plugin {
     await manager.receive(record);this.preview.tick(true);
     const start=Date.now(),at=(n:number)=>new Date(start+n).toISOString();
     callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:sequence,thread:{id:'fixture-thread',projectId:'fixture-project',title:'Task display',messages:[{id:'prompt',role:'user',text:'Synthetic task input',turnId:'turn',streaming:false,createdAt:at(0)}],activities:[],latestTurn:{turnId:'turn',messageId:'prompt',state:'running'},session:{status:'running',activeTurnId:'turn'}}}});
-    const event=(type:string,payload:any)=>callbacks.item({kind:'event',event:{sequence:++sequence,aggregateId:'fixture-thread',type,payload}});
+    const event=(type:string,payload:any)=>callbacks.item({kind:'event',event:readThreadEvent({sequence:++sequence,aggregateId:'fixture-thread',type,payload})});
     const plan=(id:string,steps:any[],text?:string)=>event('v2.turn-item.updated',{id,runId:'turn',type:'todo_list',ordinal:1,steps,text,startedAt:at(sequence),updatedAt:at(sequence)});
     const fold=(leaf:any)=>leaf.view.containerEl.querySelector('.callout[data-callout="t3-progress"]') as HTMLElement|null;
     const panel=(leaf:any)=>fold(leaf)?.querySelector<HTMLDetailsElement>('.send-to-t3-tasks');

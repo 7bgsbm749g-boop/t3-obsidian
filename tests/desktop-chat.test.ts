@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
 import {createRequire} from 'node:module';
-import {runInNewContext} from 'node:vm';
+import {runInNewContext} from './obsidian-context';
 import {webcrypto,randomUUID} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 import {settingsSocket} from './rpc-fixture';
@@ -65,7 +65,7 @@ if(args[0]==='auth'){
       };
       async loadData(){return shared.at(-1)??{};}
       async saveData(value:any){shared.push(value);}
-      addCommand(){} addSettingTab(){} registerEvent(){}
+      addCommand(){} addSettingTab(){} registerEvent(){}register(_cleanup:()=>void){}
     },
   };
   const module={exports:{} as any};

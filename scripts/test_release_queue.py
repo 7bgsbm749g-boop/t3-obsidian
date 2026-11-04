@@ -796,6 +796,20 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertTrue((directory / 'request-1.json').exists())
         self.assertEqual(self.submit(source)['jobId'], submitted['jobId'])
 
+    def test_replacement_preserves_the_original_history_classification(self):
+        source = self.source('minor-work')
+        submitted = queue.enqueue(source, self.root, 'HEAD', bump='minor', queue=self.store,
+                                  evidence=self.evidence, notes='Verified compatible feature')
+        directory = queue.job_path(self.store, submitted['jobId'])
+        original = (directory / 'request.json').read_bytes()
+        queue.write(directory / 'state.json', {'status': 'failed'})
+        replacement = queue.submission(source, self.root, 'HEAD', queue=self.store,
+                                       evidence=self.evidence, notes='Verified repair')
+        self.assertEqual(replacement['bump'], 'patch')
+        queue.retry(submitted['jobId'], replacement=replacement, queue=self.store)
+        self.assertEqual(queue.read(directory / 'request-1.json')['bump'], 'minor')
+        self.assertEqual((directory / 'request.json').read_bytes(), original)
+
     def test_prepared_candidate_keeps_its_checked_version_and_does_not_run_new_checks(self):
         source = self.source('first')
         for name, value in publisher.version_updates('1.0.1', {name: (source / name).read_bytes() for name in queue.VERSION_FILES}).items():

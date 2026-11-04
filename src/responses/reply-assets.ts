@@ -7,22 +7,22 @@ export interface ReplyReference {source:string;original:string;image:boolean;lab
 
 /** Only references in the assistant's Markdown carry a reliable insertion position. */
 export function replyReferences(markdown:string):ReplyReference[] {
-  const root=unified().use(remarkParse).parse(markdown) as Root;
+  const root=unified().use(remarkParse).parse(markdown);
   const definitions=new Map<string,string>(),found:ReplyReference[]=[];
-  function walk(node:Root|RootContent,visit:(node:any)=>void){visit(node);if('children' in node)for(const child of node.children)walk(child as RootContent,visit);}
+  function walk(node:Root|RootContent,visit:(node:Root|RootContent)=>void){visit(node);if('children' in node)for(const child of node.children)walk(child,visit);}
   walk(root,node=>{if(node.type==='definition'&&!definitions.has(node.identifier))definitions.set(node.identifier,node.url);});
   walk(root,node=>{
     const start=node.position?.start.offset,end=node.position?.end.offset;
     if(start===undefined||end===undefined)return;
-    if(['image','link','imageReference','linkReference'].includes(node.type)){
-      const source=node.url??definitions.get(node.identifier);
-      if(source)found.push({source,original:markdown.slice(start,end),image:node.type.startsWith('image'),label:node.alt??node.children?.map((child:any)=>child.value??'').join('')??'',offset:start});
+    if(node.type==='image'||node.type==='link'||node.type==='imageReference'||node.type==='linkReference'){
+      const source=node.type==='image'||node.type==='link'?node.url:definitions.get(node.identifier);
+      if(source)found.push({source,original:markdown.slice(start,end),image:node.type.startsWith('image'),label:node.type==='image'||node.type==='imageReference'?node.alt??'':node.children.map(child=>'value' in child?child.value:'').join(''),offset:start});
       return;
     }
     if(node.type!=='text')return;
     const raw=markdown.slice(start,end);
     for(const match of raw.matchAll(/(!?)\[\[([^\]\n]+)\]\]/g)){
-      const index=match.index!;let slashes=0;for(let i=index-1;i>=0&&raw[i]==='\\';i--)slashes++;
+      const index=match.index;let slashes=0;for(let i=index-1;i>=0&&raw[i]==='\\';i--)slashes++;
       if(slashes%2)continue;
       const [source,label]=match[2].split('|');
       if(!/\.[a-z0-9]{1,12}(?:#.*)?$/i.test(source.trim()))continue;
@@ -39,10 +39,13 @@ export async function rewriteReplyReferences(markdown:string,replace:(reference:
     if(text!==undefined){
       // Obsidian's wiki alias is also a Markdown table delimiter. Keep the
       // alias while escaping its pipe when the asset occupies a table cell.
-      if(tableRowAt(markdown,reference.offset)&&/^!?\[\[[^\n]+\]\]$/.test(text))text=text.replace(/(?<!\\)\|/g,'\\|');
+      if(tableRowAt(markdown,reference.offset)&&/^!?\[\[[^\n]+\]\]$/.test(text))text=escapeTablePipes(text);
       changes.push({offset:reference.offset,length:reference.original.length,text});
     }
   }
   for(const change of changes.reverse())markdown=markdown.slice(0,change.offset)+change.text+markdown.slice(change.offset+change.length);
   return markdown;
 }
+
+/** Escape unescaped table delimiters without requiring regex lookbehind. */
+function escapeTablePipes(text:string){return text.replace(/\|/g,(pipe,offset:number)=>text[offset-1]==='\\'?pipe:'\\|');}

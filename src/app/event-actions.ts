@@ -1,3 +1,6 @@
+import {jsonClone} from '../shared/values';
+import {isRecord} from '../shared/values';
+import {hasControlCharacters} from '../shared/values';
 import {safeNotePath} from '../responses/response-model';
 import {isLogPath} from '../storage/synced-event-logs';
 
@@ -14,7 +17,10 @@ export interface ActionIO {
 export class EventActionSkipped extends Error {}
 function frontmatter(text:string){const match=/^(?:\uFEFF)?---\r?\n([\s\S]*?)^---(?:\r?\n|$)/m.exec(text);return match?.index===0?match:null;}
 function notePath(path:unknown):path is string{return typeof path==='string'&&safeNotePath(path)&&!isLogPath(path)&&!path.startsWith('T3 Code Logs');}
-export function validateEventAction(value:any):EventAction {
+export function validateEventAction(input:unknown):EventAction {
+  if(!isRecord(input))throw Error('Invalid command object.');
+  // Retain every command-specific validation below before exposing the domain value.
+  const value=input as unknown as EventAction;
   if(!value||!['move-note','set-property'].includes(value.kind))throw Error('Choose a move-note or set-property action.');
   const keys=value.kind==='move-note'?['kind','folder','notePath']:['kind','property','value','notePath'];
   if(Object.keys(value).some(key=>!keys.includes(key)))throw Error('Unknown action option.');
@@ -22,11 +28,11 @@ export function validateEventAction(value:any):EventAction {
   if(value.kind==='move-note'){
     if(typeof value.folder!=='string'||!notePath(value.folder==='/'?'action.md':value.folder+'/action.md'))throw Error('Action folder must be a vault-relative folder (or /).');
   }else{
-    if(typeof value.property!=='string'||!value.property.length||value.property.length>100||/[\x00-\x1f]/.test(value.property)||['__proto__','constructor','prototype'].includes(value.property))throw Error('Invalid action property name.');
+    if(typeof value.property!=='string'||!value.property.length||value.property.length>100||hasControlCharacters(value.property)||['__proto__','constructor','prototype'].includes(value.property))throw Error('Invalid action property name.');
     const json=JSON.stringify(value.value);
     if(json===undefined||json.length>4096||JSON.parse(json)===undefined)throw Error('Action value must be a JSON value of at most 4096 bytes.');
   }
-  return JSON.parse(JSON.stringify(value));
+  return jsonClone(value);
 }
 export async function prepareEventAction(action:EventAction,observedPath:string|undefined,io:ActionIO,transition?:{property:string;after:unknown;matches?:(value:unknown)=>boolean}):Promise<ActionPlan>{
   validateEventAction(action);

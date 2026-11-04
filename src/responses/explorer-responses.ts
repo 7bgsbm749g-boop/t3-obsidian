@@ -1,3 +1,4 @@
+import {isRecord} from '../shared/values';
 import type {ResponseRecord} from './response-record';
 import {legacyQuestionReply} from './response-model';
 import {responseRunTerminal} from './response-stop-receipt';
@@ -30,7 +31,7 @@ export function leaseExplorerResponse(record:ResponseRecord):ExplorerResponse {
 }
 export function loadExplorerResponses(value:unknown):ExplorerResponse[] {
   if(!Array.isArray(value))return [];
-  return value.filter((r):r is ExplorerResponse=>!!r&&typeof r.id==='string'&&typeof r.notePath==='string'&&Number.isSafeInteger(r.epoch)&&Number.isSafeInteger(r.revision)&&['active','input','complete'].every(k=>typeof r[k]==='boolean')&&(r.deleted===undefined||typeof r.deleted==='boolean'));
+  return (value as unknown[]).filter((r):r is ExplorerResponse=>isRecord(r)&&typeof r.id==='string'&&typeof r.notePath==='string'&&Number.isSafeInteger(r.epoch)&&Number.isSafeInteger(r.revision)&&['active','input','complete'].every(k=>typeof r[k]==='boolean')&&(r.deleted===undefined||typeof r.deleted==='boolean'));
 }
 export interface NoteIndicator {active:number;input:number;complete:number;total:number;unread?:number}
 export function noteIndicators(responses:ExplorerResponse[],exists:(path:string)=>boolean):Map<string,NoteIndicator> {

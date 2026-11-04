@@ -1,3 +1,6 @@
+import {Buffer} from 'node:buffer';
+/* eslint obsidianmd/no-nodejs-modules: ["warn", {"isDesktopOnly": true}] -- This desktop adapter is lazy-loaded; scripts/check-platform-boundaries.mjs and mobile bundle tests prohibit Node imports in the portable entry graph. */
+import {errorCode,toError,isRecord,parseJson} from '../shared/values';
 import {promises as fs} from 'node:fs';
 import {join,resolve,dirname,isAbsolute} from 'node:path';
 import {homedir} from 'node:os';
@@ -10,7 +13,7 @@ import {isPathInsideDirectory} from '../connection/desktop-path';
 
 const openings=new Map<string,Promise<PrivateStorageRoute>>();
 async function syncDirectory(path:string){if(process.platform==='win32')return;const directory=await fs.open(path,'r');try{await directory.sync();}finally{await directory.close();}}
-async function fingerprint(path:string){const hash=createHash('sha256');for await(const chunk of createReadStream(path))hash.update(chunk);return hash.digest('hex');}
+async function fingerprint(path:string){const hash=createHash('sha256');for await(const chunk of createReadStream(path)){if(!(Buffer.isBuffer(chunk)))throw Error('Invalid storage byte stream.');hash.update(chunk);};return hash.digest('hex');}
 async function copyChecked(source:string,destination:string){
   await fs.mkdir(destination,{recursive:true,mode:0o700});
   for(const name of await fs.readdir(source)){
@@ -27,14 +30,14 @@ async function sameTree(source:string,destination:string):Promise<boolean>{
   return true;
 }
 async function retireCopiedTrees(route:PrivateStorageRoute){
-  const path=join(route.storageRoot,'verified-migration-copy.json');let receipt:any;try{receipt=JSON.parse(await fs.readFile(path,'utf8'));}catch(error:any){if(error.code==='ENOENT')return;throw error;}
-  if(receipt.version!==1||receipt.workspaceRoot!==route.workspaceRoot||receipt.configDir!==route.configDir||!Array.isArray(receipt.sources))throw Error('Invalid verified storage migration.');
+  const path=join(route.storageRoot,'verified-migration-copy.json');let receipt:unknown;try{receipt=parseJson(await fs.readFile(path,'utf8'));}catch(error:unknown){if(errorCode(error)==='ENOENT')return;throw toError(error);}
+  if(!isRecord(receipt)||receipt.version!==1||receipt.workspaceRoot!==route.workspaceRoot||receipt.configDir!==route.configDir||!Array.isArray(receipt.sources))throw Error('Invalid verified storage migration.');
   const allowed=new Set(['inline/v1','events/v1','commands/v1'].map(subtree=>join(route.workspaceRoot,route.configDir,'t3-code',subtree)+'.private-migration'));
-  for(const source of receipt.sources){if(!allowed.has(source))throw Error('Invalid legacy retirement path.');try{const stat=await fs.lstat(source);if(!stat.isDirectory()||stat.isSymbolicLink())throw Error('Invalid migrated legacy tree.');await fs.rm(source,{recursive:true});}catch(error:any){if(error.code!=='ENOENT')throw error;}}
+  for(const source of receipt.sources as unknown[]){if(typeof source!=='string'||!allowed.has(source))throw Error('Invalid legacy retirement path.');try{const stat=await fs.lstat(source);if(!stat.isDirectory()||stat.isSymbolicLink())throw Error('Invalid migrated legacy tree.');await fs.rm(source,{recursive:true});}catch(error:unknown){if(errorCode(error)!=='ENOENT')throw toError(error);}}
   await fs.rm(path,{force:true});
 }
 export async function existingPrivateStorage(root:string,configDir:string){
-  let raw:string|undefined;try{raw=await fs.readFile(join(root,storageRoutePath(configDir)),'utf8');}catch(error:any){if(error.code!=='ENOENT')throw error;}
+  let raw:string|undefined;try{raw=await fs.readFile(join(root,storageRoutePath(configDir)),'utf8');}catch(error:unknown){if(errorCode(error)!=='ENOENT')throw toError(error);}
   return readPrivateStorageRoute(raw,root,configDir);
 }
 /** Move the operational subtrees under their old writer locks. The small
@@ -47,35 +50,35 @@ export function ensurePrivateStorage(root:string,configDir:string,options?:{stor
     root=await fs.realpath(root);
     const route:PrivateStorageRoute={version:1,workspaceRoot:root,configDir,storageRoot:resolve(options?.storageRoot??join(homedir(),'.t3','send-to-t3-code','vaults',contentHash(root+'\0'+configDir)))};
     const prior=await existingPrivateStorage(root,configDir);if(prior){if(await fs.realpath(prior.storageRoot)!==prior.storageRoot)throw Error('Symlinked private storage.');await retireCopiedTrees(prior);return prior;}
-    const vaults=[root];try{const registry=JSON.parse(await fs.readFile(join(homedir(),'.config/obsidian/obsidian.json'),'utf8'));for(const item of Object.values(registry.vaults??{}) as any[])if(item.path)vaults.push(await fs.realpath(item.path));}catch{}
+    const vaults=[root,...await registeredVaults(join(homedir(),'.config/obsidian/obsidian.json'))];
     if(vaults.some(vault=>isPathInsideDirectory(vault,route.storageRoot)))throw Error('Operational storage must be outside every synced vault.');
     await fs.mkdir(route.storageRoot,{recursive:true,mode:0o700});if(await fs.realpath(route.storageRoot)!==route.storageRoot)throw Error('Symlinked private storage.');
     const release=await lockfile.lock(route.storageRoot,{realpath:true,stale:30_000,update:5000,retries:{retries:8,minTimeout:250,maxTimeout:1000}}),releases:Array<()=>Promise<void>>=[];
     try{
       const prior=await existingPrivateStorage(root,configDir);if(prior)return prior;
-      const originPath=join(route.storageRoot,'storage-origin.json');let origin:PrivateStorageRoute|undefined;try{origin=JSON.parse(await fs.readFile(originPath,'utf8'));}catch(error:any){if(error.code!=='ENOENT')throw error;}
+      const originPath=join(route.storageRoot,'storage-origin.json');let origin:PrivateStorageRoute|undefined;try{origin=readPrivateStorageRoute(await fs.readFile(originPath,'utf8'),root,configDir);}catch(error:unknown){if(errorCode(error)!=='ENOENT')throw toError(error);}
       if(origin&&JSON.stringify(origin)!==JSON.stringify(route))throw Error('Private operational storage belongs to another vault.');if(!origin)await fs.writeFile(originPath,JSON.stringify(route),{flag:'wx',mode:0o600});
       const copied:Array<{source:string;destination:string}>=[];
       for(const subtree of ['inline/v1','events/v1','commands/v1']){
         const source=join(root,configDir,'t3-code',subtree),destination=join(route.storageRoot,configDir,'t3-code',subtree);
         const frozen=source+'.private-migration';
-        let exists=true;try{const stat=await fs.lstat(source);if(!stat.isDirectory()||stat.isSymbolicLink())throw Error('Invalid legacy storage subtree.');}catch(error:any){if(error.code==='ENOENT')exists=false;else throw error;}
+        let exists=true;try{const stat=await fs.lstat(source);if(!stat.isDirectory()||stat.isSymbolicLink())throw Error('Invalid legacy storage subtree.');}catch(error:unknown){if(errorCode(error)==='ENOENT')exists=false;else throw toError(error);}
         await fs.mkdir(dirname(destination),{recursive:true,mode:0o700});
         if(exists){
           releases.push(await lockfile.lock(source,{realpath:true,stale:30_000,update:5000,retries:{retries:8,minTimeout:250,maxTimeout:1000}}));
-          try{await fs.access(destination);throw Error('Both legacy and private response stores exist; refusing to choose one.');}catch(error:any){if(error.code!=='ENOENT')throw error;}
+          try{await fs.access(destination);throw Error('Both legacy and private response stores exist; refusing to choose one.');}catch(error:unknown){if(errorCode(error)!=='ENOENT')throw toError(error);}
           try{await fs.rename(source,destination);}
-          catch(error:any){
-            if(error.code!=='EXDEV')throw error;
+          catch(error:unknown){
+            if(errorCode(error)!=='EXDEV')throw toError(error);
             await fs.rename(source,frozen);const temporary=destination+'.'+randomUUID()+'.tmp';
             try{await copyChecked(frozen,temporary);await fs.rename(temporary,destination);copied.push({source:frozen,destination});}
             catch(error){await fs.rm(temporary,{recursive:true,force:true});await fs.rename(frozen,source);throw error;}
           }
           await syncDirectory(dirname(destination));await syncDirectory(dirname(source));
         }else{
-          let hasFrozen=false;try{await fs.access(frozen);hasFrozen=true;}catch{}
+          let hasFrozen=false;try{await fs.access(frozen);hasFrozen=true;}catch(error){if(errorCode(error)!=='ENOENT')throw toError(error);}
           if(hasFrozen){
-            let present=true;try{await fs.access(destination);}catch(error:any){if(error.code==='ENOENT')present=false;else throw error;}
+            let present=true;try{await fs.access(destination);}catch(error:unknown){if(errorCode(error)==='ENOENT')present=false;else throw toError(error);}
             if(!present){const temporary=destination+'.'+randomUUID()+'.tmp';try{await copyChecked(frozen,temporary);await fs.rename(temporary,destination);await syncDirectory(dirname(destination));}finally{await fs.rm(temporary,{recursive:true,force:true});}}
             if(!await sameTree(frozen,destination))throw Error('Interrupted private storage copy differs from its original.');copied.push({source:frozen,destination});
           }
@@ -90,4 +93,17 @@ export function ensurePrivateStorage(root:string,configDir:string,options?:{stor
       return route;
     }finally{for(const unlock of releases.reverse())await unlock().catch(()=>{});await release();}
   })();openings.set(key,work);void work.finally(()=>{if(openings.get(key)===work)openings.delete(key);}).catch(()=>{});return work;
+}
+
+/** An unavailable registry is distinct from an unreadable or malformed one.
+ * A stale missing vault does not stop checking the other registered vaults. */
+export async function registeredVaults(registryPath:string):Promise<string[]>{
+  let text:string;try{text=await fs.readFile(registryPath,'utf8');}catch(error){if(errorCode(error)==='ENOENT')return [];throw toError(error);}
+  const registry=parseJson(text);if(!isRecord(registry)||!isRecord(registry.vaults))throw Error('Invalid Obsidian vault registry.');
+  const roots:string[]=[];
+  for(const item of Object.values(registry.vaults)){
+    if(!isRecord(item)||typeof item.path!=='string'||!isAbsolute(item.path))throw Error('Invalid registered vault path.');
+    try{roots.push(await fs.realpath(item.path));}catch(error){if(errorCode(error)!=='ENOENT')throw toError(error);}
+  }
+  return roots;
 }

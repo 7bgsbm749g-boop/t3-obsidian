@@ -1,3 +1,5 @@
+import {valueText} from '../shared/values';
+import {optionalString} from '../shared/values';
 import {insideResponse} from '../responses/response-container';
 import type {InlineActivity} from '../conversations/inline-thread';
 import {parseQuestionToken,questionKey,questionToken,type QuestionTarget} from './questions';
@@ -8,7 +10,7 @@ export type ApprovalDecision='accept'|'decline';
 export interface PendingApproval {requestId:string;turnId:string|null;kind?:string;summary:string;detail?:string}
 export const approvalKey=questionKey;
 export function staleApprovalFailure(activity:InlineActivity){
-  return activity.kind==='provider.approval.respond.failed'&&/unknown pending (?:codex )?approval request|stale pending approval request/i.test(String(activity.payload?.detail??''));
+  return activity.kind==='provider.approval.respond.failed'&&/unknown pending (?:codex )?approval request|stale pending approval request/i.test(valueText(activity.payload?.detail??''));
 }
 /** Resolution is terminal, including when requests and resolutions arrive out of order. */
 export function pendingApprovals(activities:InlineActivity[]):PendingApproval[]{
@@ -17,7 +19,7 @@ export function pendingApprovals(activities:InlineActivity[]):PendingApproval[]{
   for(const a of activities){
     const p=a.payload;
     if(a.kind!=='approval.requested'||typeof p?.requestId!=='string'||!p.requestId.trim()||closed.has(p.requestId))continue;
-    pending.set(p.requestId,{requestId:p.requestId,turnId:a.turnId,kind:p.requestKind,summary:a.summary,...(typeof p.detail==='string'?{detail:p.detail}:{})});
+    pending.set(p.requestId,{requestId:p.requestId,turnId:a.turnId,kind:optionalString(p.requestKind),summary:a.summary,...(typeof p.detail==='string'?{detail:p.detail}:{})});
   }
   return [...pending.values()];
 }
@@ -31,13 +33,13 @@ export const approvalUrl=(target:ApprovalTarget,decision:ApprovalDecision)=>`t3-
 export function parseApprovalUrl(url:string):{target:ApprovalTarget;decision:ApprovalDecision}|undefined {
   const match=/^t3-approval:([^\s]+)\/(accept|decline)$/.exec(url);
   const target=match&&parseQuestionToken(match[1]);
-  return target?{target,decision:match![2] as ApprovalDecision}:undefined;
+  return target?{target,decision:match[2] as ApprovalDecision}:undefined;
 }
 export function approvalTargets(document:string):ApprovalTarget[]{
   if(!document.includes('t3-approval:'))return [];
   const code=markdownCodeRanges(document),targets=new Map<string,ApprovalTarget>();
   for(const match of document.matchAll(/\[(?:Approve|Deny)\]\((t3-approval:[^\s)]+)\)/g)){
-    if(code.some(([from,to])=>match.index!>=from&&match.index!<to))continue;
+    if(code.some(([from,to])=>match.index>=from&&match.index<to))continue;
     const parsed=parseApprovalUrl(match[1]);if(parsed)targets.set(approvalKey(parsed.target),parsed.target);
   }
   return [...targets.values()];
@@ -54,10 +56,10 @@ export function renderApproval(request:PendingApproval,target:ApprovalTarget):st
 export function clearApprovalControls(document:string,target?:ApprovalTarget):string {
   const code=markdownCodeRanges(document);
   for(const match of [...document.matchAll(/^<!-- t3-approval:start:([^\n]+) -->\n([\s\S]*?)\n<!-- t3-approval:end:\1 -->$/gm)].reverse()){
-    const parsed=parseQuestionToken(match[1]);if(!parsed||target&&approvalKey(parsed)!==approvalKey(target)||code.some(([from,to])=>match.index!>=from&&match.index!<to))continue;
-    if(target&&insideResponse(document,match.index!))continue;
+    const parsed=parseQuestionToken(match[1]);if(!parsed||target&&approvalKey(parsed)!==approvalKey(target)||code.some(([from,to])=>match.index>=from&&match.index<to))continue;
+    if(target&&insideResponse(document,match.index))continue;
     const body=match[2].replace(/^Action needed: Command approval requested \[Approve\]\(t3-approval:[^\s)]+\) \[Deny\]\(t3-approval:[^\s)]+\)$/m,'Command approval request');
-    document=document.slice(0,match.index)+body+document.slice(match.index!+match[0].length);
+    document=document.slice(0,match.index)+body+document.slice(match.index+match[0].length);
   }
   return document;
 }

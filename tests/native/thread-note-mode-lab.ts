@@ -1,3 +1,4 @@
+import {readWireShell,readMetadataSnapshot} from '../../src/connection/wire-readers';
 import {Plugin,MarkdownView,Modal,Notice,Setting,setIcon} from 'obsidian';
 import SendToT3,{T3Settings} from '../../src/app/main';
 import {DeviceResponseManager} from '../../src/responses/device-local-responses';
@@ -28,7 +29,7 @@ export default class ThreadNoteModeLab extends Plugin {
     this.writeLab('STARTUP.json',{stage:'connecting-test-project'});
     const config=JSON.parse(fs.readFileSync(path.join(this.labRoot,'TEST-CONFIG.json'),'utf8'));this.labAutomated=config.automated===true;
     this.labAccess=await desktopThreadAccess(desktopDefaults());
-    const project=(await this.labAccess.api('/api/orchestration/shell')).projects.find((item:any)=>item.id===config.projectId);
+    const project=(readWireShell(await this.labAccess.api('/api/orchestration/shell'))).projects.find((item:any)=>item.id===config.projectId);
     if(!project||project.workspaceRoot!==path.join(this.labRoot,'workspace'))throw Error('Dedicated temporary project required.');
     const environmentId=await desktopEnvironment(desktopDefaults());
     // Use the repository's bounded native-host pattern. Product routing,
@@ -120,7 +121,7 @@ export default class ThreadNoteModeLab extends Plugin {
     await this.app.workspace.getLeaf('tab').openFile(this.app.vault.getFileByPath(this.labNotes[1])!);
     await this.waitSaved(free.bindingIds!,'MODE_FREE_OK');
     await this.shotLab('free-two-destinations.png');
-    const thread=await this.labAccess!.api('/api/orchestration/threads/'+this.labThread+'?controlOnly=true');
+    const thread=readMetadataSnapshot(await this.labAccess!.api('/api/orchestration/threads/'+this.labThread+'?controlOnly=true'));
     this.writeLab('RESULT.json',{checks:{oneToOneRealDelivery:true,oneToOneConflictsRefused:true,freeSameThreadTwoNotes:true,freeBothRepliesSaved:true},settingsChangedThroughNativeUI:!this.labAutomated,threadId:this.labThread,oneToOne:sent,free,loadedVersion:this.manifest.version,coverage:'Two bounded real T3 deliveries through the product Send API, editor and response manager in a bounded native host with synthetic settings and no account/project discovery. No QLO2 fixture, no Sync claim, no native mobile claim.',canonicalThreadId:thread.thread.id});
     this.writeLab('STAGE.json',{stage:'inspect-final-result-then-cleanup'});
     if(this.labAutomated){await this.cleanupLab();return;}
@@ -133,10 +134,10 @@ export default class ThreadNoteModeLab extends Plugin {
     try{
       if(this.labThread){
         await this.labAccess?.close?.();this.labAccess=await desktopThreadAccess(desktopDefaults());
-        const snapshot=await this.labAccess.api('/api/orchestration/threads/'+this.labThread+'?controlOnly=true');
+        const snapshot=readMetadataSnapshot(await this.labAccess.api('/api/orchestration/threads/'+this.labThread+'?controlOnly=true'));
         for(const run of snapshot.thread.runs??[])if(run.status==='running'||run.status==='waiting')await this.labAccess.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:crypto.randomUUID(),threadId:this.labThread,turnId:run.id,createdAt:new Date().toISOString()});
         await this.labAccess.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.labThread});
-        let deleted=false;try{deleted=!!(await this.labAccess.api('/api/orchestration/threads/'+this.labThread+'?controlOnly=true')).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}
+        let deleted=false;try{deleted=!!(readMetadataSnapshot(await this.labAccess.api('/api/orchestration/threads/'+this.labThread+'?controlOnly=true'))).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}
         if(!deleted)remainingThreadIds.push(this.labThread);
       }
     }catch(error){this.labErrors.push('Thread cleanup: '+String(error));if(this.labThread)remainingThreadIds.push(this.labThread);}

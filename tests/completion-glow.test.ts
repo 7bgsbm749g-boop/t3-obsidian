@@ -1,3 +1,4 @@
+import {expectRecord} from './wire-fixture';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {CompletionGlow,COMPLETION_READ_INTERVAL_MS,unreadCompletionFolders} from '../src/responses/completion-glow';
@@ -17,14 +18,14 @@ function fixture(saved?:unknown){
   let visit=async(environmentId:string,command:any)=>{
     if(receipts.has(command.commandId))return;
     receipts.add(command.commandId);
-    const target=threads.get(environmentId)?.find(t=>t.id===command.threadId);
-    if(target&&Date.parse(command.visitedAt)>Date.parse(target.lastVisitedAt))target.lastVisitedAt=command.visitedAt;
+    const target=threads.get(environmentId)?.find(t=>t.id===expectRecord(command).threadId);
+    if(target&&Date.parse(command.visitedAt)>Date.parse(target.lastVisitedAt))target.lastVisitedAt=expectRecord(command).visitedAt;
   };
   const glow=new CompletionGlow(saved,value=>{persisted=structuredClone(value);writes++;},{changed:()=>{changed++;},access:async environmentId=>{
     issued++;
     return {origin:'https://synthetic.invalid',api:async(path,command)=>{
       if(path==='/api/orchestration/shell'){reads++;return read(environmentId);}
-      assert.equal(path,'/api/orchestration/dispatch');assert.equal(command.type,'thread.visit');
+      assert.equal(path,'/api/orchestration/dispatch');assert.equal(expectRecord(command).type,'thread.visit');
       visits.push({environmentId,command:structuredClone(command)});await visit(environmentId,command);
     },close:()=>{closed++;}};
   }},()=>now);

@@ -1,5 +1,5 @@
-import type {Editor} from 'obsidian';
 import type {EditorView} from '@codemirror/view';
+import type {Editor} from 'obsidian';
 
 /** Obsidian's replaceRange forces the cursor into view. Background response
  * updates must let CodeMirror map selections and anchor the viewport instead. */
@@ -18,8 +18,9 @@ export function replaceInlineEditorText(editor:Editor,text:string,from:number,to
         if(coords&&coords.top>=bounds.top&&coords.bottom<=bounds.bottom){anchor=line.from;top=coords.top;break;}
       }
     }
+    const {EditorView}=require('@codemirror/view') as typeof import('@codemirror/view');
     const effects=anchor!==undefined&&top!==undefined&&cm.scrollDOM
-      ?require('@codemirror/view').EditorView.scrollIntoView(anchor+text.length-(to-from),{y:'start',yMargin:top-cm.scrollDOM.getBoundingClientRect().top})
+      ?EditorView.scrollIntoView(anchor+text.length-(to-from),{y:'start',yMargin:top-cm.scrollDOM.getBoundingClientRect().top})
       :undefined;
     // Let CodeMirror apply the anchor after its own measurement and scroll
     // correction. A requestMeasure write is too early in Obsidian's layout.

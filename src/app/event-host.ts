@@ -1,8 +1,10 @@
-import {sha256} from '@noble/hashes/sha256';
+import {isRecord} from '../shared/values';
+import {parseJsonRecord} from '../shared/values';
+import {sha256} from '@noble/hashes/sha2';
 import {validateEventCommand,type EventSubscriptionCommand,type EventCommandResult} from './event-subscriptions';
 export interface EventHostIdentity {vaultId:string;environmentId:string;workspaceRoot:string;directory:string}
 export interface EventHostFiles {read(path:string):Promise<string|undefined>;write(path:string,value:string):Promise<void>;remove(path:string):Promise<void>}
-export function eventCanonical(value:any):string {return value===null||typeof value!=='object'?JSON.stringify(value):Array.isArray(value)?'['+value.map(eventCanonical).join(',')+']':'{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+eventCanonical(value[key])).join(',')+'}';}
+export function eventCanonical(value:unknown):string {return value===null||typeof value!=='object'?JSON.stringify(value):Array.isArray(value)?'['+value.map(eventCanonical).join(',')+']':'{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+eventCanonical(Reflect.get(value,key) as unknown)).join(',')+'}';}
 export function eventRequest(identity:EventHostIdentity,command:EventSubscriptionCommand){
   validateEventCommand(command);
   const body=eventCanonical({version:1,host:identity,command});
@@ -14,9 +16,9 @@ export async function forwardEventCommand(identity:EventHostIdentity,command:Eve
   const request=eventRequest(identity,command);
   const read=async()=>{
     const raw=await files.read(request.result);if(!raw)return undefined;
-    const value=JSON.parse(raw);
-    if(value.version!==1||eventCanonical(value.host)!==eventCanonical(identity)||value.request!==request.name||value.result?.id!==command.id||typeof value.result?.ok!=='boolean')throw Error('Subscription host returned an invalid acknowledgement.');
-    return value.result as EventCommandResult;
+    const value=parseJsonRecord(raw);
+    if(value.version!==1||eventCanonical(value.host)!==eventCanonical(identity)||value.request!==request.name||(!isRecord(value.result)||value.result.id!==command.id)||(!isRecord(value.result)||typeof value.result.ok!=='boolean'))throw Error('Subscription host returned an invalid acknowledgement.');
+    return value.result as unknown as EventCommandResult;
   };
   const prior=await read();if(prior?.ok)return prior;
   // Only failed acknowledgements may be retried. Successful IDs remain immutable.

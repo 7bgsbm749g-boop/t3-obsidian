@@ -1,16 +1,27 @@
-import {test} from 'node:test';
+import {test,before} from 'node:test';
 import assert from 'node:assert/strict';
 import {promises as fs} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {archiveLegacyReplyImports} from '../src/connection/legacy-reply-imports-desktop';
+import {build} from 'esbuild';
+import {createRequire} from 'node:module';
+import {runInNewContext} from './obsidian-context';
+const realRequire=createRequire(import.meta.url);
+class Folder {constructor(public path:string,public children:any[]=[]){}}
+let archiveLegacyReplyImports:typeof import('../src/connection/legacy-reply-imports-desktop')['archiveLegacyReplyImports'];
+before(async()=>{
+ const bundled=await build({entryPoints:['src/connection/legacy-reply-imports-desktop.ts'],bundle:true,write:false,format:'cjs',platform:'node',external:['obsidian']});
+ const module={exports:{} as any};runInNewContext(bundled.outputFiles[0].text,{module,exports:module.exports,require:(name:string)=>name==='obsidian'?{TFolder:Folder}:realRequire(name),process,Buffer,TextEncoder,TextDecoder,setTimeout,clearTimeout,setInterval,clearInterval,console});
+ archiveLegacyReplyImports=module.exports.archiveLegacyReplyImports;
+});
 import {validateClientCommand} from '../src/app/client-command';
 
 async function fixture(){
  const root=await fs.mkdtemp(join(tmpdir(),'t3-reply-archive-')),vaultRoot=join(root,'vault'),projectRoot=join(root,'project'),path='T3 Code Attachments/12345678-1234-1234-1234-123456789abc/0123456789abcdef-report.json';
  await fs.mkdir(join(vaultRoot,path,'..'),{recursive:true});await fs.mkdir(projectRoot);await fs.writeFile(join(vaultRoot,path),'original');
- const file:any={path},folder:any={path:path.slice(0,path.lastIndexOf('/')),children:[file]},top:any={path:'T3 Code Attachments',children:[folder]},items=new Map([[file.path,file],[folder.path,folder],[top.path,top]]);file.parent=folder;folder.parent=top;
- const app:any={workspace:{iterateAllLeaves:()=>{}},vault:{adapter:{getBasePath:()=>vaultRoot},getAbstractFileByPath:(path:string)=>items.get(path)??null,readBinary:async(file:any)=>{const bytes=await fs.readFile(join(vaultRoot,file.path));return bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);},delete:async(item:any)=>{assert.ok(!('children' in item),'The native Vault.delete file API must not receive a folder');await fs.unlink(join(vaultRoot,item.path));items.delete(item.path);if(item.parent)item.parent.children=item.parent.children.filter((child:any)=>child!==item);}}};
+ const file:any={path},folder:any=new Folder(path.slice(0,path.lastIndexOf('/')),[file]),top:any=new Folder('T3 Code Attachments',[folder]),items=new Map([[file.path,file],[folder.path,folder],[top.path,top]]);file.parent=folder;folder.parent=top;
+ const app:any={workspace:{iterateAllLeaves:()=>{}},vault:{adapter:{getBasePath:()=>vaultRoot},getAbstractFileByPath:(path:string)=>items.get(path)??null,readBinary:async(file:any)=>{const bytes=await fs.readFile(join(vaultRoot,file.path));return bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);},delete:async(item:any)=>{assert.ok(!('children' in item),'The user-selected trash operation must not receive a folder');await fs.unlink(join(vaultRoot,item.path));items.delete(item.path);if(item.parent)item.parent.children=item.parent.children.filter((child:any)=>child!==item);}}};
+ app.fileManager={trashFile:app.vault.delete};app.vault.delete=()=>{throw Error('Direct deletion bypasses the user trash preference');};
  return {app,root,vaultRoot,projectRoot,path,file,scope:{environmentId:'env',projectId:'project',root:projectRoot,title:'Project'},close:()=>fs.rm(root,{recursive:true,force:true})};
 }
 test('archive persists identities before removing checked vault bytes and empty folders',async()=>{

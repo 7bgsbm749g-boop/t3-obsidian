@@ -1,0 +1,56 @@
+name: Release provenance
+
+on:
+  push:
+    tags: ['0.0.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-provenance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require an immutable numeric alpha tag
+        env:
+          T3_SOURCE_REF: ${{ github.ref }}
+        run: |
+          [[ "$T3_SOURCE_REF" =~ ^refs/tags/0\.0\.(0|[1-9][0-9]*)$ ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Verify the tagged version
+        env:
+          T3_RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          tag = os.environ['T3_RELEASE_TAG']
+          manifest = json.loads(Path('manifest.json').read_text())
+          package = json.loads(Path('package.json').read_text())
+          lock = json.loads(Path('package-lock.json').read_text())
+          assert manifest['version'] == package['version'] == lock['version'] == lock['packages']['']['version'] == tag
+          assert json.loads(Path('versions.json').read_text())[tag] == manifest['minAppVersion']
+          PY
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - name: Attest exact distributable bytes
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            dist/main.js
+            manifest.json
+            styles.css

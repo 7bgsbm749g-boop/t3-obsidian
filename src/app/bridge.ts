@@ -1,3 +1,5 @@
+import {isRecord} from '../shared/values';
+import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import type {SmartCapture} from '../notes/smart-send';
 import type {ResolvedJobOptions} from '../conversations/job-options';
 import type {NoteCommand} from '../notes/note-command';
@@ -21,11 +23,11 @@ export function acceptedRequestThread(request?:Request):string|undefined{return 
 export class RequestDeliveryError extends Error {
   constructor(message:string,readonly requestSaved:boolean,readonly terminal=false){super(message);}
 }
-export function parseProjects(value: any): Project[] {
-  if (!Array.isArray(value?.projects)) throw new Error('T3 returned an invalid project list.');
+export function parseProjects(value: unknown): Project[] {
+  if (!isRecord(value)||!Array.isArray(value.projects)) throw new Error('T3 returned an invalid project list.');
   const ids = new Set<string>();
-  return value.projects.map((p: any) => {
-    if (!p || typeof p.id !== 'string' || !p.id || typeof p.title !== 'string' || !p.title || typeof p.workspaceRoot !== 'string' || ids.has(p.id)) throw new Error('T3 returned an invalid or duplicate project.');
+  return value.projects.map((p: unknown) => {
+    if (!isRecord(p) || typeof p.id !== 'string' || !p.id || typeof p.title !== 'string' || !p.title || typeof p.workspaceRoot !== 'string' || ids.has(p.id)) throw new Error('T3 returned an invalid or duplicate project.');
     ids.add(p.id); return {id:p.id,title:p.title,workspaceRoot:p.workspaceRoot};
   });
 }
@@ -40,10 +42,10 @@ export async function withTimeout<T>(promise:Promise<T>, milliseconds:number):Pr
   try{return await Promise.race([promise,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Request timed out. Retry the saved request with its original ID.')),milliseconds);})]);}
   finally{clearTimeout(timer);}
 }
-export async function runBridge(connection:Connection,args:string[],input='',options:DirectReadOptions={}):Promise<any> {
+export async function runBridge(connection:Connection,args:string[],input='',options:DirectReadOptions={}):Promise<unknown> {
   const operation=args[0],started=Date.now();logEvent('transport.operation.started',{operation,control:options.control,transport:connection.transport??'desktop',environmentId:connection.environmentId});
   try{
-  requestAborted(options.signal);let result:any;
+  requestAborted(options.signal);let result:unknown;
   if(connection.transport==='direct')result=await readDirect(connection,args,await abortableRead(Promise.resolve(runtime?.pairedSession?.(connection.connectionId??'')),options.signal),undefined,options);
   else{
   if(retiredConnection(connection))throw new Error(RETIRED_MESSAGE);
@@ -58,7 +60,7 @@ export async function sendRequest(request: Request) {
   if(request.connection.transport==='direct'){if(!runtime?.saveRequest)throw Error('Direct request storage is unavailable.');return sendDirect(request,await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request));}
   const hasPayload = Boolean(request.attachments?.length||request.threadId);
   const result = await runBridge(request.connection, ['start','--project',request.project.id,'--title',request.title,'--request-id',request.id,hasPayload ? '--payload-file' : '--prompt-file','-'], hasPayload ? JSON.stringify({prompt:request.prompt,attachments:request.attachments,context:request.context,threadId:request.threadId}) : request.prompt);
-  if (result.ok !== true || result.phase!=='started' || typeof result.threadId !== 'string' || result.projectId !== request.project.id) throw new Error('T3 did not confirm the new turn. Retry the saved request.');
+  if (!isRecord(result)||result.ok !== true || result.phase!=='started' || typeof result.threadId !== 'string' || result.projectId !== request.project.id) throw new Error('T3 did not confirm the new turn. Retry the saved request.');
   request.acceptedThreadId=result.threadId;
   return result as {threadId:string;phase:'started'};
 }

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {runInNewContext} from 'node:vm';
+import {runInNewContext} from './obsidian-context';
 import {randomUUID,webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 async function harness(initial:any,deviceId=randomUUID()){
@@ -11,7 +11,7 @@ async function harness(initial:any,deviceId=randomUUID()){
     app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},workspace:{onLayoutReady:()=>{},on:()=>({})}};
     async loadData(){return current;}
     async saveData(value:any){current=value;saves++;}
-    addSettingTab(){}registerEvent(){}addCommand(){}
+    addSettingTab(){}registerEvent(){}addCommand(){}register(_cleanup:()=>void){}
   }
   const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};
   const module={exports:{} as any};

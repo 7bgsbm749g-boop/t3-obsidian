@@ -295,6 +295,7 @@ def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) 
                                       cwd=replacement['sourceRoot'], capture_output=True)
                 inputs[source_name] = hashlib.sha256(item.stdout).hexdigest() if item.returncode == 0 else None
             replacement = {**replacement,
+                           'bump': previous['bump'],
                            'maintenanceOnly': bool(previous.get('maintenanceOnly')) and bool(replacement.get('maintenanceOnly')),
                            'sourceInputsSha256': inputs}
             save_request(directory, replacement, name)

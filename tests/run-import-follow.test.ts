@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {runInNewContext} from 'node:vm';
+import {runInNewContext} from './obsidian-context';
 import {webcrypto,randomUUID} from 'node:crypto';
 import {displayCommand,type ThreadDisplay} from '../src/conversations/thread-display';
 import type {InlineThreadState} from '../src/conversations/inline-thread';

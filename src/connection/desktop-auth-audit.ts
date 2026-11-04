@@ -1,3 +1,5 @@
+import {errorCode} from '../shared/values';
+/* eslint obsidianmd/no-nodejs-modules: ["warn", {"isDesktopOnly": true}] -- This desktop adapter is lazy-loaded; scripts/check-platform-boundaries.mjs and mobile bundle tests prohibit Node imports in the portable entry graph. */
 import {promises as fs} from 'node:fs';
 import {join} from 'node:path';
 import type {ThreadAccessCloseReason} from '../conversations/thread-stream';
@@ -22,7 +24,7 @@ export function recordDesktopAuth(baseDir:string,record:DesktopAuthRecord):Promi
     await fs.mkdir(directory,{recursive:true,mode:0o700});
     const size=await fs.stat(path).then(stat=>stat.size).catch(()=>0);
     if(size+Buffer.byteLength(line)>DESKTOP_AUTH_AUDIT_MAX_BYTES){
-      await fs.rename(path,path+'.1').catch((error:any)=>{if(error.code!=='ENOENT')throw error;});
+      await fs.rename(path,path+'.1').catch((error:unknown)=>{if(errorCode(error)!=='ENOENT')throw error;});
     }
     await fs.appendFile(path,line,{mode:0o600});
   }).catch(()=>{/* Audit availability never changes delivery or credential cleanup. */});

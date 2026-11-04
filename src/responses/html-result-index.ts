@@ -7,7 +7,7 @@ type Block={from:number;to:number;reference:HtmlResultReference};
 type Fence={from:number;to:number;source:string;reference:HtmlResultReference|undefined};
 type Span={from:number;to:number};
 function scan(doc:Text,from:number,to:number):number[]{
-  return [...doc.sliceString(from,to).matchAll(/^ {0,3}```t3-html\r?$/gm)].map(match=>from+match.index!+match[0].indexOf('`'));
+  return [...doc.sliceString(from,to).matchAll(/^ {0,3}```t3-html\r?$/gm)].map(match=>from+match.index+match[0].indexOf('`'));
 }
 
 /** Use Remark's own flow grammar. Inline text and string decoding cannot affect

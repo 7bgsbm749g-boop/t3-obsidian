@@ -17,7 +17,7 @@ test('terminal request IDs cannot reappear after out-of-order events or reconnec
   let state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:{messages:[],activities}}}).state;
   state=applyThreadItem(state,{kind:'event',event:{sequence:3,type:'thread.activity-appended',payload:{activity:resolved()}}}).state;
   assert.deepEqual(pendingQuestions(state.activities),[]);
-  assert.equal(state.activities[0].payload?.questions[0].id,' exact id ');
+  const savedQuestions=state.activities[0].payload?.questions;assert.ok(Array.isArray(savedQuestions));assert.equal((savedQuestions[0] as {id:string}).id,' exact id ');
 });
 
 test('single, multiple, and text answers preserve provider keys and values and require every answer',()=>{

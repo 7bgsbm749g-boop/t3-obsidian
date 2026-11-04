@@ -1,3 +1,4 @@
+import {isRecord} from '../shared/values';
 import {isResponseCommand,validateResponseCommand,type ResponseCommand} from '../responses/response-command';
 import {isRecoveryCommand,validateRecoveryCommand,type RecoveryCommand,type RecoveryCommandResult} from '../responses/recovery-command';
 import {isClientCommand,validateClientCommand,type ClientCommand,type ClientCommandResult} from '../app/client-command';
@@ -12,7 +13,10 @@ export interface NoteCommand {
   destinationSection?:string;destinations:string[];threadId?:string;messageId?:string;streamReply:boolean;
 }
 export interface NoteCommandResult {id:string;ok:boolean;threadId?:string;messageId?:string;bindingIds?:string[];error?:string}
-export function validateNoteCommand(value:any):NoteCommand {
+export function validateNoteCommand(input:unknown):NoteCommand {
+  if(!isRecord(input))throw Error('Invalid command object.');
+  // Retain every command-specific validation below before exposing the domain value.
+  const value=input as unknown as NoteCommand;
   if(value?.version!==1||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.id??'')||!['send-note','attach-response'].includes(value.kind)||!safeNotePath(value.notePath)||typeof value.streamReply!=='boolean'||!Array.isArray(value.destinations)||value.destinations.length>32||value.destinations.some((path:unknown)=>!safeNotePath(path))||new Set(value.destinations).size!==value.destinations.length)throw Error('Invalid Obsidian note command.');
   if(value.threadId!==undefined&&(typeof value.threadId!=='string'||!value.threadId||value.threadId.length>200))throw Error('Invalid thread ID.');
   if(value.kind==='attach-response'&&(!value.streamReply||!value.threadId||!isT3MessageId(value.messageId)))throw Error('Attaching requires a thread and user-message ID.');
@@ -24,5 +28,5 @@ export function validateNoteCommand(value:any):NoteCommand {
 
 export type AgentCommand=RecoveryCommand|ResponseCommand|NoteCommand|EventSubscriptionCommand|FolderCommand|ClientCommand|NoteContextCommand;
 export type AgentCommandResult=RecoveryCommandResult|NoteCommandResult|EventCommandResult|FolderCommandResult|ClientCommandResult|NoteContextResult;
-export function isEventCommand(value:{kind:string}):value is EventSubscriptionCommand{return ['reserve-thread-response','stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination','subscribe-job','subscribe','subscriptions','update-subscription','pause-subscription','resume-subscription','cancel-subscription'].includes(value.kind);}
-export function validateAgentCommand(value:any):AgentCommand{return isNoteContextCommand(value??{})?validateNoteContextCommand(value):isRecoveryCommand(value??{})?validateRecoveryCommand(value):isClientCommand(value??{})?validateClientCommand(value):isResponseCommand(value??{})?validateResponseCommand(value):isFolderCommand(value??{})?validateFolderCommand(value):isEventCommand(value??{})?validateEventCommand(value):validateNoteCommand(value);}
+export function isEventCommand(value:unknown):value is EventSubscriptionCommand{return isRecord(value)&&typeof value.kind==='string'&&(['reserve-thread-response','stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination','subscribe-job','subscribe','subscriptions','update-subscription','pause-subscription','resume-subscription','cancel-subscription'].includes(value.kind));}
+export function validateAgentCommand(value:unknown):AgentCommand{return isNoteContextCommand(value??{})?validateNoteContextCommand(value):isRecoveryCommand(value??{})?validateRecoveryCommand(value):isClientCommand(value??{})?validateClientCommand(value):isResponseCommand(value??{})?validateResponseCommand(value):isFolderCommand(value??{})?validateFolderCommand(value):isEventCommand(value??{})?validateEventCommand(value):validateNoteCommand(value);}

@@ -1,3 +1,4 @@
+import {isRecord,records} from '../shared/values';
 import {loadReplyFolders,type ReplyFolders} from '../responses/reply-locations';
 export interface FolderLink {
   replyFolders?:ReplyFolders;
@@ -42,10 +43,10 @@ export function normalizeFolderLink(value:FolderLink):FolderLink{
   return link;
 }
 
-export function loadFolderLinks(data:any):FolderLink[]{
-  const source=Array.isArray(data?.folderLinks)?data.folderLinks:[];
+export function loadFolderLinks(data:unknown):FolderLink[]{
+  const source=isRecord(data)?records(data.folderLinks):[];
   const links:FolderLink[]=[];
-  for(const item of source)try{links.push(normalizeFolderLink(item));}catch{/* Drop malformed links. */}
+  for(const item of source)try{links.push(normalizeFolderLink(item as unknown as FolderLink));}catch{/* Drop malformed links. */}
   return links;
 }
 
