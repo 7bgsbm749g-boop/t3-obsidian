@@ -83,6 +83,8 @@ The retired `scripts/deploy-qlo2.py` must continue to refuse direct use. Never h
 ## Worktree and safety
 
 - This repository may contain user changes. Preserve unrelated edits and inspect overlap before patching.
+- Before reporting an edit complete, check staged and unstaged changes, including `AGENTS.md` and `skills/**/SKILL.md`. Commit and submit all intended task changes through the existing queue; skill-document-only changes use maintenance integration. Report failed checks or unsubmitted changes explicitly. Do not copy edits into canonical by hand or leave a duplicate dirty copy after integrating elsewhere.
+- Store durable task screenshots and logs in a unique task folder under `/home/ubuntu/projects/send-to-t3-code/evidence`, so receipts do not depend on a temporary worktree. Task-local build output and caches can stay in the worktree. The queue copies the submitted evidence file, not its referenced attachments; verify retained attachment paths before completing the task.
 - A user request for the full QLO2 product-change delivery path authorizes the pre-release commit of reviewed changes for that request in its source worktree. Do not commit unrelated user edits. Do not push, reset, or discard changes unless the user explicitly requests it.
 - Screenshots, test evidence, local tool state, and backups live in the project's gitignored `evidence/` directory. For shared release state, use `/home/ubuntu/projects/send-to-t3-code/evidence`. Never recreate the retired external backups directory.
 

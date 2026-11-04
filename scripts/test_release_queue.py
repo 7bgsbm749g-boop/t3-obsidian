@@ -291,6 +291,39 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertEqual(self.published, ['1.0.1', '1.0.2'])
         self.assertEqual(queue.status(job['jobId'], queue=self.store)['jobs'][0]['delivery'], 'source-only')
 
+    def test_skill_documentation_integrates_without_product_evidence_or_a_release(self):
+        source = self.source('skill-docs')
+        subprocess.run(['git', 'rm', 'skill-docs.ts'], cwd=source, check=True, capture_output=True)
+        skill = source / 'skills/obsidian-t3/SKILL.md'
+        skill.parent.mkdir(parents=True); skill.write_text('Updated skill instructions')
+        subprocess.run(['git', 'add', 'skills'], cwd=source, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'Update skill instructions'], cwd=source, check=True)
+        job = self.submit(source, evidence=False)
+        request = queue.read(queue.job_path(self.store, job['jobId']) / 'request.json')
+        self.assertTrue(request['maintenanceOnly'])
+        with patch.object(self.release, 'change_checks', SimpleNamespace(run_validation=lambda root: self.evidence), create=True):
+            queue.drain(self.release, queue=self.store)
+        state = queue.status(job['jobId'], queue=self.store)['jobs'][0]
+        self.assertEqual(state['status'], 'complete')
+        self.assertEqual(state['delivery'], 'source-only')
+        self.assertEqual((self.root / 'skills/obsidian-t3/SKILL.md').read_text(), 'Updated skill instructions')
+        self.assertEqual(self.published, [])
+        self.assertEqual(queue.read(self.root / 'manifest.json')['version'], '1.0.0')
+
+    def test_skill_documentation_does_not_exempt_product_changes_from_evidence(self):
+        source = self.source('skill-and-product')
+        skill = source / 'skills/obsidian-t3/SKILL.md'
+        skill.parent.mkdir(parents=True); skill.write_text('Updated skill instructions')
+        subprocess.run(['git', 'add', 'skills'], cwd=source, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'Update product and skill'], cwd=source, check=True)
+        job = self.submit(source, evidence=False)
+        request = queue.read(queue.job_path(self.store, job['jobId']) / 'request.json')
+        self.assertFalse(request['maintenanceOnly'])
+        queue.drain(self.release, queue=self.store)
+        self.assertEqual(queue.status(job['jobId'], queue=self.store)['jobs'][0]['status'], 'needs-evidence')
+        self.assertFalse((self.root / 'skill-and-product.ts').exists())
+        self.assertEqual(self.published, [])
+
     def test_crash_on_either_side_of_fast_forward_resumes_the_same_single_commit(self):
         class WorkerCrash(BaseException):
             pass
