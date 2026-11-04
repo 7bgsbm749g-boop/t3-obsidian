@@ -1,0 +1,605 @@
+import {contentHash} from './completion';
+import {responseIds,containsResponseBoundary} from './response-container';
+import {stoppedResponseBody} from './response-stop';
+import {failedStreamBody} from '../connection/t3-response-limits';
+import {responseConnectionBody,type ResponseConnectionIssue} from '../connection/sign-in-state';
+import type {App,MarkdownView} from 'obsidian';
+import type {Transaction} from '@codemirror/state';
+import {NativeResponseView} from './native-response-view';
+import {responseAnchor,responseRegion,type LocalResponse} from './native-response-projection';
+import type {ResponseRecord} from './response-record';
+import {regionBody,initialRegion,startMarker,endMarker,renameInlineHeader} from '../conversations/inline-thread';
+import {logFailure} from '../app/diagnostics';
+import {nativeCommitMatches,readNativeCommitProof,type NativeCommitProof} from './native-response-commit';
+import type {DirectInlineUpdate} from './direct-inline-preview';
+import {loadNativePreviews,checkedNativePreview,sameNativePreview,previewMatches,previewMessageId,MAX_NATIVE_PREVIEWS,MAX_NATIVE_PREVIEW_CHARACTERS,type NativePreviewEntry,type NativePreviewSnapshot} from './native-preview-cache';
+interface DeviceCompletionReceipt {version:1;id:string;actor:string;vaultId:string;notePath:string;commitId:string;hash:string;token:string;requestHash:string;at:number}
+import type {NativeStoppedResponse,NativeStoppedStore,NativeStoppedReference} from './native-stop-store';
+import {retainedLease,isCompletedLeaseIndex,canCompactLease} from './completed-lease-index';
+import {streamBlocks} from './stream-block';
+
+const hasSavedHistory=(document:string)=>streamBlocks(document).some(block=>block.complete&&!block.tracked);
+
+const managers=new WeakMap<App,NativeResponseManager>();
+export function nativeResponses(app:App){let manager=managers.get(app);if(!manager){manager=new NativeResponseManager(app);managers.set(app,manager);}return manager;}
+interface FinalSaveFence {
+  path:string;review:boolean;released:boolean;sealed:boolean;invalid:boolean;failure?:unknown;
+  panes:Map<MarkdownView,MarkdownView['file']>;
+  members:Map<NativeResponseView,{ready:boolean;work:Promise<void>;release?:()=>void}>;
+}
+/** Each native view owns its projection, history and selection. Saved content
+ * is compared independently across views; streaming never copies an editor
+ * buffer over a competing view. Conflicts adopt fresh saved text automatically. */
+export class NativeResponseManager {
+  private localStops=new Map<string,NativeStoppedResponse>();
+  private stopReferences=new Map<string,NativeStoppedReference>();
+  private stopLoads=new Map<string,Promise<NativeStoppedResponse|undefined>>();
+  private stopMoves=Promise.resolve();
+  private stopKey?:string;
+  private stoppedStore?:NativeStoppedStore;
+  private stoppedRestore?:Promise<void>;
+  private stoppedRestoreFailure?:unknown;
+  private pendingStops=new Map<string,Promise<void>>();
+  private stopFailures=new Map<string,unknown>();
+  private views=new Map<MarkdownView,NativeResponseView>();
+  private uninitializedViews=new WeakSet<NativeResponseView>();
+  private provisional=new Map<string,{path:string;body:string}>();
+  private streams=new Map<string,DirectInlineUpdate>();
+  private connectionIssues=new Map<string,ResponseConnectionIssue>();
+  connectionIssue(id:string){return this.connectionIssues.get(id);}
+  connection(id:string,issue?:ResponseConnectionIssue){
+    if(this.connectionIssues.get(id)?.kind===issue?.kind)return;
+    if(issue)this.connectionIssues.set(id,issue);else this.connectionIssues.delete(id);
+    this.refresh();
+  }
+  private records=new Map<string,ResponseRecord>();
+  retentionStatus(){return {records:this.records.size,completedIndexes:[...this.records.values()].filter(isCompletedLeaseIndex).length,proofs:this.proofs.size,proofCharacters:[...this.proofs.values()].reduce((total,proof)=>total+proof.document.length,0),deviceProofs:this.deviceCommits.size,deviceProofCharacters:[...this.deviceCommits.values()].reduce((total,item)=>total+item.proof.document.length,0)};}
+  private titles=new Map<string,string>();
+  private proofs=new Map<string,NativeCommitProof>();
+  private deviceCommits=new Map<string,{path:string;proof:NativeCommitProof}>();
+  private completionIdentities=new Map<string,{id:string;path:string;hash:string;commitId:string}>();
+  private reads=new Map<string,Promise<void>>();
+  private changedDuringRead=new Set<string>();
+  private lifetime=0;
+  private relocations=new Map<string,Map<string,string>>();
+  private warnings=new Map<MarkdownView,Map<string,HTMLElement>>();
+  private previewVault?:string;
+  private cached=new Map<string,NativePreviewEntry>();
+  private reconnecting=new Set<string>();
+  private savePreviews?:(snapshot:NativePreviewSnapshot)=>Promise<void>;
+  private previewDirty=false;
+  private previewTimer?:ReturnType<typeof setTimeout>;
+  private previewWork?:Promise<void>;
+  private previewSaveFailed=false;
+  private savedAdoptions=new Map<MarkdownView,Promise<void>>();
+  constructor(private app:App){
+    // Retire the removed choice workflow's copies in this vault only. Obsidian
+    // prefixes localStorage keys; all changes go through its scoped API.
+    try{
+      const keys=Array.from({length:window.localStorage.length},(_,i)=>window.localStorage.key(i)??'');
+      for(const storedKey of keys){
+        const key=/(t3-native-conflict:.+:[0-9a-f-]{36}|t3-native-resolutions:[^:]+)$/i.exec(storedKey)?.[1];
+        if(key&&this.app.loadLocalStorage(key)!=null)this.app.saveLocalStorage(key,null);
+      }
+    }catch{/* No browser storage in headless fixtures; retry on next load. */}
+  }
+  private adoptSaved(view:MarkdownView){
+    const pending=this.savedAdoptions.get(view);if(pending)return pending;
+    const lifetime=this.lifetime;
+    // Defer until the native update has returned. A pane echo is not a saved
+    // revision. Never write a competing local buffer or retain a recovery copy.
+    const work=Promise.resolve().then(async()=>{
+      const initial=this.view(view),initialFile=view.file,initialPath=initialFile?.path;if(!initial?.conflictRecord())return;
+      const release=await initial.beginFinalSave(true);
+      try{
+        if(this.lifetime!==lifetime||this.view(view)!==initial||view.file!==initialFile||view.file?.path!==initialPath)return;
+        for(let attempt=0;attempt<3;attempt++){
+          const adapter=this.view(view),file=view.file,conflict=adapter?.conflictRecord();
+          if(!adapter||!file||!conflict||!this.app.workspace.getLeavesOfType('markdown').some(leaf=>leaf.view===view))return;
+          const path=file.path,disk=await this.app.vault.read(file);
+          const current=()=>this.lifetime===lifetime&&this.view(view)===adapter&&view.file===file&&file.path===path&&this.app.workspace.getLeavesOfType('markdown').some(leaf=>leaf.view===view);
+          if(!current())return;
+          const checked=await this.app.vault.read(file);if(!current())return;
+          if(disk!==checked||adapter.conflictRecord()!==conflict)continue;
+          if(adapter.adoptSaved(disk,this.completed(path,disk,new Set(adapter.responseIds())))){
+            const fence=this.activeFinalSaves.get(path);if(fence)fence.invalid=true;
+            this.refresh();this.releaseCompleted(path,disk);
+          }
+          return;
+        }
+      }finally{release();}
+    }).catch(error=>logFailure('note.saved-adoption.failed',error,{notePath:view.file?.path})).finally(()=>{if(this.savedAdoptions.get(view)===work)this.savedAdoptions.delete(view);});
+    this.savedAdoptions.set(view,work);return work;
+  }
+  configurePreviewCache(vaultId:string,saved:unknown,save:(snapshot:NativePreviewSnapshot)=>Promise<void>){
+    this.stopKey=`t3-local-response-stops-v1:${vaultId}`;
+    const stops=this.app.loadLocalStorage?.(this.stopKey);
+    if(Array.isArray(stops))for(const stop of stops)if(typeof stop?.id==='string'&&typeof stop.path==='string'&&typeof stop.body==='string'&&typeof stop.hidden==='boolean')this.localStops.set(stop.id,stop);
+    this.previewVault=vaultId;this.savePreviews=save;this.cached.clear();this.reconnecting.clear();
+    for(const entry of loadNativePreviews(saved,vaultId)){this.cached.set(entry.id,entry);this.reconnecting.add(entry.id);}
+    if(typeof this.app.workspace?.getLeavesOfType==='function')this.refresh();
+  }
+  async configureStoppedStore(store:NativeStoppedStore){
+    this.stoppedStore=store;const legacy=[...this.localStops.values()].map(stop=>({...stop})),lifetime=this.lifetime;
+    const work=(async()=>{
+      const restored=store.list?await store.list():await store.readAll(),ids=new Set(restored.map(stop=>stop.id));
+      if(this.lifetime!==lifetime)return;
+      for(const {id,path,hidden} of restored)this.stopReferences.set(id,{id,path,hidden});
+      if(store.list)for(const id of ids)if(!this.pendingStops.has(id))this.localStops.delete(id);
+      // Compatibility stores may still supply full records. The production
+      // store reads only its small index until an open anchor needs a body.
+      if(!store.list)for(const stop of restored as NativeStoppedResponse[])this.localStops.set(stop.id,stop);
+      // Retain the old full bodies until each missing IndexedDB body/index is
+      // committed. A crash between migration and clearing is harmless.
+      for(const stop of legacy)if(!ids.has(stop.id)){await store.write(stop);if(this.lifetime===lifetime)this.stopReferences.set(stop.id,{id:stop.id,path:stop.path,hidden:stop.hidden});}
+      if(this.stopKey&&legacy.length)this.app.saveLocalStorage(this.stopKey,[]);
+      if(this.lifetime!==lifetime)return;
+      this.pruneStoppedBodies();await Promise.all([...this.stopReferences.values()].filter(stop=>this.needsStoppedBody(stop)).map(stop=>this.loadStoppedBody(stop.id)));
+      this.stoppedRestoreFailure=undefined;if(this.lifetime===lifetime)this.refresh();
+    })().catch(error=>{this.stoppedRestoreFailure=error;throw error;});
+    this.stoppedRestore=work;try{await work;}finally{if(this.stoppedRestore===work)this.stoppedRestore=undefined;}
+  }
+  private needsStoppedBody(stop:NativeStoppedReference){
+    if(!this.app.vault.getFileByPath(stop.path))return false;
+    return this.app.workspace.getLeavesOfType('markdown').some(leaf=>{
+      const view=leaf.view as MarkdownView;if(view.file?.path!==stop.path||typeof view.getViewData!=='function')return false;
+      try{return !!responseRegion(this.view(view)?.recoveryDocument()??view.getViewData(),stop.id);}catch{return false;}
+    });
+  }
+  private pruneStoppedBodies(){
+    for(const [id,stop] of this.localStops)if(this.stopReferences.has(id)&&!this.pendingStops.has(id)&&!this.stopFailures.has(id)&&!this.needsStoppedBody(stop))this.localStops.delete(id);
+  }
+  private loadStoppedBody(id:string,force=false):Promise<NativeStoppedResponse|undefined>{
+    const loaded=this.localStops.get(id);if(loaded)return Promise.resolve(loaded);
+    const pending=this.stopLoads.get(id);if(pending)return pending;
+    const reference=this.stopReferences.get(id),store=this.stoppedStore,lifetime=this.lifetime;if(!reference||!store)return Promise.resolve(undefined);
+    const work=store.readAll([id]).then(stops=>{
+      const stop=stops.find(stop=>stop.id===id);if(!stop)throw Error('A frozen response body needs recovery.');
+      if(this.lifetime!==lifetime||this.stopReferences.get(id)!==reference)return;
+      this.stopFailures.delete(id);const current={...stop,path:reference.path};if(force||this.needsStoppedBody(reference))this.localStops.set(id,current);return current;
+    }).catch(error=>{if(this.lifetime===lifetime)this.stopFailures.set(id,error);throw error;}).finally(()=>{if(this.stopLoads.get(id)===work)this.stopLoads.delete(id);if(this.lifetime===lifetime)this.refresh();});
+    this.stopLoads.set(id,work);return work;
+  }
+  private retainStop(stop:NativeStoppedResponse){
+    const previous=this.pendingStops.get(stop.id),snapshot={...stop},store=this.stoppedStore!,lifetime=this.lifetime;
+    const work=(async()=>{
+      if(previous)await previous.catch(()=>{});
+      await store.write(snapshot);
+      if(this.lifetime===lifetime)this.stopReferences.set(stop.id,{id:snapshot.id,path:snapshot.path,hidden:snapshot.hidden});
+      if(this.lifetime!==lifetime)return;
+      this.stopFailures.delete(stop.id);
+      // Keep all recovery copies until body and index are durable.
+      this.streams.delete(stop.id);this.forgetPreview(stop.id);if(this.lifetime===lifetime)this.refresh();
+    })().catch(error=>{if(this.lifetime===lifetime)this.stopFailures.set(stop.id,error);throw error;});
+    this.pendingStops.set(stop.id,work);void work.finally(()=>{if(this.pendingStops.get(stop.id)===work)this.pendingStops.delete(stop.id);if(this.lifetime===lifetime)this.pruneStoppedBodies();}).catch(()=>{});return work;
+  }
+  private dirtyPreview(){
+    this.previewDirty=true;
+    if(this.previewTimer===undefined)this.previewTimer=setTimeout(()=>{this.previewTimer=undefined;void this.flushPreviewCache();},500);
+  }
+  async flushPreviewCache():Promise<void>{
+    if(this.previewTimer!==undefined){clearTimeout(this.previewTimer);this.previewTimer=undefined;}
+    if(this.previewWork){await this.previewWork;if(this.previewDirty)await this.flushPreviewCache();return;}
+    if(!this.previewDirty||!this.savePreviews||!this.previewVault)return;
+    this.previewDirty=false;
+    const snapshot:NativePreviewSnapshot={version:1,vaultId:this.previewVault,entries:[...this.cached.values()].map(entry=>({...entry}))};
+    const work=this.savePreviews(snapshot).then(()=>{this.previewSaveFailed=false;}).catch(error=>{this.previewSaveFailed=true;this.previewDirty=true;logFailure('note.preview.cache-save',error);});this.previewWork=work;
+    try{await work;}finally{if(this.previewWork===work)this.previewWork=undefined;}
+  }
+  async prepareReload(){
+    if(this.finalSaveQueues.size)throw Error('Waiting for a final response save before reloading.');
+    await Promise.all([...this.views].filter(([,adapter])=>adapter.conflictRecord()).map(([view])=>this.adoptSaved(view)));
+    await this.flushPreviewCache();
+    if(this.stoppedRestore)await this.stoppedRestore.catch(()=>{});
+    await this.stopMoves;await Promise.allSettled([...this.stopLoads.values()]);
+    while(this.pendingStops.size)await Promise.allSettled([...this.pendingStops.values()]);
+    if(this.stoppedRestoreFailure||this.stopFailures.size)throw Error('Waiting for durable frozen response storage before reloading.');
+    await this.flushPreviewCache();
+    if(this.pendingStops.size||this.stoppedRestore)throw Error('Waiting for durable frozen response storage before reloading.');
+    if(this.finalSaveQueues.size)throw Error('Waiting for a final response save before reloading.');
+    if(this.previewSaveFailed)throw Error('Waiting for durable response recovery before reloading.');
+    for(const [view,adapter] of this.views){
+      if(adapter.conflictRecord())throw Error('Waiting for the saved note or response completion evidence before reloading.');
+      for(const id of adapter.responseIds()){
+        if(this.localStops.has(id)||this.cached.has(id)||this.records.get(id)?.finalWriter||this.deviceCommits.has(id))continue;
+        throw Error('Waiting for this response to retain its recovery state before reloading.');
+      }
+    }
+  }
+  private forgetPreview(id:string){if(this.cached.delete(id))this.dirtyPreview();this.reconnecting.delete(id);}
+  private rememberPreview(record:ResponseRecord,body:string){
+    if(!this.previewVault||record.request.vaultId!==this.previewVault||this.reconnecting.has(record.request.id)||record.finalWriter||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict)return;
+    if(this.localStops.has(record.request.id))return;
+    const request=record.request,stream=this.streams.get(request.id);
+    const entry:NativePreviewEntry={id:request.id,vaultId:request.vaultId,notePath:record.state?.notePath??request.notePath,threadId:request.threadId,projectId:request.projectId,threadEnvironmentId:request.threadEnvironmentId,messageId:previewMessageId(record),epoch:record.epoch,revision:record.revision,sequence:stream?.sequence??-1,body};
+    const old=this.cached.get(entry.id);if(old&&sameNativePreview(old,entry))return;
+    if(!checkedNativePreview(entry,this.previewVault,old))return;
+    this.cached.delete(entry.id);this.cached.set(entry.id,entry);
+    let characters=[...this.cached.values()].reduce((n,item)=>n+item.body.length,0);
+    while(this.cached.size>MAX_NATIVE_PREVIEWS||characters>MAX_NATIVE_PREVIEW_CHARACTERS){const oldest=this.cached.values().next().value!;characters-=oldest.body.length;this.cached.delete(oldest.id);this.reconnecting.delete(oldest.id);}
+    this.dirtyPreview();
+  }
+  private reconnectDocument(view:MarkdownView){const adapter=this.view(view);return adapter?.conflictRecord()?.incoming??adapter?.saved()??view.getViewData();}
+  reconnectingResponseIds(){
+    const opened=new Set([...this.views.keys()].map(view=>view.file?.path));
+    const ids=[...this.cached.values()].filter(entry=>this.reconnecting.has(entry.id)&&opened.has(entry.notePath)).map(entry=>entry.id);
+    // Recover saved identities even if reload interrupted the asynchronous
+    // preview checkpoint, or Sync delivered a rename while the app was closed.
+    for(const leaf of this.app.workspace.getLeavesOfType('markdown')){
+      const view=leaf.view as MarkdownView;if(!view.file||typeof view.getViewData!=='function')continue;
+      const saved=this.reconnectDocument(view);
+      for(const id of responseIds(saved)){
+        const region=responseRegion(saved,id);
+        if(region&&saved.slice(region.from,region.to)===responseAnchor(id,saved))ids.push(id);
+      }
+    }
+    for(const receipt of this.completionIdentities.values())if(!this.deviceCommits.has(receipt.id)&&[...this.views].some(([view])=>view.file?.path===receipt.path&&!!responseRegion(this.reconnectDocument(view),receipt.id)))ids.push(receipt.id);
+    return [...new Set(ids)];
+  }
+  deleted(path:string){for(const [id,stop] of this.localStops)if(stop.path===path||stop.path.startsWith(path+'/'))this.localStops.delete(id);for(const entry of [...this.cached.values()])if(entry.notePath===path||entry.notePath.startsWith(path+'/'))this.forgetPreview(entry.id);void this.flushPreviewCache();}
+  /** A real vault rename keeps the TFile and response identity. Host leases
+   * can lag behind that event (particularly across mobile Sync). */
+  renamed(before:string,after:string){
+    const moved=(path:string)=>path===before||path.startsWith(before+'/')?after+path.slice(before.length):path;
+    const ids=new Set([...this.provisional].filter(([,item])=>moved(item.path)!==item.path).map(([id])=>id));
+    for(const [id,record] of this.records)if(moved(record.state?.notePath??record.request.notePath)!==(record.state?.notePath??record.request.notePath))ids.add(id);
+    for(const id of ids){
+      const aliases=this.relocations.get(id)??new Map<string,string>();
+      for(const [path,destination] of aliases)aliases.set(path,moved(destination));
+      aliases.set(before,after);this.relocations.set(id,aliases);
+    }
+    const movedStops:NativeStoppedResponse[]=[];for(const stop of this.localStops.values()){const path=moved(stop.path);if(path!==stop.path){stop.path=path;movedStops.push(stop);}}
+    for(const [id,stop] of this.stopReferences)if(moved(stop.path)!==stop.path)this.stopReferences.set(id,{...stop,path:moved(stop.path)});
+    for(const commit of this.deviceCommits.values())commit.path=moved(commit.path);
+    for(const receipt of this.completionIdentities.values())receipt.path=moved(receipt.path);
+    if(this.stoppedStore){
+      const store=this.stoppedStore;
+      this.stopMoves=this.stopMoves.catch(()=>{}).then(()=>store.relocate?.(before,after));void this.stopMoves.catch(error=>{this.stoppedRestoreFailure=error;logFailure('note.stop.rename-storage',error);});
+      for(const stop of movedStops)void this.retainStop(stop).catch(error=>logFailure('note.stop.rename-storage',error,{bindingId:stop.id}));
+    }
+    else if(this.stopKey&&this.localStops.size)this.app.saveLocalStorage(this.stopKey,[...this.localStops.values()]);
+    for(const item of this.provisional.values())item.path=moved(item.path);
+    for(const entry of this.cached.values()){const path=moved(entry.notePath);if(path!==entry.notePath){entry.notePath=path;this.dirtyPreview();}}
+    for(const item of this.streams.values())item.request={...item.request,notePath:moved(item.request.notePath)};
+    for(const [id,record] of this.records){const current=record.state?.notePath??record.request.notePath,next=moved(current);if(next!==current)this.records.set(id,{...record,state:{...record.state??{requestHash:'',accepted:false,status:'waiting',hashes:[],updatedAt:''},notePath:next}});}
+    this.refresh();
+  }
+  view(view:MarkdownView){const adapter=this.views.get(view);return adapter&&!adapter.isDisposed()?adapter:undefined;}
+  toolGroup(element:HTMLElement,ref:string){for(const [view,adapter] of this.views)if(view.contentEl?.contains(element))return adapter.toolGroup(ref);}
+  renderToolBody(element:HTMLElement,body:string){for(const [view,adapter] of this.views)if(view.contentEl?.contains(element))return adapter.renderToolBody(body,element.getAttribute('data-t3-tool-ref')??undefined);return body;}
+  preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}
+  stoppedBody(id:string){return this.localStops.get(id)?.body;}
+  stop(id:string,path?:string,hidden=false,sourceView?:MarkdownView):Promise<void>|void{
+    if(this.stopReferences.has(id)&&!this.localStops.has(id))return this.loadStoppedBody(id,true).then(stop=>{if(!stop)throw Error('The frozen response is unavailable.');this.localStops.set(id,stop);return this.stop(id,path,hidden,sourceView);});
+    this.connectionIssues.delete(id);
+    const record=this.records.get(id),provisional=this.provisional.get(id),cached=this.cached.get(id);
+    const previous=this.localStops.get(id),nextPath=path??previous?.path??provisional?.path??cached?.notePath??record?.state?.notePath??record?.request.notePath??'',nextHidden=hidden||previous?.hidden===true;
+    if(previous&&previous.path===nextPath&&previous.hidden===nextHidden){const pending=this.pendingStops.get(id);if(pending)return pending;if(this.stopFailures.has(id)&&this.stoppedStore)return this.retainStop(previous);return;}
+    // A host-retained Stop already names the frozen bytes. Restore them
+    // unchanged, even if this pane or a permanent final grant is newer.
+    const retained=record?.stopRequestedAt!==undefined?record.stoppedBody:undefined;
+    const current=retained??(sourceView?this.view(sourceView)?.responseBody(id):undefined)??[...this.views.values()].map(view=>view.responseBody(id)).find(body=>body!==undefined)??record?.finalWriter?.body??this.streams.get(id)?.body??provisional?.body??cached?.body??record?.state?.body??'';
+    this.localStops.set(id,{id,path:nextPath,body:nextHidden?'':previous?.body??(retained!==undefined?retained:stoppedResponseBody(current)),hidden:nextHidden});
+    if(this.stoppedStore){this.refresh();return this.retainStop(this.localStops.get(id)!);}
+    if(this.stopKey)try{this.app.saveLocalStorage(this.stopKey,[...this.localStops.values()]);}catch(error){if(previous)this.localStops.set(id,previous);else this.localStops.delete(id);throw error;}
+    this.streams.delete(id);this.forgetPreview(id);
+    // The display is sealed synchronously, before persistence or remote work.
+    this.refresh();
+  }
+  stream(update:DirectInlineUpdate){
+    if(this.localStops.has(update.request.id)||this.stopReferences.has(update.request.id))return;
+    const record=this.records.get(update.request.id),previous=this.streams.get(update.request.id);
+    if(record&&(record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.request.vaultId!==update.request.vaultId||record.request.threadId!==update.request.threadId||record.request.projectId!==update.request.projectId||record.request.threadEnvironmentId!==update.request.threadEnvironmentId))return;
+    if(previous&&previous.sequence>update.sequence)return;
+    const cached=this.cached.get(update.request.id);
+    if(record&&update.messageId!==previewMessageId(record))return;
+    if(cached&&this.reconnecting.has(update.request.id)){
+      if(!record||!previewMatches(cached,record)||update.sequence<cached.sequence)return;
+      this.reconnecting.delete(update.request.id);
+    }
+    const path=record?.state?.notePath??update.request.notePath;
+    this.streams.set(update.request.id,{...update,request:{...update.request,notePath:path}});this.refresh(new Set([path,previous?.request.notePath??path]));
+  }
+  title(id:string,title:string){if(!title.trim()||this.titles.get(id)===title)return;this.titles.set(id,title);this.refresh();}
+  localCompleted(id:string,path:string){this.localStops.delete(id);this.records.delete(id);this.streams.delete(id);this.connectionIssues.delete(id);this.provisional.delete(id);this.forgetPreview(id);this.refresh(new Set([path]));}
+  async allowLocalBinding(id:string,path:string){
+    const file=this.app.vault.getFileByPath(path);if(!file)return;
+    const disk=await this.app.vault.read(file);if(!responseRegion(disk,id))return;
+    this.deviceCommits.delete(id);this.completionIdentities.delete(id);this.proofs.delete(id);this.records.delete(id);
+    for(const [view,adapter] of this.views)if(view.file===file)adapter.allowLocalBinding(id,disk);
+  }
+  private titled(id:string,body:string){const title=this.titles.get(id);return title?renameInlineHeader(body,title):body;}
+  deviceCommitted(path:string,proof:NativeCommitProof,refresh=true){
+    this.deviceCommits.set(proof.bindingId,{path,proof});this.streams.delete(proof.bindingId);this.provisional.delete(proof.bindingId);this.forgetPreview(proof.bindingId);
+    this.completionIdentities.set(proof.bindingId,{id:proof.bindingId,path,hash:proof.hash,commitId:proof.commitId});
+    let characters=[...this.deviceCommits.values()].reduce((n,item)=>n+JSON.stringify(item.proof).length,0);
+    for(const [id,item] of this.deviceCommits){if(this.deviceCommits.size<=32&&characters<=8_000_000)break;const protectedPane=[...this.views].some(([view,adapter])=>view.file?.path===item.path&&adapter.conflictRecord());if(protectedPane)continue;this.deviceCommits.delete(id);characters-=JSON.stringify(item.proof).length;}
+    if(refresh){this.refresh();void this.flushPreviewCache();}
+  }
+  retiredCommitted(receipt:DeviceCompletionReceipt){this.completionIdentities.set(receipt.id,{id:receipt.id,path:receipt.notePath,hash:receipt.hash,commitId:receipt.commitId});}
+  completionConflict(path:string,base:string,local:string,incoming:string,reason:string){
+    this.refresh();
+    for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.preserveConflict({base,local,incoming,reason});
+  }
+  async receive(record:ResponseRecord,proofBytes?:string){
+    if(!record.coordinated)return;
+    const cached=this.cached.get(record.request.id);
+    // Local record revisions belong to one manager lifetime. A settings-based
+    // reconnect after reload can start below the retained preview revision.
+    if(!record.request.localOnly&&cached&&previewMatches(cached,record)&&(cached.epoch>record.epoch||cached.epoch===record.epoch&&cached.revision>record.revision))return;
+    const old=this.records.get(record.request.id);if(!record.request.localOnly&&old&&(old.epoch>record.epoch||old.epoch===record.epoch&&old.revision>record.revision))return;
+    if(proofBytes&&record.state?.delivery)this.proofs.set(record.request.id,readNativeCommitProof(proofBytes,record.request.id,record.state.delivery));
+    const path=record.state?.notePath??record.request.notePath;
+    const move=[...this.relocations.get(record.request.id)??[]].sort((a,b)=>b[0].length-a[0].length).find(([before])=>path===before||path.startsWith(before+'/'));
+    if(move)record={...record,state:{...record.state??{requestHash:'',accepted:false,status:'waiting',hashes:[],updatedAt:''},notePath:move[1]+path.slice(move[0].length)}};
+    if(cached){
+      if(!previewMatches(cached,record)||record.finalWriter||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict)this.forgetPreview(record.request.id);
+      else if(cached.sequence===-1&&record.state?.body!==undefined)this.reconnecting.delete(record.request.id);
+    }
+    this.provisional.delete(record.request.id);this.records.set(record.request.id,record);
+    if(record.state?.status==='conflict')for(const [view,adapter] of this.views)if(view.file?.path===path&&adapter.responseIds().includes(record.request.id))adapter.confirmPendingConflict(record.state.detail??'The response could not verify its saved note. Both versions are preserved.');
+    if(record.stopRequestedAt!==undefined&&!record.state?.cleanupComplete&&(!this.localStops.has(record.request.id)||record.discardResponse&&!this.localStops.get(record.request.id)?.hidden))await this.stop(record.request.id,path,record.discardResponse===true);
+    if(record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete)this.streams.delete(record.request.id);
+    // Metadata and presence updates belong to this binding. Preserve immediate
+    // delivery without reading/rendering every unrelated open native note.
+    // Both locations and every duplicate-destination warning remain current.
+    const affected=new Set([path,record.state?.notePath??record.request.notePath]);
+    if(old)affected.add(old.state?.notePath??old.request.notePath);
+    if(cached)affected.add(cached.notePath);
+    for(const path of [...old?.state?.locationConflict??[],...record.state?.locationConflict??[]])affected.add(path);
+    this.refresh(affected);
+    if(record.state?.delivery&&record.state.cleanupComplete)await this.changed(record.state.notePath);
+    const current=this.records.get(record.request.id);
+    if(current&&canCompactLease(current)&&!isCompletedLeaseIndex(current)){
+      const currentPath=current.state?.notePath??current.request.notePath,file=this.app.vault.getFileByPath(currentPath),disk=file?await this.app.vault.read(file):'';
+      this.releaseCompleted(currentPath,disk);
+    }
+    if(cached&&!this.cached.has(record.request.id))await this.flushPreviewCache();
+  }
+  private releaseCompleted(path:string,document:string){
+    for(const [id,record] of this.records){
+      if(isCompletedLeaseIndex(record)||!canCompactLease(record)||(record.state?.notePath??record.request.notePath)!==path)continue;
+      // A pending or divergent native pane keeps the complete reply and proof.
+      // A later stale anchor uses the retained completion identity and recovery
+      // evidence, rather than rebuilding a reply from a compact routing record.
+      if(record.responseRemovedAt===undefined&&(responseRegion(document,id)||[...this.views].some(([view,adapter])=>view.file?.path===path&&(adapter.responseIds().includes(id)||adapter.conflictRecord()))))continue;
+      const delivery=record.state?.delivery;
+      if(delivery&&record.responseRemovedAt===undefined)this.completionIdentities.set(id,{id,path,hash:delivery.hash,commitId:delivery.commitId});
+      this.records.set(id,retainedLease(record));this.proofs.delete(id);this.deviceCommits.delete(id);this.streams.delete(id);this.provisional.delete(id);
+    }
+  }
+  private completed(path:string,document:string,pending:ReadonlySet<string>){
+    if(!pending.size)return [];
+    const hash=contentHash(document),ids:string[]=[];
+    for(const record of this.records.values()){
+      const delivery=record.state?.delivery,id=record.request.id,proof=this.proofs.get(id);
+      if(pending.has(id)&&record.request.nativeProjection&&(record.state?.notePath??record.request.notePath)===path&&!responseRegion(document,id)){ids.push(id);continue;}
+      if(!pending.has(id)||record.state?.notePath!==path||!record.state.cleanupComplete||!delivery)continue;
+      if(containsResponseBoundary(document,id)&&responseRegion(document,id))continue;
+      if(hash===delivery.hash||proof?.commitId===delivery.commitId&&proof.hash===delivery.hash&&nativeCommitMatches(proof,document))ids.push(id);
+    }
+    // A single incoming file can finish several responses. Do not retire one
+    // while another missing anchor still awaits its independent proof.
+    return [...pending].some(id=>!responseRegion(document,id)&&!ids.includes(id))?[]:ids;
+  }
+  /** File events keep adoption alive even after the device's disk observation
+   * has stopped lease polling. Reads are coalesced per note, never per pane. */
+  changed(path:string):Promise<void>{
+    const existing=this.reads.get(path);if(existing){this.changedDuringRead.add(path);return existing;}
+    if(![...this.records.values()].some(record=>record.state?.notePath===path&&record.state.cleanupComplete&&record.state.delivery))return Promise.resolve();
+    const file=this.app.vault.getFileByPath(path);if(!file)return Promise.resolve();
+    if(![...this.views].some(([view,adapter])=>view.file===file&&adapter.responseIds().length))return Promise.resolve();
+    const lifetime=this.lifetime;
+    const work=(async()=>{
+      do{
+        this.changedDuringRead.delete(path);
+        const disk=await this.app.vault.read(file);
+        if(this.lifetime!==lifetime||file.path!==path||this.app.vault.getFileByPath(path)!==file)return;
+        const pending=new Set([...this.views].filter(([view])=>view.file===file).flatMap(([,adapter])=>adapter.responseIds()));
+        const ids=this.completed(path,disk,pending);
+        if(ids.length)for(const [view,adapter] of this.views)if(view.file===file&&!adapter.isDisposed())adapter.resolveCommitted(disk,ids);
+        for(const [view,adapter] of this.views){
+          if(view.file!==file||!adapter.conflictRecord()?.awaitingCompletion)continue;
+          const unmatched=[...this.records.values()].some(record=>adapter.responseIds().includes(record.request.id)&&!responseRegion(disk,record.request.id)&&record.state?.notePath===path&&record.state.cleanupComplete&&record.state.delivery&&this.proofs.has(record.request.id)&&!this.completed(path,disk,new Set([record.request.id])).includes(record.request.id));
+          if(unmatched)adapter.confirmPendingConflict('The saved note differs from the verified completed response. Both versions are preserved.');
+        }
+        this.refresh();
+        this.releaseCompleted(path,disk);
+      }while(this.changedDuringRead.has(path));
+    })();
+    this.reads.set(path,work);void work.finally(()=>{if(this.reads.get(path)===work)this.reads.delete(path);}).catch(()=>{});return work;
+  }
+  private normalize(path:string,document:string){
+    const ids=[...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===path).map(record=>record.request.id);
+    ids.push(...[...this.provisional].filter(([,item])=>item.path===path).map(([id])=>id));
+    for(const id of new Set(ids)){if(this.deviceCommits.has(id)||!containsResponseBoundary(document,id))continue;const region=responseRegion(document,id);if(region)document=document.slice(0,region.from)+responseAnchor(id,document)+document.slice(region.to);}
+    return document;
+  }
+  installLoading(prototype:MarkdownView){
+    const original=prototype.setViewData,manager=this;
+    if(typeof original!=='function')return ()=>{};
+    let active=true;
+    const wrapped:MarkdownView['setViewData']=function(this:MarkdownView,incoming,clear){
+      if(active&&!manager.view(this)&&this.file&&(this as any).getState?.().source!==true&&(incoming.includes('data-t3-tool-group=')&&incoming.includes('send-to-t3-tool-group-content')||hasSavedHistory(incoming))){
+        try{manager.wrap(this,incoming,{set:original,clear});return;}
+        catch(error){
+          // A damaged pre-existing note must remain readable. Fall back only
+          // if initialization left the native methods intact; never bypass a
+          // retained save guard after a partially failed native update.
+          if(this.setViewData!==wrapped)throw error;
+          logFailure('note.projection.open',error,{notePath:this.file.path});
+        }
+      }
+      return original.call(this,incoming,clear);
+    };
+    prototype.setViewData=wrapped;
+    return ()=>{active=false;if(prototype.setViewData===wrapped)prototype.setViewData=original;};
+  }
+  private wrap(view:MarkdownView,saved=view.getViewData(),initial?:{set:MarkdownView['setViewData'];clear:boolean}){
+    const existing=this.view(view);if(existing)return existing;
+    const file=view.file;if(!file)throw Error('The native response note closed before final delivery.');
+    let adapter!:NativeResponseView;
+    adapter=new NativeResponseView(view,saved,conflict=>{
+      logFailure('note.projection.conflict',Error(conflict.reason),{notePath:file.path});
+      const fence=this.activeFinalSaves.get(file.path);if(fence)fence.invalid=true;
+      void this.adoptSaved(view);
+    },async()=>view.file===file?this.app.vault.read(file):undefined,incoming=>this.normalize(file.path,incoming),incoming=>this.completed(file.path,incoming,new Set(adapter.responseIds())),initial);
+    this.views.set(view,adapter);this.uninitializedViews.add(adapter);
+    const fence=this.activeFinalSaves.get(file.path);if(fence)this.joinFinalSave(fence,adapter);
+    return adapter;
+  }
+  refresh(paths?:ReadonlySet<string>){
+    this.pruneStoppedBodies();
+    const opened=new Set<string>();
+    const live=new Set(this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView));
+    for(const [view,warnings] of this.warnings)if(!live.has(view)){for(const element of warnings.values())element.remove();this.warnings.delete(view);}
+    for(const [view,adapter] of this.views)if(!live.has(view)||adapter.isDisposed()){if(!adapter.isDisposed())adapter.dispose(true);this.views.delete(view);}
+    for(const view of live){
+      if(!view.file||typeof view.getViewData!=='function'||paths&&!paths.has(view.file.path))continue;
+      const blocked=[...this.records.values()].filter(record=>!record.stopRequestedAt&&!record.state?.cleanupComplete&&record.state?.locationConflict?.includes(view.file!.path));
+      let warnings=this.warnings.get(view);if(!warnings){warnings=new Map();this.warnings.set(view,warnings);}
+      for(const [id,element] of warnings)if(!element.isConnected||!blocked.some(record=>record.request.id===id)){element.remove();warnings.delete(id);}
+      for(const record of blocked){
+        if(warnings.has(record.request.id)||!view.contentEl)continue;
+        const banner=view.contentEl.createDiv({cls:'send-to-t3-location-conflict'});banner.setAttribute('role','alert');
+        banner.createEl('strong',{text:'Response blocked: duplicate destinations'});
+        banner.createEl('p',{text:'Choose the intended note to resume this response. The prompt will not be sent again.'});
+        const list=banner.createEl('ul');for(const path of record.state!.locationConflict!)list.createEl('li',{text:path});
+        banner.createEl('button',{text:'Review response destination…'}).onclick=()=>banner.dispatchEvent(new CustomEvent('t3-review-response-location',{bubbles:true,detail:{bindingId:record.request.id}}));
+        view.contentEl.prepend(banner);warnings.set(record.request.id,banner);
+      }
+      try{
+        let adapter=this.view(view);
+        const fence=this.activeFinalSaves.get(view.file.path);if(adapter&&fence)this.joinFinalSave(fence,adapter);
+        let saved=adapter?adapter.saved():view.getViewData();
+        const waiting=[...this.stopReferences.values()].filter(stop=>stop.path===view.file!.path&&!this.localStops.has(stop.id)&&!this.stopFailures.has(stop.id)&&this.needsStoppedBody(stop));
+        if(waiting.length){for(const stop of waiting)void this.loadStoppedBody(stop.id).catch(error=>logFailure('note.stop.body-load',error,{bindingId:stop.id}));continue;}
+        const commits=[...this.deviceCommits.values()].filter(commit=>commit.path===view.file!.path),retired=[...this.completionIdentities.values()].filter(receipt=>receipt.path===view.file!.path&&!this.deviceCommits.has(receipt.id));
+        let savedHash:string|undefined;
+        const settled=[...this.records.values()].filter(record=>(record.state?.notePath??record.request.notePath)===view.file!.path&&record.state?.cleanupComplete&&record.state.delivery&&!adapter?.hasMaterialized(record.request.id)&&!responseRegion(saved,record.request.id)&&((savedHash??=contentHash(saved))===record.state.delivery.hash||this.proofs.has(record.request.id)&&nativeCommitMatches(this.proofs.get(record.request.id)!,saved))).map(record=>record.request.id);
+        const responses:LocalResponse[]=[...this.provisional.entries()].filter(([,item])=>item.path===view.file!.path).map(([id,item])=>({id,body:this.titled(id,item.body)}));
+        for(const entry of [...this.cached.values()]){
+          if(!this.reconnecting.has(entry.id)||entry.notePath!==view.file.path)continue;
+          const region=responseRegion(saved,entry.id);
+          if(!region||saved.slice(region.from,region.to)!==responseAnchor(entry.id,saved)){this.forgetPreview(entry.id);continue;}
+          if(!this.records.has(entry.id)&&!responses.some(response=>response.id===entry.id))responses.push({id:entry.id,body:this.titled(entry.id,entry.body)});
+        }
+        for(const record of this.records.values()){
+          if(isCompletedLeaseIndex(record)||record.responseRemovedAt!==undefined||(record.state?.notePath??record.request.notePath)!==view.file.path)continue;
+          const id=record.request.id;
+          if(this.deviceCommits.has(id))continue;
+          if(!containsResponseBoundary(saved,id))continue;
+          const region=responseRegion(saved,id);
+          if(!region||saved.slice(region.from,region.to)!==responseAnchor(id,saved))continue;
+          if(record.state?.cleanupComplete&&adapter?.hasMaterialized(id))continue;
+          const preparing=!record.state||record.state.status==='waiting';
+          const initialTitle=preparing?record.request.notePath.split('/').at(-1)!.replace(/\.md$/i,''):record.request.threadTitle;
+          const body=(record.state?.cleanupComplete?record.state.finalBody:undefined)??record.finalWriter?.body??this.streams.get(id)?.body??record.state?.body??regionBody(initialRegion(id,record.request.initialInput,initialTitle,record.request.intermediateMode,{startedAt:record.request.createdAt},preparing?'sending':'running').text,id)!.body;
+          const cached=this.cached.get(id),restoring=!record.finalWriter&&cached&&this.reconnecting.has(id)&&previewMatches(cached,record);
+          const stream=this.streams.get(id),failure=stream?.completionVerified?undefined:stream?.failure??record.state?.streamFailure;
+          const failureBody=restoring?cached.body:body;
+          const displayed=record.state?.cleanupComplete||record.finalWriter?body:failure?failedStreamBody(this.titled(id,failureBody)):this.titled(id,body);
+          if(!restoring)this.rememberPreview(record,displayed);
+          const terminal=record.finalWriter||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict||['complete','completed','interrupted','error','cancelled','conflict'].includes(record.state?.status??'')||stream?.completionVerified||['complete','interrupted','error'].includes(stream?.phase??'');
+          const connection=this.connectionIssues.get(id),visible=restoring&&!failure?this.titled(id,cached.body):displayed;
+          responses.push({id,body:connection?responseConnectionBody(visible,connection,id):visible,movable:!terminal&&!failure&&!connection,stoppable:!terminal,followable:!terminal&&!failure&&!connection});
+        }
+        for(const stop of this.localStops.values()){
+          if(stop.path!==view.file.path||!responseRegion(saved,stop.id)||adapter?.hasMaterialized(stop.id))continue;
+          const index=responses.findIndex(response=>response.id===stop.id);
+          const sealed={id:stop.id,body:stop.hidden?'':stop.body,followable:false};
+          if(index>=0)responses[index]=sealed;else responses.push(sealed);
+        }
+        if(!adapter&&(fence||responses.length||commits.length||retired.length||settled.length||saved.includes('data-t3-tool-group=')&&saved.includes('send-to-t3-tool-group-content')||hasSavedHistory(saved))){
+          const file=view.file;
+          adapter=this.wrap(view,saved);
+          opened.add(file.path);
+        }
+        if(adapter){
+          adapter.registerLocalBindings([...this.records.values()].filter(record=>record.request.localOnly&&(record.state?.notePath??record.request.notePath)===view.file!.path).map(record=>record.request.id));
+          for(const id of settled)adapter.markMaterialized(id);
+          for(const receipt of retired){adapter.markMaterialized(receipt.id);if(responseRegion(saved,receipt.id))adapter.preserveConflict({base:saved,local:saved,incoming:saved,reason:'An incoming note contains an already completed response anchor. The completion identity is retained; recovery requires the host proof.'});}
+          for(const {proof} of commits){
+            adapter.markMaterialized(proof.bindingId);
+            if(responseRegion(saved,proof.bindingId))adapter.preserveConflict({base:proof.document,local:proof.document,incoming:saved,reason:'An incoming note resurrected an already completed response anchor.'});
+          }
+          const inputs=responses.flatMap(response=>{
+            const stream=this.streams.get(response.id);
+            if(!stream?.request.localOnly||stream.failure)return [];
+            return [{id:response.id,steering:(stream.request.localSteering??[]).map(input=>({...input,confirmed:!!stream.checkpoint?.bindings?.[input.messageId]&&!!stream.displayedInputIds?.includes(input.messageId)}))}];
+          });
+          adapter.setResponses(responses,inputs);
+        }
+      }catch(error){logFailure('note.projection.retry',error,{notePath:view.file.path});}
+      if(this.view(view)?.conflictRecord())void this.adoptSaved(view);
+    }
+    for(const path of opened)void this.changed(path).catch(error=>logFailure('note.projection.open',error,{notePath:path}));
+  }
+  filter(transaction:Transaction){for(const adapter of this.views.values()){const result=adapter.filterTransaction(transaction);if(Array.isArray(result))return result;}return transaction;}
+  savedViews(path:string){return this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===path&&(view.getMode?.()!=='preview'||!!this.view(view))).map(view=>({view,saved:()=>this.view(view)?.saved()??view.getViewData?.()??view.editor.getValue()}));}
+  private finalSaveQueues=new Map<string,Promise<void>>();
+  private activeFinalSaves=new Map<string,FinalSaveFence>();
+  private nativePanes(path:string){return this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file?.path===path&&typeof view.getViewData==='function');}
+  private joinFinalSave(fence:FinalSaveFence,adapter:NativeResponseView){
+    if(fence.released||fence.members.has(adapter))return;
+    if(fence.sealed)fence.invalid=true;
+    const member:{ready:boolean;work:Promise<void>;release?:()=>void}={ready:false,work:Promise.resolve()};fence.members.set(adapter,member);
+    // beginFinalSave installs the constructor-bound save gate synchronously,
+    // before its first awaited drain. A pane opened during a held write joins
+    // immediately; its pending captured save can never count as verified.
+    member.work=adapter.beginFinalSave(fence.review).then(async release=>{
+      if(fence.released){release();return;}member.release=release;
+      if(this.uninitializedViews.has(adapter)&&!fence.review){
+        const file=adapter.view.file;if(!file||file.path!==fence.path)throw Error('The native response note moved before final delivery.');
+        const disk=await this.app.vault.read(file);if(fence.released)return;
+        if(adapter.view.file!==file||file.path!==fence.path||adapter.isDisposed())throw Error('The native response note changed during final delivery.');
+        adapter.initializeDiskBaseline(disk);this.uninitializedViews.delete(adapter);
+      }
+      member.ready=true;
+    }).catch(error=>{fence.failure=error;fence.invalid=true;});
+  }
+  private admitFinalSavePanes(fence:FinalSaveFence){
+    for(const view of this.nativePanes(fence.path))this.joinFinalSave(fence,this.view(view)??this.wrap(view));
+  }
+  /** Recheck actual pane identity and native save capture, not just equal
+   * bytes. A split/file switch after the final snapshot defers this attempt. */
+  finalSaveReady(path:string){
+    const fence=this.activeFinalSaves.get(path);if(!fence||fence.released)return false;
+    try{this.admitFinalSavePanes(fence);}catch(error){fence.failure=error;fence.invalid=true;}
+    const panes=this.nativePanes(path);
+    if(panes.length!==fence.panes.size||panes.some(view=>fence.panes.get(view)!==view.file))fence.invalid=true;
+    return fence.sealed&&!fence.invalid&&!fence.failure&&panes.every(view=>{
+      const adapter=this.view(view),member=adapter&&fence.members.get(adapter);return !!member?.ready&&!(view as any).saving;
+    });
+  }
+  reviewSaved(path:string,disk:string){
+    const values=this.savedViews(path).map(({view,saved})=>{const adapter=this.view(view);return adapter?adapter.reviewSaved(disk):saved()===disk?disk:undefined;});
+    if(!values.length)return disk;const first=values[0];return first!==undefined&&values.every(value=>value===first)?first:undefined;
+  }
+  resumeReviewed(path:string,disk:string,reviewed:string){
+    if(this.reviewSaved(path,disk)!==reviewed)throw Error('The reviewed note changed on this device.');
+    for(const {view} of this.savedViews(path))this.view(view)?.resumeReviewed(disk,reviewed);
+  }
+  async beginFinalSave(path:string,review=false):Promise<()=>void>{
+    const previous=this.finalSaveQueues.get(path)??Promise.resolve();let unlock!:()=>void;
+    const lock=new Promise<void>(resolve=>{unlock=resolve;}),tail=previous.then(()=>lock);this.finalSaveQueues.set(path,tail);
+    await previous;
+    const fence:FinalSaveFence={path,review,released:false,sealed:false,invalid:false,panes:new Map(),members:new Map()};this.activeFinalSaves.set(path,fence);
+    const release=()=>{if(fence.released)return;fence.released=true;for(const member of [...fence.members.values()].reverse())member.release?.();if(this.activeFinalSaves.get(path)===fence)this.activeFinalSaves.delete(path);unlock();if(this.finalSaveQueues.get(path)===tail)this.finalSaveQueues.delete(path);};
+    try{
+      for(;;){
+        this.admitFinalSavePanes(fence);await Promise.all([...fence.members.values()].map(member=>member.work));
+        if(fence.failure)throw fence.failure;
+        const panes=this.nativePanes(path);
+        if(panes.some(view=>!this.view(view)||!fence.members.get(this.view(view)!)?.ready))continue;
+        fence.panes=new Map(panes.map(view=>[view,view.file]));fence.sealed=true;
+        if(!this.finalSaveReady(path))throw Error('The native panes changed before final delivery.');
+        return release;
+      }
+    }catch(error){release();throw error;}
+  }
+  prepare(path:string,before:string,after:string,ids:string[]){if(this.activeFinalSaves.has(path)&&!this.finalSaveReady(path))throw Error('The native panes changed before final delivery.');for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.prepareMaterialization(before,after,ids);}
+  cancel(path:string){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.cancelMaterialization();}
+  committed(path:string,saved:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path){if(this.uninitializedViews.has(adapter)){adapter.initializeDiskBaseline(saved,true);this.uninitializedViews.delete(adapter);}if(!adapter.acceptCommitted(saved,ids))throw Error('A native pane did not adopt the saved result.');}}
+  dispose(){this.savedAdoptions.clear();void this.flushPreviewCache();this.lifetime++;this.localStops.clear();this.stopReferences.clear();this.stopLoads.clear();this.stopFailures.clear();for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.connectionIssues.clear();this.proofs.clear();this.deviceCommits.clear();this.completionIdentities.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
+}

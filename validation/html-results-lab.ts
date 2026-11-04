@@ -1,8 +1,8 @@
 import {Plugin,MarkdownView} from 'obsidian';
-import {HtmlResultViews} from '../html-result-view';
-import {HtmlResultStore} from '../html-result-store';
-import {renderHtmlResult,htmlResultKey} from '../html-results';
-import {deviceState} from '../device-state';
+import {HtmlResultViews} from '../src/responses/html-result-view';
+import {HtmlResultStore} from '../src/responses/html-result-store';
+import {renderHtmlResult,htmlResultKey} from '../src/responses/html-results';
+import {deviceState} from '../src/storage/device-state';
 import {reference,tool} from '../tests/fixtures/html-result';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {resolveNewThreadModel,readNewThreadModel,resolveNewThreadDefaults,readNewThreadDefaults} from '../model-defaults';
+import {resolveNewThreadModel,readNewThreadModel,resolveNewThreadDefaults,readNewThreadDefaults} from '../src/conversations/model-defaults';
 import {modelConfig,settingsSocket} from './rpc-fixture';
 
 test('new threads use the configured environment default without adding reasoning options',()=>{

@@ -2,11 +2,11 @@
 import assert from 'node:assert/strict';
 import {readFile,writeFile,rm} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
-import {cli} from '../desktop';
-import {environmentApi} from '../direct';
-import {connectT3Rpc,T3RpcError} from '../t3-rpc';
-import {connectVaultRemote} from '../vault-connection';
-import {identityPathForSettings} from '../vault-identity';
+import {cli} from '../src/connection/desktop';
+import {environmentApi} from '../src/connection/direct';
+import {connectT3Rpc,T3RpcError} from '../src/connection/t3-rpc';
+import {connectVaultRemote} from '../src/connection/vault-connection';
+import {identityPathForSettings} from '../src/app/vault-identity';
 
 async function main(){
   const evidence=resolve(process.argv[2]??''),phase=process.argv[3];

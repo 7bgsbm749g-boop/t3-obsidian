@@ -4,10 +4,10 @@ import {promises as fs} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
-import {contentHash} from '../completion';
-import {ensurePrivateStorage,existingPrivateStorage} from '../private-storage-desktop';
-import {readPrivateStorageRoute,privateStorageResolver} from '../private-storage';
-import {type ResponseStorageFiles} from '../response-record';
+import {contentHash} from '../src/responses/completion';
+import {ensurePrivateStorage,existingPrivateStorage} from '../src/storage/private-storage-desktop';
+import {readPrivateStorageRoute,privateStorageResolver} from '../src/storage/private-storage';
+import {type ResponseStorageFiles} from '../src/responses/response-record';
 async function fixture(){const root=await fs.mkdtemp(join(tmpdir(),'t3-storage-lifecycle-')),vault=join(root,'vault'),privateRoot=join(root,'private');await fs.mkdir(vault);return {root,vault,privateRoot,close:()=>fs.rm(root,{recursive:true,force:true})};}
 
 test('an existing remote connection follows a newly published private route',async()=>{

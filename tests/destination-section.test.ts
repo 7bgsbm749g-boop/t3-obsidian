@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {destinationOffset} from '../destination-section';
-import {editorStream} from '../editor-stream';
-import {responseAnchor} from '../native-response-projection';
+import {destinationOffset} from '../src/notes/destination-section';
+import {editorStream} from '../src/responses/editor-stream';
+import {responseAnchor} from '../src/responses/native-response-projection';
 import {randomUUID} from 'node:crypto';
 import {nativeRequest} from './fixtures/native-message';
 test('section placement stays within a unique heading, ignores code and preserves unrelated sections on retry',async()=>{

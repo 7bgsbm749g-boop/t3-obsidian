@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {sha256} from '@noble/hashes/sha256';
-import {contentHash,installContentHasher} from '../completion';
-import {installDesktopContentHash} from '../content-hash-desktop';
+import {contentHash,installContentHasher} from '../src/responses/completion';
+import {installDesktopContentHash} from '../src/connection/content-hash-desktop';
 
 const portable=(text:string)=>Buffer.from(sha256(new TextEncoder().encode(text))).toString('hex');
 

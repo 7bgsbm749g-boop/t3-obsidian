@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {checkedNativePreview,loadNativePreviews,sameNativePreview,type NativePreviewEntry} from '../native-preview-cache';
-import {responseAnchor} from '../native-response-projection';
-import {markdownCodeRanges,markdownCodeCacheStatus} from '../reply-html';
+import {checkedNativePreview,loadNativePreviews,sameNativePreview,type NativePreviewEntry} from '../src/responses/native-preview-cache';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {markdownCodeRanges,markdownCodeCacheStatus} from '../src/responses/reply-html';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 const entry:NativePreviewEntry={id,vaultId:'vault',notePath:'Note.md',threadId:'thread',projectId:'project',threadEnvironmentId:'environment',messageId:'message',epoch:1,revision:2,sequence:3,body:'> Reply with `code`'};

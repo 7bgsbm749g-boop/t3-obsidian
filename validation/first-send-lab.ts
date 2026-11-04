@@ -1,7 +1,7 @@
 import {Plugin,MarkdownView} from 'obsidian';
-import SendToT3 from '../main';
-import {closeNoteTabPanel} from '../note-tab-panel';
-import {loadSmartSend,prepareSmartSend,confirmSmartSend,smartDestination} from '../smart-send';
+import SendToT3 from '../src/app/main';
+import {closeNoteTabPanel} from '../src/notes/note-tab-panel';
+import {loadSmartSend,prepareSmartSend,confirmSmartSend,smartDestination} from '../src/notes/smart-send';
 
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));

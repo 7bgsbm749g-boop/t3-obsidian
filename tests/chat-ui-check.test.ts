@@ -4,7 +4,7 @@ import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
-const compiled=build({entryPoints:['chat-ui.ts'],bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
+const compiled=build({entryPoints:['src/conversations/chat-ui.ts'],bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
 async function fixture(alternative?:string,closeImmediately=false,initialBusy=false,automatic=false,remembered=true,hasContent?:boolean){
  const modals:any[]=[];
  class Element{value='';text='';style:any={};disabled=false;isConnected=true;children:any[]=[];events:any={};empty(){this.children=[];}setText(t:string){this.text=t;}focus(){}addEventListener(n:string,f:any){this.events[n]=f;}createEl(_tag:string,o:any={}){const el=new Element();el.text=o.text??'';this.children.push(el);return el;}}

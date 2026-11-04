@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {noteSteeringTarget,type NoteSteeringCandidate} from '../note-steering';
+import {noteSteeringTarget,type NoteSteeringCandidate} from '../src/notes/note-steering';
 
 const destination={notePath:'Note.md',threadId:'thread',projectId:'project',environmentId:'env'};
 const running={id:'thread',projectId:'project',session:{status:'running',activeTurnId:'turn'},latestTurn:{turnId:'turn',state:'running'}};

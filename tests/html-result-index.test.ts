@@ -2,8 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {performance} from 'node:perf_hooks';
 import {EditorState} from '@codemirror/state';
-import {HtmlResultIndex} from '../html-result-index';
-import {htmlResultBlocks,renderHtmlResult} from '../html-results';
+import {HtmlResultIndex} from '../src/responses/html-result-index';
+import {htmlResultBlocks,renderHtmlResult} from '../src/responses/html-results';
 import {reference} from './fixtures/html-result';
 
 const block=renderHtmlResult(reference);

@@ -2,10 +2,10 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {performance} from 'node:perf_hooks';
 import {EditorState,type StateField} from '@codemirror/state';
-import {ContainerMarkerIndex} from '../container-marker-index';
-import {hiddenInlineMarkerExtension,type ContainerMarkerDecorations} from '../inline-markers';
-import {containerBody,containerStart,containerEnd,responseBoundaries} from '../response-container';
-import {markdownCodeCacheStatus} from '../reply-html';
+import {ContainerMarkerIndex} from '../src/responses/container-marker-index';
+import {hiddenInlineMarkerExtension,type ContainerMarkerDecorations} from '../src/conversations/inline-markers';
+import {containerBody,containerStart,containerEnd,responseBoundaries} from '../src/responses/response-container';
+import {markdownCodeCacheStatus} from '../src/responses/reply-html';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const marker=containerBody(id,'A reply.');

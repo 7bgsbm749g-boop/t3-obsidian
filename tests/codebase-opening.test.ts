@@ -5,7 +5,7 @@ import {runInNewContext} from 'node:vm';
 import {readFile} from 'node:fs/promises';
 
 const editorExternals=['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight'];
-const bundled=build({entryPoints:['codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:editorExternals});
+const bundled=build({entryPoints:['src/projects/codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:editorExternals});
 const scope={environmentId:'env',projectId:'project',root:'/outside',title:'Project'};
 
 test('the isolated native opening lab compiles with the production bridge',async()=>{

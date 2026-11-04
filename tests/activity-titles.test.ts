@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {activeResponseFolders,activityLeafPath,decorateActivityTabs,decorateMobileActivityTabs} from '../activity-titles';
-import {decorateNoteIndicators} from '../folder-indicator';
-import type {NoteIndicator} from '../explorer-responses';
+import {activeResponseFolders,activityLeafPath,decorateActivityTabs,decorateMobileActivityTabs} from '../src/ui/activity-titles';
+import {decorateNoteIndicators} from '../src/projects/folder-indicator';
+import type {NoteIndicator} from '../src/responses/explorer-responses';
 
 class Element {
   className='';title='';textContent='';children:Element[]=[];attrs=new Map<string,string>();

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import {readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join,resolve} from 'node:path';
-import {environmentApi,commandId} from '../direct';
-import {readInlineSnapshot} from '../thread-stream';
-import {applyThreadItem,turnForMessage,turnPhase} from '../inline-thread';
+import {environmentApi,commandId} from '../src/connection/direct';
+import {readInlineSnapshot} from '../src/conversations/thread-stream';
+import {applyThreadItem,turnForMessage,turnPhase} from '../src/conversations/inline-thread';
 
 async function main(){
   const evidence=resolve(process.argv[2]??'');if(!evidence.startsWith('/home/ubuntu/projects/send-to-t3-code/evidence/'))throw Error('Private lab evidence directory required.');

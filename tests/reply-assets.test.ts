@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {replyReferences,rewriteReplyReferences} from '../reply-assets';
-import {renderInlineTurn} from '../inline-thread';
+import {replyReferences,rewriteReplyReferences} from '../src/responses/reply-assets';
+import {renderInlineTurn} from '../src/conversations/inline-thread';
 
 test('reply file references keep their order and skip code and external links',async()=>{
   const answer='Before ![plot](/tmp/plot.png) and [report](/tmp/report.pdf).\n\n![[Pasted image.png]]\n\n```md\n![example](/tmp/no.png)\n```\n\n[site](https://example.com)';

@@ -5,7 +5,7 @@ import {insertNewlineAndIndent} from '@codemirror/commands';
 import {language,syntaxTree,indentUnit} from '@codemirror/language';
 import {highlightTree,classHighlighter} from '@lezer/highlight';
 import {grammarRuntime} from './language-grammar-runtime';
-import {codeLanguage,codeReadingFence} from '../code-language';
+import {codeLanguage,codeReadingFence} from '../src/projects/code-language';
 
 test('C source and headers use the C grammar without taking Markdown or C++ extensions',()=>{
   for(const extension of ['c','h','H'])assert.equal(codeLanguage(extension)?.grammar,'c');

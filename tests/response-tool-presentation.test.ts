@@ -1,10 +1,10 @@
-import {streamBlocks} from '../stream-block';
+import {streamBlocks} from '../src/responses/stream-block';
 import {historyFixture} from './fixtures/stream-history';
-import {containerBody} from '../response-container';
+import {containerBody} from '../src/responses/response-container';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {presentToolGroups,canonicalToolGroup,toolDisplayOffset,restoreToolGroups,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,mountToolGroups,historyToolBody} from '../response-tool-presentation';
-import {renderResponseToolGroup,type ResponseTool,type ResponseToolGroup} from '../response-tools';
+import {presentToolGroups,canonicalToolGroup,toolDisplayOffset,restoreToolGroups,recoverToolGroups,compactToolGroups,assertCanonicalToolGroups,mountToolGroups,historyToolBody} from '../src/responses/response-tool-presentation';
+import {renderResponseToolGroup,type ResponseTool,type ResponseToolGroup} from '../src/responses/response-tools';
 const tool=(id='one',output='exact output'):ResponseTool=>({id,turnId:'turn',key:JSON.stringify(['turn',id]),status:'completed',label:'Ran npm',activeLabel:'Running npm',icon:'terminal',action:'command',sequence:1,command:'npm test',output});
 const group=(id='group',output='exact output',count=2):ResponseToolGroup=>({id,turnId:'turn',tools:Array.from({length:count},(_,i)=>tool(String(i),output))});
 const html=(id='group',output='exact output',count=2)=>renderResponseToolGroup(group(id,output,count));

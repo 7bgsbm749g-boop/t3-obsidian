@@ -1,10 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {NativeResponseManager} from '../native-response-manager';
-import {responseAnchor} from '../native-response-projection';
-import {contentHash} from '../completion';
-import type {ResponseRecord} from '../response-record';
+import {NativeResponseManager} from '../src/responses/native-response-manager';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {contentHash} from '../src/responses/completion';
+import type {ResponseRecord} from '../src/responses/response-record';
 
 function fixture(open=true){
  const id=randomUUID(),commitId=randomUUID(),body='Completed reply '.repeat(10000),anchor=responseAnchor(id),before=`Before\n\n${anchor}\n\nAfter\n`,final=before.replace(anchor,body),file={path:'Done.md'};

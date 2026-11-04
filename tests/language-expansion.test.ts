@@ -4,7 +4,7 @@ import {build} from 'esbuild';
 import {EditorState} from '@codemirror/state';
 import {ensureSyntaxTree,language} from '@codemirror/language';
 import {highlightTree,classHighlighter} from '@lezer/highlight';
-import {CODE_LANGUAGES,CODE_VIEW_TYPES,codeLanguage,codeReadingFence} from '../code-language';
+import {CODE_LANGUAGES,CODE_VIEW_TYPES,codeLanguage,codeReadingFence} from '../src/projects/code-language';
 import {grammarRuntime} from './language-grammar-runtime';
 import {languageFixtures} from './fixtures/languages';
 
@@ -49,6 +49,6 @@ test('the native language and external-project labs bundle without a second edit
   const external=['obsidian','electron','@electron/remote','node:*','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight'];
   const result=await build({stdin:{contents:"export {default as LanguageLab} from './validation/language-views-lab';export {default as CodebaseLab} from './validation/codebase-lab';",resolveDir:process.cwd()},bundle:true,write:false,metafile:true,platform:'node',format:'cjs',external});
   const inputs=Object.keys(result.metafile!.inputs);
-  assert.ok(inputs.includes('language-native.ts'));assert.ok(inputs.includes('codebase-native.ts'));
+  assert.ok(inputs.includes('src/projects/language-native.ts'));assert.ok(inputs.includes('src/projects/codebase-native.ts'));
   assert.equal(inputs.some(name=>/node_modules\/(?:@codemirror\/(?:state|view|language|commands|autocomplete)|@lezer\/(?:common|lr|highlight))\//.test(name)),false);
 });

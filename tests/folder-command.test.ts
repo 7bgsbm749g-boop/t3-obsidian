@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {executeFolderCommand,inspectFolderLinks,validateFolderCommand,type FolderCommand,type FolderCommandHost,type FolderCommandJournal} from '../folder-command';
-import {upsertFolderLink,type FolderLink} from '../folder-link';
-import {validateAgentCommand} from '../note-command';
+import {executeFolderCommand,inspectFolderLinks,validateFolderCommand,type FolderCommand,type FolderCommandHost,type FolderCommandJournal} from '../src/projects/folder-command';
+import {upsertFolderLink,type FolderLink} from '../src/projects/folder-link';
+import {validateAgentCommand} from '../src/notes/note-command';
 
 const project={id:'project',title:'Verified repository',workspaceRoot:'/repo',connectionId:'connection'};
 const link=(folderPath:string,id=folderPath):FolderLink=>({id,folderPath,connectionId:'connection',projectId:'project',projectTitle:'Verified repository',workspaceRoot:'/repo',self:false});

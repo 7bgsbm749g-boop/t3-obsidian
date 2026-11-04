@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {webcrypto} from 'node:crypto';
-import {noteIdentity,noteIdentityMarker,withNoteIdentity,uniqueNoteLocation} from '../note-identity';
-import {loadSmartSend,smartNote,moveSmartNotes,mergeSmartSend,prepareSmartSend,confirmSmartSend} from '../smart-send';
-import {bindNoteThreadIds,lastUsedNoteThread,mergeNoteThreads,mutateNoteThreads,resolveNoteThreadPaths,type NoteThread} from '../note-threads';
+import {noteIdentity,noteIdentityMarker,withNoteIdentity,uniqueNoteLocation} from '../src/notes/note-identity';
+import {loadSmartSend,smartNote,moveSmartNotes,mergeSmartSend,prepareSmartSend,confirmSmartSend} from '../src/notes/smart-send';
+import {bindNoteThreadIds,lastUsedNoteThread,mergeNoteThreads,mutateNoteThreads,resolveNoteThreadPaths,type NoteThread} from '../src/notes/note-threads';
 
 const old='Original/Note.md',moved='Renamed/Subfolder/Moved.md';
 const link=(noteId?:string):NoteThread=>({notePath:old,noteId,threadId:'thread',projectId:'project',connectionId:'',environmentId:'machine',workspaceRoot:'/project',selectedAt:'2026-10-30T00:00:00.000Z'});

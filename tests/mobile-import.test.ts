@@ -4,11 +4,11 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {webcrypto,randomUUID} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
-import {applyThreadItem} from '../inline-thread';
-import {eventRequest} from '../event-host';
-import {findRunImport} from '../run-import-receipt';
-import {responseAnchor} from '../native-response-projection';
-import {updateResponseBindingData} from '../response-binding-data';
+import {applyThreadItem} from '../src/conversations/inline-thread';
+import {eventRequest} from '../src/app/event-host';
+import {findRunImport} from '../src/conversations/run-import-receipt';
+import {responseAnchor} from '../src/responses/native-response-projection';
+import {updateResponseBindingData} from '../src/responses/response-binding-data';
 
 for(const phase of ['completed','running'])test(`mobile ${phase} import follows future runs after a delayed host reply without loading Node`,async()=>{
   class Base{}

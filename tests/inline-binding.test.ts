@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,renderInlineTurn,turnForMessage,turnPhase,type InlineThreadState} from '../inline-thread';
+import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,renderInlineTurn,turnForMessage,turnPhase,type InlineThreadState} from '../src/conversations/inline-thread';
 const observed=JSON.parse(readFileSync(new URL('./fixtures/working-event-sequence.json',import.meta.url),'utf8'));
 const prompt=observed[0].payload.messageId,turn='01a0fdc1-9ab9-7463-9b44-3b7a96d6ef43';
 const stamp='2026-10-02T17:55:18.588Z',later='2026-10-02T17:56:18.588Z';

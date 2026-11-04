@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {indexedDB} from 'fake-indexeddb';
 import {webcrypto} from 'node:crypto';
-import {beginLogin,pollLogin,refreshAccount,discoverMachines,CloudError,CLOUD} from '../cloud';
+import {beginLogin,pollLogin,refreshAccount,discoverMachines,CloudError,CLOUD} from '../src/connection/cloud';
 globalThis.indexedDB=indexedDB;
 Object.defineProperty(globalThis,'crypto',{value:webcrypto,configurable:true});
 const response=(data:any,status=200)=>new Response(JSON.stringify(data),{status});

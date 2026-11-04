@@ -1,14 +1,14 @@
 import {Plugin,MarkdownView,Modal,Notice,Setting,setIcon} from 'obsidian';
-import SendToT3,{T3Settings} from '../main';
-import {DeviceResponseManager} from '../device-local-responses';
-import {nativeResponses} from '../native-response-manager';
-import {deviceNoteIO,deviceFinalNoteIO} from '../inline-note-io';
-import {hiddenInlineMarkerExtension} from '../inline-markers';
-import {installResponsePresentation} from '../response-presentation';
-import {responseBindingRequests,updateResponseBindingData} from '../response-binding-data';
-import {desktopDefaults,desktopEnvironment,desktopThreadAccess,uuid5} from '../desktop';
-import type {ThreadAccess} from '../thread-stream';
-import {responseFrame} from '../response-container';
+import SendToT3,{T3Settings} from '../src/app/main';
+import {DeviceResponseManager} from '../src/responses/device-local-responses';
+import {nativeResponses} from '../src/responses/native-response-manager';
+import {deviceNoteIO,deviceFinalNoteIO} from '../src/conversations/inline-note-io';
+import {hiddenInlineMarkerExtension} from '../src/conversations/inline-markers';
+import {installResponsePresentation} from '../src/responses/response-presentation';
+import {responseBindingRequests,updateResponseBindingData} from '../src/responses/response-binding-data';
+import {desktopDefaults,desktopEnvironment,desktopThreadAccess,uuid5} from '../src/connection/desktop';
+import type {ThreadAccess} from '../src/conversations/thread-stream';
+import {responseFrame} from '../src/responses/response-container';
 const fs=require('node:fs'),path=require('node:path');
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 

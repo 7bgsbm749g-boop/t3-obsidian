@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {connectT3Rpc,T3ConnectionTimeoutError,T3RequestTimeoutError,type RpcClock} from '../t3-rpc';
-import {T3ResponseTooLargeError} from '../t3-response-limits';
+import {connectT3Rpc,T3ConnectionTimeoutError,T3RequestTimeoutError,type RpcClock} from '../src/connection/t3-rpc';
+import {T3ResponseTooLargeError} from '../src/connection/t3-response-limits';
 
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 function fixture(){

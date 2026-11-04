@@ -6,7 +6,7 @@ import {createRequire} from 'node:module';
 import {reference,tool} from './fixtures/html-result';
 
 const runtime=createRequire(import.meta.url);
-const bundled=build({stdin:{contents:"export * from './html-result-view'; export * from './html-result-store';",resolveDir:process.cwd()},bundle:true,write:false,format:'cjs',platform:'node',external:['obsidian','@codemirror/*']});
+const bundled=build({stdin:{contents:"export * from './src/responses/html-result-view'; export * from './src/responses/html-result-store';",resolveDir:process.cwd()},bundle:true,write:false,format:'cjs',platform:'node',external:['obsidian','@codemirror/*']});
 async function production(){
  const module={exports:{} as any};
  runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal:class{},MarkdownRenderChild:class{cleanup?:()=>void;register(cleanup:()=>void){this.cleanup=cleanup;}},setIcon:()=>{}}:runtime(id),TextEncoder,TextDecoder,URL,console});
@@ -80,6 +80,24 @@ test('two mounted viewers share recovery; sign-in uses only the explicit host ca
  roots[0].button('Sign in')!.click();roots[0].button('Sign in')!.click();await flush();await Promise.all(roots.map(loaded));
  assert.deepEqual(signIns,[reference.environmentId]);assert.equal(receiver.attempts,2);assert.equal(receiver.downloads,1);assert.ok(roots.every(root=>root.dataset.t3HtmlState==='ready'));
  views.dispose();assert.equal(document.blobs.size,0);
+});
+
+test('inline frames grow and shrink to live content beyond saved caps without needing focus',async()=>{
+ const module=await production(),document=documentFixture();
+ const views=new module.HtmlResultViews({},{get:async()=>page,dispose(){}});
+ const mounted=views.mount({...reference,height:200,heights:undefined},document.doc),root=mounted.root as Element;
+ await loaded(root);const frame=root.find('iframe')!,receive=document.listeners.get('message');
+ const report=(height:number,source:any=frame.contentWindow)=>receive({source,data:{jsonrpc:'2.0',method:'ui/notifications/size-changed',params:{height}}});
+ assert.equal(root.style.height,'200px');
+ report(6000,{});assert.equal(root.style.height,'200px','other frames cannot resize this result');
+ report(6000.2);assert.equal(root.style.height,'6001px');
+ report(1200);assert.equal(root.style.height,'1200px','shorter content releases the extra note space');
+ for(const invalid of [0,-1,NaN,Infinity]){report(invalid);assert.equal(root.style.height,'1200px');}
+ mounted.dispose();
+ const expanded=views.mount(reference,document.doc,true);await loaded(expanded.root);
+ document.listeners.get('message')({source:expanded.root.find('iframe').contentWindow,data:{jsonrpc:'2.0',method:'ui/notifications/size-changed',params:{height:9000}}});
+ assert.equal(expanded.root.style.height,'100%','the separate expanded viewer retains its viewport');
+ views.dispose();
 });
 
 test('manual Retry works without a sign-in callback and verification failures never auto-retry',async()=>{

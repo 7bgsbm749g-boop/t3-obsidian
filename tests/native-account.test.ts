@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount} from '../native-account';
-import {signInRequired} from '../sign-in-state';
+import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount} from '../src/connection/native-account';
+import {signInRequired} from '../src/connection/sign-in-state';
 const reply=(response:any,token='client-secret',status=200,client?:any)=>new Response(JSON.stringify({response,...(client?{client}:{})}),{status,headers:{authorization:token}});
 const session={id:'sess_1',status:'active',user:{id:'user_1'}};
 

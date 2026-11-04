@@ -1,7 +1,7 @@
 import {Plugin,MarkdownView} from 'obsidian';
-import {hiddenInlineMarkerExtension,hideResponseContainerBoundaries,type ContainerMarkerDecorations} from '../inline-markers';
-import {containerBody,containerStart} from '../response-container';
-import {markdownCodeCacheStatus} from '../reply-html';
+import {hiddenInlineMarkerExtension,hideResponseContainerBoundaries,type ContainerMarkerDecorations} from '../src/conversations/inline-markers';
+import {containerBody,containerStart} from '../src/responses/response-container';
+import {markdownCodeCacheStatus} from '../src/responses/reply-html';
 import type {StateField} from '@codemirror/state';
 const fs=require('node:fs'),path=require('node:path');
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';

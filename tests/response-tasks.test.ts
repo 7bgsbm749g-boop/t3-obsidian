@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {renderResponseTasks} from '../response-tasks';
-import {renderInlineTurn,type InlineThreadState} from '../inline-thread';
+import {renderResponseTasks} from '../src/responses/response-tasks';
+import {renderInlineTurn,type InlineThreadState} from '../src/conversations/inline-thread';
 
 test('structured Tasks has private, read-only pending, in-progress and complete indicators',()=>{
   const body=renderResponseTasks('run', {text:'Summary',steps:[{step:'Pending',status:'pending'},{text:'**Working**',status:'in_progress'},{content:'Done <script>bad</script>',status:'completed'}]});

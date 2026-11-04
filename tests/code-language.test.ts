@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {codeLanguage,nativeLanguageVersion,plainTransfer,codeReadingFence,CodeGrammarCache,rawCodeChange,codeTabSize} from '../code-language';
+import {codeLanguage,nativeLanguageVersion,plainTransfer,codeReadingFence,CodeGrammarCache,rawCodeChange,codeTabSize} from '../src/projects/code-language';
 test('raw changes preserve mixed line endings, whitespace and Unicode',()=>{
   for(const [before,after] of [['','\tnew\r\n'],['same','same'],['\told\r\n  next\n','\tnew\r\n  next\n'],['alpha\r\nbeta','alpha\r\n  beta'],['😀 x','😁 x'],['removed','']]){
     const change=rawCodeChange(before,after);assert.equal(change?before.slice(0,change.from)+change.insert+before.slice(change.to):before,after);

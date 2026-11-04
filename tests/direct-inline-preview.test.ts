@@ -1,12 +1,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {DirectInlinePreview,type DirectInlineUpdate,type PreviewClock} from '../direct-inline-preview';
-import type {ResponseRecord} from '../response-record';
-import type {ThreadStreamCallbacks,ThreadStreamItem,watchThread} from '../thread-stream';
-import {type ResponseStorageFiles} from '../response-record';
-import {T3ResponseTooLargeError} from '../t3-response-limits';
-import {normalizeV2StreamItem,normalizeV2Snapshot} from '../orchestration-v2';
+import {DirectInlinePreview,type DirectInlineUpdate,type PreviewClock} from '../src/responses/direct-inline-preview';
+import type {ResponseRecord} from '../src/responses/response-record';
+import type {ThreadStreamCallbacks,ThreadStreamItem,watchThread} from '../src/conversations/thread-stream';
+import {type ResponseStorageFiles} from '../src/responses/response-record';
+import {T3ResponseTooLargeError} from '../src/connection/t3-response-limits';
+import {normalizeV2StreamItem,normalizeV2Snapshot} from '../src/connection/orchestration-v2';
 import {handoffProjection,handoffSource,handoffRun,handoffMessage,handoffItem} from './fixtures/worktree-handoff';
 
 class TestClock implements PreviewClock {

@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {HtmlResultError,HtmlResultStore,HTML_CACHE_MAX_ENTRIES,type HtmlResultStoreOptions,type HtmlResultDiagnostic} from '../html-result-store';
-import {htmlResultKey,htmlResultIdentity,HTML_RESULT_MAX_BYTES} from '../html-results';
+import {HtmlResultError,HtmlResultStore,HTML_CACHE_MAX_ENTRIES,type HtmlResultStoreOptions,type HtmlResultDiagnostic} from '../src/responses/html-result-store';
+import {htmlResultKey,htmlResultIdentity,HTML_RESULT_MAX_BYTES} from '../src/responses/html-results';
 import {reference,tool} from './fixtures/html-result';
-import {contentHash} from '../completion';
+import {contentHash} from '../src/responses/completion';
 const html='<!doctype html><button>Interactive ✓</button>',bytes=new TextEncoder().encode(html).buffer;
 function fixture(){
  const values=new Map<string,any>(),calls:Array<{path:string;payload:any}>=[];let downloads=0,closes=0,online=true,accessError:unknown,apiError:unknown,closeError:unknown,item:any=tool(),signed:any={relativeUrl:'/api/assets/signed/result.html',expiresAt:Date.now()+60_000},response:any={status:200,mimeType:'text/html; charset=utf-8',bytes};

@@ -2,11 +2,11 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
-import {activeInlineIds,failedInlineIds,initialRegion,renderInlineTurn,type InlineThreadState} from '../inline-thread';
-import {elapsedRun,intermediateMode,runTimer,completionTime} from '../response-presentation';
-import {stoppedResponseBody} from '../response-stop';
-import {followInlineQuestions,questionConversationInputs} from '../inline-questions';
-import type {InlineSteering} from '../inline-steering';
+import {activeInlineIds,failedInlineIds,initialRegion,renderInlineTurn,type InlineThreadState} from '../src/conversations/inline-thread';
+import {elapsedRun,intermediateMode,runTimer,completionTime} from '../src/responses/response-presentation';
+import {stoppedResponseBody} from '../src/responses/response-stop';
+import {followInlineQuestions,questionConversationInputs} from '../src/interaction/inline-questions';
+import type {InlineSteering} from '../src/conversations/inline-steering';
 
 const timing={startedAt:'2026-10-02T10:00:00Z',finishedAt:'2026-10-02T10:03:17Z'};
 const state:InlineThreadState={title:'Bounded history',messages:[
@@ -255,7 +255,7 @@ test('Stop preserves header examples inside code fences',()=>{
 });
 
 test('native fold transitions finish, hidden clones do not cause repeated clicks, and rerenders retain user expansion',async()=>{
-  const {installResponsePresentation}=await import('../response-presentation');
+  const {installResponsePresentation}=await import('../src/responses/response-presentation');
   const savedElement=(globalThis as any).Element,savedObserver=(globalThis as any).MutationObserver;
   let observed:(records:any[])=>void=()=>{},clicks=0;
   const owner={};
@@ -302,7 +302,7 @@ test('native fold transitions finish, hidden clones do not cause repeated clicks
 });
 
 test('native edit actions follow the header through expansion, wrapping and removal',async()=>{
-  const {installResponsePresentation}=await import('../response-presentation');
+  const {installResponsePresentation}=await import('../src/responses/response-presentation');
   const savedObserver=globalThis.MutationObserver,savedResize=globalThis.ResizeObserver;
   let reflow:()=>void=()=>{},mutation:(records:any[])=>void=()=>{},disconnected=false;
   const observed=new Set<Element>(),values=new Map<string,string>(),classes=new Set<string>();

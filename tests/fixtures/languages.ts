@@ -1,4 +1,4 @@
-import type {CodeGrammar,CodeViewType} from '../../code-language';
+import type {CodeGrammar,CodeViewType} from '../../src/projects/code-language';
 
 export interface LanguageFixture {
   name:string;
