@@ -21,6 +21,22 @@ SPEC.loader.exec_module(release)
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    def test_memory_wait_cli_requires_allowance_and_native_recovery_watch(self):
+        for arguments in [['--wait-for-memory', 'job'],
+                          ['--wait-for-memory', 'job', '--memory-budget', '768M'],
+                          ['--queue-status', 'job', '--memory-budget', '768M']]:
+            with self.assertRaises(SystemExit):
+                release.dispatch(release.parser().parse_args(arguments))
+
+    def test_memory_cli_uses_queue_probe_and_preserves_publication_barriers(self):
+        with patch.object(release.release_queue, 'wait_for_memory', return_value={'status':'waiting-for-memory'}) as wait, \
+             patch.object(release.release_queue, 'probe_memory', return_value={'status':'needs-evidence'}) as probe, \
+             patch.object(release.release_queue, 'kick') as kick:
+            release.dispatch(release.parser().parse_args(['--wait-for-memory', 'job', '--memory-budget', '768M', '--resume-task-id', 'native-watch']))
+            wait.assert_called_once_with('job', '768M', 'native-watch')
+            release.dispatch(release.parser().parse_args(['--probe-memory', 'job']))
+            probe.assert_called_once_with('job');self.assertEqual(kick.call_count, 2)
+
     def cleanup_fixture(self, root):
         plugin = root / 'vault/.obsidian/plugins/t-three-code'; plugin.mkdir(parents=True)
         legacy = plugin.with_name('send-to-t3-code'); legacy.mkdir()
