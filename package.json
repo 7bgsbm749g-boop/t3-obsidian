@@ -1,6 +1,6 @@
 {
   "name": "t3-obsidian",
-  "version": "0.0.380-alpha",
+  "version": "0.0.381-alpha",
   "private": true,
   "description": "T3 Code integration for Obsidian notes, conversations, and linked projects.",
   "license": "MIT",
