@@ -520,7 +520,7 @@ def next_version(release, directory: Path, request: dict) -> str:
             versions.append(item['version'])
     policy = release_policy.policy(release.ROOT)
     if policy and policy['stage'] == 'alpha':
-        alphas = [value for value in versions if release_policy.ALPHA.fullmatch(value)]
+        alphas = [value for value in versions if release_policy.is_alpha_version(release.ROOT, value)]
         latest = max(alphas, key=lambda value: release_policy.order_key(release.ROOT, value)) if alphas else versions[0]
         return release_policy.bump(release.ROOT, latest, request['bump'])
     latest = max(versions, key=lambda value: release_policy.order_key(release.ROOT, value))

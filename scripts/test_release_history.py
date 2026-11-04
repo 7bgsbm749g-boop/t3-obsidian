@@ -53,3 +53,26 @@ class ReleaseHistoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'reviewed seed'):self.refresh('0.0.377-alpha')
         self.assertIsNone(self.refresh('2.45.81'))
         self.assertFalse((self.root/'evidence/version-history/history.json').exists())
+
+    def test_numeric_format_preserves_old_rows_and_continues_every_comparison(self):
+        import csv
+        original_request = dict(self.request)
+        self.refresh('0.0.377-alpha', seed=self.seed)
+        table = self.root / 'evidence/version-history/RELEASE-LEDGER.csv'
+        with table.open(newline='') as stream:
+            before = list(csv.DictReader(stream))
+        path = self.root / 'release-policy.json'
+        path.write_text(json.dumps({**history.read(path), 'versionFormat': '0.0.BUILD'}))
+        self.request = {**self.request, 'commit': 'numeric-release', 'bump': 'minor'}
+        record = self.refresh('0.0.378')
+        self.assertEqual(record['counters'], {'first': '24.9.0', 'zero': '0.112.0', 'build': 378})
+        self.assertEqual(record['releaseTitle'], 't3-obsidian 0.0.378 (Alpha)')
+        self.assertEqual(self.refresh('0.0.378')['counters'], record['counters'])
+        history.refresh(self.release, self.job, original_request, '0.0.377-alpha')
+        with table.open(newline='') as stream:
+            after = list(csv.DictReader(stream))
+        self.assertEqual(after[:-1], before)
+        self.assertEqual(after[-1]['Alpha proposal (SemVer label only)'], '0.1.0-alpha.378')
+        self.assertEqual(after[-1]['Obsidian numeric proposal (manifest/tag format)'], '0.0.378')
+        self.assertIn('`0.0.BUILD`', table.with_suffix('.md').read_text())
+        self.assertEqual(len(history.read(self.root / 'evidence/version-history/history.json')['records']), 2)

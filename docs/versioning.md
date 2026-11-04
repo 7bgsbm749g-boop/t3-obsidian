@@ -1,16 +1,16 @@
 # Alpha version policy
 
-Releases use **`0.0.BUILD-alpha`** everywhere: the Obsidian manifest,
-package files, compatibility map, archive, Git tag, and GitHub release title.
-The approved starting version is **`0.0.377-alpha`**. Each new packaged release
-advances the build once: `0.0.378-alpha`, `0.0.379-alpha`, and so on. Retrying an
-existing immutable archive keeps its version and bytes.
+The project remains in **alpha**, with plain **`0.0.BUILD`** versions in the
+Obsidian manifest, package files, compatibility map, archive, and matching Git tag.
+Each newly packaged release advances BUILD once. The GitHub title is
+**t3-obsidian VERSION (Alpha)**. Alpha is a display label, not a version suffix.
+The Obsidian display name stays **T3 Code**.
 
 [release-policy.json](../release-policy.json) enforces this rule. Stay in alpha
 until the user explicitly says to leave it. Neither a breaking change, a large
-feature, nor a high build number authorizes graduation. Do not substitute a
-numeric-only version on another platform. GitHub titles are
-**t3-obsidian VERSION**; the Obsidian display name stays **T3 Code**.
+feature, nor a high build number authorizes graduation. Retrying an existing
+immutable archive keeps its version and bytes. Do not add `-alpha` to new
+manifests or tags; Obsidian's documented distribution format is plain `x.y.z`.
 
 ## Comparison history
 
@@ -47,14 +47,18 @@ These comparison rules follow the chosen historical interpretations of
 numbers prove one uniquely correct reconstruction. The current alpha label is
 an explicit development policy, not a promise of a stable public interface.
 
-## Initial transition and distribution
+## Historical transitions and distribution
 
-Only the explicitly approved `2.45.81` → `0.0.377-alpha` transition may replace a
-larger legacy numeric version. Later alpha releases must increase their build.
-Never rewrite historical tags, archives, or receipts. The reviewed private seed
-is supplied once with `--history-seed PATH`; later jobs use the retained history.
+The original `2.45.81` → `0.0.377-alpha` transition remains a historical record.
+After the suffix-format correction, the queue continues from the highest alpha
+build, including prior suffixed versions and reserved numbers, and assigns the
+next plain numeric build. Older `2.x` receipts must not override that sequence.
+Never rewrite historical tags, archives, receipts, or comparison rows. The
+reviewed private seed is supplied once with `--history-seed PATH`; later jobs
+use the retained history.
 
-The official Obsidian community submission rules require plain `x.y.z` versions.
-This user-approved suffix is for the current alpha distribution; a successful
-local plugin load does not establish community-directory acceptance. See the
-[Obsidian submission requirements](https://docs.obsidian.md/Plugins/Releasing/Submit+your+plugin).
+Publish a regular GitHub release with matching numeric tag and manifest, and
+keep Alpha in its title and description. The GitHub prerelease flag is not the
+project's development-stage switch. Confirm the current
+[Obsidian submission requirements](https://docs.obsidian.md/Plugins/Releasing/Submit+your+plugin)
+when submitting or resubmitting to the plugin directory.

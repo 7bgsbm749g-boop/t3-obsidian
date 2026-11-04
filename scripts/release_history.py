@@ -71,14 +71,14 @@ def semantic_bump(value: str, kind: str, *, zero: bool = False) -> str:
 def refresh(release, job: Path, request: dict, version: str, *, seed: Path | None = None) -> dict | None:
     root = release.ROOT
     policy = release_policy.policy(root)
-    if not policy or policy['stage'] != 'alpha' or not release_policy.ALPHA.fullmatch(version):
+    if not policy or policy['stage'] != 'alpha' or not release_policy.is_alpha_version(root, version):
         return None
-    release_policy.require_target(root, version)
     state_path = initialize(root, seed)
     state = read(state_path)
     found = next((r for r in state['records'] if r['version'] == version), None)
     if found is None:
-        build = int(release_policy.ALPHA.fullmatch(version)[1])
+        release_policy.require_target(root, version)
+        build = release_policy.alpha_build(version)
         previous_build = state['records'][-1]['build'] if state['records'] else state['counters']['build']
         if build < previous_build or (not state['records'] and version != policy['firstAlphaVersion']):
             raise ValueError('History cannot regress or start from an unapproved alpha version.')
@@ -93,6 +93,7 @@ def refresh(release, job: Path, request: dict, version: str, *, seed: Path | Non
                  'sourceCommit': request['commit'], 'jobId': job.name,
                  'summary': request.get('summary') or 'Reviewed source release; see source commit.',
                  'threadId': request.get('threadId'), 'createdAt': request.get('createdAt'),
+                 'releaseTitle': release_policy.release_title(root, version),
                  'baselineTransition': not state['records']}
         state['records'].append(found)
     elif found['sourceCommit'] != request['commit']:
@@ -151,7 +152,7 @@ def render(root: Path, state: dict) -> None:
                     'First new version (superseded)': counters['first'], 'Proposed 0.x.x': counters['zero'],
                     'Alpha proposal (SemVer label only)': f"0.1.0-alpha.{record['build']}",
                     'Obsidian numeric proposal (manifest/tag format)': f"0.0.{record['build']}",
-                    'Proposed release title': f"t3-obsidian {record['version']}",
+                    'Proposed release title': record.get('releaseTitle', f"t3-obsidian {record['version']}"),
                     'Milestone/build rationale': 'Approved alpha numbering. ' + ('One-time baseline renumbering; earlier rows remain unchanged.' if record['baselineTransition'] else 'Alpha build advances once; comparison counters follow the declared change type.'),
                     'Date': record.get('createdAt') or '',
                     'Thread links': f'[Release work](t3-thread://v1/{thread})' if thread else 'Thread not supplied; source commit ' + record['sourceCommit'],
@@ -170,7 +171,8 @@ def render(root: Path, state: dict) -> None:
                 writer = csv.DictWriter(out, fieldnames=headers)
                 writer.writeheader(); writer.writerows(values)
             temporary_csv.replace(csv_path)
-            text = ['# Private alpha release history', '', 'The release queue maintains this table. Historical comparisons stay unchanged; new rows record assigned, packaged, installed and completed states separately. The approved version format is `0.0.BUILD-alpha` until the user explicitly leaves alpha.', '',
+            version_format = release_policy.policy(root).get('versionFormat', '0.0.BUILD-alpha')
+            text = ['# Private alpha release history', '', f'The release queue maintains this table. Historical comparisons stay unchanged; new rows record assigned, packaged, installed and completed states separately. The approved version format is `{version_format}` while the project remains in alpha; Alpha is a display label for numeric releases.', '',
                     '| ' + ' | '.join(headers) + ' |', '| ' + ' | '.join('---' for _ in headers) + ' |']
             text.extend('| ' + ' | '.join(str(row.get(k, '')).replace('\n', ' ').replace('|', '\\|') for k in headers) + ' |' for row in values)
             temp = directory / (name + '.md.tmp')
