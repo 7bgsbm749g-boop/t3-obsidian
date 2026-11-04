@@ -27,8 +27,15 @@ add another row. Failed candidates remain traceable; archived bytes and old
 release records remain immutable. Keep every comparison column until the user
 explicitly graduates from alpha.
 
+New plugin releases have one commit on `main` combining source changes and all
+version files, titled `Release VERSION: summary`. Its commit ID is the archive
+and deployment provenance. The private history still records the original task
+source commit and thread link. Local queue refs preserve source ancestry without
+adding task commits or merge commits to the public release history. Historical
+releases and already packaged retries retain their existing records.
+
 Use `--thread-id ID --summary "CHANGE"` with `--enqueue HEAD` to record the
-owning T3 thread and a useful description. Use `--release-type patch`, `minor`,
+owning T3 thread and a useful public commit description. Use `--release-type patch`, `minor`,
 `major`, or `none` for the alternative comparison counters. This classification
 does **not** change the published alpha format, including for prepared candidates:
 

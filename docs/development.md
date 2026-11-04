@@ -37,6 +37,31 @@ the user explicitly leaves alpha. With `--enqueue`, supply `--thread-id ID` and
 `--summary "CHANGE"`; choose `--release-type patch`, `minor`, `major`, or `none`
 for the private comparison table. The queue always advances the alpha build.
 
+## Release commits
+
+Each new queued plugin release adds one commit to `main`, titled
+`Release VERSION: summary`. It contains the combined task changes and the final
+version files. The queue creates that commit before checking and packaging the
+release, so the archive provenance and deployment receipt identify the exact
+release commit. Supply a useful public description with `--summary`.
+
+Task commits stay on their task branches and in local private queue refs under
+`refs/t3-release-queue/`; they are not merge parents on `main`. The queue retains
+their ancestry to handle later work based on those tasks, including after a task
+branch is removed. Independent changes still merge, and product conflicts still
+stop that job. Do not push the private queue refs.
+
+An interrupted integration resumes the same recorded commit. A publication retry
+uses the same immutable archive, version, and release commit. A failed candidate
+that has not been packaged is removed with an explicit revert; a repaired retry
+creates a new candidate with a newer version. Existing history, tags, archives,
+and receipts are never rewritten. Old in-flight archives keep their original
+provenance and can finish under the previous version-commit scheme.
+
+Documentation and release-tool changes integrate as one `Maintenance: summary`
+commit with affected checks and no plugin version or installation. An updated
+release engine still restarts the worker before validation or publication.
+
 After delivery, publish GitHub assets from the exact immutable release archive,
 using its plain numeric version as the tag and `t3-obsidian VERSION (Alpha)` as
 the title. Publish a regular GitHub release for Obsidian distribution; the
