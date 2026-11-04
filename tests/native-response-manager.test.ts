@@ -10,6 +10,8 @@ import type {ResponseRecord} from '../src/responses/response-record';
 import {unified} from 'unified';
 import remarkParse from 'remark-parse';
 import {RESPONSE_SIZE_FAILURE} from '../src/connection/t3-response-limits';
+import {EditorState} from '@codemirror/state';
+import {streamBlocks} from '../src/responses/stream-block';
 
 const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',other='bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',commitId='cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee';
 const body='> Final answer',otherBody='> Independent response';
@@ -450,4 +452,19 @@ test('a damaged existing tool note remains readable when early projection valida
  class View{file={path:'Damaged.md'};value='';getViewData(){return this.value;}setViewData(text:string,_clear:boolean){this.value=text;}getMode(){return 'source';}requestSave(){}async save(){}}
  const view=new View(),manager=new NativeResponseManager({workspace:{getLeavesOfType:()=>[{view}]}} as any),stop=manager.installLoading(View.prototype as any);
  view.setViewData(original,true);assert.equal(view.getViewData(),original);assert.equal(manager.view(view as any),undefined);stop();manager.dispose();
+});
+test('native loading protects first-line completed history without tools or an active record',async()=>{
+ const source='> [!t3-progress]- **Saved · Completed** <span class="send-to-t3-fold-key" data-t3-fold="saved:complete"></span>\n> Retained ordinary progress.\n\nFinal answer.';
+ class View{
+  file={path:'History.md'};value='';source=false;editor:any;
+  getState(){return {source:this.source};}getMode(){return 'source';}getViewData(){return this.value;}
+  setViewData(value:string,_clear:boolean){this.value=value;let state=EditorState.create({doc:value});this.editor={cm:{get state(){return state;},dispatch:(spec:any)=>{state=state.update(spec).state;this.value=state.doc.toString();}}};}
+  requestSave(){}async save(){}
+ }
+ const view=new View(),manager=new NativeResponseManager({workspace:{getLeavesOfType:()=>[{view}]},vault:{read:async()=>source}} as any),stop=manager.installLoading(View.prototype as any);
+ view.setViewData(source,true);await Promise.resolve();
+ assert.ok(manager.view(view as any));assert.equal(view.editor.cm.state.selection.main.head,streamBlocks(view.value)[0].to+1);assert.equal(view.getViewData(),source);
+ view.file={path:'Literal.md'};const literal='```md\n'+source+'\n```';view.setViewData(literal,true);
+ assert.equal(manager.view(view as any),undefined);assert.equal(view.value,literal);
+ stop();manager.dispose();
 });

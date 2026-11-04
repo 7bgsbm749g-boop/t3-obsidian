@@ -18,6 +18,7 @@ export default class StreamInteractionLab extends Plugin {
     if(!await exists(path.join(root,'ISOLATED-NATIVE-LAB')))throw Error('Isolated fixture required.');
     await fs.writeFile(path.join(root,'boot.json'),JSON.stringify({body:document.body.className}));
     const manager=nativeResponses(this.app);
+    this.register(manager.installLoading(MarkdownView.prototype));
     this.registerEditorExtension(hiddenInlineMarkerExtension());
     const {EditorState}=require('@codemirror/state');
     this.registerEditorExtension(EditorState.transactionFilter.of((tr:any)=>manager.filter(tr)));
@@ -31,7 +32,7 @@ export default class StreamInteractionLab extends Plugin {
       await leaf.setViewState({type:'markdown',state:{file:file.path,mode:'source',source:false}});
       let view=leaf.view as MarkdownView;
       const tools=renderResponseToolGroup({id:'caret-tools',turnId:'turn',tools:[{id:'tool',turnId:'turn',key:'tool',status:'completed',label:'Read synthetic output',activeLabel:'Read output',icon:'file-text',action:'read',sequence:1,output:'Synthetic retained output.\n'.repeat(20)}]});
-      const body=['> [!t3-progress]+ Interaction · Working','> <span class="send-to-t3-fold-key" data-t3-fold="fixture:active"></span>','>','> Progress content with **bold text**.','>',...tools.split('\n').map(line=>'> '+line),'>','> Thinking'].join('\n');
+      const body=['> [!t3-progress]+ Interaction · Working <span class="send-to-t3-fold-key" data-t3-fold="fixture:active"></span>','>','> Progress content with **bold text**.','>',...tools.split('\n').map(line=>'> '+line),'>','> Thinking'].join('\n');
       const record:any={coordinated:true,owner:'host',epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:3,id,vaultId:'fixture',host:{environmentId:'fixture',workspaceRoot:(this.app.vault.adapter as any).getFullPath(''),directory:'.obsidian/fixture'},notePath:file.path,threadId:'fixture-thread',messageId:id,projectId:'fixture-project',threadEnvironmentId:'fixture',initialHash:'initial',createdAt:new Date().toISOString()},state:{accepted:true,notePath:file.path,status:'running',hashes:[],body,updatedAt:''}};
       const events:any[]=[];
       const snapshot=async(label:string)=>{
@@ -43,13 +44,14 @@ export default class StreamInteractionLab extends Plugin {
           const range=document.createRange();range.selectNodeContents(node);
           if(Array.from(range.getClientRects()).some(r=>r.width&&r.height)&&getComputedStyle(node.parentElement!).visibility!=='hidden')visible.push(node.textContent??'');
         }
-        events.push({label,path:file.path,saved:view.getViewData(),editor:view.editor.getValue(),cm:cm?.state.doc.toString(),visible:visible.join('\n'),raw:(view as any).currentMode?.get(),previewHTML:(view as any).previewMode?.containerEl?.innerHTML,disk:await this.app.vault.read(file),selection:view.editor.getSelection(),caret:cm?.state.selection.main.head,folds:view.contentEl.querySelectorAll('.callout[data-callout="t3-progress"]').length,mode:view.getMode(),focused:cm?.hasFocus,active:document.activeElement?.className});
+        const state={label,path:file.path,saved:view.getViewData(),editor:view.editor.getValue(),cm:cm?.state.doc.toString(),visible:visible.join('\n'),raw:(view as any).currentMode?.get(),previewHTML:(view as any).previewMode?.containerEl?.innerHTML,selection:view.editor.getSelection(),caret:cm?.state.selection.main.head,folds:view.contentEl.querySelectorAll('.callout[data-callout="t3-progress"]').length,mode:view.getMode(),focused:cm?.hasFocus,active:document.activeElement?.className,disk:await this.app.vault.read(file)};
+        events.push(state);
         await fs.writeFile(path.join(root,'interaction.json'),JSON.stringify(events,null,2));
         if(!document.body.classList.contains('emulate-mobile')){const remote=require('electron').remote??require('@electron/remote'),frame=await remote.getCurrentWindow().webContents.capturePage();await fs.writeFile(path.join(root,`frame-${events.length}.png`),frame.toPNG());}
       };
       await manager.receive(record);await snapshot('ready');
       for(const name of ['pointerdown','pointerup','focusin','focusout','touchstart','touchend'])this.registerDomEvent(document,name as any,()=>{setTimeout(()=>void snapshot(name),100);});
-      this.registerDomEvent(document,'keydown',event=>{if(event.isTrusted)setTimeout(()=>void snapshot('trusted-key:'+event.key),150);});
+      this.registerDomEvent(document,'keydown',event=>{if(event.isTrusted){queueMicrotask(()=>void snapshot('trusted-key-immediate:'+event.key));setTimeout(()=>void snapshot('trusted-key:'+event.key),150);}});
       let working=false;
       this.registerInterval(window.setInterval(()=>{
         manager.refresh();if(working)return;
@@ -65,6 +67,27 @@ export default class StreamInteractionLab extends Plugin {
           if(command.kind==='caret-before'||command.kind==='caret-after'){
             const cm=(view.editor as any).cm,text=cm.state.doc.toString(),at=command.kind==='caret-before'?text.indexOf('Ordinary before.')+'Ordinary before.'.length:text.indexOf('Ordinary after.');
             cm.dispatch({selection:{anchor:at},scrollIntoView:true});cm.focus();
+          }
+          if(command.kind==='case'){
+            manager.dispose();
+            await leaf.openFile(this.app.vault.getFileByPath('Reference.md')!);
+            const active=command.state==='running',history=(command.tools===false?body.split('\n').slice(0,4).join('\n'):body).replace('fixture:active',active?'fixture:active':'fixture:complete').replace(' · Working',active?' · Working':' · Completed').replace('[!t3-progress]+',command.expanded===false?'[!t3-progress]-':'[!t3-progress]+');
+            const response=active?responseAnchor(id):history+(command.position==='only'?'':'\n\nFinal interaction answer.');
+            const text=(command.position==='middle'?'Ordinary before.\n\n':'')+response+(command.position==='only'?'':'\n\nOrdinary after.\n');
+            await this.app.vault.modify(file,text);
+            await leaf.openFile(file,{eState:{cursor:{from:{line:0,ch:0},to:{line:0,ch:0}}}});
+            await leaf.setViewState({type:'markdown',state:{file:file.path,mode:'source',source:false}});
+            view=leaf.view as MarkdownView;
+            if(active){record.revision++;record.state={...record.state,status:'running',body:history};await manager.receive(record);}else manager.refresh();
+            view.editor.focus();
+          }
+          if(command.kind==='caret'){
+            const cm=(view.editor as any).cm,at=command.at==='end'?cm.state.doc.length:command.at;
+            cm.dispatch({selection:{anchor:at,assoc:command.assoc??0},scrollIntoView:true});cm.focus();
+          }
+          if(command.kind==='reopen'){
+            await leaf.openFile(this.app.vault.getFileByPath('Reference.md')!);
+            await leaf.openFile(file,{eState:{cursor:{from:{line:0,ch:0},to:{line:0,ch:0}}}});view=leaf.view as MarkdownView;manager.refresh();view.editor.focus();
           }
           if(command.kind==='mode'){await leaf.setViewState({type:'markdown',state:{file:file.path,mode:command.mode,source:false}});view=leaf.view as MarkdownView;manager.refresh();}
           if(command.kind==='update'){record.revision++;record.state.body+='\n\nSubsequent stream update.';await manager.receive(record);}

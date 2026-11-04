@@ -11,8 +11,10 @@ import {responseFrame} from './response-container';
 import {localResponseBindings} from './local-response-binding';
 import {movedResponse,responseMoveEffect,responseMoveHistory,guardResponseMoveHistory,type ResponseMove} from './response-move';
 import {registerNativeDocumentState} from './native-document-state';
+import {streamBlocks} from './stream-block';
 
 export interface NativeViewConflict {base:string;local:string;incoming:string;reason:string;awaitingCompletion?:boolean;attemptedIncoming?:string;unsafeIncoming?:boolean}
+interface CaretRegion {from:number;to:number;before?:number;after?:number;edges:boolean}
 // A native pane replaces its Markdown view/adapters when navigating. Retain
 // only small runtime control state, keyed by the original vault file identity.
 const scrollStates=new WeakMap<object,Map<TFile,ResponseScrollState>>();
@@ -28,6 +30,7 @@ export class NativeResponseView {
   private saveBaseline?:{descriptor:PropertyDescriptor;value:unknown};
   private checkedDocuments=new WeakMap<object,ResponseProjection>();
   private checkedTools=new WeakMap<object,ReturnType<typeof compactToolGroups>>();
+  private caretRegions=new WeakMap<ResponseProjection,CaretRegion[]>();
   private getWrapper:MarkdownView['getViewData'];
   private setWrapper:MarkdownView['setViewData'];
   private saveWrapper:MarkdownView['save'];
@@ -58,6 +61,8 @@ export class NativeResponseView {
   private moveEditor?:object;
   private releaseMoveHistory?:()=>void;
   private releaseDocumentState?:()=>void;
+  private caretEditor?:object;
+  private releaseCaretFocus?:()=>void;
   constructor(readonly view:MarkdownView,saved:string,private conflict:(record:NativeViewConflict)=>void,private readSaved:()=>Promise<string|undefined>,private normalizeIncoming?:(text:string)=>string,private committedIncoming?:(text:string)=>readonly string[],initial?:{set:MarkdownView['setViewData'];clear:boolean}){
     this.file=view.file;this.base=saved;this.diskBase=saved;this.projection=this.buildProjection(saved,[]);
     const pane=view.leaf??view;let notes=scrollStates.get(pane);
@@ -124,6 +129,9 @@ export class NativeResponseView {
       catch{this.block({base:saved,local:saved,incoming:saved,unsafeIncoming:true,reason:'The native editor could not load the retained tool output.'});}
       throw error;
     }finally{initializing=false;}
+    // Native loading can create the editor before it restores the saved caret.
+    // Run before the next paint; later selection transactions use the same guard.
+    void Promise.resolve().then(()=>this.correctCaret());
   }
   responseBody(id:string){return this.responses.find(response=>response.id===id)?.body??regionBody(this.displayed(),id)?.body;}
   registerLocalBindings(ids:readonly string[]){for(const id of ids)this.knownLocal.add(id);}
@@ -335,7 +343,7 @@ export class NativeResponseView {
     if(cm?.dispatch&&cm!==this.moveEditor){this.releaseMoveHistory?.();this.moveEditor=cm;this.releaseMoveHistory=guardResponseMoveHistory(cm,(transaction,move)=>this.moveTransaction(transaction,move));}
     const before=this.saved();let saved=before;
     for(const input of inputs)if(responses.some(response=>response.id===input.id))saved=completedSelectionDraft(saved,input.id,input.steering);
-    if(saved===before&&this.compactTools===((this.view as any).getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable&&response.stoppable===this.responses[index].stoppable&&response.followable===this.responses[index].followable)&&this.displayed()===this.projection.display)return;
+    if(saved===before&&this.compactTools===((this.view as any).getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable&&response.stoppable===this.responses[index].stoppable&&response.followable===this.responses[index].followable)&&this.displayed()===this.projection.display){this.correctCaret();return;}
     const projection=this.buildProjection(saved,responses);
     this.responses=responses.map(response=>({...response}));this.projection=projection;
     for(const response of responses)this.materialized.delete(response.id);
@@ -344,7 +352,7 @@ export class NativeResponseView {
   }
   private render(display:string,clear:boolean){
     const current=this.displayed(),change=changedInterval(current,display);
-    if(!change){this.scroll.updated();return;}
+    if(!change){this.correctCaret();this.scroll.updated();return;}
     const cm=(this.view.editor as any)?.cm;
     if(!clear&&this.view.getMode()!=='preview'&&cm){
       const {Transaction}=require('@codemirror/state') as typeof import('@codemirror/state');
@@ -509,6 +517,7 @@ export class NativeResponseView {
   }
   isDisposed(){return this.disposed;}
   private unwrap(){
+    this.releaseCaretFocus?.();this.releaseCaretFocus=undefined;this.caretEditor=undefined;
     this.releaseDocumentState?.();this.releaseDocumentState=undefined;
     this.scroll.dispose();
     this.releaseMoveHistory?.();this.releaseMoveHistory=undefined;this.moveEditor=undefined;
@@ -603,25 +612,53 @@ export class NativeResponseView {
       return {changes:edits,selection,annotations:[Transaction.addToHistory.of(false),Transaction.userEvent.of('send-to-t3-projection')],filter:false,scrollIntoView:false};
     }catch{return;}
   }
+  private protectedCaretRegions(projection:ResponseProjection):CaretRegion[]{
+    let regions=this.caretRegions.get(projection);if(regions)return regions;
+    regions=projection.ranges.map(range=>({from:range.displayFrom,to:range.displayTo,before:range.displayFrom,after:range.displayTo,edges:false}));
+    for(const block of streamBlocks(projection.display))if(block.complete&&!block.tracked)regions.push({from:block.from,to:block.to,before:block.from>0?block.from-1:undefined,after:block.to<projection.display.length?block.to+1:undefined,edges:true});
+    regions.sort((a,b)=>a.from-b.from);this.caretRegions.set(projection,regions);return regions;
+  }
+  private correctCaret(){
+    if(this.disposed||this.view.file!==this.file||this.view.getMode()==='preview')return;
+    const cm=(this.view.editor as any)?.cm;if(!cm?.state||!cm.dispatch)return;
+    if(cm!==this.caretEditor){
+      this.releaseCaretFocus?.();this.caretEditor=cm;
+      const focus=()=>this.correctCaret();cm.contentDOM?.addEventListener?.('focus',focus,true);
+      this.releaseCaretFocus=()=>cm.contentDOM?.removeEventListener?.('focus',focus,true);
+    }
+    try{
+      const projection=this.currentProjection();
+      // A note consisting solely of history has no source position outside it.
+      // Keep native text focus out, without inserting a saved padding line.
+      if((this.view as any).getState?.().source!==true&&this.protectedCaretRegions(projection).some(region=>region.edges&&region.before===undefined&&region.after===undefined)){cm.contentDOM?.blur?.();return;}
+      const selection=this.outsideResponseSelection(cm.state.selection,cm.state.selection,projection);
+      if(selection)cm.dispatch({selection,filter:false,scrollIntoView:false});
+    }catch{/* A conflicting note remains available for recovery. */}
+  }
   private outsideResponseSelection(selection:EditorSelection,previous:EditorSelection,projection:ResponseProjection):EditorSelection|undefined {
-    if(!projection.ranges.length||(this.view as any).getState?.().source===true)return;
+    if((this.view as any).getState?.().source===true)return;
+    const protectedRegions=this.protectedCaretRegions(projection);if(!protectedRegions.length)return;
     const {EditorSelection}=require('@codemirror/state') as typeof import('@codemirror/state');
     let changed=false;
     const ranges=selection.ranges.map((caret,index)=>{
-      const containing=(position:number)=>projection.ranges.find(range=>position>range.displayFrom&&position<range.displayTo);
+      if(!caret.empty&&caret.from===0&&caret.to===projection.display.length)return caret;
+      const containing=(position:number)=>protectedRegions.find(range=>range.edges?position>=range.from&&position<=range.to:position>range.from&&position<range.to);
       const response=containing(caret.head),anchorResponse=containing(caret.anchor);
       if(!response&&!anchorResponse)return caret;
       const old=previous.ranges[index]?.head??previous.main.head;
-      changed=true;
       // Native callout editing selects the whole body, rather than placing a
       // cursor. Keep that path outside too. Browser text selection remains
       // independent; note-wide selections with endpoints outside still work.
       if(response&&response===anchorResponse){
-        const head=old<=response.displayFrom?response.displayTo:old>=response.displayTo?response.displayFrom:caret.head-response.displayFrom<response.displayTo-caret.head?response.displayFrom:response.displayTo;
+        const before=response.before??response.after,after=response.after??response.before;
+        if(before===undefined||after===undefined)return caret;
+        const head=old<=response.from?after:old>=response.to?before:caret.head-response.from<response.to-caret.head?before:after;
+        changed=true;
         return EditorSelection.cursor(head);
       }
       const forward=caret.anchor<caret.head;
-      return EditorSelection.range(anchorResponse?(forward?anchorResponse.displayFrom:anchorResponse.displayTo):caret.anchor,response?(forward?response.displayTo:response.displayFrom):caret.head);
+      changed=true;
+      return EditorSelection.range(anchorResponse?(forward?anchorResponse.before??anchorResponse.after:anchorResponse.after??anchorResponse.before)??caret.anchor:caret.anchor,response?(forward?response.after??response.before:response.before??response.after)??caret.head:caret.head);
     });
     return changed?EditorSelection.create(ranges,selection.mainIndex):undefined;
   }
@@ -630,7 +667,7 @@ export class NativeResponseView {
     const cm=(this.view.editor as any)?.cm;
     if(!cm?.state||cm.state!==transaction.startState)return transaction;
     if(!transaction.docChanged){
-      if(!transaction.selection||!this.responses.length)return transaction;
+      if(!transaction.selection)return transaction;
       try{
         const projection=this.checkedDocuments.get(transaction.startState.doc)??this.currentProjection();
         const selection=this.outsideResponseSelection(transaction.newSelection,transaction.startState.selection,projection);
@@ -664,10 +701,12 @@ export class NativeResponseView {
         transaction.changes.iterChanges((from,to,_from,_to,inserted)=>{const start=offset(from),end=offset(to);parts.push(projection!.saved.slice(cursor,start),inserted.toString());cursor=end;});
         parts.push(projection.saved.slice(cursor));
         const next={saved:parts.join(''),display:transaction.newDoc.toString(),ranges:[]};
+        this.caretRegions.set(next,this.protectedCaretRegions(projection).map(region=>({...region,from:transaction.changes.mapPos(region.from,1),to:transaction.changes.mapPos(region.to,-1),before:region.before===undefined?undefined:transaction.changes.mapPos(region.before,-1),after:region.after===undefined?undefined:transaction.changes.mapPos(region.after,1)})));
         this.checkedDocuments.set(transaction.newDoc,next);
         this.checkedTools.set(transaction.newDoc,groups.map(group=>({...group,from:transaction.changes.mapPos(group.from,1),to:transaction.changes.mapPos(group.to,-1)})));
         if(this.blocked)this.blocked={...this.blocked,local:next.saved};
-        return transaction;
+        const selection=this.outsideResponseSelection(transaction.newSelection,transaction.startState.selection.map(transaction.changes),next);
+        return selection?[transaction,{selection,sequential:true}]:transaction;
       }
       const next=this.canonicalProjection(advanceProjection(transaction,projection));
       this.checkedDocuments.set(transaction.newDoc,next);
