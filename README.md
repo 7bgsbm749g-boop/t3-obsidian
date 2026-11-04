@@ -26,9 +26,8 @@ You need Obsidian **1.8.7 or later** and a running T3 Code installation with Orc
 ## Connect notes and projects
 
 - **Link a folder.** Right-click it, choose **Link to T3 Code**, then choose a project. Notes below it use that project when you send them.
-- **Import a response.** Use **Import T3 run into this note…** from the note menu or command palette. Choose an existing response without sending a new message.
+- **Import a response.** Use **Import T3 run into this note…** from the editor menu or command palette. Choose an existing response without sending a new message.
 - **Browse project files.** Run **Open Codebase view** from the command palette to work with code, Markdown, images, and supported documents.
-- **Open in T3 Code** from the note menu to return to the conversation in T3.
 
 Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projects** to manage folder links. **Advanced** includes manual pairing and the desktop-only local connection option.
 
