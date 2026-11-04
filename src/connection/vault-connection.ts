@@ -1,5 +1,3 @@
-import {isRecord,records,parseJson} from '../shared/values';
-import {scheduleTimeout as setTimeout} from '../shared/clock';
 import {connectT3Rpc,T3RpcError as VaultRpcError,type SocketFactory} from './t3-rpc';
 export {T3RpcError as VaultRpcError} from './t3-rpc';
 import type {Connection,Project} from '../app/bridge';
@@ -11,14 +9,13 @@ import {identityPathForSettings,readVaultIdentityRecord} from '../app/vault-iden
 
 export interface VaultLocation {environmentId:string;workspaceRoot:string}
 export interface VaultRegistration {type:'project.create';commandId:string;projectId:string;title:string;workspaceRoot:string;createdAt:string}
-export function loadVaultLocations(data:unknown):VaultLocation[]{
-  return isRecord(data)?records(data.vaultLocations).flatMap(x=>typeof x.environmentId==='string'&&x.environmentId&&typeof x.workspaceRoot==='string'&&x.workspaceRoot?[{environmentId:x.environmentId,workspaceRoot:x.workspaceRoot}]:[]):[];
+export function loadVaultLocations(data:any):VaultLocation[]{
+  return Array.isArray(data?.vaultLocations)?data.vaultLocations.filter((x:any)=>typeof x?.environmentId==='string'&&x.environmentId&&typeof x?.workspaceRoot==='string'&&x.workspaceRoot):[];
 }
-export function vaultIdentity(data:unknown):string|undefined{
-  if(!isRecord(data))return;
-  if(typeof data.vaultId==='string'&&data.vaultId)return data.vaultId;
+export function vaultIdentity(data:any):string|undefined{
+  if(typeof data?.vaultId==='string'&&data.vaultId)return data.vaultId;
   // Reuse a synced legacy root link's identity during upgrade on different devices.
-  return records(data.folderLinks).find(x=>x.folderPath==='/'&&typeof x.id==='string')?.id as string|undefined;
+  return Array.isArray(data?.folderLinks)?data.folderLinks.find((x:any)=>x?.folderPath==='/'&&typeof x.id==='string')?.id:undefined;
 }
 export interface VaultRemote {
   readonly closed:boolean;
@@ -36,12 +33,12 @@ export interface VaultRemote {
 export async function connectVaultRemote(c:Connection,s:PairedSession|undefined,fetcher?:Fetcher,makeSocket?:SocketFactory):Promise<VaultRemote>{
   const api=await environmentApi(c,s,fetcher);
   const transport=await connectT3Rpc(api,endpoint(c.url||''),makeSocket);
-  const rpc=async(tag:string,payload:unknown)=>{const result=await transport.call(tag,payload);if(!isRecord(result))throw Error('T3 returned an invalid file response.');return result;};
+  const rpc=transport.call;
   const projects=async()=>parseProjects(await api('/api/orchestration/shell'));
   return {
     get closed(){return transport.closed;},
     projects,
-    browse:async path=>{const result=await rpc('filesystem.browse',{partialPath:path==='~'?path:path.replace(/[\\/]+$/,'')+'/'});if(typeof result?.parentPath!=='string'||!Array.isArray(result.entries)||result.entries.some((x:unknown)=>!isRecord(x)||typeof x.name!=='string'||typeof x.fullPath!=='string'))throw Error('Invalid folder list from T3.');return {parentPath:result.parentPath,entries:result.entries as {name:string;fullPath:string}[]};},
+    browse:async path=>{const result=await rpc('filesystem.browse',{partialPath:path==='~'?path:path.replace(/[\\/]+$/,'')+'/'});if(typeof result?.parentPath!=='string'||!Array.isArray(result.entries)||result.entries.some((x:any)=>typeof x.name!=='string'||typeof x.fullPath!=='string'))throw Error('Invalid folder list from T3.');return result;},
     matches:async(root,settingsPath,id)=>{
       const identityPath=identityPathForSettings(settingsPath);
       if(identityPath){
@@ -50,12 +47,12 @@ export async function connectVaultRemote(c:Connection,s:PairedSession|undefined,
       }
       // Older hosts remain compatible only when the complete settings can be
       // read. Never infer a vault identity from a truncated JSON prefix.
-      try{const result=await rpc('projects.readFile',{cwd:root,relativePath:settingsPath});if(result.truncated)throw Error('Update and reload T3 Code on the vault connection machine to verify its large settings file.');if(typeof result.contents!=='string')return false;let data;try{data=parseJson(result.contents);}catch{return false;}return vaultIdentity(data)===id;}
+      try{const result=await rpc('projects.readFile',{cwd:root,relativePath:settingsPath});if(result.truncated)throw Error('Update and reload T3 Code on the vault connection machine to verify its large settings file.');if(typeof result.contents!=='string')return false;let data;try{data=JSON.parse(result.contents);}catch{return false;}return vaultIdentity(data)===id;}
       catch(error){if(error instanceof VaultRpcError&&error.kind==='ProjectReadFileError')return false;throw error;}
     },
     hasNote:async(root,path)=>{
       const directoryPath=path.includes('/')?path.slice(0,path.lastIndexOf('/')):'';
-      try{const result=await rpc('projects.listEntries',{cwd:root,directoryPath});return Array.isArray(result?.entries)&&result.entries.some((x:unknown)=>isRecord(x)&&x.path===path&&x.kind==='file');}
+      try{const result=await rpc('projects.listEntries',{cwd:root,directoryPath});return Array.isArray(result?.entries)&&result.entries.some((x:any)=>x.path===path&&x.kind==='file');}
       catch(error){if(error instanceof VaultRpcError&&['ProjectListEntriesError','ProjectEntriesError'].includes(error.kind))return false;throw error;}
     },
     readFile:async(root,path)=>{
@@ -70,13 +67,13 @@ export async function connectVaultRemote(c:Connection,s:PairedSession|undefined,
       const existing=(await projects()).find(p=>sameWorkspacePath(p.workspaceRoot,root));if(existing)return existing;
       if(newFolder){
         const result=await rpc('projects.listEntries',{cwd:newFolder.parentPath,directoryPath:''});
-        if(!Array.isArray(result?.entries)||result.truncated||result.entries.some((entry:unknown)=>!isRecord(entry)||typeof entry.path!=='string'))throw Error('Cannot check this parent folder. Browse again before creating a folder.');
-        if(records(result.entries).some(entry=>typeof entry.path==='string'&&sameWorkspacePath(newFolder.parentPath.replace(/[\\/]+$/,'')+'/'+entry.path,root)))throw Error('A file or folder with this name already exists.');
+        if(!Array.isArray(result?.entries)||result.truncated||result.entries.some((entry:any)=>typeof entry.path!=='string'))throw Error('Cannot check this parent folder. Browse again before creating a folder.');
+        if(result.entries.some((entry:any)=>sameWorkspacePath(newFolder.parentPath.replace(/[\\/]+$/,'')+'/'+entry.path,root)))throw Error('A file or folder with this name already exists.');
       }
       await api('/api/orchestration/dispatch',newFolder?{...registration,createWorkspaceRootIfMissing:true}:registration);
       const project=(await projects()).find(p=>sameWorkspacePath(p.workspaceRoot,root));if(!project)throw Error('The project was created, but discovery has not returned it yet. Try again.');return project;
     },
-    close:()=>transport.close(),
+    close:transport.close,
   };
 }
 

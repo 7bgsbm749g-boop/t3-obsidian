@@ -1,9 +1,6 @@
-import {isRecord} from '../shared/values';
-import type {NormalizedThread} from '../connection/wire-types';
-import {hasControlCharacters} from '../shared/values';
-import { sha256 } from '@noble/hashes/sha2';
-import { sha1 } from '@noble/hashes/legacy';
-import { Buffer } from 'buffer/';
+import { sha256 } from '@noble/hashes/sha256';
+import { sha1 } from '@noble/hashes/sha1';
+import { Buffer } from 'buffer';
 import type { Connection } from '../app/bridge';
 export type CompletionAction = 'keep' | 'archive' | 'delete';
 export interface CompletionSettings {action: CompletionAction; archiveFolder: string}
@@ -24,28 +21,26 @@ export function installContentHasher(hash:(text:string)=>string){
 export function contentHash(text: string) {return desktopContentHash?desktopContentHash(text):Buffer.from(sha256(new TextEncoder().encode(text))).toString('hex');}
 export function archiveFolder(value: string): string {
   const path=value.trim().replace(/\\/g,'/');
-  if (!path || path.startsWith('/') || (hasControlCharacters(path)||/[:]/.test(path)) || path.split('/').some(p=>!p || p==='.' || p==='..' || p.startsWith('.') || /[<>"|?*]/.test(p) || /[. ]$/.test(p))) {
+  if (!path || path.startsWith('/') || /[:\x00-\x1f]/.test(path) || path.split('/').some(p=>!p || p==='.' || p==='..' || p.startsWith('.') || /[<>"|?*]/.test(p) || /[. ]$/.test(p))) {
     throw new Error('Choose a normal folder inside the vault, such as Archive/T3 Code.');
   }
   return path;
 }
 // The integration derives the initial user-message ID from the request ID using UUID v5.
 export function initialMessageId(requestId: string): string {
-  const bytes=Buffer.from(sha1(Buffer.concat([Buffer.from(requestId.replace(/-/g,''),'hex'),Buffer.from('message')]))).slice(0,16);
+  const bytes=Buffer.from(sha1(Buffer.concat([Buffer.from(requestId.replace(/-/g,''),'hex'),Buffer.from('message')]))).subarray(0,16);
   bytes[6]=(bytes[6]&15)|80;bytes[8]=(bytes[8]&63)|128;
   const h=bytes.toString('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
 }
-export function completionState(input:unknown, job: CompletionJob): 'wait'|'complete'|'keep' {
-  const thread:Partial<NormalizedThread>=isRecord(input)?input:{};
+export function completionState(thread: any, job: CompletionJob): 'wait'|'complete'|'keep' {
   if(thread?.id!==job.threadId || thread.projectId!==job.projectId) return 'wait';
-  if(['error','interrupted'].includes(thread.latestTurn?.state??'') || thread.session?.status==='error' || thread.session?.lastError) return 'keep';
-  if(thread.latestTurn?.state!=='completed' || !['ready','stopped'].includes(thread.session?.status??'') || thread.session?.activeTurnId || thread.hasPendingApprovals!==false || thread.hasPendingUserInput!==false || thread.backgroundLiveness) return 'wait';
+  if(['error','interrupted'].includes(thread.latestTurn?.state) || thread.session?.status==='error' || thread.session?.lastError) return 'keep';
+  if(thread.latestTurn?.state!=='completed' || !['ready','stopped'].includes(thread.session?.status) || thread.session?.activeTurnId || thread.hasPendingApprovals!==false || thread.hasPendingUserInput!==false || thread.backgroundLiveness) return 'wait';
   return 'complete';
 }
-export function isOriginalCompletedTurn(input:unknown, job: CompletionJob): boolean {
-  const thread:Partial<NormalizedThread>=isRecord(input)?input:{};
-  const users=thread?.messages?.filter(m=>m.role==='user');
-  return thread?.id===job.threadId && thread.projectId===job.projectId && thread.latestTurn?.state==='completed' && ['ready','stopped'].includes(thread.session?.status??'') && !thread.session?.activeTurnId && !thread.session?.lastError && users?.length===1 && users[0].id===initialMessageId(job.requestId) && thread.messages?.some(m=>m.role==='assistant' && m.id===thread.latestTurn?.assistantMessageId && m.streaming===false)===true;
+export function isOriginalCompletedTurn(thread: any, job: CompletionJob): boolean {
+  const users=thread?.messages?.filter((m:any)=>m.role==='user');
+  return thread?.id===job.threadId && thread.projectId===job.projectId && thread.latestTurn?.state==='completed' && ['ready','stopped'].includes(thread.session?.status) && !thread.session?.activeTurnId && !thread.session?.lastError && users?.length===1 && users[0].id===initialMessageId(job.requestId) && thread.messages.some((m:any)=>m.role==='assistant' && m.id===thread.latestTurn?.assistantMessageId && m.streaming===false);
 }
 export interface CleanupFile {path:string;ctime:number}
 export interface CleanupIO {
@@ -83,5 +78,5 @@ export async function cleanCompletedNote(job:CompletionJob, io:CleanupIO):Promis
     await io.move(file,job.destination);return `Archived to ${job.destination}`;
   }
   if(!io.active())throw new Error('Monitoring stopped.');
-  await io.trash(file);return 'Removed note using the vault deletion preference.';
+  await io.trash(file);return 'Moved note to vault trash.';
 }

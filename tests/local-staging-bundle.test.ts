@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 import {randomUUID,webcrypto} from 'node:crypto';
 import {promises as fs} from 'node:fs';

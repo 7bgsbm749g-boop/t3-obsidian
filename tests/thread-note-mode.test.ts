@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext} from 'node:vm';
 import {webcrypto} from 'node:crypto';
 import {assertThreadNoteMode,oneToOneNoteThreads,threadNoteMode} from '../src/conversations/thread-note-mode';
 import {mutateNoteThreads,type NoteThread} from '../src/notes/note-threads';

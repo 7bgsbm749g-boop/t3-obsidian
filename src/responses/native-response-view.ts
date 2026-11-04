@@ -1,5 +1,3 @@
-import {nativeMarkdownView,editorCM} from '../shared/native-editor';
-import {scheduleTimeout as setTimeout} from '../shared/clock';
 import type {MarkdownView,TFile} from 'obsidian';
 import {regionBody,selectionAnchor} from '../conversations/inline-thread';
 import {completedSelectionDraft,type InlineSteering} from '../conversations/inline-steering';
@@ -73,9 +71,7 @@ export class NativeResponseView {
     if(!scrollState){scrollState={positions:new Map()};if(this.file)notes.set(this.file,scrollState);}
     while(notes.size>64)notes.delete(notes.keys().next().value!);
     this.scroll=new ResponseScroll(view,()=>this.currentProjection(),scrollState);
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- Capture the original identity for exact restoration; each invocation uses the native receiver with .call().
     this.originalGet=view.getViewData;this.originalSet=view.setViewData;
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- Capture the original identity for exact restoration; each invocation uses the native receiver with .call().
     this.originalSave=view.save;
     this.originalRequestSave=view.requestSave;
     this.requestSaveWrapper=()=>{if(this.unloading&&this.blocked)return;if(this.saveFences){this.deferredSave=true;return;}return this.originalRequestSave.call(view);};
@@ -89,7 +85,7 @@ export class NativeResponseView {
       // need no save. In particular, do not read a multi-megabyte file twice
       // merely to discover that there is nothing to write. External updates
       // still arrive through the normal incoming-note path.
-      if(!clear&&!this.responses.length&&!this.blocked&&!this.ownSave&&nativeMarkdownView(view).saving!==true&&this.saved()===this.diskBase)return;
+      if(!clear&&!this.responses.length&&!this.blocked&&!this.ownSave&&(view as any).saving!==true&&this.saved()===this.diskBase)return;
       const file=view.file;
       const previousDisk=await this.readSaved();
       if(this.saveFences){this.deferredSave=true;return;}
@@ -173,7 +169,7 @@ export class NativeResponseView {
     return {saved:moved.offset,display:this.displayedSavedOffset(moved.offset)};
   }
   moveResponse(key:string,displayOffset:number):boolean {
-    const id=this.moveControl(key),target=id&&this.moveTarget(key,displayOffset),cm=editorCM(this.view.editor);
+    const id=this.moveControl(key),target=id&&this.moveTarget(key,displayOffset),cm=(this.view.editor as any)?.cm;
     if(!id||!target||!cm?.dispatch)return false;
     const before=this.saved(),next=movedResponse(before,id,target.saved);if(!next||next.text===before)return false;
     const {Transaction}=require('@codemirror/state') as typeof import('@codemirror/state');
@@ -221,7 +217,7 @@ export class NativeResponseView {
   }
   private buildProjection(saved:string,responses:readonly LocalResponse[]):ResponseProjection {
     assertCanonicalToolGroups(saved);for(const response of responses)assertCanonicalToolGroups(response.body);
-    const compact=this.view.getState?.().source!==true;
+    const compact=(this.view as any).getState?.().source!==true;
     const savedTools=compact?presentToolGroups(saved):{canonical:saved,display:saved,groups:[]},responseTools=new Map<string,ToolPresentation>();
     const counts=new Map<string,number>();
     for(const group of savedTools.groups){
@@ -237,14 +233,14 @@ export class NativeResponseView {
   }
   private restoreSaved(display:string){return this.restoreSavedTools(savedProjection(display,this.projection));}
   private displayed(){return this.originalGet.call(this.view);}
-  private nativeCheckpoint(){return this.saveBaseline?this.saveBaseline.value:nativeMarkdownView(this.view).lastSavedData;}
+  private nativeCheckpoint(){return this.saveBaseline?this.saveBaseline.value:(this.view as any).lastSavedData;}
   /** TextFileView's debounce retains its original save function. Its call to
    * getViewData is followed synchronously by lastSavedData and saving=true.
    * Observe that capture on the next microtask; ordinary reads and incoming
    * pane updates alone are not evidence of a native save. Disk readback still
    * has to match before this checkpoint advances the merge baseline. */
   private observeNativeSave(text:string){
-    const native=nativeMarkdownView(this.view);
+    const native=this.view as any;
     if(this.saveFences||native.saving!==false||native.lastSavedData===text)return;
     const revision=this.incomingRevision;
     void Promise.resolve().then(()=>{
@@ -255,7 +251,7 @@ export class NativeResponseView {
   private acknowledgeOwnSave(document:string){
     if(this.ownSave?.text!==document)return;
     if(this.ownSave.native){
-      const native=nativeMarkdownView(this.view),checkpoint=this.nativeCheckpoint();
+      const native=this.view as any,checkpoint=this.nativeCheckpoint();
       if(native.saving!==false)return;
       if(checkpoint!==document){this.ownSave=undefined;return;}
     }
@@ -275,7 +271,7 @@ export class NativeResponseView {
   private localSaved():string {
     const display=this.displayed();
     if(!this.projection.ranges.length&&display===this.projection.saved)return display;
-    const doc=editorCM(this.view.editor)?.state?.doc,cached=doc&&this.checkedDocuments.get(doc);
+    const doc=(this.view.editor as any)?.cm?.state?.doc,cached=doc&&this.checkedDocuments.get(doc);
     if(cached&&cached.display===display){this.projection=cached;return cached.saved;}
     // Reuse only this view's already validated projection and only when its
     // actual native bytes are identical. Every ordinary edit takes the full
@@ -288,7 +284,7 @@ export class NativeResponseView {
   currentProjection():ResponseProjection{
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
     if(this.displayed()===this.projection.display)return this.projection;
-    const doc=editorCM(this.view.editor)?.state?.doc,cached=doc&&this.checkedDocuments.get(doc);
+    const doc=(this.view.editor as any)?.cm?.state?.doc,cached=doc&&this.checkedDocuments.get(doc);
     if(cached&&cached.display===this.displayed())return this.projection=cached;
     const saved=this.saved();
     this.projection=this.buildProjection(saved,this.responses);
@@ -343,11 +339,11 @@ export class NativeResponseView {
   setResponses(responses:readonly LocalResponse[],inputs:readonly {id:string;steering:InlineSteering[]}[]=[]){
     if(this.disposed)throw Error('Native response view is disposed.');
     if(this.blocked)throw new ProjectionConflict(this.blocked.reason);
-    const cm=editorCM(this.view.editor);
+    const cm=(this.view.editor as any)?.cm;
     if(cm?.dispatch&&cm!==this.moveEditor){this.releaseMoveHistory?.();this.moveEditor=cm;this.releaseMoveHistory=guardResponseMoveHistory(cm,(transaction,move)=>this.moveTransaction(transaction,move));}
     const before=this.saved();let saved=before;
     for(const input of inputs)if(responses.some(response=>response.id===input.id))saved=completedSelectionDraft(saved,input.id,input.steering);
-    if(saved===before&&this.compactTools===(this.view.getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable&&response.stoppable===this.responses[index].stoppable&&response.followable===this.responses[index].followable)&&this.displayed()===this.projection.display){this.correctCaret();return;}
+    if(saved===before&&this.compactTools===((this.view as any).getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable&&response.stoppable===this.responses[index].stoppable&&response.followable===this.responses[index].followable)&&this.displayed()===this.projection.display){this.correctCaret();return;}
     const projection=this.buildProjection(saved,responses);
     this.responses=responses.map(response=>({...response}));this.projection=projection;
     for(const response of responses)this.materialized.delete(response.id);
@@ -357,7 +353,7 @@ export class NativeResponseView {
   private render(display:string,clear:boolean){
     const current=this.displayed(),change=changedInterval(current,display);
     if(!change){this.correctCaret();this.scroll.updated();return;}
-    const cm=editorCM(this.view.editor);
+    const cm=(this.view.editor as any)?.cm;
     if(!clear&&this.view.getMode()!=='preview'&&cm){
       const {Transaction}=require('@codemirror/state') as typeof import('@codemirror/state');
       // Streaming updates map selections and ordinary undo history without
@@ -559,7 +555,7 @@ export class NativeResponseView {
       if(this.deferredSave){this.deferredSave=false;this.originalRequestSave.call(this.view);}
     }};
     try{
-      (this.originalRequestSave as typeof this.originalRequestSave&{cancel?:()=>void})?.cancel?.();
+      (this.originalRequestSave as any)?.cancel?.();
       if(!review&&!this.blocked)this.saved();
       if(this.saveFences===1){
         // TextFileView's requestSave closes over its constructor-bound save.
@@ -572,10 +568,10 @@ export class NativeResponseView {
           this.saveBaseline={descriptor,value:descriptor.value};
           Object.defineProperty(this.view,'lastSavedData',{configurable:true,enumerable:descriptor.enumerable,get:()=>this.blocked?this.saveBaseline!.value:this.saved(),set:value=>{this.saveBaseline!.value=value;}});
         }
-        if(nativeMarkdownView(this.view).dirty)this.deferredSave=true;
+        if((this.view as any).dirty)this.deferredSave=true;
       }
       const deadline=Date.now()+5000;
-      const drain=async()=>{while(nativeMarkdownView(this.view).saving){if(Date.now()>=deadline)throw Error('Waiting for a native save before final delivery.');await new Promise<void>(resolve=>setTimeout(resolve,10));}};
+      const drain=async()=>{while((this.view as any).saving){if(Date.now()>=deadline)throw Error('Waiting for a native save before final delivery.');await new Promise(resolve=>setTimeout(resolve,10));}};
       await drain();
       const disk=await this.readSaved();
       if(this.disposed||this.view.file!==this.file)throw Error('The native view closed before final delivery.');
@@ -624,7 +620,7 @@ export class NativeResponseView {
   }
   private correctCaret(){
     if(this.disposed||this.view.file!==this.file||this.view.getMode()==='preview')return;
-    const cm=editorCM(this.view.editor);if(!cm?.state||!cm.dispatch)return;
+    const cm=(this.view.editor as any)?.cm;if(!cm?.state||!cm.dispatch)return;
     if(cm!==this.caretEditor){
       this.releaseCaretFocus?.();this.caretEditor=cm;
       const focus=()=>this.correctCaret();cm.contentDOM?.addEventListener?.('focus',focus,true);
@@ -634,13 +630,13 @@ export class NativeResponseView {
       const projection=this.currentProjection();
       // A note consisting solely of history has no source position outside it.
       // Keep native text focus out, without inserting a saved padding line.
-      if(this.view.getState?.().source!==true&&this.protectedCaretRegions(projection).some(region=>region.edges&&region.before===undefined&&region.after===undefined)){cm.contentDOM?.blur?.();return;}
+      if((this.view as any).getState?.().source!==true&&this.protectedCaretRegions(projection).some(region=>region.edges&&region.before===undefined&&region.after===undefined)){cm.contentDOM?.blur?.();return;}
       const selection=this.outsideResponseSelection(cm.state.selection,cm.state.selection,projection);
       if(selection)cm.dispatch({selection,filter:false,scrollIntoView:false});
     }catch{/* A conflicting note remains available for recovery. */}
   }
   private outsideResponseSelection(selection:EditorSelection,previous:EditorSelection,projection:ResponseProjection):EditorSelection|undefined {
-    if(this.view.getState?.().source===true)return;
+    if((this.view as any).getState?.().source===true)return;
     const protectedRegions=this.protectedCaretRegions(projection);if(!protectedRegions.length)return;
     const {EditorSelection}=require('@codemirror/state') as typeof import('@codemirror/state');
     let changed=false;
@@ -668,7 +664,7 @@ export class NativeResponseView {
   }
   filterTransaction(transaction:CMTransaction):CMTransaction|TransactionSpec[] {
     if(this.disposed)return transaction;
-    const cm=editorCM(this.view.editor);
+    const cm=(this.view.editor as any)?.cm;
     if(!cm?.state||cm.state!==transaction.startState)return transaction;
     if(!transaction.docChanged){
       if(!transaction.selection)return transaction;
@@ -700,9 +696,9 @@ export class NativeResponseView {
         if(to>before.to||toB>after.to||!(/^[a-z]/i.test(before.text)&&/^[a-z]/i.test(after.text))||/[\n\r`~<>\\]/.test(inserted.toString()+transaction.startState.doc.sliceString(from,to)))ordinary=false;
       });
       if(ordinary){
-        const offset=(position:number)=>{let shift=0;for(const group of groups){if(position<group.to)break;const retained=this.savedToolHistory.get(group.ref);if(!retained)throw new ProjectionConflict('The retained tool details are unavailable.');shift+=retained.canonical.length-(group.to-group.from);}return position+shift;};
+        const offset=(position:number)=>{let shift=0;for(const group of groups!){if(position<group.to)break;const retained=this.savedToolHistory.get(group.ref);if(!retained)throw new ProjectionConflict('The retained tool details are unavailable.');shift+=retained.canonical.length-(group.to-group.from);}return position+shift;};
         const parts:string[]=[];let cursor=0;
-        transaction.changes.iterChanges((from,to,_from,_to,inserted)=>{const start=offset(from),end=offset(to);parts.push(projection.saved.slice(cursor,start),inserted.toString());cursor=end;});
+        transaction.changes.iterChanges((from,to,_from,_to,inserted)=>{const start=offset(from),end=offset(to);parts.push(projection!.saved.slice(cursor,start),inserted.toString());cursor=end;});
         parts.push(projection.saved.slice(cursor));
         const next={saved:parts.join(''),display:transaction.newDoc.toString(),ranges:[]};
         this.caretRegions.set(next,this.protectedCaretRegions(projection).map(region=>({...region,from:transaction.changes.mapPos(region.from,1),to:transaction.changes.mapPos(region.to,-1),before:region.before===undefined?undefined:transaction.changes.mapPos(region.before,-1),after:region.after===undefined?undefined:transaction.changes.mapPos(region.after,1)})));

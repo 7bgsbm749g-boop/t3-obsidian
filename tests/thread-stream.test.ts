@@ -64,7 +64,7 @@ test('a quiet subscription refreshes the current thread snapshot',async()=>{
   }
   const watcher=watchThread('thread-2',async()=>({origin:'https://t3.example',api:async path=>{
     paths.push(path);
-    return path==='/api/auth/websocket-ticket'?{ticket:'ticket'}:{snapshotSequence:9,thread:{id:'thread-2',projectId:'project',messages:[],latestTurn:{turnId:'turn',state:'completed'}}};
+    return path==='/api/auth/websocket-ticket'?{ticket:'ticket'}:{snapshotSequence:9,thread:{messages:[],latestTurn:{turnId:'turn',state:'completed'}}};
   }}),{item:item=>items.push(item),reconnecting:error=>assert.fail(error.message)},url=>new QuietSocket(url) as unknown as WebSocket);
   try{
     await new Promise(resolve=>setTimeout(resolve,1400));
@@ -134,11 +134,11 @@ test('one-shot binding replay stops at synchronization and cancels a stranded so
     class Socket {
       onopen?:()=>void;onmessage?:(event:any)=>void;onclose?:()=>void;onerror?:()=>void;
       constructor(){queueMicrotask(()=>this.onopen?.());}
-      send(raw:string){const frame=JSON.parse(raw);sent.push(frame);if(frame.tag==='orchestration.subscribeThread')queueMicrotask(()=>cancel?abort.abort():this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[{kind:'event',event:{sequence:9,type:'v2.unknown',payload:{}}},{kind:'synchronized'}]})}));}
+      send(raw:string){const frame=JSON.parse(raw);sent.push(frame);if(frame.tag==='orchestration.subscribeThread')queueMicrotask(()=>cancel?abort.abort():this.onmessage?.({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[{kind:'event',event:{sequence:9}},{kind:'synchronized'}]})}));}
       close(){closed++;this.onclose?.();}
     }
     const work=readInlineEvents({origin:'https://t3.example',api:async()=>({ticket:'test'})},'thread',8,abort.signal,()=>new Socket() as any);
-    if(cancel)await assert.rejects(work,/canceled/);else assert.deepEqual(await work,[{kind:'event',event:{sequence:9,type:'v2.unknown',payload:{}}}]);
+    if(cancel)await assert.rejects(work,/canceled/);else assert.deepEqual(await work,[{kind:'event',event:{sequence:9}}]);
     assert.equal(sent[0].payload.afterSequence,8);assert.equal(sent[0].payload.requestCompletionMarker,true);assert.equal(closed,1);
     assert.equal(sent.at(-1)._tag,'Interrupt');
   }
@@ -153,7 +153,7 @@ test('quiet canonical polling backs off despite unrelated cursors and recovers m
   }
   const watcher=watchThread('quiet',async()=>({origin:'https://t3.example',api:async path=>{
     if(path==='/api/auth/websocket-ticket')return {ticket:'test'};
-    readTimes.push(Date.now());return {snapshotSequence:++sequence,thread:{id:'quiet',projectId:'project',messages:[{id:'reply',text:'unchanged'}],latestTurn:{state:complete?'completed':'running'}}};
+    readTimes.push(Date.now());return {snapshotSequence:++sequence,thread:{id:'quiet',messages:[{id:'reply',text:'unchanged'}],latestTurn:{state:complete?'completed':'running'}}};
   }}),{item:x=>items.push(x),reconnecting:e=>assert.fail(e.message)},()=>{socket=new Socket();return socket as any;});
   const settle=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
   const advance=async(n:number)=>{t.mock.timers.tick(n);await settle();};
@@ -174,7 +174,7 @@ test('live activity accelerates a quiet poll without overlap or postponing a due
   t.mock.timers.enable({apis:['setTimeout','Date']});
   let socket:Socket,reads=0,inFlight=0,maxInFlight=0,release:(x:any)=>void=()=>{},blocked=false;
   class Socket {onopen?:()=>void;onclose?:()=>void;onmessage?:(event:{data:string})=>void;onerror?:()=>void;send(_raw:string){}close(){this.onclose?.();}}
-  const value={thread:{id:'live',projectId:'project',messages:[]}};
+  const value={thread:{id:'live',messages:[]}};
   const watcher=watchThread('live',async()=>({origin:'https://t3.example',api:async path=>{
     if(path==='/api/auth/websocket-ticket')return {ticket:'test'};
     reads++;inFlight++;maxInFlight=Math.max(maxInFlight,inFlight);
@@ -202,7 +202,7 @@ test('a failed canonical poll returns to the fast fallback and stop ignores a la
   const watcher=watchThread('failure',async()=>({origin:'https://t3.example',api:async path=>{
     if(path==='/api/auth/websocket-ticket')return {ticket:'test'};
     reads++;if(fail)throw Error('temporary transport error');
-    return blocked?await new Promise(resolve=>{release=resolve;}):{thread:{id:'failure',projectId:'project',messages:[]}};
+    return blocked?await new Promise(resolve=>{release=resolve;}):{thread:{id:'failure',messages:[]}};
   }}),{item:x=>items.push(x),reconnecting:e=>errors.push(e.message)},()=>{socket=new Socket();return socket as any;});
   const settle=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
   const advance=async(n:number)=>{t.mock.timers.tick(n);await settle();};
@@ -210,7 +210,7 @@ test('a failed canonical poll returns to the fast fallback and stop ignores a la
     await settle();socket!.onopen?.();await advance(1200);await advance(1200);
     fail=true;await advance(2400);assert.equal(reads,3);assert.deepEqual(errors,['temporary transport error']);
     fail=false;blocked=true;await advance(1200);assert.equal(reads,4);
-    watcher.stop();release({thread:{id:'failure',projectId:'project',messages:[]}});await settle();await advance(10000);
+    watcher.stop();release({thread:{id:'failure',messages:[]}});await settle();await advance(10000);
     assert.equal(reads,4);assert.equal(items.length,2);
   }finally{watcher.stop();t.mock.timers.reset();}
 });
@@ -221,7 +221,7 @@ test('reconnect resets a quiet deadline and releases the old access',async t=>{
   class Socket {onopen?:()=>void;onclose?:()=>void;onmessage?:(event:{data:string})=>void;onerror?:()=>void;send(_raw:string){}close(){this.onclose?.();}}
   const watcher=watchThread('reconnect',async()=>({origin:'https://t3.example',close:reason=>{closed.push(reason!);},api:async path=>{
     if(path==='/api/auth/websocket-ticket')return {ticket:`ticket-${++tickets}`};
-    reads.push(Date.now());return {thread:{id:'reconnect',projectId:'project',messages:[]}};
+    reads.push(Date.now());return {thread:{id:'reconnect',messages:[]}};
   }}),{item:()=>{},reconnecting:e=>errors.push(e.message)},()=>{const s=new Socket();sockets.push(s);return s as any;});
   const settle=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
   const advance=async(n:number)=>{t.mock.timers.tick(n);await settle();};

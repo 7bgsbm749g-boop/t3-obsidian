@@ -1,8 +1,3 @@
-import {records,isRecord} from '../shared/values';
-import {toError} from '../shared/values';
-import {valueText} from '../shared/values';
-import {readControlsSnapshot} from '../connection/wire-readers';
-import {cancelTimeout as clearTimeout,scheduleTimeout as setTimeout} from '../shared/clock';
 import {logEvent,logFailure} from '../app/diagnostics';
 import {pendingQuestions,questionAnswers,questionKey,staleQuestionFailure,type PendingQuestion,type QuestionTarget,type QuestionDraft,type QuestionDrafts} from './questions';
 import type {InlineActivity} from '../conversations/inline-thread';
@@ -39,7 +34,7 @@ export class QuestionController {
   private stopped=false;
   private following=new Map<string,Promise<void>>();
   constructor(private access:(environmentId:string)=>Promise<ThreadAccess>,private store:QuestionStore,private newId:()=>string,private now=()=>new Date().toISOString(),private followAnswer?:(target:QuestionTarget,follow:QuestionAnswerFollow)=>Promise<boolean>){
-    for(const record of store.load())if(record?.target&&typeof record.target.environmentId==='string'&&typeof record.target.threadId==='string'&&typeof record.target.requestId==='string'&&record.drafts&&typeof record.drafts==='object')this.records.set(questionKey(record.target),{...record,drafts:Object.assign(Object.create(null) as QuestionDrafts,record.drafts)});
+    for(const record of store.load())if(record?.target&&typeof record.target.environmentId==='string'&&typeof record.target.threadId==='string'&&typeof record.target.requestId==='string'&&record.drafts&&typeof record.drafts==='object')this.records.set(questionKey(record.target),{...record,drafts:Object.assign(Object.create(null),record.drafts)});
     this.saved=JSON.stringify([...this.records.values()]);this.updateDismissals();
   }
   dispose(){this.stopped=true;for(const controller of this.readControllers)controller.abort(Error('Question controls closed.'));try{this.flushDrafts();}catch(error){logFailure('question.draft.flush',error);}finally{this.listeners.clear();this.tracked.clear();}}
@@ -51,7 +46,7 @@ export class QuestionController {
   /** Rendering and open forms retain a target even when disk has only anchors. */
   track(target:QuestionTarget){const key=questionKey(target),entry=this.tracked.get(key)??{target,count:0};entry.count++;this.tracked.set(key,entry);let released=false;return ()=>{if(released)return;released=true;if(--entry.count===0)this.tracked.delete(key);};}
   watchedTargets():QuestionTarget[]{return [...new Map([...this.tracked.values()].map(entry=>[questionKey(entry.target),entry.target] as const).concat([...this.records.values()].filter(record=>record.command&&!record.resolved).map(record=>[questionKey(record.target),record.target] as const))).values()];}
-  record(target:QuestionTarget){const key=questionKey(target);let record=this.records.get(key);if(!record){record={target,drafts:Object.create(null) as QuestionDrafts};this.records.set(key,record);}return record;}
+  record(target:QuestionTarget){const key=questionKey(target);let record=this.records.get(key);if(!record){record={target,drafts:Object.create(null)};this.records.set(key,record);}return record;}
   view(target:QuestionTarget):QuestionView{return this.views.get(questionKey(target))??(this.records.get(questionKey(target))?.resolved?{status:'resolved'}:{status:'loading'});}
   isDismissed(target:QuestionTarget){const record=this.records.get(questionKey(target));return !!(record?.dismissed||record?.command?.type==='thread.user-input.dismiss');}
   isHidden(target:QuestionTarget){return this.isDismissed(target)||this.view(target).status==='resolved';}
@@ -100,11 +95,11 @@ export class QuestionController {
     try{
       if(this.stopped)return;const first=targetMap.values().next().value!;
       const currentAccess=await abortableRead<ThreadAccess>(this.access(first.environmentId).then(async ready=>{if(controller.signal.aborted){try{await ready.close?.('late-access');}catch(error){logFailure('question.read.close',error);}throw controller.signal.reason;}return ready;}),controller.signal);access=currentAccess;
-      const snapshot=readControlsSnapshot(await abortableRead(currentAccess.api(`/api/orchestration/threads/${encodeURIComponent(first.threadId)}?controlOnly=true`,undefined,{signal:controller.signal}),controller.signal));
+      const snapshot=await abortableRead(currentAccess.api(`/api/orchestration/threads/${encodeURIComponent(first.threadId)}?controlOnly=true`,undefined,{signal:controller.signal}),controller.signal);
       if(snapshot?.thread?.id!==first.threadId||!Array.isArray(snapshot.thread.activities))throw Error('T3 returned an invalid question snapshot.');
       if(this.stopped)return;
       const sequenceKey=JSON.stringify([first.environmentId,first.threadId]);
-      if(typeof snapshot.snapshotSequence==='number'&&Number.isSafeInteger(snapshot.snapshotSequence)){
+      if(Number.isSafeInteger(snapshot.snapshotSequence)){
         if(snapshot.snapshotSequence<(this.sequences.get(sequenceKey)??-1))return;
         this.sequences.set(sequenceKey,snapshot.snapshotSequence);
       }
@@ -122,7 +117,7 @@ export class QuestionController {
     if(!targets.length)return;
     try{this.apply(targets,activities);this.checkedAt.set(key,Date.now());}catch(error){logFailure('question.observe',error);}this.notify();
   }
-  private apply(targets:QuestionTarget[],activities:InlineActivity[],requests?:Record<string,import('../connection/wire-types').WireRuntimeRequest>){
+  private apply(targets:QuestionTarget[],activities:InlineActivity[],requests?:Record<string,any>){
       let changed=false;
       const pending=pendingQuestions(activities);
       for(const target of targets){
@@ -132,8 +127,8 @@ export class QuestionController {
         const remote=requests?.[target.requestId];
         const terminal=related.some(a=>a.kind==='user-input.resolved'||staleQuestionFailure(a))||remote&&typeof remote.status==='string'&&remote.status!=='pending';
         const failure=related.find(a=>a.kind==='provider.user-input.respond.failed'&&!staleQuestionFailure(a)&&record.command&&!record.failureIds?.includes(a.id));
-        if(terminal||record.resolved){if(!record.resolved){changed=true;logEvent('question.resolved',{...target});}if(related.some(a=>a.kind==='user-input.resolved'&&!a.payload?.answers||staleQuestionFailure(a)))record.dismissed=true;if(record.answerFollow){if(record.dismissed)delete record.answerFollow;else record.answerFollow.accepted=true;changed=true;}record.resolved=true;delete record.command;delete record.failureIds;delete record.uncertain;record.drafts=Object.create(null) as QuestionDrafts;this.views.set(key,{status:'resolved',fresh:true});}
-        else if(failure){changed=true;delete record.command;delete record.answerFollow;delete record.failureIds;delete record.uncertain;this.views.set(key,{request,status:'error',fresh:true,detail:valueText(failure.payload?.detail??'T3 could not submit the answer. Your draft is saved.')});}
+        if(terminal||record.resolved){if(!record.resolved){changed=true;logEvent('question.resolved',{...target});}if(related.some(a=>a.kind==='user-input.resolved'&&!a.payload?.answers||staleQuestionFailure(a)))record.dismissed=true;if(record.answerFollow){if(record.dismissed)delete record.answerFollow;else record.answerFollow.accepted=true;changed=true;}record.resolved=true;delete record.command;delete record.failureIds;delete record.uncertain;record.drafts=Object.create(null);this.views.set(key,{status:'resolved',fresh:true});}
+        else if(failure){changed=true;delete record.command;delete record.answerFollow;delete record.failureIds;delete record.uncertain;this.views.set(key,{request,status:'error',fresh:true,detail:String(failure.payload?.detail??'T3 could not submit the answer. Your draft is saved.')});}
         else {
           const current=request??(remote?.status==='pending'?this.view(target).request:undefined);
           this.views.set(key,{request:current,fresh:true,accepted:!!record.command&&!record.uncertain,status:current?(this.sends.has(key)?'submitting':record.command?(record.uncertain?'error':'submitting'):'pending'):'unavailable',...(record.uncertain?{detail:this.isDismissed(target)?'Dismissal saved; waiting for T3.':'Connection lost during submission. Your answer is saved; retry safely.'}:!current?{detail:'This question is unavailable. Refresh the thread in T3.'}:{})});
@@ -150,7 +145,7 @@ export class QuestionController {
       if(!this.isDismissed(target)){
         if(view.request?.responseMode!=='message')return Promise.reject(Error('This blocking question cannot be dismissed.'));
         record.command={type:'thread.user-input.dismiss',commandId:this.newId(),threadId:target.threadId,requestId:target.requestId,createdAt:this.now()};record.dismissed=true;record.uncertain=true;
-        try{this.persist();}catch(error){delete record.command;delete record.dismissed;delete record.uncertain;return Promise.reject(toError(error));}
+        try{this.persist();}catch(error){delete record.command;delete record.dismissed;delete record.uncertain;return Promise.reject(error);}
         this.notify();
       }
       this.dismissalRetries.set(key,Date.now()+30_000);
@@ -203,8 +198,4 @@ export class QuestionController {
     await this.recoverAnswerStreams();
     }catch(error){if(!this.stopped&&this.view(target).status!=='resolved'){this.views.set(key,{...this.view(target),status:'error',detail:error instanceof Error?error.message:'Cannot submit the answer.'});this.notify();}throw error;}
   }
-}
-
-export function loadQuestionRecords(value:unknown):QuestionRecord[]{
-  return records(value).filter(row=>isRecord(row.target)&&typeof row.target.environmentId==='string'&&typeof row.target.threadId==='string'&&typeof row.target.requestId==='string'&&isRecord(row.drafts)) as unknown as QuestionRecord[];
 }

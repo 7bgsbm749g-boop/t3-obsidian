@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext} from 'node:vm';
 import {webcrypto} from 'node:crypto';
 
 async function fixture(isMobile=false){
@@ -19,7 +19,7 @@ async function fixture(isMobile=false){
       assert.equal(new URL(url).origin,'https://vps.example');
       if(url.endsWith('/.well-known/t3/environment'))return new Response(JSON.stringify({environmentId:'vps',label:'VPS',orchestrationProtocolVersion:2}));
       assert.equal(options.headers.Authorization,'Bearer device-session');
-      return new Response(JSON.stringify({thread:{id:'thread',projectId:'project',messages:[{role:'assistant',text:'Remote reply'}]}}));
+      return new Response(JSON.stringify({thread:{id:'thread',messages:[{role:'assistant',text:'Remote reply'}]}}));
     },
     document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
     URL,URLSearchParams,Headers,Response,AbortController,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console,

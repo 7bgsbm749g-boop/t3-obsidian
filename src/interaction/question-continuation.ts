@@ -36,7 +36,7 @@ export async function continueQuestionAnswer(target:QuestionTarget,follow:Questi
   if(request.responseMode!=='message'||request.requestId!==target.requestId||command.type!=='thread.user-input.respond'||command.requestId!==target.requestId||command.threadId!==target.threadId)throw Error('The saved question answer target changed.');
   const related=io.bindings().filter(binding=>binding.threadEnvironmentId===target.environmentId&&binding.threadId===target.threadId);
   const messageId=`async-answer:${target.requestId}`,access=await io.access(target.environmentId);
-  let snapshot:Awaited<ReturnType<typeof readInlineSnapshot>>;
+  let snapshot:any;
   try{snapshot=await readInlineSnapshot(access,target.threadId,undefined,{messageIds:[messageId,...related.map(binding=>binding.localMessageId??binding.messageId)],turnIds:request.turnId?[request.turnId]:[]});}finally{await access.close?.();}
   if(!io.allowed())return false;
   const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
@@ -83,7 +83,7 @@ export async function continueQuestionAnswer(target:QuestionTarget,follow:Questi
       // accepted intent remains available; no second stream is spawned.
       if(matches.length!==1){io.blocked?.(target,'Your answer was sent. The saved response changed or cannot be identified safely, so its stream could not resume.');return false;}
       const range=matches[0];
-      const inserted=await io.updateNote(path,current=>{if(current!==document)throw Error('The original response changed before it could resume.');return current.slice(0,range.from)+responseAnchor(source.id)+current.slice(range.to);},()=>io.allowed());
+      const inserted=await io.updateNote(path,current=>{if(current!==document)throw Error('The original response changed before it could resume.');return current.slice(0,range.from)+responseAnchor(source.id)+current.slice(range.to);},io.allowed);
       if(inserted===undefined)return false;
     }
     await io.register(next);

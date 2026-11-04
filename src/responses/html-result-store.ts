@@ -1,4 +1,3 @@
-import {isRecord} from '../shared/values';
 import {contentHash} from './completion';
 import {htmlRenderFromToolItem,htmlResultIdentity,htmlResultKey,HTML_RESULT_MAX_BYTES,readHtmlResult,type HtmlResultReference} from './html-results';
 import type {ThreadAccess} from '../conversations/thread-stream';
@@ -68,13 +67,12 @@ export class HtmlResultStore {
       stage='verification';
       const item=await access.api('/api/orchestration/turn-item',{threadId:reference.threadId,itemId:reference.itemId,...(reference.revision?{revision:reference.revision}:{})});
       const verified=htmlRenderFromToolItem(item);
-      if(!isRecord(item)||!verified||item.id!==reference.itemId||item.threadId!==reference.threadId||item.runId!==reference.runId||verified.attachmentId!==reference.attachmentId||reference.revision&&item.updatedAt!==reference.revision)throw new HtmlResultError('verification',stage);
+      if(!verified||item.id!==reference.itemId||item.threadId!==reference.threadId||item.runId!==reference.runId||verified.attachmentId!==reference.attachmentId||reference.revision&&item.updatedAt!==reference.revision)throw new HtmlResultError('verification',stage);
       stage='url';
       const signed=await access.api('/api/assets/create-url',{resource:{_tag:'attachment',attachmentId:verified.attachmentId,fileName:'result.html',mimeType:'text/html',disposition:'inline'}});
-      if(!isRecord(signed)||typeof signed.relativeUrl!=='string')throw new HtmlResultError('invalid-url',stage);
       let origin:URL,url:URL;
       try{origin=new URL(access.origin);url=new URL(signed?.relativeUrl??'',origin);}catch{throw new HtmlResultError('invalid-url',stage);}
-      if(typeof signed?.relativeUrl!=='string'||!signed.relativeUrl.startsWith('/api/assets/')||!url.pathname.startsWith('/api/assets/')||signed.relativeUrl.includes('\\')||url.hash||url.origin!==origin.origin||url.username||url.password||!/^https?:$/.test(url.protocol)||typeof signed.expiresAt!=='number'||!Number.isFinite(signed.expiresAt)||signed.expiresAt<=Date.now())throw new HtmlResultError('invalid-url',stage);
+      if(typeof signed?.relativeUrl!=='string'||!signed.relativeUrl.startsWith('/api/assets/')||!url.pathname.startsWith('/api/assets/')||signed.relativeUrl.includes('\\')||url.hash||url.origin!==origin.origin||url.username||url.password||!/^https?:$/.test(url.protocol)||!Number.isFinite(signed.expiresAt)||signed.expiresAt<=Date.now())throw new HtmlResultError('invalid-url',stage);
       stage='download';
       const response=await this.download(url.href);
       if(response.status!==200)throw this.failure({status:response.status},stage);
@@ -90,7 +88,7 @@ export class HtmlResultStore {
   private save(key:string,page:CachedPage):Promise<void>{
     const work=this.writes.catch(()=>{}).then(async()=>{
       if(this.stopped)return;
-      const raw=await this.storage.read('index'),entries:Array<{key:string;bytes:number}>=Array.isArray(raw)?(raw as unknown[]).filter((row):row is {key:string;bytes:number}=>isRecord(row)&&typeof row.key==='string'&&typeof row.bytes==='number'&&/^[a-f0-9]{64}$/.test(row.key)&&Number.isSafeInteger(row.bytes)&&row.bytes>0&&row.bytes<=HTML_RESULT_MAX_BYTES&&row.key!==key).slice(-HTML_CACHE_MAX_ENTRIES):[];
+      const raw=await this.storage.read('index'),entries:Array<{key:string;bytes:number}>=Array.isArray(raw)?raw.filter(row=>row&&/^[a-f0-9]{64}$/.test(row.key)&&Number.isSafeInteger(row.bytes)&&row.bytes>0&&row.bytes<=HTML_RESULT_MAX_BYTES&&row.key!==key).slice(-HTML_CACHE_MAX_ENTRIES):[];
       entries.push({key,bytes:page.bytes});let total=entries.reduce((sum,row)=>sum+row.bytes,0);
       await this.storage.write(key,page);
       const retired:string[]=[];while(total>HTML_CACHE_MAX_BYTES||entries.length>HTML_CACHE_MAX_ENTRIES){const oldest=entries.shift()!;total-=oldest.bytes;retired.push(oldest.key);}

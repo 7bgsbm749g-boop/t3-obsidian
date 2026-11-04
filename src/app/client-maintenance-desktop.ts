@@ -1,5 +1,3 @@
-/* eslint obsidianmd/no-nodejs-modules: ["warn", {"isDesktopOnly": true}] -- This desktop adapter is lazy-loaded; scripts/check-platform-boundaries.mjs and mobile bundle tests prohibit Node imports in the portable entry graph. */
-import {nativeHost} from '../shared/native-host';
 import {randomUUID} from 'node:crypto';
 import type {App} from 'obsidian';
 import {validateClientCommand,type ClientCommand,type ClientCommandResult} from './client-command';
@@ -18,7 +16,7 @@ export class DesktopClientMaintenance {
     if(this.initiated||beforeDispatch&&!beforeDispatch())return false;
     this.initiated=true;
     try{
-      if(!nativeHost(this.app).commands.executeCommandById('app:reload'))throw Error('Obsidian refused the native reload command.');
+      if(!(this.app as any).commands.executeCommandById('app:reload'))throw Error('Obsidian refused the native reload command.');
     }catch(error){this.initiated=false;throw error;}
     return true;
   }

@@ -1,8 +1,7 @@
-import {installDomFactories} from './dom-factories';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 import {reference,tool} from './fixtures/html-result';
 
@@ -10,7 +9,7 @@ const runtime=createRequire(import.meta.url);
 const bundled=build({stdin:{contents:"export * from './src/responses/html-result-view'; export * from './src/responses/html-result-store';",resolveDir:process.cwd()},bundle:true,write:false,format:'cjs',platform:'node',external:['obsidian','@codemirror/*']});
 async function production(){
  const module={exports:{} as any};
- runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal:class{},MarkdownRenderChild:class{cleanup?:()=>void;register(cleanup:()=>void){this.cleanup=cleanup;}},setIcon:()=>{}}:runtime(id),TextEncoder,TextDecoder,URL,console,queueMicrotask});
+ runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal:class{},MarkdownRenderChild:class{cleanup?:()=>void;register(cleanup:()=>void){this.cleanup=cleanup;}},setIcon:()=>{}}:runtime(id),TextEncoder,TextDecoder,URL,console});
  return module.exports;
 }
 
@@ -19,10 +18,7 @@ async function production(){
 class Element {
  children:Element[]=[];parent?:Element;dataset:Record<string,string>={};attrs:Record<string,string>={};events:Record<string,()=>void>={};
  style={height:'',colorScheme:''};className='';hidden=false;disabled=false;clientWidth=728;contentWindow={postMessage(){}};private text='';
- classList={add:(_name:string)=>{},remove:(_name:string)=>{},contains:()=>false,toggle:()=>{}};
- get parentElement(){return this.parent;}
- get isConnected(){return false;}
- closest(){return null;}
+ classList={add:(_name:string)=>{}};
  constructor(readonly tagName:string,readonly ownerDocument:any){}
  set textContent(text:string){this.text=text;this.empty();}get textContent():string{return this.text+this.children.map(child=>child.textContent).join(' ');}
  setAttribute(key:string,value:string){this.attrs[key]=value;}
@@ -41,9 +37,9 @@ function documentFixture(){
  const blobs=new Map<string,Blob>(),revoked:string[]=[],listeners=new Map();let created=0,parses=0;
  const doc:any={createElement:(tag:string)=>new Element(tag,doc),body:{classList:{contains:()=>false}}};
  doc.defaultView={getComputedStyle:()=>({getPropertyValue:()=>'',fontFamily:'sans-serif'}),navigator:{},addEventListener:(type:string,handler:any)=>listeners.set(type,handler),removeEventListener:(type:string)=>listeners.delete(type),
-  MutationObserver:class{observe(){}disconnect(){}},ResizeObserver:class{observe(){}disconnect(){}},Blob,URL:{createObjectURL:(blob:Blob)=>{const url='blob:html-test-'+ ++created;blobs.set(url,blob);return url;},revokeObjectURL:(url:string)=>{blobs.delete(url);revoked.push(url);}},
+  ResizeObserver:class{observe(){}disconnect(){}},Blob,URL:{createObjectURL:(blob:Blob)=>{const url='blob:html-test-'+ ++created;blobs.set(url,blob);return url;},revokeObjectURL:(url:string)=>{blobs.delete(url);revoked.push(url);}},
   DOMParser:class{parseFromString(html:string){parses++;return {head:{children:[],prepend(){}},documentElement:{outerHTML:html}};}}};
- installDomFactories(doc);return {doc,blobs,revoked,listeners,get parses(){return parses;}};
+ return {doc,blobs,revoked,listeners,get parses(){return parses;}};
 }
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 async function loaded(root:Element){for(let i=0;root.dataset.t3HtmlState==='loading'&&i<30;i++)await flush();assert.notEqual(root.dataset.t3HtmlState,'loading');}

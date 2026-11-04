@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext} from 'node:vm';
 import {CodebaseBrowseCache,folderKey} from '../src/projects/codebase-cache';
 import type {CodebaseIO} from '../src/projects/codebase-core';
 class El {
@@ -10,7 +10,7 @@ class El {
   createEl(tag:string,opts:any={}){const el=new El(tag);el.parent=this;el.textContent=opts.text??'';el.addClass(...(opts.cls??'').split(' ').filter(Boolean));for(const [key,value] of Object.entries(opts.attr??{}))el.setAttribute(key,String(value));this.children.push(el);return el;}
   createDiv(opts:any={}){return this.createEl('div',opts);}addClass(...names:string[]){for(const name of names)this.classes.add(name);}removeClass(...names:string[]){for(const name of names)this.classes.delete(name);}toggleClass(name:string,force:boolean){if(force)this.classes.add(name);else this.classes.delete(name);}setAttribute(name:string,value:string){this.attrs.set(name,String(value));}setText(text:string){this.textContent=text;}focus(){this.focused=true;}click(){this.onclick?.({});}
   remove(){if(this.parent)this.parent.children=this.parent.children.filter(el=>el!==this);this.parent=undefined;}get firstChild():El|null{return this.children[0]??null;}get nextSibling():El|null{return this.parent?.children[this.parent.children.indexOf(this)+1]??null;}insertBefore(el:El,before:El|null){el.remove();el.parent=this;const index=before?this.children.indexOf(before):-1;if(index<0)this.children.push(el);else this.children.splice(index,0,el);return el;}
-  querySelectorAll(selector:string){const found:El[]=[];const visit=(el:El)=>{if(selector==='[role="treeitem"]'&&el.attrs.get('role')==='treeitem')found.push(el);for(const child of el.children)visit(child);};for(const child of this.children)visit(child);return found;}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}
+  querySelectorAll(selector:string){const found:El[]=[];const visit=(el:El)=>{if(selector==='[role="treeitem"]'&&el.attrs.get('role')==='treeitem')found.push(el);for(const child of el.children)visit(child);};for(const child of this.children)visit(child);return found;}
 }
 const scope={environmentId:'env',projectId:'project',title:'Project',root:'/outside'};
 const bundle=build({entryPoints:['src/projects/codebase-view.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian']});

@@ -1,4 +1,3 @@
-import {readThreadEvent} from '../../src/connection/thread-events';
 import {Plugin,MarkdownView,MarkdownRenderer,MarkdownRenderChild,setIcon} from 'obsidian';
 import {DirectInlinePreview} from '../../src/responses/direct-inline-preview';
 import {nativeResponses} from '../../src/responses/native-response-manager';
@@ -52,7 +51,7 @@ export default class ThoughtStreamLab extends Plugin {
     await manager.receive(record);this.preview.tick(true);
     const start=Date.now(),at=(n:number)=>new Date(start+n).toISOString();
     callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:sequence,thread:{id:'fixture-thread',projectId:'fixture-project',title:'Thought stream',messages:[{id:'prompt',role:'user',text:'Synthetic task',turnId:'turn',streaming:false,createdAt:at(0)}],activities:[],latestTurn:{turnId:'turn',messageId:'prompt',state:'running'},session:{status:'running',activeTurnId:'turn'}}}});
-    const event=(type:string,payload:any)=>callbacks.item({kind:'event',event:readThreadEvent({sequence:++sequence,aggregateId:'fixture-thread',type,payload})});
+    const event=(type:string,payload:any)=>callbacks.item({kind:'event',event:{sequence:++sequence,aggregateId:'fixture-thread',type,payload}});
     const thinking=(id:string,ordinal:number,text:string,streaming=false)=>event('v2.turn-item.updated',{id,runId:'turn',type:'reasoning',ordinal,text,streaming,startedAt:at(ordinal),updatedAt:at(ordinal)});
     const fold=(leaf:any)=>leaf.view.containerEl.querySelector('.callout[data-callout="t3-progress"]') as HTMLElement|null;
     const groups=(leaf:any)=>Array.from(fold(leaf)?.querySelectorAll<HTMLDetailsElement>('details[data-t3-tool-group]')??[]);

@@ -1,4 +1,3 @@
-import {installDomFactories} from './dom-factories';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { installPaletteChat } from '../src/conversations/palette-chat';
@@ -138,7 +137,7 @@ test('rendering uses literal text, while other rows use their original renderer'
   const { app, modal } = fixture();
   const hook = installPaletteChat(app, () => {});
   const makeElement = (): any => ({
-    classList: { add() {} }, children: [], ownerDocument: installDomFactories({ createElement: () => makeElement() }),
+    classList: { add() {} }, children: [], ownerDocument: { createElement: () => makeElement() },
     appendChild(child: unknown) { this.children.push(child); },
   });
   const element = makeElement();

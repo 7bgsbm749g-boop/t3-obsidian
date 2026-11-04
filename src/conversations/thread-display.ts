@@ -1,5 +1,3 @@
-import {isRecord} from '../shared/values';
-import {hasControlCharacters} from '../shared/values';
 import {validateDestinationSection} from '../notes/destination-section';
 import {commandId} from '../connection/direct';
 import {safeNotePath,type ResponseRequest} from '../responses/response-model';
@@ -10,13 +8,10 @@ import {isT3MessageId} from '../connection/t3-message-id';
 
 export interface ThreadResponseReservation extends EventTarget {messageId:string;responses:Array<{path:string;bindingId:string}>}
 export interface ThreadResponseReservationCommand {version:1;id:string;kind:'reserve-thread-response';source:EventTarget;messageId:string;responses:ThreadResponseReservation['responses']}
-export function validateResponseReservation(input:unknown):ThreadResponseReservationCommand {
-  if(!isRecord(input))throw Error('Invalid command object.');
-  // Retain every command-specific validation below before exposing the domain value.
-  const value=input as unknown as ThreadResponseReservationCommand;
+export function validateResponseReservation(value:any):ThreadResponseReservationCommand {
   const uuid=(id:unknown)=>typeof id==='string'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id);
-  if(value?.version!==1||!uuid(value.id)||value.kind!=='reserve-thread-response'||!value.source||![value.source.threadId,value.source.projectId,value.source.environmentId].every(id=>typeof id==='string'&&id.length>0&&id.length<=200&&!hasControlCharacters(id))||!isT3MessageId(value.messageId))throw Error('Invalid response stream reservation.');
-  if(!Array.isArray(value.responses)||!value.responses.length||value.responses.length>32||value.responses.some(response=>!response||!safeNotePath(response.path)||!uuid(response.bindingId))||new Set(value.responses.map(response=>response.path)).size!==value.responses.length)throw Error('Reserve 1–32 unique response destinations and binding IDs.');
+  if(value?.version!==1||!uuid(value.id)||value.kind!=='reserve-thread-response'||!value.source||![value.source.threadId,value.source.projectId,value.source.environmentId].every(id=>typeof id==='string'&&id.length>0&&id.length<=200&&!/[\x00-\x1f]/.test(id))||!isT3MessageId(value.messageId))throw Error('Invalid response stream reservation.');
+  if(!Array.isArray(value.responses)||!value.responses.length||value.responses.length>32||value.responses.some((response:any)=>!response||!safeNotePath(response.path)||!uuid(response.bindingId))||new Set(value.responses.map((response:any)=>response.path)).size!==value.responses.length)throw Error('Reserve 1–32 unique response destinations and binding IDs.');
   return value;
 }
 export function reserveThreadResponse(reservations:ThreadResponseReservation[],command:ThreadResponseReservationCommand){
@@ -49,10 +44,7 @@ export interface DisplayHost {
   attachDisplay(request:ResponseRequest,path:string):Promise<void>;
   save():Promise<void>;
 }
-export function validateDisplayCommand(input:unknown):ThreadDisplayCommand {
-  if(!isRecord(input))throw Error('Invalid command object.');
-  // Retain every command-specific validation below before exposing the domain value.
-  const value=input as unknown as ThreadDisplayCommand;
+export function validateDisplayCommand(value:any):ThreadDisplayCommand {
   if(!STREAM_COMMANDS.includes(value?.kind)||value.version!==1||!/^[0-9a-f-]{36}$/i.test(value.id??''))throw Error('Invalid thread streaming command.');
   validateDestinationSection(value.destinationSection);
   if(value.kind==='stream-thread'){

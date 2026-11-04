@@ -1,4 +1,3 @@
-import {readMetadataSnapshot,readWireShell} from '../../src/connection/wire-readers';
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
 import SendToT3 from '../../src/app/main';
 import {DeviceResponseManager} from '../../src/responses/device-local-responses';
@@ -35,7 +34,7 @@ export default class StreamReservationLab extends Plugin {
     // the canonical terminal run, while retaining the original runtime result.
     await this.until(async()=>{
       const file=this.app.vault.getFileByPath(this.notePath);if(!file)return false;
-      const saved=await this.app.vault.read(file),snapshot=readMetadataSnapshot(await this.access!.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'));
+      const saved=await this.app.vault.read(file),snapshot=await this.access!.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true');
       const visible=this.app.workspace.getLeavesOfType('markdown').some(leaf=>(leaf.view as MarkdownView).file?.path===this.notePath&&(leaf.view as MarkdownView).contentEl.innerText.includes(marker));
       proof={savedAnswerCount:this.answerCount(saved,marker),frameRemoved:!responseFrame(saved,id),nativeAdopted:visible,terminalRun:snapshot.thread.latestTurn?.state==='completed',turnId:snapshot.thread.latestTurn?.turnId};
       return proof.savedAnswerCount===1&&proof.frameRemoved&&proof.nativeAdopted&&proof.terminalRun;
@@ -47,12 +46,12 @@ export default class StreamReservationLab extends Plugin {
     const connection=desktopDefaults(),environmentId=await desktopEnvironment(connection);
     this.access=await desktopThreadAccess(connection);
     const api=(route:string,payload?:any)=>this.access!.api(route.startsWith('/api/')?route:'/api/orchestration/'+route,payload);
-    const project=(readWireShell(await this.access.api('/api/orchestration/shell'))).projects.find((entry:any)=>entry.id===config.projectId);if(!project)throw Error('The synthetic project is unavailable.');
+    const project=(await this.access.api('/api/orchestration/shell')).projects.find((entry:any)=>entry.id===config.projectId);
     if(project?.workspaceRoot!==path.join(this.root,'workspace'))throw Error('A dedicated synthetic project is required.');
     const seed=crypto.randomUUID();this.threadId=uuid5(seed,'thread');
     this.write('TEMPORARY-T3.json',{threadId:this.threadId,notePaths:[this.notePath]});
     await start(api,{requestId:seed,project:project.id,title:'Synthetic duplicate stream regression',prompt:'Reply with exactly STREAM_IMPORT_SEED_OK. Do not use tools or modify files.'},path.join(this.root,'t3-state'),item=>readNewThreadDefaults(api,this.access!.origin,item));
-    await this.until(async()=>{const snapshot=readMetadataSnapshot(await this.access!.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'));return snapshot.thread.latestTurn?.state==='completed';},'seed run completion');
+    await this.until(async()=>{const snapshot=await this.access!.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true');return snapshot.thread.latestTurn?.state==='completed';},'seed run completion');
     const native=nativeResponses(this.app),notes=deviceNoteIO(this.app),subject:any=new SendToT3(this.app,this.manifest);this.subject=subject;
     const root=(this.app.vault.adapter as any).getFullPath('');
     subject.settings={vaultId:'stream-lab-'+crypto.randomUUID(),threadNoteMode:'free',projects:[project],directProjects:[],paired:[],connection,autoSettleThreads:false,completion:{action:'keep'},completionJobs:[],settlementJobs:[],pending:[],noteThreads:[],noteContexts:[],vaultLocations:[],folderLinkChanges:[],projectCreationLocations:[],responseBindings:{},inlineStreaming:{enabled:true,intermediateMode:'collapse',keepIntermediate:true,finalAnswerFormat:'formatted'},folderLinks:[{id:crypto.randomUUID(),folderPath:'/',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:'',environmentId,self:false}]};
@@ -102,13 +101,13 @@ export default class StreamReservationLab extends Plugin {
     if(this.timer!==undefined)window.clearInterval(this.timer);this.device?.dispose();this.subject?.eventSubscriptions?.stop();await this.subject?.eventHostServer?.dispose();
     const remainingThreadIds:string[]=[];
     try{if(this.threadId&&this.access){
-      const snapshot=readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'));
+      const snapshot=await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true');
       for(const turn of Object.values(snapshot.thread.turns??{}) as any[]){
         if(turn.state==='running')await this.access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:crypto.randomUUID(),threadId:this.threadId,turnId:turn.turnId,createdAt:new Date().toISOString()});
         if(turn.state==='queued')await this.access.api('/api/orchestration/dispatch',{type:'queued-run.cancel',commandId:crypto.randomUUID(),threadId:this.threadId,runId:turn.turnId});
       }
       await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.threadId});
-      let deleted=false;try{deleted=!!(readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}if(!deleted)remainingThreadIds.push(this.threadId);
+      let deleted=false;try{deleted=!!(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true')).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}if(!deleted)remainingThreadIds.push(this.threadId);
     }}catch(error){this.errors.push('Thread cleanup: '+String(error));if(this.threadId)remainingThreadIds.push(this.threadId);}
     await this.access?.close?.();for(const leaf of this.app.workspace.getLeavesOfType('markdown'))leaf.detach();for(const file of this.app.vault.getMarkdownFiles())await this.app.vault.delete(file);
     nativeResponses(this.app).dispose();this.write('CLEANUP.json',{temporaryThreadIds:this.threadId?[this.threadId]:[],remainingThreadIds,remainingNotes:this.app.vault.getMarkdownFiles().map(file=>file.path),errors:this.errors});await pause(250);require('@electron/remote').app.quit();

@@ -54,7 +54,7 @@ for(const timeout of [false,true])test(`stopping a borrowed response ${timeout?'
     creates++;return {origin:'https://test',api:async(_path,payload)=>{
       if(payload){commands.push(payload);if(timeout)return new Promise(()=>{});return {};}
       assert.equal(closes,0,'the shared session is still valid');
-      if(_path.startsWith('/api/orchestration/threads/stopped-thread?')){canonicalReads++;return {thread:{id:'stopped-thread',projectId:'project',messages:[],activities:[],latestTurn:{turnId:'turn',state:'running'},session:{status:'running',activeTurnId:'turn'}}};}
+      if(_path.startsWith('/api/orchestration/threads/stopped-thread?')){canonicalReads++;return {thread:{id:'stopped-thread',messages:[],activities:[],latestTurn:{turnId:'turn',state:'running'},session:{status:'running',activeTurnId:'turn'}}};}
       return {progress:'Other response still streams'};
     },close:()=>{closes++;},trace:(event,reason)=>{if(event==='borrow-released')releases.push(reason!);}};
   });
@@ -72,7 +72,7 @@ test('a borrowed Stop checks the completed original turn without interrupting a 
   const cache=new ThreadAccessCache(async()=>({origin:'https://test',api:async(readPath,payload)=>{
     if(payload){commands.push(payload);return {};}
     assert.equal(closes,0);
-    if(readPath.startsWith('/api/orchestration/threads/stopped-thread?')){canonicalReads++;return {thread:{id:'stopped-thread',projectId:'project',messages:[],activities:[],latestTurn:{turnId:'newer-turn',state:'running'},session:{status:'running',activeTurnId:'newer-turn'},checkpoints:[{turnId:'completed-turn',status:'ready',checkpointRef:'refs/t3/checkpoints/stopped-thread/turn/1',completedAt:'2026-10-10T00:00:00Z'}]}};}
+    if(readPath.startsWith('/api/orchestration/threads/stopped-thread?')){canonicalReads++;return {thread:{id:'stopped-thread',messages:[],activities:[],latestTurn:{turnId:'newer-turn',state:'running'},session:{status:'running',activeTurnId:'newer-turn'},checkpoints:[{turnId:'completed-turn',status:'ready',checkpointRef:'refs/t3/checkpoints/stopped-thread/turn/1',completedAt:'2026-10-10T00:00:00Z'}]}};}
     return {progress:'Other response still streams'};
   },close:()=>{closes++;},trace:(event,reason)=>{if(event==='borrow-released')releases.push(reason!);}}));
   try{

@@ -1,4 +1,3 @@
-import {clockForDocument} from '../shared/clock';
 import type {InlineThreadState} from '../conversations/inline-thread';
 import {reconcileResponseDOM} from './response-dom';
 import {setupDuration} from '../projects/worktree-setup';
@@ -37,7 +36,6 @@ export function completionTime(state:InlineThreadState,turnId:string):string {
 /** Native callouts give editor, reading view and mobile the same bounded fold.
  * Retain explicit user choices when streaming replaces a callout's DOM. */
 export function installResponsePresentation(root:Document,icon?:(element:HTMLElement,name:string)=>void):()=>void {
-  const {setInterval,clearInterval}=clockForDocument(root);
   const choices=new WeakMap<Element,Map<string,boolean>>();
   const retained=new WeakMap<Element,Map<string,HTMLElement>>();
   const retainedTools=new WeakMap<Element,Map<string,HTMLElement>>();
@@ -150,7 +148,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
     // processor. Give those exact command/result blocks the same control.
     for(const pre of Array.from(root.querySelectorAll<HTMLElement>('details[data-t3-tool-group] .send-to-t3-tool pre'))){
       if(pre.querySelector('.copy-code-button'))continue;
-      const button=root.win.createEl('button');button.type='button';button.className='copy-code-button send-to-t3-tool-copy';button.textContent='Copy';button.setAttribute('aria-label','Copy code');pre.appendChild(button);
+      const button=root.createElement('button');button.type='button';button.className='copy-code-button send-to-t3-tool-copy';button.textContent='Copy';button.setAttribute('aria-label','Copy code');pre.appendChild(button);
     }
     for(const element of watched)if(!layout.has(element)){resize?.unobserve(element);watched.delete(element);}
     for(const element of layout)if(!watched.has(element)){resize?.observe(element);watched.add(element);}
@@ -189,7 +187,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
     saved.set(id,detail.hasAttribute('open'));
   };
   const copyTool=(event:Event)=>{
-    const button=(event.target as Element)?.closest?.<HTMLButtonElement>('.send-to-t3-tool-copy');if(!button)return;
+    const button=(event.target as Element)?.closest?.('.send-to-t3-tool-copy') as HTMLButtonElement|null;if(!button)return;
     const code=button.closest('pre')?.querySelector('code');if(!code)return;
     event.preventDefault();event.stopPropagation();
     void navigator.clipboard.writeText(code.textContent??'').then(()=>{button.textContent='Copied';},()=>{button.textContent='Copy failed';});

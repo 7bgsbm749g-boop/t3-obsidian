@@ -1,4 +1,3 @@
-import type {MarkdownView} from 'obsidian';
 import {editorLivePreviewField} from 'obsidian';
 import {Notice,editorInfoField,type App} from 'obsidian';
 import {NoteTabPanel} from '../notes/note-tab-panel';
@@ -8,9 +7,9 @@ import {parseQuestionToken,questionKey,questionSections,type QuestionTarget} fro
 import {QuestionController} from './question-controller';
 
 function buttonLabel(controller:QuestionController,target:QuestionTarget){const view=controller.view(target);return view.status==='submitting'?(view.accepted?'Answer sent':'Submitting…'):view.status==='resolved'?'Answered':'Answer';}
-export function questionButton(controller:QuestionController,target:QuestionTarget,open:(target:QuestionTarget)=>void,doc:Document=activeDocument){
+export function questionButton(controller:QuestionController,target:QuestionTarget,open:(target:QuestionTarget)=>void){
   const untrack=controller.track(target);
-  const button=doc.win.createEl('button');button.className='send-to-t3-question-answer';
+  const button=document.createElement('button');button.className='send-to-t3-question-answer';
   const update=()=>{button.textContent=buttonLabel(controller,target);button.disabled=controller.view(target).status==='resolved';const row=button.closest<HTMLElement>('[data-t3-question], blockquote');if(row)row.hidden=controller.isHidden(target);};
   update();button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();open(target);});
   const stop=controller.subscribe(update);return {button,unsubscribe:()=>{stop();untrack();}};
@@ -25,7 +24,7 @@ export function installQuestionLinks(root:Document,controller:QuestionController
     for(const link of Array.from(root.querySelectorAll<HTMLAnchorElement>('[data-t3-question] a[href^="t3-question:"]'))){
       const target=parseQuestionToken((link.getAttribute('href')??'').slice('t3-question:'.length)),row=link.closest<HTMLElement>('[data-t3-question]'),owner=parseQuestionToken(row?.getAttribute('data-t3-question')??'');
       if(!target||!owner||questionKey(target)!==questionKey(owner))continue;
-      const control=questionButton(controller,target,target=>open(target,control.button),root);link.replaceWith(control.button);controls.set(control.button,control.unsubscribe);
+      const control=questionButton(controller,target,target=>open(target,control.button));link.replaceWith(control.button);controls.set(control.button,control.unsubscribe);
       row!.hidden=controller.isHidden(target);
     }
   };
@@ -76,7 +75,7 @@ export class QuestionModal extends NoteTabPanel {
           input.name=`t3-question-${question.id}`;input.value=option.value??option.label;input.checked=draft.selected?.includes(input.value)??(index===0&&!draft.text&&!question.multiSelect&&!record.command);
           // A default choice is a draft only, never an implicit submission.
           if(input.checked&&!draft.selected?.length){draft={...draft,selected:[input.value]};if(!record.command)this.controller.draft(this.target,question.id,draft);}
-          inputs.push(input);label.createSpan({text:option.label});if(option.description)label.createEl('small',{text:option.description});
+          inputs.push(input);label.createEl('span',{text:option.label});if(option.description)label.createEl('small',{text:option.description});
           input.onchange=()=>{draft={...draft,selected:inputs.filter(i=>i.checked).map(i=>i.value),mode:'options'};this.controller.draft(this.target,question.id,draft);updateCustom();};
         }
         const textarea=question.allowCustomAnswer!==false?section.createEl('textarea',{attr:{'aria-label':question.options.length?`Custom answer for ${question.header}`:question.header,placeholder:question.options.length?'Or write your own answer':'Your answer'}}):undefined;
@@ -104,7 +103,7 @@ export class QuestionModal extends NoteTabPanel {
     // Obsidian restores keyboard focus to the editor on modal close. Its
     // retained cursor may be above the reader's viewport, so prevent that
     // focus restoration from scrolling the note before streaming resumes.
-    const editors=this.app.workspace?.getLeavesOfType('markdown').map(leaf=>(leaf.view as MarkdownView).editor).filter(Boolean)??[];
+    const editors=this.app.workspace?.getLeavesOfType('markdown').map(leaf=>(leaf.view as any).editor).filter(Boolean)??[];
     const positions=editors.map(editor=>({editor,scroll:editor.getScrollInfo?.()}));
     super.close(restoreFocus);
     for(const {editor,scroll} of positions)if(scroll)editor.scrollTo(scroll.left,scroll.top);
@@ -147,17 +146,17 @@ export function questionEditorExtension(controller:QuestionController,open:(targ
     private unsubscribe?:()=>void;
     constructor(readonly target:QuestionTarget){super();}
     eq(other:AnswerWidget){return questionKey(this.target)===questionKey(other.target);}
-    toDOM(view?:EditorView){const path=view&&editorInfoField?view.state.field(editorInfoField,false)?.file?.path:undefined;const result=questionButton(controller,this.target,target=>open(target,path),view?.dom.ownerDocument);this.unsubscribe=result.unsubscribe;return result.button;}
+    toDOM(view?:EditorView){const path=view&&editorInfoField?view.state.field(editorInfoField,false)?.file?.path:undefined;const result=questionButton(controller,this.target,target=>open(target,path));this.unsubscribe=result.unsubscribe;return result.button;}
     destroy(){this.unsubscribe?.();}
     ignoreEvent(){return true;}
   }
   const build=(view:EditorView)=>{
     const doc=view.state.doc.toString(),ranges=[];
     // Obsidian exposes livePreview on the view; source mode keeps ordinary Markdown.
-    const live=view.contentDOM?.closest('.markdown-source-view')?.classList.contains('is-live-preview');
+    const live=(view as any).contentDOM?.closest('.markdown-source-view')?.classList.contains('is-live-preview');
     if(!live)return Decoration.none;
     const regexp=/^> \[Answer\]\(t3-question:([^\s)]+)\)$/gm;
-    for(const match of doc.matchAll(regexp)){const target=parseQuestionToken(match[1]);if(target&&!controller.isDismissed(target))ranges.push(Decoration.replace({widget:new AnswerWidget(target)}).range(match.index+2,match.index+match[0].length));}
+    for(const match of doc.matchAll(regexp)){const target=parseQuestionToken(match[1]);if(target&&!controller.isDismissed(target))ranges.push(Decoration.replace({widget:new AnswerWidget(target)}).range(match.index!+2,match.index!+match[0].length));}
     return Decoration.set(ranges);
   };
   const plugin=ViewPlugin.fromClass(class {

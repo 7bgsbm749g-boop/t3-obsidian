@@ -1,4 +1,3 @@
-import {readWireShell} from '../../src/connection/wire-readers';
 /** Bounded integration smoke against the installed local T3 server.
  * Uses a temporary CLI session; never writes or logs its credential. */
 import assert from 'node:assert/strict';
@@ -17,7 +16,7 @@ async function main(){
   let state:InlineThreadState={messages:[],activities:[]},events=0,snapshots=0;
   const beganAt=new Date().toISOString();
   try{
-    const shell=readWireShell(await access.api('/api/orchestration/shell'));
+    const shell=await access.api('/api/orchestration/shell');
     const project=shell.projects.find((p:any)=>p.workspaceRoot==='/home/ubuntu/projects/send-to-t3-code');assert.ok(project,'Canonical plugin project must exist');
     const defaults=await readNewThreadDefaults(access.api,access.origin,project);
     await access.api('/api/orchestration/dispatch',{type:'thread.create',commandId:randomUUID(),threadId,projectId:project.id,title:'Orchestrator v2 integration smoke',...defaults,interactionMode:'default',branch:null,worktreePath:null,createdAt:beganAt});

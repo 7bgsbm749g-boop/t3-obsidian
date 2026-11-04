@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext} from 'node:vm';
 import {settingsSocket} from './rpc-fixture';
 import {webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
@@ -54,7 +54,7 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
  }
  class Plugin{
   app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,v:any)=>{local=v;},workspace:{getLeavesOfType:()=>[],onLayoutReady:()=>{},on:()=>{}},vault:{read:async()=> 'Account connection test',getMarkdownFiles:()=>[],getName:()=> 'Notes'},metadataCache:{}};
-  async loadData(){return shared.at(-1)??initial;}async saveData(d:any){shared.push(d);}addSettingTab(tab:any){settingsTab=tab;}registerEvent(){}addCommand(){}register(_cleanup:()=>void){}
+  async loadData(){return shared.at(-1)??initial;}async saveData(d:any){shared.push(d);}addSettingTab(tab:any){settingsTab=tab;}registerEvent(){}addCommand(){}
  }
  const api={Plugin,Setting,Platform:{isMobile:true},TFile:File,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,requestUrl};
  const module={exports:{} as any};

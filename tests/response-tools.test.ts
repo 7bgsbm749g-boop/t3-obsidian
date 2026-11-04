@@ -15,7 +15,7 @@ test('v2 web search and T3 thread reads use specific labels with neutral live te
   const state={messages:[],activities:[a('search',1,'tool.updated',{toolCallId:'search',itemType:'web_search',data:{toolName:'web_search',input:'{"query":"Obsidian docs"}'}}),
     a('read',2,'tool.updated',{toolCallId:'read',itemType:'dynamic_tool',data:{toolName:'t3-code.t3_thread_read',input:"{'threadId': 'bc4a870c-6287-59c1-8d17-861e7a9cb050'}"}})]};
   const tools=responseTools(state,['turn']);assert.equal(tools[0].label,'Searching “Obsidian docs”');assert.equal(tools[0].action,'search');assert.equal(tools[1].label,'Reading thread bc4a870c');assert.equal(tools[1].icon,'messages-square');
-  const data=state.activities[0].payload!.data;assert.ok(data&&typeof data==='object'&&'input' in data);data.input='';assert.equal(responseTools(state,['turn'])[0].label,'Searching web');
+  state.activities[0].payload!.data.input='';assert.equal(responseTools(state,['turn'])[0].label,'Searching web');
   const live=renderInlineTurn(state,'turn','thread','running','collapse');assert.doesNotMatch(live,/<strong>Reading thread/);
 });
 test('shell labels match the program while details retain the exact command',()=>{

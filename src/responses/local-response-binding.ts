@@ -19,7 +19,7 @@ export function localResponseBindings(document:string,stored:readonly ResponseRe
     try{
       const request=validateResponseRequest(JSON.parse(decodeURIComponent(match[2])));
       const region=responseRegion(document,request.id);
-      if(request.id!==match[1]||!request.localOnly||seen.has(request.id)||!region||region.from<match.index+match[0].length||document.slice(match.index+match[0].length,region.from).trim())continue;
+      if(request.id!==match[1]||!request.localOnly||seen.has(request.id)||!region||region.from<match.index!+match[0].length||document.slice(match.index!+match[0].length,region.from).trim())continue;
       if(document.slice(region.from,region.to)!==responseAnchor(request.id,document))continue;
       seen.add(request.id);result.push(byId.get(request.id)??request);
     }catch{/* Ordinary Markdown and malformed descriptors cannot start work. */}
@@ -35,7 +35,7 @@ export function localResponseRange(document:string,id:string,stored:readonly Res
   const request=localResponseBindings(document,stored).find(request=>request.id===id);
   if(!request)return;
   const region=responseRegion(document,id)!;
-  const match=[...document.matchAll(/<!-- t3-response-binding:([0-9a-f-]{36}):[^\n]*? -->/gi)].find(match=>match[1]===id&&match.index+match[0].length<=region.from&&!document.slice(match.index+match[0].length,region.from).trim());
+  const match=[...document.matchAll(/<!-- t3-response-binding:([0-9a-f-]{36}):[^\n]*? -->/gi)].find(match=>match[1]===id&&match.index!+match[0].length<=region.from&&!document.slice(match.index!+match[0].length,region.from).trim());
   return {from:match?.index??region.from,to:region.to,request};
 }
 /** Remove only a validated legacy descriptor beside its exact empty anchor. */

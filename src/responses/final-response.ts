@@ -1,4 +1,3 @@
-import {isRecord} from '../shared/values';
 import {contentHash} from './completion';
 import {inlineTurnMessages,type InlineThreadState} from '../conversations/inline-thread';
 import type {ThreadAccess} from '../conversations/thread-stream';
@@ -21,8 +20,8 @@ export async function checkFinalResponse(access:ThreadAccess,threadId:string,sta
   if(!finalResponseKey(state,turnId))return {state,verified:false};
   const message=inlineTurnMessages(state,turnId).at(-1)!;
   const item=await access.api('/api/orchestration/turn-item',{threadId,itemId:message.itemId,...(message.updatedAt?{revision:message.updatedAt}:{})});
-  if(!isRecord(item)||item.updatedAt!==undefined&&typeof item.updatedAt!=='string'||item.id!==message.itemId||item.threadId!==threadId||item.runId!==turnId||item.messageId!==message.id||item.type!=='assistant_message'||item.streaming!==false||item.status!=='completed'||typeof item.text!=='string')throw Error('T3 did not return the final reply for this response.');
+  if(item?.id!==message.itemId||item.threadId!==threadId||item.runId!==turnId||item.messageId!==message.id||item.type!=='assistant_message'||item.streaming!==false||item.status!=='completed'||typeof item.text!=='string')throw Error('T3 did not return the final reply for this response.');
   if(message.updatedAt&&(!item.updatedAt||item.updatedAt<message.updatedAt))throw Error('T3 returned an older final reply.');
-  const corrected={...message,text:item.text,updatedAt:typeof item.updatedAt==='string'?item.updatedAt:undefined,streaming:false};
+  const corrected={...message,text:item.text,updatedAt:item.updatedAt,streaming:false};
   return {state:{...state,messages:state.messages.map(m=>m.id===message.id?corrected:m)},verified:true};
 }

@@ -1,7 +1,3 @@
-import {Buffer} from 'node:buffer';
-import {parseJsonRecord,parseJson} from '../shared/values';
-/* eslint obsidianmd/no-nodejs-modules: ["warn", {"isDesktopOnly": true}] -- This desktop adapter is lazy-loaded; scripts/check-platform-boundaries.mjs and mobile bundle tests prohibit Node imports in the portable entry graph. */
-import {errorCode,toError} from '../shared/values';
 import {promises as fs} from 'node:fs';
 import {join} from 'node:path';
 import {createServer,type Server,type IncomingMessage,type ServerResponse} from 'node:http';
@@ -42,7 +38,7 @@ export class NoteCommandServer {
     await this.atomic(join(this.base,'endpoint.json'),this.endpoint);
   }
   private async atomic(path:string,text:string){const temporary=path+'.'+randomUUID()+'.tmp';try{await fs.writeFile(temporary,text,{mode:0o600,flag:'wx'});await fs.rename(temporary,path);}finally{await fs.rm(temporary,{force:true});}}
-  private async read(path:string){try{return await fs.readFile(path,'utf8');}catch(error:unknown){if(errorCode(error)==='ENOENT')return;throw toError(error);}}
+  private async read(path:string){try{return await fs.readFile(path,'utf8');}catch(error:any){if(error.code==='ENOENT')return;throw error;}}
   private async handle(request:IncomingMessage,response:ServerResponse){
     const send=(status:number,value:unknown)=>{response.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});response.end(JSON.stringify(value));};
     const supplied=Buffer.from(request.headers.authorization??''),expected=Buffer.from('Bearer '+this.token);
@@ -50,8 +46,8 @@ export class NoteCommandServer {
     if(this.stopped||!this.ready()){send(503,{ok:false,error:'The Obsidian plugin is not ready.'});request.resume();return;}
     let id:string|undefined;
     try{
-      const chunks:Buffer[]=[];let size=0;for await(const chunk of request){if(!(Buffer.isBuffer(chunk)))throw Error('Invalid command bytes.');size+=chunk.length;if(size>64_000){send(413,{ok:false,error:'Command is too large.'});return;}chunks.push(Buffer.from(chunk));}
-      const input=parseJsonRecord(Buffer.concat(chunks).toString('utf8')),command=validateAgentCommand(input.command);id=command.id;this.received++;
+      const chunks:Buffer[]=[];let size=0;for await(const chunk of request){size+=chunk.length;if(size>64_000){send(413,{ok:false,error:'Command is too large.'});return;}chunks.push(chunk);}
+      const input=JSON.parse(Buffer.concat(chunks).toString('utf8')),command=validateAgentCommand(input.command);id=command.id;this.received++;
       const result=await this.dispatch(command,input.retry===true);
       send(200,result);
       // A reload can destroy this renderer. Acknowledge only after its durable
@@ -75,7 +71,7 @@ export class NoteCommandServer {
     if(previous!==undefined&&!isDeepStrictEqual(JSON.parse(previous),command))throw Error('This request ID already belongs to different input.');
     if(previous===undefined)await this.atomic(requestPath,JSON.stringify(command));
     const saved=await this.read(resultPath);
-    if(saved!==undefined){const result=parseJson(saved) as AgentCommandResult;if(result.ok||!retry){this.replayed++;return result;}}
+    if(saved!==undefined){const result:AgentCommandResult=JSON.parse(saved);if(result.ok||!retry){this.replayed++;return result;}}
     if(this.stopped||!this.ready())throw Error('The Obsidian plugin is not ready.');
     let result:AgentCommandResult;
     try{this.executed++;result=await this.execute(command);if(result.id!==command.id)throw Error('The command returned a different request ID.');}

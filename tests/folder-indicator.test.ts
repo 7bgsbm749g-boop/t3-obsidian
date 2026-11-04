@@ -1,4 +1,3 @@
-import {installDomFactories} from './dom-factories';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {decorateLinkedFolders,decorateNoteIndicators} from '../src/projects/folder-indicator';
@@ -7,7 +6,7 @@ class FakeElement{
   className='';textContent='';title='';parent?:FakeElement;children:FakeElement[]=[];attrs=new Map<string,string>();
   classList={contains:(value:string)=>this.className.split(' ').includes(value)};
   get parentElement(){return this.parent;}
-  ownerDocument=installDomFactories({createElement:()=>new FakeElement(),createElementNS:()=>new FakeElement()});
+  ownerDocument={createElement:()=>new FakeElement(),createElementNS:()=>new FakeElement()};
   constructor(path?:string){if(path)this.attrs.set('data-path',path);}
   getAttribute(name:string){return this.attrs.get(name)??null;}
   hasAttribute(name:string){return this.attrs.has(name);}

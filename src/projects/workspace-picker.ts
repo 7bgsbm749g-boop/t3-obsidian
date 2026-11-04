@@ -1,5 +1,3 @@
-import {hasControlCharacters} from '../shared/values';
-import {isRecord} from '../shared/values';
 export interface NewWorkspaceFolder {parentPath:string;name:string}
 
 /** Keep the machine and path together: a Windows path must never follow a Linux selection. */
@@ -20,7 +18,7 @@ export function workspaceParentPath(path:string):string {
 
 export function loadProjectCreationLocations(value:unknown):ProjectCreationLocation[] {
   if(!Array.isArray(value))return [];
-  return (value as unknown[]).filter((v):v is ProjectCreationLocation=>isRecord(v)&&typeof v.connectionId==='string'&&typeof v.parentPath==='string'&&!!v.parentPath.trim()&&typeof v.selectedAt==='string'&&Number.isFinite(Date.parse(v.selectedAt))&&(v.environmentId===undefined||typeof v.environmentId==='string')&&(v.deviceId===undefined||typeof v.deviceId==='string'));
+  return value.filter((v):v is ProjectCreationLocation=>!!v&&typeof v.connectionId==='string'&&typeof v.parentPath==='string'&&!!v.parentPath.trim()&&typeof v.selectedAt==='string'&&Number.isFinite(Date.parse(v.selectedAt))&&(v.environmentId===undefined||typeof v.environmentId==='string')&&(v.deviceId===undefined||typeof v.deviceId==='string'));
 }
 export function rememberProjectCreationLocation(locations:ProjectCreationLocation[],location:ProjectCreationLocation):ProjectCreationLocation[] {
   const key=(v:ProjectCreationLocation)=>v.environmentId?'environment:'+v.environmentId:v.connectionId||'device:'+v.deviceId;
@@ -38,7 +36,7 @@ export function projectCreationDefaults(locations:ProjectCreationLocation[],mach
 
 export function workspaceChildPath(parentPath:string,name:string):string {
   if(!parentPath.trim()||parentPath==='~')throw Error('Browse to a parent folder first.');
-  if(!name||name!==name.trim()||name==='.'||name==='..'||(/[\\/<>:"|?*]/.test(name)||hasControlCharacters(name,true))||/[. ]$/.test(name))throw Error('Enter a valid folder name without path separators.');
+  if(!name||name!==name.trim()||name==='.'||name==='..'||/[\\/<>:"|?*\u0000-\u001f\u007f]/.test(name)||/[. ]$/.test(name))throw Error('Enter a valid folder name without path separators.');
   if(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name))throw Error('Choose a folder name that is not reserved by Windows.');
   const separator=parentPath.includes('\\')&&!parentPath.includes('/')?'\\':'/';
   return parentPath.replace(/[\\/]+$/,'')+separator+name;

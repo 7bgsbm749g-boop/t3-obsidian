@@ -6,8 +6,8 @@ import {approvalKey,parseApprovalUrl,type ApprovalTarget,type ApprovalDecision} 
 import {ApprovalController} from './approval-controller';
 import {markdownCodeRanges} from '../responses/reply-html';
 
-export function approvalButton(controller:ApprovalController,target:ApprovalTarget,decision:ApprovalDecision,doc:Document=activeDocument){
-  const button=doc.win.createEl('button');button.className=`send-to-t3-approval-button${decision==='accept'?' mod-cta':''}`;
+export function approvalButton(controller:ApprovalController,target:ApprovalTarget,decision:ApprovalDecision){
+  const button=document.createElement('button');button.className=`send-to-t3-approval-button${decision==='accept'?' mod-cta':''}`;
   const update=()=>{
     const view=controller.view(target),saved=controller.record(target).command,label=decision==='accept'?'Approve':'Deny';
     button.textContent=view.status==='resolved'?'Resolved':view.status==='submitting'&&saved?.decision===decision?'Sending…':saved&&view.status==='error'&&saved.decision===decision?`Retry ${label.toLowerCase()}`:label;
@@ -30,17 +30,17 @@ export function approvalEditorExtension(controller:ApprovalController):Extension
     private unsubscribe?:()=>void;
     constructor(readonly target:ApprovalTarget,readonly decision:ApprovalDecision){super();}
     eq(other:ApprovalWidget){return approvalKey(this.target)===approvalKey(other.target)&&this.decision===other.decision;}
-    toDOM(view?:EditorView){const result=approvalButton(controller,this.target,this.decision,view?.dom.ownerDocument);this.unsubscribe=result.unsubscribe;return result.button;}
+    toDOM(){const result=approvalButton(controller,this.target,this.decision);this.unsubscribe=result.unsubscribe;return result.button;}
     destroy(){this.unsubscribe?.();}
     ignoreEvent(){return true;}
   }
   const build=(view:EditorView)=>{
-    if(!view.contentDOM?.closest('.markdown-source-view')?.classList.contains('is-live-preview'))return Decoration.none;
+    if(!(view as any).contentDOM?.closest('.markdown-source-view')?.classList.contains('is-live-preview'))return Decoration.none;
     const doc=view.state.doc.toString();if(!doc.includes('t3-approval:'))return Decoration.none;
     const code=markdownCodeRanges(doc),ranges=[];
     for(const match of doc.matchAll(/\[(?:Approve|Deny)\]\((t3-approval:[^\s)]+)\)/g)){
-      if(code.some(([from,to])=>match.index>=from&&match.index<to))continue;
-      const parsed=parseApprovalUrl(match[1]);if(parsed)ranges.push(Decoration.replace({widget:new ApprovalWidget(parsed.target,parsed.decision)}).range(match.index,match.index+match[0].length));
+      if(code.some(([from,to])=>match.index!>=from&&match.index!<to))continue;
+      const parsed=parseApprovalUrl(match[1]);if(parsed)ranges.push(Decoration.replace({widget:new ApprovalWidget(parsed.target,parsed.decision)}).range(match.index!,match.index!+match[0].length));
     }
     return Decoration.set(ranges);
   };

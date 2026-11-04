@@ -27,7 +27,7 @@ test('a socket that appears open but drops every frame is confirmed dead before 
 });
 
 test('unary final replies above the former limit work and oversized errors retain their size identity',async()=>{
- const h=fixture(),rpc=await h.open();const accepted=rpc.call('orchestration.getTurnItem',{threadId:'thread',itemId:'item'});h.reply('1',{text:'x'.repeat(4_100_000)});const value=await accepted;assert.ok(value&&typeof value==='object'&&'text' in value&&typeof value.text==='string');assert.equal(value.text.length,4_100_000);
+ const h=fixture(),rpc=await h.open();const accepted=rpc.call('orchestration.getTurnItem',{threadId:'thread',itemId:'item'});h.reply('1',{text:'x'.repeat(4_100_000)});assert.equal((await accepted).text.length,4_100_000);
  const blocked=rpc.call('orchestration.getTurnItem',{threadId:'thread',itemId:'large'}),rejected=assert.rejects(blocked,T3ResponseTooLargeError);h.reply('2',{text:'x'.repeat(8_000_001)});await rejected;assert.equal(rpc.closed,true);assert.equal(h.timers.size,0);
 });
 

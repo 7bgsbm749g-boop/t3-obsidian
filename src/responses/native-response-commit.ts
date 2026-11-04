@@ -1,4 +1,3 @@
-import {parseJson} from '../shared/values';
 import {contentHash} from './completion';
 import {changedEdits} from './coordinated-merge';
 import type {ResponseState} from './response-model';
@@ -17,7 +16,7 @@ export function nativeCommitPath(directory:string,id:string,commitId:string){
 }
 export function readNativeCommitProof(bytes:string,id:string,delivery:NonNullable<ResponseState['delivery']>):NativeCommitProof {
   if(!delivery.proofHash||contentHash(bytes)!==delivery.proofHash)throw Error('Native commit evidence checksum changed.');
-  const proof:NativeCommitProof=parseJson(bytes) as NativeCommitProof;
+  const proof:NativeCommitProof=JSON.parse(bytes);
   if(proof.version!==1||proof.bindingId!==id||proof.commitId!==delivery.commitId||proof.hash!==delivery.hash||typeof proof.document!=='string'||contentHash(proof.document)!==proof.hash||!Array.isArray(proof.ranges)||!proof.ranges.length)throw Error('Native commit evidence does not match this delivery.');
   let end=-1;
   for(const range of proof.ranges){

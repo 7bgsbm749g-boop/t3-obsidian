@@ -1,13 +1,12 @@
-import {records} from '../shared/values';
 import {normalizeFolderLink,normalizeFolderPath,type FolderLink} from './folder-link';
 /** One latest mutation per folder, including unlink tombstones, travels through Sync. */
 export interface FolderLinkChange {folderPath:string;id:string;at:string;link:FolderLink|null}
 export function loadFolderLinkChanges(value:unknown):FolderLinkChange[]{
   if(!Array.isArray(value))return [];
   const result:FolderLinkChange[]=[];
-  for(const item of records(value))try{
-    if(typeof item.folderPath!=='string'||typeof item.id!=='string'||!item.id||typeof item.at!=='string'||!Number.isFinite(Date.parse(item.at)))continue;
-    const folderPath=normalizeFolderPath(item.folderPath),link=item.link===null?null:normalizeFolderLink(item.link as FolderLink);
+  for(const item of value)try{
+    if(typeof item.id!=='string'||!item.id||typeof item.at!=='string'||!Number.isFinite(Date.parse(item.at)))continue;
+    const folderPath=normalizeFolderPath(item.folderPath),link=item.link===null?null:normalizeFolderLink(item.link);
     if(link&&link.folderPath!==folderPath)continue;
     result.push({folderPath,id:item.id,at:new Date(item.at).toISOString(),link});
   }catch{/* Ignore malformed Sync records. */}

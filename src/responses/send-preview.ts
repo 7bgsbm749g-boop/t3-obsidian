@@ -39,7 +39,7 @@ const renderings=new WeakMap<HTMLElement,Component>();
 function disposePreview(element:HTMLElement){renderings.get(element)?.unload();renderings.delete(element);}
 export function sendPreviewElement(document:Document,preview:SendPreview,measure:()=>void=()=>{}){
   const {Component,MarkdownRenderer}=require('obsidian') as typeof import('obsidian');
-  const block=document.win.createDiv();
+  const block=document.createElement('div');
   block.className='markdown-rendered send-to-t3-send-preview';block.contentEditable='false';
   block.setAttribute('aria-label',`${preview.title} · Sending`);
   const child=new Component();child.load();renderings.set(block,child);
@@ -59,7 +59,7 @@ export class SendPreviews {
     let current=this.pending.get(view);
     if(current&&current.file!==view.file){this.hide(view);current=undefined;}
     if(!current){
-      const path=view.file.path,preview:SendPreview={app:view.app,path,title:view.file.basename??path.split('/').at(-1)!.replace(/\.md$/i,''),id:`send:${++nextPreview}`,startedAt:new Date().toISOString()};
+      const path=view.file!.path,preview:SendPreview={app:view.app,path,title:view.file!.basename??path.split('/').at(-1)!.replace(/\.md$/i,''),id:`send:${++nextPreview}`,startedAt:new Date().toISOString()};
       const cm=(view.editor as unknown as {cm?:EditorView})?.cm;
       let clear:()=>void;
       if(view.getMode?.()!=='preview'&&cm?.state){

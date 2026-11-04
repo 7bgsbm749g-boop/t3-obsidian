@@ -1,4 +1,3 @@
-import {parseJsonRecord} from '../shared/values';
 /** A small host identity record avoids downloading the growing settings file. */
 export const vaultIdentityPath=(configDir:string)=>`${configDir}/t3-code/vault-identity.json`;
 export function identityPathForSettings(settingsPath:string):string|undefined{
@@ -7,7 +6,7 @@ export function identityPathForSettings(settingsPath:string):string|undefined{
   return vaultIdentityPath(configDir);
 }
 export function readVaultIdentityRecord(contents:string):string|undefined{
-  try{const record=parseJsonRecord(contents);return record?.version===1&&typeof record.vaultId==='string'&&record.vaultId.length>0&&record.vaultId.length<=512?record.vaultId:undefined;}catch{return undefined;}
+  try{const record=JSON.parse(contents);return record?.version===1&&typeof record.vaultId==='string'&&record.vaultId.length>0&&record.vaultId.length<=512?record.vaultId:undefined;}catch{return undefined;}
 }
 export interface VaultIdentityFiles {
   exists(path:string):Promise<boolean>;

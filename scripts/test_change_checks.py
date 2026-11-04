@@ -123,25 +123,25 @@ class ValidationCacheTests(unittest.TestCase):
     def test_repeat_publish_and_docs_edit_reuse_checks_but_code_dependency_and_environment_changes_do_not(self):
         with patch.object(checks, 'environment', return_value={'node': 'test'}), patch.object(checks, 'checked_command', side_effect=self.command):
             proof = self.validate()
-            self.assertEqual(len(self.commands), 3)
+            self.assertEqual(len(self.commands), 2)
             self.assertEqual(json.loads(proof.read_bytes())['testSuite']['executed'], ['tests/core.test.ts'])
             self.assertEqual(self.validate(), proof)
             checks.verify_validation(proof, self.root, require_build=True)
-            self.assertEqual(len(self.commands), 3)
+            self.assertEqual(len(self.commands), 2)
             (self.root / 'README.md').write_bytes(b'changed docs')
             with self.assertRaisesRegex(SystemExit, 'Source changed'):
                 checks.verify_validation(proof, self.root)
             proof = self.validate()
-            self.assertEqual(len(self.commands), 3)
+            self.assertEqual(len(self.commands), 2)
             self.assertEqual(json.loads(proof.read_bytes())['testSuite']['reused'], ['tests/core.test.ts'])
             (self.root / 'core.ts').write_bytes(b'export const value=3;')
             proof = self.validate()
-            self.assertEqual(len(self.commands), 6)
+            self.assertEqual(len(self.commands), 4)
             (self.root / 'node_modules/package/index.js').write_bytes(b'changed dependency')
             with self.assertRaisesRegex(SystemExit, 'Dependencies or runtime changed'):
                 checks.verify_validation(proof, self.root)
             proof = self.validate()
-            self.assertEqual(len(self.commands), 9)
+            self.assertEqual(len(self.commands), 6)
             with patch.object(checks, 'environment', return_value={'node': 'different'}):
                 with self.assertRaisesRegex(SystemExit, 'Dependencies or runtime changed'):
                     checks.verify_validation(proof, self.root)

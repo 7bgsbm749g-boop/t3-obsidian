@@ -38,7 +38,7 @@ export class RunImportPicker extends FuzzySuggestModal<ImportRun>{
     el.addEventListener('focusin',()=>this.prepare(run,el));
   }
   onOpen(){
-    void super.onOpen();this.modalEl.addClass('send-to-t3-run-picker');
+    super.onOpen();this.modalEl.addClass('send-to-t3-run-picker');
     const doc=this.modalEl.ownerDocument,win=doc.defaultView!;
     this.observer=new win.MutationObserver(()=>{
       if(this.active&&!this.active.row.isConnected)this.clear();

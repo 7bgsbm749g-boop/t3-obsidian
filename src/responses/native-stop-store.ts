@@ -1,4 +1,3 @@
-import {toError} from '../shared/values';
 import {openStateDatabase} from '../storage/local-state';
 import {contentHash} from './completion';
 import {safeNotePath} from './response-model';
@@ -29,22 +28,22 @@ export function nativeStoppedStore(deviceId:string,vaultId:string):NativeStopped
       const db=await openStateDatabase();try{return await new Promise<NativeStoppedReference[]>((resolve,reject)=>{
         const transaction=db.transaction('devices','readonly'),request=transaction.objectStore('devices').get(indexKey);let entries:NativeStoppedReference[]=[],failure:unknown;
         request.onsuccess=()=>{try{entries=index(request.result).entries.map(({id,path,hidden})=>({id,path,hidden}));}catch(error){failure=error;transaction.abort();}};
-        transaction.oncomplete=()=>resolve(entries);transaction.onabort=transaction.onerror=()=>reject(toError(failure??Error('Cannot read the frozen response index.')));
+        transaction.oncomplete=()=>resolve(entries);transaction.onabort=transaction.onerror=()=>reject(failure??Error('Cannot read the frozen response index.'));
       });}finally{db.close();}
     },
     async readAll(ids){
       const selected=ids&&new Set(ids);
       const db=await openStateDatabase();try{return await new Promise<NativeStoppedResponse[]>((resolve,reject)=>{
         const transaction=db.transaction('devices','readonly'),store=transaction.objectStore('devices'),results:NativeStoppedResponse[]=[];let failure:unknown;
-        const request=store.get(indexKey);request.onsuccess=()=>{try{for(const reference of index(request.result).entries){if(selected&&!selected.has(reference.id))continue;const read=store.get(bodyKey(reference.id,reference.hash));read.onsuccess=()=>{const body:unknown=read.result;if(typeof body!=='string'||body.length!==reference.length||contentHash(body)!==reference.hash){failure=Error('A frozen response body needs recovery.');transaction.abort();return;}results.push({id:reference.id,path:reference.path,body,hidden:reference.hidden});};}}catch(error){failure=error;transaction.abort();}};
-        transaction.oncomplete=()=>resolve(results);transaction.onabort=transaction.onerror=()=>reject(toError(failure??Error('Cannot restore frozen responses from this device.')));
+        const request=store.get(indexKey);request.onsuccess=()=>{try{for(const reference of index(request.result).entries){if(selected&&!selected.has(reference.id))continue;const read=store.get(bodyKey(reference.id,reference.hash));read.onsuccess=()=>{const body=read.result;if(typeof body!=='string'||body.length!==reference.length||contentHash(body)!==reference.hash){failure=Error('A frozen response body needs recovery.');transaction.abort();return;}results.push({id:reference.id,path:reference.path,body,hidden:reference.hidden});};}}catch(error){failure=error;transaction.abort();}};
+        transaction.oncomplete=()=>resolve(results);transaction.onabort=transaction.onerror=()=>reject(failure??Error('Cannot restore frozen responses from this device.'));
       });}finally{db.close();}
     },
     async relocate(before,after){
       const db=await openStateDatabase();try{await new Promise<void>((resolve,reject)=>{
         const transaction=db.transaction('devices','readwrite'),store=transaction.objectStore('devices');let failure:unknown;
         const request=store.get(indexKey);request.onsuccess=()=>{try{const previous=index(request.result);store.put({version:1,entries:previous.entries.map(entry=>entry.path===before||entry.path.startsWith(before+'/')?{...entry,path:after+entry.path.slice(before.length)}:entry)},indexKey);}catch(error){failure=error;transaction.abort();}};
-        transaction.oncomplete=()=>resolve();transaction.onabort=transaction.onerror=()=>reject(toError(failure??Error('Cannot move the frozen response index.')));
+        transaction.oncomplete=()=>resolve();transaction.onabort=transaction.onerror=()=>reject(failure??Error('Cannot move the frozen response index.'));
       });}finally{db.close();}
     },
     async write(stop){
@@ -53,7 +52,7 @@ export function nativeStoppedStore(deviceId:string,vaultId:string):NativeStopped
       const db=await openStateDatabase();try{await new Promise<void>((resolve,reject)=>{
         const transaction=db.transaction('devices','readwrite'),store=transaction.objectStore('devices');let failure:unknown;
         const request=store.get(indexKey);request.onsuccess=()=>{try{const previous=index(request.result),read=store.get(key);read.onsuccess=()=>{try{if(read.result!==undefined&&read.result!==stop.body)throw Error('The immutable frozen response changed.');if(read.result===undefined)store.put(stop.body,key);const next={version:1,entries:previous.entries.filter(entry=>entry.id!==stop.id).concat(reference)};store.put(next,indexKey);}catch(error){failure=error;transaction.abort();}};}catch(error){failure=error;transaction.abort();}};
-        transaction.oncomplete=()=>resolve();transaction.onabort=transaction.onerror=()=>reject(toError(failure??Error('Cannot save the frozen response. Free device storage and retry.')));
+        transaction.oncomplete=()=>resolve();transaction.onabort=transaction.onerror=()=>reject(failure??Error('Cannot save the frozen response. Free device storage and retry.'));
       });}finally{db.close();}
     },
   };

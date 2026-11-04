@@ -1,5 +1,3 @@
-import {parseJsonRecord} from '../shared/values';
-/* eslint obsidianmd/no-nodejs-modules: ["warn", {"isDesktopOnly": true}] -- This desktop adapter is lazy-loaded; scripts/check-platform-boundaries.mjs and mobile bundle tests prohibit Node imports in the portable entry graph. */
 import {promises as fs} from 'node:fs';
 import {join} from 'node:path';
 import lockfile from 'proper-lockfile';
@@ -28,9 +26,9 @@ export class EventHostServer {
   }
   async load():Promise<EventState|undefined>{
     const raw=await this.files.read(this.identity.directory+'/state.json');if(!raw)return undefined;
-    const saved=parseJsonRecord(raw);
+    const saved=JSON.parse(raw);
     if(saved.version!==1||eventCanonical(saved.host)!==eventCanonical(this.identity))throw Error('Saved subscriptions belong to a different vault connection machine.');
-    return saved.state as EventState|undefined;
+    return saved.state;
   }
   async save(state:EventState){if(this.stopped||!this.ready())throw Error('Subscription host ownership changed.');await this.files.write(this.identity.directory+'/state.json',JSON.stringify({version:1,host:this.identity,state}));}
   tick(){if(this.work)return this.work;if(this.stopped||!this.active||!this.ready())return Promise.resolve();const work=this.scan();this.work=work;void work.finally(()=>{this.work=undefined;}).catch(()=>{});return work;}
@@ -42,7 +40,7 @@ export class EventHostServer {
       let result:EventCommandResult;
       try{
         const raw=(await this.files.read(path))!;if(raw.length>64_000)throw Error('Subscription request is too large.');
-        const value=parseJsonRecord(raw),command=validateEventCommand(value.command);
+        const value=JSON.parse(raw),command=validateEventCommand(value.command);
         if(value.version!==1||eventCanonical(value.host)!==eventCanonical(this.identity)||eventRequest(this.identity,command).name!==name)throw Error('Subscription request belongs to a different host or has changed bytes.');
         result=await this.execute(command);
       }catch(error){result={id:name.slice(0,36),ok:false,error:error instanceof Error?error.message:String(error)};}

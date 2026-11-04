@@ -1,4 +1,3 @@
-import {hasControlCharacters,isRecord} from '../shared/values';
 import {validateDestinationSection} from '../notes/destination-section';
 import {contentHash} from './completion';
 import {questionTargets} from '../interaction/questions';
@@ -73,15 +72,12 @@ export interface ResponseFiles {
 export const legacyQuestionReply=(state:ResponseState|undefined)=>state?.status==='complete'&&state.questionFollows===undefined&&!!state.body?.includes('> **T3 · Question pending**')&&questionTargets(state.body).length>0;
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export function safeNotePath(path:unknown):path is string {
-  return typeof path==='string'&&path.endsWith('.md')&&!path.includes('\\')&&!(hasControlCharacters(path)||/[:]/.test(path))&&path.split('/').every(p=>!!p&&p!=='.'&&p!=='..'&&!p.startsWith('.'));
+  return typeof path==='string'&&path.endsWith('.md')&&!path.includes('\\')&&!/[\x00-\x1f:]/.test(path)&&path.split('/').every(p=>!!p&&p!=='.'&&p!=='..'&&!p.startsWith('.'));
 }
-export function validateResponseRequest(input:unknown):ResponseRequest {
-  if(!isRecord(input))throw Error('Invalid hosted response job.');
-  // The checks below establish this complete persisted command contract.
-  const value=input as unknown as ResponseRequest;
+export function validateResponseRequest(value:any):ResponseRequest {
   if(value?.localOnly!==undefined&&(value.localOnly!==true||value.version!==4||value.nativeProjection!==true||value.responseContainer!==true))throw Error('Invalid local response binding.');
   if(value?.localStage!==undefined&&(!value.localOnly||![value.localStage.originalHash,value.localStage.stagedHash].every(hash=>typeof hash==='string'&&/^[0-9a-f]{64}$/.test(hash))))throw Error('Invalid local staged edit.');
-  if(value?.importTurn!==undefined){const turn=value.importTurn;if(value.version!==4||turn.messageId!==value.messageId||typeof turn.turnId!=='string'||!turn.turnId||turn.turnId.length>200||!['running','completed','interrupted','error','cancelled'].includes(turn.state)||!Number.isFinite(Date.parse(turn.requestedAt??'')))throw Error('Invalid imported run evidence.');}
+  if(value?.importTurn!==undefined){const turn=value.importTurn;if(value.version!==4||turn.messageId!==value.messageId||typeof turn.turnId!=='string'||!turn.turnId||turn.turnId.length>200||!['running','completed','interrupted','error','cancelled'].includes(turn.state)||!Number.isFinite(Date.parse(turn.requestedAt)))throw Error('Invalid imported run evidence.');}
   if(value?.replyFolders!==undefined)validateReplyFolders(value.replyFolders);
   if(value?.nativeProjection!==undefined&&typeof value.nativeProjection!=='boolean')throw Error('Invalid native projection preference.');
   if(value?.responseContainer!==undefined&&(typeof value.responseContainer!=='boolean'||value.responseContainer&&!value.nativeProjection))throw Error('Invalid response container preference.');
@@ -89,7 +85,7 @@ export function validateResponseRequest(input:unknown):ResponseRequest {
   validateDestinationSection(value?.destinationSection);
   if(value?.initialInput!==undefined){
     const input=value.initialInput,answer=input?.answer;
-    const asyncAnswer=answer&&typeof answer.requestId==='string'&&answer.requestId.length>0&&input.messageId===`async-answer:${answer.requestId}`&&Array.isArray(answer.questions)&&answer.questions.every(question=>question&&typeof question.id==='string'&&typeof question.question==='string')&&(!answer.answers||JSON.stringify(submittedAnswers(answer.answers))===JSON.stringify(answer.answers));
+    const asyncAnswer=answer&&typeof answer.requestId==='string'&&answer.requestId.length>0&&input.messageId===`async-answer:${answer.requestId}`&&Array.isArray(answer.questions)&&answer.questions.every((question:any)=>question&&typeof question.id==='string'&&typeof question.question==='string')&&(!answer.answers||JSON.stringify(submittedAnswers(answer.answers))===JSON.stringify(answer.answers));
     if(!isT3MessageId(input?.messageId)&&!asyncAnswer||answer&&!asyncAnswer||input.messageId!==value.messageId||typeof input.text!=='string'||!input.text.trim()||input.text.length>120_000||input.label!==undefined&&(typeof input.label!=='string'||input.label.length>200))throw Error('Invalid initial response input.');
   }
   if(value?.threadTitle!==undefined&&(typeof value.threadTitle!=='string'||value.threadTitle.length>200))throw Error('Invalid thread title.');
@@ -98,7 +94,7 @@ export function validateResponseRequest(input:unknown):ResponseRequest {
   if(value?.finalAnswerFormat==='raw-markdown'&&![3,4].includes(value.version))throw Error('Raw Markdown requires an updated response writer.');
   if(value?.intermediateMode!==undefined&&!['remove','keep','collapse'].includes(value.intermediateMode))throw Error('Invalid hosted response preference.');
   if(value?.keepIntermediate!==undefined&&typeof value.keepIntermediate!=='boolean')throw Error('Invalid hosted response preference.');
-  if(![1,2,3,4].includes(value?.version)||(value.version!==1&&!uuid.test(value.initialOwner??''))||!uuid.test(value.id??'')||!(isT3MessageId(value.messageId)||typeof value.messageId==='string'&&(/^async-answer:\S{1,2000}$/.test(value.messageId)&&!hasControlCharacters(value.messageId)))||!safeNotePath(value.notePath)||
+  if(![1,2,3,4].includes(value?.version)||(value.version!==1&&!uuid.test(value.initialOwner??''))||!uuid.test(value.id??'')||!(isT3MessageId(value.messageId)||typeof value.messageId==='string'&&/^async-answer:[^\s\x00-\x1f]{1,2000}$/.test(value.messageId))||!safeNotePath(value.notePath)||
     ![value.threadId,value.vaultId,value.projectId,value.threadEnvironmentId,value.createdAt,value.host?.environmentId,value.host?.workspaceRoot,value.host?.directory].every(x=>typeof x==='string'&&x.length>0)||
     !/^[0-9a-f]{64}$/.test(value.initialHash))throw Error('Invalid hosted response job.');
   return value;

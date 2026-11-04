@@ -3,16 +3,14 @@
 // Neither requests nor keys are placed in the synced vault.
 import {openStateDatabase} from './local-state';
 
-export function deviceState<T=unknown>(key:string):Promise<T|undefined>;
-export function deviceState(key:string,value:unknown):Promise<void>;
-export async function deviceState(key:string, value?:unknown):Promise<unknown> {
+export async function deviceState(key:string, value?:unknown):Promise<any> {
   const db=await openStateDatabase();
   try {
     return await new Promise((resolve,reject)=>{
       const transaction=db.transaction('devices',value===undefined?'readonly':'readwrite');
       const store=transaction.objectStore('devices');
       const request=value===undefined?store.get(key):store.put(value,key);
-      transaction.oncomplete=()=>resolve(value===undefined?request.result as unknown:undefined);
+      transaction.oncomplete=()=>resolve(request.result);
       transaction.onabort=()=>reject(new Error('Cannot save local requests. Free device storage and retry.'));
       transaction.onerror=()=>reject(new Error('Cannot access local request storage.'));
     });

@@ -1,4 +1,3 @@
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {elapsedRun} from './response-presentation';
 import {markdownCodeRanges} from './reply-html';
 import {contentHash} from './completion';
@@ -15,11 +14,11 @@ import {stopWorktreeSetup} from '../projects/worktree-setup';
 export function stoppedResponseBody(body:string):string {
   body=clearApprovalControls(body);
   const protectedCode=markdownCodeRanges(body);
-  const questions=[...body.matchAll(/^<!-- t3-question:start:([^\n]+) -->\n([\s\S]*?)\n<!-- t3-question:end:\1 -->$/gm)].filter(match=>parseQuestionToken(match[1])&&!protectedCode.some(([from,to])=>match.index>=from&&match.index<to));
+  const questions=[...body.matchAll(/^<!-- t3-question:start:([^\n]+) -->\n([\s\S]*?)\n<!-- t3-question:end:\1 -->$/gm)].filter(match=>parseQuestionToken(match[1])&&!protectedCode.some(([from,to])=>match.index!>=from&&match.index!<to));
   for(const match of questions.reverse()){
     let text=match[2].split('\n').filter(line=>line!=='> **T3 · Question pending**'&&line!=='> **T3 · Answer needed**'&&line!==`> [Answer](t3-question:${match[1]})`).join('\n');
     if(match[2].startsWith('<div class="send-to-t3-question" data-t3-question="'+match[1]+'">'))text=match[2].slice(match[2].indexOf('</div>')+6,-6);
-    body=body.slice(0,match.index)+text+body.slice(match.index+match[0].length);
+    body=body.slice(0,match.index)+text+body.slice(match.index!+match[0].length);
   }
   // Collapse keeps its thread header when stopped, with a frozen duration.
   const beforeStop=markdownCodeRanges(body);let stopOffset=0;

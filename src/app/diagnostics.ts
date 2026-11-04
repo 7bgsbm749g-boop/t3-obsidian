@@ -1,5 +1,3 @@
-import {isRecord} from '../shared/values';
-import {jsonClone} from '../shared/values';
 export type LogLevel='info'|'warning'|'error';
 export interface DiagnosticEvent {at:string;sequence:number;sessionId:string;deviceId:string;event:string;level:LogLevel;fields:Record<string,unknown>}
 export interface DiagnosticState {schema:1;events:DiagnosticEvent[]}
@@ -55,7 +53,7 @@ export class EventJournal {
   }
   async flush(forcePublish=false){
     const run=this.work.catch(()=>{}).then(async()=>{
-      this.trim();const today=new Date(this.now()).toISOString().slice(0,10);if(this.publishedDay!==today)this.publishAt=0;const snapshot=jsonClone(this.state);
+      this.trim();const today=new Date(this.now()).toISOString().slice(0,10);if(this.publishedDay!==today)this.publishAt=0;const snapshot=JSON.parse(JSON.stringify(this.state));
       try{
         if(this.dirty){this.dirty=false;try{await this.io.save(snapshot);}catch(error){this.dirty=true;throw error;}}
         if(this.io.publish&&(forcePublish||this.now()>=this.publishAt)){await this.io.publish(snapshot.events);this.publishAt=this.now()+30_000;this.publishedDay=today;}
@@ -72,4 +70,4 @@ export class EventJournal {
   }
   async close(){this.closed=true;await this.flush(true);}
 }
-export function validEvent(event:unknown):event is DiagnosticEvent{return Boolean(isRecord(event)&&typeof event.at==='string'&&Number.isFinite(Date.parse(event.at))&&typeof event.sessionId==='string'&&Number.isInteger(event.sequence)&&typeof event.event==='string'&&typeof event.level==='string'&&['info','warning','error'].includes(event.level)&&event.fields&&typeof event.fields==='object');}
+export function validEvent(event:any):event is DiagnosticEvent{return Boolean(event&&typeof event.at==='string'&&Number.isFinite(Date.parse(event.at))&&typeof event.sessionId==='string'&&Number.isInteger(event.sequence)&&typeof event.event==='string'&&['info','warning','error'].includes(event.level)&&event.fields&&typeof event.fields==='object');}

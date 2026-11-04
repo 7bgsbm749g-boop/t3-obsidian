@@ -1,8 +1,0 @@
-{
-  "repository": "https://github.com/obsidianmd/eslint-plugin",
-  "commit": "2c05f10a347f7a01907cc542738409a3302ed358",
-  "sourceArchiveSha256": "e753cc5d89194545a0429f2abc9e5678e86fe5fb3690f825e217588c816f6260",
-  "builder": "scripts/build-review-linter.mjs",
-  "packageVersion": "0.4.2",
-  "archive": "eslint-plugin-obsidianmd-2c05f10a347f.tgz"
-}

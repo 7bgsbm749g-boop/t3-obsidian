@@ -1,5 +1,3 @@
-import {toError} from '../shared/values';
-import {scheduleTimeout as setTimeout} from '../shared/clock';
 import {DirectInlinePreview,type DirectInlineUpdate} from './direct-inline-preview';
 import {localResponseBindings,localResponseRange,withoutLocalResponseBinding} from './local-response-binding';
 import {compactResponseBinding} from './response-binding-data';
@@ -237,7 +235,7 @@ export class LocalResponseManager {
     await this.saveStopped(runtime,body??runtime.update?.body??'');
     let failure:unknown;
     try{if(!runtime.stopAcknowledged&&!runtime.update?.completionVerified)await interruptStoppedResponse(()=>this.io.access(runtime.request.threadEnvironmentId),id,runtime.request.threadId,turnId,10_000,runtime.request.localMessageId??runtime.request.messageId,runtime.request.projectId,runtime.request.createdAt);runtime.stopAcknowledged=true;}catch(error){failure=error;}
-    if(failure)throw toError(failure);
+    if(failure)throw failure;
     return this.status(id)!;
   }
   async cancel(id:string){const runtime=this.jobs.get(id);if(!runtime)return;this.stopLocally(id);await this.saveStopped(runtime,'');}

@@ -1,5 +1,3 @@
-import {jsonClone} from '../shared/values';
-import {hasControlCharacters,isRecord} from '../shared/values';
 import {folderLinkForPath,type FolderLink} from './folder-link';
 import type {Project} from '../app/bridge';
 import {validateReplyFolders,type ReplyFolders} from '../responses/reply-locations';
@@ -12,23 +10,20 @@ export interface FolderCommandResult {
   id:string;ok:boolean;vaultId:string;folderPath:string;directLink:FolderLink|null;effectiveLink:FolderLink|null;
   routing:'linked-project'|'no-project';
 }
-export function isFolderCommand(value:unknown):value is FolderCommand {
-  return isRecord(value)&&typeof value.kind==='string'&&['inspect-folder','link-folder','unlink-folder'].includes(value.kind??'');
+export function isFolderCommand(value:{kind?:string}):value is FolderCommand {
+  return ['inspect-folder','link-folder','unlink-folder'].includes(value.kind??'');
 }
 export function safeFolderPath(value:unknown):value is string {
-  return value==='/'||typeof value==='string'&&value.length>0&&value.length<=2000&&value===value.trim()&&!(hasControlCharacters(value,true)||/[\\:]/.test(value))&&value.split('/').every(part=>!!part&&part!=='.'&&part!=='..'&&!part.startsWith('.'));
+  return value==='/'||typeof value==='string'&&value.length>0&&value.length<=2000&&value===value.trim()&&!/[\\\x00-\x1f\x7f:]/.test(value)&&value.split('/').every(part=>!!part&&part!=='.'&&part!=='..'&&!part.startsWith('.'));
 }
-export function validateFolderCommand(input:unknown):FolderCommand {
-  if(!isRecord(input))throw Error('Invalid Obsidian folder command.');
-  // The checks below establish this complete persisted command contract.
-  const value=input as unknown as FolderCommand;
+export function validateFolderCommand(value:any):FolderCommand {
   if(value?.version!==1||!isFolderCommand(value??{})||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.id??''))throw Error('Invalid Obsidian folder command.');
   if(!safeFolderPath(value.folderPath))throw Error('Choose an existing vault-relative folder; / means the vault root.');
   const fields=['version','id','kind','folderPath',...(value.kind==='link-folder'?['projectId','connectionId','environmentId','mode','relink','replyFolders']:[])];
   if(Object.keys(value).some(key=>!fields.includes(key)))throw Error('Unexpected folder command arguments.');
   if(value.kind==='link-folder'){
     if(value.replyFolders!==undefined){validateReplyFolders(value.replyFolders);if(value.folderPath==='/')throw Error('Use the general settings for vault-root file locations.');}
-    for(const key of ['projectId','connectionId','environmentId'] as const)if(typeof value[key]!=='string'||!value[key].trim()||value[key]!==value[key].trim()||value[key].length>200||hasControlCharacters(value[key],true))throw Error(`Linking requires an explicit ${key}.`);
+    for(const key of ['projectId','connectionId','environmentId'])if(typeof value[key]!=='string'||!value[key].trim()||value[key]!==value[key].trim()||value[key].length>200||/[\x00-\x1f\x7f]/.test(value[key]))throw Error(`Linking requires an explicit ${key}.`);
     if(!['project','self'].includes(value.mode)||typeof value.relink!=='boolean')throw Error('Choose project or self link mode and an explicit relink preference.');
     if(value.folderPath==='/')throw Error('The vault root is not a project link. Choose a folder inside the vault.');
   }
@@ -39,7 +34,7 @@ export function inspectFolderLinks(id:string,vaultId:string,folderPath:string,li
   // A hypothetical child follows exactly the same nearest-ancestor rule as a note.
   const effectiveLink=folderLinkForPath(links,folderPath==='/'?'command-inspection.md':folderPath+'/command-inspection.md')??null;
   const routing=effectiveLink?'linked-project':'no-project';
-  return jsonClone({id,ok:true as const,vaultId,folderPath,directLink,effectiveLink,routing});
+  return JSON.parse(JSON.stringify({id,ok:true,vaultId,folderPath,directLink,effectiveLink,routing}));
 }
 interface Prepared {before:FolderLink|null;after:FolderLink|null;project?:Project;result:FolderCommandResult}
 export interface FolderCommandJournal {command:FolderCommand;prepared?:Prepared;result?:FolderCommandResult}
@@ -50,7 +45,7 @@ export interface FolderCommandHost {
   save(link:FolderLink,project:Project):Promise<void>;unlink(path:string):Promise<void>;
 }
 const same=(a:unknown,b:unknown)=>canonical(a)===canonical(b);
-function canonical(value:unknown):string|undefined {return value&&typeof value==='object'?JSON.stringify(Object.keys(value).sort().map(key=>[key,canonical(Reflect.get(value,key) as unknown)])):JSON.stringify(value);}
+function canonical(value:any):string {return value&&typeof value==='object'?JSON.stringify(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):JSON.stringify(value);}
 /** Persist exact intent before mutation; recover a save whose acknowledgement was lost. */
 export async function executeFolderCommand(input:FolderCommand,host:FolderCommandHost):Promise<FolderCommandResult> {
   const command=validateFolderCommand(input);
@@ -76,7 +71,7 @@ export async function executeFolderCommand(input:FolderCommand,host:FolderComman
   if(command.kind==='link-folder'){
     const unchanged=before?.projectId===project!.id&&before.connectionId===(project!.connectionId??'')&&before.self===(command.mode==='self')&&(!before.environmentId||before.environmentId===command.environmentId)&&before.workspaceRoot===project!.workspaceRoot;
     if(before&&!unchanged&&!command.relink)throw Error('This folder already has a different direct link. Use --relink to deliberately replace it.');
-    after={id:unchanged?before.id:command.id,folderPath:command.folderPath,connectionId:project!.connectionId??'',projectId:project!.id,projectTitle:project!.title,workspaceRoot:project!.workspaceRoot,self:command.mode==='self',vaultId:host.vaultId,environmentId:command.environmentId};
+    after={id:unchanged?before!.id:command.id,folderPath:command.folderPath,connectionId:project!.connectionId??'',projectId:project!.id,projectTitle:project!.title,workspaceRoot:project!.workspaceRoot,self:command.mode==='self',vaultId:host.vaultId,environmentId:command.environmentId};
     if(command.replyFolders??before?.replyFolders)after.replyFolders=validateReplyFolders((command.replyFolders??before?.replyFolders)!);
   }
   if(journal.prepared&&!same(after,journal.prepared.after))throw Error('Verified project metadata changed since preparation. Inspect it and use a new request ID.');

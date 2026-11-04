@@ -1,4 +1,3 @@
-import {isRecord,records} from '../shared/values';
 import type {Project} from '../app/bridge';
 import type {T3Api} from '../connection/t3-rpc';
 
@@ -12,9 +11,9 @@ export const isNoProjectKey=(key?:string)=>key===NO_PROJECT||!!key?.startsWith(N
 /** Use T3's own backing record; its IDs remain valid for history and replies. */
 export async function ensureNoProject(api:T3Api):Promise<Project>{
   const result=await api('/api/orchestration/no-project',{});
-  if(!isRecord(result)||typeof result.projectId!=='string'||!result.projectId)throw Error('This T3 machine does not support threads without a project. Update T3 and retry.');
+  if(typeof result?.projectId!=='string'||!result.projectId)throw Error('This T3 machine does not support threads without a project. Update T3 and retry.');
   const shell=await api('/api/orchestration/shell');
-  const project=isRecord(shell)?records(shell.projects).find(project=>project.id===result.projectId):undefined;
-  if(!project||typeof project.id!=='string'||typeof project.title!=='string'||typeof project.workspaceRoot!=='string'||!project.workspaceRoot)throw Error('T3 has not returned its No project workspace. Try again.');
+  const project=shell.projects?.find((project:any)=>project.id===result.projectId);
+  if(!project||typeof project.title!=='string'||typeof project.workspaceRoot!=='string'||!project.workspaceRoot)throw Error('T3 has not returned its No project workspace. Try again.');
   return {id:project.id,title:'No project',workspaceRoot:project.workspaceRoot};
 }

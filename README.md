@@ -1,6 +1,6 @@
-# T3 Code
+# t3-obsidian
 
-The **t3-obsidian** plugin brings [T3 Code](https://github.com/pingdotgg/t3code) into your Obsidian notes. Send a note or selection to an agent, ask questions in the editor, and read replies as they arrive.
+Bring [T3 Code](https://github.com/pingdotgg/t3code) into your Obsidian notes. Send a note or selection to an agent, ask questions in the editor, and read replies as they arrive.
 
 The plugin appears as **T3 Code** in Obsidian. This is an independent community plugin, with support for desktop and mobile.
 

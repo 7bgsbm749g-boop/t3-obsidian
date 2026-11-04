@@ -1,4 +1,3 @@
-import {isRecord,parseJson} from '../shared/values';
 import {contentHash} from '../responses/completion';
 import type {InlineThreadState} from './inline-thread';
 
@@ -12,17 +11,17 @@ export interface InlineWorktreeHandoff {
 const machineMessage=/^message:mcp:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}:worktree-continuation:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const handoffTool=/^(?:t3-code\.|mcp__t3[_-]code__)?t3_worktree_handoff$/;
 const date=(value:unknown):value is string=>typeof value==='string'&&Number.isFinite(Date.parse(value));
-function object(value:unknown):Record<string,unknown>|undefined {if(typeof value==='string')try{return object(parseJson(value));}catch{return undefined;}return isRecord(value)?value:undefined;}
+function object(value:any):any {if(typeof value==='string')try{return JSON.parse(value);}catch{return undefined;}return value;}
 
-export function worktreeHandoff(item:unknown):InlineWorktreeHandoff|undefined {
-  if(!isRecord(item)||item.type!=='dynamic_tool'||typeof item.toolName!=='string'||!handoffTool.test(item.toolName)||typeof item.id!=='string'||typeof item.runId!=='string'||!date(item.startedAt))return;
+export function worktreeHandoff(item:any):InlineWorktreeHandoff|undefined {
+  if(item?.type!=='dynamic_tool'||!handoffTool.test(item.toolName??'')||typeof item.id!=='string'||typeof item.runId!=='string'||!date(item.startedAt))return;
   const input=object(item.input),prompt=input?.continuationPrompt;
-  if(!input||typeof prompt!=='string'||!prompt.trim())return;
-  const raw=object(item.output),block=Array.isArray(raw?.content)&&raw.content.length===1?raw.content[0] as unknown:undefined,output=isRecord(block)&&block.type==='text'?object(block.text):raw,continuation=object(output?.continuation);
+  if(typeof prompt!=='string'||!prompt.trim())return;
+  const raw=object(item.output),output=Array.isArray(raw?.content)&&raw.content.length===1&&raw.content[0]?.type==='text'?object(raw.content[0].text):raw,continuation=output?.continuation;
   const successful=item.status==='completed'&&typeof output?.worktreePath==='string'&&output.branch===input.branch;
   const completedAt=date(item.completedAt)?item.completedAt:item.status==='completed'&&date(item.updatedAt)?item.updatedAt:undefined;
   const status=successful&&completedAt&&continuation?.status==='scheduled'?'scheduled':successful&&continuation?.status==='skipped'?'skipped':
-    typeof item.status==='string'&&['failed','cancelled'].includes(item.status)||continuation?.status==='failed'?'failed':item.status==='interrupted'?'interrupted':'pending';
+    ['failed','cancelled'].includes(item.status)||continuation?.status==='failed'?'failed':item.status==='interrupted'?'interrupted':'pending';
   return {id:item.id,sourceTurnId:item.runId,promptHash:contentHash(prompt),startedAt:item.startedAt,
     ...(completedAt?{completedAt}:{}),status};
 }

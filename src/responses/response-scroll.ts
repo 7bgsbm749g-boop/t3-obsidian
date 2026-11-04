@@ -1,4 +1,3 @@
-import {editorCM} from '../shared/native-editor';
 import type {MarkdownView} from 'obsidian';
 import type {ResponseProjection} from './native-response-projection';
 import {ResponseHeightGuard} from './response-height';
@@ -61,7 +60,7 @@ export class ResponseScroll {
     if(window.ResizeObserver)this.resize=new window.ResizeObserver(this.updated);
   }
   private mode(){return this.view.getMode()+':'+!!this.view.contentEl?.querySelector('.markdown-source-view.is-live-preview');}
-  private scroller(){return this.view.getMode()==='preview'?this.view.contentEl?.querySelector<HTMLElement>('.markdown-preview-view'):editorCM(this.view.editor)?.scrollDOM;}
+  private scroller(){return this.view.getMode()==='preview'?this.view.contentEl?.querySelector<HTMLElement>('.markdown-preview-view'):(this.view.editor as any)?.cm?.scrollDOM as HTMLElement|undefined;}
   private range(key:string){
     if(!key.endsWith(':active'))return;
     const projection=this.projection(),matches=projection.ranges.filter(range=>projection.display.slice(range.displayFrom,range.displayTo).includes(`data-t3-fold="${key}"`));
@@ -122,7 +121,7 @@ export class ResponseScroll {
     this.frame=window.requestAnimationFrame(time=>{
       this.frame=undefined;if(this.following!==following)return;
       if(this.view.file!==this.file||!this.view.contentEl.isConnected||this.view.contentEl.getClientRects?.().length===0){this.pause();return;}
-      const cm=editorCM(this.view.editor);
+      const cm=(this.view.editor as any)?.cm;
       const range=this.range(following.key);if(!range){this.stop();return;}
       const scroller=this.scroller();
       if(!scroller)return;

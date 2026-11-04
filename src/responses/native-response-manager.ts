@@ -1,6 +1,3 @@
-import {isRecord,toError} from '../shared/values';
-import {nativeMarkdownView} from '../shared/native-editor';
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {contentHash} from './completion';
 import {responseIds,containsResponseBoundary} from './response-container';
 import {stoppedResponseBody} from './response-stop';
@@ -11,7 +8,7 @@ import type {Transaction} from '@codemirror/state';
 import {NativeResponseView} from './native-response-view';
 import {responseAnchor,responseRegion,type LocalResponse} from './native-response-projection';
 import type {ResponseRecord} from './response-record';
-import {regionBody,initialRegion,renameInlineHeader} from '../conversations/inline-thread';
+import {regionBody,initialRegion,startMarker,endMarker,renameInlineHeader} from '../conversations/inline-thread';
 import {logFailure} from '../app/diagnostics';
 import {nativeCommitMatches,readNativeCommitProof,type NativeCommitProof} from './native-response-commit';
 import type {DirectInlineUpdate} from './direct-inline-preview';
@@ -116,8 +113,8 @@ export class NativeResponseManager {
   }
   configurePreviewCache(vaultId:string,saved:unknown,save:(snapshot:NativePreviewSnapshot)=>Promise<void>){
     this.stopKey=`t3-local-response-stops-v1:${vaultId}`;
-    const stops:unknown=this.app.loadLocalStorage?.(this.stopKey);
-    if(Array.isArray(stops))for(const stop of stops as unknown[])if(isRecord(stop)&&typeof stop.id==='string'&&typeof stop.path==='string'&&typeof stop.body==='string'&&typeof stop.hidden==='boolean')this.localStops.set(stop.id,stop as unknown as NativeStoppedResponse);
+    const stops=this.app.loadLocalStorage?.(this.stopKey);
+    if(Array.isArray(stops))for(const stop of stops)if(typeof stop?.id==='string'&&typeof stop.path==='string'&&typeof stop.body==='string'&&typeof stop.hidden==='boolean')this.localStops.set(stop.id,stop);
     this.previewVault=vaultId;this.savePreviews=save;this.cached.clear();this.reconnecting.clear();
     for(const entry of loadNativePreviews(saved,vaultId)){this.cached.set(entry.id,entry);this.reconnecting.add(entry.id);}
     if(typeof this.app.workspace?.getLeavesOfType==='function')this.refresh();
@@ -201,7 +198,7 @@ export class NativeResponseManager {
     if(this.pendingStops.size||this.stoppedRestore)throw Error('Waiting for durable frozen response storage before reloading.');
     if(this.finalSaveQueues.size)throw Error('Waiting for a final response save before reloading.');
     if(this.previewSaveFailed)throw Error('Waiting for durable response recovery before reloading.');
-    for(const adapter of this.views.values()){
+    for(const [view,adapter] of this.views){
       if(adapter.conflictRecord())throw Error('Waiting for the saved note or response completion evidence before reloading.');
       for(const id of adapter.responseIds()){
         if(this.localStops.has(id)||this.cached.has(id)||this.records.get(id)?.finalWriter||this.deviceCommits.has(id))continue;
@@ -419,12 +416,11 @@ export class NativeResponseManager {
     return document;
   }
   installLoading(prototype:MarkdownView){
-    // eslint-disable-next-line @typescript-eslint/unbound-method, @typescript-eslint/no-this-alias -- Capture the original identity for exact restoration; each invocation uses the native receiver with .call().
     const original=prototype.setViewData,manager=this;
     if(typeof original!=='function')return ()=>{};
     let active=true;
     const wrapped:MarkdownView['setViewData']=function(this:MarkdownView,incoming,clear){
-      if(active&&!manager.view(this)&&this.file&&this.getState?.().source!==true&&(incoming.includes('data-t3-tool-group=')&&incoming.includes('send-to-t3-tool-group-content')||hasSavedHistory(incoming))){
+      if(active&&!manager.view(this)&&this.file&&(this as any).getState?.().source!==true&&(incoming.includes('data-t3-tool-group=')&&incoming.includes('send-to-t3-tool-group-content')||hasSavedHistory(incoming))){
         try{manager.wrap(this,incoming,{set:original,clear});return;}
         catch(error){
           // A damaged pre-existing note must remain readable. Fall back only
@@ -573,7 +569,7 @@ export class NativeResponseManager {
     const panes=this.nativePanes(path);
     if(panes.length!==fence.panes.size||panes.some(view=>fence.panes.get(view)!==view.file))fence.invalid=true;
     return fence.sealed&&!fence.invalid&&!fence.failure&&panes.every(view=>{
-      const adapter=this.view(view),member=adapter&&fence.members.get(adapter);return !!member?.ready&&!nativeMarkdownView(view).saving;
+      const adapter=this.view(view),member=adapter&&fence.members.get(adapter);return !!member?.ready&&!(view as any).saving;
     });
   }
   reviewSaved(path:string,disk:string){
@@ -593,7 +589,7 @@ export class NativeResponseManager {
     try{
       for(;;){
         this.admitFinalSavePanes(fence);await Promise.all([...fence.members.values()].map(member=>member.work));
-        if(fence.failure)throw toError(fence.failure);
+        if(fence.failure)throw fence.failure;
         const panes=this.nativePanes(path);
         if(panes.some(view=>!this.view(view)||!fence.members.get(this.view(view)!)?.ready))continue;
         fence.panes=new Map(panes.map(view=>[view,view.file]));fence.sealed=true;

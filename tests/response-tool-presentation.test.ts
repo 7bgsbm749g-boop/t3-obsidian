@@ -1,4 +1,3 @@
-import {installDomFactories} from './dom-factories';
 import {streamBlocks} from '../src/responses/stream-block';
 import {historyFixture} from './fixtures/stream-history';
 import {containerBody} from '../src/responses/response-container';
@@ -76,7 +75,7 @@ test('live and stopped summaries are preserved without changing lifecycle status
 });
 class FakeElement {
  children:FakeElement[]=[];parent?:FakeElement;attrs:Record<string,string>={};events=new Map<string,Set<()=>unknown>>();open=false;isConnected=true;className='';textContent='';
- ownerDocument=installDomFactories({createElement:()=>new FakeElement()});
+ ownerDocument={createElement:()=>new FakeElement()};
  constructor(public tag='div'){}
  get childNodes(){return this.children;}
  append(...children:FakeElement[]){for(const child of children){child.parent=this;this.children.push(child);}}

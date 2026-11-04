@@ -1,4 +1,3 @@
-import {expectRecord} from '../wire-fixture';
 import {Plugin,MarkdownView,TFile} from 'obsidian';
 import {CompletionGlow} from '../../src/responses/completion-glow';
 import {completionSource,noteIndicators,type ExplorerResponse} from '../../src/responses/explorer-responses';
@@ -36,8 +35,8 @@ export default class CompletionReadLab extends Plugin {
       let responses:ExplorerResponse[]=paths.map((notePath,index)=>({id:'synthetic-'+index,notePath,epoch:1,revision:1,active:false,input:false,complete:true,completionId:'run',completion:{...completion}}));
       this.glow=new CompletionGlow(undefined,value=>{saved=value;},{changed:()=>this.indicators?.refresh(),access:async()=>({origin:'https://synthetic.invalid',api:async(route,command)=>{
         if(route==='/api/orchestration/shell')return {threads:[{...thread}]};
-        if(route!=='/api/orchestration/dispatch'||expectRecord(command).type!=='thread.visit')throw Error('Unexpected synthetic operation.');
-        visits.push({...expectRecord(command)});if(Date.parse(String(expectRecord(command).visitedAt))>Date.parse(thread.lastVisitedAt))thread.lastVisitedAt=String(expectRecord(command).visitedAt);
+        if(route!=='/api/orchestration/dispatch'||command.type!=='thread.visit')throw Error('Unexpected synthetic operation.');
+        visits.push({...command});if(Date.parse(command.visitedAt)>Date.parse(thread.lastVisitedAt))thread.lastVisitedAt=command.visitedAt;
         return {sequence:visits.length};
       }})});
       this.glow.observe(responses);await this.glow.refresh();

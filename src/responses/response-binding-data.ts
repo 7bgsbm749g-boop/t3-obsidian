@@ -1,4 +1,3 @@
-import {isRecord,parseJson} from '../shared/values';
 import {validateResponseRequest,type ResponseRequest} from './response-model';
 import {validSteeringInput} from '../conversations/inline-steering';
 
@@ -8,26 +7,26 @@ const keys=['initialOwner','localMessageId','localStage','importTurn','replyFold
 /** Shared routing and user choices only. Checkpoints, received prose and final
  * recovery bodies remain in the device's existing local stores. */
 export function compactResponseBinding(request:ResponseRequest):ResponseRequest {
-  const value:Record<string,unknown>={version:4,localOnly:true,nativeProjection:true,responseContainer:true};
+  const value:any={version:4,localOnly:true,nativeProjection:true,responseContainer:true};
   for(const key of keys)if(request[key]!==undefined)value[key]=request[key];
   value.host={environmentId:request.host.environmentId,workspaceRoot:request.host.workspaceRoot,directory:request.host.directory,...(request.host.connectionId?{connectionId:request.host.connectionId}:{})};
   if(request.localSteering?.length)value.localSteering=request.localSteering.map(input=>{
     if(!validSteeringInput(input))throw Error('Invalid saved response input.');
     return {messageId:input.messageId,text:input.text,before:[],...(input.selection?{selection:input.selection}:{}),...(input.selections?{selections:input.selections}:{}),...(input.sourceResponseId?{sourceResponseId:input.sourceResponseId}:{}),...(input.confirmed?{confirmed:true}:{}),...(input.label?{label:input.label}:{}),...(input.createdAt?{createdAt:input.createdAt}:{})};
   });
-  return validateResponseRequest(parseJson(JSON.stringify(validateResponseRequest(value))));
+  return JSON.parse(JSON.stringify(validateResponseRequest(value)));
 }
 export function loadResponseBindingData(value:unknown):ResponseBindingData {
   const result:ResponseBindingData={};
-  if(!isRecord(value))return result;
+  if(!value||typeof value!=='object'||Array.isArray(value))return result;
   for(const [id,entry] of Object.entries(value))try{
-    if(!isRecord(entry)||entry.version!==1||typeof entry.clock!=='number'||!Number.isSafeInteger(entry.clock)||entry.clock<0||typeof entry.actor!=='string'||!entry.actor||entry.actor.length>200||!isRecord(entry.request)||entry.request.localOnly!==true)continue;
-    const request=compactResponseBinding(validateResponseRequest(entry.request));if(request.id!==id)continue;
+    if(entry?.version!==1||!Number.isSafeInteger(entry.clock)||entry.clock<0||typeof entry.actor!=='string'||!entry.actor||entry.actor.length>200||entry.request?.localOnly!==true)continue;
+    const request=compactResponseBinding(entry.request);if(request.id!==id)continue;
     result[id]={version:1,clock:entry.clock,actor:entry.actor,request};
   }catch{/* Invalid settings never create a response or replace note text. */}
   return result;
 }
-const canonical=(value:unknown):string=>JSON.stringify(value,(_key,child:unknown)=>isRecord(child)?Object.fromEntries(Object.keys(child).sort().map(key=>[key,child[key]])):child);
+const canonical=(value:any):string=>JSON.stringify(value,(_key,child)=>child&&typeof child==='object'&&!Array.isArray(child)?Object.fromEntries(Object.keys(child).sort().map(key=>[key,child[key]])):child);
 export function mergeResponseBindingData(...sources:unknown[]):ResponseBindingData {
   const result:ResponseBindingData={};
   for(const source of sources)for(const [id,next] of Object.entries(loadResponseBindingData(source))){

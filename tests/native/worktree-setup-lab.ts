@@ -1,4 +1,3 @@
-import {readThreadSnapshot} from '../../src/connection/wire-types';
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
 import {DirectInlinePreview} from '../../src/responses/direct-inline-preview';
 import {nativeResponses} from '../../src/responses/native-response-manager';
@@ -40,7 +39,7 @@ export default class WorktreeSetupLab extends Plugin {
   let callbacks!:ThreadStreamCallbacks,sequence=20,lastBody='';
   const watch:typeof watchThread=(_id,_access,next)=>{callbacks=next;return {stop:()=>{}};};
   this.preview=new DirectInlinePreview(record,async()=>{throw Error('No network in setup fixture');},update=>{lastBody=update.body;manager.stream(update);},watch);await manager.receive(record);this.preview.tick(true);
-  callbacks.item({kind:'snapshot',snapshot:readThreadSnapshot(normalizeV2Snapshot({snapshotSequence:sequence,projection:{thread:{id:'fixture-thread',projectId:'fixture-project',title:'Worktree setup'},messages:[{id:'prompt',role:'user',runId:'run',text:'Synthetic task',streaming:false,createdAt:at(0)}],runs:[{id:'run',ordinal:1,userMessageId:'prompt',status:'preparing',requestedAt:at(0)}],runtimeRequests:[],turnItems:[{...preparationItem,status:'running',startedAt:at(0),completedAt:null,updatedAt:at(0)}]}}))});
+  callbacks.item({kind:'snapshot',snapshot:normalizeV2Snapshot({snapshotSequence:sequence,projection:{thread:{id:'fixture-thread',projectId:'fixture-project',title:'Worktree setup'},messages:[{id:'prompt',role:'user',runId:'run',text:'Synthetic task',streaming:false,createdAt:at(0)}],runs:[{id:'run',ordinal:1,userMessageId:'prompt',status:'preparing',requestedAt:at(0)}],runtimeRequests:[],turnItems:[{...preparationItem,status:'running',startedAt:at(0),completedAt:null,updatedAt:at(0)}]}})});
   const base={...completedSetup,startedAt:at(0),endedAt:null,phase:'running' as const,sequence:1,stages:completedSetup.stages.map(s=>({...s,startedAt:null,endedAt:null,status:'pending' as const}))};
   const update=(value:any)=>callbacks.item({kind:'event',event:{type:'thread.worktree-setup',aggregateId:'fixture-thread',payload:value}});
   const panel=(leaf:any)=>leaf.view.containerEl.querySelector('.send-to-t3-worktree-setup') as HTMLElement|null;

@@ -1,4 +1,3 @@
-import {readWireShell} from '../../src/connection/wire-readers';
 import assert from 'node:assert/strict';
 import {readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
@@ -15,7 +14,7 @@ async function main(){
   const beforeNew=await json('before-new.json'),beforePrevious=await json('before-previous.json'),baseline=await json('baseline-nonstream.json');
   assert.equal(beforeNew.ok,false);assert.equal(beforePrevious.ok,false);
   for(const failure of [beforeNew,beforePrevious])assert.match(failure.error,/streaming host no longer matches/);
-  const shell=readWireShell(await api('/api/orchestration/shell'));assert.ok(!shell.threads.some((t:any)=>t.id===commandId(beforeNew.id,'thread')),'Failed preparation must not create a thread');
+  const shell=await api('/api/orchestration/shell');assert.ok(!shell.threads.some((t:any)=>t.id===commandId(beforeNew.id,'thread')),'Failed preparation must not create a thread');
   const old=await readInlineSnapshot(access,baseline.threadId,lab.projectId);
   assert.ok(!old.thread.messages.some((m:any)=>m.id===commandId(beforePrevious.id,'message')),'Failed previous send must not dispatch');
   const newResult=await json('after-new.json'),previous=await json('after-previous.json');assert.equal(newResult.ok,true);assert.equal(previous.ok,true);assert.equal(previous.threadId,newResult.threadId);

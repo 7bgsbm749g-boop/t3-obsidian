@@ -20,7 +20,7 @@ test('frozen body and tiny index survive a new store instance and identical body
   try{await h.store.write(h.stop);await h.store.write({...h.stop,path:'Moved.md'});}
   finally{IDBObjectStore.prototype.put=put;}
   assert.equal(bodyWrites,1);assert.deepEqual(await nativeStoppedStore(h.device,h.vault).readAll(),[{...h.stop,path:'Moved.md'}]);
-  const index=await deviceState<{entries:{hash:string;length:number}[]}>(h.indexKey);assert.ok(index);assert.ok(JSON.stringify(index).length<512);assert.doesNotMatch(JSON.stringify(index),/Preserved tool output/);assert.equal(index.entries[0].hash,contentHash(h.stop.body));assert.equal(index.entries[0].length,h.stop.body.length);
+  const index=await deviceState(h.indexKey);assert.ok(JSON.stringify(index).length<512);assert.doesNotMatch(JSON.stringify(index),/Preserved tool output/);assert.equal(index.entries[0].hash,contentHash(h.stop.body));assert.equal(index.entries[0].length,h.stop.body.length);
 });
 
 test('an index-write failure aborts both the new body and its index, then a retry restores the complete record',async()=>{

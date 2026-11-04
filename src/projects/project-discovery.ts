@@ -1,4 +1,4 @@
-import {sha256} from '@noble/hashes/sha2';
+import {sha256} from '@noble/hashes/sha256';
 import type {Project} from '../app/bridge';
 
 export interface ProjectSource {

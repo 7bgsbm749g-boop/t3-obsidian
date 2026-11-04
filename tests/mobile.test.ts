@@ -3,7 +3,7 @@ import { deviceState } from '../src/storage/device-state';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext} from 'node:vm';
 import {webcrypto,createHash} from 'node:crypto';
 import {contentHash,initialMessageId} from '../src/responses/completion';
 import {settingsSocket} from './rpc-fixture';
@@ -19,12 +19,12 @@ test('mobile upgrade removes old credentials and ends uncertain sends without re
  class Plugin{
   app={loadLocalStorage:(key:string)=>key==='send-to-t3-code-device-v1'?local:localValues.get(key),saveLocalStorage:(key:string,v:any)=>{if(key==='send-to-t3-code-device-v1')local=v;else localValues.set(key,v);},workspace:{onLayoutReady:()=>{},on:()=>{}}};
   async loadData(){return {remote:{url:'https://old.example'},remoteProjects:[{id:'p'}],remoteSelected:['laptop:p']};}
-  async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}register(_cleanup:()=>void){}
+  async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}
  }
  const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};
  const module={exports:{} as any};runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout,clearTimeout,console},{timeout:5000});
  const p=new module.exports.default();await p.onload();assert.equal(p.mode,'direct');assert.equal(p.settings.pending.length,0);assert.equal(p.settings.completionJobs[0].status,'kept');assert.match(p.settings.completionJobs[0].detail,/companion mode was removed/);
- assert.equal(typeof p.retry,'undefined');assert.equal((await deviceState<{pending:unknown[]}>(local.deviceId))!.pending.length,0);assert.ok(!(localValues.get(`t3-send-failures-v1:${p.settings.vaultId}`) as any[])?.some(e=>e.stage==='failure-save'));
+ assert.equal(typeof p.retry,'undefined');assert.equal((await deviceState(local.deviceId)).pending.length,0);assert.ok(!(localValues.get(`t3-send-failures-v1:${p.settings.vaultId}`) as any[])?.some(e=>e.stage==='failure-save'));
  assert.ok(!('tokens' in local));for(const d of shared){assert.ok(!('remote' in d));assert.ok(!('remoteProjects' in d));assert.ok(!JSON.stringify(d).includes('old-secret'));}
 });
 
@@ -47,7 +47,7 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
  class Plugin{
   app={loadLocalStorage:(key:string)=>key==='send-to-t3-code-device-v1'?local:localValues.get(key),saveLocalStorage:(key:string,v:any)=>{if(key==='send-to-t3-code-device-v1')local=v;else localValues.set(key,v);},workspace:{onLayoutReady:()=>{},on:()=>{}},vault:{read:async()=>markdown,readBinary:async()=>Uint8Array.from(Buffer.from(png,'base64')).buffer,getName:()=> 'Notes'},metadataCache:{getFirstLinkpathDest:()=>file}};
   async loadData(){return {paired:[{id:'c',name:'Laptop',url:'https://t3.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:p']};}
-  async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}register(_cleanup:()=>void){}
+  async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}
  }
  const api={Plugin,Platform:{isMobile:true},TFile:File,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};
  const fetcher=async(url:string,o:any)=>{
@@ -69,7 +69,7 @@ test('mobile OAuth sign-in discovers machines, persists credentials locally and 
  let local:any={};const shared:any[]=[];const timers=new Map<number,{fn:()=>any;delay:number}>();let next=1;let tokenReply:((r:Response)=>void)|undefined;let delayToken=false;
  class Base{};class Plugin{
   app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,v:any)=>{local=v;},workspace:{onLayoutReady:()=>{},on:()=>{}}};
-  async loadData(){return {}; }async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}register(_cleanup:()=>void){}
+  async loadData(){return {}; }async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}
  }
  const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};
  const result=(v:any)=>new Response(JSON.stringify(v));
@@ -81,9 +81,9 @@ test('mobile OAuth sign-in discovers machines, persists credentials locally and 
   assert.ok(url.endsWith('/v1/environments'));assert.equal(o.headers.Authorization,'Bearer oauth-private');return result({environments:[{environmentId:'env',label:'Laptop',endpoint:{httpBaseUrl:'https://t3.example'}}]});
  };
  const module={exports:{} as any};runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:settingsSocket(),AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout:(fn:()=>any,delay:number)=>{const id=next++;timers.set(id,{fn,delay});return id;},clearTimeout:(id:number)=>timers.delete(id),console},{timeout:5000});
- const p=new module.exports.default();await p.onload();let pollWork:Promise<void>|undefined;const runPoll=p.pollCloudLogin.bind(p);p.pollCloudLogin=(...args:unknown[])=>{pollWork=runPoll(...args);return pollWork;};await p.startCloudLogin();assert.equal(p.cloudLogin.userCode,'ABCD');assert.equal(local.cloudAccount,null);p.cloudLogin.nextPollAt=0;
- let poll=[...timers].find(([,t])=>t.delay<30000)!;timers.delete(poll[0]);await poll[1].fn();await pollWork;assert.equal(p.cloudMachines[0].name,'Laptop');assert.equal(local.cloudAccount.refreshToken,'refresh-private');
+ const p=new module.exports.default();await p.onload();await p.startCloudLogin();assert.equal(p.cloudLogin.userCode,'ABCD');assert.equal(local.cloudAccount,null);p.cloudLogin.nextPollAt=0;
+ let poll=[...timers].find(([,t])=>t.delay<30000)!;timers.delete(poll[0]);await poll[1].fn();assert.equal(p.cloudMachines[0].name,'Laptop');assert.equal(local.cloudAccount.refreshToken,'refresh-private');
  for(const d of shared)assert.ok(!JSON.stringify(d).match(/oauth-private|refresh-private|device-private/));
  await p.signOutCloud();assert.equal(local.cloudAccount,null);assert.equal(p.cloudMachines.length,0);
- await p.startCloudLogin();p.cloudLogin.nextPollAt=0;delayToken=true;poll=[...timers].find(([,t])=>t.delay<30000)!;timers.delete(poll[0]);poll[1].fn();const pending=pollWork;await new Promise(r=>setImmediate(r));await p.signOutCloud();tokenReply!(token());await pending;assert.equal(p.cloudAccount,null);assert.equal(local.cloudAccount,null);p.onunload();
+ await p.startCloudLogin();p.cloudLogin.nextPollAt=0;delayToken=true;poll=[...timers].find(([,t])=>t.delay<30000)!;timers.delete(poll[0]);const pending=poll[1].fn();await new Promise(r=>setImmediate(r));await p.signOutCloud();tokenReply!(token());await pending;assert.equal(p.cloudAccount,null);assert.equal(local.cloudAccount,null);p.onunload();
 });

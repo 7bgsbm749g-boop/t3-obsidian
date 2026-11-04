@@ -1,4 +1,3 @@
-import {expectRecord} from '../wire-fixture';
 /** Read-only integration check for an existing real T3 HTML result. No prompt
  * is dispatched. Short-lived local credentials and signed URLs stay in memory. */
 import assert from 'node:assert/strict';
@@ -12,7 +11,7 @@ async function main(){
  const access=await desktopThreadAccess({host:'local',executable:'/home/ubuntu/.local/bin/t3'});
  try{
   const descriptor=await (await fetch(new URL('/.well-known/t3/environment',access.origin))).json() as any;
-  const item=expectRecord(await access.api('/api/orchestration/turn-item',{threadId,itemId})),page=htmlRenderFromToolItem(item);assert.ok(page,'The exact completed HTML item must exist');
+  const item=await access.api('/api/orchestration/turn-item',{threadId,itemId}),page=htmlRenderFromToolItem(item);assert.ok(page,'The exact completed HTML item must exist');
   const reference=readHtmlResult({version:1,environmentId:descriptor.environmentId,threadId,runId:item.runId,itemId,revision:item.updatedAt,...page});assert.ok(reference);
   const values=new Map<string,unknown>(),storage={read:async(key:string)=>values.get(key),write:async(key:string,value:unknown)=>{values.set(key,value);}};
   let downloads=0;

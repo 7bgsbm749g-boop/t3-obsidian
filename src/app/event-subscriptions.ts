@@ -1,12 +1,10 @@
-import {isRecord,jsonClone} from '../shared/values';
-import {hasControlCharacters} from '../shared/values';
 import {obsidianFooter} from '../notes/obsidian-prompt';
 import {responseIds,containerStart,responseFrame} from '../responses/response-container';
 import {EventActionSkipped,validateEventAction,type EventAction,type ActionPlan} from './event-actions';
 import {jobEvents,validateJob,type JobWatch,type JobEvent,type JobObservation} from '../conversations/job-lifecycle';
 import {STREAM_COMMANDS,validateDisplayCommand,displayCommand,tickDisplay,renameDisplays,validateResponseReservation,reserveThreadResponse,reservedResponseBindings,renameResponseReservations,type ThreadResponseReservationCommand,type ThreadResponseReservation,type ThreadDisplayCommand,type ThreadDisplay,type DisplayHost} from '../conversations/thread-display';
 import {applyThreadItem,type InlineThreadState} from '../conversations/inline-thread';
-import {sha256} from '@noble/hashes/sha2';
+import {sha256} from '@noble/hashes/sha256';
 import {safeNotePath} from '../responses/response-model';
 import {isLogPath} from '../storage/synced-event-logs';
 import {markdownCodeRanges} from '../responses/reply-html';
@@ -38,24 +36,18 @@ export interface EventSubscriptionHost {
   deliverAction?(notification:EventNotification):Promise<void>;
   readThread?(target:EventTarget):Promise<InlineThreadState>;
   displayHost?:Omit<DisplayHost,'save'|'readThread'>;
-  watchThread?(target:EventTarget,item:(value:unknown)=>void,sequence:()=>number|undefined,reconnecting?:()=>void):{stop():void};
+  watchThread?(target:EventTarget,item:(value:any)=>void,sequence:()=>number|undefined,reconnecting?:()=>void):{stop():void};
   recording(active:boolean):void;now():number;id():string;
 }
 const uuid=(value:unknown):value is string=>typeof value==='string'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
-const identity=(value:unknown):value is string=>typeof value==='string'&&value.length>0&&value.length<=200&&!hasControlCharacters(value);
-export function validateEventScope(input:unknown):EventScope {
-  if(!isRecord(input))throw Error('Invalid command object.');
-  // Retain every command-specific validation below before exposing the domain value.
-  const value=input as unknown as EventScope;
+const identity=(value:unknown):value is string=>typeof value==='string'&&value.length>0&&value.length<=200&&!/[\x00-\x1f]/.test(value);
+export function validateEventScope(value:any):EventScope {
   if(!value||!['note','folder'].includes(value.kind)||typeof value.recursive!=='boolean'||typeof value.path!=='string')throw Error('Invalid event subscription scope.');
   if(value.kind==='note'?!safeNotePath(value.path):value.path!=='/'&&!safeNotePath(value.path+'/scope.md'))throw Error('Use a vault-relative note or folder path.');
   if(value.path.startsWith('T3 Code Logs')||isLogPath(value.path))throw Error('Plugin logs cannot be watched.');
   return {path:value.path,kind:value.kind,recursive:value.recursive};
 }
-export function validateEventFilter(input:unknown):EventFilter {
-  if(!isRecord(input))throw Error('Invalid command object.');
-  // Retain every command-specific validation below before exposing the domain value.
-  const value=input as unknown as EventFilter;
+export function validateEventFilter(value:any):EventFilter {
   if(!value||!Array.isArray(value.events)||!value.events.length||value.events.length>5||new Set(value.events).size!==value.events.length||value.events.some((kind:unknown)=>!EVENT_KINDS.includes(kind as EventKind)))throw Error('Select create, modify, property, rename, or delete events.');
   if(value.property!==undefined&&(!identity(value.property)||value.property.length>100))throw Error('Invalid property name.');
   if(value.events.includes('property')&&!value.property)throw Error('Property events require a property name.');
@@ -63,17 +55,15 @@ export function validateEventFilter(input:unknown):EventFilter {
   if(Object.hasOwn(value,'equals')&&JSON.stringify(value.equals).length>4096)throw Error('Property value is too large.');
   return {events:[...value.events],...(value.property?{property:value.property}:{}),...(Object.hasOwn(value,'equals')?{equals:value.equals}:{})};
 }
-export function validateEventCommand(input:unknown):EventSubscriptionCommand {
-  if(!isRecord(input))throw Error('Invalid event subscription command.');
-  if(input.kind==='reserve-thread-response')return validateResponseReservation(input);
-  if(typeof input.kind==='string'&&(STREAM_COMMANDS as readonly string[]).includes(input.kind))return validateDisplayCommand(input);
-  const value=input as unknown as NoteEventSubscriptionCommand;
+export function validateEventCommand(value:any):EventSubscriptionCommand {
+  if(value?.kind==='reserve-thread-response')return validateResponseReservation(value);
+  if(STREAM_COMMANDS.includes(value?.kind))return validateDisplayCommand(value);
   if(value?.version!==1||!uuid(value.id)||!['subscribe','subscribe-job','subscriptions','update-subscription','pause-subscription','resume-subscription','cancel-subscription'].includes(value.kind))throw Error('Invalid event subscription command.');
   if(value.kind==='subscribe'||value.kind==='subscribe-job'){
     if(value.action!==undefined){validateEventAction(value.action);if(value.target!==undefined)throw Error('Choose either an action or a receiving thread.');if(value.kind==='subscribe-job'&&!value.action.notePath)throw Error('Job actions require notePath.');}
     else if(!value.target||![value.target.threadId,value.target.projectId,value.target.environmentId].every(identity))throw Error('A subscription needs its originating thread, project, and machine IDs, or an action.');
     if(value.kind==='subscribe-job'){validateJob(value.job);if(value.scope!==undefined||value.filter!==undefined)throw Error('Job watches do not take note filters.');}
-    else {validateEventScope(value.scope);const filter=validateEventFilter(value.filter);if(value.action&&!value.action.notePath&&filter.events.includes('delete'))throw Error('Delete actions require an explicit notePath.');}
+    else {validateEventScope(value.scope);validateEventFilter(value.filter);if(value.action&&!value.action.notePath&&value.filter.events.includes('delete'))throw Error('Delete actions require an explicit notePath.');}
   }else if(value.kind!=='subscriptions'&&!uuid(value.subscriptionId))throw Error('A subscription ID is required.');
   if(value.kind==='update-subscription'){
     if(!value.scope&&!value.filter)throw Error('Supply a scope or event filter to update.');
@@ -95,7 +85,7 @@ export function eventContent(content:string):string {
   const code=content.includes('<!-- t3-')?markdownCodeRanges(content):[];
   return content.replace(/<!-- t3-(inline|response):start:([^\s]+) -->[\s\S]*?<!-- t3-\1:end:\2 -->(?:\r?\n)?/g,(text,_kind,_id,offset:number)=>code.some(([from,to])=>offset>=from&&offset<to)?text:'').replace(/\n+$/,'');
 }
-function canonical(value:unknown):string {if(value===undefined)return 'undefined';if(value===null||typeof value!=='object')return JSON.stringify(value);if(Array.isArray(value))return '['+value.map(canonical).join(',')+']';return '{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+canonical(Reflect.get(value,key) as unknown)).join(',')+'}';}
+function canonical(value:unknown):string {if(value===undefined)return 'undefined';if(value===null||typeof value!=='object')return JSON.stringify(value);if(Array.isArray(value))return '['+value.map(canonical).join(',')+']';return '{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+canonical((value as any)[key])).join(',')+'}';}
 function hash(text:string){return Array.from(sha256(new TextEncoder().encode(text)),byte=>byte.toString(16).padStart(2,'0')).join('');}
 export function inEventScope(scope:EventScope,path:string):boolean {
   if(!safeNotePath(path)||isLogPath(path))return false;
@@ -106,15 +96,14 @@ export function inEventScope(scope:EventScope,path:string):boolean {
 function eventValue(value:unknown):unknown {const text=canonical(value);return text.length<=2048?value??null:{truncated:true,hash:hash(text)};}
 export function observedPropertyEquals(current:unknown,observed:unknown){return canonical(eventValue(current))===canonical(observed);}
 function sameTarget(a:Partial<EventTarget>,b:Partial<EventTarget>){return a.threadId===b.threadId&&a.projectId===b.projectId&&a.environmentId===b.environmentId;}
-const clone=jsonClone;
+const clone=<T>(value:T):T=>JSON.parse(JSON.stringify(value));
 const empty=():EventState=>({version:1,subscriptions:[],notifications:[],commands:{},feedback:[]});
 /** Thread snapshots contain plain JSON data. Compare without allocating another
  * encoded copy of every message body; equal snapshots retain their references. */
-function sameThreadData(a:unknown,b:unknown):boolean {
+function sameThreadData(a:any,b:any):boolean {
   if(a===b)return true;
   if(a===null||b===null||typeof a!=='object'||typeof b!=='object')return false;
   if(Array.isArray(a)||Array.isArray(b))return Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((value,index)=>sameThreadData(value,b[index]));
-  if(!isRecord(a)||!isRecord(b))return false;
   // Optional undefined fields disappear in the durable JSON representation.
   const keys=Object.keys(a).filter(key=>a[key]!==undefined);
   return keys.length===Object.keys(b).filter(key=>b[key]!==undefined).length&&keys.every(key=>Object.hasOwn(b,key)&&sameThreadData(a[key],b[key]));
@@ -130,8 +119,8 @@ function compactObservedThread(state:InlineThreadState):InlineThreadState {
   if(state.protocolVersion!==2)return state;
   const {inputBoundaries:_boundaries,...rest}=state;
   const lifecycle=new Set(['approval.requested','approval.resolved','user-input.requested','user-input.resolved','provider.turn.start.failed','runtime.error']);
-  const controls=Object.fromEntries(Object.entries(state.v2Controls??{}).map(([id,c])=>[id,{id:c.id,ordinal:c.ordinal,type:c.type,requestId:c.requestId,runId:c.runId,status:c.status,startedAt:c.startedAt,updatedAt:c.updatedAt,completedAt:c.completedAt,responseMode:c.responseMode}]));
-  const requests=Object.fromEntries(Object.entries(state.v2Requests??{}).map(([id,r])=>[id,{id:r.id,kind:r.kind,status:r.status,resolvedAt:r.resolvedAt,responseCapability:r.responseCapability?{type:r.responseCapability.type}:undefined,answers:r.answers?{}:undefined}]));
+  const controls=Object.fromEntries(Object.entries(state.v2Controls??{}).map(([id,c])=>[id,{id:c.id,type:c.type,requestId:c.requestId,runId:c.runId,status:c.status,startedAt:c.startedAt,updatedAt:c.updatedAt,completedAt:c.completedAt,responseMode:c.responseMode}]));
+  const requests=Object.fromEntries(Object.entries(state.v2Requests??{}).map(([id,r])=>[id,{id:r.id,status:r.status,resolvedAt:r.resolvedAt,responseCapability:r.responseCapability?{type:r.responseCapability.type}:undefined,answers:r.answers?{}:undefined}]));
   return {...rest,messages:state.messages.filter(m=>m.role==='user'||m.role==='assistant').map(m=>m.role==='user'?{id:m.id,role:m.role,text:m.text,turnId:m.turnId,streaming:m.streaming,createdAt:m.createdAt,createdBy:m.createdBy,creationSource:m.creationSource,senderThreadId:m.senderThreadId,senderThreadTitle:m.senderThreadTitle,delegatedCompletion:m.delegatedCompletion}:{id:m.id,role:m.role,text:'',turnId:m.turnId,streaming:m.streaming,createdAt:m.createdAt}),
     activities:state.activities.filter(a=>lifecycle.has(a.kind)).map(a=>({...a,payload:a.payload?{requestId:a.payload.requestId,responseMode:a.payload.responseMode,detail:a.payload.detail,answers:a.payload.answers?{}:undefined}:undefined})),
     ...(state.v2Controls?{v2Controls:controls}:{}),...(state.v2Requests?{v2Requests:requests}:{})};
@@ -240,7 +229,7 @@ export class EventSubscriptions {
           waiting||=responseIds(prior.content).some(id=>{
             if(!pending.has(id))return false;
             if(responseIds(note.content).includes(id))return false;
-            try{const frame=responseFrame(prior.content,id);return !!frame&&note.content!==prior.content.slice(0,frame.from)+prior.content.slice(frame.to);}catch{return false;}
+            try{const frame=responseFrame(prior.content,id);return !!frame&&note!.content!==prior.content.slice(0,frame.from)+prior.content.slice(frame.to);}catch{return false;}
           });
         }
       }
@@ -410,10 +399,9 @@ export class EventSubscriptions {
     for(const d of this.state.displays??[])if(d.enabled&&!d.cancelled)targets.set(this.threadKey(d),d);
     for(const [key,monitor] of this.monitors)if(!targets.has(key)){monitor.stop();this.monitors.delete(key);this.canonicalUntil.delete(key);}
     for(const [key,target] of targets)if(!this.monitors.has(key))this.monitors.set(key,this.host.watchThread(target,item=>{
-      if(!isRecord(item))return;
       void this.serialize(async()=>{
         const prior=this.state.threads?.[key]??{state:{messages:[],activities:[]}};
-        if(item.kind==='event'&&isRecord(item.event)&&typeof item.event.sequence==='number'&&item.event.sequence<= (prior.sequence??-1))return;
+        if(item.kind==='event'&&item.event?.sequence<= (prior.sequence??-1))return;
         const reduced=applyThreadItem(prior.state,item),applied={...reduced,state:compactObservedThread(reduced.state)};
         const sequence=item.kind==='snapshot'&&prior.sequence!==undefined?prior.sequence:applied.sequence??prior.sequence;
         if(sameObservedThread(prior.state,applied.state)&&!(item.kind==='snapshot'&&prior.sequence===undefined&&sequence!==undefined)){

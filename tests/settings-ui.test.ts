@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext} from 'node:vm';
 import {webcrypto} from 'node:crypto';
 
 // Exercise the shipped settings tab with Obsidian's small DOM/component surface.
@@ -11,27 +11,25 @@ class Element {
   constructor(readonly tag='div'){}
   createEl(tag:string,options:any={}){const el=new Element(tag);el.text=options.text??'';el.attrs={...options.attr};this.children.push(el);return el;}
   createDiv(options:any={}){return this.createEl('div',options);}
-  addClass(){}removeClass(){}empty(){this.children=[];this.controls=[];}
+  addClass(){}empty(){this.children=[];this.controls=[];}
   setAttribute(name:string,value:string){this.attrs[name]=value;}
   addEventListener(name:string,callback:any){this.listeners[name]=callback;}
   focus(){this.focused=true;}
   all():Element[]{return [this,...this.children.flatMap(child=>child.all())];}
-  fire(name:string,event:any={}){this.listeners[name]?.(event);}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}
+  fire(name:string,event:any={}){this.listeners[name]?.(event);}
 }
-async function harness(mobile=false,modern=false){
-  let updates=0;
+async function harness(mobile=false){
   class Base{}
   class Tab{containerEl=new Element();constructor(public app:any){}}
-  if(modern)Object.defineProperty(Tab.prototype,'update',{value(){updates++;}});
   class Setting {
-    el:Element;get settingEl(){return this.el;}
+    el:Element;
     constructor(parent:Element){this.el=parent.createEl('setting');}
     setName(text:string){this.el.text=text;return this;}setDesc(){return this;}setHeading(){return this;}
     add(callback:any){const control:any={inputEl:{},options:{} as Record<string,string>,setPlaceholder(){return this;},setValue(value:any){this.value=value;return this;},setButtonText(text:string){this.text=text;return this;},setCta(){return this;},setDisabled(){return this;},addOption(key:string,value:string){this.options[key]=value;return this;},addOptions(options:any){Object.assign(this.options,options);return this;},onChange(run:any){this.change=run;return this;},onClick(run:any){this.click=run;return this;}};callback(control);this.el.controls.push(control);return this;}
     addText(callback:any){return this.add(callback);}addDropdown(callback:any){return this.add(callback);}
     addButton(callback:any){return this.add(callback);}addToggle(callback:any){return this.add(callback);}
   }
-  const api={requireApiVersion:(version:string)=>modern&&version==='1.13.0',Plugin:Base,PluginSettingTab:Tab,Setting,Platform:{isMobile:mobile},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base};
+  const api={Plugin:Base,PluginSettingTab:Tab,Setting,Platform:{isMobile:mobile},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base};
   const module={exports:{} as any};
   runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},crypto:webcrypto,TextEncoder,TextDecoder,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},console},{timeout:5000});
   let saves=0,refreshes=0;
@@ -42,7 +40,7 @@ async function harness(mobile=false,modern=false){
   const panel=()=>root.all().find(el=>el.attrs.role==='tabpanel')!;
   const row=(name:string)=>panel().all().find(el=>el.tag==='setting'&&el.text===name)!;
   const select=(name:string)=>tabs().find(el=>el.text===name)!.fire('click');
-  return {tab,plugin,root,tabs,panel,row,select,Setting,updates:()=>updates,saves:()=>saves,refreshes:()=>refreshes};
+  return {tab,plugin,root,tabs,panel,row,select,saves:()=>saves,refreshes:()=>refreshes};
 }
 
 test('settings pages isolate maintenance controls and support keyboard tab navigation',async()=>{
@@ -98,20 +96,4 @@ test('thread/note modes default to Free inside collapsed Beta and preserve links
   await h.row('Thread and note mode').controls[0].change('free');
   assert.equal(h.saves(),2);assert.equal(JSON.stringify(h.plugin.settings.noteThreads),before);
   assert.equal(h.plugin.settings.inlineStreaming.enabled,true);
-});
-
-
-test('native settings index includes every page and reply control without auto-saving credentials',async()=>{
-  const h=await harness(false,true),pages=h.tab.getSettingDefinitions();
-  assert.deepEqual(Array.from(pages,(page:any)=>page.name),['Connection','Replies','Projects','Advanced']);
-  const names:string[]=[],aliases:string[]=[];
-  const scan=(items:any[])=>{for(const item of items){names.push(item.name);aliases.push(...item.aliases??[]);if(item.items)scan(item.items);}};scan(pages);
-  for(const name of ['Connect with','T3 account','Stream replies into the editor','Final answer format','Thread title generation','Settle completed threads','Beta','Thread and note mode'])assert.ok(names.includes(name),name);
-  for(const field of ['T3 account email','Email verification code','Vault connection','T3 address or pairing link','Pairing code','Archive folder'])assert.ok(aliases.includes(field),field);
-  assert.equal(h.saves(),0);assert.equal(h.refreshes(),0);
-  const replies=pages.find((page:any)=>page.name==='Replies').items,format=replies.find((row:any)=>row.name==='Final answer format');
-  const row=new h.Setting(new Element());format.render(row);
-  await row.el.controls[0].change('raw-markdown');assert.equal(h.saves(),1);assert.equal(h.plugin.settings.inlineStreaming.finalAnswerFormat,'raw-markdown');
-  h.plugin.cloudChanged();assert.equal(h.updates(),1,'Dynamic account state refreshes the native index without rebuilding the legacy tab');
-  assert.equal(h.plugin.nativeAccount,undefined,'Native definition discovery never creates credentials');
 });

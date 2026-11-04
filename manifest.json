@@ -1,9 +1,9 @@
 {
   "id": "t-three-code",
   "name": "T3 Code",
-  "version": "0.0.387",
+  "version": "0.0.386",
   "minAppVersion": "1.8.7",
-  "description": "Bring T3 Code into Obsidian. Send notes as prompts, stream replies into the editor, and more.",
+  "description": "Chat with T3, send notes, link folders, and record durable automation events.",
   "author": "jslepx, 7bgsbm749g-boop",
   "authorUrl": "https://github.com/7bgsbm749g-boop",
   "isDesktopOnly": false

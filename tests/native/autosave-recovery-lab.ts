@@ -1,5 +1,3 @@
-import {readThreadSnapshot} from '../../src/connection/wire-types';
-import {readMetadataSnapshot} from '../../src/connection/wire-readers';
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
 import SendToT3 from '../../src/app/main';
 import {nativeResponses} from '../../src/responses/native-response-manager';
@@ -93,12 +91,12 @@ export default class AutosaveRecoveryLab extends Plugin {
 
     const config=JSON.parse(fs.readFileSync(path.join(this.root,'TEST-CONFIG.json'),'utf8')),connection=desktopDefaults();
     this.access=await desktopThreadAccess(connection);const api=(route:string,payload?:any)=>this.access!.api(route.startsWith('/api/')?route:'/api/orchestration/'+route,payload);
-    const source=readMetadataSnapshot(await api('threads/'+config.sourceThreadId+'?controlOnly=true')),project={id:source.thread.projectId};
+    const source=await api('threads/'+config.sourceThreadId+'?controlOnly=true'),project={id:source.thread.projectId};
     const requestId=crypto.randomUUID(),stateDir=path.join(this.root,'t3-state');this.write('TEMPORARY-T3.json',{requestId,stateDir});
     const started=await start(api,{requestId,project:project.id,title:'Synthetic autosave recovery delivery '+requestId.slice(0,8),prompt:'This is a synthetic delivery test. Do not use tools, read or change files, create tasks, or call other agents. Reply with exactly AUTOSAVE_RECOVERY_LIVE_OK.'},stateDir,item=>readNewThreadDefaults(this.access!.api,this.access!.origin,item));
     this.threadId=started.threadId;this.write('TEMPORARY-T3.json',{requestId,stateDir,threadId:this.threadId});
     let run:any;
-    await this.until(async()=>{const snapshot=readThreadSnapshot(await api('threads/'+this.threadId+'?importRuns=true'));const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;run=importRuns(state).find(item=>item.status==='Completed'&&!item.unavailable);return !!run;},'bounded real T3 completion',120_000);
+    await this.until(async()=>{const snapshot=await api('threads/'+this.threadId+'?importRuns=true');const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;run=importRuns(state).find(item=>item.status==='Completed'&&!item.unavailable);return !!run;},'bounded real T3 completion',120_000);
     const environmentId=await desktopEnvironment(connection);
     subject.settings={vaultId:'synthetic-live-import',inlineStreaming:{enabled:true},responseBindings:{}};
     subject.connection=()=>({...connection,environmentId});subject.inlineThreadAccess=()=>desktopThreadAccess(connection);
@@ -126,7 +124,7 @@ export default class AutosaveRecoveryLab extends Plugin {
       if(!this.threadId&&fs.existsSync(path.join(this.root,'TEMPORARY-T3.json'))){const saved=JSON.parse(fs.readFileSync(path.join(this.root,'TEMPORARY-T3.json'),'utf8')),ledger=path.join(saved.stateDir,'requests',saved.requestId+'.json');if(fs.existsSync(ledger))this.threadId=JSON.parse(fs.readFileSync(ledger,'utf8')).threadId;}
       if(this.threadId&&this.access){
         await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.threadId});
-        let deleted=false;try{const snapshot=readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'));deleted=!!snapshot.thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}
+        let deleted=false;try{const snapshot=await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true');deleted=!!snapshot.thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}
         if(!deleted)remainingThreadIds.push(this.threadId);
       }
     }catch(error){this.errors.push('Thread cleanup: '+String(error));if(this.threadId)remainingThreadIds.push(this.threadId);}

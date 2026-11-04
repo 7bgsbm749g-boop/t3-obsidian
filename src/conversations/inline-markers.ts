@@ -1,4 +1,3 @@
-import {parseJsonRecord} from '../shared/values';
 import type {Extension} from '@codemirror/state';
 import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
 import type {MarkdownPostProcessorContext} from 'obsidian';
@@ -24,10 +23,10 @@ export function hiddenInlineMarkerExtension():Extension {
       if(markdownCodeRanges(document).some(([from,to])=>pos>=from&&pos<to))return null;
       try{
         if(match[0].startsWith('<!-- t3-response-binding:')){
-          const encoded=/^<!-- t3-response-binding:([0-9a-f-]{36}):(.*) -->$/i.exec(match[0])!,request=validateResponseRequest(parseJsonRecord(decodeURIComponent(encoded[2])));
+          const encoded=/^<!-- t3-response-binding:([0-9a-f-]{36}):(.*) -->$/i.exec(match[0])!,request=validateResponseRequest(JSON.parse(decodeURIComponent(encoded[2])));
           if(!request.localOnly||request.id!==encoded[1]||!responseFrame(document,request.id))return null;
         }else{
-          const value=parseJsonRecord(decodeURIComponent(match[0].slice('<!-- t3-run-import:'.length,-4)));
+          const value=JSON.parse(decodeURIComponent(match[0].slice('<!-- t3-run-import:'.length,-4)));
           if(value.version!==1||!value.bindingId||!value.threadId||!value.messageId||!value.runId)return null;
         }
       }catch{return null;}

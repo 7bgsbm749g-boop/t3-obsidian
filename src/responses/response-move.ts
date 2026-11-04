@@ -1,7 +1,6 @@
 import {cursorInsertionOffset} from '../notes/cursor-insertion';
 import {responseAnchor,responseRegion} from './native-response-projection';
 import {localResponseRange} from './local-response-binding';
-import type {EditorView} from '@codemirror/view';
 import type {StateEffectType,Extension,Transaction,TransactionSpec} from '@codemirror/state';
 import {applySavedEdits,type SavedEdit} from './coordinated-merge';
 
@@ -15,7 +14,7 @@ export function responseMoveEffect(){
  * Undo/redo are rechecked against the current response and saved note. */
 export function responseMoveHistory():Extension {
   const {invertedEffects}=require('@codemirror/commands') as typeof import('@codemirror/commands');
-  return invertedEffects.of(transaction=>transaction.effects.flatMap(item=>item.is(responseMoveEffect())?[responseMoveEffect().of({...item.value,before:item.value.after,after:item.value.before,edits:item.value.inverse,inverse:item.value.edits})]:[]));
+  return invertedEffects.of(transaction=>transaction.effects.filter(item=>item.is(responseMoveEffect())).map(item=>responseMoveEffect().of({...item.value,before:item.value.after,after:item.value.before,edits:item.value.inverse,inverse:item.value.edits})));
 }
 type MoveHandler=(transaction:Transaction,move:ResponseMove)=>TransactionSpec|undefined;
 const dispatchers=new WeakMap<object,{handler?:MoveHandler}>();
@@ -23,26 +22,26 @@ const dispatchers=new WeakMap<object,{handler?:MoveHandler}>();
  * as an effect-only history step, then its current projection is applied as a
  * separate non-history update. No streamed body enters a move history event.
  * A detached owner consumes old move steps without changing the document. */
-export function guardResponseMoveHistory(cm:EditorView,handler:MoveHandler):()=>void {
+export function guardResponseMoveHistory(cm:any,handler:MoveHandler):()=>void {
   let owned=dispatchers.get(cm);
   if(!owned){
-    owned={};dispatchers.set(cm,owned);const state=owned,original=cm.dispatch.bind(cm);
-    cm.dispatch=function(...args:([Transaction]|[readonly Transaction[]]|TransactionSpec[])){
-      const transactions:readonly(Transaction|TransactionSpec)[]=args.length===1&&Array.isArray(args[0])?args[0]:args as (Transaction|TransactionSpec)[];
-      if(transactions.every((tr):tr is Transaction=>'startState' in tr)&&transactions.some((tr:Transaction)=>tr.effects.some(item=>item.is(responseMoveEffect())))){
+    owned={};dispatchers.set(cm,owned);const state=owned,original=cm.dispatch;
+    cm.dispatch=function(...args:any[]){
+      const transactions=args.length===1&&Array.isArray(args[0])?args[0]:args;
+      if(transactions.every((tr:any)=>tr?.startState)&&transactions.some((tr:Transaction)=>tr.effects.some(item=>item.is(responseMoveEffect())))){
         for(const transaction of transactions){
-          const move=transaction.effects.find(item=>item.is(responseMoveEffect()));
+          const move=transaction.effects.find((item:any)=>item.is(responseMoveEffect()));
           if(move&&transaction.startState===cm.state){
             const update=state.handler?.(transaction,move.value);
             original.call(cm,transaction);
             if(update)original.call(cm,cm.state.update(update));
           }else original.call(cm,transaction);
         }
-      }else Reflect.apply(original,cm,args);
+      }else original.apply(cm,args);
     };
   }
   owned.handler=handler;
-  return ()=>{if(owned.handler===handler)owned.handler=undefined;};
+  return ()=>{if(owned!.handler===handler)owned!.handler=undefined;};
 }
 
 /** Move the exact saved container (and any legacy binding descriptor) in one

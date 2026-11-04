@@ -1,4 +1,3 @@
-import {expectRecord} from './wire-fixture';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Buffer} from 'node:buffer';
@@ -6,7 +5,7 @@ import {jsonHttp} from '../src/connection/direct';
 
 test('a valid response larger than the former 4 MB limit is accepted',async()=>{
  const text='x'.repeat(4_100_000),fetcher=async()=>new Response(JSON.stringify({text}));
- assert.equal(expectRecord(await jsonHttp('https://fixture/api/test',{},fetcher as any)).text,text);
+ assert.equal((await jsonHttp('https://fixture/api/test',{},fetcher as any)).text,text);
 });
 
 const fetchBody=(bytes:Uint8Array)=>async()=>new Response(new ReadableStream({start(controller){for(let i=0;i<bytes.length;i+=2)controller.enqueue(bytes.slice(i,i+2));controller.close();}}),{status:200});

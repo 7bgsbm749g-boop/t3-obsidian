@@ -1,4 +1,3 @@
-import {clockForDocument} from '../shared/clock';
 import type {MarkdownView} from 'obsidian';
 
 export interface StreamStopTarget {id:string;key:string;view:MarkdownView}
@@ -6,7 +5,6 @@ export interface StreamStopTarget {id:string;key:string;view:MarkdownView}
 /** UI state belongs to a response in a pane, never to note Markdown. Resolve
  * again at activation: a retained DOM node can outlive the run it displayed. */
 export function installStreamStopControls(root:Document,resolve:(fold:HTMLElement)=>StreamStopTarget|undefined,stop:(target:StreamStopTarget)=>Promise<void>,icon:(element:HTMLElement,name:string)=>void,onError:(error:unknown)=>void):()=>void {
-  const {setInterval,clearInterval}=clockForDocument(root);
   const controls=new Map<HTMLElement,HTMLButtonElement>(),pending=new Set<string>();
   let active:StreamStopTarget|undefined,disposed=false,queued=false,suppressPointerFocus=false;
   const identity=(target:StreamStopTarget)=>JSON.stringify([target.id,target.key]);
@@ -20,7 +18,7 @@ export function installStreamStopControls(root:Document,resolve:(fold:HTMLElemen
       live.add(fold);fold.classList.add('send-to-t3-stream-stoppable');
       let button=controls.get(fold);
       if(!button){
-        button=root.win.createEl('button');button.type='button';button.className='clickable-icon send-to-t3-stream-stop';button.hidden=true;
+        button=root.createElement('button');button.type='button';button.className='clickable-icon send-to-t3-stream-stop';button.hidden=true;
         button.setAttribute('aria-label','Stop T3 response');button.setAttribute('title','Stop T3 response');icon(button,'square');
         controls.set(fold,button);
         resize?.observe(fold);
@@ -28,8 +26,6 @@ export function installStreamStopControls(root:Document,resolve:(fold:HTMLElemen
       // Native rendering can replace children while retaining the callout.
       if(button.parentElement!==fold)fold.appendChild(button);
       button.hidden=!shown(target);button.disabled=pending.has(target.id);
-      fold.classList.toggle('send-to-t3-stop-visible',!button.hidden);
-      fold.closest('.cm-embed-block')?.classList.toggle('send-to-t3-stop-visible',!button.hidden);
       activeExists||=!button.hidden;
       button.setAttribute('aria-busy',String(button.disabled));
       const heading=fold.querySelector<HTMLElement>(':scope > .callout-title');
@@ -39,7 +35,7 @@ export function installStreamStopControls(root:Document,resolve:(fold:HTMLElemen
       }
     }
     if(!activeExists)active=undefined;
-    for(const [fold,button] of controls)if(!live.has(fold)){button.remove();resize?.unobserve(fold);fold.classList.remove('send-to-t3-stream-stoppable','send-to-t3-stop-visible');fold.closest('.cm-embed-block')?.classList.remove('send-to-t3-stop-visible');fold.style.removeProperty('--send-to-t3-stop-center');controls.delete(fold);}
+    for(const [fold,button] of controls)if(!live.has(fold)){button.remove();resize?.unobserve(fold);fold.classList.remove('send-to-t3-stream-stoppable');fold.style.removeProperty('--send-to-t3-stop-center');controls.delete(fold);}
   };
   const schedule=()=>{if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
   const find=(target:EventTarget|null)=>{
@@ -96,5 +92,5 @@ export function installStreamStopControls(root:Document,resolve:(fold:HTMLElemen
   const resize=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(schedule);
   const observer=new MutationObserver(schedule);observer.observe(root.body,{childList:true,subtree:true});
   const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('pointercancel',resetPointerFocus,true);root.removeEventListener('keydown',resetPointerFocus,true);root.removeEventListener('click',click,true);root.removeEventListener('focusin',reveal,true);root.removeEventListener('focusout',blur,true);for(const [fold,button] of controls){button.remove();fold.classList.remove('send-to-t3-stream-stoppable','send-to-t3-stop-visible');fold.closest('.cm-embed-block')?.classList.remove('send-to-t3-stop-visible');fold.style.removeProperty('--send-to-t3-stop-center');}controls.clear();};
+  return ()=>{disposed=true;observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('pointercancel',resetPointerFocus,true);root.removeEventListener('keydown',resetPointerFocus,true);root.removeEventListener('click',click,true);root.removeEventListener('focusin',reveal,true);root.removeEventListener('focusout',blur,true);for(const [fold,button] of controls){button.remove();fold.classList.remove('send-to-t3-stream-stoppable');fold.style.removeProperty('--send-to-t3-stop-center');}controls.clear();};
 }

@@ -1,5 +1,3 @@
-import {readMetadataSnapshot} from '../../src/connection/wire-readers';
-import {readThreadSnapshot} from '../../src/connection/wire-types';
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
 import {nativeResponses} from '../../src/responses/native-response-manager';
 import {deviceNoteIO,deviceFinalNoteIO} from '../../src/conversations/inline-note-io';
@@ -53,7 +51,7 @@ export default class AutoContinuationLab extends Plugin {
   this.write('TEMPORARY-T3.json',{threadId:this.threadId,requestId,messageId,notePath:note});
   await start(api,{requestId,project:project.id,title:'Synthetic automatic continuation '+requestId.slice(0,8),prompt:'This is a bounded synthetic plugin test. Do not use tools, inspect files, edit files or delegate. Reply exactly SOURCE_PROGRESS_OK.'},path.join(this.root,'t3-state'),item=>readNewThreadDefaults(this.access!.api,this.access!.origin,item));
   let original:any;const readErrors:any[]=[];
-  await this.until(async()=>{try{original=readThreadSnapshot(await api('threads/'+this.threadId));}catch(error){readErrors.push({message:String(error),kind:(error as any).kind,method:(error as any).rpcMethod});this.write('READ-ERRORS.json',readErrors);if(readErrors.length>10)throw error;return false;}const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:original}).state;const source=Object.values(state.turns??{}).find(turn=>turn.messageId===messageId);if(source&&['completed','error'].includes(source.state)&&source.completedAt){this.sourceId=source.turnId;return true;}return false;},'source run terminal');
+  await this.until(async()=>{try{original=await api('threads/'+this.threadId);}catch(error){readErrors.push({message:String(error),kind:(error as any).kind,method:(error as any).rpcMethod});this.write('READ-ERRORS.json',readErrors);if(readErrors.length>10)throw error;return false;}const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:original}).state;const source=Object.values(state.turns??{}).find(turn=>turn.messageId===messageId);if(source&&['completed','error'].includes(source.state)&&source.completedAt){this.sourceId=source.turnId;return true;}return false;},'source run terminal');
   this.write('ORIGINAL-CANONICAL.json',original);this.write('FAILED-READER-PROJECTION.json',this.failedSource(original));
   const native=nativeResponses(this.app),notes=deviceNoteIO(this.app);let records:any={};const trace:any[]=[],recordTrace=(row:any)=>{trace.push({at:new Date().toISOString(),...row});if(trace.length>80)trace.shift();this.write('TRACE.json',trace);};const finalNotes=deviceFinalNoteIO(this.app,()=>true);
   this.local=new LocalResponseManager('auto-continuation-lab','synthetic-auto-continuation',{
@@ -70,7 +68,7 @@ export default class AutoContinuationLab extends Plugin {
   // follow/attach call and no new response registration.
   await api('dispatch',{type:'thread.turn.start',commandId:crypto.randomUUID(),threadId:this.threadId,message:{messageId:followMessage,role:'user',text:'Continue the same task. Do not use tools or change files. Reply exactly AUTO_CONTINUATION_LIVE_OK.',attachments:[],createdBy:'user',creationSource:'web'},runtimeMode:original.thread.runtimeMode??original.thread.session?.runtimeMode??'approval-required',interactionMode:original.thread.interactionMode??'default',createdAt:new Date().toISOString()});
   const finalSave=await this.local.waitForSave(id,120_000);if(!finalSave.saved){this.write('SAVE-FAILURE.json',{finalSave,record:this.local.record(id),disk:await this.app.vault.read(file),editor:(leaf.view as MarkdownView).editor.getValue(),recovery:native.view(leaf.view as MarkdownView)?.recoveryDocument()});throw Error('Continuation final save: '+finalSave.reason);}
-  const snapshot=readThreadSnapshot(await api('threads/'+this.threadId)),state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state,saved=await this.app.vault.read(file);
+  const snapshot=await api('threads/'+this.threadId),state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state,saved=await this.app.vault.read(file);
   await this.until(()=>(leaf.view as MarkdownView).editor.getValue().includes('AUTO_CONTINUATION_LIVE_OK'),'visible saved reply');
   const record=this.local.record(id),next=Object.values(state.turns??{}).find(turn=>turn.messageId===followMessage);
   const checks={realContinuation:!!next&&next.state==='completed',automaticLink:record?.state?.turnId===next?.turnId&&record?.state?.turnIds?.includes(this.sourceId!)===true,
@@ -84,10 +82,10 @@ export default class AutoContinuationLab extends Plugin {
  private async cleanup(){
   if(this.timer!==undefined)window.clearInterval(this.timer);this.local?.dispose();const remainingThreadIds:string[]=[];
   try{if(this.threadId&&this.access){
-   const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))}).state;
+   const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true')}).state;
    for(const turn of Object.values(state.turns??{})){if(turn.state==='running')await this.access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:crypto.randomUUID(),threadId:this.threadId,turnId:turn.turnId,createdAt:new Date().toISOString()});if(turn.state==='queued')await this.access.api('/api/orchestration/dispatch',{type:'queued-run.cancel',commandId:crypto.randomUUID(),threadId:this.threadId,runId:turn.turnId});}
    await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.threadId});
-   let deleted=false;try{deleted=!!(readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}if(!deleted)remainingThreadIds.push(this.threadId);
+   let deleted=false;try{deleted=!!(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true')).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}if(!deleted)remainingThreadIds.push(this.threadId);
   }}catch(error){this.errors.push('Thread cleanup: '+String(error));if(this.threadId)remainingThreadIds.push(this.threadId);}
   await this.access?.close?.();for(const leaf of this.app.workspace.getLeavesOfType('markdown'))leaf.detach();for(const file of this.app.vault.getMarkdownFiles())await this.app.vault.delete(file);
   this.write('CLEANUP.json',{temporaryThreadIds:this.threadId?[this.threadId]:[],remainingThreadIds,remainingNotes:this.app.vault.getMarkdownFiles().map(file=>file.path),errors:this.errors});

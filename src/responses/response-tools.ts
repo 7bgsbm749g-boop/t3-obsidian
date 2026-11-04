@@ -1,11 +1,10 @@
-import {isRecord,records,parseJson} from '../shared/values';
 import type {InlineActivity,InlineMessage,InlineThreadState} from '../conversations/inline-thread';
 import {micromark} from 'micromark';
 export type ToolAction='command'|'edit'|'read'|'browser'|'device'|'search'|'code-search'|'thread'|'link-pr'|'unlink-pr'|'list-prs'|'other';
 export interface ResponseTool {id:string;turnId:string;key:string;status:string;label:string;activeLabel:string;icon:string;action:ToolAction;createdAt?:string;startedAt?:string;sequence:number;command?:string;cwd?:string;output?:string;exitCode?:number;durationMs?:number;files?:string[]}
 export interface ResponseToolGroup {id:string;turnId:string;createdAt?:string;sequence?:number;tools:ResponseTool[];thoughts?:InlineMessage[]}
-const object=(value:unknown):Record<string,unknown>=>isRecord(value)?value:{};
-const string=(value:unknown)=>typeof value==='string'?value.trim():'';
+const object=(value:any):Record<string,any>=>value&&typeof value==='object'&&!Array.isArray(value)?value:{};
+const string=(value:any)=>typeof value==='string'?value.trim():'';
 const compact=(value:string)=>value.replace(/\s+/g,' ').slice(0,160);
 const html=(value:string)=>value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\r\n?|\n/g,'&#10;');
 const done=(status:string)=>['completed','failed','declined','stopped'].includes(status);
@@ -20,14 +19,14 @@ export function commandProgram(command:string):string {
   const program=/^(?:sudo\s+|env\s+)?([^\s;&|]+)/.exec(value)?.[1]?.replace(/^['"]|['"]$/g,'').split(/[\\/]/).at(-1);
   return program&&/^[\w.+-]+$/.test(program)?program:'command';
 }
-function content(value:unknown):string {
+function content(value:any):string {
   if(typeof value==='string')return value;
-  if(Array.isArray(value))return records(value).map(item=>typeof item.text==='string'?item.text:'').filter(Boolean).join('\n');
+  if(Array.isArray(value))return value.map(item=>typeof item?.text==='string'?item.text:'').filter(Boolean).join('\n');
   return '';
 }
-function changedFiles(value:unknown,depth=0,result=new Set<string>()):Set<string> {
+function changedFiles(value:any,depth=0,result=new Set<string>()):Set<string> {
   if(depth>4)return result;
-  if(Array.isArray(value)){for(const item of value as unknown[])changedFiles(item,depth+1,result);return result;}
+  if(Array.isArray(value)){for(const item of value)changedFiles(item,depth+1,result);return result;}
   const record=object(value);
   for(const key of ['path','filePath','relativePath','filename','newPath','oldPath'])if(string(record[key]))result.add(string(record[key]));
   for(const key of ['item','result','input','data','changes','files','edits','patch','patches','operations'])if(record[key])changedFiles(record[key],depth+1,result);
@@ -38,13 +37,13 @@ function fields(activity:InlineActivity){
   const command=string(item.command)||string(input.command)||string(result.command)||string(data.command);
   const name=string(data.toolName)||[string(data.server),string(data.tool)].filter(Boolean).join('.')||string(p.title)||string(activity.summary).replace(/ started$/i,'');
   const rawInput=item.input??data.input;let structuredInput=object(rawInput);
-  if(typeof rawInput==='string'){try{structuredInput=object(parseJson(rawInput));}catch{/* Provider summaries may be plain text. */}}
+  if(typeof rawInput==='string'){try{structuredInput=object(JSON.parse(rawInput));}catch{/* Provider summaries may be plain text. */}}
   const path=string(input.path??input.file_path??data.path??item.path);
   const rawOutput=content(item.aggregatedOutput)||content(result.content)||content(data.content)||content(item.content)||content(result.output)||content(data.output)||string(p.detail);
   const exitCode=item.exitCode??result.exitCode??data.exitCode,durationMs=item.durationMs??result.durationMs??data.durationMs;
   const status=string(p.status)||(activity.kind==='tool.completed'?'completed':'inProgress');
-  const files=changedFiles(data),allFiles:unknown[]=[...(Array.isArray(p.files)?p.files as unknown[]:[]),...(Array.isArray(data.files)?data.files as unknown[]:[])];for(const file of allFiles){const path=typeof file==='string'?file:object(file).path;if(string(path))files.add(string(path));}
-  const query=string(structuredInput.query??structuredInput.q??records(structuredInput.search_query)[0]?.q);
+  const files=changedFiles(data);for(const file of [...(Array.isArray(p.files)?p.files:[]),...(Array.isArray(data.files)?data.files:[])])if(string(typeof file==='string'?file:file?.path))files.add(string(typeof file==='string'?file:file?.path));
+  const query=string(structuredInput.query??structuredInput.q??structuredInput.search_query?.[0]?.q);
   const threadId=string(structuredInput.threadId)||(/['"]threadId['"]\s*:\s*['"]([\w:-]+)['"]/.exec(typeof rawInput==='string'?rawInput:'')?.[1]??'');
   return {status,name:/^(?:Tool|Tool updated)$/i.test(name)?undefined:name||undefined,path:path||undefined,kind:data.kind,itemType:p.itemType,requestKind:p.requestKind,query:query||undefined,threadId:threadId||undefined,
     command:command||undefined,cwd:string(item.cwd??input.workdir??data.cwd)||undefined,output:rawOutput&&rawOutput!==command?rawOutput:undefined,
@@ -86,7 +85,7 @@ export function responseTools(state:InlineThreadState,turns:string[]):ResponseTo
   const groups=new Map<string,InlineActivity[]>();
   for(const a of state.activities){
     if(!turns.includes(a.turnId??'')||!/^tool\.(started|updated|completed)$/.test(a.kind)||a.payload?.itemType==='reasoning')continue;
-    const p=object(a.payload);if(!p.toolCallId&&!p.title&&!p.data)continue;const id=string(p.toolCallId)||`legacy:${string(p.itemType)}:${string(p.title)||string(a.summary).replace(/ started$/i,'')}`;
+    const p=a.payload??{};if(!p.toolCallId&&!p.title&&!p.data)continue;const id=string(p.toolCallId)||`legacy:${p.itemType??''}:${string(p.title)||string(a.summary).replace(/ started$/i,'')}`;
     const key=JSON.stringify([a.turnId,id]);const group=groups.get(key)??[];group.push(a);groups.set(key,group);
   }
   return [...groups].map(([key,items])=>{
@@ -118,7 +117,7 @@ export function responseToolGroups(state:InlineThreadState,turns:string[]):Respo
     if(!group||slot!==previousSlot){
       group={id:'',turnId:entry.turnId,createdAt:entry.createdAt,sequence:entry.sequence,tools:[],thoughts:[]};result.push(group);
     }
-    if(entry.tool)group.tools.push(entry.tool);else group.thoughts!.push(entry.thought);
+    if(entry.tool)group.tools.push(entry.tool);else group.thoughts!.push(entry.thought!);
     previousSlot=slot;
   }
   // Concurrent calls can finish out of order. The earliest canonical identity

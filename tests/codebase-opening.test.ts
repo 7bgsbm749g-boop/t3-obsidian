@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext} from 'node:vm';
 import {readFile} from 'node:fs/promises';
 
 const editorExternals=['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight'];
@@ -30,9 +30,9 @@ async function fixture(){
   const app:any={loadLocalStorage:(key:string)=>local.get(key),saveLocalStorage:(key:string,value:unknown)=>local.set(key,value),
     vault:{configDir:'.obsidian',adapter:{read:async()=>{throw Error('missing');}},getFileByPath:()=>null,getAbstractFileByPath:()=>null,read:async()=>'',cachedRead:async()=>''},
     metadataCache:{getFirstLinkpathDest:()=>null,getCache:()=>null},
-    workspace:{openLinkText:async(link:string)=>{nativeLinks.push(link);},getLeaf:()=>leaf,getLeavesOfType:()=>[],iterateAllLeaves:(run:any)=>run({view:{file:{path:'Reference.md'},containerEl:{contains:()=>true}}}),on:()=>({}),offref(){},onLayoutReady(){}}};
+    workspace:{openLinkText:async(link:string)=>{nativeLinks.push(link);},getLeaf:()=>leaf,getLeavesOfType:()=>[],iterateAllLeaves:(run:any)=>run({view:{file:{path:'Reference.md'},containerEl:{contains:()=>true}}}),on:()=>({}),onLayoutReady(){}}};
   const plugin={registerView(){},registerInterval(){},registerEditorSuggest(){},registerEvent(){},addCommand(){},registerDomEvent:(_target:any,event:string,handler:any)=>{if(event==='click')click=handler;}};
-  const module={exports:{} as any};runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:()=>({EditorSuggest:Base,ItemView:Base,MarkdownView:View,TFile:File,TFolder:File,FuzzySuggestModal:Base,Notice}),window:{setInterval:()=>0},document:{addEventListener(event:string,handler:any){if(event==='click')click=handler;},removeEventListener(){},createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},TextEncoder,URL,setTimeout,clearTimeout,performance});
+  const module={exports:{} as any};runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:()=>({EditorSuggest:Base,ItemView:Base,MarkdownView:View,TFile:File,TFolder:File,FuzzySuggestModal:Base,Notice}),window:{setInterval:()=>0},document:{addEventListener(){},createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},TextEncoder,URL,setTimeout,clearTimeout,performance});
   const bridge=new module.exports.CodebaseBridge(app,plugin,io,()=>[],'opening',{environments:()=>['env'],load:()=>undefined,save:async()=>{}});await bridge.install();
   return {bridge,app,io,leaf,notices,nativeLinks,get click(){return click;},progress:()=>notices.filter(notice=>notice.classes.has('send-to-t3-file-opening'))};
 }

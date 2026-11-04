@@ -1,14 +1,12 @@
-import {isRecord,parseJson,toError,records} from '../shared/values';
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {T3_RESPONSE_MAX_BYTES,T3ResponseTooLargeError} from './t3-response-limits';
-import {Buffer} from 'buffer/';
+import {Buffer} from 'buffer';
 import {T3_PROTOCOL_VERSION} from './orchestration-v2';
 
-export type T3Api=(path:string,payload?:unknown)=>Promise<unknown>;
+export type T3Api=(path:string,payload?:any)=>Promise<any>;
 export type SocketFactory=(url:string)=>WebSocket;
 export const RPC_REQUEST_TIMEOUT_MS=15_000,RPC_HEALTH_INTERVAL_MS=5_000,RPC_HEALTH_TIMEOUT_MS=3_000;
 export interface RpcClock {now():number;timer(callback:()=>void,milliseconds:number):ReturnType<typeof setTimeout>;clear(timer:ReturnType<typeof setTimeout>):void}
-const clock:RpcClock={now:()=>typeof performance==='undefined'?Date.now():performance.now(),timer:(callback,milliseconds)=>{const timer=setTimeout(callback,milliseconds);if(typeof timer!=='number')timer.unref?.();return timer;},clear:timer=>clearTimeout(timer)};
+const clock:RpcClock={now:()=>globalThis.performance?.now()??Date.now(),timer:(callback,milliseconds)=>{const timer=setTimeout(callback,milliseconds);(timer as any).unref?.();return timer;},clear:timer=>clearTimeout(timer)};
 export class T3ConnectionTimeoutError extends Error {
   readonly name='T3ConnectionTimeoutError';readonly kind='ConnectionTimeout';readonly confirmed=true;
   constructor(readonly connectionId:string,readonly rpcMethod:string,readonly elapsedMs:number,readonly pendingCount:number,readonly idleMs:number){super('The selected machine stopped responding. Reconnecting.');}
@@ -25,11 +23,11 @@ export class T3RpcError extends Error {
 /** Unary requests over T3's authenticated Effect RPC protocol. */
 export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFactory=url=>new WebSocket(url),time:RpcClock=clock){
   const issued=await api('/api/auth/websocket-ticket',{});
-  if(!isRecord(issued)||typeof issued.ticket!=='string'||!issued.ticket)throw Error('T3 did not issue a connection ticket.');
+  if(typeof issued?.ticket!=='string'||!issued.ticket)throw Error('T3 did not issue a connection ticket.');
   const url=new URL('/ws',origin);url.protocol=url.protocol==='https:'?'wss:':'ws:';
   url.searchParams.set('wsTicket',issued.ticket);url.searchParams.set('orchestrationProtocol',String(T3_PROTOCOL_VERSION));
   const socket=makeSocket(url.href),connectionId=`rpc-${++connections}`;let closed=false,nextId=0,lastReply=time.now(),healthTimer:ReturnType<typeof setTimeout>|undefined;
-  const pending=new Map<string,{resolve:(value:unknown)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>;method:string;started:number}>();
+  const pending=new Map<string,{resolve:(value:any)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>;method:string;started:number}>();
   let probe:{work:Promise<void>;resolve():void;reject(error:Error):void;timer:ReturnType<typeof setTimeout>}|undefined;
   const finish=(error:Error)=>{for(const task of pending.values()){time.clear(task.timer);task.reject(error instanceof T3ConnectionTimeoutError?new T3ConnectionTimeoutError(connectionId,task.method,Math.max(0,time.now()-task.started),error.pendingCount,error.idleMs):error);}pending.clear();};
   const fail=(error:Error)=>{
@@ -63,26 +61,25 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
     try{
       if(typeof event.data!=='string')throw Error('T3 returned an incompatible response.');
       if(Buffer.byteLength(event.data)>T3_RESPONSE_MAX_BYTES)throw new T3ResponseTooLargeError();
-      const decoded=parseJson(event.data);const frames:unknown[]=Array.isArray(decoded)?decoded:[decoded];
+      const decoded=JSON.parse(event.data);const frames=Array.isArray(decoded)?decoded:[decoded];
       for(const frame of frames){
         if(closed)return;
-        if(!isRecord(frame))throw Error('Invalid RPC frame.');
         if(frame._tag==='Pong'){received();continue;}
         if(frame._tag==='Ping'){received();socket.send(JSON.stringify({_tag:'Pong'}));continue;}
         if(frame._tag==='Defect')throw Error('This T3 version could not process the request.');
         const id=String(frame.requestId),task=pending.get(id);if(!task||frame._tag!=='Exit')continue;
         received();pending.delete(id);time.clear(task.timer);
-        if(isRecord(frame.exit)&&frame.exit._tag==='Success')task.resolve(frame.exit.value);
-        else {const causes=isRecord(frame.exit)?frame.exit.cause:undefined;const cause=records(causes).find(x=>x._tag==='Fail')?.error,failure=isRecord(cause)?cause:undefined;const required=failure?.requiredPermission;const permission=typeof required==='string'&&['filesystem:read','filesystem:write','orchestration:read','orchestration:operate'].includes(required)?required:undefined;task.reject(new T3RpcError(typeof failure?._tag==='string'?failure._tag:'RpcError',permission,task.method));}
+        if(frame.exit?._tag==='Success')task.resolve(frame.exit.value);
+        else {const causes=frame.exit?.cause;const failure=Array.isArray(causes)?causes.find((x:any)=>x._tag==='Fail')?.error:undefined;const permission=['filesystem:read','filesystem:write','orchestration:read','orchestration:operate'].includes(failure?.requiredPermission)?failure.requiredPermission:undefined;task.reject(new T3RpcError(failure?._tag??'RpcError',permission,task.method));}
       }
     }catch(error){fail(error instanceof T3ResponseTooLargeError?error:Error('T3 returned an incompatible response.'));}
   };
-  try{await ready;}catch(error){fail(error instanceof Error?error:Error(String(error)));throw toError(error);}
-  const rpc=async(tag:string,payload:unknown):Promise<unknown>=>{
+  try{await ready;}catch(error){fail(error instanceof Error?error:Error(String(error)));throw error;}
+  const rpc=async(tag:string,payload:any)=>{
     // A laptop waking from sleep checks the old socket before putting another
     // file request on it, even if the browser never emitted onclose.
     if(!closed&&time.now()-lastReply>=RPC_HEALTH_INTERVAL_MS)await check();
-    const result=await new Promise<unknown>((resolve,reject)=>{
+    return new Promise<any>((resolve,reject)=>{
     if(closed){reject(Error('The machine connection closed. Choose the machine again.'));return;}
     const id=String(++nextId),started=time.now(),timer=time.timer(()=>{
       void check().then(()=>{const task=pending.get(id);if(!task)return;pending.delete(id);task.reject(new T3RequestTimeoutError(tag,Math.max(0,time.now()-started)));},()=>{});
@@ -90,7 +87,6 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
     pending.set(id,{resolve,reject,timer,method:tag,started});
     try{socket.send(JSON.stringify({_tag:'Request',id,tag,payload,headers:[]}));}catch{fail(Error('Cannot send the request to this machine.'));}
     });
-    return result;
   };
   return {call:rpc,get closed(){return closed;},close(){time.clear(openTimer);fail(Error('T3 connection closed.'));}};
 }

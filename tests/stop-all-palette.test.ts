@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext} from 'node:vm';
 import {randomUUID,webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 import {initialRegion} from '../src/conversations/inline-thread';
@@ -16,7 +16,7 @@ test('mobile palette stop all works without selection, while sending is busy, an
     app={loadLocalStorage:(key:string)=>storage.get(key),saveLocalStorage:(key:string,data:any)=>storage.set(key,data),workspace:{onLayoutReady:()=>{},on:()=>{},getLeavesOfType:()=>[{view}]}};
     async loadData(){return {};}
     async saveData(){}
-    addCommand(command:any){commands.set(command.id,command);}addSettingTab(){}registerEvent(){}register(_cleanup:()=>void){}
+    addCommand(command:any){commands.set(command.id,command);}addSettingTab(){}registerEvent(){}
   }
   const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:class{constructor(text:string){notices.push(text);}}};
   const module={exports:{} as any};

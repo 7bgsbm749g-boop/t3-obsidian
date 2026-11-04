@@ -26,7 +26,7 @@ function scan(doc:Text,from:number,to:number):Candidate[]{
   const source=doc.sliceString(from,to);
   // An unfinished HTML tag can consume a later directive in a regex match.
   // Discover the two kinds independently; only a complete tag pair hides code.
-  return [...source.matchAll(expression),...source.matchAll(htmlTags)].map(match=>({from:from+match.index,to:from+match.index+match[0].length,text:match[0]})).sort((a,b)=>a.from-b.from);
+  return [...source.matchAll(expression),...source.matchAll(htmlTags)].map(match=>({from:from+match.index!,to:from+match.index!+match[0].length,text:match[0]})).sort((a,b)=>a.from-b.from);
 }
 function codeAt(tree:Tree,position:number){
   for(let node=tree.resolve(position,1);node;node=node.parent!)if(['FencedCode','CodeBlock','InlineCode'].includes(node.name))return true;

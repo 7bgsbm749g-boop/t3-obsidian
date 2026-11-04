@@ -1,6 +1,3 @@
-import {valueText} from '../shared/values';
-import {isRecord} from '../shared/values';
-import {hasControlCharacters,optionalString} from '../shared/values';
 import {commandId} from '../connection/direct';
 import {turnForMessage,turnPhase,type InlineThreadState} from './inline-thread';
 import type {EventTarget} from '../app/event-subscriptions';
@@ -15,11 +12,8 @@ export interface JobEvent {
   execution:'t3';delivery:'independent';productDelivery:'unverified';requestId?:string;detail?:string;
 }
 export interface JobObservation {turnId?:string;seen:string[];terminal?:JobStatus;error?:string}
-const identity=(v:unknown):v is string=>typeof v==='string'&&v.length>0&&v.length<=200&&!hasControlCharacters(v);
-export function validateJob(input:unknown):JobWatch {
-  if(!isRecord(input))throw Error('Invalid command object.');
-  // Retain every command-specific validation below before exposing the domain value.
-  const value=input as unknown as JobWatch;
+const identity=(v:unknown):v is string=>typeof v==='string'&&v.length>0&&v.length<=200&&!/[\x00-\x1f]/.test(v);
+export function validateJob(value:any):JobWatch {
   if(!value||![value.jobId,value.requestId,value.messageId,value.threadId,value.projectId,value.environmentId].every(identity)||value.turnId!==undefined&&!identity(value.turnId))throw Error('A job needs job, dispatch request, originating user message, thread, project, and environment IDs.');
   return {...value};
 }
@@ -43,12 +37,12 @@ export function jobEvents(job:JobWatch,state:InlineThreadState,observation:JobOb
   };
   if(observation.terminal)return events;
   const startFailure=state.activities.find(a=>a.kind==='provider.turn.start.failed'&&a.payload?.requestId===job.messageId);
-  if(startFailure){emit('failed',startFailure.id,startFailure.createdAt??'',job.messageId,valueText(startFailure.payload?.detail??startFailure.summary));return events;}
+  if(startFailure){emit('failed',startFailure.id,startFailure.createdAt??'',job.messageId,String(startFailure.payload?.detail??startFailure.summary));return events;}
   if(!turnId||!state.messages.some(m=>m.role==='user'&&m.id===job.messageId))return events;
   const delegated=delegatedWork(state,[turnId]),current=delegated.turnId??turnId;
   const activities=state.activities.filter(a=>!!a.turnId&&delegated.turnIds.includes(a.turnId));
   for(const activity of activities){
-    const requestId=optionalString(activity.payload?.requestId);
+    const requestId=activity.payload?.requestId;
     if(activity.kind==='approval.requested'||activity.kind==='user-input.requested')emit(activity.kind==='approval.requested'?'waiting-approval':'waiting-input',activity.id,activity.createdAt??'',requestId,activity.summary);
     if(activity.kind==='approval.resolved'||activity.kind==='user-input.resolved')emit('running',activity.id,activity.createdAt??'',requestId,activity.summary);
   }

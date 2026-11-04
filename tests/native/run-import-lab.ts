@@ -1,4 +1,3 @@
-import {expectRecord} from '../wire-fixture';
 import {Component,Plugin,MarkdownRenderer,MarkdownView} from 'obsidian';
 import {ImportRunModal,RunImportPicker,RUN_PREVIEW_DELAY} from '../../src/conversations/run-import-ui';
 import {availableImportRun,type ImportRun} from '../../src/conversations/run-import';
@@ -28,8 +27,8 @@ export default class RunImportLab extends Plugin {
  private async capture(name:string){const doc=this.picker?.modalEl.ownerDocument??document,win=doc.defaultView as any,remote=win.require?win.require('@electron/remote'):require('@electron/remote');const image=await remote.getCurrentWebContents().capturePage();fs.writeFileSync(path.join(this.root,name),image.toPNG());}
  private async nativeCapture(){const doc=this.picker?.modalEl.ownerDocument??document;this.write('NATIVE.json',{expanded:doc.querySelector('.send-to-t3-run-row.is-previewing')?.getAttribute('data-t3-import-run'),frames:doc.querySelectorAll('.send-to-t3-run-preview iframe').length,modalText:doc.querySelector('.send-to-t3-run-picker')?.textContent});await this.capture('native-check.png');}
  private makeViews(){const cache=new Map();return new HtmlResultViews(this.app,new HtmlResultStore({read:async key=>cache.get(key),write:async(key,value)=>{cache.set(key,value);}},async()=>({origin:'https://fixture.test',api:async(route,payload)=>{
-  if(route==='/api/orchestration/turn-item'){const ref=this.references.find(r=>r.itemId===expectRecord(payload).itemId)!;return {id:ref.itemId,threadId:ref.threadId,runId:ref.runId,type:'dynamic_tool',toolName:'t3-code.html_render',status:'completed',updatedAt:ref.revision,output:{htmlRender:ref}};}
-  return {relativeUrl:'/api/assets/'+expectRecord(expectRecord(payload).resource).attachmentId,expiresAt:Date.now()+60000};
+  if(route==='/api/orchestration/turn-item'){const ref=this.references.find(r=>r.itemId===payload.itemId)!;return {id:ref.itemId,threadId:ref.threadId,runId:ref.runId,type:'dynamic_tool',toolName:'t3-code.html_render',status:'completed',updatedAt:ref.revision,output:{htmlRender:ref}};}
+  return {relativeUrl:'/api/assets/'+payload.resource.attachmentId,expiresAt:Date.now()+60000};
  }}),async url=>{this.downloads++;await pause(50);return {status:200,mimeType:'text/html',bytes:new TextEncoder().encode(this.pages.get(url.split('/').at(-1)!)!).buffer};}));}
  private show(baseline=false){
   const previous=this.picker;this.picker=undefined;previous?.close();

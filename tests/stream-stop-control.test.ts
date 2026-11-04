@@ -1,4 +1,3 @@
-import {installDomFactories} from './dom-factories';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {installStreamStopControls,type StreamStopTarget} from '../src/responses/stream-stop-control';
@@ -35,7 +34,7 @@ test('Stop requires one explicitly active response; completion, conflicts and a 
 // selection, rendering, keyboard activation and touch layout have a real-app lab.
 class Element {
   parentElement:Element|null=null;children:Element[]=[];hidden=false;disabled=false;type='';className='';attrs=new Map<string,string>();
-  classes=new Set<string>();classList={add:(...names:string[])=>names.forEach(name=>this.classes.add(name)),remove:(...names:string[])=>names.forEach(name=>this.classes.delete(name)),toggle:(name:string,on:boolean)=>{if(on)this.classes.add(name);else this.classes.delete(name);},contains:(name:string)=>this.classes.has(name)};
+  classes=new Set<string>();classList={add:(name:string)=>this.classes.add(name),remove:(name:string)=>this.classes.delete(name)};
   styles=new Map<string,string>();style={setProperty:(name:string,value:string)=>this.styles.set(name,value),removeProperty:(name:string)=>this.styles.delete(name)};clientTop=0;
   rect={top:10,height:20};getBoundingClientRect(){return this.rect;}
   constructor(readonly kind='text'){}
@@ -61,7 +60,7 @@ class Element {
 function fixture(stop:(target:StreamStopTarget)=>Promise<void>=async()=>{}){
   const savedObserver=globalThis.MutationObserver;let mutated=()=>{};
   (globalThis as any).MutationObserver=class {constructor(callback:()=>void){mutated=callback;}observe(){}disconnect(){}};
-  const root=new EventTarget() as any;root.body=new Element('body');root.querySelectorAll=()=>folds;root.createElement=()=>new Element('button');installDomFactories(root);
+  const root=new EventTarget() as any;root.body=new Element('body');root.querySelectorAll=()=>folds;root.createElement=()=>new Element('button');
   const folds=[new Element('fold'),new Element('fold')],view={} as any,targets=new Map(folds.map((fold,i)=>[fold,{id:i?other:id,key:`${i}:active`,view}]));
   for(const fold of folds)root.body.appendChild(fold);
   const errors:unknown[]=[],calls:StreamStopTarget[]=[];

@@ -1,9 +1,7 @@
-import {readThreadSnapshot} from '../src/connection/wire-types';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {applyThreadItem,inlineBindingCheckpoint,renderInlineTurn,restoreInlineBindings,type InlineThreadState} from '../src/conversations/inline-thread';
-import {normalizeV2Snapshot as normalizeUnknownSnapshot,normalizeV2StreamItem} from '../src/connection/orchestration-v2';
-const normalizeV2Snapshot=(value:unknown)=>readThreadSnapshot(normalizeUnknownSnapshot(value));
+import {normalizeV2Snapshot,normalizeV2StreamItem} from '../src/connection/orchestration-v2';
 import {responseTools} from '../src/responses/response-tools';
 import {renderWorktreeSetup,readWorktreeSetup,setupDuration} from '../src/projects/worktree-setup';
 import {stoppedResponseBody} from '../src/responses/response-stop';

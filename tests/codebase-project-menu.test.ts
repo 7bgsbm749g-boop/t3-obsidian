@@ -1,13 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext} from 'node:vm';
 const bundle=build({entryPoints:['src/projects/codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian']});
 const scope={environmentId:'env',projectId:'project',root:'/outside',title:'Project'};
 async function fixture(){
- class Base{}class Element{children:Element[]=[];textContent='';createEl(_tag:string,options:any={}){const e=new Element();e.textContent=options.text??'';this.children.push(e);return e;}setText(text:string){this.textContent=text;}createDiv(options:any={}){return Reflect.apply(this.createEl,this,['div',options]);}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}}
+ class Base{}class Element{children:Element[]=[];textContent='';createEl(_tag:string,options:any={}){const e=new Element();e.textContent=options.text??'';this.children.push(e);return e;}setText(text:string){this.textContent=text;}}
  class Modal{titleEl=new Element();contentEl=new Element();buttons:Button[]=[];input?:Text;closed=false;constructor(public app:any){}open(){}close(){this.closed=true;}}
- class Button{disabled=false;text='';cb?:()=>Promise<void>|void;setButtonText(t:string){this.text=t;return this;}setDisabled(v:boolean){this.disabled=v;return this;}setCta(){return this;}setWarning(){return this;}onClick(cb:any){this.cb=cb;return this;}click(){return this.disabled?undefined:this.cb?.();}setClass(_name:string){return this;}}
+ class Button{disabled=false;text='';cb?:()=>Promise<void>|void;setButtonText(t:string){this.text=t;return this;}setDisabled(v:boolean){this.disabled=v;return this;}setCta(){return this;}setWarning(){return this;}onClick(cb:any){this.cb=cb;return this;}click(){return this.disabled?undefined:this.cb?.();}}
  class Text{value='';cb?:(value:string)=>void;setValue(v:string){this.value=v;return this;}onChange(cb:any){this.cb=cb;return this;}change(v:string){this.value=v;this.cb?.(v);}}
  const buttons:Button[]=[],inputs:Text[]=[];
  class Setting{constructor(_el:Element){}setName(){return this;}addButton(cb:any){const b=new Button();buttons.push(b);cb(b);return this;}addText(cb:any){const t=new Text();inputs.push(t);cb(t);return this;}}

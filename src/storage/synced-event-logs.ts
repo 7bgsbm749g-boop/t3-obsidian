@@ -1,9 +1,8 @@
-import {isRecord,parseJson} from '../shared/values';
 import {redact,validEvent,type DiagnosticEvent} from '../app/diagnostics';
 /** Root configuration JSON is included in Sync's core-plugin-data category. */
-export const eventLogPath=(configDir:string)=>`${configDir}/t3-code-log.json`;
+export const EVENT_LOG_PATH='.obsidian/t3-code-log.json';
 export const EVENT_LOG_FOLDER='T3 Code Logs'; // Retired location, migration only.
-export function isLogPath(path:string){return path.endsWith('/t3-code-log.json')||path===EVENT_LOG_FOLDER||path.startsWith(EVENT_LOG_FOLDER+'/');}
+export function isLogPath(path:string){return path===EVENT_LOG_PATH||path===EVENT_LOG_FOLDER||path.startsWith(EVENT_LOG_FOLDER+'/');}
 export function logDay(now:number){return new Date(now).toISOString().slice(0,10);}
 export function currentDayEvents(events:DiagnosticEvent[],now:number){const day=logDay(now);return events.filter(event=>event.at.slice(0,10)===day);}
 interface Files {exists(path:string):Promise<boolean>;mkdir(path:string):Promise<void>;read(path:string):Promise<string>;write(path:string,data:string):Promise<void>;remove(path:string):Promise<void>;list?(path:string):Promise<{files:string[];folders:string[]}>;rmdir?(path:string,recursive:boolean):Promise<void>}
@@ -12,12 +11,12 @@ interface Files {exists(path:string):Promise<boolean>;mkdir(path:string):Promise
 export class SyncedEventLogs {
   private work=Promise.resolve();
   readonly path:string;
-  constructor(private files:Files,private deviceId:string,private paths:()=>string[],private now=()=>Date.now(),configDir:string){this.path=eventLogPath(configDir);}
+  constructor(private files:Files,private deviceId:string,private paths:()=>string[],private now=()=>Date.now(),configDir='.obsidian'){this.path=`${configDir}/t3-code-log.json`;}
   private parse(text:string,legacy=false):DiagnosticEvent[]{
     try{const raw=legacy?/^# T3 Code plugin event log\n[\s\S]*```json\n([\s\S]*)\n```\n?$/.exec(text)?.[1]:text;if(!raw)return [];
-      const value=parseJson(raw);if(!isRecord(value)||value.schema!==1||!Array.isArray(value.events))throw Error('Invalid plugin event log');
-      if(!value.events.every((event:unknown)=>validEvent(event)&&typeof event.deviceId==='string'))throw Error('Invalid plugin event log entries');
-      return (value.events as DiagnosticEvent[]).map((event:DiagnosticEvent)=>({...event,fields:redact(event.fields) as Record<string,unknown>}));
+      const value=JSON.parse(raw);if(value.schema!==1||!Array.isArray(value.events))throw Error('Invalid plugin event log');
+      if(!value.events.every((event:any)=>validEvent(event)&&typeof event.deviceId==='string'))throw Error('Invalid plugin event log entries');
+      return value.events.map((event:DiagnosticEvent)=>({...event,fields:redact(event.fields) as Record<string,unknown>}));
     }catch(error){if(legacy)return [];throw error;}
   }
   async read(){return await this.files.exists(this.path)?currentDayEvents(this.parse(await this.files.read(this.path)),this.now()):[];}

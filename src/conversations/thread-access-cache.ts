@@ -55,11 +55,11 @@ export class ThreadAccessCache {
     if(this.entries.get(environmentId)===entry){entry.expires=0;entry.reason='auth-rejected';}
   }
 
-  private async request(environmentId:string,path:string,payload?:unknown):Promise<unknown>{
+  private async request(environmentId:string,path:string,payload?:any):Promise<any>{
     // Reads and stream-ticket creation are safe to retry. Dispatch never is.
     return this.perform(environmentId,access=>access.api(path,payload),payload===undefined&&!path.split('?')[0].endsWith('/dispatch')||path==='/api/auth/websocket-ticket');
   }
-  private async perform<T>(environmentId:string,operation:(access:ThreadAccess)=>Promise<T>,retry:boolean):Promise<T>{
+  private async perform(environmentId:string,operation:(access:ThreadAccess)=>Promise<any>,retry:boolean):Promise<any>{
     const entry=await this.acquire(environmentId);
     try{return await operation(entry.access);}
     catch(error){

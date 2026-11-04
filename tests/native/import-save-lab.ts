@@ -1,4 +1,3 @@
-import {expectRecord} from '../wire-fixture';
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
 import SendToT3 from '../../src/app/main';
 import {LocalResponseManager} from '../../src/responses/local-response-manager';
@@ -33,7 +32,7 @@ export default class ImportSaveLab extends Plugin {
     const source={threadId:'synthetic-thread',projectId:'synthetic-project',environmentId:'synthetic-environment'};
     const at='2026-10-20T00:00:00Z',turn={turnId,messageId,state:'completed',requestedAt:at,completedAt:at,assistantMessageId:'synthetic-answer'};
     const marker='NATIVE_IMPORT_FINAL_SAVED';
-    const snapshot={snapshotSequence:2,thread:{protocolVersion:2 as const,id:source.threadId,projectId:source.projectId,title:'Synthetic completed import',latestTurn:turn,turns:{[turnId]:turn},session:{status:'ready',activeTurnId:null},activities:[],messages:[{id:messageId,role:'user',turnId,text:'Synthetic import prompt.',streaming:false,createdAt:at},{id:'synthetic-answer',role:'assistant',turnId,itemId:'synthetic-final-item',updatedAt:at,text:marker,streaming:false,createdAt:at}]}};
+    const snapshot={snapshotSequence:2,thread:{protocolVersion:2,id:source.threadId,projectId:source.projectId,title:'Synthetic completed import',latestTurn:turn,turns:{[turnId]:turn},session:{status:'ready',activeTurnId:null},activities:[],messages:[{id:messageId,role:'user',turnId,text:'Synthetic import prompt.',streaming:false,createdAt:at},{id:'synthetic-answer',role:'assistant',turnId,itemId:'synthetic-final-item',updatedAt:at,text:marker,streaming:false,createdAt:at}]}};
     subject.settings={vaultId:'synthetic-import-vault',inlineStreaming:{enabled:true},responseBindings:{}};
     subject.connection=()=>({environmentId:source.environmentId});
     subject.localResponseTarget=async()=>({environmentId:source.environmentId,workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'});
@@ -44,7 +43,7 @@ export default class ImportSaveLab extends Plugin {
       openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file).map(view=>({path:view.file!.path,document:native.view(view)?.saved()??view.getViewData()})),
       syncReady:()=>syncReady,receiveCoordinated:record=>native.receive(record),receiveDirect:update=>native.stream(update),localCompleted:(id,note)=>native.localCompleted(id,note),
       completionFailed:error=>write('SAVE-ERROR.json',{error:String(error)}),
-      access:async()=>({origin:'https://synthetic.invalid',api:async(route,payload)=>{completionReads.push({route,itemId:expectRecord(payload).itemId});if(route!=='/api/orchestration/turn-item')throw Error('Unexpected synthetic request.');return {id:'synthetic-final-item',threadId:source.threadId,runId:turnId,messageId:'synthetic-answer',type:'assistant_message',text:marker,streaming:false,status:'completed',updatedAt:at};}}),
+      access:async()=>({origin:'https://synthetic.invalid',api:async(route,payload)=>{completionReads.push({route,itemId:payload?.itemId});if(route!=='/api/orchestration/turn-item')throw Error('Unexpected synthetic request.');return {id:'synthetic-final-item',threadId:source.threadId,runId:turnId,messageId:'synthetic-answer',type:'assistant_message',text:marker,streaming:false,status:'completed',updatedAt:at};}}),
     },deviceFinalNoteIO(this.app,()=>true),Date.now,(record,access,receive)=>new DirectInlinePreview(record,access,receive,(_thread,_access,callbacks)=>{queueMicrotask(()=>callbacks.item({kind:'snapshot',snapshot}));return {stop:()=>{}};}));
     this.register(()=>local.dispose());this.registerInterval(window.setInterval(()=>{native.refresh();local.tick();},100));
     let dialog:ImportRunModal|undefined,dialogSaveChecked=false,followChecked=false;

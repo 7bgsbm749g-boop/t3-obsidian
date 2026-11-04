@@ -1,4 +1,4 @@
-import {Buffer} from 'buffer/';
+import {Buffer} from 'buffer';
 import {deviceState} from '../storage/device-state';
 export interface ProofKey {privateKey:CryptoKey;publicJwk:JsonWebKey}
 const b64=(v:ArrayBuffer|Uint8Array|string)=>Buffer.from(typeof v==='string'?new TextEncoder().encode(v):new Uint8Array(v)).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
@@ -8,7 +8,7 @@ export async function proofKey(id:string,create=true):Promise<ProofKey>{
  const work=loadProofKey(id,create);pendingKeys.set(id,work);try{return await work;}finally{if(pendingKeys.get(id)===work)pendingKeys.delete(id);}
 }
 async function loadProofKey(id:string,create:boolean):Promise<ProofKey>{
- const name='dpop:'+id;const saved=await deviceState<ProofKey>(name);if(saved?.privateKey&&saved?.publicJwk)return saved;
+ const name='dpop:'+id;const saved=await deviceState(name);if(saved?.privateKey&&saved?.publicJwk)return saved;
  if(!create)throw Error('This device’s connection key is missing. Refresh your T3 connections.');
  if(!crypto.subtle)throw Error('Secure browser cryptography is unavailable on this device.');
  const pair=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']);

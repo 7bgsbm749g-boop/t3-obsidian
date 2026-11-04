@@ -69,8 +69,3 @@ keep Alpha in its title and description. The GitHub prerelease flag is not the
 project's development-stage switch. Confirm the current
 [Obsidian submission requirements](https://docs.obsidian.md/Plugins/Releasing/Submit+your+plugin)
 when submitting or resubmitting to the plugin directory.
-
-New GitHub release assets must carry provenance for their exact numeric tag and
-reviewed queue commit. Use the checked publication procedure in
-[Review and release checks](review-and-release.md). This does not change alpha
-numbering, private comparison counters, or immutable historical releases.

@@ -17,7 +17,6 @@ async function main(){
   const result:any={phase,at:new Date().toISOString(),hostRoot:lab.hostRoot,sourceRoot:lab.sourceRoot,transport:'authenticated projects.readFile RPC, separate vault roots'};
   try{
     const file=await rpc.call('projects.readFile',{cwd:lab.hostRoot,relativePath:settingsPath});
-    assert.ok(file&&typeof file==='object'&&'byteLength' in file&&'contents' in file&&typeof file.contents==='string'&&'truncated' in file);
     result.settings={byteLength:file.byteLength,returnedBytes:Buffer.byteLength(file.contents),truncated:file.truncated};assert.equal(file.truncated,true,'The old fault requires settings larger than the real T3 limit.');
     if(phase==='before'){
       await assert.rejects(rpc.call('projects.readFile',{cwd:lab.hostRoot,relativePath:identityPathForSettings(settingsPath)}),(e:any)=>e.kind==='ProjectReadFileError');

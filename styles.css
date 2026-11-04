@@ -73,10 +73,11 @@
 /* Keep response counts accessible without a visible dot, badge or spacing. */
 .send-to-t3-note-indicator {
   position: absolute;
-  width: 0;
-  height: 0;
+  width: 1px;
+  height: 1px;
   margin: 0;
   overflow: hidden;
+  clip-path: inset(50%);
 }
 
 /* Unread completions follow the theme accent, independently of running shine. */
@@ -200,7 +201,7 @@
 
 .send-to-t3-question-answer { margin: 0.3em 0; color: var(--text-accent); }
 .send-to-t3-question { margin: .8em 0; font-size: .9em; }
-body .send-to-t3-question[hidden] { display: none; }
+.send-to-t3-question[hidden] { display: none !important; }
 .send-to-t3-question-heading { display: flex; align-items: center; gap: .6em; color: var(--text-muted); }
 .send-to-t3-question-heading strong { font-size: var(--font-ui-small); font-weight: var(--font-semibold); }
 .send-to-t3-question-heading .send-to-t3-question-answer { margin: 0 0 0 auto; }
@@ -216,7 +217,7 @@ body .send-to-t3-question[hidden] { display: none; }
 .send-to-t3-custom-answer-hint { display: block; margin-top: 0.4em; color: var(--text-muted); }
 .send-to-t3-question-actions { display: flex; flex-wrap: wrap; gap: 0.7em; justify-content: flex-end; }
 /* Obsidian's button display rules override the browser's default hidden rule. */
-body .send-to-t3-question-actions button[hidden] { display: none; }
+.send-to-t3-question-actions button[hidden] { display: none !important; }
 
 .send-to-t3-panel-host { position: relative; }
 .modal.send-to-t3-tab-panel {
@@ -242,7 +243,7 @@ body .send-to-t3-question-actions button[hidden] { display: none; }
 .send-to-t3-tab-panel .modal-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .send-to-t3-tab-panel .modal-title { font-size: var(--font-ui-medium); }
 .send-to-t3-tab-panel .setting-item { border: 0; }
-body .send-to-t3-destination-actions button[hidden] { display: none; }
+.send-to-t3-destination-actions button[hidden] { display: none !important; }
 .modal.send-to-t3-ask-composer {
   inset: auto 12px max(12px, env(safe-area-inset-bottom));
   width: calc(100% - 24px);
@@ -315,27 +316,27 @@ body .send-to-t3-destination-actions button[hidden] { display: none; }
 .send-to-t3-response-drag { display: inline-flex; align-items: center; flex: 0 0 auto; color: var(--text-faint); cursor: grab; touch-action: none; user-select: none; padding: 3px; border-radius: 4px; }
 .send-to-t3-response-drag svg { width: 16px; height: 16px; }
 .send-to-t3-response-drag:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
-body .send-to-t3-response-dragging, .send-to-t3-response-dragging * { cursor: grabbing; }
+.send-to-t3-response-dragging, .send-to-t3-response-dragging * { cursor: grabbing !important; }
 .send-to-t3-response-drop { position: fixed; z-index: 10000; height: 3px; background: var(--interactive-accent); border-radius: 2px; pointer-events: none; }
 .send-to-t3-response-drop[hidden] { display: none; }
 .send-to-t3-response-drag-ghost { position: fixed; z-index: 10001; pointer-events: none; padding: 5px 9px; border-radius: 5px; background: var(--background-primary); border: 1px solid var(--interactive-accent); color: var(--text-normal); font-size: var(--font-ui-small); box-shadow: var(--shadow-s); }
 .callout[data-callout="t3-progress"].send-to-t3-stream-stoppable { position: relative; }
-.send-to-t3-stream-stoppable.send-to-t3-stop-visible > .callout-title { padding-inline-end: 56px; }
+.send-to-t3-stream-stoppable:has(> .send-to-t3-stream-stop:not([hidden])) > .callout-title { padding-inline-end: 56px; }
 .send-to-t3-stream-stop { position: absolute; top: var(--send-to-t3-stop-center, 1em); right: 4px; transform: translateY(-50%); z-index: 3; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; min-width: 0; min-height: 0; margin: 0; padding: 0; color: var(--text-muted); background: transparent; border: 0; border-radius: var(--radius-s, 4px); box-shadow: none; cursor: pointer; touch-action: manipulation; }
-body .send-to-t3-stream-stop[hidden] { display: none; }
+.send-to-t3-stream-stop[hidden] { display: none !important; }
 .send-to-t3-stream-stop svg { width: 14px; height: 14px; fill: currentColor; }
 .send-to-t3-stream-stop:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
 .send-to-t3-stream-stop:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
 .send-to-t3-stream-stop:disabled { cursor: wait; opacity: 0.5; }
-.cm-embed-block.send-to-t3-stop-visible > .embed-actions.send-to-t3-stream-actions:not(.send-to-t3-stream-actions-bottom),
-.send-to-t3-stream-stoppable.send-to-t3-stop-visible > .send-to-t3-reading-actions:not(.send-to-t3-stream-actions-bottom) { right: 32px; }
+.cm-embed-block:has(.send-to-t3-stream-stop:not([hidden])) > .embed-actions.send-to-t3-stream-actions:not(.send-to-t3-stream-actions-bottom),
+.send-to-t3-stream-stoppable:has(> .send-to-t3-stream-stop:not([hidden])) > .send-to-t3-reading-actions:not(.send-to-t3-stream-actions-bottom) { right: 32px; }
 /* Align the native editor action with the header, including wrapped titles. */
 .markdown-source-view.mod-cm6 .embed-actions.send-to-t3-progress-actions {
   top: var(--send-to-t3-header-center);
   transform: translateY(-50%);
 }
 .send-to-t3-stream-actions .edit-block-button:not(.send-to-t3-stream-close):not(.send-to-t3-stream-follow):not(.send-to-t3-stream-sign-in),
-body .send-to-t3-stream-close[hidden], .send-to-t3-stream-follow[hidden], .send-to-t3-stream-sign-in[hidden] { display: none; }
+.send-to-t3-stream-close[hidden], .send-to-t3-stream-follow[hidden], .send-to-t3-stream-sign-in[hidden] { display: none !important; }
 .send-to-t3-stream-sign-in { cursor: pointer; min-height: 28px; padding: 3px 12px; border-radius: 4px; white-space: nowrap; font-size: var(--font-ui-small); }
 .markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-auth-required { opacity: 1; }
 .send-to-t3-stream-close[aria-disabled="true"] { pointer-events: none; opacity: 0.5; }
@@ -350,17 +351,15 @@ body .send-to-t3-stream-close[hidden], .send-to-t3-stream-follow[hidden], .send-
 .send-to-t3-reading-actions.send-to-t3-stream-actions-moving { transition: top 420ms cubic-bezier(.33, 1, .68, 1); }
 .markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions-bottom,
 .send-to-t3-reading-actions.send-to-t3-stream-actions-bottom { top: var(--send-to-t3-stream-bottom-center); }
-.callout[data-callout="t3-progress"].send-to-t3-has-reading-actions { position: relative; }
+.callout[data-callout="t3-progress"]:has(> .send-to-t3-reading-actions) { position: relative; }
 .send-to-t3-reading-actions { position: absolute; right: 4px; z-index: 2; }
 /* A native stream widget can temporarily become a shorter height estimate.
    Keep its editor from clamping to that false bottom during the redraw. */
-/* CodeMirror replaces inline min-height while native widgets settle. This
- * scoped override preserves the measured floor outside that inline style. */
 .cm-content[data-t3-response-height-guard="true"] { min-height: var(--send-to-t3-response-min-height) !important; }
 .send-to-t3-stream-follow { cursor: pointer; color: var(--text-muted); }
 /* A collapsed response has no visible output to follow, even while Stop is shown. */
-.cm-embed-block.send-to-t3-stream-collapsed > .send-to-t3-stream-actions .send-to-t3-stream-follow,
-.callout[data-callout="t3-progress"].is-collapsed > .send-to-t3-reading-actions .send-to-t3-stream-follow { display: none; }
+.cm-embed-block:has(> .callout[data-callout="t3-progress"].is-collapsed, > .markdown-rendered > .callout[data-callout="t3-progress"].is-collapsed) > .send-to-t3-stream-actions .send-to-t3-stream-follow,
+.callout[data-callout="t3-progress"].is-collapsed > .send-to-t3-reading-actions .send-to-t3-stream-follow { display: none !important; }
 .send-to-t3-stream-follow svg { width: 20px; height: 20px; }
 .send-to-t3-stream-follow[aria-pressed="true"],
 .markdown-source-view.mod-cm6 .edit-block-button.send-to-t3-stream-follow[aria-pressed="true"] {
@@ -417,7 +416,7 @@ body .send-to-t3-stream-close[hidden], .send-to-t3-stream-follow[hidden], .send-
 .send-to-t3-run-timer { font-variant-numeric: tabular-nums; color: var(--text-muted); font-weight: normal; }
 .send-to-t3-fold-key { display: none; }
 /* Container syntax has no visible paragraph in Reading view. */
-body .send-to-t3-response-boundary { display: none; }
+.send-to-t3-response-boundary { display: none !important; }
 .send-to-t3-response-activity {
   color: var(--text-muted);
   overflow-wrap: anywhere;
@@ -506,13 +505,13 @@ body .send-to-t3-response-boundary { display: none; }
 
 /* Native explorer classes supply spacing, selection, icons, and theme styling. */
 .t3-codebase-explorer { padding: 0; overflow: auto; }
-body .t3-codebase-explorer [hidden] { display: none; }
+.t3-codebase-explorer [hidden] { display: none !important; }
 .t3-codebase-explorer .tree-item-inner { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t3-codebase-message { color: var(--text-muted); font-size: var(--font-ui-smaller); padding: 4px 12px; }
 .t3-codebase-explorer .collapse-icon svg { transform: rotate(90deg); }
 .t3-codebase-explorer .collapse-icon.is-collapsed svg { transform: rotate(0deg); }
 /* Keep the native path header, with project names in place of bridge identities. */
-body [data-t3-codebase-hidden="true"] { display: none; }
+[data-t3-codebase-hidden="true"] { display: none !important; }
 
 /* The unfinished paragraph keeps a stable text node until a block boundary. */
 .send-to-t3-stream-tail { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -542,12 +541,12 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 [data-t3-tool-icon] { display: inline-flex; width: 16px; height: 16px; flex: 0 0 16px; }
 [data-t3-tool-icon] svg { width: 16px; height: 16px; }
 .send-to-t3-tool-group-content { padding-left: 1.1em; }
-.markdown-rendered .send-to-t3-response-history,.markdown-rendered .send-to-t3-response-history>.send-to-t3-tool-group-content{display:block;margin:0;padding:0;border:0;background:transparent;}
+.markdown-rendered .send-to-t3-response-history,.markdown-rendered .send-to-t3-response-history>.send-to-t3-tool-group-content{display:contents;}
 .markdown-rendered .send-to-t3-response-history>summary{display:none;}
 .send-to-t3-tool[data-t3-tool-status="inProgress"] > summary::after { content: ''; width: .65em; height: .65em; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: send-to-t3-inline-spin .8s linear infinite; }
 .send-to-t3-tool[data-t3-tool-status="failed"] > summary { color: var(--text-error); }
 .send-to-t3-tool pre { max-height: 18em; overflow: auto; white-space: pre-wrap; }
-.send-to-t3-tool pre { position: relative; }
+.send-to-t3-tool pre:has(> .send-to-t3-tool-copy) { position: relative; }
 @media (prefers-reduced-motion: reduce) { .send-to-t3-tool > summary::after { animation: none; } }
 .send-to-t3-worktree-setup { margin: .5em 0; font-family: var(--font-interface); font-size: 14px; line-height: 1.5; color: var(--text-muted); }
 .send-to-t3-setup-header { display: flex; align-items: baseline; gap: 8px; min-height: 32px; padding: 4px 4px 8px; margin-bottom: 6px; border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 60%, transparent); }
@@ -591,18 +590,18 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .send-to-t3-html-passive { pointer-events: none; }
 
 /* Existing spaces and tabs have the same display policy in both code modes. */
-.workspace .t3-code-language-view .cm-scroller,
-.workspace .t3-code-language-view .cm-content,
-.workspace .t3-code-language-view pre,
-.workspace .t3-code-language-view code {
-  font-family: var(--font-monospace);
-  tab-size: var(--t3-code-language-tab-size, 4);
+.t3-code-language-view .cm-scroller,
+.t3-code-language-view .cm-content,
+.t3-code-language-view pre,
+.t3-code-language-view code {
+  font-family: var(--font-monospace) !important;
+  tab-size: var(--t3-code-language-tab-size, 4) !important;
 }
 /* HTML is the content, with the same small hover action as a native embed. */
 .send-to-t3-html-result{position:relative;display:block;width:100%;min-width:0;margin:var(--p-spacing,1em) 0;border:0;background:transparent;contain:layout;}
-.markdown-source-view.mod-cm6 .cm-preview-code-block.send-to-t3-html-code-block{padding:0;background:transparent;border:0;border-radius:0;outline:none;box-shadow:none;overflow:visible;}
+.markdown-source-view .cm-preview-code-block:has(.send-to-t3-html-result){padding:0;background:transparent;border:0!important;border-radius:0;outline:none!important;box-shadow:none!important;overflow:visible;}
 .markdown-source-view .cm-preview-code-block .send-to-t3-html-result{margin:0;}
-.markdown-source-view.mod-cm6 .cm-preview-code-block.send-to-t3-html-code-block .edit-block-button{display:none;}
+.markdown-source-view .cm-preview-code-block:has(.send-to-t3-html-result) .edit-block-button{display:none!important;}
 .send-to-t3-html-surface{width:100%;height:100%;min-width:0;}
 .send-to-t3-html-frame{display:block;width:100%;height:100%;margin:0;padding:0;border:0;background:transparent;}
 .markdown-source-view .send-to-t3-html-frame{border-radius:0;}
@@ -619,6 +618,6 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .send-to-t3-html-modal .modal-content{display:flex;flex-direction:column;gap:8px;overflow:hidden;}
 .send-to-t3-html-zoom{display:flex;justify-content:flex-end;align-items:center;gap:6px;}
 .send-to-t3-html-expanded{height:75vh;overflow:auto;}
-.send-to-t3-html-expanded.send-to-t3-html-expanded-loading{height:auto;min-height:64px;}
+.send-to-t3-html-expanded:has(>.send-to-t3-html-result:not([data-t3-html-state="ready"])){height:auto;min-height:64px;}
 .send-to-t3-html-expanded>.send-to-t3-html-result{height:100%;margin:0;}
 @media(pointer:coarse){.send-to-t3-html-controls{opacity:1;}}

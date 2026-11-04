@@ -1,4 +1,3 @@
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import type {ResponseRecord} from './response-record';
 import type {ResponseRequest} from './response-model';
 import {applyThreadItem,inlineBindingCheckpoint,inlineTurnMessages,restoreInlineBindings,turnForMessage,renderInlineTurn,rememberInlineTurns,type InlineThreadState,type InlineStartRequest,type InlineActivity} from '../conversations/inline-thread';
@@ -96,7 +95,7 @@ export class DirectInlinePreview {
     const request=this.record.request;
     if(item.kind==='synchronized')return;
     const sequence=item.kind==='snapshot'?item.snapshot?.snapshotSequence:item.event?.sequence;
-    if(item.kind!=='event'||item.event?.type!=='thread.worktree-setup')if(typeof sequence!=='number'||!Number.isSafeInteger(sequence)||sequence<0)return;
+    if(item.kind!=='event'||item.event?.type!=='thread.worktree-setup')if(!Number.isSafeInteger(sequence)||sequence<0)return;
     if(item.kind==='snapshot'&&(item.snapshot?.thread?.id!==request.threadId||item.snapshot?.thread?.projectId!==request.projectId))return;
     if(item.kind==='event'&&item.event?.aggregateId!==undefined&&item.event.aggregateId!==request.threadId)return;
     if(this.connectionIssue){this.connectionIssue=undefined;this.connectionChanged?.();}
@@ -212,7 +211,7 @@ export class DirectInlinePreview {
         this.verifiedKey=checked.verified?finalResponseKey(this.state,turnId):undefined;
         if(checked.verified)this.failure=undefined;
       }else{
-        if(!('thread' in result)||typeof result.snapshotSequence!=='number'||result.snapshotSequence<sequence)return;
+        if(result.snapshotSequence<sequence)return;
         this.state=applyThreadItem(this.state,{kind:'snapshot',snapshot:result}).state;
         this.verifiedSequence=result.snapshotSequence;
       }

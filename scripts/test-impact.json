@@ -1,8 +1,6 @@
 {
   "dependencies": {
-    "src/conversations/run-import-ui.ts": [
-      "styles.css"
-    ],
+    "src/conversations/run-import-ui.ts": ["styles.css"],
     "tests/codebase-response-save.test.ts": [
       "tests/native/codebase-response-save-lab.ts"
     ],
@@ -41,8 +39,7 @@
       "src/app/main.ts",
       "esbuild.config.mjs",
       "manifest.json",
-      "THIRD_PARTY_NOTICES.md",
-      "src/shared/obsidian-window.d.ts"
+      "THIRD_PARTY_NOTICES.md"
     ],
     "src/app/main.ts": [
       "styles.css"

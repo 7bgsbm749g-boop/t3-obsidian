@@ -1,8 +1,7 @@
-import {installDomFactories} from './dom-factories';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 import {EditorState} from '@codemirror/state';
 import {questionUrl,renderQuestion,pendingQuestions} from '../src/interaction/questions';
@@ -15,7 +14,7 @@ class Element {
   addClass(){} addEventListener(){} empty(){this.children=[];}replaceChildren(){this.children=[];}
   createEl(tag:string,options?:any){const child=new Element(tag,options);this.children.push(child);return child;}
   createDiv(options?:any){return this.createEl('div',options);}
-  querySelectorAll(selector:string):Element[]{return this.children.flatMap(child=>[...(selector.split(',').includes(child.tag)?[child]:[]),...child.querySelectorAll(selector)]);}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}
+  querySelectorAll(selector:string):Element[]{return this.children.flatMap(child=>[...(selector.split(',').includes(child.tag)?[child]:[]),...child.querySelectorAll(selector)]);}
 }
 const target={environmentId:'environment',threadId:'thread',requestId:'request'};
 async function harness(){
@@ -137,7 +136,7 @@ test('native HTML question links become tracked controls and mismatched targets 
  const token=questionUrl(target).slice('t3-question:'.length),row={hidden:false,getAttribute:()=>token};
  const link={getAttribute:()=>questionUrl(target),closest:()=>row,replaceWith:(button:any)=>{bound=button;bound.isConnected=true;bound.closest=()=>row;}};
  const other={...link,closest:()=>({getAttribute:()=>encodeURIComponent(JSON.stringify({...target,requestId:'other'}))}),replaceWith:()=>{throw Error('A mismatched row must not be bound');}};
- const dispose=h.module.exports.installQuestionLinks(installDomFactories({querySelectorAll:()=>[link,other],createElement:(tag:string)=>new Element(tag)}),h.controller,()=>opens++);
+ const dispose=h.module.exports.installQuestionLinks({querySelectorAll:()=>[link,other]},h.controller,()=>opens++);
  assert.ok(bound);assert.equal(bound.disabled,false);assert.equal(h.controller.watchedTargets().filter((item:any)=>item.requestId==='request').length,1);
  h.activities.push({id:'answered',kind:'user-input.resolved',payload:{requestId:'request',answers:{text:'Yes'}}});await h.controller.refresh([target]);assert.equal(row.hidden,true);assert.equal(bound.disabled,true);assert.equal(opens,0);
  dispose();h.modal.close();h.controller.dispose();

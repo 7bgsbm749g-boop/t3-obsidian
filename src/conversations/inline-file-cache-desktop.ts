@@ -1,5 +1,3 @@
-/* eslint obsidianmd/no-nodejs-modules: ["warn", {"isDesktopOnly": true}] -- This desktop adapter is lazy-loaded; scripts/check-platform-boundaries.mjs and mobile bundle tests prohibit Node imports in the portable entry graph. */
-import {errorCode,toError} from '../shared/values';
 import {promises as fs,type BigIntStats} from 'node:fs';
 
 type Entry={identity:BigIntStats;value:string};
@@ -10,7 +8,7 @@ const sameIdentity=(a:BigIntStats,b:BigIntStats)=>a.dev===b.dev&&a.ino===b.ino&&
  * target bytes; they always retain ordinary fresh-read behavior. */
 export async function inlineFileVersion(path:string):Promise<string|undefined>{
   try{const stat=await fs.lstat(path,{bigint:true});return stat.isFile()?[stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs,stat.mode].join(':'):undefined;}
-  catch(error:unknown){if(errorCode(error)==='ENOENT')return;throw toError(error);}
+  catch(error:any){if(error.code==='ENOENT')return;throw error;}
 }
 
 /** Only reuse bytes after a fresh nanosecond file-identity check. This cache
@@ -26,14 +24,14 @@ export class DesktopInlineReadCache {
   async read(path:string,retain=true):Promise<string|undefined>{
     if(!retain)this.invalidate(path);
     let before:BigIntStats;
-    try{before=await fs.lstat(path,{bigint:true});}catch(error:unknown){this.invalidate(path);if(errorCode(error)==='ENOENT')return;throw toError(error);}
+    try{before=await fs.lstat(path,{bigint:true});}catch(error:any){this.invalidate(path);if(error.code==='ENOENT')return;throw error;}
     const cached=this.entries.get(path);
     if(before.isFile()&&cached&&sameIdentity(before,cached.identity)){
       this.entries.delete(path);this.entries.set(path,cached);this.hits++;return cached.value;
     }
     this.invalidate(path);
     let value:string;
-    try{this.sourceReads++;value=await this.readFile(path);}catch(error:unknown){if(errorCode(error)==='ENOENT')return;throw toError(error);}
+    try{this.sourceReads++;value=await this.readFile(path);}catch(error:any){if(error.code==='ENOENT')return;throw error;}
     if(retain&&before.isFile()&&value.length<=this.maxCharacters&&this.maxEntries>0){
       // A concurrent replacement or write cannot authenticate the bytes just
       // read for later reuse. Preserve ordinary read semantics, but do not cache.

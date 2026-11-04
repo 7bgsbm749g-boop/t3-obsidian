@@ -1,4 +1,3 @@
-import {installDomFactories} from './dom-factories';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {activeResponseFolders,activityLeafPath,decorateActivityTabs,decorateMobileActivityTabs} from '../src/ui/activity-titles';
@@ -8,7 +7,7 @@ import type {NoteIndicator} from '../src/responses/explorer-responses';
 class Element {
   className='';title='';textContent='';children:Element[]=[];attrs=new Map<string,string>();
   classList={contains:(name:string)=>this.className.split(' ').includes(name)};
-  ownerDocument=installDomFactories({createElement:()=>new Element()});
+  ownerDocument={createElement:()=>new Element()};
   parent?:Element;
   getAttribute(name:string){return this.attrs.get(name)??null;}
   hasAttribute(name:string){return this.attrs.has(name);}

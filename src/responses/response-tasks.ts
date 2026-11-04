@@ -1,5 +1,3 @@
-import {valueText} from '../shared/values';
-import {records} from '../shared/values';
 import {micromark} from 'micromark';
 
 const html=(text:string)=>text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -10,10 +8,10 @@ function task(text:string,state:TaskState){
   // renderers must not change these agent-owned, read-only status indicators.
   return `<div class="send-to-t3-task" role="listitem" data-t3-task-state="${state}"><span class="send-to-t3-task-mark" role="img" aria-label="${stateLabel[state]}"></span><div class="send-to-t3-task-text">${micromark(text)}</div></div>`;
 }
-export function renderResponseTasks(id:string,payload:{text?:string;steps?:unknown[]}):string {
+export function renderResponseTasks(id:string,payload:{text?:string;steps?:any[]}):string {
   let body='';
   if(Array.isArray(payload.steps)&&payload.steps.length){
-    body=records(payload.steps).map(step=>task(valueText(step.step??step.text??step.content??'').replace(/[\r\n]+/g,' '),step.status==='completed'?'completed':step.status==='in_progress'?'in_progress':'pending')).join('');
+    body=payload.steps.map(step=>task(String(step.step??step.text??step.content??'').replace(/[\r\n]+/g,' '),step.status==='completed'?'completed':step.status==='in_progress'?'in_progress':'pending')).join('');
   }else{
     let prose:string[]=[],fence='';
     const flush=()=>{if(prose.length)body+=micromark(prose.join('\n'));prose=[];};
