@@ -16,7 +16,7 @@ You need Obsidian **1.8.7 or later** and a running T3 Code installation with Orc
 
 ## Work from your notes
 
-- **Send a note or selection.** Use **Send to agent** from the editor menu or command palette. Choose a new conversation or continue an existing thread.
+- **Send a note or selection.** Use **Send to agent** from the editor menu, or **T3 Code** from the command palette. Choose a new conversation or continue an existing thread.
 - **Ask a question.** Use **Ask agent** to open the composer. Selected text becomes context for your question.
 - **Follow the reply.** Responses stream into the note. Expand progress to see the agent’s activity, answer its questions, or stop the response. The finished reply becomes Markdown in your note.
 - **Continue your work.** Later sends can reuse the note’s previous thread. Smart Send avoids sending the same automatic note context again.
@@ -25,9 +25,9 @@ You need Obsidian **1.8.7 or later** and a running T3 Code installation with Orc
 
 ## Connect notes and projects
 
-- **Link a folder** to a T3 project from the folder menu. Notes below it use that project when you send them.
-- **Import a response** from an existing T3 run into a note without sending a new message.
-- **Browse project files** from Obsidian, including code, Markdown, images, and supported documents.
+- **Link a folder.** Right-click it, choose **Link to T3 Code**, then choose a project. Notes below it use that project when you send them.
+- **Import a response.** Use **Import T3 run into this note…** from the note menu or command palette. Choose an existing response without sending a new message.
+- **Browse project files.** Run **Open Codebase view** from the command palette to work with code, Markdown, images, and supported documents.
 - **Open in T3 Code** from the note menu to return to the conversation in T3.
 
 Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projects** to manage folder links. **Advanced** includes manual pairing and the desktop-only local connection option.
