@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {createRequire} from 'node:module';
-import {runInNewContext} from 'node:vm';
+import {runInNewContext} from './obsidian-context';
 import {EditorState,Facet} from '@codemirror/state';
 import {EditorView} from '@codemirror/view';
 import {ensureSyntaxTree,language,syntaxTree} from '@codemirror/language';

@@ -94,7 +94,7 @@ export class ProjectCreateModal extends Modal {
   }
   private updatePreview(){
     if(!this.preview)return;this.preview.empty();
-    this.preview.createEl('span',{cls:'send-to-t3-workspace-preview-label',text:this.useNewFolder?'New workspace':'Existing workspace'});
+    this.preview.createSpan({cls:'send-to-t3-workspace-preview-label',text:this.useNewFolder?'New workspace':'Existing workspace'});
     const path=this.preview.createEl('code');
     try{path.setText(this.useNewFolder?workspaceChildPath(this.folder,this.folderName):this.folder);}
     catch{path.setText('Choose a parent folder and a valid project folder name.');}
@@ -110,7 +110,7 @@ export class ProjectCreateModal extends Modal {
     const entries=filterWorkspaceFolders(visible,this.query).sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true,sensitivity:'base'}));
     for(const entry of entries){
       const row=list.createEl('button',{cls:'send-to-t3-workspace-folder',attr:{'aria-label':`Open ${entry.name}`}});row.disabled=this.working;
-      setIcon(row.createEl('span',{cls:'send-to-t3-workspace-folder-icon'}),'folder');row.createEl('span',{text:entry.name});setIcon(row.createEl('span',{cls:'send-to-t3-workspace-folder-arrow'}),'chevron-right');
+      setIcon(row.createSpan({cls:'send-to-t3-workspace-folder-icon'}),'folder');row.createSpan({text:entry.name});setIcon(row.createSpan({cls:'send-to-t3-workspace-folder-arrow'}),'chevron-right');
       row.onclick=()=>void this.browse(entry.fullPath);
     }
     if(!entries.length)list.createEl('p',{text:this.working?'Loading folders…':this.query?'No matching folders':this.entries.length&&!this.showHidden?'Only hidden folders here. Select Show hidden to see them.':this.location?'No folders in this directory.':'Enter a folder path and select Go.',attr:{role:'status'}});

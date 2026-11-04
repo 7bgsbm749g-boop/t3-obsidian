@@ -1,3 +1,4 @@
+import {readWireShell,readMetadataSnapshot} from '../../src/connection/wire-readers';
 import {Plugin,MarkdownView} from 'obsidian';
 import SendToT3 from '../../src/app/main';
 import {desktopDefaults,desktopEnvironment,desktopThreadAccess,uuid5} from '../../src/connection/desktop';
@@ -27,7 +28,7 @@ export default class SelectionResendLab extends Plugin {
   private async run(){
     const config=JSON.parse(fs.readFileSync(path.join(this.root,'TEST-CONFIG.json'),'utf8')),connection=desktopDefaults();
     this.access=await desktopThreadAccess(connection);
-    const project=(await this.access.api('/api/orchestration/shell')).projects.find((item:any)=>item.id===config.projectId);
+    const project=(readWireShell(await this.access.api('/api/orchestration/shell'))).projects.find((item:any)=>item.id===config.projectId);if(!project)throw Error('The synthetic project is unavailable.');
     this.assert(project?.workspaceRoot===path.join(this.root,'workspace'),'A dedicated temporary project is required.');
     const environmentId=await desktopEnvironment(connection),p:any=new SendToT3(this.app,this.manifest);this.subject=p;
     p.settings={vaultId:'selection-lab-'+crypto.randomUUID(),threadNoteMode:'free',threadTitleGeneration:'untitled-only',projects:[project],directProjects:[],paired:[],connection,autoSettleThreads:false,completion:{action:'keep'},completionJobs:[],settlementJobs:[],pending:[],noteThreads:[],noteContexts:[],vaultLocations:[],folderLinkChanges:[],projectCreationLocations:[],responseBindings:{},inlineStreaming:{enabled:false},folderLinks:[{id:crypto.randomUUID(),folderPath:'Fixture',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:'',environmentId,self:false}]};
@@ -79,10 +80,10 @@ export default class SelectionResendLab extends Plugin {
     const remainingThreadIds:string[]=[];
     try{
       if(this.threadId&&this.access){
-        const snapshot=await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true');
+        const snapshot=readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'));
         if(snapshot.thread.session?.activeTurnId)await this.access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:crypto.randomUUID(),threadId:this.threadId,turnId:snapshot.thread.session.activeTurnId,createdAt:new Date().toISOString()});
         await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.threadId});
-        let deleted=false;try{deleted=!!(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true')).thread.deletedAt;}catch(error){deleted=(error as any).status===404;}
+        let deleted=false;try{deleted=!!(readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))).thread.deletedAt;}catch(error){deleted=(error as any).status===404;}
         if(!deleted)remainingThreadIds.push(this.threadId);
       }
     }catch(error){this.errors.push('Thread cleanup: '+String(error));if(this.threadId)remainingThreadIds.push(this.threadId);}

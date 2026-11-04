@@ -1,3 +1,5 @@
+import {readThreadSnapshot} from '../../src/connection/wire-types';
+import {readWireShell,readMetadataSnapshot} from '../../src/connection/wire-readers';
 import {Plugin,MarkdownView,TFolder,Notice,setIcon} from 'obsidian';
 import SendToT3 from '../../src/app/main';
 import {DeviceResponseManager} from '../../src/responses/device-local-responses';
@@ -29,7 +31,7 @@ export default class NoteThreadMovesLab extends Plugin {
   private async run(){
     const config=JSON.parse(fs.readFileSync(path.join(this.root,'TEST-CONFIG.json'),'utf8'));
     this.access=await desktopThreadAccess(desktopDefaults());
-    const project=(await this.access.api('/api/orchestration/shell')).projects.find((item:any)=>item.id===config.projectId);
+    const project=(readWireShell(await this.access.api('/api/orchestration/shell'))).projects.find((item:any)=>item.id===config.projectId);
     if(!project||project.workspaceRoot!==path.join(this.root,'workspace'))throw Error('Dedicated synthetic project required.');
     const environmentId=await desktopEnvironment(desktopDefaults()),native=nativeResponses(this.app),p:any=new SendToT3(this.app,this.manifest);this.subject=p;
     const recordFailure=p.recordSendFailure.bind(p);p.recordSendFailure=(...args:any[])=>{this.write('SEND-FAILURE.json',args.map(value=>value instanceof Error?{error:String(value),stack:value.stack}:value));return recordFailure(...args);};
@@ -74,7 +76,7 @@ export default class NoteThreadMovesLab extends Plugin {
     const second=p.settings.noteContexts[1];if(second.threadId!==this.thread)throw Error('Default Send created another thread.');
     await this.until(async()=>{const status=p.deviceInline.responseStatus(second.bindingIds[0]);return !!status?.runTerminal&&(await this.app.vault.read(file)).includes('> NOTE_MOVE_SECOND_OK');},'second real saved reply');
     const current=await this.app.vault.read(file);if(noteIdentity(current)!==id)throw Error('The move replaced the note identity.');
-    const snapshot=await this.access.api('/api/orchestration/threads/'+this.thread);
+    const snapshot=readThreadSnapshot(await this.access.api('/api/orchestration/threads/'+this.thread));
     const prompts=snapshot.thread.messages.filter((message:any)=>message.role==='user').map((message:any)=>message.text);
     if(prompts.length!==2||prompts[1].includes('NOTE_MOVE_FIRST_OK')||prompts.some((text:string)=>text.includes('t3-note-id')))throw Error('Source coverage or identity exclusion failed.');
     await this.shot('same-thread-after-offline-move.png');
@@ -87,10 +89,10 @@ export default class NoteThreadMovesLab extends Plugin {
     try{
       if(this.thread){
         await this.access?.close?.();this.access=await desktopThreadAccess(desktopDefaults());
-        const snapshot=await this.access.api('/api/orchestration/threads/'+this.thread+'?controlOnly=true');
+        const snapshot=readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.thread+'?controlOnly=true'));
         for(const run of snapshot.thread.runs??[])if(run.status==='running'||run.status==='waiting')await this.access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:crypto.randomUUID(),threadId:this.thread,turnId:run.id,createdAt:new Date().toISOString()});
         await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.thread});
-        try{if(!(await this.access.api('/api/orchestration/threads/'+this.thread+'?controlOnly=true')).thread.deletedAt)remainingThreadIds.push(this.thread);}catch(error){if((error as any)?.status!==404)remainingThreadIds.push(this.thread);}
+        try{if(!(readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.thread+'?controlOnly=true'))).thread.deletedAt)remainingThreadIds.push(this.thread);}catch(error){if((error as any)?.status!==404)remainingThreadIds.push(this.thread);}
       }
     }catch(error){this.failures.push(String(error));if(this.thread)remainingThreadIds.push(this.thread);}
     await this.access?.close?.();

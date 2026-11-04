@@ -1,19 +1,25 @@
+import {outgoingMessage,type OutgoingMessage} from './send-contracts';
+import {readRawSnapshot,readHistory,readThreadList} from './wire-readers';
+import type {WireSnapshot,WireMessage,WireTurnItem} from './wire-types';
+import {toError,isRecord} from '../shared/values';
 import {connectT3Rpc,type T3Api,type SocketFactory} from './t3-rpc';
 import {normalizeV2Snapshot,restoreCompactSnapshot,v2Command} from './orchestration-v2';
 import {htmlRenderFromToolItem} from '../responses/html-results';
 
+interface Attachment {id:string;dataUrl?:string;type?:string;name?:string;mimeType?:string;sizeBytes?:number}
+
 export interface T3RequestOptions {signal?:AbortSignal}
-export type AbortableT3Api=(path:string,payload?:any,options?:T3RequestOptions)=>Promise<any>;
+export type AbortableT3Api=(path:string,payload?:unknown,options?:T3RequestOptions)=>Promise<unknown>;
 
 export function cancelledRequest(message='Request cancelled.'):Error{return typeof DOMException==='function'?new DOMException(message,'AbortError'):Object.assign(Error(message),{name:'AbortError'});}
-export function requestAborted(signal?:AbortSignal){if(signal?.aborted)throw signal.reason??cancelledRequest();}
+export function requestAborted(signal?:AbortSignal){if(signal?.aborted)throw toError(signal.reason??cancelledRequest());}
 /** Cancellation of a read never authorizes another mutation. */
 export function abortableRead<T>(work:Promise<T>,signal?:AbortSignal):Promise<T>{
   if(!signal)return work;
   return new Promise((resolve,reject)=>{
-    const cancel=()=>{cleanup();reject(signal.reason??cancelledRequest());};
+    const cancel=()=>{cleanup();reject(toError(signal.reason??cancelledRequest()));};
     const cleanup=()=>signal.removeEventListener('abort',cancel);
-    work.then(value=>{cleanup();signal.aborted?cancel():resolve(value);},error=>{cleanup();reject(error);});
+    work.then(value=>{cleanup();signal.aborted?cancel():resolve(value);},error=>{cleanup();reject(toError(error));});
     if(signal.aborted)cancel();else signal.addEventListener('abort',cancel,{once:true});
   });
 }
@@ -21,32 +27,34 @@ export function abortableRead<T>(work:Promise<T>,signal?:AbortSignal):Promise<T>
 /** All wire mutations use v2 RPC (projects have their own HTTP API). The old
  * path is an internal routing key for durable plugin commands, never sent. */
 export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory):AbortableT3Api {
-  const outputs=new Map<string,any>();
+  const outputs=new Map<string,WireTurnItem>();
   const outputSizes=new Map<string,number>();let outputCharacters=0;
   const senderTitles=new Map<string,string|undefined>();let senderRefresh=-Infinity;
   const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-  async function persistAttachments(rpc:Awaited<ReturnType<typeof connectT3Rpc>>,threadId:string,message:any){
-    const uploads=message.attachments.filter((a:any)=>typeof a.dataUrl==='string');
+  async function persistAttachments<T extends OutgoingMessage>(rpc:Awaited<ReturnType<typeof connectT3Rpc>>,threadId:string,message:T){
+    const uploads=message.attachments.filter(a=>typeof a.dataUrl==='string');
     if(!uploads.length)return message;
     const result=await rpc.call('assets.persistChatAttachments',{threadId,messageId:message.messageId,attachments:uploads});
-    if(!Array.isArray(result?.attachments)||result.attachments.length!==uploads.length)throw Error('T3 did not confirm the image upload. Retry the saved request.');
-    const ids=new Map(uploads.map((a:any,i:number)=>[a.id,result.attachments[i].id]));let index=0;
-    return {...message,attachments:message.attachments.map((a:any)=>typeof a.dataUrl==='string'?result.attachments[index++]:a),
-      ...(message.context?{context:{...message.context,records:message.context.records.map((r:any)=>({...r,...(ids.has(r.attachmentId)?{attachmentId:ids.get(r.attachmentId)}:{})}))}}:{})};
+    if(!isRecord(result)||!Array.isArray(result.attachments)||result.attachments.length!==uploads.length)throw Error('T3 did not confirm the image upload. Retry the saved request.');
+    const stored:unknown[]=result.attachments;
+    const attachments=stored.map(value=>{if(!isRecord(value)||typeof value.id!=='string')throw Error('T3 did not confirm an image upload identity.');return value as unknown as Attachment;});
+    const ids=new Map(uploads.map((a,i)=>[a.id,attachments[i].id]));let index=0;
+    return {...message,attachments:message.attachments.map(a=>typeof a.dataUrl==='string'?attachments[index++]:a),
+      ...(message.context?.records?{context:{...message.context,records:message.context.records.map(r=>({...r,...(typeof r.attachmentId==='string'&&ids.has(r.attachmentId)?{attachmentId:ids.get(r.attachmentId)}:{})}))}}:{})};
   }
-  async function senderMessages(snapshot:any){
+  async function senderMessages(snapshot:WireSnapshot){
     const messages=snapshot.projection.messages;
-    const ids=[...new Set<string>(messages.filter((m:any)=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')).map((m:any)=>m.senderThreadId))].slice(-256);
+    const ids=[...new Set<string>(messages.filter(m=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')).map(m=>m.senderThreadId!))].slice(-256);
     const age=Date.now()-senderRefresh;
     if(ids.length&&(age>=30_000||age>=1000&&ids.some(id=>!senderTitles.has(id)))){
       senderRefresh=Date.now();
       try{
         // Shell metadata resolves exact IDs without reading other conversations.
-        const shell=await raw('/api/orchestration/shell');
-        if(Array.isArray(shell?.threads)){
-          const threads=[...shell.threads,...(Array.isArray(shell.archivedThreads)?shell.archivedThreads:[])];
+        const shell:unknown=await raw('/api/orchestration/shell');
+        if(isRecord(shell)&&Array.isArray(shell.threads)){
+          const threads=readThreadList({threads:[...(shell.threads as unknown[]),...(Array.isArray(shell.archivedThreads)?shell.archivedThreads as unknown[]:[])]});
           for(const id of ids){
-            const title=threads.find((t:any)=>t.id===id)?.title;
+            const title=threads.find(t=>t.id===id)?.title;
             senderTitles.delete(id);
             senderTitles.set(id,typeof title==='string'&&title.trim()&&title.length<=160?title:undefined);
           }
@@ -54,32 +62,32 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         }
       }catch{/* Missing sender metadata must not block reply recovery. */}
     }
-    return messages.map((m:any)=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')?{...m,senderThreadTitle:senderTitles.get(m.senderThreadId)}:m);
+    return messages.map(m=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')?{...m,senderThreadTitle:senderTitles.get(m.senderThreadId!)}:m);
   }
-  async function hydrate(snapshot:any){
-    if(!snapshot?.projection)return snapshot;
+  async function hydrate(snapshot:WireSnapshot|import('./wire-readers').MetadataSnapshot){
+    if(!('projection' in snapshot)||!snapshot.projection)return snapshot;
     const messages=await senderMessages(snapshot);
     const items=snapshot.projection.turnItems??[];
-    const omitted=items.filter((i:any)=>i.outputOmitted===true);
+    const omitted=items.filter(i=>i.outputOmitted===true);
     // Handoff results can precede a long resumed run. Retain their lifecycle
     // proof independently of the recent tool-detail window.
-    const needed=[...new Map([...omitted.slice(-40),...omitted.filter((item:any)=>/(?:^|[._])t3_worktree_handoff$/.test(item.toolName??'')).slice(-32)].map(item=>[item.id,item])).values()];
-    const hydrated=new Map<string,any>();let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
+    const needed=[...new Map([...omitted.slice(-40),...omitted.filter(item=>/(?:^|[._])t3_worktree_handoff$/.test(item.toolName??'')).slice(-32)].map(item=>[item.id,item])).values()];
+    const hydrated=new Map<string,WireTurnItem>();let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
     try{
       for(const item of needed){
         const key=JSON.stringify([snapshot.projection.thread.id,item.id,item.updatedAt]);
-        if(outputs.has(key)){hydrated.set(key,outputs.get(key));continue;}
+        if(outputs.has(key)){hydrated.set(key,outputs.get(key)!);continue;}
         rpc??=await connectT3Rpc(raw,origin,makeSocket);
         const result=await rpc.call('orchestration.getTurnItem',{threadId:snapshot.projection.thread.id,itemId:item.id,revision:item.updatedAt});
-        if(result?.item?.id===item.id&&result.item.updatedAt===item.updatedAt){
-          hydrated.set(key,result.item);const characters=JSON.stringify(result.item).length;
-          if(characters<=2_000_000){outputCharacters+=characters-(outputSizes.get(key)??0);outputs.set(key,result.item);outputSizes.set(key,characters);}
+        if(isRecord(result)&&isRecord(result.item)&&result.item.id===item.id&&result.item.updatedAt===item.updatedAt){
+          const full=result.item as unknown as WireTurnItem;hydrated.set(key,full);const characters=JSON.stringify(full).length;
+          if(characters<=2_000_000){outputCharacters+=characters-(outputSizes.get(key)??0);outputs.set(key,full);outputSizes.set(key,characters);}
         }
       }
     }catch{/* A missing tool detail must not block canonical reply recovery. */}
     finally{rpc?.close();}
     while(outputs.size>256||outputCharacters>2_000_000){const key=outputs.keys().next().value!;outputs.delete(key);outputCharacters-=outputSizes.get(key)??0;outputSizes.delete(key);}
-    return {...snapshot,projection:{...snapshot.projection,messages,turnItems:items.map((i:any)=>hydrated.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??outputs.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??i)}};
+    return {...snapshot,projection:{...snapshot.projection,messages,turnItems:items.map(i=>hydrated.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??outputs.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??i)}};
   }
   return async(path,payload,options)=>{
     requestAborted(options?.signal);
@@ -95,36 +103,38 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     // Internal adapter route: the server provides this read over RPC only.
     if(path==='/api/orchestration/turn-item'){
       const rpc=await connectT3Rpc(raw,origin,makeSocket);
-      try{return (await rpc.call('orchestration.getTurnItem',payload))?.item;}finally{rpc.close();}
+      try{const result=await rpc.call('orchestration.getTurnItem',payload);return isRecord(result)?result.item:undefined;}finally{rpc.close();}
     }
     // Internal route for a new auto-titled thread and its immutable first send.
     if(path==='/api/orchestration/launch'){
       const rpc=await connectT3Rpc(raw,origin,makeSocket);
-      try{return await rpc.call('orchestration.launchThread',{...payload,initialMessage:await persistAttachments(rpc,payload.threadId,payload.initialMessage)});}finally{rpc.close();}
+      try{if(!isRecord(payload)||typeof payload.threadId!=='string')throw Error('Invalid T3 launch identity.');return await rpc.call('orchestration.launchThread',{...payload,initialMessage:await persistAttachments(rpc,payload.threadId,outgoingMessage(payload.initialMessage))});}finally{rpc.close();}
     }
     if(path==='/api/orchestration/dispatch'){
+      if(!isRecord(payload))throw Error('Invalid saved T3 dispatch.');
       const {__legacyV1,...saved}=payload;
       let command=v2Command(saved);
       if(command.type.startsWith('project.'))return raw('/api/projects/mutate',command);
       // V2 did not copy V1 command receipts. Reconcile migrated messages by
       // their preserved exact IDs before a saved V1 request can dispatch again.
       if(__legacyV1&&(command.type==='thread.create'||command.type==='message.dispatch')){
-        let snapshot:any;
-        try{snapshot=restoreCompactSnapshot(await raw(`/api/orchestration/threads/${encodeURIComponent(command.threadId)}/bounded?compactTurnItems=1`));}
-        catch(error:any){if(error?.status!==404)throw error;}
-        if(snapshot?.projection){
+        if(typeof command.threadId!=='string')throw Error('Invalid saved T3 thread identity.');
+        let snapshot:WireSnapshot|import('./wire-readers').MetadataSnapshot|undefined;
+        try{const rawSnapshot=readRawSnapshot(await raw(`/api/orchestration/threads/${encodeURIComponent(command.threadId)}/bounded?compactTurnItems=1`));snapshot='projection' in rawSnapshot?restoreCompactSnapshot(rawSnapshot):rawSnapshot;}
+        catch(error:unknown){if(!isRecord(error)||error.status!==404)throw toError(error);}
+        if(snapshot&&'projection' in snapshot){
           const p=snapshot.projection;
           if(command.type==='thread.create'){
             if(p.thread.projectId!==command.projectId)throw Error('The saved thread belongs to another project. Nothing was sent.');
             return {sequence:snapshot.snapshotSequence};
           }
-          let message=p.messages.find((m:any)=>m.id===command.messageId);
+          let message:Pick<WireMessage,'id'|'text'|'role'>|undefined=p.messages.find(m=>m.id===command.messageId);
           let cursor=snapshot.historyCursor,more=snapshot.hasMoreHistory===true,pages=0;
           while(!message&&more){
             if(!cursor||++pages>100)throw Error('Cannot verify the old saved request. Check its T3 history before retrying.');
-            const page=await raw(`/api/orchestration/threads/${encodeURIComponent(command.threadId)}/history?cursor=${encodeURIComponent(cursor)}`);
-            const row=page.items?.find((r:any)=>r.item?.messageId===command.messageId);
-            if(row)message={id:row.item.messageId,text:row.item.text,role:row.item.type==='user_message'?'user':'assistant'};
+            const page=readHistory(await raw(`/api/orchestration/threads/${encodeURIComponent(command.threadId)}/history?cursor=${encodeURIComponent(cursor)}`));
+            const row=page.items?.find(r=>r.item?.messageId===command.messageId);
+            if(row&&typeof row.item.messageId==='string'&&typeof row.item.text==='string')message={id:row.item.messageId,text:row.item.text,role:row.item.type==='user_message'?'user':'assistant'};
             cursor=page.nextCursor;more=page.hasMoreHistory===true;
           }
           if(message){
@@ -135,7 +145,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       }
       const rpc=await connectT3Rpc(raw,origin,makeSocket);
       try{
-        if(command.type==='message.dispatch')command=await persistAttachments(rpc,command.threadId,command);
+        if(command.type==='message.dispatch'){if(typeof command.threadId!=='string')throw Error('Invalid saved T3 thread identity.');command={...command,...await persistAttachments(rpc,command.threadId,outgoingMessage(command))};}
         return await rpc.call('orchestration.dispatchCommand',command);
       }finally{rpc.close();}
     }
@@ -147,42 +157,43 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         // The bounded projection retains only recent runs. History pages carry
         // conversation items, not the missing run rows. The canonical thread
         // projection is the supported API for the complete run/prompt index.
-        const full=await request(root,payload),p=full?.projection;
+        const full=readRawSnapshot(await request(root,payload));if(!('projection' in full))return normalizeV2Snapshot(full);const p=full.projection;
         requestAborted(options?.signal);
         // Preserve only tiny HTML references for previews. Never hydrate tools
         // or retain the multi-megabyte HTML inputs in the import picker.
-        const html=p?[...new Map([...(p.turnItems??[]),...(p.visibleTurnItems??[]).filter((row:any)=>row.sourceThreadId===p.thread.id).map((row:any)=>row.item)].filter((item:any)=>htmlRenderFromToolItem(item)).map((item:any)=>[item.id,{...item,input:undefined}])).values()]:[];
+        const html=p?[...new Map([...(p.turnItems??[]),...(p.visibleTurnItems??[]).filter(row=>row.sourceThreadId===p.thread.id).map(row=>row.item)].filter(item=>htmlRenderFromToolItem(item)).map(item=>[item.id,{...item,input:undefined}])).values()]:[];
         return normalizeV2Snapshot(p?{...full,hasMoreHistory:false,projection:{...p,turnItems:html,visibleTurnItems:[]}}:full);
       }
-      const snapshot=restoreCompactSnapshot(await request(root+'/bounded?compactTurnItems=1',payload));
+      const rawSnapshot=readRawSnapshot(await request(root+'/bounded?compactTurnItems=1',payload));const snapshot='projection' in rawSnapshot?restoreCompactSnapshot(rawSnapshot):rawSnapshot;
+      if(!('projection' in snapshot))return normalizeV2Snapshot(snapshot);
       requestAborted(options?.signal);
       if(controlOnly){
         if(!snapshot?.projection)return normalizeV2Snapshot(snapshot);
-        const p=snapshot.projection,controls=[...new Map([...p.turnItems??[],...p.visibleTurnItems?.filter((row:any)=>row.sourceThreadId===p.thread.id).map((row:any)=>row.item)??[]].filter((item:any)=>['approval_request','user_input_request'].includes(item.type)).map((item:any)=>[item.id,item])).values()];
+        const p=snapshot.projection,controls=[...new Map([...p.turnItems??[],...p.visibleTurnItems?.filter(row=>row.sourceThreadId===p.thread.id).map(row=>row.item)??[]].filter(item=>['approval_request','user_input_request'].includes(item.type)).map(item=>[item.id,item])).values()];
         const normalized=normalizeV2Snapshot({...snapshot,projection:{...p,messages:[],turnItems:controls}});
-        const pending=(p.runtimeRequests??[]).filter((item:any)=>item.status==='pending'&&item.responseCapability?.type!=='not_resumable');
-        normalized.thread.hasPendingUserInput||=pending.some((item:any)=>['user_input','user-input'].includes(item.kind));
-        normalized.thread.hasPendingApprovals||=pending.some((item:any)=>!['user_input','user-input'].includes(item.kind));
+        const pending=(p.runtimeRequests??[]).filter(item=>item.status==='pending'&&item.responseCapability?.type!=='not_resumable');
+        normalized.thread.hasPendingUserInput||=pending.some(item=>['user_input','user-input'].includes(item.kind));
+        normalized.thread.hasPendingApprovals||=pending.some(item=>!['user_input','user-input'].includes(item.kind));
         return normalized;
       }
       if(!snapshot?.projection||path.includes('turnLimit=')&&!importRunId)return normalizeV2Snapshot(await hydrate(snapshot));
       // Full recovery follows opaque cursors rather than asking for one
       // unbounded HTTP body. Keep the initial control-plane watermark so live
       // events committed during pagination still replay after this snapshot.
-      const conversation=(item:any)=>['user_message','assistant_message'].includes(item.type);
-      const needed=(item:any)=>!importRunId||conversation(item)||item.runId===importRunId;
+      const conversation=(item:WireTurnItem)=>['user_message','assistant_message'].includes(item.type);
+      const needed=(item:WireTurnItem)=>!importRunId||conversation(item)||item.runId===importRunId;
       const rows=[...(snapshot.projection.visibleTurnItems??[])].filter(row=>needed(row.item));
       let cursor=snapshot.historyCursor,more=snapshot.hasMoreHistory===true,pages=0;
       while(more){
         if(!cursor||++pages>100)throw Error('T3 history exceeded its recovery page limit.');
-        const page=await request(root+'/history?cursor='+encodeURIComponent(cursor));
+        const page=readHistory(await request(root+'/history?cursor='+encodeURIComponent(cursor)));
         if(!Array.isArray(page.items))throw Error('T3 returned an invalid history page.');
-        rows.unshift(...page.items.filter((row:any)=>needed(row.item)));cursor=page.nextCursor;more=page.hasMoreHistory===true;
+        rows.unshift(...page.items.filter(row=>needed(row.item)));cursor=page.nextCursor;more=page.hasMoreHistory===true;
       }
-      const p=snapshot.projection,items=new Map<string,any>(),messages=new Map<string,any>();
+      const p=snapshot.projection,items=new Map<string,WireTurnItem>(),messages=new Map<string,WireMessage>();
       for(const row of rows)if(row.sourceThreadId===p.thread.id)items.set(row.item.id,row.item);
       for(const item of p.turnItems??[])if(needed(item))items.set(item.id,item);
-      for(const item of items.values())if(item.type==='user_message'||item.type==='assistant_message')messages.set(item.messageId,{id:item.messageId,threadId:p.thread.id,runId:item.runId,nodeId:item.nodeId,role:item.type==='user_message'?'user':'assistant',text:item.text,streaming:item.streaming===true,createdAt:item.startedAt??item.updatedAt,context:item.context,attachments:item.attachments??[],createdBy:item.createdBy,creationSource:item.creationSource,senderThreadId:item.senderThreadId,delegatedCompletion:item.delegatedCompletion});
+      for(const item of items.values())if((item.type==='user_message'||item.type==='assistant_message')&&typeof item.messageId==='string'&&typeof item.text==='string')messages.set(item.messageId,{id:item.messageId,threadId:p.thread.id,runId:item.runId??null,nodeId:item.nodeId,role:item.type==='user_message'?'user':'assistant',text:item.text,streaming:item.streaming===true,createdAt:item.startedAt??item.updatedAt,context:item.context,attachments:item.attachments??[],createdBy:item.createdBy,creationSource:item.creationSource,senderThreadId:item.senderThreadId,delegatedCompletion:item.delegatedCompletion});
       for(const message of p.messages)messages.set(message.id,message);
       const recovered={...snapshot,hasMoreHistory:false,projection:{...p,turnItems:[...items.values()].sort((a,b)=>a.ordinal-b.ordinal),messages:[...messages.values()].sort((a,b)=>(a.createdAt??'').localeCompare(b.createdAt??''))}};
       return normalizeV2Snapshot(await hydrate(recovered));

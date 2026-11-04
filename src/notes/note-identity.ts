@@ -7,8 +7,8 @@ export function noteIdentityRanges(document:string){
   const candidates=[...document.matchAll(/^<!-- t3-note-id:([a-f0-9]{64}) -->\r?$/gm)];
   if(!candidates.length)return [];
   const code=markdownCodeRanges(document);
-  return candidates.filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to)&&!insideResponse(document,match.index!))
-    .map(match=>({id:match[1],from:match.index!,to:match.index!+match[0].length}));
+  return candidates.filter(match=>!code.some(([from,to])=>match.index>=from&&match.index<to)&&!insideResponse(document,match.index))
+    .map(match=>({id:match[1],from:match.index,to:match.index+match[0].length}));
 }
 export function noteIdentity(document:string){
   const markers=noteIdentityRanges(document);

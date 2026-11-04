@@ -1,3 +1,5 @@
+import {readThreadSnapshot} from '../../src/connection/wire-types';
+import {readWireShell,readMetadataSnapshot} from '../../src/connection/wire-readers';
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
 import SendToT3 from '../../src/app/main';
 import {nativeResponses} from '../../src/responses/native-response-manager';
@@ -55,13 +57,13 @@ export default class WorktreeContinuationLab extends Plugin {
     const connection=desktopDefaults(),environmentId=await desktopEnvironment(connection);
     this.access=await desktopThreadAccess(connection);
     const api=(route:string,payload?:any)=>this.access!.api(route.startsWith('/api/')?route:'/api/orchestration/'+route,payload);
-    const project=(await api('shell')).projects.find((item:any)=>item.id===config.projectId);
+    const project=(readWireShell(await api('shell'))).projects.find((item:any)=>item.id===config.projectId);
     if(!project?.workspaceRoot?.startsWith(this.root+path.sep))throw Error('A dedicated synthetic project inside this lab is required.');
     const requestId=crypto.randomUUID(),messageId=uuid5(requestId,'message');this.threadId=uuid5(requestId,'thread');
     this.write('TEMPORARY-T3.json',{threadId:this.threadId,requestId,messageId,notePath:'Worktree delivery.md'});
     await start(api,{requestId,project:project.id,title:'Synthetic worktree continuation '+requestId.slice(0,8),
       prompt:'This is a bounded synthetic plugin test. Do not inspect files, run shell commands, edit source, or call other agents. Call t3_worktree_handoff once with branch "smoke/'+requestId+'", baseRef "HEAD", startFromOrigin false, runSetupScript false, and continuationPrompt exactly "Reply with exactly WORKTREE_CONTINUATION_LIVE_OK. Do not use tools or change files.". Call that tool as your final action. The continuation must return that exact marker.'},path.join(this.root,'t3-state'),item=>readNewThreadDefaults(this.access!.api,this.access!.origin,item));
-    await this.until(async()=>!!(await api('threads/'+this.threadId)).thread.messages.find((item:any)=>item.id===messageId),'original input');
+    await this.until(async()=>!!(readThreadSnapshot(await api('threads/'+this.threadId))).thread.messages.find((item:any)=>item.id===messageId),'original input');
     const native=nativeResponses(this.app),subject:any=new SendToT3(this.app,this.manifest),notes=deviceNoteIO(this.app);
     subject.settings={vaultId:'synthetic-worktree-'+requestId,inlineStreaming:{enabled:true,intermediateMode:'collapse'},responseBindings:{}};
     subject.connection=()=>({...connection,environmentId});subject.inlineThreadAccess=()=>desktopThreadAccess(connection);
@@ -83,7 +85,7 @@ export default class WorktreeContinuationLab extends Plugin {
     const finalSave=await this.local.waitForSave(binding.id,120_000);
     if(!finalSave.saved)throw Error('The continuation was not saved: '+finalSave.reason);
     await this.until(()=>(leaf.view as MarkdownView).contentEl.innerText.includes('WORKTREE_CONTINUATION_LIVE_OK'),'visible continuation');
-    const snapshot=await api('threads/'+this.threadId),projected=this.loseResult(snapshot),state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:projected}).state;
+    const snapshot=readThreadSnapshot(await api('threads/'+this.threadId)),projected=this.loseResult(snapshot),state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:projected}).state;
     const source=Object.values(state.turns??{}).find(turn=>turn.messageId===messageId),handoffs=Object.values(state.worktreeHandoffs??{});
     const saved=await this.app.vault.read(file),visible=(leaf.view as MarkdownView).contentEl.innerText;
     const checks={originalInterrupted:source?.state==='interrupted',exactContinuation:!!source&&delegatedTurnIds(state,[source.turnId]).length===2,
@@ -103,13 +105,13 @@ export default class WorktreeContinuationLab extends Plugin {
     const remainingThreadIds:string[]=[];
     try{
       if(this.threadId&&this.access){
-        const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true')}).state;
+        const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))}).state;
         for(const turn of Object.values(state.turns??{})){
           if(turn.state==='running')await this.access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:crypto.randomUUID(),threadId:this.threadId,turnId:turn.turnId,createdAt:new Date().toISOString()});
           if(turn.state==='queued')await this.access.api('/api/orchestration/dispatch',{type:'queued-run.cancel',commandId:crypto.randomUUID(),threadId:this.threadId,runId:turn.turnId});
         }
         await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.threadId});
-        let deleted=false;try{deleted=!!(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true')).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}
+        let deleted=false;try{deleted=!!(readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}
         if(!deleted)remainingThreadIds.push(this.threadId);
       }
     }catch(error){this.errors.push('Thread cleanup: '+String(error));if(this.threadId)remainingThreadIds.push(this.threadId);}

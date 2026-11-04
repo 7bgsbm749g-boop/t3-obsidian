@@ -2,7 +2,7 @@ import {destinationOffset} from '../notes/destination-section';
 import {responseAnchor} from './native-response-projection';
 import {intermediateMode} from './response-presentation';
 import {commandId} from '../connection/direct';
-import {initialRegion,endInsertionOffset,regionBody,startMarker} from '../conversations/inline-thread';
+import {initialRegion,regionBody,startMarker} from '../conversations/inline-thread';
 import {safeNotePath,validateResponseRequest,type ResponseRequest} from './response-model';
 import {resolveCursorInsertion,type CursorInsertion} from '../notes/cursor-insertion';
 

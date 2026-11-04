@@ -1,3 +1,4 @@
+import {editorCM} from '../shared/native-editor';
 import type {App,MarkdownView} from 'obsidian';
 import {nativeResponses} from './native-response-manager';
 import type {NativeResponseView} from './native-response-view';
@@ -9,17 +10,17 @@ export function installResponseDrag(app:App,root:Document,icon:(element:HTMLElem
   const grips=new Map<HTMLElement,{fold:HTMLElement;key:string;view:MarkdownView;adapter:NativeResponseView;id:string}>();
   type Drag={view:MarkdownView;file:MarkdownView['file'];adapter:NativeResponseView;id:string;key:string;pointer:number;startX:number;startY:number;x:number;y:number;moving:boolean};
   let drag:Drag|undefined,frame:number|undefined,queued=false,disposed=false;
-  const marker=root.createElement('div'),ghost=root.createElement('div');
+  const marker=root.win.createDiv(),ghost=root.win.createDiv();
   marker.className='send-to-t3-response-drop';ghost.className='send-to-t3-response-drag-ghost';ghost.textContent='Move response';
   const clear=()=>{
     if(frame!==undefined)win.cancelAnimationFrame(frame);frame=undefined;
-    if(drag){try{drag.view.contentEl.releasePointerCapture(drag.pointer);}catch{}drag.view.contentEl.classList.remove('send-to-t3-response-dragging');}
+    if(drag){try{drag.view.contentEl.releasePointerCapture(drag.pointer);}catch{/* Pointer capture can already be released by the host. */}drag.view.contentEl.classList.remove('send-to-t3-response-dragging');}
     drag=undefined;marker.remove();ghost.remove();
   };
   const current=(item:Drag)=>!disposed&&item.view.file===item.file&&item.view.getMode()==='source'&&app.workspace.getLeavesOfType('markdown').some(leaf=>leaf.view===item.view)&&nativeResponses(app).view(item.view)===item.adapter&&item.adapter.moveControl(item.key)===item.id;
   const target=(item:Drag)=>{
-    const cm=(item.view.editor as any)?.cm,box=cm?.scrollDOM.getBoundingClientRect();
-    if(!box||item.x<box.left||item.x>box.right||item.y<box.top||item.y>box.bottom)return;
+    const cm=editorCM(item.view.editor),box=cm?.scrollDOM.getBoundingClientRect();
+    if(!cm||!box||item.x<box.left||item.x>box.right||item.y<box.top||item.y>box.bottom)return;
     let offset=cm.posAtCoords({x:item.x,y:item.y},false);
     if(offset==null){const content=cm.contentDOM.getBoundingClientRect();if(item.y>=content.bottom)offset=cm.state.doc.length;else if(item.y<=content.top)offset=0;else return;}
     const destination=item.adapter.moveTarget(item.key,offset);
@@ -30,7 +31,7 @@ export function installResponseDrag(app:App,root:Document,icon:(element:HTMLElem
     if(!current(item)){clear();return;}
     if(item.moving){
       try{
-        const cm=(item.view.editor as any)?.cm,box=cm.scrollDOM.getBoundingClientRect();
+        const cm=editorCM(item.view.editor);if(!cm){clear();return;}const box=cm.scrollDOM.getBoundingClientRect();
         if(item.x>=box.left&&item.x<=box.right&&item.y>=box.top&&item.y<=box.bottom){
           const edge=32,delta=item.y<box.top+edge?-Math.min(16,(box.top+edge-item.y)/2):item.y>box.bottom-edge?Math.min(16,(item.y-box.bottom+edge)/2):0;
           if(delta)cm.scrollDOM.scrollTop+=delta;
@@ -50,7 +51,7 @@ export function installResponseDrag(app:App,root:Document,icon:(element:HTMLElem
     if(!control||event.button!==0||event.isPrimary===false||control.adapter.moveControl(control.key)!==control.id)return;
     event.preventDefault();event.stopImmediatePropagation();clear();
     drag={...control,file:control.view.file,pointer:event.pointerId,startX:event.clientX,startY:event.clientY,x:event.clientX,y:event.clientY,moving:false};
-    try{control.view.contentEl.setPointerCapture(event.pointerId);}catch{}
+    try{control.view.contentEl.setPointerCapture(event.pointerId);}catch{/* Dragging still works through the document listener without capture. */}
     frame=win.requestAnimationFrame(tick);
   };
   const move=(event:PointerEvent)=>{
@@ -76,7 +77,7 @@ export function installResponseDrag(app:App,root:Document,icon:(element:HTMLElem
       const adapter=view&&nativeResponses(app).view(view),id=key&&adapter?.moveControl(key);
       if(!heading||!view||!adapter||!key||!id)continue;
       let grip=heading.querySelector<HTMLElement>(':scope > .send-to-t3-response-drag');
-      if(!grip){grip=root.createElement('span');grip.className='send-to-t3-response-drag';grip.setAttribute('aria-label','Drag active response');grip.setAttribute('title','Drag to move response');icon(grip,'grip-vertical');heading.prepend(grip);}
+      if(!grip){grip=root.win.createSpan();grip.className='send-to-t3-response-drag';grip.setAttribute('aria-label','Drag active response');grip.setAttribute('title','Drag to move response');icon(grip,'grip-vertical');heading.prepend(grip);}
       live.add(grip);grips.set(grip,{fold,key,view,adapter,id});
     }
     for(const [grip] of grips)if(!live.has(grip)){grip.remove();grips.delete(grip);}

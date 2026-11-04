@@ -1,5 +1,10 @@
+import type {ThreadStreamItem} from '../connection/thread-events';
+export type {ThreadStreamItem} from '../connection/thread-events';
+import {parseJson,isRecord} from '../shared/values';
+import {readThreadSnapshot,type ThreadSnapshot} from '../connection/wire-types';
+import {cancelTimeout as clearTimeout,scheduleTimeout as setTimeout} from '../shared/clock';
 import {logEvent,logFailure} from '../app/diagnostics';
-import {Buffer} from 'buffer';
+import {Buffer} from 'buffer/';
 import {contentHash} from '../responses/completion';
 import {applyThreadItem,turnForMessage,type InlineThreadState} from './inline-thread';
 import {T3_PROTOCOL_VERSION,normalizeV2StreamItem,normalizeV2Snapshot,normalizeV2TitleItem} from '../connection/orchestration-v2';
@@ -7,9 +12,8 @@ import {responseTooLarge} from '../connection/t3-response-limits';
 import {readWorktreeSetup,workspacePreparation} from '../projects/worktree-setup';
 
 export type ThreadAccessCloseReason='cache-expired'|'auth-rejected'|'host-disposed'|'stop-complete'|'stop-timeout'|'stream-reconnect'|'stream-stopped'|'late-access'|'caller-closed';
-export interface ThreadAccess {origin:string;api:(path:string,payload?:any,options?:{signal?:AbortSignal})=>Promise<any>;expiresAt?:number;close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
+export interface ThreadAccess {origin:string;api:(path:string,payload?:unknown,options?:{signal?:AbortSignal})=>Promise<unknown>;expiresAt?:number;close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
 export type ThreadAccessFactory=()=>Promise<ThreadAccess>;
-export type ThreadStreamItem={kind:'snapshot';snapshot:any}|{kind:'event';event:any}|{kind:'synchronized'};
 export interface ThreadStreamCallbacks {item:(item:ThreadStreamItem)=>void;reconnecting:(error:Error)=>void;failure?:(error:Error)=>void}
 export interface InlineHistoryTargets {messageIds:string[];turnIds:string[]}
 
@@ -19,9 +23,9 @@ export function needsInlineHistory(state:InlineThreadState,targets:InlineHistory
 
 /** Recent polling stays small. A stranded response can request the complete
  * canonical transcript, including prompts older than the polling window. */
-export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets,full=false,importOnly=false,importRunId?:string):Promise<any> {
+export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets,full=false,importOnly=false,importRunId?:string):Promise<ThreadSnapshot> {
   const read=async(all:boolean)=>{
-    const snapshot=normalizeV2Snapshot(await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}${importOnly?'&importRuns=true':''}${importRunId?'&importRunId='+encodeURIComponent(importRunId):''}`));
+    const snapshot=readThreadSnapshot(normalizeV2Snapshot(await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}${importOnly?'&importRuns=true':''}${importRunId?'&importRunId='+encodeURIComponent(importRunId):''}`)));
     if(snapshot?.thread?.id!==threadId||projectId&&snapshot.thread.projectId!==projectId)throw Error('Waiting for the requested T3 thread.');
     return snapshot;
   };
@@ -36,25 +40,26 @@ export async function readInlineSnapshot(access:ThreadAccess,threadId:string,pro
 export async function readInlineEvents(access:ThreadAccess,threadId:string,afterSequence:number,signal:AbortSignal,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url)):Promise<ThreadStreamItem[]> {
   const issued=await access.api('/api/auth/websocket-ticket',{});
   if(signal.aborted)throw Error('T3 binding recovery canceled.');
-  if(typeof issued?.ticket!=='string'||!issued.ticket)throw Error('T3 did not issue a stream ticket.');
+  if(!isRecord(issued)||typeof issued.ticket!=='string'||!issued.ticket)throw Error('T3 did not issue a stream ticket.');
   const url=new URL('/ws',access.origin);url.protocol=url.protocol==='https:'?'wss:':'ws:';
   url.searchParams.set('wsTicket',issued.ticket);url.searchParams.set('orchestrationProtocol',String(T3_PROTOCOL_VERSION));
   return new Promise((resolve,reject)=>{
     const socket=makeSocket(url.href),items:ThreadStreamItem[]=[];let finished=false;
     const abort=()=>finish(Error('T3 binding recovery canceled.'));
-    const finish=(error?:Error)=>{if(finished)return;finished=true;signal.removeEventListener('abort',abort);try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{}socket.close();error?reject(error):resolve(items);};
+    const finish=(error?:Error)=>{if(finished)return;finished=true;signal.removeEventListener('abort',abort);try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{/* The closed socket needs no replay interruption. */}socket.close();error?reject(error):resolve(items);};
     signal.addEventListener('abort',abort,{once:true});
     socket.onopen=()=>{if(signal.aborted){abort();return;}socket.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,afterSequence,requestCompletionMarker:true,acceptBoundedSnapshot:true,acceptCompactTurnItems:true},headers:[]}));};
     socket.onmessage=message=>{try{
       if(typeof message.data!=='string'||Buffer.byteLength(message.data)>16_000_000)throw Error('T3 stream frame is too large.');
-      const decoded=JSON.parse(message.data);
+      const decoded=parseJson(message.data);
       for(const frame of Array.isArray(decoded)?decoded:[decoded]){
+        if(!isRecord(frame))throw Error('Invalid T3 stream frame.');
         if(frame._tag==='Ping'){socket.send(JSON.stringify({_tag:'Pong'}));continue;}
         if(frame._tag==='Defect')throw Error('T3 binding replay failed.');
         if(String(frame.requestId)!=='1')continue;
         if(frame._tag==='Chunk'){
           if(!Array.isArray(frame.values))throw Error('Invalid T3 binding replay.');
-          for(const item of frame.values){if(item.kind==='synchronized'){finish();return;}if(items.length>=1001)throw Error('T3 binding replay exceeded its event limit.');items.push(normalizeV2StreamItem(item));}
+          for(const item of frame.values as unknown[]){if(isRecord(item)&&item.kind==='synchronized'){finish();return;}if(items.length>=1001)throw Error('T3 binding replay exceeded its event limit.');items.push(normalizeV2StreamItem(item));}
           socket.send(JSON.stringify({_tag:'Ack',requestId:'1'}));
         }else if(frame._tag==='Exit')throw Error('T3 binding replay ended before synchronization.');
       }
@@ -92,7 +97,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       const subscribeSetup=()=>{if(setupWanted&&!setupSubscribed&&socketOpen&&ws){setupSubscribed=true;ws.send(JSON.stringify({_tag:'Request',id:'2',tag:'subscribeWorktreeSetup',payload:{threadId},headers:[]}));}};
       const deliver=(item:ThreadStreamItem)=>{
         callbacks.item(item);
-        const preparation=item.kind==='snapshot'?item.snapshot?.thread?.activities?.some((a:any)=>a.kind==='response.worktree-setup'):item.kind==='event'&&item.event?.type==='v2.turn-item.updated'&&workspacePreparation(item.event.payload);
+        const preparation=item.kind==='snapshot'?item.snapshot?.thread?.activities?.some(a=>a.kind==='response.worktree-setup'):item.kind==='event'&&item.event?.type==='v2.turn-item.updated'&&workspacePreparation(item.event.payload);
         if(preparation&&!replay?.titleOnly){setupWanted=true;subscribeSetup();}
       };
       const fail=(error:Error)=>{if(ended||stopped)return;ended=true;ws?.close();retry(error);};
@@ -108,12 +113,12 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         if(stopped||ended||access!==ready||polling||!pollEnabled())return;
         polling=true;const beforeActivity=activityVersion;
         try{
-          const snapshot=historyTargets?await readInlineSnapshot(ready,threadId,undefined,historyTargets()):normalizeV2Snapshot(await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true&turnLimit=20`));
+          const snapshot=historyTargets?await readInlineSnapshot(ready,threadId,undefined,historyTargets()):readThreadSnapshot(normalizeV2Snapshot(await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true&turnLimit=20`)));
           if(!stopped&&!ended&&access===ready&&snapshot?.thread){
             // The global snapshot cursor can advance for unrelated threads.
             // Keep only a small digest; still deliver every canonical snapshot
             // so replay cursors and binding evidence continue to advance.
-            const hash=contentHash(JSON.stringify({thread:snapshot.thread,historyComplete:snapshot.historyComplete}));
+            const hash=contentHash(JSON.stringify({thread:snapshot.thread,historyComplete:snapshot.thread.historyComplete??!snapshot.page?.hasMore}));
             pollDelay=beforeActivity===activityVersion&&hash===lastSnapshotHash?Math.min(5000,pollDelay*2):1200;
             lastSnapshotHash=hash;deliver({kind:'snapshot',snapshot});
           }else pollDelay=1200;
@@ -125,7 +130,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       if(replay?.pollImmediately&&pollEnabled())void poll();
       const issued=await ready.api('/api/auth/websocket-ticket',{});
       if(stopped||access!==ready)return;
-      if(typeof issued?.ticket!=='string'||!issued.ticket)throw Error('T3 did not issue a stream ticket.');
+      if(!isRecord(issued)||typeof issued.ticket!=='string'||!issued.ticket)throw Error('T3 did not issue a stream ticket.');
       const url=new URL('/ws',ready.origin);url.protocol=url.protocol==='https:'?'wss:':'ws:';
       url.searchParams.set('wsTicket',issued.ticket);url.searchParams.set('orchestrationProtocol',String(T3_PROTOCOL_VERSION));
       const openedSocket=socket=ws=makeSocket(url.href);
@@ -144,8 +149,9 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       openedSocket.onmessage=message=>{
         try{
           if(typeof message.data!=='string'||Buffer.byteLength(message.data)>16_000_000)throw Error('T3 stream frame is too large.');
-          const decoded=JSON.parse(message.data),frames=Array.isArray(decoded)?decoded:[decoded];
+          const decoded=parseJson(message.data),frames=Array.isArray(decoded)?decoded:[decoded];
           for(const frame of frames){
+            if(!isRecord(frame))throw Error('Invalid T3 stream frame.');
             if(frame._tag==='Ping'){openedSocket.send(JSON.stringify({_tag:'Pong'}));continue;}
             // Optional setup progress must not fail the transcript on older hosts.
             if(String(frame.requestId)==='2'){
@@ -162,8 +168,9 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
             if(String(frame.requestId)!=='1')continue;
             if(frame._tag==='Chunk'){
               if(!Array.isArray(frame.values))throw Error('T3 returned an invalid stream chunk.');
-              logEvent('stream.chunk',{threadId,count:frame.values.length,sequence:frame.values.at(-1)?.event?.sequence??frame.values.at(-1)?.snapshot?.snapshotSequence});
-              for(const value of frame.values){
+              logEvent('stream.chunk',{threadId,count:frame.values.length});
+              for(const value of frame.values as unknown[]){
+                if(!isRecord(value))throw Error('Invalid T3 stream item.');
                 if(value.kind==='event'||value.kind==='snapshot'){
                   activityVersion++;pollDelay=1200;lastSnapshotHash=undefined;schedulePoll(1200);
                 }

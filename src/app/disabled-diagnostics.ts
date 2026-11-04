@@ -7,7 +7,7 @@ interface LogFiles {
 }
 
 /** One-time startup cleanup, with no journal, timers, watchers or publication. */
-export async function clearVaultDiagnostics(files:LogFiles,configDir='.obsidian'):Promise<void> {
+export async function clearVaultDiagnostics(files:LogFiles,configDir:string):Promise<void> {
   const shared=`${configDir}/t3-code-log.json`;
   if(await files.exists(shared))await files.remove(shared);
   const retired='T3 Code Logs';

@@ -39,7 +39,7 @@ test('v2 title snapshots keep their cursor after newer metadata and unknown even
 });
 test('title feeds isolate environments, reject another project, and fence late events after closure',()=>{
  const h=fixture();h.feed.sync([destination,{...destination,id:'remote',threadEnvironmentId:'other-host'}]);assert.equal(h.streams.length,2);
- h.streams[0].callbacks.item({kind:'snapshot',snapshot:{thread:{id:'thread',projectId:'wrong',title:'Wrong title'}}});assert.equal(h.titles.length,0);
+ h.streams[0].callbacks.item({kind:'snapshot',snapshot:{thread:{id:'thread',projectId:'wrong',title:'Wrong title',messages:[]}}});assert.equal(h.titles.length,0);
  h.feed.sync([]);assert.ok(h.streams.every(stream=>stream.stopped));
  h.streams[0].callbacks.item({kind:'event',event:{sequence:2,type:'thread.metadata-updated',payload:{title:'Late title'}}});assert.equal(h.titles.length,0);
  h.feed.sync([destination]);h.feed.dispose();assert.ok(h.streams[2].stopped);

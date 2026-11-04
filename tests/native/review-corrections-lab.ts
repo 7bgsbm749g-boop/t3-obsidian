@@ -1,3 +1,5 @@
+import {readMetadataSnapshot} from '../../src/connection/wire-readers';
+import {expectProject} from '../wire-fixture';
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
 import {nativeResponses} from '../../src/responses/native-response-manager';
 import {nativeStoppedStore} from '../../src/responses/native-stop-store';
@@ -43,7 +45,7 @@ export default class ReviewCorrectionsLab extends Plugin {
   private async run(){
     const connection={...desktopDefaults(),stateDir:path.join(this.root,'t3-state')},environmentId=await desktopEnvironment(connection);
     this.access=await desktopThreadAccess(connection);
-    const project=await runDesktopWithAccess(connection,['no-project'],'',this.access);
+    const project=expectProject(await runDesktopWithAccess(connection,['no-project'],'',this.access));
     const requestId=crypto.randomUUID(),id=crypto.randomUUID(),note='Review corrections.md',vaultId='synthetic-review-corrections';
     this.threadId=uuid5(requestId,'thread');this.write('TEMPORARY-T3.json',{threadId:this.threadId,notePath:note,requestId});
     const native=nativeResponses(this.app),notes=deviceNoteIO(this.app),smart=loadSmartSend(undefined);let bindings:any={};
@@ -69,7 +71,7 @@ export default class ReviewCorrectionsLab extends Plugin {
     await this.events.observe('modify',note,await snapshot());
     const silentFinal=this.events.snapshot.notifications.length===0,saved=await this.app.vault.read(file),view=leaf.view as MarkdownView;
     await this.until(()=>issued===closed,'completion access revocation');
-    let title='';await this.until(async()=>{const state=await this.access!.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true');title=state.thread.title;return !!title&&title!==AUTO_THREAD_TITLE;},'automatic local title');
+    let title='';await this.until(async()=>{const state=readMetadataSnapshot(await this.access!.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'));title=state.thread.title??'';return !!title&&title!==AUTO_THREAD_TITLE;},'automatic local title');
     view.editor.replaceRange('\nIndependent user edit.',view.editor.offsetToPos(view.editor.getValue().length));await view.save();await this.events.observe('modify',note,await snapshot());
     const userObserved=this.events.snapshot.notifications.length===1;
     const result:any={checks:{finalVisible:view.editor.getValue().includes('REVIEW_CORRECTIONS_OK'),finalSaved:saved.includes('REVIEW_CORRECTIONS_OK'),finalAnchorRemoved:!saved.includes(responseAnchor(id)),finalSaveSilent:silentFinal,userEditObserved:userObserved,provenanceSaved:provenance>0,completionAccessClosed:issued>0&&issued===closed,localAutomaticTitle:title!==AUTO_THREAD_TITLE},title,issued,closed,threadId:this.threadId};
@@ -100,10 +102,10 @@ export default class ReviewCorrectionsLab extends Plugin {
   private async cleanup(){
     if(this.timer!==undefined)window.clearInterval(this.timer);this.events?.stop();this.local?.dispose();const remainingThreadIds:string[]=[];
     if(this.threadId&&this.access){
-      const state=await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true');
+      const state=readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'));
       for(const turn of Object.values(state.thread.turns??{}) as any[])if(turn.state==='running')await this.access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:crypto.randomUUID(),threadId:this.threadId,turnId:turn.turnId,createdAt:new Date().toISOString()});
       await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.threadId});
-      try{if(!(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true')).thread.deletedAt)remainingThreadIds.push(this.threadId);}catch(error){if((error as any)?.status!==404)throw error;}
+      try{if(!(readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))).thread.deletedAt)remainingThreadIds.push(this.threadId);}catch(error){if((error as any)?.status!==404)throw error;}
     }
     await this.access?.close?.();for(const leaf of this.app.workspace.getLeavesOfType('markdown'))leaf.detach();for(const file of this.app.vault.getMarkdownFiles())await this.app.vault.delete(file);
     nativeResponses(this.app).dispose();this.write('CLEANUP.json',{temporaryThreadIds:this.threadId?[this.threadId]:[],remainingThreadIds,remainingNotes:this.app.vault.getMarkdownFiles().map(file=>file.path)});

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
-import {runInNewContext} from 'node:vm';
+import {runInNewContext} from './obsidian-context';
 
 const compiled=build({entryPoints:['src/notes/note-tab-panel.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
 async function fixture(){
@@ -21,7 +21,7 @@ async function fixture(){
   const doc:any={activeElement:new Element(),defaultView:{HTMLElement:Element,visualViewport:{height:600,addEventListener:()=>{},removeEventListener:()=>{}}},addEventListener:(key:string,callback:Function)=>callbacks.set(key,callback),removeEventListener:(key:string)=>callbacks.delete(key)};
   const host=new Element(),otherHost=new Element();host.ownerDocument=otherHost.ownerDocument=doc;
   const view={file:{path:'Synthetic.md'},containerEl:host},other={file:{path:'Other.md'},containerEl:otherHost};
-  const app={workspace:{activeLeaf:{view},getLeavesOfType:()=>[{view},{view:other}],on:(key:string,callback:Function)=>{events.set(key,callback);return key;},offref:(key:string)=>events.delete(key)}};
+  const app={workspace:{activeLeaf:{view},getActiveViewOfType:()=>app.workspace.activeLeaf.view,getLeavesOfType:()=>[{view},{view:other}],on:(key:string,callback:Function)=>{events.set(key,callback);return key;},offref:(key:string)=>events.delete(key)}};
   let nativeOpen=0,nativeClose=0,opened=0,closed=0;
   class Modal {modalEl=new Element();titleEl=new Element();contentEl=new Element();constructor(public app:any){}open(){nativeOpen++;(this as any).onOpen();}close(){nativeClose++;(this as any).onClose();}}
   const module={exports:{} as any};runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:()=>({Modal}),HTMLElement:Element});

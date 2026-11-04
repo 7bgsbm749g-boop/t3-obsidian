@@ -1,3 +1,4 @@
+import {readThreadSnapshot} from '../src/connection/wire-types';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -36,14 +37,14 @@ const completeV2=(h:ReturnType<typeof fixture>,sequence=2,text='Final reply')=>{
 const finalItem=(text='Final reply')=>({id:'opaque-item',threadId:'thread',runId:'turn',messageId:'answer',type:'assistant_message',text,streaming:false,status:'completed',updatedAt:'2026-10-06T03:01:00.000Z'});
 const settle=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
 
-const recoverySnapshot=(sequence:number,status='running',withInput=true):ThreadStreamItem=>({kind:'snapshot',snapshot:normalizeV2Snapshot({snapshotSequence:sequence,projection:{thread:{id:'thread',projectId:'project'},runtimeRequests:[],runs:[
+const recoverySnapshot=(sequence:number,status='running',withInput=true):ThreadStreamItem=>({kind:'snapshot',snapshot:readThreadSnapshot(normalizeV2Snapshot({snapshotSequence:sequence,projection:{thread:{id:'thread',projectId:'project'},runtimeRequests:[],runs:[
  {id:'turn',ordinal:1,userMessageId:'prompt',status:'failed',requestedAt:'2026-10-06T03:00:00Z',completedAt:'2026-10-06T03:01:00Z'},
  {id:'retry',ordinal:2,userMessageId:'retry-input',status,requestedAt:'2026-10-06T03:02:00Z',...(status==='completed'?{completedAt:'2026-10-06T03:03:00Z'}:{})}],messages:[
  {id:'prompt',runId:'turn',role:'user',text:'Original task',createdBy:'user',creationSource:'web',createdAt:'2026-10-06T03:00:00Z',streaming:false},
  {id:'old',runId:'turn',role:'assistant',text:'Earlier progress.',createdAt:'2026-10-06T03:00:30Z',streaming:false},
  ...(withInput?[{id:'retry-input',runId:'retry',role:'user',text:'Continue from T3.',createdBy:'user',creationSource:'web',createdAt:'2026-10-06T03:02:00Z',streaming:false}]:[]),
  {id:'retry-answer',runId:'retry',role:'assistant',text:'Recovered answer.',createdAt:'2026-10-06T03:02:30Z',streaming:status!=='completed'}],turnItems:[
- {id:'retry-final',runId:'retry',messageId:'retry-answer',type:'assistant_message',status:status==='completed'?'completed':'running',text:'Recovered answer.',streaming:status!=='completed',updatedAt:'2026-10-06T03:02:30Z'}]}})});
+ {id:'retry-final',runId:'retry',messageId:'retry-answer',type:'assistant_message',status:status==='completed'?'completed':'running',text:'Recovered answer.',streaming:status!=='completed',updatedAt:'2026-10-06T03:02:30Z'}]}}))});
 
 test('a T3 user retry automatically joins the original response and verifies only its exact final item',async()=>{
  const reads:any[]=[],h=fixture(true,async(path,payload)=>{reads.push({path,payload});return {id:'retry-final',threadId:'thread',runId:'retry',messageId:'retry-answer',type:'assistant_message',text:'Recovered answer.',streaming:false,status:'completed',updatedAt:'2026-10-06T03:02:30Z'};});
@@ -88,10 +89,10 @@ test('the live preview keeps public thoughts from snapshots and updates outside 
  assert.doesNotMatch(h.updates.at(-1)!.body,/Unrelated summary/);assert.equal(h.updates.at(-1)!.phase,'running');assert.equal(h.updates.at(-1)!.completionVerified,false);h.preview.dispose();
 });
 test('an interrupt arriving before handoff evidence cannot finalize; canonical recovery follows the replacement',async()=>{
- const canonical=normalizeV2Snapshot({...handoffProjection({runs:[{...handoffSource,id:'turn'},handoffRun],messages:[{id:'prompt',role:'user',runId:'turn',text:'Question',streaming:false},handoffMessage],turnItems:[{...handoffItem,runId:'turn'}]}),snapshotSequence:12});
+ const canonical=readThreadSnapshot(normalizeV2Snapshot({...handoffProjection({runs:[{...handoffSource,id:'turn'},handoffRun],messages:[{id:'prompt',role:'user',runId:'turn',text:'Question',streaming:false},handoffMessage],turnItems:[{...handoffItem,runId:'turn'}]}),snapshotSequence:12}));
  const reads:string[]=[],h=fixture(false,async(path)=>{reads.push(path);return canonical;});
  h.record.request.localOnly=true;h.preview.tick(true);
- const first=normalizeV2Snapshot(handoffProjection({runs:[{...handoffSource,id:'turn',status:'running',completedAt:null}],messages:[{id:'prompt',role:'user',runId:'turn',text:'Question',streaming:false}],turnItems:[]}));
+ const first=readThreadSnapshot(normalizeV2Snapshot(handoffProjection({runs:[{...handoffSource,id:'turn',status:'running',completedAt:null}],messages:[{id:'prompt',role:'user',runId:'turn',text:'Question',streaming:false}],turnItems:[]})));
  h.item({kind:'snapshot',snapshot:first});
  h.item(normalizeV2StreamItem({kind:'event',sequence:11,event:{type:'run.updated',payload:{...handoffSource,id:'turn'}}}));
  assert.ok(h.updates.every(update=>!update.completionVerified));
@@ -102,10 +103,10 @@ test('an interrupt arriving before handoff evidence cannot finalize; canonical r
 test('a real handoff chain keeps one response and verifies only the final replacement output',async()=>{
  const calls:string[]=[],h=fixture(false,async(path,payload)=>{
   calls.push(path);if(path==='/api/orchestration/turn-item')return {...finalItem('HANDOFF_READY'),id:'handoff-final',runId:'resume',messageId:'handoff-answer'};
-  return normalizeV2Snapshot({...handoffProjection(),snapshotSequence:11});
+  return readThreadSnapshot(normalizeV2Snapshot({...handoffProjection(),snapshotSequence:11}));
  });
  h.record.request.localOnly=true;h.record.request.intermediateMode='collapse';h.preview.tick(true);
- h.item({kind:'snapshot',snapshot:normalizeV2Snapshot(handoffProjection({runs:[handoffSource],messages:[{id:'prompt',role:'user',runId:'source',text:'Question',streaming:false}],turnItems:[handoffItem]}))});
+ h.item({kind:'snapshot',snapshot:readThreadSnapshot(normalizeV2Snapshot(handoffProjection({runs:[handoffSource],messages:[{id:'prompt',role:'user',runId:'source',text:'Question',streaming:false}],turnItems:[handoffItem]})))});
  assert.equal(h.updates.at(-1)!.completionVerified,false);assert.match(h.updates.at(-1)!.body,/Moving to worktree/);
  await settle();assert.equal(h.updates.at(-1)!.turnId,'resume');assert.equal(h.updates.at(-1)!.phase,'running');
  h.item(normalizeV2StreamItem({kind:'event',sequence:12,event:{type:'turn-item.updated',payload:{...finalItem('HANDOFF_READY'),id:'handoff-final',runId:'resume',messageId:'handoff-answer'}}}));
@@ -116,7 +117,7 @@ test('a real handoff chain keeps one response and verifies only the final replac
 });
 
 test('a genuine interruption finalizes after canonical confirmation even when an unrelated run is active',async()=>{
- const canonical=normalizeV2Snapshot(handoffProjection({runs:[handoffSource,{id:'unrelated',ordinal:2,status:'running',userMessageId:'other'}],messages:[{id:'prompt',role:'user',runId:'source',text:'Question',streaming:false}],turnItems:[]}));
+ const canonical=readThreadSnapshot(normalizeV2Snapshot(handoffProjection({runs:[handoffSource,{id:'unrelated',ordinal:2,status:'running',userMessageId:'other'}],messages:[{id:'prompt',role:'user',runId:'source',text:'Question',streaming:false}],turnItems:[]})));
  const h=fixture(false,async()=>canonical);h.record.request.localOnly=true;h.preview.tick(true);h.item({kind:'snapshot',snapshot:canonical});
  assert.equal(h.updates.at(-1)!.completionVerified,false);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.updates.at(-1)!.phase,'interrupted');assert.equal(h.updates.at(-1)!.turnId,'source');h.preview.dispose();
 });

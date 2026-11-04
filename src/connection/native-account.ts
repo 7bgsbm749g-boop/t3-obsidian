@@ -1,8 +1,12 @@
-import {Buffer} from 'buffer';
+import {isRecord,parseJson} from '../shared/values';
+import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
+import {Buffer} from 'buffer/';
 import type {Fetcher} from './direct';
 import type {CloudAccount} from './cloud';
 import {SignInRequiredError} from './sign-in-state';
 
+// Lazy SDK import keeps the explicitly injected standalone transport usable.
+const defaultNativeAccountFetch:Fetcher=async(input,options)=>(await import('./network')).nativeAccountFetch(input,options);
 const ORIGIN='https://clerk.t3.codes';
 export interface NativeAccount {clientToken:string;sessionId:string;userId:string;identity:string}
 export interface EmailLogin {clientToken:string;signInId:string;email:string;expiresAt:number}
@@ -21,16 +25,16 @@ async function request(path:string,state:ClientState,body:Record<string,string>|
  try{
   const response=await Promise.race([fetcher(url,{method:body?'POST':'GET',headers:{...(state.clientToken?{Authorization:'Bearer '+state.clientToken}:{}),...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},...(body?{body:new URLSearchParams(body).toString()}:{}),credentials:'omit',redirect:'error',signal:controller.signal}),new Promise<never>((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new SignInError('T3 sign-in timed out. Try again.'));},30000);})]);
   const text=await response.text();if(Buffer.byteLength(text)>1_000_000)throw new SignInError('T3 sign-in response is too large.');
-  let data:any;try{data=JSON.parse(text);}catch{throw new SignInError('T3 sign-in returned an invalid response.');}
+  let data:Record<string,unknown>;try{const parsed=parseJson(text);if(!isRecord(parsed))throw Error('Expected a sign-in object.');data=parsed;}catch{throw new SignInError('T3 sign-in returned an invalid response.');}
   const rotated=response.headers.get('authorization')?.replace(/^Bearer /i,'');
   if(rotated){state.clientToken=rotated;await changed?.();}
-  if(!response.ok){const code=data.errors?.[0]?.code;
+  if(!response.ok){const first=Array.isArray(data.errors)?data.errors[0] as unknown:undefined;const code=isRecord(first)&&typeof first.code==='string'?first.code:'';
    if(response.status===401||['session_expired','session_revoked','session_not_found','client_invalid','client_not_found'].includes(code))throw new SignInRequiredError();
    throw new SignInError(messages[code]??(response.status===429?messages.too_many_requests:`T3 sign-in failed (HTTP ${response.status}). Try again or use advanced pairing.`));}
-  return {data:data.response??data,client:data.client};
+  const result=data.response??data;if(!isRecord(result)||data.client!==undefined&&!isRecord(data.client))throw new SignInError('T3 sign-in returned an invalid response.');return {data:result,client:data.client};
  }catch(e){if(e instanceof SignInError||e instanceof SignInRequiredError)throw e;throw new SignInError('Cannot reach T3 sign-in. Check your internet connection.');}finally{clearTimeout(timer);}
 }
-export async function beginEmailLogin(email:string,fetcher:Fetcher=fetch):Promise<EmailLogin>{
+export async function beginEmailLogin(email:string,fetcher:Fetcher=defaultNativeAccountFetch):Promise<EmailLogin>{
  email=email.trim();if(email.length>320||!/^\S+@\S+\.\S+$/.test(email))throw new SignInError('Enter the email address you use for T3.');
  const login:EmailLogin={clientToken:'',signInId:'',email,expiresAt:Date.now()+10*60_000};
  await request('/v1/client',login,undefined,fetcher);
@@ -38,30 +42,30 @@ export async function beginEmailLogin(email:string,fetcher:Fetcher=fetch):Promis
  const started=await request('/v1/client/sign_ins',login,{identifier:email},fetcher);
  if(typeof started.data.id!=='string')throw new SignInError('T3 did not create a sign-in request.');
  login.signInId=started.data.id;
- const factor=started.data.supported_first_factors?.find((f:any)=>f.strategy==='email_code'&&typeof f.email_address_id==='string');
- if(!factor)throw new SignInError('This T3 account does not support email-code sign-in. Use advanced pairing.');
+ const factor=(Array.isArray(started.data.supported_first_factors)?started.data.supported_first_factors:[]).filter(isRecord).find(f=>f.strategy==='email_code'&&typeof f.email_address_id==='string');
+ if(!factor||typeof factor.email_address_id!=='string')throw new SignInError('This T3 account does not support email-code sign-in. Use advanced pairing.');
  await request('/v1/client/sign_ins/'+encodeURIComponent(login.signInId)+'/prepare_first_factor',login,{strategy:'email_code',email_address_id:factor.email_address_id},fetcher);
  return login;
 }
-export async function verifyEmailLogin(login:EmailLogin,code:string,fetcher:Fetcher=fetch):Promise<NativeAccount>{
+export async function verifyEmailLogin(login:EmailLogin,code:string,fetcher:Fetcher=defaultNativeAccountFetch):Promise<NativeAccount>{
  if(Date.now()>=login.expiresAt)throw new SignInError(messages.verification_expired);
  if(!/^\d{6}$/.test(code.trim()))throw new SignInError('Enter the six-digit code from your T3 email.');
  const completed=await request('/v1/client/sign_ins/'+encodeURIComponent(login.signInId)+'/attempt_first_factor',login,{strategy:'email_code',code:code.trim()},fetcher);
  if(completed.data.status!=='complete'||typeof completed.data.created_session_id!=='string')throw new SignInError('T3 requires an additional sign-in step. Finish it in T3 or use advanced pairing.');
  const client=completed.client??(await request('/v1/client',login,undefined,fetcher)).data;
- const session=client.sessions?.find((s:any)=>s.id===completed.data.created_session_id&&s.status==='active');
- if(typeof session?.user?.id!=='string')throw new SignInError('T3 did not return an active account session.');
+ const session=(Array.isArray(client.sessions)?client.sessions:[]).filter(isRecord).find(s=>s.id===completed.data.created_session_id&&s.status==='active');
+ if(typeof session?.id!=='string'||!isRecord(session.user)||typeof session.user.id!=='string')throw new SignInError('T3 did not return an active account session.');
  return {clientToken:login.clientToken,sessionId:session.id,userId:session.user.id,identity:login.email};
 }
-export async function nativeRelayAccount(account:NativeAccount,changed:()=>Promise<void>,fetcher:Fetcher=fetch):Promise<CloudAccount>{
+export async function nativeRelayAccount(account:NativeAccount,changed:()=>Promise<void>,fetcher:Fetcher=defaultNativeAccountFetch):Promise<CloudAccount>{
  const client=await request('/v1/client',account,undefined,fetcher,changed);
- if(!client.data.sessions?.some((s:any)=>s.id===account.sessionId&&s.status==='active'&&s.user?.id===account.userId))throw new SignInRequiredError();
+ if(!(Array.isArray(client.data.sessions)?client.data.sessions:[]).filter(isRecord).some(s=>s.id===account.sessionId&&s.status==='active'&&isRecord(s.user)&&s.user.id===account.userId))throw new SignInRequiredError();
  const result=await request('/v1/client/sessions/'+encodeURIComponent(account.sessionId)+'/tokens/t3-relay',account,{},fetcher,changed);
  if(typeof result.data.jwt!=='string')throw new SignInError('T3 did not authorize account connections.');
- let expiresAt=0;try{expiresAt=JSON.parse(Buffer.from(result.data.jwt.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'),'base64').toString()).exp*1000;}catch{}
+ let expiresAt=0;try{const claims=parseJson(Buffer.from(result.data.jwt.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'),'base64').toString());if(isRecord(claims)&&typeof claims.exp==='number')expiresAt=claims.exp*1000;}catch{/* Invalid claims retain zero expiry and fail the check below. */}
  if(!Number.isFinite(expiresAt)||expiresAt<=Date.now())throw new SignInError('T3 returned an expired account token.');
  return {accessToken:result.data.jwt,expiresAt,identity:account.identity};
 }
-export async function revokeNativeAccount(account:NativeAccount,fetcher:Fetcher=fetch){
+export async function revokeNativeAccount(account:NativeAccount,fetcher:Fetcher=defaultNativeAccountFetch){
  await request('/v1/client/sessions/'+encodeURIComponent(account.sessionId)+'/remove',account,{},fetcher);
 }

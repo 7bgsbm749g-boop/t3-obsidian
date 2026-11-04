@@ -1,3 +1,4 @@
+import {isRecord,toError} from '../shared/values';
 /**
  * The core command palette has no public extension point. Keep its instance-only
  * integration here; a normal plugin command remains available if it changes.
@@ -22,7 +23,7 @@ export interface PaletteChatController {
   dispose(): void;
 }
 
-type Method = (this: PaletteModal, ...args: any[]) => any;
+type Method = (this: PaletteModal, ...args: unknown[]) => unknown;
 const methodNames = ['getSuggestions', 'renderSuggestion', 'selectSuggestion', 'onChooseSuggestion', 'onOpen'] as const;
 type MethodName = typeof methodNames[number];
 type PaletteModal = Record<MethodName, Method> & {
@@ -82,7 +83,7 @@ export function installPaletteChat<Context = unknown>(
         if (!active || this !== modal) return suggestions;
         // Current core versions return an array. Leave a changed contract alone.
         if (!Array.isArray(suggestions)) { setStatus('incompatible'); return suggestions; }
-        if (typeof args[0] !== 'string') return suggestions;
+        if (typeof args[0] !== 'string') return suggestions as unknown[];
         const selection=options.captureSource?source?.selection??'':options.getSelection?.()??'';
         const name=query.trim()
           ? `${selection.trim()?'Ask T3 Code':'T3 Code'}: “${query}”`
@@ -95,16 +96,16 @@ export function installPaletteChat<Context = unknown>(
         // Insert after core filtering/sorting, before its display limit is applied.
         // The registered command is the hotkey/fallback surface. While this
         // dynamic row is available, show only one manual T3 action.
-        return [row, ...suggestions.filter(suggestion=>suggestion?.item?.id!==`${options.pluginId??'send-to-t3-code'}:send-or-ask`)];
+        return [row, ...(suggestions as unknown[]).filter(suggestion=>!isRecord(suggestion)||!isRecord(suggestion.item)||suggestion.item.id!==`${options.pluginId??'send-to-t3-code'}:send-or-ask`)];
       },
       renderSuggestion(...args) {
         const row = args[0];
         if (!row || typeof row !== 'object' || !rows.has(row)) return originals.renderSuggestion.apply(this, args);
         const element = args[1] as HTMLElement;
         element.classList.add('mod-complex', 'send-to-t3-palette-suggestion');
-        const content = element.ownerDocument.createElement('div');
+        const content = element.ownerDocument.win.createDiv();
         content.className = 'suggestion-content';
-        const title = element.ownerDocument.createElement('div');
+        const title = element.ownerDocument.win.createDiv();
         title.className = 'suggestion-title';
         title.textContent = (row as ChatRow).item.name;
         content.appendChild(title);
@@ -113,16 +114,16 @@ export function installPaletteChat<Context = unknown>(
       selectSuggestion(...args) {
         const row = args[0];
         const own = row && typeof row === 'object' ? rows.get(row) : undefined;
-        if (own && (!active || own.epoch !== epoch || own.query !== modal.inputEl.value || submitted || composing || args[1]?.isComposing)) return;
+        if (own && (!active || own.epoch !== epoch || own.query !== modal.inputEl.value || submitted || composing || (isRecord(args[1])&&args[1].isComposing))) return;
         return originals.selectSuggestion.apply(this, args);
       },
       onChooseSuggestion(...args) {
         const row = args[0];
         const own = row && typeof row === 'object' ? rows.get(row) : undefined;
         if (!own) return originals.onChooseSuggestion.apply(this, args);
-        if (!active || own.epoch !== epoch || own.query !== modal.inputEl.value || submitted || composing || args[1]?.isComposing) return;
+        if (!active || own.epoch !== epoch || own.query !== modal.inputEl.value || submitted || composing || (isRecord(args[1])&&args[1].isComposing)) return;
         submitted = true;
-        try { if(own.error)throw own.error;Promise.resolve(onSubmit(own.query,own.selection,Boolean(args[1]?.ctrlKey),own.context)).catch(error => options.onError?.(error)); }
+        try { if(own.error)throw toError(own.error);Promise.resolve(onSubmit(own.query,own.selection,Boolean((isRecord(args[1])&&args[1].ctrlKey)),own.context)).catch(error => options.onError?.(error)); }
         catch (error) { options.onError?.(error); }
       },
       onOpen(...args) {

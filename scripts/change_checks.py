@@ -28,7 +28,9 @@ QLO2 = Path('/home/ubuntu/vaults/QLO2/.obsidian/plugins/t-three-code/manifest.js
 if not QLO2.exists():
     QLO2 = QLO2.parent.with_name('send-to-t3-code') / 'manifest.json'
 RELEASE_FILES = ('manifest.json', 'versions.json', 'styles.css', 'README.md', 'LICENSE')
-RUNNER_INPUTS = {'scripts/change_checks.py', 'scripts/test-impact.json'}
+RUNNER_INPUTS = {'scripts/change_checks.py', 'scripts/test-impact.json', 'scripts/lint.mjs',
+                 'eslint.config.mjs', 'scripts/check-platform-boundaries.mjs',
+                 'scripts/check-review-styles.mjs', 'scripts/build-review-linter.mjs'}
 CODE_SUFFIXES = {'.ts', '.tsx', '.js', '.mjs', '.cjs', '.py', '.css'}
 IMPORTS = re.compile(r'''(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"']+)''')
 FILE_READS = re.compile(r'''(?:\breadFile(?:Sync)?|\bnew\s+URL|\.with_name)\s*\(\s*["'`]([^"'`\r\n]+)["'`]''')
@@ -210,6 +212,28 @@ def checked_command(root: Path, command: list[str], log: Path, timeout: int = 90
         raise SystemExit(f'Check failed ({result.returncode}). Full log: {log}')
 
 
+def cached_review_checks(root: Path, files: dict[str, bytes], context: dict, cache: Path) -> Path:
+    inputs = {name: digest(value) for name, value in files.items()
+              if name.endswith(('.ts', '.tsx')) or name in RUNNER_INPUTS or name in
+              ('package.json', 'package-lock.json', 'tsconfig.json', 'manifest.json', 'styles.css', 'LICENSE')}
+    key = digest(json_bytes({'inputs': inputs, 'context': context, 'reviewPolicy': 1}))
+    directory = cache / 'review' / key
+    with lock(cache / 'locks' / ('review-' + key)):
+        if not directory.exists():
+            temporary = Path(tempfile.mkdtemp(prefix='review-', dir=cache))
+            checked_command(root, ['npm', 'run', 'lint'], temporary / 'lint.log', timeout=300)
+            if snapshot_hash(source_files(root)) != snapshot_hash(files) or dependency_hash(root) != context['dependenciesSha256']:
+                raise SystemExit('Inputs changed during review checks. No successful check was cached.')
+            (temporary / 'review.json').write_bytes(json_bytes({'status': 'passed', 'key': key,
+                'logSha256': digest((temporary / 'lint.log').read_bytes())}))
+            directory.parent.mkdir(parents=True, exist_ok=True)
+            temporary.rename(directory)
+        result = json.loads((directory / 'review.json').read_bytes())
+        if result.get('status') != 'passed' or digest((directory / 'lint.log').read_bytes()) != result.get('logSha256'):
+            raise SystemExit('Cached review evidence is damaged: ' + str(directory))
+    return directory / 'review.json'
+
+
 def cached_build(root: Path, files: dict[str, bytes], context: dict, cache: Path) -> tuple[Path, bool]:
     # The builder also reads non-code inputs, such as the bundled notices.
     # Retain the type-check inputs and include the builder's transitive reads.
@@ -254,7 +278,7 @@ def run_validation(root: Path = ROOT, *, base: str | None = None, all_tests: boo
     cache.mkdir(parents=True, exist_ok=True)
     graph = plan.pop('graph')
     validation_key = digest(json_bytes({'source': snapshot_hash(files), 'context': context,
-                                        'base': base, 'scope': plan['scope'], 'build': require_build}))
+                                        'base': base, 'scope': plan['scope'], 'build': require_build, 'reviewPolicy': 1}))
     with lock(cache / 'locks' / ('validation-' + validation_key)):
         receipt = cache / 'validations' / (validation_key + '.json')
         if receipt.exists():
@@ -262,6 +286,7 @@ def run_validation(root: Path = ROOT, *, base: str | None = None, all_tests: boo
             print(f'Checks already passed for these exact inputs. Reusing {receipt}', flush=True)
             return receipt
         run_directory = Path(tempfile.mkdtemp(prefix='run-', dir=cache))
+        review = cached_review_checks(root, files, context, cache)
         # Bundle consumers need the production bundle. A release always does.
         needs_build = require_build or any('dist/main.js' in closure({test}, graph) for test in plan['testFiles'])
         needs_build = needs_build or any(name.endswith(('.ts', '.tsx')) for name in plan['changedFiles'])
@@ -292,7 +317,9 @@ def run_validation(root: Path = ROOT, *, base: str | None = None, all_tests: boo
             javascript = [name for name in pending if name.endswith('.ts')]
             python = [name for name in pending if name.endswith('.py')]
             if javascript:
-                commands.append((javascript, [str(root / 'node_modules/.bin/tsx'), '--test', '--test-concurrency=2', *javascript]))
+                for offset in range(0, len(javascript), 8):
+                    batch = javascript[offset:offset + 8]
+                    commands.append((batch, [str(root / 'node_modules/.bin/tsx'), '--test', '--test-concurrency=2', *batch]))
             if python:
                 commands.append((python, [sys.executable, '-m', 'unittest', *[name.removesuffix('.py').replace('/', '.') for name in python]]))
             for index, (tests, command) in enumerate(commands):
@@ -310,6 +337,7 @@ def run_validation(root: Path = ROOT, *, base: str | None = None, all_tests: boo
             raise SystemExit('Source or dependencies changed during validation. No release proof was created.')
         result = {'schema': 1, 'createdAt': dt.datetime.now(dt.timezone.utc).isoformat(),
                   'sourceSha256': snapshot_hash(files), 'context': context, 'sourceRoot': str(root),
+                  'review': str(review), 'reviewSha256': digest(review.read_bytes()),
                   'bundle': str(bundle) if bundle else None, 'bundleSha256': digest(bundle.read_bytes()) if bundle else None,
                   'releaseInputsSha256': {name: digest(files[name]) for name in RELEASE_FILES if name in files},
                   'testSuite': {'status': 'passed', 'baseCommit': base, **plan, 'executed': pending, 'reused': reused},
@@ -325,6 +353,13 @@ def run_validation(root: Path = ROOT, *, base: str | None = None, all_tests: boo
 
 def verify_validation(path: Path, root: Path = ROOT, *, require_build: bool = False) -> dict:
     result = json.loads(path.read_bytes())
+    if result.get('review'):
+        review = Path(result['review'])
+        if digest(review.read_bytes()) != result['reviewSha256']:
+            raise SystemExit('Review evidence changed.')
+        proof = json.loads(review.read_bytes())
+        if proof.get('status') != 'passed' or digest(review.with_name('lint.log').read_bytes()) != proof['logSha256']:
+            raise SystemExit('Review evidence changed.')
     if result.get('schema') != 1 or result.get('testSuite', {}).get('status') != 'passed':
         raise SystemExit('Validation proof does not record successful checks.')
     if result['sourceSha256'] != snapshot_hash(source_files(root)):

@@ -1,3 +1,5 @@
+import {readWireShell,readMetadataSnapshot} from '../../src/connection/wire-readers';
+import {readThreadSnapshot} from '../../src/connection/wire-types';
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
 import SendToT3 from '../../src/app/main';
 import {nativeResponses} from '../../src/responses/native-response-manager';
@@ -91,9 +93,9 @@ export default class AgentNoteEditsLab extends Plugin {
     const followRequest=crypto.randomUUID(),followMessage=uuid5(followRequest,'message');
     if(plan.text.trim()!==user)throw Error('Smart Send did not isolate the user follow-up: '+JSON.stringify(plan.text));
     await start(api,{requestId:followRequest,project:project.id,threadId:this.threadId,title:'Synthetic agent note edits',prompt:plan.text+obsidianFooter(this.app.vault.getName(),note)},path.join(this.root,'t3-state'));
-    const snapshot=await api('threads/'+this.threadId),state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+    const snapshot=readThreadSnapshot(await api('threads/'+this.threadId)),state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
     const delivered=state.messages.find(message=>message.id===followMessage)?.text??'';
-    const shell=await api('shell');
+    const shell=readWireShell(await api('shell'));
     const checks={localNoProjectDefault:!project.connectionId,nativeNoProjectThread:snapshot.thread.projectId===project.id,localStagingHost:localHost.workspaceRoot===actualRoot,noVaultRootProject:!shell.projects.some((item:any)=>item.workspaceRoot===actualRoot),stagedEditSaved:saved.includes('Agent first line.\nAgent final line.'),realFinalSaved:saved.includes('NOTE_EDIT_FINAL_OK'),visibleEdit:visible.includes('Agent first line.')&&visible.includes('NOTE_EDIT_FINAL_OK'),userTailKept:saved.includes('User tail.'),provenancePersisted:Object.keys(reloaded.noteEdits??{}).length>0,onlyUserAdditionPrepared:plan.text.trim()===user,realFollowupAccepted:delivered.includes(user),agentTextNotEchoed:!delivered.includes('Agent first line.')&&!delivered.includes('Agent final line.')&&!delivered.includes('NOTE_EDIT_FINAL_OK'),noErrors:this.errors.length===0};
     this.write('RESULT.json',{checks,routingMs,deliveryMs,project,localHost,threadId:this.threadId,messageId:followMessage,prepared:plan.text,delivered,saved,errors:this.errors,coverage:'Real local No project thread through the production send bridge and warmed local credential cache, with a remote vault connection configured; checked local staging protocol, native Obsidian editor/file save, settings reload, and real Smart Send follow-up delivery in a separate unsynced test vault. Unit checks cover silent remote fallback. No remote Sync or native mobile coverage.'});
     await subject.localDesktopAccess?.dispose();
@@ -103,13 +105,13 @@ export default class AgentNoteEditsLab extends Plugin {
   private async cleanup(){
     if(this.timer!==undefined)window.clearInterval(this.timer);this.local?.dispose();const remainingThreadIds:string[]=[];
     try{if(this.threadId&&this.access){
-      const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true')}).state;
+      const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))}).state;
       for(const turn of Object.values(state.turns??{})){
         if(turn.state==='running')await this.access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:crypto.randomUUID(),threadId:this.threadId,turnId:turn.turnId,createdAt:new Date().toISOString()});
         if(turn.state==='queued')await this.access.api('/api/orchestration/dispatch',{type:'queued-run.cancel',commandId:crypto.randomUUID(),threadId:this.threadId,runId:turn.turnId});
       }
       await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.threadId});
-      let deleted=false;try{deleted=!!(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true')).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}if(!deleted)remainingThreadIds.push(this.threadId);
+      let deleted=false;try{deleted=!!(readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}if(!deleted)remainingThreadIds.push(this.threadId);
     }}catch(error){this.errors.push('Thread cleanup: '+String(error));if(this.threadId)remainingThreadIds.push(this.threadId);}
     await this.access?.close?.();for(const leaf of this.app.workspace.getLeavesOfType('markdown'))leaf.detach();for(const file of this.app.vault.getMarkdownFiles())await this.app.vault.delete(file);
     if(this.stagingPath)fs.rmSync(path.dirname(this.stagingPath),{recursive:true,force:true});

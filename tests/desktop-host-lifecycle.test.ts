@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID,webcrypto} from 'node:crypto';
 import {createRequire} from 'node:module';
-import {runInNewContext} from 'node:vm';
+import {runInNewContext} from './obsidian-context';
 import {setTimeout as pause} from 'node:timers/promises';
 import lockfile from 'proper-lockfile';
 import {promises as fs} from 'node:fs';

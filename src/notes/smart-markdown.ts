@@ -31,7 +31,7 @@ function parseMarkdownText(source:string){
   const tasks:Span[]=[],headers:Span[]=[],quotes:Span[]=[];
   // eslint-disable-next-line no-unsanitized/method -- micromark's document() is a Markdown tokenizer, not the DOM Document API.
   const events=parse({extensions:[gfmStrikethrough({singleTilde:false})]}).document().write(preprocess()(source,undefined,true));
-  while(!subtokenize(events)){}
+  while(!subtokenize(events)){/* Continue until all nested tokenizer events have been expanded. */}
   for(const [kind,token] of events){
     const name=token.type,from=token.start.offset,to=token.end.offset;
     if(name==='blockQuote'&&kind==='exit'){quotes.pop();continue;}

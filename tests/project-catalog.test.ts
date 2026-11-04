@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {runInNewContext} from 'node:vm';
+import {runInNewContext} from './obsidian-context';
 import {randomUUID,webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 
@@ -12,7 +12,7 @@ async function harness(){
  let disk=initial;class Base{};class Folder{path='Notes';name='Notes';}
  class Plugin{
   app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>Object.assign(local,value),workspace:{onLayoutReady:(cb:Function)=>layouts.push(cb),on:(name:string,cb:Function)=>events.set(name,cb)},vault:{getName:()=> 'Catalog test'}};
-  async loadData(){return disk;}async saveData(value:any){disk=value;saves++;}addSettingTab(){}registerEvent(){}addCommand(){}registerInterval(){}
+  async loadData(){return disk;}async saveData(value:any){disk=value;saves++;}addSettingTab(){}registerEvent(){}addCommand(){}registerInterval(){}register(_cleanup:()=>void){}
  }
  const api={Plugin,Platform:{isMobile:true},TFolder:Folder,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};const module={exports:{} as any};
  const fetcher=async(url:string)=>{

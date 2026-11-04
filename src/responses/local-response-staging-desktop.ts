@@ -1,3 +1,5 @@
+/* eslint obsidianmd/no-nodejs-modules: ["warn", {"isDesktopOnly": true}] -- This desktop adapter is lazy-loaded; scripts/check-platform-boundaries.mjs and mobile bundle tests prohibit Node imports in the portable entry graph. */
+import {errorCode,toError} from '../shared/values';
 import {promises as fs} from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -17,8 +19,8 @@ export async function localStageCommand(kind:'stage-note-edit'|'submit-note-edit
   if(kind==='stage-note-edit'){
     await fs.mkdir(root,{recursive:true,mode:0o700});
     let original:string;
-    try{original=await fs.readFile(originalPath,'utf8');}catch(error:any){if(error.code!=='ENOENT')throw error;original=document;await fs.writeFile(originalPath,original,{flag:'wx',mode:0o600});}
-    try{await fs.writeFile(stagingPath,original,{flag:'wx',mode:0o600});}catch(error:any){if(error.code!=='EEXIST')throw error;}
+    try{original=await fs.readFile(originalPath,'utf8');}catch(error:unknown){if(errorCode(error)!=='ENOENT')throw toError(error);original=document;await fs.writeFile(originalPath,original,{flag:'wx',mode:0o600});}
+    try{await fs.writeFile(stagingPath,original,{flag:'wx',mode:0o600});}catch(error:unknown){if(errorCode(error)!=='EEXIST')throw toError(error);}
     return {stagingPath,originalHash:contentHash(original),notePath:request.notePath};
   }
   const original=await fs.readFile(originalPath,'utf8'),staged=await fs.readFile(stagingPath,'utf8');

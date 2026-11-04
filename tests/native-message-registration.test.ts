@@ -1,10 +1,12 @@
+import {readThreadSnapshot} from '../src/connection/wire-types';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {isT3MessageId} from '../src/connection/t3-message-id';
 import {validateResponseRequest} from '../src/responses/response-model';
 import {compactResponseBinding,loadResponseBindingData,updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../src/responses/response-binding-data';
-import {normalizeV2Snapshot} from '../src/connection/orchestration-v2';
+import {normalizeV2Snapshot as normalizeUnknownSnapshot} from '../src/connection/orchestration-v2';
+const normalizeV2Snapshot=(value:unknown)=>readThreadSnapshot(normalizeUnknownSnapshot(value));
 import {applyThreadItem,turnForMessage} from '../src/conversations/inline-thread';
 import {displayCommand,tickDisplay,type ThreadDisplay,type DisplayHost} from '../src/conversations/thread-display';
 import {LocalResponseManager} from '../src/responses/local-response-manager';

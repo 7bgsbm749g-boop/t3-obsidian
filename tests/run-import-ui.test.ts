@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
-import {runInNewContext} from 'node:vm';
+import {runInNewContext} from './obsidian-context';
 import {createRequire} from 'node:module';
 import type {RunImportResult} from '../src/conversations/run-import';
 
@@ -10,7 +10,7 @@ const drain=async()=>{for(let i=0;i<4;i++)await Promise.resolve();};
 function deferred<T>(){let resolve!:(value:T)=>void,reject!:(error:Error)=>void;const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 async function fixture(attach:(follow:boolean)=>Promise<RunImportResult>){
   const buttons:any[]=[],toggles:any[]=[],notices:Array<{text:string;duration:number}>=[];
-  class Element {children:any[]=[];setText(){}empty(){this.children=[];}createEl(_tag:string,value:any){this.children.push(value);}}
+  class Element {children:any[]=[];setText(){}empty(){this.children=[];}createEl(_tag:string,value:any){this.children.push(value);}createDiv(options:any={}){return Reflect.apply(this.createEl,this,['div',options]);}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}}
   class Modal {contentEl=new Element();titleEl=new Element();isOpen=false;closed=0;open(){this.isOpen=true;(this as any).onOpen();}close(){this.isOpen=false;this.closed++;(this as any).onClose();}}
   class Control {
     text='';disabled=false;value=false;handler:Function=()=>{};

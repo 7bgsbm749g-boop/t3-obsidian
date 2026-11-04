@@ -139,7 +139,7 @@ export function historyToolBody(body:string){
 }
 export function presentToolGroups(canonical:string,collapseHistory=true):ToolPresentation{
  const mode=collapseHistory?'collapsed':'expanded',cached=presentationCache.get(canonical),existing=cached?.[mode];
- if(existing){presentationCache.delete(canonical);presentationCache.set(canonical,cached!);return copyPresentation(existing);}
+ if(existing){presentationCache.delete(canonical);presentationCache.set(canonical,cached);return copyPresentation(existing);}
  const replacements:Array<{from:number;to:number;ref:string;placeholder:string}>=[];
  const flow=collapseHistory?toolFlowProjection(canonical):undefined;
  if(flow)for(const block of streamBlocks(flow.text)){
@@ -236,7 +236,7 @@ export function mountToolGroups(root:HTMLElement,resolve:(ref:string)=>string|un
    if(!details.open||pending||loadedRef===ref||!alive(ref))return;pending=true;
    try{
     const original=await resolve(ref);if(!alive(ref)||!details.open)return;if(!original||contentHash(original)!==ref||!history&&(!groupAt(original,0)||groupAt(original,0)!.to!==original.length))throw Error('The retained tool details are unavailable.');
-    const temporary=root.ownerDocument.createElement('div');await render(history?historyToolBody(original):original,temporary);if(!alive(ref)||!details.open)return;
+    const temporary=root.ownerDocument.win.createDiv();await render(history?historyToolBody(original):original,temporary);if(!alive(ref)||!details.open)return;
     const content=history?temporary:temporary.querySelector('.send-to-t3-tool-group-content'),target=details.querySelector('.send-to-t3-tool-group-content');if(!content||!target)throw Error('Cannot render the retained tool details.');
     target.replaceChildren(...Array.from(content.childNodes));loadedRef=ref;
    }catch(error){if(alive(ref))failure?.(error);}finally{pending=false;if(alive(details.getAttribute('data-t3-tool-ref')??'')&&details.open&&ref!==details.getAttribute('data-t3-tool-ref'))void toggle();}
@@ -245,7 +245,8 @@ export function mountToolGroups(root:HTMLElement,resolve:(ref:string)=>string|un
   // Reload that exact new reference, rejecting any pending result for the old one.
   const Observer=root.ownerDocument.defaultView?.MutationObserver;
   if(Observer){const observer=new Observer(()=>{void toggle();});observer.observe(details,{attributes:true,attributeFilter:['data-t3-tool-ref']});cleanups.push(()=>observer.disconnect());}
-  details.addEventListener('toggle',toggle);cleanups.push(()=>details.removeEventListener('toggle',toggle));if(details.open)void toggle();
+  const onToggle=()=>{void toggle().catch(error=>failure?.(error));};
+  details.addEventListener('toggle',onToggle);cleanups.push(()=>details.removeEventListener('toggle',onToggle));if(details.open)onToggle();
  }
  return ()=>{disposed=true;for(const cleanup of cleanups)cleanup();};
 }

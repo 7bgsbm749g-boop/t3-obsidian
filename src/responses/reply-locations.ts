@@ -1,3 +1,4 @@
+import {hasControlCharacters} from '../shared/values';
 import type {FolderLink} from '../projects/folder-link';
 
 export interface ReplyFolders {images:string;files:string}
@@ -7,7 +8,7 @@ export const DEFAULT_REPLY_FOLDERS:ReplyFolders={images:'T3 Code Attachments',fi
 export function replyFolder(value:unknown):string {
   if(typeof value!=='string')throw Error('Choose an attachment folder.');
   const path=value.trim().replace(/\\/g,'/').replace(/\/+$/,'');
-  if(!path||path.startsWith('/')||/[\x00-\x1f\x7f<>:"|?*]/.test(path)||path.split('/').some(part=>!part||part.startsWith('.')||part.trim()!==part))throw Error('Choose a folder inside the vault or linked folder, without hidden folders or traversal.');
+  if(!path||path.startsWith('/')||(hasControlCharacters(path,true)||/[<>:"|?*]/.test(path))||path.split('/').some(part=>!part||part.startsWith('.')||part.trim()!==part))throw Error('Choose a folder inside the vault or linked folder, without hidden folders or traversal.');
   return path;
 }
 export function validateReplyFolders(value:ReplyFolders):ReplyFolders {

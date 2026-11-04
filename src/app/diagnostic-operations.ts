@@ -1,22 +1,28 @@
+import {isRecord,toError} from '../shared/values';
 import {contentHash} from '../responses/completion';
 import {logEvent,logFailure} from './diagnostics';
-/** Explicit operation boundaries: no arguments/results containing note text or
- * credentials are serialized, and the original return/throw behavior is kept. */
+
+function promiseLike(value:unknown):value is PromiseLike<unknown>{return isRecord(value)&&typeof value.then==='function';}
+const identity=(value:unknown)=>typeof value==='string'?value:undefined;
+
+/** Log exact operation identities without serializing prompts or credentials. */
 export function instrumentOperations(target:object,names:string[]):()=>void {
-  const undo:Array<()=>void>=[];
+  const operations=target as Record<string,unknown>,undo:Array<()=>void>=[];
   for(const name of names){
-    const original=(target as any)[name];if(typeof original!=='function')continue;
+    const value=operations[name];if(typeof value!=='function')continue;
+    const original=value as (...args:unknown[])=>unknown;
     const own=Object.getOwnPropertyDescriptor(target,name);
-    (target as any)[name]=function(...args:unknown[]){
-      const operationId=globalThis.crypto?.randomUUID?.()??`${Date.now()}-${Math.random()}`;
-      const first=args[0] as any,second=args[1] as any;
-      const metadata={requestId:first?.project&&first?.connection?first.id:undefined,projectId:first?.project?.id,threadId:first?.threadId,notePath:first?.path??second?.path,jobId:['sendInlineSteering','continueInline','stopHostedInline'].includes(name)?first:undefined,...(typeof first==='string'&&['sendChat','sendInlineChat'].includes(name)?{promptHash:contentHash(first),promptLength:first.length}:{})};
+    operations[name]=function(this:unknown,...args:unknown[]){
+      const operationId=(typeof crypto==='undefined'?undefined:crypto.randomUUID?.())??`${Date.now()}-${Math.random()}`;
+      const first=isRecord(args[0])?args[0]:undefined,second=isRecord(args[1])?args[1]:undefined;
+      const project=isRecord(first?.project)?first.project:undefined;
+      const metadata={requestId:project&&first?.connection?identity(first.id):undefined,projectId:identity(project?.id),threadId:identity(first?.threadId),notePath:identity(first?.path??second?.path),jobId:['sendInlineSteering','continueInline','stopHostedInline'].includes(name)?identity(args[0]):undefined,...(typeof args[0]==='string'&&['sendChat','sendInlineChat'].includes(name)?{promptHash:contentHash(args[0]),promptLength:args[0].length}:{})};
       const started=Date.now();logEvent(`operation.${name}.started`,{...metadata,operationId});
-      const done=(value:unknown)=>{logEvent(`operation.${name}.completed`,{...metadata,operationId,durationMs:Date.now()-started});return value;};
-      const failed=(error:unknown)=>{logFailure(`operation.${name}.failed`,error,{...metadata,operationId,durationMs:Date.now()-started});throw error;};
-      try{const value=original.apply(this,args);return value&&typeof value.then==='function'?value.then(done,failed):done(value);}catch(error){return failed(error);}
+      const done=(result:unknown)=>{logEvent(`operation.${name}.completed`,{...metadata,operationId,durationMs:Date.now()-started});return result;};
+      const failed=(error:unknown)=>{logFailure(`operation.${name}.failed`,error,{...metadata,operationId,durationMs:Date.now()-started});throw toError(error);};
+      try{const result=original.apply(this,args);return promiseLike(result)?result.then(done,failed):done(result);}catch(error){return failed(error);}
     };
-    undo.push(()=>{if(own)Object.defineProperty(target,name,own);else delete (target as any)[name];});
+    undo.push(()=>{if(own)Object.defineProperty(target,name,own);else delete operations[name];});
   }
-  return ()=>{for(const fn of undo)fn();};
+  return ()=>{for(const dispose of undo)dispose();};
 }

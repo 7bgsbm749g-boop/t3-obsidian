@@ -1,3 +1,4 @@
+import {isRecord,records,parseJson,optionalString} from '../shared/values';
 import type {CompletionSource,ExplorerResponse,NoteIndicator} from './explorer-responses';
 import type {ResponseRequest} from './response-model';
 import type {ThreadAccess,ThreadAccessCloseReason} from '../conversations/thread-stream';
@@ -13,7 +14,7 @@ export interface CompletionGlowIO {
 }
 export const COMPLETION_READ_INTERVAL_MS=15_000;
 const timestamp=(value:unknown)=>typeof value==='string'?Date.parse(value):NaN;
-const validSource=(value:any):value is CompletionSource=>value&&['environmentId','projectId','threadId','runId'].every(key=>typeof value[key]==='string'&&value[key].length>0)&&
+const validSource=(value:unknown):value is CompletionSource=>isRecord(value)&&['environmentId','projectId','threadId','runId'].every(key=>typeof value[key]==='string'&&value[key].length>0)&&
   (value.completedAt===undefined||Number.isFinite(timestamp(value.completedAt)));
 const threadKey=(source:CompletionSource)=>JSON.stringify([source.environmentId,source.projectId,source.threadId]);
 const completionKey=(receipt:CompletionReceipt)=>JSON.stringify([receipt.id,receipt.completionId]);
@@ -28,8 +29,8 @@ export class CompletionGlow {
   private retryAt=0;
   private stopped=false;
   constructor(saved:unknown,private save:(receipts:CompletionReceipt[])=>void,private io:CompletionGlowIO,private now=Date.now){
-    this.access=new ThreadAccessCache(io.access,now);
-    if(Array.isArray(saved))for(const value of saved)if(value&&typeof value.id==='string'&&typeof value.completionId==='string'&&typeof value.notePath==='string'&&(value.deleted===undefined||typeof value.deleted==='boolean')){
+    this.access=new ThreadAccessCache(environmentId=>io.access(environmentId),now);
+    for(const value of records(saved))if(typeof value.id==='string'&&typeof value.completionId==='string'&&typeof value.notePath==='string'&&(value.deleted===undefined||typeof value.deleted==='boolean')){
       // Discard the retired device-local viewed bit, including on migration.
       this.receipts.set(value.id,{id:value.id,completionId:value.completionId,notePath:value.notePath,
         ...(validSource(value.completion)?{completion:{...value.completion}}:{}),...(value.deleted?{deleted:true}:{})});
@@ -60,7 +61,7 @@ export class CompletionGlow {
     for(const receipt of this.receipts.values())if(!receipt.deleted&&!receipt.completion){
       const request=requests.get(receipt.id);if(!request)continue;
       try{
-        const [messageId,runId]=JSON.parse(receipt.completionId);
+        const identity=parseJson(receipt.completionId);if(!Array.isArray(identity)||typeof identity[0]!=='string'||typeof identity[1]!=='string')continue;const [messageId,runId]=identity as [string,string];
         if(![request.messageId,request.localMessageId,...request.localSteering?.map(input=>input.messageId)??[]].includes(messageId))continue;
         const source={environmentId:request.threadEnvironmentId,projectId:request.projectId,threadId:request.threadId,runId};
         if(validSource(source)){receipt.completion=source;changed=true;}
@@ -81,22 +82,19 @@ export class CompletionGlow {
   private async read(environmentId:string,force=false):Promise<void>{
     let entry=this.environments.get(environmentId);
     if(!entry){entry={threads:new Map(),nextRead:0};this.environments.set(environmentId,entry);}
-    if(entry.work){const previous=entry.work;await previous;if(!force||this.stopped)return;if(entry.work&&entry.work!==previous){await entry.work;return;}}
+    if(entry.work){const previous=entry.work;await previous;if(!force||this.stopped)return;if(entry.work!==undefined&&entry.work!==previous){await entry.work;return;}}
     if(this.stopped||!force&&this.now()<entry.nextRead)return;
     entry.nextRead=this.now()+COMPLETION_READ_INTERVAL_MS;
     const current=entry;
     const work=Promise.resolve().then(async()=>{
       const access=await this.access.get(environmentId);
-      const shell=await access.api('/api/orchestration/shell');
-      if(!Array.isArray(shell?.threads))throw Error('T3 did not return thread read state.');
+      const shell:unknown=await access.api('/api/orchestration/shell');
+      if(!isRecord(shell)||!Array.isArray(shell.threads))throw Error('T3 did not return thread read state.');
       if(this.stopped)return;
       const sources=[...this.receipts.values()].filter(receipt=>!receipt.deleted&&receipt.completion?.environmentId===environmentId);
       const ids=new Set(sources.map(receipt=>receipt.completion!.threadId));
       // Keep no transcript or unrelated thread metadata after this read.
-      current.threads=new Map(shell.threads.filter((thread:any)=>ids.has(thread.id)).map((thread:any)=>[thread.id,{
-        id:thread.id,projectId:thread.projectId,lastVisitedAt:thread.lastVisitedAt,
-        latestRunId:thread.latestRunId,latestRunCompletedAt:thread.latestRunCompletedAt,status:thread.status,
-      }]));
+      current.threads=new Map(records(shell.threads).flatMap(thread=>{if(typeof thread.id!=='string'||!ids.has(thread.id)||typeof thread.projectId!=='string')return [];const value:ThreadReadState={id:thread.id,projectId:thread.projectId,lastVisitedAt:optionalString(thread.lastVisitedAt),latestRunId:optionalString(thread.latestRunId),latestRunCompletedAt:optionalString(thread.latestRunCompletedAt),status:optionalString(thread.status)};return [[thread.id,value] as [string,ThreadReadState]];}));
       let changed=false;
       for(const receipt of sources){
         const source=receipt.completion!,state=this.state(receipt);

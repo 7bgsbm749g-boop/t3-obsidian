@@ -16,9 +16,9 @@ export function responseBoundaries(document:string):ResponseBoundary[]{
   const code=markdownCodeRanges(document),boundaries:ResponseBoundary[]=[],sections:Array<ResponseBoundary|undefined>=[];
   // Native tool groups store escaped commands/output in HTML code elements.
   // Their literal directive text must not close the enclosing live response.
-  for(const match of document.matchAll(/<(pre|code)\b[^>]*>[\s\S]*?<\/\1\s*>/gi))code.push([match.index!,match.index!+match[0].length]);
+  for(const match of document.matchAll(/<(pre|code)\b[^>]*>[\s\S]*?<\/\1\s*>/gi))code.push([match.index,match.index+match[0].length]);
   for(const match of candidates){
-    const from=match.index!,to=from+match[0].length;
+    const from=match.index,to=from+match[0].length;
     if(code.some(([start,end])=>from>=start&&from<end))continue;
     let escapes=0;for(let at=from-1;at>=0&&document[at]==='\\';at--)escapes++;if(escapes%2)continue;
     if(match[1]){boundaries.push({id:match[3],kind:match[2] as 'start'|'end',format:match[1] as 'inline'|'response',from,to,text:match[0]});continue;}

@@ -1,3 +1,5 @@
+import {valueText} from '../shared/values';
+import {isRecord,records,parseJson} from '../shared/values';
 import {insideResponse} from '../responses/response-container';
 import type {InlineActivity} from '../conversations/inline-thread';
 import {markdownCodeRanges} from '../responses/reply-html';
@@ -9,7 +11,7 @@ export interface QuestionTarget {environmentId:string;threadId:string;requestId:
 export interface QuestionDraft {selected?:string[];text?:string;mode?:'custom'|'options'}
 export type QuestionDrafts=Record<string,QuestionDraft>;
 const staleDetails=['stale pending user-input request','unknown pending user-input request','unknown pending user input request','unknown pending codex user input request'];
-export function staleQuestionFailure(activity:InlineActivity){return activity.kind==='provider.user-input.respond.failed'&&staleDetails.some(fragment=>String(activity.payload?.detail??'').toLowerCase().includes(fragment));}
+export function staleQuestionFailure(activity:InlineActivity){return activity.kind==='provider.user-input.respond.failed'&&staleDetails.some(fragment=>valueText(activity.payload?.detail??'').toLowerCase().includes(fragment));}
 
 /** Request IDs are unique. Resolution remains terminal regardless of activity order. */
 export function pendingQuestions(activities:InlineActivity[]):PendingQuestion[]{
@@ -18,9 +20,9 @@ export function pendingQuestions(activities:InlineActivity[]):PendingQuestion[]{
     const p=activity.payload;if(!p||typeof p.requestId!=='string'||!p.requestId.trim())continue;
     if(activity.kind==='user-input.resolved'||staleQuestionFailure(activity)){closed.add(p.requestId);pending.delete(p.requestId);continue;}
     if(activity.kind!=='user-input.requested'||closed.has(p.requestId)||!Array.isArray(p.questions))continue;
-    const questions:Question[]=p.questions.flatMap((q:any)=>{
+    const questions:Question[]=records(p.questions).flatMap(q=>{
       if(!q||typeof q.id!=='string'||typeof q.header!=='string'||typeof q.question!=='string'||!Array.isArray(q.options))return [];
-      const options=q.options.filter((o:any)=>o&&typeof o.label==='string'&&typeof o.description==='string'&&(o.value===undefined||typeof o.value==='string'));
+      const options=records(q.options).filter((o):o is Record<string,unknown>&QuestionOption=>typeof o.label==='string'&&typeof o.description==='string'&&(o.value===undefined||typeof o.value==='string'));
       if(!options.length&&q.allowCustomAnswer===false)return [];
       return [{id:q.id,header:q.header,question:q.question,options,multiSelect:q.multiSelect===true,...(typeof q.allowCustomAnswer==='boolean'?{allowCustomAnswer:q.allowCustomAnswer}:{})}];
     });
@@ -42,7 +44,7 @@ export const questionKey=(target:QuestionTarget)=>JSON.stringify([target.environ
 export function questionToken(target:QuestionTarget){return encodeURIComponent(JSON.stringify(target)).replace(/[!'()*]/g,c=>`%${c.charCodeAt(0).toString(16).toUpperCase()}`);}
 export function parseQuestionToken(token:string):QuestionTarget|undefined {
   if(token.length>12000)return;
-  try{const p=JSON.parse(decodeURIComponent(token));if(p&&[p.environmentId,p.threadId,p.requestId].every(v=>typeof v==='string'&&v.length>0&&v.length<=2000))return {environmentId:p.environmentId,threadId:p.threadId,requestId:p.requestId};}catch{/* Ordinary Markdown links are not question metadata. */}
+  try{const p=parseJson(decodeURIComponent(token));if(isRecord(p)&&[p.environmentId,p.threadId,p.requestId].every(v=>typeof v==='string'&&v.length>0&&v.length<=2000)){const target=p as unknown as QuestionTarget;return {environmentId:target.environmentId,threadId:target.threadId,requestId:target.requestId};}}catch{/* Ordinary Markdown links are not question metadata. */}
 }
 export const questionUrl=(target:QuestionTarget)=>`t3-question:${questionToken(target)}`;
 export function questionTargets(document:string):QuestionTarget[]{
@@ -59,13 +61,13 @@ export function questionSections(document:string):{from:number;to:number;target:
   const candidates=[...document.matchAll(/^<!-- t3-question:(start|end):([^\s]+) -->$/gm)];
   if(!candidates.some(match=>match[1]==='start'))return [];
   const code=markdownCodeRanges(document),sections=[];
-  const markers=candidates.filter(match=>!code.some(([from,to])=>match.index!>=from&&match.index!<to));
+  const markers=candidates.filter(match=>!code.some(([from,to])=>match.index>=from&&match.index<to));
   for(const match of markers){
     if(match[1]!=='start')continue;
-    const from=match.index!,target=parseQuestionToken(match[2]),own=markers.filter(marker=>marker[2]===match[2]);
+    const from=match.index,target=parseQuestionToken(match[2]),own=markers.filter(marker=>marker[2]===match[2]);
     if(!target||own.length!==2||own[0]!==match||own[1][1]!=='end')continue;
-    const endAt=own[1].index!,to=endAt+own[1][0].length;
-    if(markers.some(marker=>marker.index!>from&&marker.index!<endAt))continue;
+    const endAt=own[1].index,to=endAt+own[1][0].length;
+    if(markers.some(marker=>marker.index>from&&marker.index<endAt))continue;
     sections.push({from,to,target});
   }
   return sections;

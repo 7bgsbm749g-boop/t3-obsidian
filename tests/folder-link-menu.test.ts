@@ -6,7 +6,7 @@ import {responseAnchor} from '../src/responses/native-response-projection';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {runInNewContext} from 'node:vm';
+import {runInNewContext} from './obsidian-context';
 import {webcrypto,randomUUID} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 
@@ -26,7 +26,7 @@ async function folderMenuHarness(initial?:any){
     events:Record<string,Function>={};
     addEventListener(name:string,callback:Function){this.events[name]=callback;}
     click(){if(!this.disabled)return this.onclick?.()??this.events.click?.();}
-    createEl(_tag:string,options?:{text?:string;cls?:string}){const child=new Element();child.tag=_tag;child.text=options?.text??'';child.cls=options?.cls??'';this.children.push(child);return child;}
+    createEl(_tag:string,options?:{text?:string;cls?:string}){const child=new Element();child.tag=_tag;child.text=options?.text??'';child.cls=options?.cls??'';this.children.push(child);return child;}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}
   }
   class Control {
     value:any;disabled=false;text='';handler:(value?:any)=>any=()=>{};
@@ -75,7 +75,7 @@ async function folderMenuHarness(initial?:any){
     };
     async loadData(){return {...(shared.at(-1)??{}),paired:[{id:'c',name:'Laptop',url:'https://folder.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:project']};}
     async saveData(data:any){if(failSave)throw Error('Simulated settings storage failure');shared.push(data);}
-    addSettingTab(){}registerEvent(){}addCommand(){}
+    addSettingTab(){}registerEvent(){}addCommand(){}register(_cleanup:()=>void){}
   }
   class MenuItem {
     title='';disabled=false;submenu?:Menu;callback:(event?:{ctrlKey?:boolean})=>any=()=>{};
@@ -207,10 +207,10 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
     const picker=h.modals.at(-1);assert.equal(picker.getItems().length,1);
     assert.equal(picker.getItems()[0].id,'foreign');
     assert.match(picker.getItemText(picker.getItems()[0]),/Remembered project · Idle/);
-    await picker.onChooseItem(picker.getItems()[0]);
+    await picker.onChooseItem(picker.getItems()[0]);await idle();
     assert.equal(sent.length,2);assert.equal(sent[1].options.threadId,'foreign');assert.equal(sent[1].project.id,h.project.id);
     h.plugin.settings.folderLinks[1].projectId=h.project.id;
-    await picker.onChooseItem(picker.getItems()[0]);
+    await picker.onChooseItem(picker.getItems()[0]);await idle();
     assert.equal(sent.length,3,'Changing a folder link does not change the displayed project choice');
     assert.equal(sent[2].project.id,h.project.id);
   }finally{h.plugin.onunload();}

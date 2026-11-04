@@ -78,12 +78,12 @@ export function escapeReplyHtml(markdown:string):string {
         }
       }
     }
-    if('children' in node)for(const child of node.children)walk(child as RootContent);
+    if('children' in node)for(const child of node.children)walk(child);
   }
-  walk(parser.parse(markdown) as Root);
+  walk(parser.parse(markdown));
   const offsets:number[]=[];
   for(const match of markdown.matchAll(/<(?:\/?[a-z][a-z0-9-]*(?=[\s/>]|$)|!--|[!?])/gi)){
-    const offset=match.index!;
+    const offset=match.index;
     if(protectedRanges.some(([from,to])=>offset>=from&&offset<to))continue;
     let slashes=0;for(let index=offset-1;index>=0&&markdown[index]==='\\';index--)slashes++;
     if(slashes%2===0)offsets.push(offset);

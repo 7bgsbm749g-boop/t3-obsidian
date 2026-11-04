@@ -1,3 +1,5 @@
+import {readThreadSnapshot} from '../../src/connection/wire-types';
+import {readWireShell,readMetadataSnapshot} from '../../src/connection/wire-readers';
 import {Plugin,MarkdownView,setIcon} from 'obsidian';
 import {nativeResponses} from '../../src/responses/native-response-manager';
 import {deviceNoteIO,deviceFinalNoteIO} from '../../src/conversations/inline-note-io';
@@ -35,7 +37,7 @@ export default class SteeringConsumptionLab extends Plugin {
   private async run(){
     const connection=desktopDefaults(),environmentId=await desktopEnvironment(connection);this.access=await desktopThreadAccess(connection);
     const api=(route:string,payload?:any)=>this.access!.api(route.startsWith('/api/')?route:'/api/orchestration/'+route,payload);
-    const project=(await api('shell')).projects.find((item:any)=>item.workspaceRoot==='/home/ubuntu/projects/send-to-t3-code');if(!project)throw Error('The plugin project is unavailable.');
+    const project=(readWireShell(await api('shell'))).projects.find((item:any)=>item.workspaceRoot==='/home/ubuntu/projects/send-to-t3-code');if(!project)throw Error('The plugin project is unavailable.');
     const requestId=crypto.randomUUID(),messageId=uuid5(requestId,'message'),id=crypto.randomUUID(),text='STEER_MOVE_CONFIRMED: Keep the final answer brief.';
     this.threadId=uuid5(requestId,'thread');this.write('TEMPORARY-T3.json',{threadId:this.threadId,notePath:'Steering removal.md',requestId});
     const native=nativeResponses(this.app),notes=deviceNoteIO(this.app);let records:any={};
@@ -58,7 +60,7 @@ export default class SteeringConsumptionLab extends Plugin {
     if(!adapter.saved().includes(text))throw Error('An unconfirmed steer removed its source.');
     await start(api,{requestId:steerRequest,project:project.id,threadId:this.threadId,title:'Steering removal test',prompt:text},path.join(this.root,'t3-state'));
     await this.until(async()=>!adapter.saved().includes(text)&&!(await this.app.vault.read(file)).includes(text)&&view.editor.getValue().includes('[!t3-steering] You'),'confirmed source removal and native save');
-    const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:await api('threads/'+this.threadId)}).state;
+    const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:readThreadSnapshot(await api('threads/'+this.threadId))}).state;
     const saved=await this.app.vault.read(file),display=adapter.canonicalDisplayed(),checks={sourceRemovedWhileRunning:Object.values(state.turns??{}).some(turn=>turn.state==='running'),exactInputPresent:state.messages.some(message=>message.id===steerId&&message.text.includes(text)),sourceAbsentOnDisk:!saved.includes(text),oneVisibleCopy:display.split(text).length-1===1,youQuoteVisible:view.contentEl.innerText.includes(text),ordinaryTextPreserved:saved.includes('Keep this note text.')&&saved.includes('Keep the note tail.'),noConflict:!adapter.conflictRecord(),noErrors:this.errors.length===0};
     this.write('RESULT.json',{checks,bindingId:id,threadId:this.threadId,messageId:steerId,saved,display,errors:this.errors,coverage:'Real T3 steering confirmation, native Obsidian rendering and native autosave in a separate unsynced test vault. Unit checks cover delayed saved-source restoration and reload recovery. No real remote Sync or native mobile coverage.'});
     await this.capture('confirmed-steer.png');if(Object.values(checks).some(pass=>!pass))throw Error('The steering checks failed.');
@@ -66,13 +68,13 @@ export default class SteeringConsumptionLab extends Plugin {
   private async cleanup(){
     if(this.timer!==undefined)window.clearInterval(this.timer);this.local?.dispose();const remainingThreadIds:string[]=[];
     try{if(this.threadId&&this.access){
-      const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true')}).state;
+      const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))}).state;
       for(const turn of Object.values(state.turns??{})){
         if(turn.state==='running')await this.access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:crypto.randomUUID(),threadId:this.threadId,turnId:turn.turnId,createdAt:new Date().toISOString()});
         if(turn.state==='queued')await this.access.api('/api/orchestration/dispatch',{type:'queued-run.cancel',commandId:crypto.randomUUID(),threadId:this.threadId,runId:turn.turnId});
       }
       await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.threadId});
-      let deleted=false;try{deleted=!!(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true')).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}if(!deleted)remainingThreadIds.push(this.threadId);
+      let deleted=false;try{deleted=!!(readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}if(!deleted)remainingThreadIds.push(this.threadId);
     }}catch(error){this.errors.push('Thread cleanup: '+String(error));if(this.threadId)remainingThreadIds.push(this.threadId);}
     await this.access?.close?.();for(const leaf of this.app.workspace.getLeavesOfType('markdown'))leaf.detach();for(const file of this.app.vault.getMarkdownFiles())await this.app.vault.delete(file);
     this.write('CLEANUP.json',{temporaryThreadIds:this.threadId?[this.threadId]:[],remainingThreadIds,remainingNotes:this.app.vault.getMarkdownFiles().map(file=>file.path),errors:this.errors});

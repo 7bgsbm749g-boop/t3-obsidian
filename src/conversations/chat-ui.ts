@@ -1,3 +1,4 @@
+import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout,clockForDocument} from '../shared/clock';
 import {resolveJobOptions,overrideCount,type JobOverrides,type ResolvedJobOptions,type InlineDefaults} from './job-options';
 import {logEvent,logFailure} from '../app/diagnostics';
 import {App, FuzzySuggestModal, Modal, Notice, Setting} from 'obsidian';
@@ -46,7 +47,7 @@ export interface ChatHost {
 class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
   constructor(app:App,private choices:()=>{key:string;label:string}[],private choose:(key:string)=>void,private watch?:(listener:()=>void)=>()=>void){super(app);this.setPlaceholder('Choose a T3 Code project');this.emptyStateText='Discovering projects… Connect T3 if no projects appear.';}
   private unwatch?:()=>void;
-  onOpen(){super.onOpen?.();this.unwatch=this.watch?.(()=>this.inputEl?.dispatchEvent(new Event('input')));}
+  onOpen(){void super.onOpen?.();this.unwatch=this.watch?.(()=>this.inputEl?.dispatchEvent(new Event('input')));}
   onClose(){this.unwatch?.();super.onClose?.();}
   getItems(){return this.choices();}
   getItemText(item:{key:string;label:string}){return item.label;}
@@ -97,10 +98,10 @@ class SendDestinationModal extends NoteTabPanel {
   private checkDestination(key?:string){
     if(this.check&&this.check.key===key&&!this.check.controller.signal.aborted&&Date.now()-this.check.started<DESTINATION_CHECK_TIMEOUT_MS)return this.check.work;
     this.cancelCheck();const controller=new AbortController(),started=Date.now();
-    const timer=setTimeout(()=>controller.abort(Error('The conversation check took too long. Retry or choose another thread.')),DESTINATION_CHECK_TIMEOUT_MS);
+    const timer=clockForDocument(this.contentEl.ownerDocument).setTimeout(()=>controller.abort(Error('The conversation check took too long. Retry or choose another thread.')),DESTINATION_CHECK_TIMEOUT_MS);
     const work=abortableRead(Promise.resolve().then(async()=>{if(controller.signal.aborted)throw controller.signal.reason;const destination=await this.host.getDefaultDestination!(key,controller.signal);if(!destination.unavailable&&this.host.hasNewContent&&!await this.host.hasNewContent(destination,this.prompt??''))return {...destination,empty:true};return destination;}),controller.signal)
-      .catch(error=>({label:'Thread unavailable',unavailable:true,detail:controller.signal.aborted&&!this.opened?'Conversation check cancelled.':error instanceof Error?error.message:'Cannot check this conversation. Reconnect T3 or choose another thread.'} as ChatDestination))
-      .finally(()=>clearTimeout(timer));
+      .catch((error):ChatDestination=>({label:'Thread unavailable',unavailable:true,detail:controller.signal.aborted&&!this.opened?'Conversation check cancelled.':error instanceof Error?error.message:'Cannot check this conversation. Reconnect T3 or choose another thread.'}))
+      .finally(()=>clockForDocument(this.contentEl.ownerDocument).clearTimeout(timer));
     this.check={key,controller,work,started};return work;
   }
   onOpen(){
@@ -112,7 +113,7 @@ class SendDestinationModal extends NoteTabPanel {
     projectButton.disabled=Boolean(this.host.busy);
     projectButton.addEventListener('click',()=>{
       if(this.field)this.prompt=this.field.value;
-      new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),key=>{logEvent('ui.destination.project-selected',{projectKey:key});this.projectKey=key;this.onOpen();},this.host.onProjectChange).open();
+      new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),key=>{logEvent('ui.destination.project-selected',{projectKey:key});this.projectKey=key;this.onOpen();},this.host.onProjectChange?.bind(this.host)).open();
     });
     const count=overrideCount(this.overrides);
     const overridesButton=row.createEl('button',{text:count?`Overrides · ${count}`:'Overrides',attr:{'aria-label':`Overrides for this send: ${count} explicit choices`}});
@@ -178,7 +179,7 @@ class SendDestinationModal extends NoteTabPanel {
     this.unwatchBusy=this.host.onBusyChange?.(()=>{if(this.opened&&revision===this.revision)this.refreshAvailability?.();});
     this.refreshAvailability();
     if(this.field)this.field.focus();
-    else setTimeout(()=>{if(defaultButton?.isConnected)defaultButton.focus();},0);
+    else clockForDocument(this.contentEl.ownerDocument).setTimeout(()=>{if(defaultButton?.isConnected)defaultButton.focus();},0);
   }
   onClose(){this.opened=false;this.unwatchBusy?.();this.unwatchBusy=undefined;this.cancelCheck();logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
   private async choose(target:Destination|boolean='default'){
@@ -275,7 +276,7 @@ export class AskComposer extends NoteTabPanel {
     this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Ask agent',placeholder:'Ask agent…',rows:'3'}});this.field.value=this.draft;
     this.field.addEventListener('input',()=>{this.draft=this.field!.value;this.saveDraft(this.draft);});
     this.field.addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.isComposing){event.preventDefault();void this.send(false);}});
-    const actions=this.contentEl.createEl('div',{cls:'send-to-t3-ask-actions'});
+    const actions=this.contentEl.createDiv({cls:'send-to-t3-ask-actions'});
     actions.createEl('button',{text:'Choose destination…'}).addEventListener('click',()=>void this.send(true));
     actions.createEl('button',{text:'Send',cls:'mod-cta'}).addEventListener('click',()=>void this.send(false));this.field.focus();
   }

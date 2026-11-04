@@ -1,3 +1,4 @@
+import {logFailure} from '../app/diagnostics';
 import {type FolderLink} from './folder-link';
 import {type NoteIndicator} from '../responses/explorer-responses';
 import {activeResponseFolders,setActiveTitle} from '../ui/activity-titles';
@@ -11,17 +12,17 @@ const LINK_PATHS=['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71',
 /** Decorates exact linked folders without marking every descendant they route. */
 export function decorateLinkedFolders(root:ParentNode,links:FolderLink[]):void{
   const linked=new Map(links.filter(link=>link.folderPath!=='/').map(link=>[link.folderPath,link]));
-  for(const title of Array.from(root.querySelectorAll('.nav-folder-title[data-path]')) as HTMLElement[]){
+  for(const title of Array.from(root.querySelectorAll<HTMLElement>('.nav-folder-title[data-path]'))){
     const link=linked.get(title.getAttribute('data-path')??'');
-    let badge=title.querySelector('.'+LINKED_FOLDER_BADGE_CLASS) as HTMLElement|null;
+    let badge=title.querySelector<HTMLElement>('.'+LINKED_FOLDER_BADGE_CLASS);
     if(!link){badge?.remove();continue;}
     if(!badge){
       const doc=title.ownerDocument;
-      badge=doc.createElement('span');badge.className=LINKED_FOLDER_BADGE_CLASS;
+      badge=doc.win.createSpan();badge.className=LINKED_FOLDER_BADGE_CLASS;
       badge.setAttribute('data-t3-linked-folder','true');badge.setAttribute('role','img');
-      const icon=doc.createElementNS('http://www.w3.org/2000/svg','svg');
+      const icon=doc.win.createSvg('svg');
       for(const [key,value] of Object.entries({class:'send-to-t3-linked-folder-logo',viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':'2','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true',focusable:'false'}))icon.setAttribute(key,value);
-      for(const d of LINK_PATHS){const path=doc.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',d);icon.appendChild(path);}
+      for(const d of LINK_PATHS){const path=doc.win.createSvg('path');path.setAttribute('d',d);icon.appendChild(path);}
       badge.appendChild(icon);title.appendChild(badge);
     }
     const label=`Linked to T3 Code project: ${link.projectTitle}`;
@@ -32,7 +33,7 @@ export function decorateLinkedFolders(root:ParentNode,links:FolderLink[]):void{
 export function decorateNoteIndicators(root:ParentNode,notes:Map<string,NoteIndicator>,folderNote:(title:HTMLElement)=>string|undefined=()=>undefined):void {
   const folders=activeResponseFolders(notes);
   const unreadFolders=unreadCompletionFolders(notes);
-  for(const title of Array.from(root.querySelectorAll('.nav-file-title[data-path], .nav-folder-title[data-path]')) as HTMLElement[]){
+  for(const title of Array.from(root.querySelectorAll<HTMLElement>('.nav-file-title[data-path], .nav-folder-title[data-path]'))){
     const folder=title.classList.contains('nav-folder-title');
     const path=folder?folderNote(title):title.getAttribute('data-path')??'';
     const note=path?notes.get(path):undefined;
@@ -42,15 +43,15 @@ export function decorateNoteIndicators(root:ParentNode,notes:Map<string,NoteIndi
     if(glow){if(title.getAttribute('data-t3-completion-glow')!==glow)title.setAttribute('data-t3-completion-glow',glow);}
     else if(title.hasAttribute('data-t3-completion-glow'))title.removeAttribute('data-t3-completion-glow');
     setActiveTitle(title.querySelector<HTMLElement>(folder?'.nav-folder-title-content':'.nav-file-title-content'),active||folder&&folders.has(title.getAttribute('data-path')??''));
-    let indicator=title.querySelector('.'+NOTE_INDICATOR_CLASS) as HTMLElement|null;
+    let indicator=title.querySelector<HTMLElement>('.'+NOTE_INDICATOR_CLASS);
     if(!active&&!input){indicator?.remove();continue;}
-    if(!indicator){indicator=title.ownerDocument.createElement('span');indicator.className=NOTE_INDICATOR_CLASS;indicator.setAttribute('role','img');title.appendChild(indicator);}
+    if(!indicator){indicator=title.ownerDocument.win.createSpan();indicator.className=NOTE_INDICATOR_CLASS;indicator.setAttribute('role','img');title.appendChild(indicator);}
     const mode=[active?'active':'',input?'input':''].filter(Boolean).join(' ');
     if(indicator.getAttribute('data-t3-state')!==mode){
       indicator.setAttribute('data-t3-state',mode);
       indicator.replaceChildren();
     }
-    const label=[active?`${note!.active} active T3 ${note!.active===1?'response':'responses'}`:'',input?`${note!.input} T3 ${note!.input===1?'response needs':'responses need'} input`:''].filter(Boolean).join('; ');
+    const label=[active?`${note.active} active T3 ${note.active===1?'response':'responses'}`:'',input?`${note.input} T3 ${note.input===1?'response needs':'responses need'} input`:''].filter(Boolean).join('; ');
     if(indicator.title!==label)indicator.title=label;
     if(indicator.getAttribute('aria-label')!==label)indicator.setAttribute('aria-label',label);
   }
@@ -59,10 +60,10 @@ export interface FolderIndicatorController {refresh():void;dispose():void}
 export function installFolderIndicators(root:HTMLElement,getLinks:()=>FolderLink[],getNotes:()=>Map<string,NoteIndicator>=()=>new Map(),folderNote:(title:HTMLElement)=>string|undefined=()=>undefined,decorateTabs:(notes:Map<string,NoteIndicator>)=>void=()=>{}):FolderIndicatorController{
   let stopped=false,scheduled=false;
   const observers=new Map<HTMLElement,MutationObserver>();
-  const schedule=()=>{if(stopped||scheduled)return;scheduled=true;Promise.resolve().then(()=>{scheduled=false;refresh();});};
+  const schedule=()=>{if(stopped||scheduled)return;scheduled=true;void Promise.resolve().then(()=>{scheduled=false;refresh();}).catch(error=>{scheduled=false;logFailure('folder.indicators.refresh.failed',error);});};
   const refresh=()=>{
     if(stopped)return;
-    const explorers=new Set(Array.from(root.querySelectorAll('.nav-files-container')) as HTMLElement[]),notes=getNotes();
+    const explorers=new Set(Array.from(root.querySelectorAll<HTMLElement>('.nav-files-container'))),notes=getNotes();
     decorateTabs(notes);
     for(const [explorer,observer] of observers)if(!explorers.has(explorer)){observer.disconnect();observers.delete(explorer);}
     for(const explorer of explorers){

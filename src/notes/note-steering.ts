@@ -1,3 +1,4 @@
+import {isRecord} from '../shared/values';
 import {responseOwnsActiveTurn,threadIsActive} from '../conversations/thread-target';
 
 export interface NoteSteeringCandidate {
@@ -8,8 +9,8 @@ export interface NoteSteeringDestination {notePath:string;threadId:string;projec
 
 /** Callers supply only responses whose intact anchors are still in the note.
  * A saved routing identity alone cannot prove ownership after a reload. */
-export function noteSteeringTarget<T extends NoteSteeringCandidate>(thread:any,destination:NoteSteeringDestination,candidates:readonly T[],preferredId?:string):T|undefined {
-  if(!threadIsActive(thread))return;
+export function noteSteeringTarget<T extends NoteSteeringCandidate>(thread:unknown,destination:NoteSteeringDestination,candidates:readonly T[],preferredId?:string):T|undefined {
+  if(!isRecord(thread)||!threadIsActive(thread))return;
   if(thread.hasPendingApprovals||thread.hasPendingUserInput)throw Error('This conversation is waiting for approval or input. Resolve it in T3 before sending.');
   const attached=candidates.filter(candidate=>candidate.notePath===destination.notePath&&candidate.threadId===destination.threadId&&candidate.projectId===destination.projectId&&candidate.environmentId===destination.environmentId);
   const matches=attached.filter(candidate=>responseOwnsActiveTurn(thread,candidate.state)&&!['complete','interrupted','error','cancelled'].includes(candidate.state?.status??''));
