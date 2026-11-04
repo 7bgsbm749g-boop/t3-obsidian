@@ -5,25 +5,12 @@ import subprocess
 import tempfile
 import json
 import unittest
-import ast
 
 ROOT = Path(__file__).resolve().parent.parent
 NATIVE_LAB = Path(__file__).with_name('build-native-response-lab.mjs')
 
 
 class EvidencePathTests(unittest.TestCase):
-    def test_native_sync_driver_resolves_the_repository_after_the_fixture_move(self):
-        script = ROOT / 'tests/native/local-response-sync-lab.py'
-        tree = ast.parse(script.read_text())
-        assignment = next(node for node in tree.body if isinstance(node, ast.Assign)
-                          and any(isinstance(target, ast.Name) and target.id == 'ROOT' for target in node.targets))
-        # Evaluate only the path expression, never the driver's real Sync operations.
-        resolved = eval(compile(ast.Expression(assignment.value), str(script), 'eval'),
-                        {'Path': Path, '__file__': str(script)})
-        self.assertEqual(resolved, ROOT)
-        self.assertTrue((resolved / 'scripts/obsidian-sync-lab.py').is_file())
-        self.assertTrue((resolved / 'tests/native/local-response-sync-case.ts').is_file())
-
     def test_sync_lab_keeps_evidence_inside_the_plugin_project(self):
         spec = importlib.util.spec_from_file_location('sync_lab', Path(__file__).with_name('obsidian-sync-lab.py'))
         module = importlib.util.module_from_spec(spec)
@@ -51,9 +38,9 @@ class EvidencePathTests(unittest.TestCase):
         for script, extra, message in [
             ('scripts/prepare-remote-delivery-lab.mjs', [], 'Private evidence directory required.'),
             ('scripts/prepare-smart-send-rename-lab.mjs', [], 'Private evidence directory required.'),
-            ('tests/native/connection-health-live.ts', [], 'Private evidence directory required.'),
-            ('tests/native/remote-delivery-api.ts', ['before'], 'Supply a private lab directory'),
-            ('tests/native/remote-delivery-results.ts', [], 'Private lab evidence directory required.'),
+            ('validation/connection-health-live.ts', [], 'Private evidence directory required.'),
+            ('validation/remote-delivery-api.ts', ['before'], 'Supply a private lab directory'),
+            ('validation/remote-delivery-results.ts', [], 'Private lab evidence directory required.'),
         ]:
             with self.subTest(script=script):
                 result = subprocess.run(

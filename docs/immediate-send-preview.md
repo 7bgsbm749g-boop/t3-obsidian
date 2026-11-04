@@ -25,7 +25,7 @@ ownership checks still decide steering and dispatch.
 Regression coverage exercises synchronous creation before project lookup and
 conversation checks, mapping during typing, selection retention, nested scopes,
 handoff, retries, cleanup, and disabled streaming paths. The native fixture is
-`tests/native/immediate-send-lab.ts`, built with
+`validation/immediate-send-lab.ts`, built with
 `node scripts/build-native-response-lab.mjs evidence/TASK/native --immediate-send`.
 It uses a separate unsynced Obsidian vault, delays and cancels preparation before
 external dispatch, captures editor and Reading-view behavior, and deletes all
