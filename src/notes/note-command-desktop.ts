@@ -29,7 +29,9 @@ function loadDesktop():Promise<void>{
 import {parseJsonRecord,parseJson} from '../shared/values';
 import {errorCode,toError} from '../shared/values';
 
-import type {Server,IncomingMessage,ServerResponse} from 'node:http';
+type Server=import('node:http').Server;
+type IncomingMessage=import('node:http').IncomingMessage;
+type ServerResponse=import('node:http').ServerResponse;
 
 import {desktopTimers} from '../connection/desktop-timers';
 import {validateAgentCommand,type AgentCommand,type AgentCommandResult} from './note-command';

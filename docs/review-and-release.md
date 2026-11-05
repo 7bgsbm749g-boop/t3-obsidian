@@ -13,7 +13,9 @@ features, and undocumented priority overrides. Desktop adapters remain lazy;
 mobile does not import their filesystem, process, HTTP-server or timer APIs.
 Every Node value import is deferred behind an explicit `Platform.isDesktop`
 guard in the adapter that uses it. Do not exempt desktop filenames from the
-rule. Editor SDK modules use ES imports from the host's shared runtime. Native
+rule. Express Node types with compiler-only `import('node:...')` type queries;
+the directory scanner also flags type-only static import declarations.
+Editor SDK modules use ES imports from the host's shared runtime. Native
 language view adapters load after their SDK version check and before their
 synchronous view factories register; language grammars remain lazy.
 Keep version guards as direct `if (requireApiVersion(...))` branches so both

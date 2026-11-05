@@ -13,18 +13,18 @@ for(const file of files){
  function check(node){if(ts.isCallExpression(node)&&ts.isIdentifier(node.expression)&&node.expression.text==='require')throw Error(`Use ES imports in ${relative(root,file)}`);ts.forEachChild(node,check)}
  check(source);
  for(const declaration of source.statements){
-  if(!ts.isImportDeclaration(declaration)&&!ts.isExportDeclaration(declaration)||!declaration.moduleSpecifier||!ts.isStringLiteral(declaration.moduleSpecifier)||declaration.isTypeOnly)continue;
-  const clause=declaration.importClause;
-  if(clause?.isTypeOnly||clause&&!clause.name&&clause.namedBindings&&ts.isNamedImports(clause.namedBindings)&&clause.namedBindings.elements.every(item=>item.isTypeOnly))continue;
+  if(!ts.isImportDeclaration(declaration)&&!ts.isExportDeclaration(declaration)||!declaration.moduleSpecifier||!ts.isStringLiteral(declaration.moduleSpecifier))continue;
   const name=declaration.moduleSpecifier.text;
   if(isBuiltin(name)){
    if(name==='buffer')throw Error(`${relative(root,file)} must select the browser buffer/ package explicitly`);
-   throw Error(`${relative(root,file)} eagerly imports Node; use a guarded dynamic import instead`);
+   throw Error(`${relative(root,file)} declares a static Node import; use guarded dynamic imports for runtime and import() type queries for types`);
   }
+  const clause=declaration.importClause;
+  if(declaration.isTypeOnly||clause?.isTypeOnly||clause&&!clause.name&&clause.namedBindings&&ts.isNamedImports(clause.namedBindings)&&clause.namedBindings.elements.every(item=>item.isTypeOnly))continue;
   if(name.startsWith('.')){const prefix=resolve(dirname(file),name),target=[prefix,prefix+'.ts',join(prefix,'index.ts')].find(candidate=>known.has(candidate));if(target)edges.push(target)}
  }
  graph.set(file,edges);
 }
 const visited=new Set();function visit(file){if(visited.has(file))return;visited.add(file);if(nodeFiles.has(file))throw Error(`Portable entry eagerly loads ${relative(root,file)}`);for(const next of graph.get(file)??[])visit(next)}
 visit(join(root,'src/app/main.ts'));
-console.log(`Platform boundaries: ${visited.size} portable modules; all Node imports deferred and no require-style source imports.`);
+console.log(`Platform boundaries: ${visited.size} portable modules; all Node runtime imports deferred; no static Node declarations or require-style source imports.`);

@@ -10,7 +10,7 @@ function loadDesktop():Promise<void>{
   throw Error('This feature requires Obsidian on desktop.');
 }
 import {errorCode,toError} from '../shared/values';
-import type {BigIntStats} from 'node:fs';
+type BigIntStats=import('node:fs').BigIntStats;
 
 type Entry={identity:BigIntStats;value:string};
 const sameIdentity=(a:BigIntStats,b:BigIntStats)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs&&a.mode===b.mode;
