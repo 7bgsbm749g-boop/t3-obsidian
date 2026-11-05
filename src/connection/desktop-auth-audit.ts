@@ -17,7 +17,7 @@ import {errorCode} from '../shared/values';
 import type {ThreadAccessCloseReason} from '../conversations/thread-stream';
 
 export const DESKTOP_AUTH_AUDIT_MAX_BYTES=256*1024;
-type AuthEvent='issued'|'rejected'|'closing'|'revoke-completed'|'revoke-failed'|'borrow-released'|'recovered';
+type AuthEvent='issued'|'verified'|'rejected'|'closing'|'revoke-completed'|'revoke-failed'|'borrow-released'|'recovered';
 export interface DesktopAuthRecord {
   event:AuthEvent;sessionId:string;component:'response-host'|'thread-reader';
   issuedAt:number;expiresAt?:number;reason?:ThreadAccessCloseReason;caller?:string[];

@@ -51,13 +51,25 @@ import type {DirectReadOptions} from './direct';
 import {T3_PROTOCOL_HEADER,T3_PROTOCOL_VERSION} from './orchestration-v2';
 import {ensureNoProject} from '../projects/no-project';
 import {AUTO_THREAD_TITLE} from '../conversations/thread-title';
+import {selectDesktopCli,desktopLauncher,DESKTOP_LAUNCHER_MAX_BYTES} from './desktop-cli';
 
 export async function desktopDefaults():Promise<Connection> {await loadDesktop();return {executable:'',host:'local',native:true,baseDir:join(homedir(),'.t3')};}
 export async function cli(command:string[],args:string[],signal?:AbortSignal):Promise<string> {
  await loadDesktop();
+ requestAborted(signal);
+ let executable=command[0],prefix=command.slice(1),env:Record<string,string>|undefined;
+ if(process.platform==='win32'&&/\.cmd$/i.test(executable)){
+  const file=await fs.open(executable,'r');
+  try{
+   const buffer=Buffer.alloc(DESKTOP_LAUNCHER_MAX_BYTES+1),{bytesRead}=await file.read(buffer,0,buffer.length,0);
+   if(bytesRead>DESKTOP_LAUNCHER_MAX_BYTES)throw Error('The T3 desktop launcher is too large. Open T3 to refresh it.');
+   const launcher=desktopLauncher(executable,buffer.subarray(0,bytesRead).toString('utf8'),process.env.T3CODE_HOME);
+   executable=launcher.executable;prefix=[...launcher.args,...prefix];env=launcher.env;
+  }finally{await file.close();}
+ }
  return new Promise((resolve,reject)=>{
   try{requestAborted(signal);}catch(error){reject(toError(error));return;}
-  const child=spawn(command[0],[...command.slice(1),...args],{shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});
+  const child=spawn(executable,[...prefix,...args],{shell:false,windowsHide:true,stdio:['ignore','pipe','pipe'],...(env?{env:{...process.env,...env}}:{})});
   let output='';let size=0;let settled=false;
   const cancel=()=>{child.kill();finish(toError(signal?.reason??cancelledRequest()));};
   const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',cancel);error?reject(error):resolve(output);};
@@ -70,9 +82,7 @@ export async function cli(command:string[],args:string[],signal?:AbortSignal):Pr
  });
 }
 export async function findCli(connection:Connection):Promise<string[]> {await loadDesktop();
- if(connection.native && connection.executable.trim())return [connection.executable];
- const paths=process.platform==='win32'?[join(homedir(),'.t3','bin','t3.exe'),join(homedir(),'AppData','Local','Programs','t3-code-desktop','resources','t3.exe')]:[join(homedir(),'.local','bin','t3'),'/usr/local/bin/t3','/opt/homebrew/bin/t3'];
- const found=paths.find(p=>existsSync(p));return [found??'t3'];
+ return [selectDesktopCli(process.platform,homedir(),join,existsSync,connection.executable)];
 }
 export async function addDesktopProject(connection:Connection,workspaceRoot:string,title:string):Promise<string>{
  await loadDesktop();
@@ -156,8 +166,18 @@ function localSession(value:unknown):LocalSession{
   if(!isRecord(value)||typeof value.token!=='string'||!value.token||typeof value.sessionId!=='string'||!value.sessionId||value.expiresAt!==undefined&&typeof value.expiresAt!=='string')throw Error('Invalid T3 session response; credential output withheld.');
   return value as unknown as LocalSession;
 }
-function localRuntime(value:unknown):{origin:string}{
-  if(!isRecord(value)||typeof value.origin!=='string')throw Error('Invalid T3 runtime address.');return {origin:value.origin};
+function localRuntime(value:unknown):{origin:string;serverVersion?:string}{
+  if(!isRecord(value)||typeof value.origin!=='string')throw Error('Invalid T3 runtime address.');return {origin:value.origin,...(typeof value.serverVersion==='string'&&/^[\w.+-]{1,100}$/.test(value.serverVersion)?{serverVersion:value.serverVersion}:{})};
+}
+async function verifyLocalSession(api:()=>Promise<unknown>,command:string[],serverVersion?:string,signal?:AbortSignal):Promise<void>{
+ try{await api();}catch(error){
+  if(!(error instanceof T3HttpError)||error.status!==401)throw error;
+  // Version output is inspected only on failure, and only its version field
+  // can enter diagnostics. Credential command output is never included.
+  const output=await cli(command,['--version'],signal).catch(()=>'');
+  const version=/^t3 v([\w.+-]{1,100})\s*$/.exec(output.trim())?.[1]??'unavailable';
+  throw new T3HttpError(401,`T3 rejected a new local session (HTTP 401). Selected CLI: ${command[0]}. CLI version: ${version}. T3 server version: ${serverVersion??'unavailable'}. Open T3 to refresh its launcher, or select its current CLI in plugin settings.`);
+ }
 }
 function storedLedger(value:unknown):DesktopLedger{
   if(!isRecord(value)||typeof value.requestHash!=='string'||typeof value.requestId!=='string'||typeof value.threadId!=='string'||!isRecord(value.project)||typeof value.project.id!=='string'||typeof value.phase!=='string'||!['prepared','created','started'].includes(value.phase))throw Error('Invalid saved T3 request ledger.');
@@ -229,6 +249,7 @@ export async function runDesktop(connection:Connection,args:string[],input='',op
   try{session=localSession(parseJson(issued));}catch{throw new Error('Invalid T3 session response; credential output withheld.');}
   if(!session.token || !session.sessionId)throw new Error('Unexpected T3 session response.');
   const transport=desktopApi(runtime.origin,session.token);
+  await verifyLocalSession(()=>transport('/api/orchestration/shell',undefined,options),command,runtime.serverVersion,options.signal);
   const api=(path:string,payload?:unknown)=>transport(path.startsWith('/api/')?path:'/api/orchestration/'+path,payload,options);
   if(req.action==='no-project')return await ensureNoProject(api);
   if(req.action==='start')return await start(api,req,connection.stateDir||join(base,'send-to-t3-code','desktop'),project=>readNewThreadDefaults(api,runtime.origin,project));
@@ -272,7 +293,7 @@ export async function desktopThreadAccess(connection:Connection,component:'respo
   const api=desktopApi(runtime.origin,issued.token);
   const audit=(event:import('./desktop-auth-audit').DesktopAuthRecord['event'],reason?:import('../conversations/thread-stream').ThreadAccessCloseReason,caller?:string[])=>recordDesktopAuth(base,{...metadata,event,reason,caller});
   void audit('issued');let closed=false,rejectionRecorded=false,recoveryRecorded=false;
-  return {origin:runtime.origin,expiresAt,trace:(event,reason)=>{if(event==='recovered'){if(recoveryRecorded)return;recoveryRecorded=true;}void audit(event,reason);},async api(path,payload){
+  const access:ThreadAccess={origin:runtime.origin,expiresAt,trace:(event,reason)=>{if(event==='recovered'){if(recoveryRecorded)return;recoveryRecorded=true;}void audit(event,reason);},async api(path,payload){
     try{return await api(path,payload);}catch(error){
       if(error instanceof T3HttpError&&error.status===401&&!rejectionRecorded){rejectionRecorded=true;void audit('rejected');}throw error;
     }
@@ -283,6 +304,8 @@ export async function desktopThreadAccess(connection:Connection,component:'respo
     try{await cli(command,['auth','session','revoke','--base-dir',base,issued.sessionId]);void audit('revoke-completed',reason);}
     catch{void audit('revoke-failed',reason);/* Session expires after five minutes. */}
   }};
+  try{await verifyLocalSession(()=>access.api('/api/orchestration/shell'),command,runtime.serverVersion);void audit('verified');return access;}
+  catch(error){await access.close?.(error instanceof T3HttpError&&error.status===401?'auth-rejected':'caller-closed');throw error;}
 }
 
 export async function desktopEnvironment(connection:Connection):Promise<string>{
