@@ -43,6 +43,29 @@ single documentation commit with `python3 scripts/integrate_docs.py COMMIT`.
 This runs a normal Git cherry-pick under the repository lock, not the release
 queue. Mixed product changes still require the product release process.
 
+## GitHub pushes and publication
+
+`push`, `push to GitHub`, and `push to main` mean upload reviewed commits only.
+They do not authorize a version change, release tag, release queue job,
+installation, GitHub release, or Obsidian directory submission or review.
+The product-delivery default applies to implementation requests, not push
+requests. GitHub release publication needs a separate user request or existing
+authorization that explicitly covers publication; QLO2 delivery alone does not
+provide that authorization.
+
+Before an authorized push, read the shared maintainer instructions below.
+Push the intended branch with an explicit refspec and `git -c
+push.followTags=false push ...`. Do not use `--tags`, `--follow-tags`, or
+`--mirror`, push private queue refs, or create a release tag for a source push.
+Do not add release checks or wait for publication work to complete a push.
+Normal checks for the requested source change still apply.
+
+GitHub builds run for numeric release tags, not branch pushes or pull requests.
+The release workflow must build and attest the exact release assets before
+authorized publication. Instruction and workflow maintenance needs no plugin
+version, package, installation, or publication. See
+[Review and release checks](docs/review-and-release.md).
+
 ## Maintainer configuration and releases
 
 Machine-specific paths and deployment instructions are private. Before an

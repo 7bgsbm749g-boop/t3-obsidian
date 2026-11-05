@@ -26,6 +26,22 @@ Read them with `python3 scripts/maintainer_config.py --instructions`. Do not put
 credentials in either file. Publication requires explicit deployment settings;
 the tools do not guess a personal vault.
 
+## Push and publication scope
+
+Keep the private guide consistent with the public `AGENTS.md`: a push request
+uploads reviewed commits only. It does not request a version, release tag,
+queue job, vault installation, GitHub release, or directory review. Read the
+shared private guide before an authorized push and disable implicit tag
+following with an explicit branch refspec. GitHub publication requires its own
+explicit authorization; the QLO2 delivery default is a separate scope.
+
+Branch pushes and pull requests do not run hosted build checks. Numeric release
+tags run `.github/workflows/release-provenance.yml`, which still lints, builds,
+and attests all three published assets. Keep those attestations to address the
+directory recommendation. See [Review and release checks](review-and-release.md)
+for both procedures. Workflow-only edits use source-only queue maintenance,
+with no plugin version or installation.
+
 ## Documentation and skills
 
 Commit documentation and skill instructions normally. To integrate one reviewed

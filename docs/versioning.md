@@ -64,8 +64,10 @@ Never rewrite historical tags, archives, receipts, or comparison rows. The
 reviewed private seed is supplied once with `--history-seed PATH`; later jobs
 use the retained history.
 
-Publish a regular GitHub release with matching numeric tag and manifest, and
-keep Alpha in its title and description. The GitHub prerelease flag is not the
+For separately authorized GitHub publication, publish a regular release with
+matching numeric tag and manifest, and keep Alpha in its title and description.
+A source push does not create a release or advance the plugin version.
+The GitHub prerelease flag is not the
 project's development-stage switch. Confirm the current
 [Obsidian submission requirements](https://docs.obsidian.md/Plugins/Releasing/Submit+your+plugin)
 when submitting or resubmitting to the plugin directory.

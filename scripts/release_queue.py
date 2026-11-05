@@ -32,6 +32,7 @@ FINISHED = {'complete', 'failed', 'needs-evidence', 'awaiting-smoke', 'waiting-f
 
 def maintenance_only(names: list[str]) -> bool:
     return bool(names) and all(name.startswith(('scripts/', 'tests/', 'docs/')) or
+                               (name.startswith('.github/workflows/') and Path(name).suffix in {'.yml', '.yaml'}) or
                                (name.startswith('skills/') and Path(name).suffix == '.md') or
                                name in {'AGENTS.md', 'README.md', 'LICENSE'} for name in names)
 

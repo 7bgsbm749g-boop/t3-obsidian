@@ -312,6 +312,43 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertEqual(self.published, ['1.0.1', '1.0.2'])
         self.assertEqual(queue.status(job['jobId'], queue=self.store)['jobs'][0]['delivery'], 'source-only')
 
+    def test_workflow_removal_integrates_without_a_product_release(self):
+        workflow = self.root / '.github/workflows/build.yml'
+        workflow.parent.mkdir(parents=True); workflow.write_text('name: Build plugin\n')
+        self.git('add', '.'); self.git('commit', '-qm', 'Existing branch build')
+        source = self.source('workflow-only')
+        subprocess.run(['git', 'rm', 'workflow-only.ts', '.github/workflows/build.yml'], cwd=source, check=True, capture_output=True)
+        (source / 'AGENTS.md').write_text('Push source separately from release publication.\n')
+        subprocess.run(['git', 'add', '.'], cwd=source, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'Remove branch build and clarify push scope'], cwd=source, check=True)
+        job = self.submit(source, evidence=False)
+        request = queue.read(queue.job_path(self.store, job['jobId']) / 'request.json')
+        self.assertTrue(request['maintenanceOnly'])
+        with patch.object(self.release, 'change_checks', SimpleNamespace(run_validation=lambda root: self.evidence), create=True):
+            queue.drain(self.release, queue=self.store)
+        state = queue.status(job['jobId'], queue=self.store)['jobs'][0]
+        self.assertEqual(state['status'], 'complete')
+        self.assertEqual(state['delivery'], 'source-only')
+        self.assertFalse(workflow.exists())
+        self.assertTrue((self.root / 'AGENTS.md').is_file())
+        self.assertEqual(queue.read(self.root / 'manifest.json')['version'], '1.0.0')
+        self.assertEqual(self.published, [])
+
+    def test_workflow_changes_do_not_exempt_product_changes_from_evidence(self):
+        source = self.source('workflow-and-product')
+        workflow = source / '.github/workflows/release.yaml'
+        workflow.parent.mkdir(parents=True); workflow.write_text('name: Release build\n')
+        subprocess.run(['git', 'add', '.'], cwd=source, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'Update workflow and product'], cwd=source, check=True)
+        job = self.submit(source, evidence=False)
+        request = queue.read(queue.job_path(self.store, job['jobId']) / 'request.json')
+        self.assertFalse(request['maintenanceOnly'])
+        queue.drain(self.release, queue=self.store)
+        self.assertEqual(queue.status(job['jobId'], queue=self.store)['jobs'][0]['status'], 'needs-evidence')
+        self.assertFalse((self.root / 'workflow-and-product.ts').exists())
+        self.assertFalse((self.root / '.github/workflows/release.yaml').exists())
+        self.assertEqual(self.published, [])
+
     def test_skill_documentation_integrates_without_product_evidence_or_a_release(self):
         source = self.source('skill-docs')
         subprocess.run(['git', 'rm', 'skill-docs.ts'], cwd=source, check=True, capture_output=True)
