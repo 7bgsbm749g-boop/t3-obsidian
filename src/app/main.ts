@@ -71,6 +71,7 @@ import {clearVaultDiagnostics} from './disabled-diagnostics';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from '../connection/cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from '../connection/native-account';
 import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from '../connection/direct';
+import {environmentAccess} from '../connection/environment-access';
 import { requireApiVersion,setIcon, App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type SettingDefinition,type SettingDefinitionItem,type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer, parseYaml, stringifyYaml,requestUrl } from 'obsidian';
 import { Buffer } from 'buffer/';
 import { deviceState,clearDeviceDiagnostics } from '../storage/device-state';
@@ -402,10 +403,7 @@ export default class SendToT3 extends Plugin {
     nativeResponses(this.app).configurePreviewCache(this.settings.vaultId,savedPreviews,async snapshot=>{await deviceState(previewKey,snapshot);});
     try{await nativeResponses(this.app).configureStoppedStore(nativeStoppedStore(this.deviceId,this.settings.vaultId));}catch(error){logFailure('note.stop.cache-restore',error);new Notice('T3 Code: Frozen response recovery is waiting for device storage. Saved recovery text is retained.',10000);}
     if(typeof this.registerView==='function'){
-    this.codebase=new CodebaseBridge(this.app,this,codebaseTransport(async(environmentId,reason)=>{
-      if(!Platform.isMobile){try{if(environmentId===await this.localInlineEnvironment())return (await import('../connection/desktop')).desktopThreadAccess({...this.settings.connection,host:'local'});}catch{/* Remote paired access remains available when local discovery fails. */}}
-      return this.inlineThreadAccess(environmentId,reason==='auth-rejected');
-    }),()=>this.settings.folderLinks.map(link=>({...link,environmentId:link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??this.eventLocalEnvironmentId})),this.settings.vaultId,{...{environments:()=>[...new Set([...this.settings.paired.map(c=>c.environmentId),...(this.eventLocalEnvironmentId?[this.eventLocalEnvironmentId]:[])])]},load:()=>this.settings.codebase,save:async state=>{this.settings.codebase=state;await this.save();},projectChanged:async(scope,change)=>{await this.updateCodebaseProjectLinks(scope,change);}});
+    this.codebase=new CodebaseBridge(this.app,this,codebaseTransport((environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected')),()=>this.settings.folderLinks.map(link=>({...link,environmentId:link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??this.eventLocalEnvironmentId})),this.settings.vaultId,{...{environments:()=>[...new Set([...this.settings.paired.map(c=>c.environmentId),...(this.eventLocalEnvironmentId?[this.eventLocalEnvironmentId]:[])])]},load:()=>this.settings.codebase,save:async state=>{this.settings.codebase=state;await this.save();},projectChanged:async(scope,change)=>{await this.updateCodebaseProjectLinks(scope,change);}});
     await this.codebase.install();
     }
     this.deviceInline=new DeviceResponseManager(this.inlineActor,this.settings.vaultId,{
@@ -825,7 +823,7 @@ export default class SendToT3 extends Plugin {
   private async eventHostFiles(route:{host:import('./event-host').EventHostIdentity;connectionId?:string}):Promise<{files:import('./event-host').EventHostFiles;close():void}>{
     const {host}=route;
     const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
-    if(!Platform.isMobile&&root&&sameWorkspacePath(root,host.workspaceRoot)&&await this.localInlineEnvironment()===host.environmentId)return {files:(await import('../responses/response-storage-desktop')).localInlineFiles(host.workspaceRoot,host.directory),close:()=>{}};
+    if(!Platform.isMobile&&root&&sameWorkspacePath(root,host.workspaceRoot)&&await this.isLocalStorageEnvironment(host.environmentId))return {files:(await import('../responses/response-storage-desktop')).localInlineFiles(host.workspaceRoot,host.directory),close:()=>{}};
     const paired=this.settings.paired.find(c=>c.environmentId===host.environmentId&&c.id===route.connectionId)??this.settings.paired.find(c=>c.environmentId===host.environmentId);
     if(!paired)throw Error('Connect the vault connection machine before managing subscriptions.');
     const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId},await this.sessionFor(paired.id));
@@ -1879,11 +1877,13 @@ export default class SendToT3 extends Plugin {
     new Notice('The latest T3 turn is attached to this response.');
   }
   private async inlineThreadAccess(environmentId:string,forceRefresh=false):Promise<ThreadAccess>{
-    const paired=this.settings.paired.find(connection=>connection.environmentId===environmentId);
-    // A known connection is sufficient, even when this desktop's T3 server
-    // is stopped. Local discovery is only needed for an unpaired local thread.
-    if(!paired&&!Platform.isMobile&&environmentId===await this.localInlineEnvironment())return (await import('../connection/desktop')).desktopThreadAccess({...this.settings.connection,host:'local'});
-    if(!paired)throw Error('Connect this device to the thread machine to take over responses.');
+    return environmentAccess(environmentId,{
+      ...(!Platform.isMobile?{local:{identify:()=>this.localNoProjectEnvironment(),open:()=>this.localThreadAccess()}}:{}),
+      paired:[...this.settings.paired].sort((a,b)=>this.connectionScore(b)-this.connectionScore(a)),openPaired:paired=>this.pairedThreadAccess(paired,forceRefresh),
+    });
+  }
+  private async pairedThreadAccess(paired:PairedConnection,forceRefresh=false):Promise<ThreadAccess>{
+    const environmentId=paired.environmentId;
     const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
     let session=await this.sessionFor(paired.id,forceRefresh),api=await environmentApi(connection,session);
     let renewing:Promise<void>|undefined;
@@ -1961,7 +1961,7 @@ export default class SendToT3 extends Plugin {
   }
   private async localResponseFiles(target:ResponseStorageTarget,_waitForHost=true):Promise<{files:ResponseFiles;readonly closed:boolean;close():void}>{
     const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
-    if(!Platform.isMobile&&adapter.getFullPath&&sameWorkspacePath(adapter.getFullPath(''),target.workspaceRoot)&&await this.localInlineEnvironment()===target.environmentId){
+    if(!Platform.isMobile&&adapter.getFullPath&&sameWorkspacePath(adapter.getFullPath(''),target.workspaceRoot)&&await this.isLocalStorageEnvironment(target.environmentId)){
       const {ensurePrivateStorage}=await import('../storage/private-storage-desktop');await ensurePrivateStorage(target.workspaceRoot,this.app.vault.configDir);
       const files=(await import('../responses/response-storage-desktop')).localInlineFiles(target.workspaceRoot,target.directory);
       return {closed:false,files,close:()=>{void files.close?.();}};
@@ -2017,10 +2017,18 @@ export default class SendToT3 extends Plugin {
     return this.settings.paired.length===1?this.settings.paired[0].id:undefined;
   }
   private localNoProjectEnvironment(){return import('../connection/desktop').then(desktop=>desktop.availableDesktopEnvironment(this.settings.connection));}
+  private async isLocalStorageEnvironment(environmentId:string):Promise<boolean>{
+    // These identities were verified on this device. Its vault files remain
+    // local when T3 stops; file access must not depend on server availability.
+    if(environmentId===this.eventLocalEnvironmentId||environmentId===this.localNoProjectId)return true;
+    try{return environmentId===await this.localNoProjectEnvironment();}catch{return false;}
+  }
+  private localThreadAccess():Promise<ThreadAccess>{
+    if(!Platform.isDesktop)return Promise.reject(Error('Local T3 access requires a desktop.'));
+    return import('../connection/desktop').then(desktop=>desktop.desktopThreadAccess({...this.settings.connection,host:'local'}));
+  }
   private desktopAccess(){
-    this.localDesktopAccess??=new ThreadAccessCache(async()=>{
-      const desktop=await import('../connection/desktop');return desktop.desktopThreadAccess({...this.settings.connection,host:'local'});
-    });
+    this.localDesktopAccess??=new ThreadAccessCache(()=>this.localThreadAccess());
     return this.localDesktopAccess.get(JSON.stringify([this.settings.connection.executable,this.settings.connection.baseDir??'']));
   }
   private refreshLocalNoProject():Promise<string|undefined>{
@@ -2265,10 +2273,15 @@ export default class SendToT3 extends Plugin {
     for(const project of this.settings.directProjects){
       const c=this.settings.paired.find(c=>c.id===project.connectionId);
       const key=JSON.stringify([c?.environmentId??project.connectionId,project.id]);
-      const score=(this.projectDiscovery?.status(this.sourceKey(c))==='available'?4:0)+(this.cloudMachines.some(m=>m.environmentId===c?.environmentId&&m.url===c.url)?2:0);
+      const score=this.connectionScore(c);
       if(!catalog.has(key)||score>catalog.get(key)!.score)catalog.set(key,{project,score});
     }
     return [...catalog.values()].map(entry=>entry.project);
+  }
+  private connectionScore(connection?:PairedConnection){
+    const session=connection&&this.pairedSessions[connection.id];
+    const credential=!!session&&session.environmentId===connection?.environmentId&&session.url===connection.url&&session.expiresAt>Date.now()+5000;
+    return (this.projectDiscovery?.status(this.sourceKey(connection))==='available'?4:0)+(this.cloudMachines.some(machine=>machine.environmentId===connection?.environmentId&&machine.url===connection.url)?2:0)+(credential?1:0);
   }
   connection(project:Project):Connection {if(project.connectionId){const c=this.settings.paired.find(c=>c.id===project.connectionId);if(!c)throw Error('Pair a T3 connection in settings first.');return {transport:'direct',url:c.url,connectionId:c.id,environmentId:c.environmentId,host:'direct',executable:''};}return {...this.settings.connection,host:'local',transport:'desktop',...(this.localNoProjectId?{environmentId:this.localNoProjectId}:{})};}
   async pairConnection(name:string,address:string,code:string,expectedEnvironmentId?:string){
