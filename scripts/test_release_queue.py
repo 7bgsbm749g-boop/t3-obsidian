@@ -18,6 +18,27 @@ SPEC.loader.exec_module(publisher)
 
 
 class ReleaseQueueTests(unittest.TestCase):
+    def test_finished_source_cleanup_retries_busy_checkout_and_rechecks_resolved_blocker(self):
+        source = self.source('finished-source')
+        submitted = self.submit(source)
+        directory = self.store / 'jobs' / submitted['jobId']
+        state = {'status': 'complete'}
+        with patch.object(queue.source_cleanup, 'cleanup', return_value={'status': 'pending', 'reason': 'Active thread'}), patch.object(queue, 'now', return_value='2026-11-05T00:00:00+00:00'):
+            deadline = queue.cleanup_finished_sources(self.release, [(directory, state)])
+        self.assertEqual(deadline, '2026-11-05T00:00:30+00:00')
+        state['sourceCleanup'] = {'status': 'blocked', 'reason': 'Uncommitted files'}
+        with patch.object(queue.source_cleanup, 'cleanup', return_value={'status': 'removed'}) as cleanup:
+            self.assertIsNone(queue.cleanup_finished_sources(self.release, [(directory, state)]))
+        cleanup.assert_called_once()
+        self.assertEqual(queue.read(directory / 'state.json')['sourceCleanup']['status'], 'removed')
+
+    def test_submission_refuses_uncommitted_instruction_files(self):
+        source = self.source('unfinished-instructions')
+        (source / 'AGENTS.md').write_text('unfinished')
+        with self.assertRaisesRegex(SystemExit, 'Commit all intended'):
+            self.submit(source)
+        self.assertFalse((self.store / 'jobs').exists())
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.directory = Path(self.temporary.name)

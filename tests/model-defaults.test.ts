@@ -76,7 +76,7 @@ test('authenticated thread defaults share one config snapshot and close on inval
     class TrackedSocket extends Socket {close(){closed=true;super.close();}}
     const api=async()=>({ticket:'ephemeral'});
     const result=readNewThreadDefaults(api,'https://selected.example',{id:'p'},url=>new TrackedSocket(url) as any);
-    if(invalid)await assert.rejects(result,/invalid access default/);else assert.deepEqual(await result,{modelSelection:config.settings.defaultModelSelection,runtimeMode:'auto'});
+    if(invalid)await assert.rejects(result,/invalid access default/);else assert.deepEqual(await result,{modelSelection:config.settings.defaultModelSelection,runtimeMode:'auto',workspaceStrategy:{type:'root'}});
     assert.equal(reads,1);assert.equal(closed,true);
   }
 });
@@ -91,4 +91,30 @@ test('authenticated model reads use a one-time socket ticket and close on succes
     if(invalid)await assert.rejects(result,/model defaults/);else assert.equal((await result).model,'gpt-5.6-sol');
     assert.equal(closed,true);
   }
+});
+
+test('workspace defaults inherit environment and project settings without changing access',()=>{
+ const config:any=modelConfig();
+ config.settings.defaultThreadEnvMode='worktree';config.settings.newWorktreesStartFromOrigin=true;
+ assert.deepEqual(resolveNewThreadDefaults(config,{id:'p'}).workspaceStrategy,{type:'worktree',baseRef:'HEAD',startFromOrigin:true});
+ config.settings.projectSettingsOverrides.p={defaultThreadEnvMode:'local'};
+ assert.deepEqual(resolveNewThreadDefaults(config,{id:'p'}).workspaceStrategy,{type:'root'});
+ config.settings.projectSettingsOverrides.p={defaultThreadEnvMode:null};
+ assert.equal(resolveNewThreadDefaults(config,{id:'p'}).workspaceStrategy?.type,'worktree');
+ assert.deepEqual(resolveNewThreadDefaults(config,{id:'other',defaultThreadEnvMode:'local'}).workspaceStrategy,{type:'root'});
+ config.settings.defaultThreadEnvMode='invalid';
+ assert.throws(()=>resolveNewThreadDefaults(config,{id:'p'}),/invalid workspace default/);
+});
+
+test('workspace preparation uses the repository branch and keeps non-repository projects local',async()=>{
+ for(const isRepo of [true,false]){
+  const config:any=modelConfig();config.settings.defaultThreadEnvMode='worktree';
+  const Socket=settingsSocket(()=>config,undefined,(tag,payload)=>{
+   assert.equal(tag,'vcs.refreshStatus');assert.deepEqual(payload,{cwd:'/project',localOnly:true});
+   return {isRepo,refName:isRepo?'topic':null};
+  });
+  const api:any=async()=>({ticket:'test'});
+  const defaults=await readNewThreadDefaults(api,'https://t3.example',{id:'p',workspaceRoot:'/project'},url=>new Socket(url) as any);
+  assert.deepEqual(defaults.workspaceStrategy,isRepo?{type:'worktree',baseRef:'topic',startFromOrigin:false}:{type:'root'});
+ }
 });

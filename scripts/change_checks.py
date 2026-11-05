@@ -20,11 +20,15 @@ import sys
 import tarfile
 import tempfile
 import time
+try:
+    from . import maintainer_config
+except ImportError:
+    import maintainer_config
 
 ROOT = Path(__file__).resolve().parent.parent
-CACHE = Path('/home/ubuntu/projects/send-to-t3-code/evidence/checks')
-RECEIPTS = Path('/home/ubuntu/projects/send-to-t3-code/evidence/releases')
-QLO2 = Path('/home/ubuntu/vaults/QLO2/.obsidian/plugins/t-three-code/manifest.json')
+CACHE = maintainer_config.canonical_root() / 'evidence/checks'
+RECEIPTS = maintainer_config.canonical_root() / 'evidence/releases'
+QLO2 = maintainer_config.path_setting('productionPlugins', ROOT / '.unconfigured/production/plugins') / 't-three-code/manifest.json'
 if not QLO2.exists():
     QLO2 = QLO2.parent.with_name('send-to-t3-code') / 'manifest.json'
 RELEASE_FILES = ('manifest.json', 'versions.json', 'styles.css', 'README.md', 'LICENSE')

@@ -113,6 +113,9 @@
     ],
     "scripts/release_policy.py": [
       "release-policy.json"
+    ],
+    "scripts/test_source_cleanup.py": [
+      "scripts/cleanup-worktree.mjs"
     ]
   }
 }

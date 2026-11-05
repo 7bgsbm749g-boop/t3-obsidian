@@ -1,0 +1,57 @@
+# Local maintainer setup
+
+The public plugin does not need the maintainer's machine paths. Normal
+contributors can build and test the source without access to a production vault.
+
+Machine settings are read from `t3-obsidian/maintainer.json` inside the Git common
+directory. Find that directory with `git rev-parse --path-format=absolute
+--git-common-dir`; a worktree's `.git` can be a file, so do not assume it is a
+directory. The settings are shared by the repository's linked worktrees and are
+never committed. `T3_OBSIDIAN_MAINTAINER_CONFIG` can select a different local file.
+
+The JSON object accepts these local values:
+
+- `canonicalRoot`: the integration checkout's absolute path.
+- `developmentPlugins` and `productionPlugins`: the plugin-parent directories in
+  the development and production vaults. Existing device settings are preserved.
+- `obsidianCli`: the local Obsidian Sync CLI executable.
+- `syncService`: the system service that owns production Sync.
+- `responseHostUnit`: the local background-response service definition.
+- `releaseQueueUnit`: the queue service name, without a suffix.
+- `t3Command` and `t3BaseDir`: the T3 executable and its data directory. These let
+  completed jobs request checkout removal through T3 before deleting a branch.
+
+Keep private operating instructions in `t3-obsidian/AGENTS.md` beside the JSON.
+Read them with `python3 scripts/maintainer_config.py --instructions`. Do not put
+credentials in either file. Publication requires explicit deployment settings;
+the tools do not guess a personal vault.
+
+## Documentation and skills
+
+Commit documentation and skill instructions normally. To integrate one reviewed
+commit into the configured canonical checkout, run:
+
+```sh
+python3 scripts/integrate_docs.py COMMIT
+```
+
+The helper checks that the commit changes only documentation or skill metadata,
+then runs a normal Git cherry-pick under the existing repository lock. It creates
+no release job, changes no plugin version, and runs no build or installation.
+Conflicts leave the source branch intact and restore the canonical checkout.
+The release command also redirects documentation-only `--enqueue` requests to
+this ordinary Git route, so an old habit does not create a plugin release.
+
+## Finished release branches
+
+Deleting a checkout does not delete its branch. New release requests record the
+source branch and exact submitted commit. After successful delivery, the worker
+requests removal through T3, then removes the local branch. Active processes,
+pending T3 work, uncommitted files, unexpected ignored files, other checkouts,
+and newer branch commits prevent removal. Cleanup status is retained in the job.
+Historical requests without the source-branch record are not deleted in bulk.
+
+The existing queue retry timer retries busy checkout cleanup with bounded
+backoff. The queue's directory watch also wakes when Git worktrees are removed.
+Run the existing `--install-queue` operation once after updating its watcher
+definition. No additional polling service is required.

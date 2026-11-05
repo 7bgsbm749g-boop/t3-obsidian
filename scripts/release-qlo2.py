@@ -26,18 +26,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import change_checks
 import release_queue
 import release_policy
+import maintainer_config
+import integrate_docs
 from plugin_id_migration import LEGACY_ID, installed_plugin, needs_migration, migrate_installation, legacy_settings_remnant, archive_legacy_settings
 
 
 ROOT = Path(__file__).resolve().parent.parent
-CANONICAL_ROOT = Path('/home/ubuntu/projects/send-to-t3-code')
-DEV_PLUGIN = installed_plugin(Path('/home/ubuntu/Obsidian Vault/.obsidian/plugins'))
-QLO2_PLUGIN = installed_plugin(Path('/home/ubuntu/vaults/QLO2/.obsidian/plugins'))
-BACKUPS = Path('/home/ubuntu/projects/send-to-t3-code/evidence')
+CANONICAL_ROOT = maintainer_config.canonical_root()
+DEV_PLUGIN = installed_plugin(maintainer_config.path_setting('developmentPlugins', CANONICAL_ROOT / '.unconfigured/development/plugins'))
+QLO2_PLUGIN = installed_plugin(maintainer_config.path_setting('productionPlugins', CANONICAL_ROOT / '.unconfigured/production/plugins'))
+BACKUPS = CANONICAL_ROOT / 'evidence'
 RECEIPTS = BACKUPS / 'releases'
-SYNC_SERVICE = 'obsidian-qlo2-sync.service'
-OB = Path('/home/ubuntu/.local/bin/ob')
-HOST_UNIT = Path('/home/ubuntu/.config/systemd/user/send-to-t3-code-response-host.service')
+SYNC_SERVICE = maintainer_config.setting('syncService', 'obsidian-production-sync.service')
+OB = maintainer_config.path_setting('obsidianCli', Path('ob'))
+HOST_UNIT = maintainer_config.path_setting('responseHostUnit', Path.home() / '.config/systemd/user/send-to-t3-code-response-host.service')
 
 RUNTIME_FILES = ('main.js', 'manifest.json', 'styles.css')
 RELEASE_FILES = ('main.js', 'manifest.json', 'versions.json', 'styles.css', 'README.md', 'LICENSE')
@@ -294,6 +296,8 @@ def deploy_qlo2(
     *,
     allow_same_version: bool = False,
 ) -> dict[str, Any]:
+    if ROOT.resolve() == CANONICAL_ROOT.resolve():
+        maintainer_config.require_deployment()
     global QLO2_PLUGIN
     run(['systemctl', '--user', 'is-active', '--quiet', SYNC_SERVICE])
     if not QLO2_PLUGIN.is_dir():
@@ -796,6 +800,13 @@ def dispatch(args: argparse.Namespace) -> None:
             raise SystemExit('Supply --evidence and --notes together. Product jobs without evidence wait before publication.')
         if git_state()[1]:
             raise SystemExit('Commit the reviewed task changes before enqueueing; uncommitted edits are not submitted.')
+        selected = subprocess.check_output(['git', 'rev-parse', '--verify', args.enqueue + '^{commit}'], cwd=ROOT, text=True).strip()
+        files = subprocess.check_output(['git', 'diff-tree', '--no-commit-id', '--name-only', '-r', selected], cwd=ROOT, text=True).splitlines()
+        if files and all(integrate_docs.documentation_file(name) for name in files):
+            if args.validation or args.evidence or args.history_seed:
+                raise SystemExit('Documentation integration does not accept product evidence or release inputs.')
+            print(json.dumps(integrate_docs.integrate(ROOT, CANONICAL_ROOT, selected), indent=2))
+            return
         result = release_queue.enqueue(ROOT, CANONICAL_ROOT, args.enqueue, bump=args.release_type or 'patch',
                                        validation=args.validation.resolve() if args.validation else None,
                                        evidence=args.evidence.resolve() if args.evidence else None, notes=args.notes,

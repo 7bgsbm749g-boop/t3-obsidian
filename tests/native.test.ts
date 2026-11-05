@@ -97,3 +97,22 @@ test('native existing-thread delivery preserves the target and retries only its 
   await assert.rejects(start(api,{...req,threadId:id},dir),/different parameters/);
  }finally{await rm(dir,{recursive:true,force:true});}
 });
+
+test('named native sends use saved T3 worktree defaults across retries',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'native-workspace-'));
+ try{
+  const calls:any[]=[];let lose=true,reads=0;
+  const config:any=modelConfig();config.settings.defaultThreadEnvMode='worktree';
+  const api:any=async(route:string,payload:any)=>{
+   if(route==='shell')return {projects:[{id:'p'}]};
+   assert.equal(route,'/api/orchestration/launch');calls.push(payload);
+   if(lose){lose=false;throw Error('Lost launch reply');}return {};
+  };
+  const request={requestId:crypto.randomUUID(),project:'p',title:'Named note',prompt:'Content'};
+  await assert.rejects(start(api,request,dir,async project=>{reads++;return resolveNewThreadDefaults(config,project);}),/Lost launch reply/);
+  config.settings.defaultThreadEnvMode='local';
+  await start(api,request,dir);
+  assert.deepEqual(calls[0].workspaceStrategy,{type:'worktree',baseRef:'HEAD',startFromOrigin:false});
+  assert.equal(calls[0].generateTitle,false);assert.deepEqual(calls[1],calls[0]);assert.equal(reads,1);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});

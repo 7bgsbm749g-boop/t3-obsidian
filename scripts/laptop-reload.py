@@ -17,7 +17,8 @@ import release_policy
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = Path.home() / '.config/send-to-t3-code/laptop-reload.json'
 STATE = Path.home() / '.local/state/send-to-t3-code/native-laptop-reload'
-RECEIPTS = Path('/home/ubuntu/projects/send-to-t3-code/evidence/releases')
+import maintainer_config
+RECEIPTS = maintainer_config.canonical_root() / 'evidence/releases'
 RUNTIME = ('main.js', 'manifest.json', 'styles.css')
 
 

@@ -3,9 +3,10 @@ import {connectT3Rpc,type T3Api,type SocketFactory} from '../connection/t3-rpc';
 
 export interface ModelSelection {instanceId:string;model:string;options?:{id:string;value:unknown}[]}
 export type RuntimeMode='approval-required'|'auto-accept-edits'|'auto'|'full-access';
-export interface NewThreadDefaults {modelSelection:ModelSelection;runtimeMode:RuntimeMode}
+export type WorkspaceStrategy={type:'root'}|{type:'worktree';baseRef:string;startFromOrigin:boolean};
+export interface NewThreadDefaults {modelSelection:ModelSelection;runtimeMode:RuntimeMode;workspaceStrategy?:WorkspaceStrategy}
 interface Provider {instanceId:string;enabled:boolean;availability?:string;status:string;models:{slug:string;isDefault?:boolean;isCustom?:boolean}[]}
-interface Project {id:string;defaultModelSelection?:ModelSelection|null}
+interface Project {id:string;workspaceRoot?:string;defaultModelSelection?:ModelSelection|null;defaultThreadEnvMode?:'local'|'worktree'|null}
 
 /** Match T3's project override, migration, and provider-picker precedence. */
 export function resolveNewThreadModel(config:unknown,project:Project):ModelSelection {
@@ -44,12 +45,27 @@ export function resolveNewThreadDefaults(config:unknown,project:Project):NewThre
   const projectMode=isRecord(overrides)?overrides.defaultRuntimeMode:undefined;
   const runtimeMode=projectMode!==undefined?projectMode:config.settings.defaultRuntimeMode!==undefined?config.settings.defaultRuntimeMode:'full-access';
   if(typeof runtimeMode!=='string'||!['approval-required','auto-accept-edits','auto','full-access'].includes(runtimeMode))throw Error('T3 returned an invalid access default. Choose an access mode in T3 settings and retry.');
-  return {modelSelection,runtimeMode:runtimeMode as RuntimeMode};
+  const storedMode=isRecord(overrides)?overrides.defaultThreadEnvMode:undefined;
+  const workspaceMode=storedMode??project.defaultThreadEnvMode??config.settings.defaultThreadEnvMode??'local';
+  if(workspaceMode!=='local'&&workspaceMode!=='worktree')throw Error('T3 returned an invalid workspace default. Choose a workspace mode in T3 settings and retry.');
+  const fromOrigin=config.settings.newWorktreesStartFromOrigin??false;
+  if(typeof fromOrigin!=='boolean')throw Error('T3 returned an invalid worktree origin default.');
+  return {modelSelection,runtimeMode:runtimeMode as RuntimeMode,workspaceStrategy:workspaceMode==='worktree'?{type:'worktree',baseRef:'HEAD',startFromOrigin:fromOrigin}:{type:'root'}};
 }
 
 export async function readNewThreadDefaults(api:T3Api,origin:string,project:Project,makeSocket?:SocketFactory):Promise<NewThreadDefaults>{
   const rpc=await connectT3Rpc(api,origin,makeSocket);
-  try{return resolveNewThreadDefaults(await rpc.call('server.getConfig',{}),project);}
+  try{
+    const defaults=resolveNewThreadDefaults(await rpc.call('server.getConfig',{}),project);
+    if(defaults.workspaceStrategy?.type==='worktree'&&project.workspaceRoot){
+      const status=await rpc.call('vcs.refreshStatus',{cwd:project.workspaceRoot,localOnly:true});
+      if(!isRecord(status)||typeof status.isRepo!=='boolean')throw Error('T3 did not return the project repository status. Retry the saved request.');
+      // Non-repository folders and No project stay in their T3-managed folder.
+      if(!status.isRepo)defaults.workspaceStrategy={type:'root'};
+      else if(typeof status.refName==='string'&&status.refName)defaults.workspaceStrategy.baseRef=status.refName;
+    }
+    return defaults;
+  }
   finally{rpc.close();}
 }
 

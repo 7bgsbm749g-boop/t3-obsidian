@@ -158,7 +158,7 @@ export async function requestJson(origin:string,token:string,path:string,payload
 }
 async function save(path:string,value:unknown){const temp=path+'.tmp';const f=await fs.open(temp,'w',0o600);try{await f.writeFile(JSON.stringify(value));await f.sync();}finally{await f.close();}await fs.rename(temp,path);}
 interface DesktopLedger {
-  protocolVersion?:2;launch?:boolean;requestHash:string;requestId:string;threadId:string;
+  protocolVersion?:2;launch?:boolean;generateTitle?:boolean;workspaceStrategy?:import('../conversations/model-defaults').WorkspaceStrategy;requestHash:string;requestId:string;threadId:string;
   project:{id:string};phase:'prepared'|'created'|'started';create?:CreateThreadCommand|null;turn?:TurnStartCommand;
 }
 interface LocalSession {token:string;sessionId:string;expiresAt?:string}
@@ -211,8 +211,9 @@ export async function start(api:T3Api,req:StartRequest,stateDir:string,loadDefau
    if(!loadDefaults)throw new Error('Cannot read T3 thread defaults. Retry from the updated plugin.');
    const defaults=await loadDefaults(project);
    const stamp=new Date().toISOString();const threadId=uuid5(id,'thread');
-   const common={threadId,...defaults,interactionMode:'default',createdAt:stamp};
-   ledger={protocolVersion:2,...(req.title===AUTO_THREAD_TITLE?{launch:true}:{}),requestHash:hash,requestId:id,threadId,project,phase:'prepared',create:{...common,type:'thread.create',commandId:uuid5(id,'create'),projectId:project.id,title:req.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:uuid5(id,'turn'),message:{messageId:uuid5(id,'message'),role:'user',text:req.prompt,attachments:req.attachments??[],...(req.context?{context:req.context}:{})}}};await save(path,ledger);
+   const {workspaceStrategy,...accessDefaults}=defaults;
+   const common={threadId,...accessDefaults,interactionMode:'default',createdAt:stamp};
+   ledger={protocolVersion:2,...(req.title===AUTO_THREAD_TITLE||workspaceStrategy?.type==='worktree'?{launch:true,generateTitle:req.title===AUTO_THREAD_TITLE,workspaceStrategy}:{}),requestHash:hash,requestId:id,threadId,project,phase:'prepared',create:{...common,type:'thread.create',commandId:uuid5(id,'create'),projectId:project.id,title:req.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:uuid5(id,'turn'),message:{messageId:uuid5(id,'message'),role:'user',text:req.prompt,attachments:req.attachments??[],...(req.context?{context:req.context}:{})}}};await save(path,ledger);
    }
   }
   if(compromised)throw toError(compromised);
@@ -222,7 +223,7 @@ export async function start(api:T3Api,req:StartRequest,stateDir:string,loadDefau
    if(!ledger.create||!ledger.turn)throw Error('The saved T3 launch commands are missing.');
    const {commandId,threadId,projectId,title,modelSelection,runtimeMode,interactionMode}=ledger.create;
    const {messageId,text,attachments,context}=ledger.turn.message;
-   await api('/api/orchestration/launch',{commandId,threadId,projectId,title,generateTitle:true,modelSelection,runtimeMode,interactionMode,creationSource:'web',workspaceStrategy:{type:'root'},initialMessage:{messageId,text,attachments,...(context?{context}:{})}});
+   await api('/api/orchestration/launch',{commandId,threadId,projectId,title,generateTitle:ledger.generateTitle??true,modelSelection,runtimeMode,interactionMode,creationSource:'web',workspaceStrategy:ledger.workspaceStrategy??{type:'root'},initialMessage:{messageId,text,attachments,...(context?{context}:{})}});
    ledger.phase='started';await save(path,ledger);
   }
   if(compromised)throw toError(compromised);

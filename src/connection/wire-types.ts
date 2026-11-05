@@ -37,7 +37,7 @@ export interface WireProjection {
 export interface WireSnapshot {
   projection:WireProjection;snapshotSequence:number;hasMoreHistory?:boolean;historyCursor?:string|null;turnItemsOmitLocalVisible?:boolean;
 }
-export interface WireProject {id:string;title:string;workspaceRoot:string;deletedAt?:string|null;defaultModelSelection?:ModelSelection|null}
+export interface WireProject {id:string;title:string;workspaceRoot:string;deletedAt?:string|null;defaultModelSelection?:ModelSelection|null;defaultThreadEnvMode?:'local'|'worktree'|null}
 export interface WireShell {projects:WireProject[];threads:WireThread[];archivedThreads?:WireThread[]}
 export interface WireHistory {items:WireVisibleItem[];hasMoreHistory:boolean;nextCursor?:string|null}
 export interface NormalizedThread extends InlineThreadState {

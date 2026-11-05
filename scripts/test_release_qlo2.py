@@ -21,6 +21,16 @@ SPEC.loader.exec_module(release)
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    def test_documentation_enqueue_is_an_ordinary_commit_without_a_queue_job(self):
+        with patch.object(release, 'git_state', return_value=('commit', [])), \
+             patch.object(release.subprocess, 'check_output', side_effect=['commit\n', 'AGENTS.md\n']), \
+             patch.object(release.integrate_docs, 'integrate', return_value={'status': 'committed'}) as integrate, \
+             patch.object(release.release_queue, 'enqueue') as enqueue, \
+             patch.object(release.release_queue, 'kick') as kick:
+            release.dispatch(release.parser().parse_args(['--enqueue', 'HEAD']))
+            integrate.assert_called_once_with(release.ROOT, release.CANONICAL_ROOT, 'commit')
+            enqueue.assert_not_called(); kick.assert_not_called()
+
     def test_memory_wait_cli_requires_allowance_and_native_recovery_watch(self):
         for arguments in [['--wait-for-memory', 'job'],
                           ['--wait-for-memory', 'job', '--memory-budget', '768M'],

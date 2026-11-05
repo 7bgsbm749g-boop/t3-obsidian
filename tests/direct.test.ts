@@ -188,3 +188,23 @@ test('direct acknowledgement persists exact prompt delivery and the observed act
   const restored=structuredClone(snapshots.at(-1));await sendDirect(restored,session,async()=>{},fetcher as any);
   assert.equal(dispatches,1);assert.deepEqual(restored.directPlan.delivery,request.directPlan?.delivery);
 });
+
+test('named direct sends prepare worktrees before starting and replay the saved workspace after a lost reply',async(t)=>{
+ const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
+ const config:any=modelConfig();config.settings.defaultThreadEnvMode='worktree';
+ const launches:any[]=[];let saved:any,lose=true;
+ globalThis.WebSocket=settingsSocket(()=>config,undefined,(tag,payload)=>{
+  if(tag==='vcs.refreshStatus')return {isRepo:true,refName:'main'};
+  assert.equal(tag,'orchestration.launchThread');launches.push(payload);
+  if(lose){lose=false;throw Error('Lost acknowledgement');}return {threadId:payload.threadId};
+ }) as any;
+ const request:Request={id:crypto.randomUUID(),project:{id:'p',title:'P',workspaceRoot:'/repo'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:'Named note',prompt:'Content'};
+ const fetcher:any=async(u:string)=>response(u.endsWith('/environment')?descriptor:u.endsWith('/shell')?{projects:[{id:'p',workspaceRoot:'/repo'}]}:{ticket:'test'});
+ const save=async()=>{saved=structuredClone(request);};
+ await assert.rejects(sendDirect(request,session,save,fetcher),/Cannot reach/);
+ assert.deepEqual(launches[0].workspaceStrategy,{type:'worktree',baseRef:'main',startFromOrigin:false});
+ assert.equal(launches[0].generateTitle,false);
+ config.settings.defaultThreadEnvMode='local';
+ await sendDirect(saved,session,async()=>{},fetcher);
+ assert.deepEqual(launches[1],launches[0]);
+});

@@ -14,14 +14,16 @@ import subprocess
 import tempfile
 
 try:
-    from . import release_policy, release_history, release_memory
+    from . import release_policy, release_history, release_memory, maintainer_config, source_cleanup
 except ImportError:
     import release_policy
     import release_history
     import release_memory
+    import maintainer_config
+    import source_cleanup
 
-QUEUE = Path('/home/ubuntu/projects/send-to-t3-code/evidence/release-queue')
-UNIT = 'send-to-t3-release-queue'
+QUEUE = maintainer_config.canonical_root() / 'evidence/release-queue'
+UNIT = maintainer_config.setting('releaseQueueUnit', 'send-to-t3-release-queue')
 JOB_ID = re.compile(r'^\d{12}-[0-9a-f]{16}$')
 VERSION_FILES = {'package.json', 'package-lock.json', 'manifest.json', 'versions.json'}
 MAX_ATTEMPTS = 3
@@ -145,6 +147,8 @@ def job_path(queue: Path, job_id: str) -> Path:
 def submission(root: Path, canonical: Path, commit: str, *, bump: str = 'patch', validation: Path | None = None,
                evidence: Path | None = None, notes: str = '', history_seed: Path | None = None,
                summary: str = '', thread_id: str | None = None, queue: Path = QUEUE) -> dict:
+    if git(root, 'status', '--porcelain=v1'):
+        raise SystemExit('Commit all intended task files before submitting; uncommitted files are not released.')
     commit = git(root, 'rev-parse', '--verify', '--end-of-options', commit + '^{commit}')
     canonical_commit = git(canonical, 'rev-parse', 'HEAD')
     context = integration_context(root, canonical_commit, queue)
@@ -163,7 +167,7 @@ def submission(root: Path, canonical: Path, commit: str, *, bump: str = 'patch',
             continue
         item = subprocess.run(['git', 'show', f'{commit}:{name}'], cwd=root, capture_output=True)
         inputs[name] = hashlib.sha256(item.stdout).hexdigest() if item.returncode == 0 else None
-    return {**identity, 'createdAt': now(), 'sourceRoot': str(root), 'mergeBase': base,
+    return {**identity, 'createdAt': now(), 'sourceRoot': str(root), 'sourceBranch': git(root, 'branch', '--show-current') or None, 'mergeBase': base,
             'maintenanceOnly': maintenance_only(changed),
             'historySeed': str(history_seed) if history_seed else None, 'threadId': thread_id,
             'summary': summary or ' | '.join(git(root, 'log', '--format=%s', base + '..' + commit).splitlines()[:12]),
@@ -250,7 +254,7 @@ def install(canonical: Path, *, queue: Path = QUEUE) -> None:
         'TimeoutStartSec=3600\nRestart=on-failure\nRestartSec=15\n')
     (units / (UNIT + '.path')).write_text(
         '[Unit]\nDescription=Wake the T3 Code release queue\n'
-        '[Path]\nPathExists=' + str(queue / 'wake') + '\nUnit=' + UNIT + '.service\n'
+        '[Path]\nPathExists=' + str(queue / 'wake') + '\nPathChanged=' + str(maintainer_config.common_directory(canonical) / 'worktrees') + '\nUnit=' + UNIT + '.service\n'
         '[Install]\nWantedBy=default.target\n')
     subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
     subprocess.run(['systemctl', '--user', 'enable', '--now', UNIT + '.path'], check=True)
@@ -801,6 +805,33 @@ def isolate_failure(release, directory: Path, state: dict) -> bool:
     return True
 
 
+def cleanup_finished_sources(release, pending: list) -> str | None:
+    deadlines = []
+    for directory, state in pending:
+        if state['status'] != 'complete':
+            continue
+        request = read(directory / state.get('requestFile', 'request.json'))
+        if not request.get('sourceBranch') or state.get('sourceCleanup', {}).get('status') in {'removed', 'protected', 'not-requested'}:
+            continue
+        previous = state.get('sourceCleanup', {})
+        # A later queue wake can clear a blocker. Blocked entries do not arm
+        # retries, but must be checked again after the owner resolves them.
+        if previous.get('nextAttemptAt', '') > now():
+            deadlines.append(previous['nextAttemptAt'])
+            continue
+        try:
+            outcome = source_cleanup.cleanup(release.ROOT, request)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            outcome = {'status': 'pending', 'reason': 'Checkout cleanup could not finish: ' + type(error).__name__}
+        if outcome.get('status') == 'pending':
+            attempts = previous.get('attempts', 0) + 1
+            delay = min(300, 30 * 2 ** min(attempts - 1, 4))
+            outcome.update(attempts=attempts, nextAttemptAt=(dt.datetime.fromisoformat(now()) + dt.timedelta(seconds=delay)).isoformat())
+            deadlines.append(outcome['nextAttemptAt'])
+        update(directory, state, sourceCleanup=outcome)
+    return min(deadlines, default=None)
+
+
 def drain(release, *, queue: Path = QUEUE) -> dict:
     release.canonical_root_required()
     try:
@@ -823,14 +854,17 @@ def drain(release, *, queue: Path = QUEUE) -> dict:
                                     update(path, item, status='queued', requiresJobId=None, nextAction=None)
                             if item['status'] == 'waiting-for-memory':
                                 probe_memory_entry(path, item)
+                        cleanup_deadline = cleanup_finished_sources(release, pending)
                         memory_deadline = next_memory_probe(pending)
                         directory = next((path for path, item in pending
                                           if item['status'] not in FINISHED or memory_holds_lane(item)), None)
                         if directory is None:
                             (queue / 'wake').unlink(missing_ok=True)
                             if memory_deadline:
-                                schedule_retry(memory_deadline, queue=queue)
+                                schedule_retry(min(memory_deadline, cleanup_deadline or memory_deadline), queue=queue)
                                 return {'status': 'waiting-for-memory', 'nextProbeAt': memory_deadline}
+                            if cleanup_deadline:
+                                schedule_retry(cleanup_deadline, queue=queue)
                             return {'status': 'idle'}
                         state = read(directory / 'state.json')
                         if state['status'] == 'waiting-for-memory':

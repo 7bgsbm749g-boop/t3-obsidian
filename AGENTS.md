@@ -1,95 +1,78 @@
-# T3 Code repository guidance
+# Contributor and agent guidance
 
-## Authoritative locations
+## Scope and source
 
-- Implement and test in the current thread's source worktree. Parallel tasks use separate worktrees.
-- `/home/ubuntu/projects/send-to-t3-code` is the integration and release checkout. The release queue worker owns integration and publication there; task threads submit reviewed commits from their own worktrees.
-- `/home/ubuntu/Obsidian Vault/.obsidian/plugins/t-three-code` is the development-vault installation. It may contain only `main.js`, `manifest.json`, `styles.css`, and its device-local `data.json`. Never edit source there.
-- `/home/ubuntu/vaults/QLO2/.obsidian/plugins/t-three-code` is the QLO2 installation published by Obsidian Sync. Never edit it by hand.
-- The current plugin ID and installation directory are `t-three-code`. `send-to-t3-code` is a legacy installation name, not a second supported destination. The release queue can still migrate one real legacy installation, including hotkey and enabled-plugin references, with backups. The owner disables that old QLO2 plugin while its queue slot is held, retries the job, and enables the migrated plugin for the live check. Never install both IDs. Private storage namespaces, service names and the immutable archive root remain unchanged.
-- A legacy directory containing only `data.json` (or no files) beside a verified current runtime is a settings remnant, not a second installation. Discovery is read-only and selects the current plugin. Publication backs up and removes that remnant while holding the release lock and, for QLO2, with Sync paused; it never merges old settings into current settings. Real duplicate runtimes, unknown contents and symlinks still stop the release. For explicitly requested standalone cleanup, commit the reviewed tooling first and run `npm run release:qlo2 -- --cleanup-legacy-settings` from the task worktree; this command takes the same release lock, preserves both settings files separately, requires a fresh `Fully synced` scan, and restarts Sync in a `finally` path. Never recreate the old installation directory to save settings.
-- Preserve every installation's `data.json`. Release tooling must prove it remained byte-identical.
+This repository contains the T3 Code plugin for Obsidian. Its plugin ID is
+`t-three-code`. Preserve existing settings, storage namespaces, and compatibility
+identities. Use the current source layout: `src/app/`, `src/connection/`,
+`src/conversations/`, `src/projects/`, `src/responses/`, `tests/`, and `scripts/`.
+Never edit an installed plugin bundle as source.
 
-If the current working directory is an installed-plugin directory, stop and move the work to a source worktree. Do not reconstruct source from an installed bundle.
+Inspect the working tree before editing and preserve unrelated changes.
+Investigation and review are read-only unless implementation is requested.
+Commit all intended tracked changes, including instruction and skill files,
+before reporting them complete. Report failed checks and unfinished work.
 
-## Definition of done
+## Development and validation
 
-- Investigation, explanation, review, and feasibility work are read-only unless the user separately asks for implementation.
-- `source-only`, `prototype`, or `do not deploy` means edit and test the current source worktree without installing or releasing it.
-- For an ordinary user-requested product change, “implement”, “fix”, “add”, or “build” means the full QLO2 delivery path unless the user explicitly narrows the scope:
-  1. implement in the task's source worktree;
-  2. select tests for changed systems and their transitive consumers; let the queue perform final validation once for each distinct set of inputs;
-  3. commit the reviewed source, documentation, and test changes in that worktree;
-  4. submit those commits to the FIFO release queue; its single worker integrates them, assigns a strictly newer version, validates, and publishes;
-  5. install runtime artifacts into the development vault;
-  6. back up and install QLO2 while preserving `data.json`;
-  7. force and verify a fresh Obsidian Sync scan;
-  8. reload a real QLO2 Obsidian client and smoke-test the changed behavior;
-  9. record immutable smoke evidence and verify deletion of all temporary smoke threads and notes.
-- Do not say a product change is deployed, live, complete, or ready merely because `npm run build` passed. A release receipt with status `awaiting-live-smoke` is intentionally incomplete.
+Use Node.js 22, npm, and Python 3. Preserve the existing lockfile and resolved
+versions. `npm ci` installs dependencies. `npm run build` checks TypeScript and
+creates `dist/main.js`; it does not install the plugin.
 
-## Required commands
+Use `npm run test:plan` and `npm test` for affected checks. An explicit
+`--base COMMIT` selects a development baseline. Do not run the full suite by
+default. Add meaningful regression coverage for behavior changes.
 
-- Review gates: `npm run lint` runs the pinned official Obsidian ESLint rules with zero errors or warnings, then checks portable/desktop boundaries and CSS. `npm test` caches these gates only for identical source, configuration, installed dependency bytes, and runtime. Do not bypass them or suppress Obsidian, unsafe-boundary, deprecation, or security rules. Static Node import declarations (including type-only imports) and require-style source imports are forbidden; use import() type queries for Node types and explicit Platform.isDesktop guards for deferred runtime imports. CSS priority overrides are forbidden. The response height spacer requires native viewport and rendered-pixel proof after changes.
-- Build: `npm run build` (writes `dist/main.js`, never into a vault). The check runner builds when needed and reuses an exact matching build; do not separately repeat it.
-- Test: `npm test` selects changed systems and transitive consumers against the installed release, including staged, unstaged, untracked, and deleted source. `npm run test:plan` shows the selection. `npm test -- --base COMMIT` selects against an explicit development baseline. Successful checks are reused only for identical source dependencies, installed dependency bytes, runtime, and bundle inputs. Do not run the full suite by default; `npm run test:all` is an explicit diagnostic command. Shared test-runner, build, or dependency changes can affect the whole suite.
-- Alpha is mandatory: [release-policy.json](release-policy.json) and [docs/versioning.md](docs/versioning.md) require plain `0.0.BUILD` in manifests, package files, archives and Git tags. Keep Alpha as a separate GitHub release-title label (`t3-obsidian VERSION (Alpha)`), with a regular GitHub release for Obsidian distribution. Never reintroduce the `-alpha` suffix for new releases. Earlier suffixed versions remain immutable history. Each new packaged release increments BUILD once; retries keep immutable bytes and the same number. Only an explicit user instruction can graduate the project from alpha. `--release-type patch|minor|major|none` classifies the parallel history counters; it never changes the published alpha format. Include `--thread-id ID --summary "CHANGE"` when enqueueing, including prepared candidates. The queue maintains all private comparison columns and historical links in `evidence/version-history/` and registered existing task evidence mirrors until explicit graduation; never commit or publish private thread tables.
-- Default release: commit reviewed task changes, then run `npm run release:qlo2 -- --enqueue HEAD` from that worktree. The worker assigns the final version, integrates, builds, validates affected systems once, installs, verifies Sync, and reloads QLO2. Read only that job with `npm run release:qlo2 -- --queue-status JOB_ID`. Do not bump/reserve versions, edit the canonical checkout, contact other threads, inspect sibling threads, or negotiate release/GUI slots for release coordination. The queue is the coordination mechanism. Independent development checks may run in task worktrees; matching successful inputs remain cached for final validation.
-- New plugin releases add one single-parent commit on `main`, `Release VERSION: summary`, containing task changes and all final version files before validation and packaging. Supply a useful public `--summary`. Original task commits and ancestry remain in local private `refs/t3-release-queue/` refs and queue records, not as merge parents on `main`; never push those refs. Maintenance-only work adds one checked source commit without a plugin version. Preserve historical commits and legacy in-flight archive provenance; never squash or amend published history. Retries resume the exact journalled commit and immutable archive. Unpackaged failed candidates still use explicit queue-owned reverts.
-- Temporary memory refusal is an automatic recovery wait, not a reason to leave an unattended `needs-evidence` job. The queue reprobes at 30 seconds, then 1, 2, 4, 8 and 15 minutes (capped), preserving the candidate and its failure allowance. If native verification is blocked, enqueue the reviewed commit with its owning thread, create a native T3 interval recovery watch bound to that same thread, and record `--wait-for-memory JOB_ID --memory-budget ALLOWANCE --resume-task-id SCHEDULED_TASK_ID`. The watch uses `--probe-memory JOB_ID`, adopts the returned increasing delay, resumes verification and cleanup automatically when ready, and is deleted after completion. Keep active tests running when a watch fires; do not duplicate them. Follow [docs/release-queue-memory.md](docs/release-queue-memory.md); never end a turn on memory refusal without this continuation.
-- Supply already verified behavior evidence with `--enqueue HEAD --evidence PATH --notes "WHAT WAS VERIFIED"` to permit automatic smoke completion when its touched source inputs survive integration unchanged. Product jobs without evidence wait at `needs-evidence` before integration and do not hold the lane. If integration changes the tested inputs, publication and native-client verification finish, then the job remains incomplete at `awaiting-smoke` while later jobs continue. Its owner tests the exact archived candidate and records `--complete-smoke` from the canonical checkout. Historical completion requires matching archive bytes and retained native-client proof. Other task threads do not coordinate with the owner.
-- A prepared candidate can also be enqueued with `--validation PATH`. The optional `--prepare --bump patch` / `--prepare --version VERSION` workflow supports an exact candidate check before submission; it is not the concurrent default because the worker owns version assignment. Matching prepared bytes publish without rebuilding or retesting; changed inputs are refused.
-- One-time queue setup from the canonical checkout: `npm run release:qlo2 -- --install-queue`. A systemd path unit wakes the worker on submissions/completions, with no periodic polling. Requests, FIFO positions, logs, and durable states live outside synced vaults under `/home/ubuntu/projects/send-to-t3-code/evidence/release-queue`. Repeated submission of a source commit returns the same job. Failures retry automatically. After three failures, a safe unpublished candidate is removed with explicit reverts of only its queue-owned integration commits, marked `failed`, and set aside so later jobs continue. Shared installation failures retain immutable bytes and arm a persistent one-shot retry deadline, with increasing delays up to five minutes. Crashed workers restart automatically. Tests, Sync, and native-client checks are never bypassed. Use `--retry-queued JOB_ID` after repairing a failed candidate; an existing archive resumes its exact immutable bytes. Before packaging, corrected committed source can replace a failed candidate in the same slot with `--retry-queued JOB_ID --replacement HEAD` (and new optional validation/evidence); original requests remain retained. Updated release tooling restarts the worker before validation.
-- The legacy one-step `npm run release:qlo2 -- --bump patch` path uses affected tests before queue installation. After installation, direct publication and archive resume through the CLI are refused; submit/retry the queue job instead. The worker calls the same supported release implementation. `release:qlo2` is the only supported packaging/deployment entry point.
-- Documentation-only and release-tool-only changes need their affected checks and reviewed source integration, not a plugin version or deployment, unless a release is needed to verify the delivery tooling itself.
-- Run packaging and QLO2 delivery from the canonical release checkout, one release at a time. Other source worktrees can remain active and need not be clean.
-- If packaging succeeded but installation or Sync failed, use `npm run release:qlo2 -- --retry-queued JOB_ID`; the worker resumes the exact immutable archive. Before queue installation only, the legacy equivalent is `--resume VERSION`. Never delete/rebuild that version with different bytes.
-- Commit the reviewed release changes before running the release command. Do not include unrelated user edits in that commit. The release command refuses a dirty worktree by default; `--allow-dirty` remains an exceptional path only when the user explicitly requests deployment of reviewed dirty bytes.
-- After a real client reload and smoke test, record evidence with:
-  `npm run release:qlo2 -- --complete-smoke VERSION --device DEVICE --evidence PATH --notes "WHAT WAS VERIFIED"`.
-- Publication automatically checks the real QLO2 client, invokes its native reload command, and records a new instance at the released version in `client-check.json`. Retry a failed common check with `--check-client VERSION`; this does not reinstall. The laptop reload service runs asynchronously and does not delay the VPS release.
+`npm run lint` must pass with zero errors or warnings. Preserve platform
+boundaries: guard deferred Node runtime imports with `Platform.isDesktop`,
+use `import()` type queries for Node types, and do not introduce static Node
+imports or require-style imports. CSS priority overrides are forbidden. Changes
+to the response-height spacer require native viewport and rendered-pixel proof.
 
-For GitHub publication, push only the reviewed queue release source and its matching numeric tag. The tag workflow builds and attests the exact assets. Use `scripts/publish-github.py VERSION --gh /path/to/current/gh --notes-file PATH --evidence evidence/PATH --publish` after it succeeds; it checks completed smoke/client delivery, immutable archive hashes, remote tag identity, and exact tag/commit/workflow attestations before creating a regular Alpha release. It refuses asset replacement. See [docs/review-and-release.md](docs/review-and-release.md).
+Keep credentials and real vault content out of committed fixtures and reports.
+Use synthetic fixtures in a separate test vault. Preserve installed `data.json`.
+Desktop checks do not prove native mobile behavior. Clean up temporary test
+notes, threads, apps, and helpers after retaining evidence.
 
-The retired `scripts/deploy-qlo2.py` must continue to refuse direct use. Never hand-copy files into either vault and never overwrite an existing versioned archive or receipt.
+## Documentation and skills
 
-## Release invariants
+Documentation and skill-instruction changes use ordinary Git commits, without
+plugin builds, version changes, installation, or release jobs. Review the diff
+and relevant links. In a configured maintainer checkout, integrate a reviewed
+single documentation commit with `python3 scripts/integrate_docs.py COMMIT`.
+This runs a normal Git cherry-pick under the repository lock, not the release
+queue. Mixed product changes still require the product release process.
 
-- Every deployment advances the installed alpha build. The original approved legacy renumbering was `2.45.81` to `0.0.377-alpha`. The current format uses plain numeric `0.0.BUILD` after the existing alpha build sequence; historical `2.x` numbers do not restart that sequence.
-- Version alignment includes `package.json`, the root and package entry in `package-lock.json`, `manifest.json`, and `versions.json`.
-- Archives under `release/` and receipts under `/home/ubuntu/projects/send-to-t3-code/evidence/releases/` are immutable. If a release attempt has created one, do not reuse that version for different bytes.
-- The package contains exactly `main.js`, `manifest.json`, `versions.json`, `styles.css`, `README.md`, and `LICENSE` beneath `send-to-t3-code/`.
-- Installation is atomic per file. QLO2 deployment must stop the continuous Sync service, install, run a fresh one-shot scan, require `Fully synced`, and restart the service in a `finally` path.
-- Keep deployment on the VPS. Do not route QLO2 installation through the Windows laptop.
+## Maintainer configuration and releases
 
-## Live smoke testing
+Machine-specific paths and deployment instructions are private. Before an
+authorized maintainer operation, read them with
+`python3 scripts/maintainer_config.py --instructions`. Configuration is stored
+under `t3-obsidian/` in the Git common directory, shared by linked worktrees;
+`T3_OBSIDIAN_MAINTAINER_CONFIG` can select another local JSON file. Do not commit
+personal installation paths, vault locations, or local settings.
 
-- Check changed behavior once per validated candidate, in the relevant test vault/client. Reuse that evidence after publication when the tested behavior inputs are identical. QLO2 still needs fresh Sync, exact installed bytes, and a real loaded-client check; do not repeat fixture setup or unrelated manual checks there. Use the local VPS Obsidian client by default; test another affected device when the change is platform-specific. Common automatic reload evidence does not establish changed UI or delivery behavior.
-- Do not create or store smoke-test notes, folders, attachments, screenshots, logs, reports, or other evidence in QLO2, even temporarily. Keep test fixtures in a separate test vault and all plugin evidence in this project's gitignored `evidence/` directory, outside synced vaults. Other projects keep their evidence in their own gitignored `evidence/` directories. Delivered file links must point inside the owning project workspace.
-- Preserve the user's current note and settings. Keep QLO2 verification limited to checks that create no test content. Run fixture-based checks in a separate test vault and report that distinction. Cancel before dispatching external work when delivery itself is not under test.
-- Always delete every temporary T3 smoke-test thread and smoke-test note after use, including failed, cancelled, and interrupted tests. Save diagnostic evidence outside the vault first, stop any active test work, then delete the threads through native T3 controls and the notes through Obsidian's normal vault operations. Archiving a thread or closing a tab does not count as deletion. Preserve pre-existing user threads and notes, and immutable evidence.
-- Track the exact test thread IDs and note paths. Verify that all are deleted before reporting the test complete or recording a completed smoke receipt. If cleanup fails, report the remaining IDs/paths and the blocker; cleanup remains required.
-- For editor-menu changes, verify in the actual editor that the menu appears only for the intended selection and that the expected destination UI opens. For delivery changes, complete one bounded real delivery from the separate test vault and verify the observable T3 result.
-- Capture a screenshot or equivalent durable evidence outside the vault, then record it with `--complete-smoke`. Do not fabricate or record a smoke receipt based only on unit tests.
-- Reloading a client can interrupt active work. Inspect current state first, then use Obsidian's **Reload app without saving** command or a verified plugin disable/enable cycle; `Ctrl+R` alone is not acceptable reload evidence. Do not kill Obsidian blindly.
+Product delivery uses the existing serialized release queue. Commit reviewed
+source before submission. Do not edit the integration checkout by hand or
+replace immutable archives and receipts. The queue owns final integration,
+version assignment, validation, packaging, installation, and client checks.
+Publication is incomplete until the required behavior and cleanup proof pass.
+Follow the private maintainer instructions for the configured delivery route.
 
-## Visual changes and evidence
+The project remains Alpha. New versions use numeric `0.0.BUILD`; Alpha is a
+separate release-title label. Keep all version files aligned and preserve
+published history. Do not bump versions for documentation or ordinary source
+contributions. Only explicit user direction can end the Alpha stage.
 
-- A request to strengthen an effect preserves the normal appearance between passes unless the user asks to change it. Prefer changing the effect's parameters over replacing text painting or markup.
-- Text fill, clipping, opacity, filters, and compositing can change visible glyph edges even when font, colour, and dimensions match. Treat changes to those properties as rendering changes.
-- Compare rendered pixels against the last accepted version with the effect outside the text, using the same document, position, theme, selection state, and custom colours. Also check that the requested effect is visibly stronger. Computed styles and layout measurements alone do not prove unchanged appearance.
-- Match claims to evidence. A desktop or Chromium check does not prove native iPhone behaviour. Before explaining what changed, inspect the diff; do not claim that normal text is unchanged without a rendered comparison.
+## Evidence and completion
 
-## Worktree and safety
+Keep evidence under this repository's ignored `evidence/` directory, outside
+synced vaults. Retained release evidence and referenced attachments must be
+stored under the configured canonical checkout, not a temporary task checkout.
+The queue retains submitted evidence; verify any attachment references as well.
 
-- This repository may contain user changes. Preserve unrelated edits and inspect overlap before patching.
-- Before reporting an edit complete, check staged and unstaged changes, including `AGENTS.md` and `skills/**/SKILL.md`. Commit and submit all intended task changes through the existing queue; skill-document-only changes use maintenance integration. Report failed checks or unsubmitted changes explicitly. Do not copy edits into canonical by hand or leave a duplicate dirty copy after integrating elsewhere.
-- Store durable task screenshots and logs in a unique task folder under `/home/ubuntu/projects/send-to-t3-code/evidence`, so receipts do not depend on a temporary worktree. Task-local build output and caches can stay in the worktree. The queue copies the submitted evidence file, not its referenced attachments; verify retained attachment paths before completing the task.
-- A user request for the full QLO2 product-change delivery path authorizes the pre-release commit of reviewed changes for that request in its source worktree. Do not commit unrelated user edits. Do not push, reset, or discard changes unless the user explicitly requests it.
-- Screenshots, test evidence, local tool state, and backups live in the project's gitignored `evidence/` directory. For shared release state, use `/home/ubuntu/projects/send-to-t3-code/evidence`. Never recreate the retired external backups directory.
-
-## Real Sync testing capability
-
-- The VPS has two independent desktop test clients and local vaults, **Sync Test A** and **Sync Test B**, connected to the dedicated **T3 Sync Test Lab** remote vault through official Obsidian Headless Sync. Use [docs/obsidian-sync-test-lab.md](docs/obsidian-sync-test-lab.md) and `scripts/obsidian-sync-lab.py` when investigating Sync races; do not substitute two windows on one local folder.
-- Keep lab content synthetic and preserve production QLO2, settings, and unrelated clients. Prepare the reviewed plugin and supported connection separately before testing its behavior; never clone production private response records into the lab.
-- Report real file propagation, visible editor behavior, desktop core Sync engine behavior, and native mobile coverage separately. This lab does not prove native iPhone or Android behavior. Mobile emulation feasibility and its remaining prerequisites are recorded in the runbook.
+A completed release can remove its task checkout and local branch only when
+its submitted commit is still the branch tip, tracked and untracked files are
+clean, no active work uses the checkout, and all local files are disposable or
+retained elsewhere. Preserve dirty or advanced branches and report the blocker.
+Deleting a worktree alone does not delete its branch.

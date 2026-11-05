@@ -22,7 +22,7 @@ import {AUTO_THREAD_TITLE} from '../conversations/thread-title';
 export interface RemoteEnvironmentDescriptor extends Record<string,unknown>{environmentId:string;label:string;orchestrationProtocolVersion:2}
 export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean}
 export interface PairedSession {token:string;expiresAt:number;environmentId:string;url:string;dpopKeyId?:string;accountId?:string;permissions?:string[]}
-export interface DirectPlan {protocolVersion?:2;launch?:boolean;hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:CreateThreadCommand|null;turn:TurnStartCommand;observedActiveTurnId?:string;delivery?:InlineStartRequest}
+export interface DirectPlan {protocolVersion?:2;launch?:boolean;generateTitle?:boolean;workspaceStrategy?:import('../conversations/model-defaults').WorkspaceStrategy;hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:CreateThreadCommand|null;turn:TurnStartCommand;observedActiveTurnId?:string;delivery?:InlineStartRequest}
 export type Fetcher=typeof fetch;
 export function endpoint(value:string):string {
  let u:URL;try{u=new URL(value.trim());}catch{throw Error('Enter a T3 HTTPS address or pairing link.');}
@@ -132,8 +132,9 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
   }else{
   const projects=readWireProjects(await api('shell'));const project=projects.find(p=>p.id===r.project.id);if(!project)throw Error('Project no longer exists. Scan this connection again.');
   const defaults=await readNewThreadDefaults(environment,endpoint(r.connection.url||''),project);
-  const common={threadId:commandId(r.id,'thread'),...defaults,interactionMode:'default',createdAt:new Date().toISOString()};
-  r.directPlan={protocolVersion:2,...(r.title===AUTO_THREAD_TITLE?{launch:true}:{}),hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title:r.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
+  const {workspaceStrategy,...accessDefaults}=defaults;
+  const common={threadId:commandId(r.id,'thread'),...accessDefaults,interactionMode:'default',createdAt:new Date().toISOString()};
+  r.directPlan={protocolVersion:2,...(r.title===AUTO_THREAD_TITLE||workspaceStrategy?.type==='worktree'?{launch:true,generateTitle:r.title===AUTO_THREAD_TITLE,workspaceStrategy}:{}),hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title:r.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
   }
  }
  // Persist the complete commands before their first attempt AND on every retry.
@@ -145,7 +146,7 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
   if(!plan.create)throw Error('The saved T3 creation command is missing. Nothing was sent.');
   const {commandId,threadId,projectId,title,modelSelection,runtimeMode,interactionMode}=plan.create;
   const {messageId,text,attachments,context}=plan.turn.message;
-  await environment('/api/orchestration/launch',{commandId,threadId,projectId,title,generateTitle:true,modelSelection,runtimeMode,interactionMode,creationSource:'web',workspaceStrategy:{type:'root'},initialMessage:{messageId,text,attachments,...(context?{context}:{})}});
+  await environment('/api/orchestration/launch',{commandId,threadId,projectId,title,generateTitle:plan.generateTitle??true,modelSelection,runtimeMode,interactionMode,creationSource:'web',workspaceStrategy:plan.workspaceStrategy??{type:'root'},initialMessage:{messageId,text,attachments,...(context?{context}:{})}});
   plan.phase='started';await save();
  }
  if(plan.phase==='prepared'){await api('dispatch',{...plan.create,...(plan.protocolVersion===2?{}:{__legacyV1:true})});plan.phase='created';await save();}
