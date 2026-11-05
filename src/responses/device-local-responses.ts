@@ -18,6 +18,7 @@ export interface DeviceResponseIO {
   saveLocalNote?(path:string):Promise<void>;
   syncReady?(path:string):boolean;
   localCompleted?(id:string,path:string):void;
+  localEditSaved?(request:ResponseRequest,document:string):Promise<void>;
   localConnection?(id:string,issue?:ResponseConnectionIssue):void;
   localFinalBody?(update:DirectInlineUpdate):Promise<string>;
   rememberResponse?(request:ResponseRequest,body:string,before:string,after:string,offset:number):Promise<void>;
@@ -60,6 +61,8 @@ export class DeviceResponseManager {
   failResponse(_host:ResponseStorageTarget,id:string){return this.local?.cancel(id)??Promise.resolve();}
   stopResponse(_host:ResponseStorageTarget,id:string,body?:string,_operationId?:string):Promise<ResponseStopReceipt>{return this.manager().stop(id,body);}
   responseStatus(id:string){return this.local?.status(id);}
+  frozenBody(id:string){return this.local?.frozenBody(id);}
+  retrySave(binding:ResponseRequest,hash:string,frozenBody?:string){if(this.stopped)throw Error('The plugin is disabled.');return this.manager().retrySave(binding,hash,frozenBody);}
   waitForSave(id:string,timeoutMs?:number):Promise<LocalResponseSaveResult>{return this.stopped||!this.local?Promise.resolve({saved:false,reason:'plugin-unavailable'}):this.local.waitForSave(id,timeoutMs);}
   localResponse(id:string){const record=this.local?.record(id);return record?{record,host:record.request.host}:undefined;}
   cachedResponse(id:string){return this.localResponse(id);}

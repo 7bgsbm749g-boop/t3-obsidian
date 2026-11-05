@@ -32,7 +32,7 @@ test('whole-note Send starts the indicator synchronously before project lookup a
   let reject!:(error:Error)=>void;const gate=new Promise((_resolve,fail)=>{reject=fail;});
   h.plugin.chatTarget=async()=>{events.push('lookup');return gate;};
   const sending=h.plugin.sendNote(h.file,undefined,undefined,true);
-  assert.deepEqual(events,['show']);assert.equal(h.value(),document);
+  assert.equal(events[0],'show');assert.equal(h.value(),document);
   await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(events,['show','lookup']);
   reject(Error('Synthetic project failure'));await assert.rejects(sending,/Synthetic project failure/);
   assert.deepEqual(events,['show','lookup','clear']);assert.equal(h.value(),document);

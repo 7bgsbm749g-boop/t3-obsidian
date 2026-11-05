@@ -6,7 +6,6 @@ import {responseAnchor,renderResponse,projectResponses,savedProjection,responseR
 import {containerBody,containerStart,containerEnd,responseFrame,responseIds,responseBoundaries} from '../src/responses/response-container';
 import {regionBody,inlineTargetAt,inlineResponseRange,activeInlineIds,initialRegion,finalizeRegion,startMarker,endMarker} from '../src/conversations/inline-thread';
 import {contentHash} from '../src/responses/completion';
-import {eventContent} from '../src/app/event-subscriptions';
 import {editorStream} from '../src/responses/editor-stream';
 import {ResponseNoteLocator} from '../src/responses/response-location';
 import {hiddenInlineMarkerExtension,type ContainerMarkerDecorations} from '../src/conversations/inline-markers';
@@ -67,13 +66,13 @@ test('new native registrations use containers only after host negotiation and re
     const io={updateNote:async(_path:string,change:(text:string)=>string)=>document=change(document)};
     const request=await editorStream(source,'A.md',io,()=>true),original=document;
     assert.equal(document.includes('data-t3-response='),modern);assert.equal(document.includes('<!-- t3-inline:'),!modern);
-    assert.equal(eventContent(document),eventContent('Before\n'));assert.equal(await editorStream(source,'A.md',io,()=>true).then(request=>request.id),request.id);assert.equal(document,original);
+    assert.equal(await editorStream(source,'A.md',io,()=>true).then(request=>request.id),request.id);assert.equal(document,original);
   }
 });
 test('moved and duplicated saved containers use the existing destination recovery checks',async()=>{
   const notes=new Map([['Moved.md',responseAnchor(id)],['Example.md','```html\n'+responseAnchor(id)+'\n```']]);
   const locator=new ResponseNoteLocator(()=>[...notes.keys()],async path=>notes.get(path));
-  assert.equal(await locator.locate(id,'Old.md'),'Moved.md');
+  locator.remember('Moved.md',notes.get('Moved.md'));assert.equal(await locator.locate(id,'Moved.md'),'Moved.md');
   notes.set('Copy.md',responseAnchor(id));locator.changed('Copy.md');await assert.rejects(locator.locate(id,'Moved.md'),/multiple notes/);
 });
 test('question and approval cleanup leaves controls inside active containers for the response writer',()=>{

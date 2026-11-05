@@ -17,7 +17,7 @@ export interface ResponseRequest {
   localOnly?:true;
   localMessageId?:string;
   localSteering?:InlineSteering[];
-  localStage?:{originalHash:string;stagedHash:string};
+  localStage?:{originalHash:string;stagedHash:string;editId?:string;transport?:{environmentId:string;workspaceRoot:string;base:string}};
   localResume?:{prose?:InlineMessage[];bindingCheckpoint?:InlineBindingCheckpoint;turnIds?:string[];questionFollows?:InlineQuestionFollow[];incoming?:InlineSteering[];presentationTurns?:Record<string,InlineTurn>};
   /** Exact source lifecycle retained when importing an already existing run. */
   importTurn?:InlineTurn;
@@ -81,6 +81,10 @@ export function validateResponseRequest(input:unknown):ResponseRequest {
   const value=input as unknown as ResponseRequest;
   if(value?.localOnly!==undefined&&(value.localOnly!==true||value.version!==4||value.nativeProjection!==true||value.responseContainer!==true))throw Error('Invalid local response binding.');
   if(value?.localStage!==undefined&&(!value.localOnly||![value.localStage.originalHash,value.localStage.stagedHash].every(hash=>typeof hash==='string'&&/^[0-9a-f]{64}$/.test(hash))))throw Error('Invalid local staged edit.');
+  if(value.localStage?.transport){
+    const stage=value.localStage,route=stage.transport!;
+    if(!uuid.test(stage.editId??'')||typeof route.environmentId!=='string'||!route.environmentId||route.environmentId.length>256||typeof route.workspaceRoot!=='string'||!route.workspaceRoot||route.workspaceRoot.length>4096||typeof route.base!=='string'||!route.base.startsWith(`.t3-obsidian/clients/${value.vaultId}/`)||!uuid.test(route.base.slice(`.t3-obsidian/clients/${value.vaultId}/`.length)))throw Error('Invalid checked edit transport.');
+  }
   if(value?.importTurn!==undefined){const turn=value.importTurn;if(value.version!==4||turn.messageId!==value.messageId||typeof turn.turnId!=='string'||!turn.turnId||turn.turnId.length>200||!['running','completed','interrupted','error','cancelled'].includes(turn.state)||!Number.isFinite(Date.parse(turn.requestedAt??'')))throw Error('Invalid imported run evidence.');}
   if(value?.replyFolders!==undefined)validateReplyFolders(value.replyFolders);
   if(value?.nativeProjection!==undefined&&typeof value.nativeProjection!=='boolean')throw Error('Invalid native projection preference.');

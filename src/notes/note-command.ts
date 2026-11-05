@@ -3,7 +3,8 @@ import {isResponseCommand,validateResponseCommand,type ResponseCommand} from '..
 import {isRecoveryCommand,validateRecoveryCommand,type RecoveryCommand,type RecoveryCommandResult} from '../responses/recovery-command';
 import {isClientCommand,validateClientCommand,type ClientCommand,type ClientCommandResult} from '../app/client-command';
 import {validateDestinationSection} from './destination-section';
-import {validateEventCommand,type EventSubscriptionCommand,type EventCommandResult} from '../app/event-subscriptions';
+import {isThreadCommand,validateThreadCommand,type ThreadCommand,type ThreadDisplayResult} from '../conversations/thread-displays';
+import {isNoteEditCommand,validateNoteEditCommand,type NoteEditCommand} from './checked-note-edits';
 import {safeNotePath} from '../responses/response-model';
 import {isFolderCommand,validateFolderCommand,type FolderCommand,type FolderCommandResult} from '../projects/folder-command';
 import {isNoteContextCommand,validateNoteContextCommand,type NoteContextCommand,type NoteContextResult} from './note-context';
@@ -26,7 +27,6 @@ export function validateNoteCommand(input:unknown):NoteCommand {
   return value;
 }
 
-export type AgentCommand=RecoveryCommand|ResponseCommand|NoteCommand|EventSubscriptionCommand|FolderCommand|ClientCommand|NoteContextCommand;
-export type AgentCommandResult=RecoveryCommandResult|NoteCommandResult|EventCommandResult|FolderCommandResult|ClientCommandResult|NoteContextResult;
-export function isEventCommand(value:unknown):value is EventSubscriptionCommand{return isRecord(value)&&typeof value.kind==='string'&&(['reserve-thread-response','stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination','subscribe-job','subscribe','subscriptions','update-subscription','pause-subscription','resume-subscription','cancel-subscription'].includes(value.kind));}
-export function validateAgentCommand(value:unknown):AgentCommand{return isNoteContextCommand(value??{})?validateNoteContextCommand(value):isRecoveryCommand(value??{})?validateRecoveryCommand(value):isClientCommand(value??{})?validateClientCommand(value):isResponseCommand(value??{})?validateResponseCommand(value):isFolderCommand(value??{})?validateFolderCommand(value):isEventCommand(value??{})?validateEventCommand(value):validateNoteCommand(value);}
+export type AgentCommand=RecoveryCommand|ResponseCommand|NoteCommand|ThreadCommand|FolderCommand|ClientCommand|NoteContextCommand|NoteEditCommand;
+export type AgentCommandResult=RecoveryCommandResult|NoteCommandResult|ThreadDisplayResult|FolderCommandResult|ClientCommandResult|NoteContextResult|Record<string,unknown>;
+export function validateAgentCommand(value:unknown):AgentCommand{return isNoteEditCommand(value)?validateNoteEditCommand(value):isNoteContextCommand(value??{})?validateNoteContextCommand(value):isRecoveryCommand(value??{})?validateRecoveryCommand(value):isClientCommand(value??{})?validateClientCommand(value):isResponseCommand(value??{})?validateResponseCommand(value):isFolderCommand(value??{})?validateFolderCommand(value):isThreadCommand(value)?validateThreadCommand(value):validateNoteCommand(value);}

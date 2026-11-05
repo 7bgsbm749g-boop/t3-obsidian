@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,readFile,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,readFile,writeFile,rm,readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
@@ -32,10 +32,10 @@ if(args[0]==='auth'){
  console.log('Added project '+project.id);
 }else process.exitCode=1;
 `,{mode:0o700});
-  const commands:any[]=[],shared:any[]=[];
+  const commands:any[]=[],shared:any[]=[],projectMutations:any[]=[];
   const server=createServer(async(req,res)=>{
     try{
-      if(req.url==='/.well-known/t3/environment'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({environmentId:'test-environment',orchestrationProtocolVersion:2}));return;}
+      if(req.url==='/.well-known/t3/environment'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({environmentId:'test-environment',label:'Synthetic local',orchestrationProtocolVersion:2}));return;}
       assert.equal(req.headers.authorization,'Bearer test-only');
       res.setHeader('Content-Type','application/json');
       if(req.url?.endsWith('/shell')){
@@ -44,23 +44,25 @@ if(args[0]==='auth'){
       }else if(req.url?.endsWith('/websocket-ticket'))res.end(JSON.stringify({ticket:'ephemeral'}));
       else{
         let body='';for await(const chunk of req)body+=chunk;
-        commands.push(JSON.parse(body));res.end('{}');
+        const value=JSON.parse(body);if(req.url==='/api/projects/mutate'){projectMutations.push(value);const projects=JSON.parse(await readFile(catalogPath,'utf8'));const created={id:value.projectId,title:value.title,workspaceRoot:value.workspaceRoot};await mkdir(created.workspaceRoot,{recursive:true});await writeFile(catalogPath,JSON.stringify([...projects,created]));}else commands.push(value);res.end('{}');
       }
     }catch(error){res.statusCode=500;res.end(JSON.stringify({error:String(error)}));}
   });
   await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   await writeFile(join(dir,'userdata','server-runtime.json'),JSON.stringify({origin:`http://127.0.0.1:${(server.address() as any).port}`}));
-  const connection={native:true,executable:cliPath,host:'local',baseDir:dir};
-  let local:any={deviceId:randomUUID(),mode,connection},activeFile:any;
+  const url=`http://127.0.0.1:${(server.address() as any).port}`,connection={executable:'',host:'direct',transport:'direct',url,connectionId:'loopback',environmentId:'test-environment'};
+  shared.push({paired:[{id:'loopback',name:'This computer',url,environmentId:'test-environment'}],directProjects:(existing?[project]:[]).map(item=>({...item,connectionId:'loopback'}))});
+  let local:any={deviceId:randomUUID(),mode,connection,pairedSessions:{loopback:{url,environmentId:'test-environment',token:'test-only',expiresAt:Date.now()+600_000}}},activeFile:any;
   class Base{}
+  class FileAdapter {getBasePath(){return vaultRoot;}getFullPath(path:string){return join(vaultRoot,path);}}
   class Folder {path='/';name='';}
   const root=new Folder();
   const folders=new Map<string,Folder>();
-  const api={Platform:{isMobile:false},TFolder:Folder,TFile:Base,MarkdownView:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,
+  const api={FileSystemAdapter:FileAdapter,Platform:{isMobile:false},TFolder:Folder,TFile:Base,MarkdownView:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,
     Plugin:class {
       app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},
         workspace:{onLayoutReady:()=>{},on:()=>{},getActiveViewOfType:()=>activeFile?{file:activeFile}:undefined},
-        vault:{getAbstractFileByPath:(path:string)=>folders.get(path),getRoot:()=>root,getName:()=> 'Vault café with spaces',adapter:{getFullPath:(path:string)=>join(vaultRoot,path)},
+        vault:{getAbstractFileByPath:(path:string)=>folders.get(path),getRoot:()=>root,getName:()=> 'Vault café with spaces',adapter:new FileAdapter(),
           read:()=>assert.fail('Chat must not read Markdown'),readBinary:()=>assert.fail('Chat must not read images')},
       };
       async loadData(){return shared.at(-1)??{};}
@@ -71,8 +73,10 @@ if(args[0]==='auth'){
   const module={exports:{} as any};
   runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,
     require:(name:string)=>name==='obsidian'?api:realRequire(name),indexedDB,
-    global:{},process,Buffer,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
+    global:{},process,Buffer,fetch,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
     WebSocket:settingsSocket(undefined,undefined,async(tag,payload)=>{
+      if(tag==='filesystem.browse'){const parentPath=payload.partialPath.replace(/[\\/]+$/,'');return {parentPath,entries:(await readdir(parentPath,{withFileTypes:true})).filter(item=>item.isDirectory()).map(item=>({name:item.name,fullPath:join(parentPath,item.name)}))};}
+      if(tag==='projects.listEntries')return {entries:(await readdir(join(payload.cwd,payload.directoryPath),{withFileTypes:true})).map(item=>({path:item.name,kind:item.isDirectory()?'directory':'file'})),truncated:false};
       if(tag==='projects.ensureScratch'){const projects=JSON.parse(await readFile(catalogPath,'utf8'));if(!projects.some((p:any)=>p.id===noProject.id))await writeFile(catalogPath,JSON.stringify([...projects,noProject]));return {projectId:noProject.id};}
       if(tag==='orchestration.launchThread'){commands.push(payload);return {threadId:payload.threadId};}
       assert.equal(tag,'orchestration.dispatchCommand');commands.push(payload);return {};
@@ -81,10 +85,10 @@ if(args[0]==='auth'){
   const instances:any[]=[];
   const start=async()=>{const plugin=new module.exports.default();instances.push(plugin);await plugin.onload();return plugin;};
   const plugin=await start();
-  return {plugin,start,shared,commands,project,noProject,vaultRoot,root,
+  return {plugin,start,shared,commands,project,noProject,vaultRoot,root,projectMutations,
     addFolder:async(path:string)=>{const folder=new Folder();folder.path=path;folder.name=path.split('/').at(-1)!;folders.set(path,folder);await mkdir(join(vaultRoot,path),{recursive:true});},
     setNote:(path?:string)=>{activeFile=path?{path,extension:'md'}:undefined;},
-    cliCalls:async()=> (await readFile(callsPath,'utf8')).trim().split('\n').map(line=>JSON.parse(line)),
+    cliCalls:async()=>{try{return (await readFile(callsPath,'utf8')).trim().split('\n').map(line=>JSON.parse(line));}catch{return []; }},
     dispose:async()=>{
       for(const instance of instances)instance.onunload();
       await Promise.all(instances.map(instance=>instance.localDesktopAccess?.dispose()));
@@ -135,7 +139,7 @@ test('desktop unlinked notes choose an external workspace and persist the link o
   try{
     await h.addFolder('Fresh/deep');
     const external=join(h.vaultRoot,'..','External project');await mkdir(external);
-    h.plugin.pickFolderProject=async(_folder:any,name:string)=>{const location=await h.plugin.projectLocation({id:'local',name:'This computer',local:true});return location.create(external,name);};
+    h.plugin.pickFolderProject=async(_folder:any,name:string)=>{const location=await h.plugin.projectLocation({id:'loopback',name:'This computer'});return location.create(external,name);};
     await h.plugin.sendChat('Reply only OK',{path:'Fresh/deep/note.md',absolutePath:join(h.vaultRoot,'Fresh/deep/note.md')},{projectOverrideKey:'folder:new'});
     const link=h.plugin.settings.folderLinks.find((link:any)=>link.folderPath==='Fresh/deep');
     assert.equal(link.projectTitle,'deep');assert.equal(link.self,false);
@@ -143,7 +147,7 @@ test('desktop unlinked notes choose an external workspace and persist the link o
     assert.equal(h.commands[0].projectId,link.projectId);
     await h.plugin.sendChat('Another note',{path:'Fresh/deep/child/note.md',absolutePath:join(h.vaultRoot,'Fresh/deep/child/note.md')},{newThread:true});
     assert.equal(h.commands[2].projectId,link.projectId);
-    assert.equal((await h.cliCalls()).filter(args=>args[0]==='project').length,1);
+    assert.equal(h.projectMutations.length,1);assert.equal((await h.cliCalls()).length,0);
   }finally{await h.dispose();}
 });
 
@@ -151,12 +155,12 @@ test('desktop new workspace creation checks vault exclusion before making a dire
   const h=await harness(true);
   try{
     const parent=join(h.vaultRoot,'..'),root=join(parent,'New workspace');
-    const location=await h.plugin.projectLocation({id:'local',name:'This computer',local:true});
+    const location=await h.plugin.projectLocation({id:'loopback',name:'This computer'});
     const project=await location.create(root,'Created workspace',{parentPath:parent,name:'New workspace'});
     assert.equal(project.workspaceRoot,root);
     assert.equal((await location.browse(root)).parentPath,root);
     const retry=await location.create(root,'Created workspace',{parentPath:parent,name:'New workspace'});
-    assert.equal(retry.id,project.id);assert.equal((await h.cliCalls()).filter(args=>args[0]==='project').length,1);
+    assert.equal(retry.id,project.id);assert.equal(h.projectMutations.length,1);assert.equal((await h.cliCalls()).length,0);
     const blocked=join(h.vaultRoot,'blocked');
     await assert.rejects(location.create(blocked,'Blocked',{parentPath:h.vaultRoot,name:'blocked'}),/outside the Obsidian vault/);
     assert.ok(!(await location.browse(h.vaultRoot)).entries.some((entry:any)=>entry.name==='blocked'));
@@ -200,7 +204,7 @@ test('unlinked subfolder sends use No project without opening the workspace pick
     assert.equal(h.commands[0].projectId,h.noProject.id);
     assert.equal(h.shared.at(-1).folderLinks.length,0);
     const host=await h.plugin.localResponseTarget({project:h.noProject,connection:{environmentId:'test-environment'}});
-    assert.equal(host.workspaceRoot,h.vaultRoot);assert.notEqual(host.workspaceRoot,h.noProject.workspaceRoot);
+    assert.equal(host.workspaceRoot,h.noProject.workspaceRoot,'native replies no longer require a remote vault staging root');
   }finally{await h.dispose();}
 });
 
@@ -221,12 +225,12 @@ test('a saved vault connection keeps its original remote machine while new No pr
   const h=await harness(true);
   try{
     h.plugin.eventLocalEnvironmentId='test-environment';
-    h.plugin.settings.paired=[{id:'original',name:'Original computer',environmentId:'other-environment',url:'https://original.example'}];
+    h.plugin.settings.paired.push({id:'original',name:'Original computer',environmentId:'other-environment',url:'https://original.example'});
     h.plugin.settings.vaultHost={connectionId:'',environmentId:'other-environment',workspaceRoot:h.vaultRoot};
     assert.equal(h.plugin.vaultConnection().connectionId,'original');
     assert.equal(h.plugin.fallbackNoProjectMachine(),'original');
-    assert.equal(h.plugin.defaultNoProjectMachine(),'local');
+    assert.equal(h.plugin.defaultNoProjectMachine(),'loopback');
     h.plugin.settings.vaultHost.environmentId='test-environment';
-    assert.equal(h.plugin.defaultNoProjectMachine(),'local');
+    assert.equal(h.plugin.defaultNoProjectMachine(),'loopback');
   }finally{await h.dispose();}
 });

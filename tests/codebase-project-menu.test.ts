@@ -41,7 +41,7 @@ test('concurrent confirmed changes keep a later failed local update durable whil
  await assert.rejects(a,/Second link update failed/);await assert.rejects(b,/Second link update failed/);assert.equal(calls,2);assert.deepEqual(f.local.get(key),[second]);assert.equal(f.renames,0);assert.equal(f.deletes,0);
 });
 
-for(const modern of [false,true])test(`delete project uses the supported destructive style (${modern})`,async()=>{
- const f=await fixture(modern);f.bridge.projectModal(scope,true);
- assert.equal(f.buttons[1].appearance,modern?'destructive':'mod-warning');assert.equal(f.deletes,0);
+test('delete project uses the native destructive style on supported clients',async()=>{
+ const f=await fixture(true);f.bridge.projectModal(scope,true);
+ assert.equal(f.buttons[1].appearance,'destructive');assert.equal(f.deletes,0);
 });

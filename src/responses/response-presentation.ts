@@ -146,12 +146,6 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
       }
     }
     if(icon)for(const element of Array.from(root.querySelectorAll<HTMLElement>('[data-t3-tool-icon]')))if(!element.firstChild)icon(element,element.dataset.t3ToolIcon??'wrench');
-    // Native HTML blocks outside callouts do not get Obsidian's code-copy
-    // processor. Give those exact command/result blocks the same control.
-    for(const pre of Array.from(root.querySelectorAll<HTMLElement>('details[data-t3-tool-group] .send-to-t3-tool pre'))){
-      if(pre.querySelector('.copy-code-button'))continue;
-      const button=root.win.createEl('button');button.type='button';button.className='copy-code-button send-to-t3-tool-copy';button.textContent='Copy';button.setAttribute('aria-label','Copy code');pre.appendChild(button);
-    }
     for(const element of watched)if(!layout.has(element)){resize?.unobserve(element);watched.delete(element);}
     for(const element of layout)if(!watched.has(element)){resize?.observe(element);watched.add(element);}
     for(const actions of aligned)if(!actionsInUse.has(actions)){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');aligned.delete(actions);}
@@ -188,12 +182,6 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
     const container=owner(detail);let saved=toolChoices.get(container);if(!saved){saved=new Map();toolChoices.set(container,saved);}
     saved.set(id,detail.hasAttribute('open'));
   };
-  const copyTool=(event:Event)=>{
-    const button=(event.target as Element)?.closest?.<HTMLButtonElement>('.send-to-t3-tool-copy');if(!button)return;
-    const code=button.closest('pre')?.querySelector('code');if(!code)return;
-    event.preventDefault();event.stopPropagation();
-    void navigator.clipboard.writeText(code.textContent??'').then(()=>{button.textContent='Copied';},()=>{button.textContent='Copy failed';});
-  };
   const click=(event:Event)=>{
     const summary=(event.target as Element)?.closest?.('summary'),detail=summary?.parentElement;
     if(detail?.matches(detailSelector)){
@@ -204,7 +192,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
       const expanded=!detail.hasAttribute('open');saved.set(id,expanded);detail.toggleAttribute('open',expanded);
       event.preventDefault();event.stopImmediatePropagation();return;
     }
-    remember(event);copyTool(event);
+    remember(event);
   };
   const observer=new MutationObserver(records=>{if(records.some(record=>[...Array.from(record.addedNodes),...Array.from(record.removedNodes)].some(node=>node.nodeType===1)))schedule();});
   observer.observe(root.body,{childList:true,subtree:true});

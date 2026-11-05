@@ -4,7 +4,7 @@ import {mkdtemp,readFile,writeFile,rm,readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {workspaceChildPath,workspaceParentPath,projectCreationDefaults,rememberProjectCreationLocation,loadProjectCreationLocations} from '../src/projects/workspace-picker';
-import {createDesktopFolder} from '../src/connection/desktop';
+import {createDesktopFolder} from './fixtures/baseline-native/desktop';
 
 test('workspace folder names stay within their parent on Linux and Windows',()=>{
   assert.equal(workspaceChildPath('/work','Café project'),'/work/Café project');

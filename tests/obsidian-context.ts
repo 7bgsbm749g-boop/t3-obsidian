@@ -12,6 +12,7 @@ export function runInNewContext(code:string,context:Context={},options?:RunningC
     // Keep the original strict fixture loader for every Node module.
     if(hostEditor.test(id))return hostRequire(id);
     const value=sourceRequire(id);
+    if(id==='obsidian'&&value&&!value.FileSystemAdapter)value.FileSystemAdapter=class FileSystemAdapter {};
     if(id==='obsidian'&&value?.Platform&&typeof value.Platform.isDesktop!=='boolean')value.Platform.isDesktop=!value.Platform.isMobile;
     return value;
   };

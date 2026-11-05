@@ -75,7 +75,7 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
  const previousConnects=connects;p.pairedSessions[c.id].expiresAt=0;await Promise.all([p.sessionFor(c.id),p.sessionFor(c.id)]);assert.equal(connects,previousConnects+1,'Renewal is coalesced');
  // A transport failure must not erase a valid device account.
  p.nativeToken=undefined;nativeOffline=true;await assert.rejects(p.nativeCredential(),/Cannot reach T3 sign-in/);assert.equal(p.nativeAccount.userId,'user-native');nativeOffline=false;
- settingsTab.display=()=>{ui.text=[];ui.buttons=[];ui.inputs=[];settingsTab.cloudUI(element);};settingsTab.display();
+ settingsTab.update=()=>{ui.text=[];ui.buttons=[];ui.inputs=[];settingsTab.cloudUI(element);};settingsTab.refresh();
  // The screenshot's expired account state must become one coherent sign-in UI.
  verified=false;p.nativeToken=undefined;p.pairedSessions[c.id].expiresAt=0;
  await assert.rejects(p.sessionFor(c.id),(error:any)=>error.signInRequired===true);

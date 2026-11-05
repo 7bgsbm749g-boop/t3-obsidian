@@ -8,12 +8,10 @@ import {hiddenInlineMarkerExtension} from '../../src/conversations/inline-marker
 import {installResponsePresentation} from '../../src/responses/response-presentation';
 import {LocalResponseManager} from '../../src/responses/local-response-manager';
 import {responseBindingRequests,updateResponseBindingData} from '../../src/responses/response-binding-data';
-import {desktopDefaults,desktopEnvironment,desktopThreadAccess,runDesktopWithAccess,uuid5} from '../../src/connection/desktop';
+import {desktopDefaults,desktopEnvironment,desktopThreadAccess,runDesktopWithAccess,uuid5} from '../fixtures/baseline-native/desktop';
 import {responseAnchor} from '../../src/responses/native-response-projection';
 import {contentHash} from '../../src/responses/completion';
 import {loadSmartSend,rememberResponse} from '../../src/notes/smart-send';
-import {EventSubscriptions} from '../../src/app/event-subscriptions';
-import {projectEventNote} from '../../src/app/event-note-projection';
 import {AUTO_THREAD_TITLE} from '../../src/conversations/thread-title';
 import {CodebaseBridge} from '../../src/projects/codebase-native';
 import type {ResponseRequest} from '../../src/responses/response-model';
@@ -26,7 +24,7 @@ class BridgeHost extends Plugin {async onload(){}}
  * No notification is dispatched. Cleanup uses native thread and vault APIs. */
 export default class ReviewCorrectionsLab extends Plugin {
   private root='';private access?:ThreadAccess;private threadId?:string;
-  private local?:LocalResponseManager;private events?:EventSubscriptions;
+  private local?:LocalResponseManager;
   private timer?:number;private errors:string[]=[];private running=false;
   async onload(){
     this.root=path.dirname((this.app.vault.adapter as any).getFullPath(''));
@@ -59,23 +57,17 @@ export default class ReviewCorrectionsLab extends Plugin {
     },deviceFinalNoteIO(this.app,()=>true));
     const initial='# Review corrections\n\nUser source.\n\n'+responseAnchor(id)+'\n\nUser tail.\n';
     const file=await this.app.vault.create(note,initial),leaf=this.app.workspace.getLeaf(false);await leaf.openFile(file);await leaf.setViewState({type:'markdown',state:{file:note,mode:'source',source:false}});
-    const snapshot=async()=>({path:note,content:await this.app.vault.read(file),properties:{}});
-    this.events=new EventSubscriptions({load:async()=>undefined,save:async()=>{},notes:async()=>[await snapshot()],projectNote:value=>projectEventNote(value,smart,responseBindingRequests(bindings)),validateTarget:async()=>{},isBusy:async()=>false,prepare:async()=>{throw Error('No external event work is allowed.');},deliver:async()=>{throw Error('No external event work is allowed.');},recording(){},now:Date.now,id:()=>crypto.randomUUID()});
-    await this.events.initialize();await this.events.command({version:1,id:crypto.randomUUID(),kind:'subscribe',target:{threadId:'synthetic-unrelated-observer',projectId:project.id,environmentId},scope:{path:note,kind:'note',recursive:false},filter:{events:['modify']}});
-    this.registerEvent(this.app.vault.on('modify',changed=>{if(changed.path===note)void snapshot().then(value=>this.events?.observe('modify',note,value)).catch(error=>this.errors.push(String(error)));}));
     const binding:ResponseRequest={version:4,localOnly:true,nativeProjection:true,responseContainer:true,independent:true,id,initialOwner:crypto.randomUUID(),vaultId,host:{environmentId,workspaceRoot:(this.app.vault.adapter as any).getFullPath(''),directory:'.obsidian/inline'},notePath:note,threadId:this.threadId,messageId:uuid5(requestId,'message'),projectId:project.id,threadEnvironmentId:environmentId,initialHash:contentHash(''),createdAt:new Date().toISOString(),intermediateMode:'collapse',threadTitle:AUTO_THREAD_TITLE};
     await this.local.register(binding);this.timer=window.setInterval(()=>{native.refresh();this.local?.tick();},100);
     const prompt='This is a bounded synthetic plugin release test. Do not use tools, inspect files, delegate, or change settings. Reply exactly REVIEW_CORRECTIONS_OK.';
     await runDesktopWithAccess(connection,['start','--project',project.id,'--title',AUTO_THREAD_TITLE,'--request-id',requestId,'--prompt-file','-'],prompt,this.access);
     await this.until(()=>this.local!.status(id)?.finalSaved===true,'native final save');
-    await this.events.observe('modify',note,await snapshot());
-    const silentFinal=this.events.snapshot.notifications.length===0,saved=await this.app.vault.read(file),view=leaf.view as MarkdownView;
+    const saved=await this.app.vault.read(file),view=leaf.view as MarkdownView;
     await this.until(()=>issued===closed,'completion access revocation');
     let title='';await this.until(async()=>{const state=readMetadataSnapshot(await this.access!.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'));title=state.thread.title??'';return !!title&&title!==AUTO_THREAD_TITLE;},'automatic local title');
-    view.editor.replaceRange('\nIndependent user edit.',view.editor.offsetToPos(view.editor.getValue().length));await view.save();await this.events.observe('modify',note,await snapshot());
-    const userObserved=this.events.snapshot.notifications.length===1;
-    const result:any={checks:{finalVisible:view.editor.getValue().includes('REVIEW_CORRECTIONS_OK'),finalSaved:saved.includes('REVIEW_CORRECTIONS_OK'),finalAnchorRemoved:!saved.includes(responseAnchor(id)),finalSaveSilent:silentFinal,userEditObserved:userObserved,provenanceSaved:provenance>0,completionAccessClosed:issued>0&&issued===closed,localAutomaticTitle:title!==AUTO_THREAD_TITLE},title,issued,closed,threadId:this.threadId};
-    this.write('DELIVERY.json',result);this.events.stop();this.local.dispose();window.clearInterval(this.timer);this.timer=undefined;
+    view.editor.replaceRange('\nIndependent user edit.',view.editor.offsetToPos(view.editor.getValue().length));await view.save();
+    const result:any={checks:{finalVisible:view.editor.getValue().includes('REVIEW_CORRECTIONS_OK'),finalSaved:saved.includes('REVIEW_CORRECTIONS_OK'),finalAnchorRemoved:!saved.includes(responseAnchor(id)),provenanceSaved:provenance>0,completionAccessClosed:issued>0&&issued===closed,localAutomaticTitle:title!==AUTO_THREAD_TITLE},title,issued,closed,threadId:this.threadId};
+    this.write('DELIVERY.json',result);this.local.dispose();window.clearInterval(this.timer);this.timer=undefined;
     await this.storageChecks(result);
     result.checks.noErrors=this.errors.length===0;result.errors=this.errors;
     this.write('RESULT.json',result);fs.writeFileSync(path.join(this.root,'result.png'),(await require('@electron/remote').getCurrentWebContents().capturePage()).toPNG());
@@ -100,7 +92,7 @@ export default class ReviewCorrectionsLab extends Plugin {
     await this.app.workspace.getLeaf(false).openFile(this.app.vault.getFileByPath('Review corrections.md')!);
   }
   private async cleanup(){
-    if(this.timer!==undefined)window.clearInterval(this.timer);this.events?.stop();this.local?.dispose();const remainingThreadIds:string[]=[];
+    if(this.timer!==undefined)window.clearInterval(this.timer);this.local?.dispose();const remainingThreadIds:string[]=[];
     if(this.threadId&&this.access){
       const state=readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'));
       for(const turn of Object.values(state.thread.turns??{}) as any[])if(turn.state==='running')await this.access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:crypto.randomUUID(),threadId:this.threadId,turnId:turn.turnId,createdAt:new Date().toISOString()});

@@ -4,12 +4,13 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from './obsidian-context';
 import {webcrypto,randomUUID} from 'node:crypto';
 import {commandId} from '../src/connection/direct';
-import {validateAgentCommand,isEventCommand} from '../src/notes/note-command';
+import {validateAgentCommand} from '../src/notes/note-command';
+import {isThreadCommand} from '../src/conversations/thread-displays';
 
 const source={threadId:'thread',projectId:'project',environmentId:'machine'};
 const command=()=>({version:1,id:randomUUID(),kind:'reserve-thread-response',source,messageId:randomUUID(),responses:[{path:'Note.md',bindingId:randomUUID()}]});
 test('stream reservation validation rejects ambiguous destinations and invalid identities at the command boundary',()=>{
-  const valid=command();assert.equal(isEventCommand(valid),true);assert.equal(validateAgentCommand(valid),valid);
+  const valid=command();assert.equal(isThreadCommand(valid),true);assert.equal(validateAgentCommand(valid),valid);
   for(const change of [{id:'bad'},{messageId:'bad\nmessage'},{source:{...source,environmentId:''}},{responses:[]},{responses:[{path:'../Note.md',bindingId:randomUUID()}]},{responses:[{path:'Note.md',bindingId:'bad'}]},{responses:[...valid.responses,...valid.responses]}, {responses:Array.from({length:33},(_,i)=>({path:i+'.md',bindingId:randomUUID()}))}])assert.throws(()=>validateAgentCommand({...valid,...change}));
 });
 

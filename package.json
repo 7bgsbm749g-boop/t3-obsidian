@@ -1,6 +1,6 @@
 {
   "name": "t3-obsidian",
-  "version": "0.0.397",
+  "version": "0.0.398",
   "private": true,
   "description": "Bring T3 Code into your vault. Send notes as prompts, stream replies into the editor, and more.",
   "license": "MIT",
@@ -22,7 +22,6 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/proper-lockfile": "^4.1.4",
     "esbuild": "^0.25.0",
     "fake-indexeddb": "^6.2.4",
     "obsidian": "latest",
@@ -30,7 +29,9 @@
     "typescript": "^5.0.0",
     "eslint": "9.39.5",
     "typescript-eslint": "8.72.1",
-    "eslint-plugin-obsidianmd": "file:scripts/vendor/eslint-plugin-obsidianmd-2c05f10a347f.tgz"
+    "eslint-plugin-obsidianmd": "file:scripts/vendor/eslint-plugin-obsidianmd-2c05f10a347f.tgz",
+    "proper-lockfile": "4.1.2",
+    "@types/proper-lockfile": "4.1.4"
   },
   "dependencies": {
     "@codemirror/commands": "6.10.0",
@@ -58,7 +59,6 @@
     "micromark": "4.0.2",
     "micromark-extension-gfm-strikethrough": "2.1.0",
     "micromark-util-subtokenize": "2.1.0",
-    "proper-lockfile": "^4.1.2",
     "remark-parse": "^11.0.0",
     "unified": "^11.0.5"
   }

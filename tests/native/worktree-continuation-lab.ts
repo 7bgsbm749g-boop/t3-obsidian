@@ -9,7 +9,7 @@ import {installResponsePresentation} from '../../src/responses/response-presenta
 import {LocalResponseManager} from '../../src/responses/local-response-manager';
 import {DirectInlinePreview} from '../../src/responses/direct-inline-preview';
 import {responseBindingRequests,updateResponseBindingData} from '../../src/responses/response-binding-data';
-import {desktopDefaults,desktopEnvironment,desktopThreadAccess,start,uuid5} from '../../src/connection/desktop';
+import {desktopDefaults,desktopEnvironment,desktopThreadAccess,start,uuid5} from '../fixtures/baseline-native/desktop';
 import {readNewThreadDefaults} from '../../src/conversations/model-defaults';
 import {applyThreadItem} from '../../src/conversations/inline-thread';
 import {delegatedTurnIds} from '../../src/conversations/inline-delegation';

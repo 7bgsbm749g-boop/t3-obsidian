@@ -4,8 +4,8 @@ import {win32,posix,join} from 'node:path';
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {createServer} from 'node:http';
-import {selectDesktopCli,desktopLauncher,DESKTOP_LAUNCHER_MAX_BYTES} from '../src/connection/desktop-cli';
-import {runDesktop,desktopThreadAccess} from '../src/connection/desktop';
+import {selectDesktopCli,desktopLauncher,DESKTOP_LAUNCHER_MAX_BYTES} from './fixtures/baseline-native/desktop-cli';
+import {runDesktop,desktopThreadAccess} from './fixtures/baseline-native/desktop';
 
 const home='C:\\Users\\T3 user & (work)!';
 const launcher=win32.join(home,'.t3/bin/t3.cmd');

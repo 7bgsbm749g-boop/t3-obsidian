@@ -1,6 +1,6 @@
-import {hasControlCharacters,isRecord} from '../shared/values';
+import {isRecord} from '../shared/values';
 export interface ClientCommand {
-  version:1;id:string;kind:'client-status'|'send-failure-log'|'reload-client'|'archive-reply-imports';
+  version:1;id:string;kind:'client-status'|'send-failure-log'|'reload-client';
   projectId?:string;environmentId?:string;archiveDirectory?:string;
   since?:string;
   releaseVersion?:string;runtimeSha256?:Record<'main.js'|'manifest.json'|'styles.css',string>;
@@ -15,15 +15,13 @@ export interface ClientCommandResult {
   codeRangeCache?:ReturnType<typeof import('../responses/reply-html').markdownCodeCacheStatus>;
   responseHost?:{active:false;retired:true};
 }
-export function isClientCommand(value:unknown):value is ClientCommand{return isRecord(value)&&typeof value.kind==='string'&&(['client-status','send-failure-log','reload-client','archive-reply-imports'].includes(value.kind??''));}
+export function isClientCommand(value:unknown):value is ClientCommand{return isRecord(value)&&typeof value.kind==='string'&&(['client-status','send-failure-log','reload-client'].includes(value.kind??''));}
 export function validateClientCommand(input:unknown):ClientCommand {
   if(!isRecord(input))throw Error('Invalid client command.');
   // The checks below establish this complete persisted command contract.
   const value=input as unknown as ClientCommand;
   if(value?.version!==1||!isClientCommand(value)||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.id??''))throw Error('Invalid client command.');
-  if(value.kind==='archive-reply-imports'){
-    if(typeof value.projectId!=='string'||!value.projectId||typeof value.environmentId!=='string'||!value.environmentId||typeof value.archiveDirectory!=='string'||!value.archiveDirectory||value.archiveDirectory.startsWith('/')||value.archiveDirectory.includes('\\')||(hasControlCharacters(value.archiveDirectory)||/[:]/.test(value.archiveDirectory))||value.archiveDirectory.split('/').some((part:string)=>!part||part==='.'||part==='..'))throw Error('Moving old reply files requires an exact linked project and a directory inside it.');
-  }else if(value.projectId!==undefined||value.environmentId!==undefined||value.archiveDirectory!==undefined)throw Error('Archive options require archive-reply-imports.');
+  if(value.projectId!==undefined||value.environmentId!==undefined||value.archiveDirectory!==undefined)throw Error('Old attachment cleanup was removed.');
   if(value.since!==undefined&&(value.kind!=='send-failure-log'||typeof value.since!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value.since)||!Number.isFinite(Date.parse(value.since))))throw Error('Failure log requires a UTC timestamp.');
   if(value.kind==='reload-client'){
     const hashes=value.runtimeSha256;

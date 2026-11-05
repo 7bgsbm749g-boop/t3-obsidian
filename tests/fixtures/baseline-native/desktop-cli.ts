@@ -1,4 +1,5 @@
-import {hasControlCharacters} from '../shared/values';
+// Historical test/lab adapter only. Never import this file from src or ship it in the plugin.
+import {hasControlCharacters} from '../../../src/shared/values';
 
 /** T3 rewrites its Windows launcher when the desktop app moves or updates.
  * Read that launcher again for each invocation; never cache a versioned target. */

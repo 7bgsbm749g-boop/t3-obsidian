@@ -5,7 +5,7 @@ import {EditorView,keymap,lineNumbers} from '@codemirror/view';
 import {language,syntaxHighlighting,HighlightStyle,indentOnInput,foldGutter,type LanguageSupport} from '@codemirror/language';
 import {insertNewlineAndIndent,indentMore,indentLess} from '@codemirror/commands';
 import {tags} from '@lezer/highlight';
-import {codeLanguage,codeReadingFence,plainTransfer,rawCodeChange,codeTabSize,MAX_CODE_PARSE_LENGTH,type CodeViewType} from './code-language';
+import {codeLanguage,codeReadingFence,rawCodeChange,codeTabSize,MAX_CODE_PARSE_LENGTH,type CodeViewType} from './code-language';
 import type {NativeLanguageViews} from './language-views';
 import {codePlaintext} from './language-plaintext';
 
@@ -19,6 +19,7 @@ interface NativeReadingMode extends MarkdownPreviewView {
   getFoldInfo():{folds:unknown[];lines:number};applyFoldInfo():void;
   setEphemeralState(state:CodeEphemeralState):void;onResize():void;
 }
+// Let CodeMirror handle normal clipboard behavior; omit Markdown-specific conversions.
 const clipboardHooks=EditorView as typeof EditorView&{clipboardCopyHook?:unknown;clipboardPasteHook?:unknown};
 function nativeEdit(view:MarkdownView):NativeEditMode{
   const value:unknown=Reflect.get(view,'editMode');if(!isRecord(value))throw Error('Native editor mode is unavailable.');return value as unknown as NativeEditMode;
@@ -39,7 +40,7 @@ class NativeCodeView extends MarkdownView {
     this.contentEl.classList.add('t3-code-language-view');
     const roots=(name:string)=>{const methods:Array<(this:NativeEditMode)=>Extension[]>=[];for(let prototype:unknown=Object.getPrototypeOf(edit);isRecord(prototype);prototype=Object.getPrototypeOf(prototype) as unknown){const member:unknown=Reflect.get(prototype,name);if(Object.hasOwn(prototype,name)&&typeof member==='function')methods.push(member as (this:NativeEditMode)=>Extension[]);}return methods;};
     const local=roots('buildLocalExtensions'),dynamic=roots('getDynamicExtensions');
-    if(local.length<2||dynamic.length<2||typeof edit.set!=='function'||typeof edit.getLocalExtensions!=='function'||typeof edit.updateOptions!=='function'||typeof preview.set!=='function'||typeof preview.clear!=='function'||typeof preview.get!=='function'||(['getScroll','applyScroll','setEphemeralState','onResize'] as const).some(method=>typeof preview[method]!=='function')||!clipboardHooks.clipboardCopyHook||!clipboardHooks.clipboardPasteHook)throw Error('Required per-instance native editor methods are absent');
+    if(local.length<2||dynamic.length<2||typeof edit.set!=='function'||typeof edit.getLocalExtensions!=='function'||typeof edit.updateOptions!=='function'||typeof preview.set!=='function'||typeof preview.clear!=='function'||typeof preview.get!=='function'||(['getScroll','applyScroll','setEphemeralState','onResize'] as const).some(method=>typeof preview[method]!=='function'))throw Error('Required per-instance native editor methods are absent');
     const genericLocal=local[local.length-1],genericDynamic=dynamic[dynamic.length-1];
     const colors=HighlightStyle.define([
       {tag:tags.keyword,color:'var(--color-purple)'},
@@ -49,11 +50,7 @@ class NativeCodeView extends MarkdownView {
       {tag:tags.typeName,color:'var(--color-yellow)'},
     ]);
     const sizePolicy=EditorState.transactionExtender.of(transaction=>this.codeTransaction(transaction));
-    const clipboard=Prec.highest(EditorView.domEventHandlers({
-      paste:(event,cm)=>{event.preventDefault();const raw=plainTransfer(event.clipboardData);if(raw!==undefined)cm.dispatch({...cm.state.replaceSelection(raw),userEvent:'input.paste',scrollIntoView:true});return true;},
-      drop:(event,cm)=>{event.preventDefault();const raw=plainTransfer(event.dataTransfer);if(raw!==undefined&&raw!==''){const position=cm.posAtCoords({x:event.clientX,y:event.clientY})??cm.state.selection.main.from;cm.dispatch({changes:{from:position,insert:raw},userEvent:'input.drop',scrollIntoView:true});}return true;},
-    }));
-    this.codeExtensions=[EditorState.lineSeparator.of('\n'),clipboard,sizePolicy,Prec.highest(EditorView.contentAttributes.of({spellcheck:'false',autocorrect:'off',autocapitalize:'off'})),Prec.highest(keymap.of([{key:'Enter',run:insertNewlineAndIndent},{key:'Tab',run:indentMore,shift:indentLess}])),EditorView.editorAttributes.of({'data-language-view':type})];
+    this.codeExtensions=[EditorState.lineSeparator.of('\n'),sizePolicy,Prec.highest(EditorView.contentAttributes.of({spellcheck:'false',autocorrect:'off',autocapitalize:'off'})),Prec.highest(keymap.of([{key:'Enter',run:insertNewlineAndIndent},{key:'Tab',run:indentMore,shift:indentLess}])),EditorView.editorAttributes.of({'data-language-view':type})];
     const generic=genericLocal.call(edit).filter(provider=>{const value:unknown=provider;return !isRecord(value)||value.facet!==clipboardHooks.clipboardCopyHook&&value.facet!==clipboardHooks.clipboardPasteHook;});
     edit.getLocalExtensions=()=>[generic,this.codeExtensions,this.compartment.of(this.syntaxExtensions()),syntaxHighlighting(colors)];
     edit.localExtensions=null;

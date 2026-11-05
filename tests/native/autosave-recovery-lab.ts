@@ -9,7 +9,7 @@ import {hiddenInlineMarkerExtension} from '../../src/conversations/inline-marker
 import {installResponsePresentation} from '../../src/responses/response-presentation';
 import {LocalResponseManager} from '../../src/responses/local-response-manager';
 import {responseBindingRequests,updateResponseBindingData} from '../../src/responses/response-binding-data';
-import {desktopDefaults,desktopEnvironment,desktopThreadAccess,start} from '../../src/connection/desktop';
+import {desktopDefaults,desktopEnvironment,desktopThreadAccess,start} from '../fixtures/baseline-native/desktop';
 import {readNewThreadDefaults} from '../../src/conversations/model-defaults';
 import {applyThreadItem} from '../../src/conversations/inline-thread';
 import {importRuns} from '../../src/conversations/run-import';

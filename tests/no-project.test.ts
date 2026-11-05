@@ -6,7 +6,7 @@ import {readDirect,sendDirect,commandId} from '../src/connection/direct';
 import type {Request} from '../src/app/bridge';
 import {noteThreadTitle} from '../src/conversations/thread-title';
 import {settingsSocket} from './rpc-fixture';
-import {availableDesktopEnvironment} from '../src/connection/desktop';
+import {availableDesktopEnvironment} from './fixtures/baseline-native/desktop';
 import {createServer} from 'node:http';
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';

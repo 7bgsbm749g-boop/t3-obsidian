@@ -5,7 +5,6 @@ import {initialRegion} from '../src/conversations/inline-thread';
 import type {ResponseRequest} from '../src/responses/response-model';
 import {contentHash} from '../src/responses/completion';
 import {coordinatedDeliveryLimitations} from '../src/responses/coordinated-delivery-gates';
-import {eventContent} from '../src/app/event-subscriptions';
 import {historyFixture} from './fixtures/stream-history';
 import {streamBlock} from '../src/responses/stream-block';
 import {nativeCommitMatches,readNativeCommitProof} from '../src/responses/native-response-commit';

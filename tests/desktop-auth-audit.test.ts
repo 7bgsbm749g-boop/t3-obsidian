@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,readFile,writeFile,stat,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {recordDesktopAuth,DESKTOP_AUTH_AUDIT_MAX_BYTES} from '../src/connection/desktop-auth-audit';
+import {recordDesktopAuth,DESKTOP_AUTH_AUDIT_MAX_BYTES} from './fixtures/baseline-native/desktop-auth-audit';
 
 test('local credential audit retains closure reason and caller, excludes extra fields, and rotates bounded files',async()=>{
   const root=await mkdtemp(join(tmpdir(),'t3-auth-audit-')),path=join(root,'userdata/logs/obsidian-stream-auth.jsonl');

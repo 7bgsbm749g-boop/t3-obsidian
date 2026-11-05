@@ -11,17 +11,13 @@ The same command checks the static entry graph for eager Node imports and
 checks CSS for expensive `:has()` selectors, partially supported layout
 features, and undocumented priority overrides. Desktop adapters remain lazy;
 mobile does not import their filesystem, process, HTTP-server or timer APIs.
-Every Node value import is deferred behind an explicit `Platform.isDesktop`
-guard in the adapter that uses it. Do not exempt desktop filenames from the
-rule. Express Node types with compiler-only `import('node:...')` type queries;
-the directory scanner also flags type-only static import declarations.
-Editor SDK modules use ES imports from the host's shared runtime. Native
-language view adapters load after their SDK version check and before their
-synchronous view factories register; language grammars remain lazy.
-Keep version guards as direct `if (requireApiVersion(...))` branches so both
-older and current directory scanners can verify new API calls. The legacy
-`display()` fallback remains virtual for older clients and host integrations;
-a deprecation advisory on that compatibility branch is intentional.
+The production plugin does not import filesystem, process, or HTTP-server
+modules, enumerate vault notes, or access the clipboard. Only desktop hashing
+and timers use guarded Node imports. Agent commands and edit proposals use
+T3 Connect file RPCs; private receipts and snapshots use IndexedDB. Native
+indexed settings require Obsidian 1.13.0; no legacy settings renderer remains.
+Historical native test adapters are fixtures, never production imports. The
+build refuses test adapters and retired filesystem dependencies in its inputs.
 `npm test` runs and caches these gates before the affected tests. Cache keys
 include installed dependency bytes, runtime, source and configuration. Passing
 bounded test batches retain their own logs; failed batches have no success
@@ -30,10 +26,12 @@ pushes and pull requests do not run a GitHub build workflow.
 
 ## Necessary capabilities and overrides
 
-The plugin uses authenticated network requests and WebSockets for T3, clipboard
-access for explicit copy actions, and vault operations for requested note and
-response changes. Desktop-only connection and storage adapters also need Node
-filesystem and process APIs. These are product capabilities, not unused code.
+The plugin uses authenticated network requests and WebSockets for T3 and
+Obsidian's APIs for requested note changes and safe final saves. It does not
+start a command service on a local port. Normal editor clipboard behavior is
+provided by Obsidian; plugin copy buttons and custom link suggestions were
+removed. Note, property, folder and job event emissions were removed. Reply
+streaming and explicit following remain.
 Clerk account requests use Obsidian `requestUrl`. The T3 browser transport keeps
 abort, redirect rejection and incremental body limits, which `requestUrl` does
 not expose. It uses the main window's fetch explicitly. UI listeners and timers

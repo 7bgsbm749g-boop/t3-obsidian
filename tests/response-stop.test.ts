@@ -108,3 +108,18 @@ test('an active exact bound turn is interrupted after checking its canonical sta
   await interruptStoppedResponse(async()=>({origin:'https://test',api:async(_path,payload)=>{if(payload){commands.push(payload);return {};}return {thread:{id:'thread',projectId:'project',messages:[],activities:[],latestTurn:{turnId:'active',state:'running'},session:{status:'running',activeTurnId:'active'}}};}}),randomUUID(),'thread','active');
   assert.equal(commands.length,1);assert.equal(commands[0].turnId,'active');
 });
+
+test('a run finishing between the status read and interrupt is confirmed without replay or stopping a newer run',async()=>{
+  for(const completed of [false,true]){
+    let reads=0,interrupts=0;
+    const failure=Error('The run finished before the interrupt');
+    const access={origin:'https://synthetic.invalid',api:async(_route:string,payload?:unknown)=>{
+      if(payload){interrupts++;throw failure;}
+      reads++;
+      return {thread:{id:'thread',projectId:'project',messages:[],activities:[],latestTurn:{turnId:reads>1?'newer':'original',state:'running'},turns:reads>1&&completed?{original:{turnId:'original',state:'completed',requestedAt:'2026-10-10T00:00:00Z'}}:{},checkpoints:reads>1&&completed?[{turnId:'original',status:'ready',checkpointRef:'exact',completedAt:'2026-10-10T00:00:01Z'}]:[],session:{status:'running',activeTurnId:reads>1?'newer':'original'}}};
+    }};
+    const work=interruptStoppedResponse(async()=>access,'11111111-1111-4111-8111-111111111111','thread','original',1000,undefined,'project');
+    if(completed)await work;else await assert.rejects(work,error=>error===failure);
+    assert.equal(interrupts,1);assert.equal(reads,2);
+  }
+});

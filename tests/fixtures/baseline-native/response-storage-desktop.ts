@@ -1,3 +1,4 @@
+// Historical test/lab adapter only. Never import this file from src or ship it in the plugin.
 import {Platform} from 'obsidian';
 let randomUUID:typeof import('node:crypto').randomUUID;
 let fs:typeof import('node:fs').promises;
@@ -21,11 +22,11 @@ function loadDesktop():Promise<void>{
   throw Error('This feature requires Obsidian on desktop.');
 }
 
-import {errorCode,toError} from '../shared/values';
+import {errorCode,toError} from '../../../src/shared/values';
 
-import {DesktopInlineReadCache,inlineFileVersion} from '../conversations/inline-file-cache-desktop';
-import {existingPrivateStorage} from '../storage/private-storage-desktop';
-import type {ResponseStorageFiles} from './response-record';
+import {DesktopInlineReadCache,inlineFileVersion} from './inline-file-cache-desktop';
+import {existingPrivateStorage} from './private-storage-desktop';
+import type {ResponseStorageFiles} from '../../../src/responses/response-record';
 const inlineReadCache=new DesktopInlineReadCache();
 
 export function localInlineFiles(root:string,directory:string,storageRoot?:string):ResponseStorageFiles&{requests():Promise<string[]>;listSidecars(path:string):Promise<string[]>}{

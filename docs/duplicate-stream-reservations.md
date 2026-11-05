@@ -1,5 +1,7 @@
 # Duplicate streams after importing future runs
 
+Historical investigation. Current reply following and command transport are documented in [Checked note edits](checked-note-edits.md); event subscriptions and the native filesystem host are retired.
+
 Sending from a note and following that thread's future runs can race across
 devices. T3 exposes the new run before Obsidian Sync delivers the sending
 device's response binding to the watcher. Both paths then attach the same

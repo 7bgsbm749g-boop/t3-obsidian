@@ -4,7 +4,8 @@ import {validateDestinationSection} from '../notes/destination-section';
 import {commandId} from '../connection/direct';
 import {safeNotePath,type ResponseRequest} from '../responses/response-model';
 import {turnForMessage,type InlineMessage,type InlineThreadState} from './inline-thread';
-import type {EventTarget} from '../app/event-subscriptions';
+export interface ThreadTarget {threadId:string;projectId:string;environmentId:string}
+type EventTarget=ThreadTarget;
 import {isRunInput} from './run-input';
 import {isT3MessageId} from '../connection/t3-message-id';
 

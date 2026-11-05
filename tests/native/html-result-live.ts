@@ -3,7 +3,7 @@ import {expectRecord} from '../wire-fixture';
  * is dispatched. Short-lived local credentials and signed URLs stay in memory. */
 import assert from 'node:assert/strict';
 import {writeFile} from 'node:fs/promises';
-import {desktopThreadAccess} from '../../src/connection/desktop';
+import {desktopThreadAccess} from '../fixtures/baseline-native/desktop';
 import {HtmlResultStore} from '../../src/responses/html-result-store';
 import {htmlRenderFromToolItem,readHtmlResult,renderHtmlResult} from '../../src/responses/html-results';
 import {contentHash} from '../../src/responses/completion';

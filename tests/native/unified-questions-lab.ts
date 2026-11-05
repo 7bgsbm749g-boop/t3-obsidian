@@ -7,7 +7,7 @@ import {hiddenInlineMarkerExtension} from '../../src/conversations/inline-marker
 import {installResponsePresentation} from '../../src/responses/response-presentation';
 import {LocalResponseManager} from '../../src/responses/local-response-manager';
 import {responseBindingRequests,updateResponseBindingData,type ResponseBindingData} from '../../src/responses/response-binding-data';
-import {desktopDefaults,desktopEnvironment,desktopThreadAccess,start,uuid5} from '../../src/connection/desktop';
+import {desktopDefaults,desktopEnvironment,desktopThreadAccess,start,uuid5} from '../fixtures/baseline-native/desktop';
 import {readNewThreadDefaults} from '../../src/conversations/model-defaults';
 import {contentHash} from '../../src/responses/completion';
 import {QuestionController} from '../../src/interaction/question-controller';

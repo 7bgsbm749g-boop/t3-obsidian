@@ -140,7 +140,7 @@ test('agent failures preserve UI-created links and do not create missing self pr
   try{
     const modal=await h.open();await h.button(modal,'Link').click();const saved=JSON.stringify(h.plugin.settings.folderLinks);
     const make=(extra:any={})=>({version:1,id:randomUUID(),kind:'link-folder',folderPath:'Notes',projectId:'project',connectionId:'c',environmentId:'env',mode:'project',relink:true,...extra});
-    await assert.rejects(h.plugin.executeAgentCommand(make({environmentId:'wrong'})),/connection and environment/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);
+    await assert.rejects(h.plugin.executeAgentCommand(make({environmentId:'wrong'})),/exact folder destination/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);
     h.setProjects([]);await assert.rejects(h.plugin.executeAgentCommand(make()),/project is unavailable/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);
     h.setProjects([h.project]);await assert.rejects(h.plugin.executeAgentCommand(make({mode:'self'})),/verified vault connection machine/);assert.equal(JSON.stringify(h.plugin.settings.folderLinks),saved);
     h.setProjects([{...h.project,id:'other'}]);h.setFailSave(true);
@@ -295,55 +295,37 @@ test('mobile resolves a legacy local vault location through its exact discovered
   }finally{h.plugin.onunload();}
 });
 
-test('default desktop No project uses local T3, reuses a warm check, and stages in the actual local vault',async()=>{
-  const h=await folderMenuHarness(),notices=h.notices.length;
-  try{
-    h.fileMenu('Note.md',false);h.plugin.settings.vaultHost={connectionId:'c',environmentId:'env',workspaceRoot:'/remote-vault'};
-    h.plugin.app.vault.adapter={getFullPath:()=>'/local-vault'};
-    let checks=0;const reads:any[]=[];
-    h.plugin.localNoProjectEnvironment=async()=>{checks++;return 'local-env';};
-    h.plugin.readNoProjectProject=async(connection:any)=>{reads.push(connection);return {id:'local-scratch',title:'No project',workspaceRoot:'/local-scratch'};};
-    await h.plugin.refreshLocalNoProject();const started=performance.now();
-    for(let n=0;n<2;n++){
-      const target=await h.plugin.noProjectTarget();assert.equal(target.project.id,'local-scratch');assert.equal(target.project.connectionId,undefined);
-    }
-    assert.equal(h.plugin.defaultNoProjectMachine(),'local');assert.equal(checks,1);assert.ok(performance.now()-started<100,'Warm selection must not wait for another health check');
-    assert.ok(reads.every(connection=>connection.host==='local'&&connection.environmentId==='local-env'));
-    const host=await h.plugin.localResponseTarget({connection:reads[0]});assert.equal(host.workspaceRoot,'/local-vault');assert.equal(host.environmentId,'local-env');
-    assert.equal(h.plugin.vaultConnection().workspaceRoot,'/remote-vault');assert.equal(h.notices.length,notices);
-  }finally{h.plugin.onunload();}
+test('default No project uses a paired loopback API and stages in its exact project workspace',async()=>{
+ const h=await folderMenuHarness();
+ try{
+  const local={id:'loopback',name:'Local T3',environmentId:'local-env',url:'http://127.0.0.1:3773'};h.plugin.settings.paired.push(local);
+  const reads:any[]=[];h.plugin.readNoProjectProject=async(connection:any)=>{reads.push(connection);return {id:'local-scratch',title:'No project',workspaceRoot:'/local-scratch'};};
+  const target=await h.plugin.noProjectTarget();assert.equal(target.project.connectionId,local.id);assert.equal(h.plugin.defaultNoProjectMachine(),local.id);
+  assert.equal(reads.length,1);assert.equal(reads[0].transport,'direct');assert.equal(reads[0].environmentId,local.environmentId);
+  const host=await h.plugin.localResponseTarget({project:target.project,connection:reads[0]});assert.equal(host.workspaceRoot,'/local-scratch');assert.equal(host.environmentId,local.environmentId);
+ }finally{h.plugin.onunload();}
 });
 
-test('unavailable local No project silently uses the vault machine without a picker or local setup',async()=>{
-  const h=await folderMenuHarness(),notices=h.notices.length;
-  try{
-    h.fileMenu('Note.md',false);h.plugin.settings.vaultHost={connectionId:'c',environmentId:'env',workspaceRoot:'/remote-vault'};
-    h.plugin.localNoProjectEnvironment=async()=>undefined;
-    const reads:any[]=[];h.plugin.readNoProjectProject=async(connection:any)=>{reads.push(connection);return {id:'remote-scratch',title:'No project',workspaceRoot:'/remote-scratch'};};
-    const result=await h.plugin.noProjectTarget();assert.equal(result.project.connectionId,'c');assert.equal(reads.length,1);assert.equal(reads[0].transport,'direct');
-    assert.equal(h.modals.length,0);assert.equal(h.notices.length,notices);
-  }finally{h.plugin.onunload();}
+test('a single paired remote No project works without local CLI discovery or a chooser',async()=>{
+ const h=await folderMenuHarness(),notices=h.notices.length;
+ try{
+  const reads:any[]=[];h.plugin.readNoProjectProject=async(connection:any)=>{reads.push(connection);return {id:'remote-scratch',title:'No project',workspaceRoot:'/remote-scratch'};};
+  const result=await h.plugin.noProjectTarget();assert.equal(result.project.connectionId,'c');assert.equal(reads.length,1);assert.equal(reads[0].transport,'direct');assert.equal(h.modals.length,0);assert.equal(h.notices.length,notices);
+  await assert.rejects(h.plugin.noProjectTarget('thread:no-project:local'),/selected local T3/);assert.equal(reads.length,1);
+ }finally{h.plugin.onunload();}
 });
 
-test('local No project setup failure falls back before dispatch, while explicit machine choices retain their errors',async()=>{
-  const h=await folderMenuHarness(),notices=h.notices.length;
-  try{
-    h.fileMenu('Note.md',false);h.plugin.localNoProjectEnvironment=async()=> 'local-env';
-    const reads:string[]=[];h.plugin.readNoProjectProject=async(connection:any)=>{reads.push(connection.host);if(connection.host==='local')throw Error('Local setup failed');return {id:'remote-scratch',title:'No project',workspaceRoot:'/remote-scratch'};};
-    assert.equal((await h.plugin.noProjectTarget()).project.connectionId,'c');assert.deepEqual(reads,['local','direct']);
-    reads.length=0;await h.plugin.noProjectTarget();assert.deepEqual(reads,['direct'],'A recent local setup failure must not delay the next send');
-    reads.length=0;await assert.rejects(h.plugin.noProjectTarget('thread:no-project:local'),/Local setup failed/);assert.deepEqual(reads,['local']);assert.equal(h.notices.length,notices);
-  }finally{h.plugin.onunload();}
-});
-
-test('a stalled local preparation has a bounded silent fallback and explicit remote choices skip local discovery',async()=>{
-  const h=await folderMenuHarness(),notices=h.notices.length;
-  try{
-    h.fileMenu('Note.md',false);let checks=0;h.plugin.localNoProjectEnvironment=async()=>{checks++;return 'local-env';};
-    let localSignal:AbortSignal|undefined;h.plugin.readNoProjectProject=async(connection:any,signal?:AbortSignal)=>{if(connection.host==='local'){localSignal=signal;return new Promise(()=>{});}return {id:'remote-scratch',title:'No project',workspaceRoot:'/remote-scratch'};};
-    const start=performance.now();assert.equal((await h.plugin.noProjectTarget()).project.connectionId,'c');assert.ok(performance.now()-start<1600);assert.equal(localSignal?.aborted,true);
-    const previous=checks;await h.plugin.noProjectTarget('thread:no-project:c');assert.equal(checks,previous);assert.equal(h.notices.length,notices);
-  }finally{h.plugin.onunload();}
+test('an explicit or default selected machine failure never falls through to a different environment',async()=>{
+ const h=await folderMenuHarness();
+ try{
+  h.plugin.settings.paired.push({id:'loopback',name:'Local',environmentId:'local-env',url:'http://127.0.0.1:3773'});
+  const reads:string[]=[];h.plugin.readNoProjectProject=async(connection:any)=>{reads.push(connection.environmentId);if(connection.environmentId==='local-env')throw Error('Selected machine unavailable');return {id:'remote-scratch',title:'No project',workspaceRoot:'/remote-scratch'};};
+  await assert.rejects(h.plugin.noProjectTarget(),/Selected machine unavailable/);assert.deepEqual(reads,['local-env']);
+  assert.equal((await h.plugin.noProjectTarget('thread:no-project:c')).project.connectionId,'c');assert.deepEqual(reads,['local-env','env']);
+  h.plugin.settings.vaultHost={connectionId:'offline',environmentId:'offline-env',workspaceRoot:'/unknown'};h.plugin.settings.paired=h.plugin.settings.paired.filter((connection:any)=>connection.id!=='loopback');
+  await assert.rejects(h.plugin.noProjectTarget(),/Reconnect the selected T3 machine/);assert.equal(reads.length,2);
+  assert.throws(()=>h.plugin.connection({...h.project,connectionId:'offline'}),/Reconnect the selected project machine/);
+ }finally{h.plugin.onunload();}
 });
 
 test('vault connection setup saves the verified path without registering or linking a T3 project',async()=>{
@@ -704,14 +686,15 @@ for(const confirmed of [false,true])test(`import selects its source but only con
  }finally{h.plugin.onunload();}
 });
 
-test('bundled Send and Ask recover a source renamed through delete/create before dispatch',async()=>{
+test('delete/create without an observed rename starts fresh coverage without scanning the vault',async()=>{
  const h=await folderMenuHarness();
  try{
   const original='Notes/Untitled.md',renamed='Notes/Named.md',requestId=randomUUID(),binding=commandId(requestId,`binding:${original}`);
   const {file}=h.fileMenu(original,false);Object.assign(file,{basename:'Untitled',stat:{ctime:123}});
   let document='First instruction.';const sent:any[]=[];
+  h.plugin.app.vault.process=async(_file:any,change:(text:string)=>string)=>document=change(document);
   h.plugin.app.vault.read=async()=>document;h.plugin.app.vault.getFileByPath=(path:string)=>path===file.path?file:undefined;
-  h.plugin.app.vault.getAbstractFileByPath=h.plugin.app.vault.getFileByPath;h.plugin.app.vault.getMarkdownFiles=()=>[file];
+  h.plugin.app.vault.getAbstractFileByPath=h.plugin.app.vault.getFileByPath;h.plugin.app.vault.getMarkdownFiles=()=>assert.fail('Vault enumeration is retired');
   h.plugin.app.workspace.getLeavesOfType=()=>[];
   h.plugin.settings.autoSettleThreads=false;h.plugin.settings.inlineStreaming.enabled=false;
   h.plugin.settings.folderLinks=[{id:'link',folderPath:'Notes',connectionId:'c',environmentId:'env',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot}];
@@ -720,11 +703,12 @@ test('bundled Send and Ask recover a source renamed through delete/create before
   const oldId=sent[0].smartSend.noteId;
   moveSmartNotes(h.plugin.smartData(),original);file.path=renamed;
   document+=` Added detail.\n:::send-to-t3-response data-t3-response="${binding}"\n\n\n\n:::/send-to-t3-response`;
-  // Model discovery on the receiving device before settings catch up.
+  document+=`\n<!-- t3-note-id:${oldId} -->\n`;await h.plugin.ensureNoteIdentity(renamed);
+  // The explicit current path starts fresh; no vault-wide history recovery.
   await rememberResponse(h.plugin.smartData(),renamed,'unrelated-reply','Other response.','','',0);
   await h.plugin.send(file,h.project,{threadId:'smart-thread',streamReply:false,throwOnError:true});
-  assert.equal(sent.length,2);assert.match(sent[1].prompt,/Added detail/);assert.doesNotMatch(sent[1].prompt,/First instruction/);
-  assert.equal(h.plugin.smartData().notes[oldId].path,renamed);assert.ok(!h.plugin.smartData().notes[oldId].deleted);
+  assert.equal(sent.length,2);assert.match(sent[1].prompt,/Added detail/);assert.match(sent[1].prompt,/First instruction/);
+  assert.ok(h.plugin.smartData().notes[oldId].deleted);assert.notEqual(sent[1].smartSend.noteId,oldId);
   const editor={getValue:()=>document,getSelection:()=>'',getCursor:()=>({line:0,ch:0}),posToOffset:()=>0},view={file,editor};
   document=document.replace('Added detail.','Added detail. Another detail.');
   await h.plugin.sendChat(document,{path:renamed},{threadId:'smart-thread',sourceContext:{editor,view,smartDocument:document,smartQuestion:'Why?'}});

@@ -1,6 +1,6 @@
 import {isRecord} from '../shared/values';
 import {safeNotePath} from './response-model';
-export const RESPONSE_COMMANDS=['resolve-response-location','response-status','response-import-info','response-import-records','resume-response','stage-note-edit','submit-note-edit','repair-response','remove-response','close-stream-block'] as const;
+export const RESPONSE_COMMANDS=['resolve-response-location','response-status','response-import-info','response-import-records','resume-response','repair-response','remove-response','close-stream-block'] as const;
 export interface ImportSource {threadId:string;projectId:string;environmentId:string}
 export interface ImportRecordsCommand {version:1;id:string;kind:'response-import-records';source:ImportSource;cursor?:string}
 export interface CloseStreamBlockCommand {version:1;id:string;kind:'close-stream-block';foldKey:string;hash:string;notePath:string}
@@ -21,7 +21,7 @@ export function validateResponseCommand(input:unknown):ResponseCommand {
     return value;
   }
   if(!uuid(value.bindingId))throw Error('Choose the exact response binding UUID.');
-  if(['submit-note-edit','repair-response','resolve-response-location'].includes(value.kind)&&!/^([0-9a-f]{64})$/.test(value.hash??''))throw Error('A reviewed original or current note hash is required.');
+  if(['repair-response','resolve-response-location'].includes(value.kind)&&!/^([0-9a-f]{64})$/.test(value.hash??''))throw Error('A reviewed original or current note hash is required.');
   if(value.kind==='resolve-response-location'&&!safeNotePath(value.notePath))throw Error('Choose the exact intended note path.');
   return value;
 }

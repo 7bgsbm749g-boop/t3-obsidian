@@ -1,7 +1,7 @@
 import {readWireShell,readMetadataSnapshot} from '../../src/connection/wire-readers';
 import {Plugin,MarkdownView} from 'obsidian';
 import SendToT3 from '../../src/app/main';
-import {desktopDefaults,desktopEnvironment,desktopThreadAccess,uuid5} from '../../src/connection/desktop';
+import {desktopDefaults,desktopEnvironment,desktopThreadAccess,uuid5} from '../fixtures/baseline-native/desktop';
 import {readInlineSnapshot,type ThreadAccess} from '../../src/conversations/thread-stream';
 import {applyThreadItem} from '../../src/conversations/inline-thread';
 import {closeNoteTabPanel} from '../../src/notes/note-tab-panel';

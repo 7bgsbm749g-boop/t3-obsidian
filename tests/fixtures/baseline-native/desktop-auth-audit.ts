@@ -1,3 +1,4 @@
+// Historical test/lab adapter only. Never import this file from src or ship it in the plugin.
 import {Platform} from 'obsidian';
 let fs:typeof import('node:fs').promises;
 let join:typeof import('node:path').join;
@@ -12,9 +13,9 @@ function loadDesktop():Promise<void>{
   }
   throw Error('This feature requires Obsidian on desktop.');
 }
-import {errorCode} from '../shared/values';
+import {errorCode} from '../../../src/shared/values';
 
-import type {ThreadAccessCloseReason} from '../conversations/thread-stream';
+import type {ThreadAccessCloseReason} from '../../../src/conversations/thread-stream';
 
 export const DESKTOP_AUTH_AUDIT_MAX_BYTES=256*1024;
 type AuthEvent='issued'|'verified'|'rejected'|'closing'|'revoke-completed'|'revoke-failed'|'borrow-released'|'recovered';

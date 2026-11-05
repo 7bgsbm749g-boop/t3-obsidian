@@ -1,5 +1,7 @@
 # Streaming host allocation reduction
 
+> Historical implementation. Its local command/event runtime was removed. See [checked note edits](checked-note-edits.md) for the current protocol.
+
 Linux killed QLO2's renderer for memory exhaustion on 2026-10-05. The preceding
 [investigation](auth-recovery-and-memory-20261005.md) identified repeated copying
 and saving of a 6.5 MB private event state as a major allocation contributor.

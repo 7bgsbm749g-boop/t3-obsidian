@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,rm,realpath} from 'node:fs/promises';
 import {join} from 'node:path';
-import {registeredVaults} from '../src/storage/private-storage-desktop';
+import {registeredVaults} from './fixtures/baseline-native/private-storage-desktop';
 
 test('a stale registry path cannot hide later vaults from private-storage checks',async t=>{
   const directory=join(process.cwd(),'evidence/review-remediation');

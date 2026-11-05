@@ -1,5 +1,7 @@
 # Stream credential recovery and QLO2 memory investigation
 
+Historical investigation. Current reply following and command transport are documented in [Checked note edits](checked-note-edits.md); event subscriptions and the native filesystem host are retired.
+
 ## Authentication cause and delivered fix
 
 The affected authentication is the VPS Obsidian response host's automatic,

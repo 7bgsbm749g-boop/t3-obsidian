@@ -163,7 +163,7 @@ export class InlineChatManager {
     if(this.stopped||job.hosted||job.finalized||job.phase==='cancelled'||!job.threadId||!job.connection)return;
     const runtime=this.runtime(job);runtime.monitor?.stop();
     const access=async()=>{
-      if(!job.connection!.environmentId&&job.connection!.transport!=='direct'){job.connection!.environmentId=await (await import('../connection/desktop')).desktopEnvironment(job.connection!);this.persist();}
+      if(job.connection!.transport!=='direct')throw Error('Reconnect this reply through T3 Connect.');
       return this.access(job.connection!);
     };
     runtime.monitor=watchThread(job.threadId,access,{
@@ -178,7 +178,7 @@ export class InlineChatManager {
       const api=await environmentApi(connection,session);
       return {origin:endpoint(connection.url??''),api};
     }
-    const desktop=await import('../connection/desktop');return desktop.desktopThreadAccess(connection);
+    throw Error('Reconnect this reply through T3 Connect.');
   }
   private receive(job:InlineJob,item:ThreadStreamItem){
     if(this.stopped||job.finalized||job.phase==='cancelled'||!this.jobs.includes(job))return;

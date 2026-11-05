@@ -1,5 +1,7 @@
 # Desktop CLI selection
 
+> Historical implementation. Its local command/event runtime was removed. See [checked note edits](checked-note-edits.md) for the current protocol.
+
 The plugin uses the official T3 CLI to issue short-lived local API sessions.
 On Windows it prefers `~/.t3/bin/t3.cmd`, which T3 updates to point to the
 desktop app's bundled CLI. A leftover standalone `t3.exe` does not take priority

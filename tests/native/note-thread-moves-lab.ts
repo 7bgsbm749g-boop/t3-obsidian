@@ -8,7 +8,7 @@ import {deviceNoteIO,deviceFinalNoteIO} from '../../src/conversations/inline-not
 import {hiddenInlineMarkerExtension} from '../../src/conversations/inline-markers';
 import {installResponsePresentation} from '../../src/responses/response-presentation';
 import {responseBindingRequests,updateResponseBindingData} from '../../src/responses/response-binding-data';
-import {desktopDefaults,desktopEnvironment,desktopThreadAccess,uuid5} from '../../src/connection/desktop';
+import {desktopDefaults,desktopEnvironment,desktopThreadAccess,uuid5} from '../fixtures/baseline-native/desktop';
 import {noteIdentity} from '../../src/notes/note-identity';
 import {configureBridge} from '../../src/app/bridge';
 import {rememberResponse} from '../../src/notes/smart-send';
@@ -37,7 +37,7 @@ export default class NoteThreadMovesLab extends Plugin {
     const recordFailure=p.recordSendFailure.bind(p);p.recordSendFailure=(...args:any[])=>{this.write('SEND-FAILURE.json',args.map(value=>value instanceof Error?{error:String(value),stack:value.stack}:value));return recordFailure(...args);};
     p.settings={vaultId:crypto.randomUUID(),threadNoteMode:'free',projects:[project],directProjects:[],paired:[],connection:(await desktopDefaults()),autoSettleThreads:false,completion:{action:'keep',archiveFolder:'Archive'},completionJobs:[],settlementJobs:[],pending:[],noteThreads:[],noteContexts:[],vaultLocations:[],folderLinkChanges:[],projectCreationLocations:[],responseBindings:{},inlineStreaming:{enabled:true,intermediateMode:'collapse',keepIntermediate:true,finalAnswerFormat:'formatted'},folderLinks:[{id:crypto.randomUUID(),folderPath:'Fixture',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:'',environmentId,self:false}]};
     p.mode='desktop';p.localNoProjectId=environmentId;p.eventLocalEnvironmentId=environmentId;p.localInlineEnvironment=async()=>environmentId;p.inlineThreadAccess=async()=>desktopThreadAccess((await desktopDefaults()));p.save=async()=>this.saveData(p.settings);
-    configureBridge({mobile:false,localAccess:async()=>this.access!});
+    configureBridge({mobile:false,access:async()=>this.access!});
     this.registerEditorExtension(hiddenInlineMarkerExtension());
     this.registerEditorExtension(require('@codemirror/state').EditorState.transactionFilter.of((transaction:any)=>native.filter(transaction)));
     this.register(installResponsePresentation(document,setIcon));

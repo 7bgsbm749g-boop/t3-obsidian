@@ -15,6 +15,7 @@ import {readNewThreadDefaults} from '../conversations/model-defaults';
 import {T3HttpError} from '../conversations/thread-access-cache';
 import {t3Api,abortableRead,requestAborted,type AbortableT3Api,type T3RequestOptions} from './t3-api';
 import {T3_PROTOCOL_VERSION,T3_PROTOCOL_HEADER} from './orchestration-v2';
+import type {ThreadAccess} from '../conversations/thread-stream';
 import type {SocketFactory} from './t3-rpc';
 import {PLUGIN_SCOPE,hasPluginPermissions} from './environment-permissions';
 import {ensureNoProject} from '../projects/no-project';
@@ -102,11 +103,11 @@ async function readApi(c:Connection,s:PairedSession|undefined,fetcher:Fetcher,si
  try{const api=await abortableRead(entry.work,signal);requestAborted(signal);return {api,invalidate:()=>{if(cache.get(identity)===entry)cache.delete(identity);}};}
  finally{if(--entry.users===0&&!entry.settled){entry.controller.abort();if(cache.get(identity)===entry)cache.delete(identity);}}
 }
-export interface DirectReadOptions extends T3RequestOptions {control?:boolean}
+export interface DirectReadOptions extends T3RequestOptions {control?:boolean;access?:ThreadAccess}
 export function readDirect(c:Connection,args:['read',string],s?:PairedSession,fetcher?:Fetcher,options?:DirectReadOptions):Promise<import('./wire-readers').ThreadMetadata>;
 export function readDirect(c:Connection,args:string[],s?:PairedSession,fetcher?:Fetcher,options?:DirectReadOptions):Promise<unknown>;
 export async function readDirect(c:Connection,args:string[],s?:PairedSession,fetcher:Fetcher=browserFetch,options:DirectReadOptions={}){
- const access=await readApi(c,s,fetcher,options.signal),api=(path:string)=>access.api('/api/orchestration/'+path,undefined,options);
+ const access=options.access?{api:options.access.api,invalidate:()=>{}}:await readApi(c,s,fetcher,options.signal),api=(path:string)=>access.api('/api/orchestration/'+path,undefined,options);
  try{
  if(args[0]==='no-project'&&args.length===1)return await ensureNoProject(access.api);
  if(args[0]==='projects'&&args.length===1)return {projects:readWireProjects(await api('shell'))};
@@ -119,8 +120,8 @@ export function commandId(id:string,name:string){
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))throw Error('Invalid request ID.');
  const b=Buffer.from(sha1(Buffer.concat([Buffer.from(id.replace(/-/g,''),'hex'),Buffer.from(name)]))).slice(0,16);b[6]=(b[6]&15)|80;b[8]=(b[8]&63)|128;const h=b.toString('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
 }
-export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Promise<void>,fetcher?:Fetcher){
- const environment=await environmentApi(r.connection,s,fetcher);
+export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Promise<void>,fetcher?:Fetcher,access?:ThreadAccess){
+ const environment=access?.api??await environmentApi(r.connection,s,fetcher);
  const api=(path:string,payload?:unknown)=>environment('/api/orchestration/'+path,payload);
  const hash=Buffer.from(sha256(Buffer.from(JSON.stringify({project:r.project.id,title:r.title,prompt:r.prompt,attachments:r.attachments??[],context:r.context??null,...(r.threadId?{threadId:r.threadId}:{})})))).toString('hex');
  if(r.directPlan&&(r.directPlan.hash!==hash||r.directPlan.environmentId!==r.connection.environmentId))throw Error('Saved request no longer matches its original content or environment.');
@@ -131,7 +132,7 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
    r.directPlan={protocolVersion:2,hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{
   const projects=readWireProjects(await api('shell'));const project=projects.find(p=>p.id===r.project.id);if(!project)throw Error('Project no longer exists. Scan this connection again.');
-  const defaults=await readNewThreadDefaults(environment,endpoint(r.connection.url||''),project);
+  const defaults=await readNewThreadDefaults(environment,access?.origin??endpoint(r.connection.url||''),project);
   const {workspaceStrategy,...accessDefaults}=defaults;
   const common={threadId:commandId(r.id,'thread'),...accessDefaults,interactionMode:'default',createdAt:new Date().toISOString()};
   r.directPlan={protocolVersion:2,...(r.title===AUTO_THREAD_TITLE||workspaceStrategy?.type==='worktree'?{launch:true,generateTitle:r.title===AUTO_THREAD_TITLE,workspaceStrategy}:{}),hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title:r.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};

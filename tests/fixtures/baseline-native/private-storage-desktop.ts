@@ -1,3 +1,4 @@
+// Historical test/lab adapter only. Never import this file from src or ship it in the plugin.
 import {Platform} from 'obsidian';
 let Buffer:typeof import('node:buffer').Buffer;
 let fs:typeof import('node:fs').promises;
@@ -32,11 +33,11 @@ function loadDesktop():Promise<void>{
   throw Error('This feature requires Obsidian on desktop.');
 }
 
-import {errorCode,toError,isRecord,parseJson} from '../shared/values';
+import {errorCode,toError,isRecord,parseJson} from '../../../src/shared/values';
 
-import {contentHash} from '../responses/completion';
-import {readPrivateStorageRoute,storageRoutePath,type PrivateStorageRoute} from './private-storage';
-import {isPathInsideDirectory} from '../connection/desktop-path';
+import {contentHash} from '../../../src/responses/completion';
+import {readPrivateStorageRoute,storageRoutePath,type PrivateStorageRoute} from '../../../src/storage/private-storage';
+import {isPathInsideDirectory} from '../../../src/connection/desktop-path';
 
 const openings=new Map<string,Promise<PrivateStorageRoute>>();
 async function syncDirectory(path:string){if(process.platform==='win32')return;const directory=await fs.open(path,'r');try{await directory.sync();}finally{await directory.close();}}

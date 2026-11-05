@@ -1,5 +1,7 @@
 # Response host registration and restart recovery
 
+> Historical implementation. Its local command/event runtime was removed. See [checked note edits](checked-note-edits.md) for the current protocol.
+
 At 23:03 UTC on October 3, mobile clients retained three native response
 registrations without host acknowledgements. The host had stopped answering
 mailbox traffic around 22:31, while its lock continued renewing. The queued

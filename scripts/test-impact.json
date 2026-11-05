@@ -91,7 +91,7 @@
       "tests/native/unified-questions-lab.ts"
     ],
     "tests/local-response-manager.test.ts": [
-      "tests/native/agent-note-edits-lab.ts",
+      "tests/native/connect-note-edits-lab.ts",
       "tests/native/local-response-sync-case.ts"
     ],
     "tests/note-identity.test.ts": [
@@ -116,6 +116,10 @@
     ],
     "scripts/test_source_cleanup.py": [
       "scripts/cleanup-worktree.mjs"
+    ],
+    "tests/checked-note-edits.test.ts": [
+      "tests/native/connect-note-edits-lab.ts",
+      "scripts/build-connect-command-lab.mjs"
     ]
   }
 }

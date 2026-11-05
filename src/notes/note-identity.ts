@@ -22,17 +22,3 @@ export function withNoteIdentity(document:string,id:string){
   if(marker)return document.slice(0,marker.from)+noteIdentityMarker(id)+document.slice(marker.to);
   return document+(document.endsWith('\n')?'':'\n')+'\n'+noteIdentityMarker(id)+'\n';
 }
-
-/** Only missed moves require a bounded, sequential vault scan. Never pick the
- * first of several copies, including copies not open in an editor. */
-export async function uniqueNoteLocation(matches:(document:string)=>boolean,paths:string[],read:(path:string)=>Promise<string|undefined>){
-  let found:string|undefined;const deadline=Date.now()+20000;
-  for(const path of paths){
-    if(Date.now()>deadline)throw Error('The T3 note identity check took too long. Send again or choose an existing thread.');
-    const document=await read(path);
-    if(document===undefined||!matches(document))continue;
-    if(found)throw Error(`This T3 note identity appears in several notes: ${found}; ${path}. Choose separate note identities before sending.`);
-    found=path;
-  }
-  return found;
-}

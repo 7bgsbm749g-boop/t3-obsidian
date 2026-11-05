@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reload the laptop's QLO2 window after Sync, using the plugin's direct command endpoint."""
+"""Reload the laptop's QLO2 window after Sync, using the connected plugin command transport."""
 from __future__ import annotations
 
 import argparse
@@ -13,6 +13,7 @@ import uuid
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_policy
+from connect_commands import send_command as connected_command
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = Path.home() / '.config/send-to-t3-code/laptop-reload.json'
@@ -47,12 +48,31 @@ def latest_release() -> dict | None:
 
 
 def mailbox(config: dict, command: dict, *, retry: bool = False, cleanup: bool = False) -> dict:
+    if cleanup:
+        return {'ok': True}  # Connected commands clean their exact files after acknowledgement.
+    connected = connected_command(config['vault'], command, root=config.get('transportRoot'), client_id=config.get('clientId'), timeout=5, retry=retry)
+    if connected is not None:
+        return connected
+    # A client connected only to its own T3 machine uses the same helper there.
+    # Legacy HTTP below is restricted to the first reload from an older plugin.
+    if command.get('kind') not in ['client-status', 'send-failure-log', 'reload-client']:
+        raise ValueError('The release helper accepts maintenance commands only.')
+    helper = Path(__file__).with_name('connect_commands.py').read_text() + '\nimport sys\n_p=json.loads(sys.stdin.read())\ntry:\n _r=send_command(_p["vault"],_p["command"],timeout=5,retry=_p["retry"])\nexcept (ValueError,OSError) as _e:\n _r=dict(id=_p["command"]["id"],ok=False,error=str(_e))\nprint(json.dumps(_r))\n'
+    helper64 = base64.b64encode(helper.encode()).decode()
     # Structured data is base64; neither paths nor user strings become shell code.
     payload = base64.b64encode(json.dumps({'vault': config['vault'], 'command': command, 'retry': retry, 'cleanup': cleanup}).encode()).decode()
     script = r'''
 $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 $p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('PAYLOAD')) | ConvertFrom-Json
+$python=Get-Command python.exe -ErrorAction SilentlyContinue
+if($python) {
+  $code=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('HELPER64'))
+  $inputJson=$p | ConvertTo-Json -Depth 20 -Compress
+  $connectedJson=$inputJson | & $python.Source -c $code
+  if($LASTEXITCODE -ne 0) { throw 'The connected command helper failed. No fallback command was dispatched.' }
+  if($connectedJson -and $connectedJson.Trim() -ne 'null') { $connectedJson; exit }
+}
 $routePath=Join-Path $p.vault '.obsidian/t3-code/storage-route.json'
 if(-not (Test-Path $routePath)) {
   @{id=$p.command.id;ok=$false;pending=$true;bootstrapRequired=$true;error='The plugin command bridge is not initialized. Load the current plugin once to create its private mailbox.'} | ConvertTo-Json -Compress; exit
@@ -86,7 +106,7 @@ if($endpoint.version -ne 1 -or $uri.Scheme -ne 'http' -or $uri.Host -ne '127.0.0
 $body=@{command=$p.command;retry=[bool]$p.retry} | ConvertTo-Json -Depth 12 -Compress
 $answer=Invoke-RestMethod -Method Post -Uri $uri -Headers @{Authorization=('Bearer '+$endpoint.token)} -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 5 -MaximumRedirection 0
 $answer | ConvertTo-Json -Depth 20 -Compress
-'''.replace('PAYLOAD', payload)
+'''.replace('PAYLOAD', payload).replace('HELPER64', helper64)
     bootstrap = '[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); & ([ScriptBlock]::Create([Console]::In.ReadToEnd()))'
     encoded = base64.b64encode(bootstrap.encode('utf-16le')).decode()
     result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', config['host'],

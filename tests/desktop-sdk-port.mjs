@@ -5,6 +5,6 @@ import {registerHooks} from 'node:module';
 // real VM/native fixture. VM/mobile tests keep their own explicit SDK port.
 const desktopPlatform=new URL('./fixtures/desktop-sdk.cjs',import.meta.url).href;
 registerHooks({resolve(specifier,context,next){
-  if(specifier==='obsidian'&&context.parentURL&&(/\/src\/.*(?:-desktop|\/desktop(?:-[^/]+)?)\.ts$/.test(context.parentURL)||context.parentURL.endsWith('/src/responses/send-preview.ts')))return {url:desktopPlatform,shortCircuit:true};
+  if(specifier==='obsidian'&&context.parentURL&&(/\/src\/.*(?:-desktop|\/desktop(?:-[^/]+)?)\.ts$/.test(context.parentURL)||context.parentURL.includes('/tests/fixtures/baseline-native/')||context.parentURL.endsWith('/src/responses/send-preview.ts')))return {url:desktopPlatform,shortCircuit:true};
   return next(specifier,context);
 }});

@@ -1,3 +1,12 @@
+import {forEachBounded} from '../shared/bounded-work';
+import {ConnectCommandHost,commandBase,type CommandFiles,type CommandRoute} from '../notes/connect-command-host';
+import {connectCommandFiles} from '../notes/connect-command-files';
+import {CheckedNoteEdits,isNoteEditCommand,checkedStageDraft,type EditSnapshot} from '../notes/checked-note-edits';
+import {connectT3Rpc} from '../connection/t3-rpc';
+import {ThreadDisplays,isThreadCommand,type ThreadDisplayResult} from '../conversations/thread-displays';
+import type {ThreadTarget as EventTarget} from '../conversations/thread-display';
+import {readPrivateStorageRoute} from '../storage/private-storage';
+import {DesktopClientMaintenance} from './client-maintenance-desktop';
 import * as cmState from '@codemirror/state';
 import {loadQuestionRecords} from '../interaction/question-controller';
 import {loadApprovalRecords} from '../interaction/approval-controller';
@@ -9,13 +18,10 @@ import {isRecord,jsonClone,parseJson} from '../shared/values';
 import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {SendPreviews} from '../responses/send-preview';
 import {savedToDisplay} from '../responses/native-response-projection';
-import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,explicitSelectionText,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,recoverSmartNote,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from '../notes/smart-send';
-import {DuplicateResponseLocation} from '../responses/response-location';
-import {noteIdentity,noteIdentityRanges,withNoteIdentity,uniqueNoteLocation} from '../notes/note-identity';
-import {streamBlocks} from '../responses/stream-block';
+import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,explicitSelectionText,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from '../notes/smart-send';
+import {noteIdentity,withNoteIdentity} from '../notes/note-identity';
 import {retainedLocalFinal,restoredLocalFinal} from '../responses/local-final-cache';
 import {HtmlResultStore} from '../responses/html-result-store';
-import {projectEventNote} from './event-note-projection';
 import {HtmlResultViews} from '../responses/html-result-view';
 import {hasResponseMarkers} from '../conversations/inline-thread';
 import {responseIds,responseFrame} from '../responses/response-container';
@@ -23,10 +29,8 @@ import {noteSteeringTarget} from '../notes/note-steering';
 import {interruptStoppedResponse} from '../responses/response-stop';
 import {localResponseBindings,localResponseRange} from '../responses/local-response-binding';
 import {loadResponseBindingData,mergeResponseBindingData,updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../responses/response-binding-data';
-import {localStagedDraft,localStageCommand} from '../responses/local-response-staging';
 import {localSyncReady} from '../storage/local-sync-state';
 import {rewriteReplyReferences} from '../responses/reply-assets';
-import {prepareEventAction,executeEventAction,type ActionIO,type ActionPlan} from './event-actions';
 import {isClientCommand} from './client-command';
 import {markdownCodeCacheStatus,escapeReplyHtml} from '../responses/reply-html';
 import pluginManifest from '../../manifest.json';
@@ -34,7 +38,7 @@ import {appendSendFailure,sendFailureLog,type SendFailure} from '../responses/se
 import {ConnectionRecovery} from '../connection/connection-recovery';
 import {hasPluginPermissions} from '../connection/environment-permissions';
 import {REAUTHENTICATE_MESSAGE,SignInRequiredError,signInRequired} from '../connection/sign-in-state';
-import {T3HttpError,ThreadAccessCache} from '../conversations/thread-access-cache';
+import {T3HttpError} from '../conversations/thread-access-cache';
 import {mergeSharedSettings} from '../storage/shared-settings';
 import {noteThreadTitle,threadTitleGeneration,type ThreadTitleGeneration} from '../conversations/thread-title';
 import {ResponseLocationModal} from '../responses/response-location-ui';
@@ -57,14 +61,14 @@ import {abortableRead,requestAborted} from '../connection/t3-api';
 import {mountToolGroups} from '../responses/response-tool-presentation';
 import {availableImportRun,importRunPreview,importRuns,importBindingId,importFollowId,type RunImportResult} from '../conversations/run-import';
 import {renderRunImportPreview} from '../conversations/run-import-preview';
-import {findRunImport,runImportReceipt,runImportReceipts} from '../conversations/run-import-receipt';
+import {findRunImport,runImportReceipt} from '../conversations/run-import-receipt';
 import {openRunImport,ImportStreamsModal} from '../conversations/run-import-ui';
 import {type InlineThreadState} from '../conversations/inline-thread';
 import {nativeResponses} from '../responses/native-response-manager';
 import {editorStream} from '../responses/editor-stream';
 import {captureCursorInsertion,resolveCursorInsertion,type CursorInsertion} from '../notes/cursor-insertion';
 import {continueQuestionAnswer} from '../interaction/question-continuation';
-import {validateNoteCommand,isEventCommand,type NoteCommand,type NoteCommandResult} from '../notes/note-command';
+import {validateNoteCommand,validateAgentCommand,type NoteCommand,type NoteCommandResult} from '../notes/note-command';
 import {isFolderCommand,executeFolderCommand,type FolderCommand} from '../projects/folder-command';
 import {configureDiagnostics,logEvent,logFailure,type EventJournal} from './diagnostics';
 import {clearVaultDiagnostics} from './disabled-diagnostics';
@@ -72,15 +76,15 @@ import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from '../connection/native-account';
 import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from '../connection/direct';
 import {environmentAccess} from '../connection/environment-access';
-import { requireApiVersion,setIcon, App, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type SettingDefinition,type SettingDefinitionItem,type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer, parseYaml, stringifyYaml,requestUrl } from 'obsidian';
+import {setIcon, App, FileSystemAdapter, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type SettingDefinition,type SettingDefinitionItem,type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer,  requestUrl } from 'obsidian';
 import { Buffer } from 'buffer/';
-import { deviceState,clearDeviceDiagnostics } from '../storage/device-state';
+import { deviceState,retainDeviceState,clearDeviceDiagnostics } from '../storage/device-state';
 import {nativeStoppedStore} from '../responses/native-stop-store';
 import { downloadImage,nativeAccountFetch } from '../connection/network';
 import {ensureVaultIdentityRecord} from './vault-identity';
 import { collectImages, imageReferenceDefinitions, MAX_IMAGE_BYTES } from '../notes/images';
 import {vaultHost,loadVaultHost,mergeVaultHost,type VaultHost} from './vault-host';
-import {NO_PROJECT,isNoProjectKey,noProjectKey,noProjectMachine} from '../projects/no-project';
+import {ensureNoProject,NO_PROJECT,isNoProjectKey,noProjectKey,noProjectMachine} from '../projects/no-project';
 import {CompletionSettings,CompletionJob,CompletionAction,contentHash,completionState,isOriginalCompletedTurn,cleanCompletedNote} from '../responses/completion';
 import {Connection,Project,Request,RequestDeliveryError,acceptedRequestThread,parseProjects,runBridge,sendRequest,configureBridge,retiredConnection,projectKey,projectLabel,withTimeout} from './bridge';
 import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from '../projects/folder-link';
@@ -97,21 +101,19 @@ import {CompletionGlow} from '../responses/completion-glow';
 import {folderNotePath,type FolderNotesSettings} from '../projects/folder-note-adapter';
 import {installFolderIndicators,type FolderIndicatorController} from '../projects/folder-indicator';
 import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,waitForVaultNote,type VaultLocation,type VaultRegistration} from '../connection/vault-connection';
-import {loadProjectCreationLocations,rememberProjectCreationLocation,projectCreationDefaults,workspaceParentPath,workspaceChildPath,type ProjectCreationLocation} from '../projects/workspace-picker';
+import {loadProjectCreationLocations,rememberProjectCreationLocation,projectCreationDefaults,workspaceParentPath,type ProjectCreationLocation} from '../projects/workspace-picker';
 import {ProjectCreateModal,ProjectCreationCancelled,workspaceInsideVault,type ProjectLocation} from '../projects/project-create-ui';
 import {VaultSetupModal,VaultSetupCancelled,type VaultMachine} from '../connection/vault-setup-ui';
-import {EventSubscriptions,type EventTarget,type NoteEventSnapshot,notificationPrompt,inEventScope,observedPropertyEquals} from './event-subscriptions';
-import {existingThreadTurn,threadIsActive,responseOwnsActiveTurn} from '../conversations/thread-target';
+import {threadIsActive,responseOwnsActiveTurn} from '../conversations/thread-target';
 import {DeviceResponseManager} from '../responses/device-local-responses';
 import {deviceNoteIO,deviceFinalNoteIO} from '../conversations/inline-note-io';
-import {privateStorageResolver} from '../storage/private-storage';
 import {projectReplyReference as resolveReplyReference} from '../projects/project-reference';
 import {type CodebaseState,CodebaseBridge} from '../projects/codebase-native';
 import {codebaseTransport} from '../projects/codebase-transport';
 import {changeCodebaseProjectLinks} from '../projects/codebase-core';
 import {loadReplyFolders,type ReplyFolders} from '../responses/reply-locations';
 import {InlineChatManager,captureEditorSelection,type InlineJob} from '../conversations/inline-chat';
-import {type ResponseRequest,type ResponseStorageTarget,type ResponseFiles} from '../responses/response-model';
+import {type ResponseRequest,type ResponseStorageTarget,} from '../responses/response-model';
 import {type ResponseRecord} from '../responses/response-record';
 import {hiddenInlineMarkerExtension,hideResponseContainerBoundaries} from '../conversations/inline-markers';
 import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,selectionOverlapsInlineResponse,selectionAnchor,initialRegion,insertionOffset,endInsertionOffset,failedInlineIds,regionBody,finalizeRegion,type SelectionAnchor} from '../conversations/inline-thread';
@@ -187,8 +189,14 @@ export default class SendToT3 extends Plugin {
   private monitoring = false;
   private stopped = false;
   private projectCreateModal?:ProjectCreateModal;
-  private noteCommandServer?:import('../notes/note-command-desktop').NoteCommandServer;
-  private clientMaintenance?:import('./client-maintenance-desktop').DesktopClientMaintenance;
+  private commandHosts=new Map<string,{host:ConnectCommandHost;rpc:Awaited<ReturnType<typeof connectT3Rpc>>;files:CommandFiles}>();
+  private commandProjects=new Map<string,Project>();
+  private verifiedConnections=new Map<string,{work:Promise<void>;until:number}>();
+  private commandSerial:Promise<void>=Promise.resolve();
+  private noteEdits?:CheckedNoteEdits;
+  private threadDisplays?:ThreadDisplays;
+  private threadDisplayOpening?:Promise<void>;
+  private clientMaintenance?:DesktopClientMaintenance;
   private saving = Promise.resolve();
   private sharedBaseline='';
   private lastDiskSnapshot='';
@@ -202,16 +210,8 @@ export default class SendToT3 extends Plugin {
   private completionGlow?:CompletionGlow;
   private vaultSetup?:Promise<VaultHost>;
   private noProjectProjects=new Map<string,Project>();
-  private localNoProjectCheck?:Promise<string|undefined>;
-  private localNoProjectId?:string;
-  private localNoProjectCheckedAt=0;
-  private localNoProjectRetryAt=0;
-  private localDesktopAccess?:ThreadAccessCache;
   private vaultSetupModal?:VaultSetupModal;
   private vaultRegistrations:Record<string,VaultRegistration>={};
-  private eventSubscriptions?:EventSubscriptions;
-  private eventHostServer?:import('./event-host-desktop').EventHostServer;
-  private eventHostOpening?:Promise<void>;
   private inlineChat?:InlineChatManager;
   private questions?:QuestionController;
   private approvals?:ApprovalController;
@@ -225,7 +225,6 @@ export default class SendToT3 extends Plugin {
   private inlineActor=randomId();
 
   private noteCommandOpening?:Promise<void>;
-  private inlineEnvironment?:Promise<string>;
   private eventLocalEnvironmentId?:string;
   diagnostics?:EventJournal;
   private failedRequests=new WeakSet<Request>();
@@ -311,8 +310,9 @@ export default class SendToT3 extends Plugin {
     this.deviceId=local?.deviceId??randomId();
     this.compactNoteCommandReceipts();
     const state=await deviceState<Partial<Pick<Settings,'pending'|'completionJobs'|'settlementJobs'>>&{queued?:Array<Request&{threadId:string;superseded?:boolean}>}>(this.deviceId);
-    const defaults:Connection = Platform.isMobile ? {executable:'',host:'local'} : await (await import('../connection/desktop')).desktopDefaults();
-    this.mode=Platform.isMobile||local?.mode!=='desktop'?'direct':'desktop';
+    const defaults:Connection={executable:'',host:'direct',transport:'direct'};
+    this.clientMaintenance=new DesktopClientMaintenance(this.app,'','',pluginManifest.version);
+    this.mode='direct';
     this.pairedSessions=local?.pairedSessions??{};
     this.cloudAccount=local?.cloudAccount??null;
     this.nativeAccount=local?.nativeAccount??null;
@@ -415,10 +415,11 @@ export default class SendToT3 extends Plugin {
       saveLocalBinding:request=>this.saveResponseBinding(request),
       retainLocalFinal:async update=>{await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${update.request.id}`,retainedLocalFinal(update));},
       loadLocalFinal:async request=>restoredLocalFinal(await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${request.id}`),request),
-      localFinalDraft:async(document,request)=>{if(!request.localStage)return document;const opened=await this.localResponseFiles(request.host,false);try{return await localStagedDraft(document,request,opened.files);}finally{opened.close();}},
+      localFinalDraft:async(document,request)=>{if(!request.localStage)return document;if(!request.localStage.transport)throw Error('Prepare this old staged edit again through T3 Connect.');return checkedStageDraft(document,request,await this.commandFiles(request.localStage.transport));},
       syncReady:path=>localSyncReady(this.app,path),
       openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file&&typeof view.getViewData==='function').map(view=>({path:view.file!.path,document:nativeResponses(this.app).view(view)?.recoveryDocument()??view.getViewData()})),
       saveLocalNote:async path=>{for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===path&&typeof view.save==='function')await view.save();}},
+      localEditSaved:async request=>{await this.markEditSaved(request);},
       localCompleted:(id,path)=>{nativeResponses(this.app).localCompleted(id,path);void deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${id}`,null).catch(error=>logFailure('response.local.final-cache-cleanup',error));this.inlineChat?.flushAvailable();},
       localConnection:(id,issue)=>nativeResponses(this.app).connection(id,issue),
       localQuestions:update=>{if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);},
@@ -441,9 +442,9 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.inlineChat!.stopAllAt(editor,view,this.deviceInline?.stoppableResponses(file.path)).then(count=>new Notice(count?`Stopped ${count} T3 response${count===1?'':'s'} in this note.`:'No active or failed T3 responses in this note.')).catch(error=>new Notice(`T3: ${message(error)}`,10000));
       return true;
     }});
-    if(!Platform.isMobile)this.app.workspace.onLayoutReady(()=>{
-      const refresh=()=>{void this.refreshNoteCommandHost().catch(()=>{});void this.refreshEventHost().catch(()=>{});};
-      refresh();this.registerInlineInterval(refresh,5000);
+    this.app.workspace.onLayoutReady(()=>{
+      const refresh=()=>{void this.refreshNoteCommandHost().then(()=>this.startThreadDisplays()).catch(error=>logFailure('commands.start',error));};
+      refresh();void this.startThreadDisplays().catch(error=>logFailure('reply.follow.start',error));this.registerInlineInterval(refresh,5000);this.registerInlineInterval(()=>{void this.tickCommandHosts();},1000);
     });
     this.addCommand({id:'send-note-to-multiple-notes',name:'Send note with streaming destinations…',checkCallback:checking=>{
       const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;if(!file||this.busy||threadNoteMode(this.settings.threadNoteMode)==='one-to-one')return false;
@@ -520,23 +521,18 @@ export default class SendToT3 extends Plugin {
     });
     this.sharedBaseline=JSON.stringify(this.sharedSnapshot());
     for(const request of [...this.settings.pending])await this.failRequest(request,Error('The previous send ended without a local confirmation.'),'startup-recovery',Date.now());
-    if(!Platform.isMobile && !this.settings.connection.native){
-      const old=this.settings.connection;
-      this.settings.connection=defaults;
-      if(old.host!=='local')this.mode='direct';
-    }
     // Version 1.4 delivery is retired. Preserve completion tracking for its
     // already accepted threads; never automatically resend an old queued note.
     for(const entry of state?.queued??[]){
       if(!entry.superseded && entry.completion?.action!=='keep' && entry.completion && !this.settings.completionJobs.some(j=>j.requestId===entry.id))
         this.settings.completionJobs.push({...entry.completion,requestId:entry.id,threadId:entry.threadId,projectId:entry.project.id,connection:entry.connection,status:'watching'});
     }
-    const migrateConnection=(c:Connection):Connection=>!retiredConnection(c)&&c.transport!=='direct'&&!c.native?{...this.settings.connection,host:'local',transport:'desktop'}:c;
+    const migrateConnection=(c:Connection):Connection=>{if(c.transport==='direct')return c;const paired=this.settings.paired.find(value=>value.environmentId===c.environmentId);return paired?{executable:'',host:'direct',transport:'direct',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId}:c;};
     for(const request of this.settings.pending)request.connection=migrateConnection(request.connection);
     for(const job of this.settings.completionJobs){job.connection=migrateConnection(job.connection);if(retiredConnection(job.connection)&&job.status==='watching'){job.status='kept';job.detail='Kept note: the companion mode was removed. Check the original thread in T3.';}}
     this.settings.settlementJobs=this.settings.settlementJobs.filter(job=>job&&typeof job.requestId==='string'&&typeof job.messageId==='string'&&typeof job.threadId==='string'&&typeof job.projectId==='string'&&job.connection&&!retiredConnection(job.connection)).map(job=>({...job,connection:migrateConnection(job.connection)}));
     await this.initializeProjectCatalog();
-    configureBridge({mobile:Platform.isMobile,...(!Platform.isMobile?{localAccess:()=>this.desktopAccess()}:{}),pairedSession:id=>this.sessionFor(id),saveRequest:async request=>{if(!this.settings.pending.includes(request))throw Error('Saved request is missing. Nothing was sent.');this.persistAgentCommand(request);await this.save();}});
+    configureBridge({mobile:Platform.isMobile,access:environmentId=>this.inlineThreadAccess(environmentId),pairedSession:id=>this.sessionFor(id),saveRequest:async request=>{if(!this.settings.pending.includes(request))throw Error('Saved request is missing. Nothing was sent.');this.persistAgentCommand(request);await this.save();}});
     // Migrate unfinished desktop requests once, but do not rewrite the shared
     // settings file merely because this device started. Credentials and jobs
     // are device-local.
@@ -767,12 +763,7 @@ export default class SendToT3 extends Plugin {
       this.app.saveLocalStorage(`${this.localKey}-questions-${this.settings.vaultId}-paths`,[...this.questionPaths]);
     }catch{/* Notes, authentication, and Sync are retried on the next refresh. */}finally{this.refreshingQuestions=false;}
   }
-  private async eventSnapshot(path:string,content:string):Promise<NoteEventSnapshot> {
-    let properties:Record<string,unknown>|null={};
-    const frontmatter=/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
-    if(frontmatter)try{const parsed:unknown=parseYaml(frontmatter[1]);if(isRecord(parsed))properties=parsed;}catch{properties=null;/* Invalid YAML is not a trustworthy property transition. */}
-    return {path,content,properties};
-  }
+
   private async eventThread(target:EventTarget){
     return (await this.eventThreadSnapshot(target)).thread;
   }
@@ -784,216 +775,44 @@ export default class SendToT3 extends Plugin {
       return snapshot;
     }finally{await access.close?.();}
   }
-  private async eventHostTarget(){
-    const root=this.vaultConnection();
-    if(!root)throw Error('Choose a vault connection machine before creating subscriptions.');
-    const localRoot=!Platform.isMobile?(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.(''):undefined;
-    const environmentId=root.environmentId??this.settings.paired.find(c=>c.id===root.connectionId)?.environmentId??(!root.connectionId&&localRoot&&sameWorkspacePath(localRoot,root.workspaceRoot)?await this.localInlineEnvironment():undefined);
-    if(!environmentId)throw Error('Reconnect the vault connection machine before creating subscriptions.');
-    return {host:{vaultId:this.settings.vaultId,environmentId,workspaceRoot:root.workspaceRoot,directory:`${this.app.vault.configDir}/t3-code/events/v1`},connectionId:root.connectionId};
-  }
-  private eventHostCurrent(host:import('./event-host').EventHostIdentity){
-    const root=this.vaultConnection();
-    const environmentId=root?.environmentId??this.settings.paired.find(c=>c.id===root?.connectionId)?.environmentId??this.eventLocalEnvironmentId;
-    return !this.stopped&&host.vaultId===this.settings.vaultId&&environmentId===host.environmentId&&Boolean(root&&sameWorkspacePath(root.workspaceRoot,host.workspaceRoot));
-  }
-  private refreshEventHost():Promise<void>{
-    if(this.eventHostOpening)return this.eventHostOpening;
-    const work=this.openEventHost();this.eventHostOpening=work;void work.finally(()=>{this.eventHostOpening=undefined;}).catch(()=>{});return work;
-  }
-  private async openEventHost(){
-    if(this.stopped||Platform.isMobile)return;
-    if(this.eventHostServer&&!this.eventHostCurrent(this.eventHostServer.identity)){
-      const server=this.eventHostServer;this.eventHostServer=undefined;await server.dispose();
-    }
-    if(this.eventHostServer)return;
-    const {host}=await this.eventHostTarget();
-    const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
-    if(!root||!sameWorkspacePath(root,host.workspaceRoot))return;
-    this.eventLocalEnvironmentId=await this.localInlineEnvironment();
-    if(this.eventLocalEnvironmentId!==host.environmentId)return;
-    const {EventHostServer}=await import('./event-host-desktop');
-    const server=await EventHostServer.open(host,command=>{
-      if(!this.eventSubscriptions||!this.eventHostCurrent(host))throw Error('Subscription host is not ready.');
-      return this.eventSubscriptions.command(command);
-    },()=>this.eventHostCurrent(host),()=>{this.eventSubscriptions?.stop();this.eventSubscriptions=undefined;this.eventHostServer=undefined;});
-    this.eventHostServer=server;
-    try{await this.startEventSubscriptions(server);server.activate();}catch(error){this.eventHostServer=undefined;await server.dispose();throw error;}
-  }
-  private async eventHostFiles(route:{host:import('./event-host').EventHostIdentity;connectionId?:string}):Promise<{files:import('./event-host').EventHostFiles;close():void}>{
-    const {host}=route;
-    const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
-    if(!Platform.isMobile&&root&&sameWorkspacePath(root,host.workspaceRoot)&&await this.isLocalStorageEnvironment(host.environmentId))return {files:(await import('../responses/response-storage-desktop')).localInlineFiles(host.workspaceRoot,host.directory),close:()=>{}};
-    const paired=this.settings.paired.find(c=>c.environmentId===host.environmentId&&c.id===route.connectionId)??this.settings.paired.find(c=>c.environmentId===host.environmentId);
-    if(!paired)throw Error('Connect the vault connection machine before managing subscriptions.');
-    const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId},await this.sessionFor(paired.id));
-    try{
-      if(!await remote.matches(host.workspaceRoot,`${this.app.vault.configDir}/plugins/${this.manifest.id}/data.json`,host.vaultId))throw Error('The subscription host no longer matches this vault.');
-      const storage=privateStorageResolver(path=>remote.readFile(host.workspaceRoot,path),host.workspaceRoot,this.app.vault.configDir);
-      return {files:{read:async path=>remote.readFile(await storage(),path),write:async(path,value)=>remote.writeFile(await storage(),path,value),remove:async path=>remote.deleteFile(await storage(),path)},close:()=>remote.close()};
-    }catch(error){remote.close();throw error;}
-  }
-  private eventActionIO():ActionIO {
-    const file=(path:string)=>{const value=this.app.vault.getAbstractFileByPath(path);return value instanceof TFile?value:undefined;};
-    const checkEditor=(path:string,expected:string)=>{
-      for(const leaf of this.app.workspace.getLeavesOfType('markdown')){
-        const view=leaf.view as MarkdownView;
-        if(view.file?.path===path&&view.getMode()==='source'&&(nativeResponses(this.app).view(view)?.saved()??view.editor.getValue())!==expected)throw Error('Action note has unsaved editor changes.');
-      }
-    };
-    return {
-      read:async path=>{const value=file(path);return value?this.app.vault.read(value):undefined;},
-      parse:parseYaml,stringify:stringifyYaml,
-      write:async(path,expected,content)=>{const value=file(path);if(!value)throw Error('Action note is unavailable.');checkEditor(path,expected);await this.app.vault.process(value,current=>{if(current!==expected)throw Error('Action note changed after preparation.');return content;});},
-      move:async(path,destination,expected)=>{
-        const value=file(path);if(!value)throw Error('Action note is unavailable.');checkEditor(path,expected);
-        const parts=destination.split('/').slice(0,-1);let folder='';
-        for(const part of parts){folder=folder?folder+'/'+part:part;const existing=this.app.vault.getAbstractFileByPath(folder);if(existing&&!(existing instanceof TFolder))throw Error('Action folder conflicts with a file.');if(!existing)await this.app.vault.createFolder(folder);}
-        if(await this.app.vault.read(value)!==expected)throw Error('Action note changed after preparation.');
-        checkEditor(path,expected);if(this.app.vault.getAbstractFileByPath(destination))throw Error('Action destination already exists.');
-        await this.app.vault.rename(value,destination);
-      },
-    };
-  }
-  private async startEventSubscriptions(server:import('./event-host-desktop').EventHostServer){
-    if(this.eventSubscriptions||this.stopped||Platform.isMobile)return;
-    const key=`events:${this.settings.vaultId}:${this.deviceId}`;
-    const service=new EventSubscriptions({
-      load:async()=>{const saved=await server.load();if(saved)return saved;return await deviceState(key);},save:state=>server.save(state),now:()=>Date.now(),id:randomId,
-      notes:async scope=>{
-        const files=this.app.vault.getMarkdownFiles().filter(file=>inEventScope(scope,file.path));
-        return Promise.all(files.map(async file=>this.eventSnapshot(file.path,await this.app.vault.read(file))));
-      },
-      projectNote:note=>projectEventNote(note,this.smartData(),responseBindingRequests(this.settings.responseBindings??{})),
-      validateTarget:async target=>{await this.eventThread(target);},
-      isBusy:async target=>threadIsActive(await this.eventThread(target)),
-      prepare:async notification=>existingThreadTurn(await this.eventThread(notification.target!),notification.target!,commandId(notification.id,'turn'),{messageId:commandId(notification.id,'message'),role:'user',text:notificationPrompt(notification,this.app.vault.getName()),attachments:[]}),
-      deliver:async notification=>{
-        if(!this.eventHostCurrent(server.identity))throw Error('Subscription host ownership changed.');
-        const thread=await this.eventThread(notification.target!);
-        if(thread.messages?.some(entry=>entry.id===commandId(notification.id,'message')&&entry.role==='user'))return 'delivered';
-        if(threadIsActive(thread))return 'busy';
-        const access=await this.inlineThreadAccess(notification.target!.environmentId);
-        try{if(!this.eventHostCurrent(server.identity))throw Error('Subscription host ownership changed.');await access.api('/api/orchestration/dispatch',notification.command);return 'delivered';}finally{await access.close?.();}
-      },
-      prepareAction:notification=>{const event=notification.events.at(-1)!;return prepareEventAction(notification.action!,event.kind==='job'?undefined:event.path,this.eventActionIO(),event.kind==='property'?{property:event.property!,after:event.after,matches:value=>observedPropertyEquals(value,event.after)}:undefined);},
-      deliverAction:async notification=>{if(!this.eventHostCurrent(server.identity))throw Error('Subscription host ownership changed.');await executeEventAction(notification.command as ActionPlan,this.eventActionIO());},
-      readThread:async target=>{
-        const snapshot=await this.eventThreadSnapshot(target);
-        const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:snapshot.thread}}).state;
-        // Keep the canonical watermark without stamping unrelated global clock
-        // changes into every timestamp-derived message binding.
-        return {...state,...(typeof snapshot.snapshotSequence==='number'&&Number.isSafeInteger(snapshot.snapshotSequence)&&snapshot.snapshotSequence>=0?{sequence:snapshot.snapshotSequence}:{})};
-      },
-      watchThread:(target,item,sequence,reconnecting)=>{
-        return watchThread(target.threadId,()=>this.inlineThreadAccess(target.environmentId),{item:value=>{if(value.kind==='snapshot'&&value.snapshot?.thread?.projectId!==target.projectId)return;item(value);},reconnecting:error=>{reconnecting?.();logFailure('subscriptions.thread.reconnecting',error,{...target});}},undefined,undefined,{afterSequence:sequence,pollSnapshots:false});
-      },
-      displayHost:{
-        validateRelation:(target,paths)=>this.assertNoteMode(undefined,target,paths),
-        confirmRelation:(target,paths)=>this.confirmModeRelation(target,paths),
-        validateDestination:async path=>{const text=await deviceNoteIO(this.app).readNote(path);if(text===undefined)throw Error(`Destination note unavailable: ${path}`);endInsertionOffset(text);},
-        responseBindings:target=>this.displayResponseBindings(target),
-        prepareDisplay:async(display,destination,input)=>{
-          const host=await this.inlineHostTarget(),id=commandId(display.id,`response:${input.id}:${destination.id}`);
-          return {localOnly:true,nativeProjection:true,responseContainer:true,destinationSection:destination.section,version:4,finalAnswerFormat:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat),independent:true,id,initialInput:{messageId:input.id,text:input.text,label:incomingLabel(input)},initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id,{messageId:input.id,text:input.text,label:incomingLabel(input)},undefined,'collapse',{startedAt:input.createdAt??display.createdAt}).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:true,intermediateMode:'collapse'};
-        },
-        attachDisplay:async(request,path)=>{
-          if(this.stopped||!this.eventHostCurrent(server.identity)||!this.deviceInline)throw Error('Streaming host ownership changed.');
-          await this.confirmModeRelation({threadId:request.threadId,projectId:request.projectId,environmentId:request.threadEnvironmentId},[path]);
-          const io=deviceNoteIO(this.app),known=responseBindingRequests(this.settings.responseBindings??{}).find(binding=>binding.id===request.id);
-          const document=await io.readNote(path);if(document===undefined)throw Error('The streaming destination is unavailable.');
-          if(known){if(localResponseRange(document,request.id,[known]))await this.deviceInline.register({...known,notePath:path});return;}
-          await this.assertNoteMode(path,{threadId:request.threadId,projectId:request.projectId,environmentId:request.threadEnvironmentId});
-          const current={...request,localOnly:true as const,nativeProjection:true,responseContainer:true,notePath:path};
-          await editorStream(current,path,io,()=>!this.stopped&&this.eventHostCurrent(server.identity),request.id);
-          await this.deviceInline.register(current);
-        },
-      },
-      recording:active=>logEvent('subscriptions.monitoring',{active}),
-    });
-    try{await service.initialize();await server.save(service.snapshot);}catch(error){service.stop();throw error;}if(this.stopped||!this.eventHostCurrent(server.identity)){service.stop();return;}this.eventSubscriptions=service;
-    let captureWork=Promise.resolve();
-    const observe=(kind:'create'|'modify'|'rename'|'delete',file:TAbstractFile,oldPath?:string)=>{
-      if(this.eventSubscriptions!==service||!this.eventHostCurrent(server.identity))return;
-      if(file instanceof TFolder){
-        if(kind==='rename')captureWork=captureWork.catch(()=>{}).then(()=>this.renameEventFolder(file,oldPath!,service));
-        if(kind==='delete')captureWork=captureWork.catch(()=>{}).then(()=>service.deleteFolder(file.path)).then(()=>{});
-        void captureWork.catch(error=>new Notice(`T3 events: ${message(error)}`,10000));return;
-      }
-      if(!(file instanceof TFile)||!service.interested(file.path,oldPath))return;
-      const path=file.path;captureWork=captureWork.catch(()=>{}).then(async()=>{if(this.stopped||this.eventSubscriptions!==service||!this.eventHostCurrent(server.identity))return;const note=kind==='delete'?undefined:await this.eventSnapshot(path,await this.app.vault.read(file));await service.observe(kind,path,note,oldPath);});
-      void captureWork.catch(error=>new Notice(`T3 events: ${message(error)}`,10000));
-    };
-    this.registerEvent(this.app.vault.on('create',file=>observe('create',file)));
-    this.registerEvent(this.app.vault.on('modify',file=>observe('modify',file)));
-    this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>observe('rename',file,oldPath)));
-    this.registerEvent(this.app.vault.on('delete',file=>observe('delete',file)));
-    // Node timers continue polling in background desktop windows.
-    this.registerInlineInterval(()=>{if(this.eventSubscriptions===service&&this.eventHostCurrent(server.identity)&&service.active)void service.tick().catch(error=>new Notice(`T3 event delivery: ${message(error)}`,10000));},1000);
-  }
+
+
   private async displayResponseBindings(target:EventTarget){
     return responseBindingRequests(this.settings.responseBindings??{}).filter(request=>request.threadId===target.threadId&&request.projectId===target.projectId&&request.threadEnvironmentId===target.environmentId).map(request=>({
       id:request.id,path:request.notePath,messageIds:[request.messageId,...(request.localMessageId?[request.localMessageId]:[]),...request.localSteering?.map(input=>input.messageId)??[]],
       turnIds:[...(request.importTurn?[request.importTurn.turnId]:[]),...this.deviceInline?.cachedResponse(request.id)?.record.state?.turnIds??[]]
     }));
   }
-  private async renameEventFolder(folder:TFolder,oldPath:string,service:EventSubscriptions){
-    if(!service.interestedFolder(folder.path,oldPath))return;
-    const notes=await Promise.all(this.app.vault.getMarkdownFiles().filter(file=>file.path.startsWith(folder.path+'/')).map(async file=>this.eventSnapshot(file.path,await this.app.vault.read(file))));
-    await service.renameFolder(oldPath,folder.path,notes);
-  }
-  async executeAgentCommand(input:import('../notes/note-command').AgentCommand){
+
+  async executeAgentCommand(raw:unknown,route?:CommandRoute){
+    const input=validateAgentCommand(raw);
+    if(isNoteEditCommand(input)){if(!route)throw Error('Use the authenticated T3 Connect edit route.');return this.checkedEdits().execute(input,route);}
     if(isNoteContextCommand(input)){
       const latest=await this.loadSettings();
       const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
       return noteContext(input,mergeNoteContexts(this.settings.noteContexts,latest?.noteContexts),responseBindingRequests(mergeResponseBindingData(this.settings.responseBindings,latest?.responseBindings)),{name:this.app.vault.getName(),id:this.settings.vaultId,...(root?{workspaceRoot:root}:{})});
     }
-    if(isRecoveryCommand(input))throw Error('Legacy reply recovery has been retired. Its unfinished work was cancelled.');
-    if(isClientCommand(input)){
-      await this.refreshNoteCommandHost();
-      if(!this.clientMaintenance||this.stopped)throw Error('Desktop client maintenance is unavailable.');
-      const result=await this.clientMaintenance.execute(input);
-      if(input.kind==='archive-reply-imports'){
-        if(Platform.isMobile||!this.codebase)throw Error('Move old reply imports from a desktop client.');
-        if(input.environmentId!==await this.localInlineEnvironment())throw Error('Choose a linked project on this desktop computer.');
-        const {archiveLegacyReplyImports}=await import('../connection/legacy-reply-imports-desktop');
-        return {...result,replyImports:await this.codebase.archiveReplyImports(input.environmentId,input.projectId!,input.archiveDirectory!,archiveLegacyReplyImports)};
+    if(isRecoveryCommand(input)){
+      const binding=responseBindingRequests(this.settings.responseBindings??{}).find(request=>request.id===input.bindingId&&request.localOnly);
+      if(!binding||!this.deviceInline)throw Error('This reply is unavailable on this client.');
+      const current=await deviceNoteIO(this.app).readNote(binding.notePath);if(current===undefined)throw Error('The response note is unavailable.');
+      const frozen=this.deviceInline.frozenBody(binding.id)??nativeResponses(this.app).stoppedBody(binding.id)??(await nativeStoppedStore(this.deviceId,this.settings.vaultId).readAll([binding.id]))[0]?.body;
+      if(input.kind==='response-recovery-info'){
+        const proposed=frozen??this.deviceInline.cachedResponse(binding.id)?.record.state?.body??'';
+        return {id:input.id,ok:true,recovery:{id:binding.id,notePath:binding.notePath,currentHash:contentHash(current),proofHash:contentHash(proposed),proposedHash:binding.localStage?.stagedHash??contentHash(proposed),proposedCharacters:proposed.length}};
       }
+      const result=await this.deviceInline.retrySave(binding,input.hash!,frozen);
+      return {id:input.id,ok:true,status:result.saved?'saved':'pending',...result};
+    }
+    if(isClientCommand(input)){
+      if(!this.clientMaintenance||this.stopped)throw Error('Client maintenance is unavailable.');
+      const result=await this.clientMaintenance.execute(input);
       if(input.kind==='send-failure-log')return {...result,failureLog:sendFailureLog(this.app.loadLocalStorage(this.failureKey()),result.client!.loadedVersion,this.deviceId,input.since)};
-      return input.kind==='client-status'?{...result,commandServer:this.noteCommandServer?.status(),connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),legacyRepliesRetired:true}:result;
+      return input.kind==='client-status'?{...result,commandServer:{transport:'t3-connect',connected:this.commandHosts.size},connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),legacyRepliesRetired:true}:result;
     }
     if(isResponseCommand(input)){
       const command=validateResponseCommand(input);
       if(command.kind==='response-import-records'||command.kind==='response-import-info')return this.executeImportRead(command,await this.inlineHostTarget());
-      if(command.kind==='stage-note-edit'||command.kind==='submit-note-edit'){
-        const known=responseBindingRequests(this.settings.responseBindings??{}).find(binding=>binding.id===command.bindingId);
-        // The fallback is only for an explicit staging command on an older
-        // still-comment-based response. It is never a background vault scan.
-        const located=await deviceNoteIO(this.app).locateNote(command.bindingId,known?.notePath??'');
-        const paths=new Set([located,known?.notePath,...this.app.workspace.getLeavesOfType('markdown').map(leaf=>(leaf.view as MarkdownView).file?.path)]);
-        for(const path of paths){
-          const file=path&&this.app.vault.getFileByPath(path);if(!file)continue;
-          const document=await deviceNoteIO(this.app).readNote(file.path);if(document===undefined)continue;
-          const binding=localResponseBindings(document,responseBindingRequests(this.settings.responseBindings??{})).find(binding=>binding.id===command.bindingId&&binding.vaultId===this.settings.vaultId);if(!binding)continue;
-          if(Platform.isMobile)throw Error('Run the note staging command on the desktop plugin host.');
-          const request={...binding,notePath:file.path},opened=await this.localResponseFiles(request.host,false);
-          try{
-            const result=await localStageCommand(command.kind,request,document,opened.files,command.hash);
-            if('request' in result&&result.request){
-              const stagedRequest=result.request,release=await nativeResponses(this.app).beginFinalSave(file.path);
-              try{
-                const current=await deviceNoteIO(this.app).readNote(file.path);
-                if(current===undefined||!localResponseRange(current,request.id,[request]))throw Error('The response completed before staging.');
-                await this.saveResponseBinding(stagedRequest);
-              }finally{release();}
-              for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===file.path)await view.save();}
-              this.deviceInline?.resume();
-            }
-            if('request' in result){const {request:_request,...receipt}=result;return {id:command.id,ok:true,...receipt};}return {id:command.id,ok:true,...result};
-          }finally{opened.close();}
-        }
-      }
-
       if(command.kind==='close-stream-block'){
         const {removeStreamBlock}=await import('../responses/stream-block');
         const io=deviceNoteIO(this.app),result=await io.updateNote(command.notePath,document=>removeStreamBlock(document,command.foldKey,command.hash).text,()=>!this.stopped);
@@ -1029,20 +848,7 @@ export default class SendToT3 extends Plugin {
         unlink:path=>this.unlinkFolder(path),
       });}finally{this.busy=false;}
     }
-    if(isEventCommand(input)){
-      const {forwardEventCommand,eventCanonical}=await import('./event-host');
-      const key=`event-route:${this.settings.vaultId}:${input.id}`;
-      const previous=await deviceState<{input:string;host:import('./event-host').EventHostIdentity;connectionId?:string}>(key);
-      if(previous&&previous.input!==eventCanonical(input))throw Error('This request ID already belongs to different input.');
-      const route=previous??{input:eventCanonical(input),...await this.eventHostTarget()};
-      if(!previous)await deviceState(key,route);
-      const current=await this.eventHostTarget();
-      if(eventCanonical(current.host)!==eventCanonical(route.host))throw Error('This command belongs to the previous vault connection machine. Restore that host to retry, or use a new request ID.');
-      await this.refreshEventHost();
-      const opened=await this.eventHostFiles(route);
-      const pause=Platform.isMobile?(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms)):async(ms:number)=>(await (await import('../connection/desktop-timers')).desktopTimers()).pause(ms);
-      try{return await forwardEventCommand(route.host,input,opened.files,pause);}finally{opened.close();}
-    }
+    if(isThreadCommand(input)){await this.startThreadDisplays();return this.threadDisplays!.command(input);}
     return this.executeNoteCommand(input);
   }
   private commandFolder(path:string):TFolder {
@@ -1052,34 +858,25 @@ export default class SendToT3 extends Plugin {
     return folder;
   }
   private async folderCommandProject(command:Extract<FolderCommand,{kind:'link-folder'}>):Promise<Project>{
-    const local=command.connectionId==='local';
-    const paired=local?undefined:this.settings.paired.find(connection=>connection.id===command.connectionId);
-    if(!local&&(!paired||paired.environmentId!==command.environmentId))throw Error('The explicit connection and environment do not identify an available destination.');
-    if(local&&Platform.isMobile)throw Error('Local folder linking requires a desktop client.');
-    const connection:Connection=local?{...this.settings.connection,host:'local',transport:'desktop'}:{transport:'direct',host:'direct',executable:'',url:paired!.url,connectionId:paired!.id,environmentId:paired!.environmentId};
-    let reply:unknown;
-    if(local){
-      const access=await (await import('../connection/desktop')).desktopThreadAccess(connection);
-      try{
-        const environment:unknown=await access.api('/.well-known/t3/environment');
-        if(!isRecord(environment)||environment.environmentId!==command.environmentId||environment.orchestrationProtocolVersion!==2)throw Error('The requested environment is not this desktop’s T3 v2 machine.');
-        reply=await access.api('/api/orchestration/shell');
-      }finally{await access.close?.();}
-    }else reply=await runBridge(connection,['projects']);
+    const paired=this.settings.paired.find(connection=>connection.id===command.connectionId)??this.settings.paired.find(connection=>connection.environmentId===command.environmentId);
+    if(!paired||paired.environmentId!==command.environmentId)throw Error('Pair the exact folder destination through T3 Connect.');
+    const local=['localhost','127.0.0.1','[::1]'].includes(new URL(paired.url).hostname);
+    const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId};
+    const reply=await runBridge(connection,['projects']);
     if(isRecord(reply)&&reply.cached)throw Error('The destination is offline. Linking requires verified live project metadata.');
     const project=parseProjects(reply).find(project=>project.id===command.projectId);
     if(!project||!project.workspaceRoot.trim())throw Error('The requested project is unavailable on that connection and environment.');
     if(command.mode==='self'){
       let workspaceRoot:string;
       if(local){
-        const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
-        if(!adapter.getFullPath)throw Error('This vault does not expose a local filesystem path.');
-        workspaceRoot=adapter.getFullPath(command.folderPath==='/'?'':command.folderPath);
+        const root=this.localVaultPath(command.folderPath==='/'?'':command.folderPath);
+        if(!root)throw Error('This vault does not expose a local filesystem path.');
+        workspaceRoot=root;
       }else{
         const root=this.vaultConnection();
         const rootEnvironment=root?.environmentId??this.settings.paired.find(c=>c.id===root?.connectionId)?.environmentId;
         if(!root||rootEnvironment!==command.environmentId)throw Error('Self mode requires the selected machine to be the verified vault connection machine.');
-        const remote=await connectVaultRemote(connection,await this.sessionFor(paired!.id));
+        const remote=await connectVaultRemote(connection,await this.sessionFor(paired.id));
         try{
           if(!await remote.matches(root.workspaceRoot,`${this.app.vault.configDir}/plugins/${this.manifest?.id||'send-to-t3-code'}/data.json`,this.settings.vaultId))throw Error('The destination vault no longer matches the requested vault.');
           const separator=root.workspaceRoot.includes('\\')&&!root.workspaceRoot.includes('/')?'\\':'/';
@@ -1164,7 +961,6 @@ export default class SendToT3 extends Plugin {
   }
   chatReadinessError():string|undefined {
     if(this.stopped)return 'The plugin has been disabled. Re-enable it before sending.';
-    if(this.mode==='desktop'||!Platform.isMobile&&this.localNoProjectId)return;
     const hasDeviceSession=this.settings.paired.some(c=>{const session=this.pairedSessions[c.id];return session?.environmentId===c.environmentId&&session.url===c.url&&session.expiresAt>Date.now()+5000;});
     if(hasDeviceSession)return;
     if(this.signInExpired)return REAUTHENTICATE_MESSAGE;
@@ -1177,11 +973,15 @@ export default class SendToT3 extends Plugin {
     if(!file||file.extension.toLowerCase()!=='md')return;
     return this.noteContext(file);
   }
-  private noteContext(file:TFile):{path:string;absolutePath?:string} {
-    const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
-    return {path:file.path,...(!Platform.isMobile&&typeof adapter?.getFullPath==='function'?{absolutePath:adapter.getFullPath(file.path)}:{})};
+  private localVaultPath(path=''){
+    const adapter=this.app.vault.adapter;if(Platform.isMobile||!(adapter instanceof FileSystemAdapter))return;
+    const root=adapter.getBasePath(),separator=root.includes('\\')&&!root.includes('/')?'\\':'/';
+    return root.replace(/[\\/]+$/,'')+(path?separator+path.replace(/[\\/]+/g,separator):'');
   }
-  private modeRelations(localEnvironment=this.eventLocalEnvironmentId??this.localNoProjectId){
+  private noteContext(file:TFile):{path:string;absolutePath?:string} {
+    const absolutePath=this.localVaultPath(file.path);return {path:file.path,...(absolutePath?{absolutePath}:{})};
+  }
+  private modeRelations(localEnvironment=this.eventLocalEnvironmentId){
     return this.noteThreadRelations().map(entry=>({...entry,environmentId:entry.environmentId??(this.settings.paired??[]).find(connection=>connection.id===entry.connectionId)?.environmentId??(!entry.connectionId?localEnvironment:undefined)}));
   }
   private noteThreadRelations(){return resolveNoteThreadPaths(this.settings.noteThreads,this.settings.smartSend?.notes??{}).filter(entry=>entry.noteId||!this.app?.vault?.getFileByPath||!!this.app.vault.getFileByPath(entry.notePath));}
@@ -1194,63 +994,12 @@ export default class SendToT3 extends Plugin {
     await this.save();
   }
   private noteThread(path?:string){return path?lastUsedNoteThread(threadNoteMode(this.settings.threadNoteMode)==='one-to-one'?oneToOneNoteThreads(this.modeRelations()):this.noteThreadRelations(),path):undefined;}
-  /** Resolve a note before the chooser captures its default destination. No
-   * normal linked send scans the vault; only a missed move needs uniqueness. */
-  private async recoverNoteThread(path?:string){
-    const vault=this.app?.vault,file=path&&vault?.getFileByPath?.(path);if(!path||!file)return;
-    const view=this.app.workspace.getActiveViewOfType?.(MarkdownView);
-    const document=view?.file?.path===path&&view.editor?this.notePromptDocument(view):await vault.read(file);
-    const data=this.smartData(),id=noteIdentity(document),before=JSON.stringify(this.settings.noteThreads),identityBefore=id?JSON.stringify(data.notes[id]):undefined;
-    const migrated=bindNoteThreadIds(this.settings.noteThreads,data.notes);
-    if(before!==JSON.stringify(migrated))this.settings.noteThreads=migrated;
-    if(id){
-      const known=data.notes[id];
-      if(!known)throw Error('The saved T3 note ID has no thread history on this device. Wait for plugin settings to sync before sending.');
-      // A copy never takes the original's identity or conversation.
-      if(known.path!==path&&vault.getFileByPath(known.path))return;
-      if(known.path!==path||known.deleted){
-        const location=await uniqueNoteLocation(text=>noteIdentityRanges(text).some(marker=>marker.id===id),vault.getMarkdownFiles().map(file=>file.path),async candidate=>{const item=vault.getFileByPath(candidate);return item?await vault.read(item):undefined;});
-        if(location!==path||file.path!==path||vault.getFileByPath(path)!==file)throw Error('The note moved while its T3 identity was being checked. Send again from its current location.');
-        const old=known.path;
-        moveSmartNotes(data,old,path);
-        const revision=Math.max(Date.now(),...Object.values(data.notes).map(note=>note.revision+1));data.notes[id]={path,revision,renamedAt:revision};
-        this.settings.noteThreads=mutateNoteThreads(this.settings.noteThreads,old,path);
-        this.settings.noteThreads=this.settings.noteThreads.map(entry=>{if(entry.noteId!==id||!entry.deletedAt)return entry;const {deletedAt,...live}=entry;return {...live,notePath:path,renamedAt:new Date(revision).toISOString()};});
-      }
-    }else if(!this.noteThread(path)){
-      await this.recoverLegacyNoteThread(path,document);
-      await this.recoverSmartSource(path,document);
-    }
-    const resolved=bindNoteThreadIds(resolveNoteThreadPaths(this.settings.noteThreads,data.notes),data.notes);
-    if(JSON.stringify(this.settings.noteThreads)!==JSON.stringify(resolved))this.settings.noteThreads=resolved;
-    if(before!==JSON.stringify(this.settings.noteThreads)||id&&identityBefore!==JSON.stringify(data.notes[id]))await this.save();
-  }
-  private async recoverLegacyNoteThread(path:string,document:string){
-    const vault=this.app.vault,entries=this.settings.noteThreads.filter(entry=>!entry.deletedAt&&!vault.getFileByPath(entry.notePath));
-    if(!entries.length)return;
-    const receipts=[...runImportReceipts(document)].map(value=>value.receipt);
-    const blocks=streamBlocks(document),candidates=new Map<string,(text:string)=>boolean>();
-    for(const entry of entries){
-      const receipt=receipts.find(item=>item.threadId===entry.threadId&&item.projectId===entry.projectId&&(!entry.environmentId||item.environmentId===entry.environmentId));
-      const block=blocks.find(item=>decodeURIComponent(item.key).startsWith(entry.threadId+':'));
-      if(receipt)candidates.set(entry.notePath,text=>[...runImportReceipts(text)].some(({receipt:item})=>item.bindingId===receipt.bindingId));
-      else if(block)candidates.set(entry.notePath,text=>streamBlocks(text).some(item=>item.key===block.key));
-    }
-    if(candidates.size>1)throw Error('This note contains conversations from several missing notes. Choose its existing thread explicitly.');
-    for(const [old,matches] of candidates){
-      const location=await uniqueNoteLocation(matches,vault.getMarkdownFiles().map(file=>file.path),async candidate=>{const file=vault.getFileByPath(candidate);return file?await vault.read(file):undefined;});
-      if(location!==path||vault.getFileByPath(old))throw Error('The original T3 note location is uncertain. Choose its existing thread explicitly.');
-      this.settings.noteThreads=bindNoteThreadIds(this.settings.noteThreads,this.smartData().notes);
-      moveSmartNotes(this.smartData(),old,path);
-      this.settings.noteThreads=mutateNoteThreads(this.settings.noteThreads,old,path);
-    }
-  }
   private async assertNoteMode(notePath:string|undefined,target:ModeThread,destinations:string[]=[]){
     if(threadNoteMode(this.settings.threadNoteMode)!=='one-to-one')return;
     if(!target.environmentId&&!target.connectionId)target={...target,environmentId:await this.localInlineEnvironment()};
     assertThreadNoteMode('one-to-one',this.modeRelations(!target.connectionId?target.environmentId:undefined),notePath,target,destinations);
   }
-  private async confirmModeRelation(target:import('./event-subscriptions').EventTarget,paths:string[]){
+  private async confirmModeRelation(target:EventTarget,paths:string[]){
     if(threadNoteMode(this.settings.threadNoteMode)!=='one-to-one'||!paths.length)return;
     await this.assertNoteMode(undefined,target,paths);
     if(paths.every(path=>this.noteThread(path)))return;
@@ -1300,7 +1049,7 @@ export default class SendToT3 extends Plugin {
     return !!(await prepareSmartSend(this.smartData(),file.path,await this.smartKey(project,this.connection(project),destination.threadId??''),document,context?.smartScope)).text.trim();
   }
   private async recoverSmartReplies(path:string,document:string){
-    await this.recoverSmartSource(path,document);
+
     const data=this.smartData(),bindings=responseBindingRequests(this.settings.responseBindings??{}).filter(request=>request.notePath===path&&!hasResponseMarkers(document,request.id)&&!Object.keys(data.responses).some(id=>id.startsWith(request.id+':')));
     const sources=new Map<string,{environment:string;project:string;thread:string}>();
     for(const request of bindings)sources.set(JSON.stringify([request.threadEnvironmentId,request.projectId,request.threadId]),{environment:request.threadEnvironmentId,project:request.projectId,thread:request.threadId});
@@ -1335,33 +1084,7 @@ export default class SendToT3 extends Plugin {
       await work;
     }
   }
-  private async recoverSmartSource(path:string,document:string){
-    const data=this.smartData(),visible=new Set(responseIds(document).filter(id=>!!responseFrame(document,id))),candidates=new Set<string>();
-    if(!visible.size)return;
-    for(const [id,head] of Object.entries(data.heads)){
-      const note=data.notes[head.noteId];
-      if(!note||note.path===path||this.app.vault.getAbstractFileByPath(note.path))continue;
-      const bindings=new Set(head.bindings??[]);
-      // Releases before binding provenance was retained can still prove the
-      // original source's deterministic stream ID from its send receipt.
-      if(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)){
-        bindings.add(commandId(id,`binding:${note.path}`));
-        for(const record of this.settings.noteContexts??[])if(record.notePath&&record.messageId===commandId(id,'message')&&head.destination===smartDestination(record.environmentId,record.projectId,record.threadId))bindings.add(commandId(id,`binding:${record.notePath}`));
-      }
-      for(const binding of bindings)if(visible.has(binding)){
-        // Start at the absent old path so the existing locator performs its
-        // shared recovery scan and refuses duplicate/copied response blocks.
-        try{if(await deviceNoteIO(this.app).locateNote(binding,note.path)===path)candidates.add(head.noteId);}
-        catch(error){if(!(error instanceof DuplicateResponseLocation))throw error;}
-      }
-    }
-    const oldPaths=[...new Set([...candidates].map(id=>data.notes[id].path))];
-    this.settings.noteThreads=bindNoteThreadIds(this.settings.noteThreads,data.notes);
-    if(recoverSmartNote(data,path,[...candidates],old=>!!this.app.vault.getAbstractFileByPath(old))){
-      for(const old of oldPaths)this.settings.noteThreads=mutateNoteThreads(this.settings.noteThreads,old,path);
-      await this.save(true);
-    }
-  }
+
   private openAsk(file:TFile,selection='',captured?:EditorChatContext,choose=false){
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
     const view=captured?.view??(active?.file?.path===file.path?active:undefined);
@@ -1374,9 +1097,10 @@ export default class SendToT3 extends Plugin {
   private previousNoteThread(path:string,threadId:string){return previousNoteThreads(this.noteThreadRelations(),path).find(entry=>entry.threadId===threadId);}
   private projectForNoteThread(entry:NoteThread):Project{
     const candidates=[...this.settings.directProjects,...this.settings.projects].filter(item=>item.id===entry.projectId&&sameWorkspacePath(item.workspaceRoot,entry.workspaceRoot)&&(!Platform.isMobile||Boolean(item.connectionId)));
-    const sameConnection=candidates.find(item=>(item.connectionId??'')===entry.connectionId);
+    const sameConnection=entry.connectionId?candidates.find(item=>item.connectionId===entry.connectionId):undefined;
+    const connected=candidates.filter(item=>item.connectionId&&this.settings.paired.some(connection=>connection.id===item.connectionId&&(!entry.environmentId||connection.environmentId===entry.environmentId)));
     const sameEnvironment=entry.environmentId?candidates.find(item=>this.settings.paired.find(connection=>connection.id===item.connectionId)?.environmentId===entry.environmentId):undefined;
-    const project=sameConnection??sameEnvironment??(candidates.length===1?candidates[0]:undefined);
+    const project=sameConnection??sameEnvironment??(connected.length===1?connected[0]:candidates.length===1?candidates[0]:undefined);
     if(!project)throw Error('The last used thread’s T3 project is unavailable on this device. Reconnect that project or choose another thread.');
     return project;
   }
@@ -1427,7 +1151,7 @@ export default class SendToT3 extends Plugin {
   async openNoteSend(file:TFile,showSelector=false,insertion=this.noteSendInsertion(file)){
     const finishPreview=!showSelector&&this.hasConfirmedNoteSend(file.path)?this.previewSend(file.path,undefined,insertion):()=>{};
     try{
-    await this.recoverNoteThread(file.path);
+
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(this.noteContext(file)),
       beginSend:options=>this.previewSend(file.path,undefined,insertion,options.inline.enabled),
       hasNewContent:(destination)=>this.hasSmartContent(file,destination),
@@ -1463,17 +1187,17 @@ export default class SendToT3 extends Plugin {
     });
   }
   async openImportStreams(file:TFile){
-    const result=await this.executeAgentCommand({version:1,id:randomId(),kind:'thread-streams'}) as import('./event-subscriptions').EventCommandResult;
+    const result=await this.executeAgentCommand({version:1,id:randomId(),kind:'thread-streams'}) as ThreadDisplayResult;
     const displays=(result.displays??[]).filter(display=>!display.cancelled&&display.destinations.some(destination=>destination.path===file.path&&!destination.removed));
     const labelled=await Promise.all(displays.map(async display=>({...display,title:await this.eventThread(display).then(thread=>String(thread.title)).catch(()=>`Unavailable thread · ${display.threadId.slice(0,8)}`)})));
     if(this.stopped)return;
     new ImportStreamsModal(this.app,file.path,labelled,async(display,kind)=>{
-      const changed=await this.executeAgentCommand({version:1,id:randomId(),kind,subscriptionId:display.id,...(kind==='remove-stream-destination'?{destination:file.path}:{})}) as import('./event-subscriptions').EventCommandResult;
+      const changed=await this.executeAgentCommand({version:1,id:randomId(),kind,subscriptionId:display.id,...(kind==='remove-stream-destination'?{destination:file.path}:{})}) as ThreadDisplayResult;
       return changed.display!;
     }).open();
   }
   private async followImportedThread(source:{threadId:string;projectId:string;environmentId:string},notePath:string,messageId:string,state:InlineThreadState){
-    const result=await this.executeAgentCommand({version:1,id:randomId(),kind:'thread-streams'}) as import('./event-subscriptions').EventCommandResult;
+    const result=await this.executeAgentCommand({version:1,id:randomId(),kind:'thread-streams'}) as ThreadDisplayResult;
     const history=(result.displays??[]).filter(display=>display.threadId===source.threadId&&display.projectId===source.projectId&&display.environmentId===source.environmentId&&display.destinations.some(destination=>destination.path===notePath));
     const matches=history.filter(display=>display.destinations.some(destination=>destination.path===notePath&&!destination.removed));
     const prompts=state.messages.filter(message=>message.role==='user'),selected=prompts.findIndex(message=>message.id===messageId);
@@ -1503,7 +1227,7 @@ export default class SendToT3 extends Plugin {
     if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
     this.busy=true;
     try{
-      await this.recoverNoteThread(notePath);
+
       await this.assertNoteMode(notePath,{...this.connection(project),projectId:project.id,threadId});
       const history=await this.readImportHistory(project,threadId),run=importRuns(history.state).find(run=>run.messageId===messageId);
       if(!run||run.unavailable||!run.turnId||!run.turn)throw Error(run?.unavailable??'This response is no longer in the T3 history.');
@@ -1540,7 +1264,7 @@ export default class SendToT3 extends Plugin {
     jobOptions??=resolveJobOptions(this.settings.inlineStreaming);
     const finishPreview=this.previewSend(file.path,undefined,insertion,jobOptions.inline.enabled);
     try{
-      await this.recoverNoteThread(file.path);
+
       const active=this.app.workspace.getActiveViewOfType(MarkdownView);
       const content=active?.file?.path===file.path&&active.editor?this.notePromptDocument(active):await this.app.vault.read(file);
       if(!content.trim()){new Notice('This note is empty. Add Markdown before sending.');return;}
@@ -1708,7 +1432,6 @@ export default class SendToT3 extends Plugin {
     };
   }
   private async openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false,showSelector=false){
-    try{await this.recoverNoteThread(note?.path);}catch(error){new Notice(`T3 Code: ${message(error)}`,10000);return;}
     // Generated text is captured context, never a source to move. Classify it
     // before the chooser/network waits: streaming may replace its surroundings.
     if(inline?.anchor)inline=this.canonicalChatContext(inline);
@@ -1877,15 +1600,24 @@ export default class SendToT3 extends Plugin {
     new Notice('The latest T3 turn is attached to this response.');
   }
   private async inlineThreadAccess(environmentId:string,forceRefresh=false):Promise<ThreadAccess>{
-    return environmentAccess(environmentId,{
-      ...(!Platform.isMobile?{local:{identify:()=>this.localNoProjectEnvironment(),open:()=>this.localThreadAccess()}}:{}),
-      paired:[...this.settings.paired].sort((a,b)=>this.connectionScore(b)-this.connectionScore(a)),openPaired:paired=>this.pairedThreadAccess(paired,forceRefresh),
-    });
+    return environmentAccess(environmentId,{paired:[...this.settings.paired].sort((a,b)=>this.connectionScore(b)-this.connectionScore(a)),openPaired:paired=>this.pairedThreadAccess(paired,forceRefresh)});
   }
   private async pairedThreadAccess(paired:PairedConnection,forceRefresh=false):Promise<ThreadAccess>{
     const environmentId=paired.environmentId;
     const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
     let session=await this.sessionFor(paired.id,forceRefresh),api=await environmentApi(connection,session);
+    // Verify authorization before exposing a candidate to sends or writes.
+    // A failed open can try another endpoint for the same machine; the caller
+    // operation is never part of this fallback.
+    const key=JSON.stringify([paired.url,environmentId,session?.token,session?.expiresAt,session?.dpopKeyId]);
+    let verified=this.verifiedConnections.get(key);
+    if(forceRefresh||!verified||verified.until<=Date.now()){
+      const work=api('/api/orchestration/shell').then(()=>{});verified={work,until:Date.now()+30_000};this.verifiedConnections.set(key,verified);
+      while(this.verifiedConnections.size>16)this.verifiedConnections.delete(this.verifiedConnections.keys().next().value!);
+      void work.catch(()=>{if(this.verifiedConnections.get(key)?.work===work)this.verifiedConnections.delete(key);});
+    }
+    await verified.work;
+    if(!Platform.isMobile&&['localhost','127.0.0.1','[::1]'].includes(new URL(paired.url).hostname))this.eventLocalEnvironmentId=environmentId;
     let renewing:Promise<void>|undefined;
     return {origin:endpoint(paired.url),get expiresAt(){return session?.expiresAt;},api:async(path,payload,options)=>{
       const attemptedApi=api;
@@ -1902,9 +1634,10 @@ export default class SendToT3 extends Plugin {
       }
     }};
   }
-  private localInlineEnvironment():Promise<string>{
-    if(Platform.isMobile)return Promise.reject(Error('A phone cannot host vault responses.'));
-    return this.inlineEnvironment??=import('../connection/desktop').then(d=>d.desktopEnvironment(this.settings.connection)).catch(error=>{this.inlineEnvironment=undefined;throw error;});
+  private async localInlineEnvironment():Promise<string>{
+    const local=this.settings.paired.find(connection=>['localhost','127.0.0.1','[::1]'].includes(new URL(connection.url).hostname));
+    if(!local)throw Error('Pair this T3 machine through T3 Connect before using its local project.');
+    await this.pairedThreadAccess(local);return local.environmentId;
   }
   private registerInlineInterval(callback:()=>void,milliseconds:number){
     if(Platform.isMobile){this.registerInterval(window.setInterval(callback,milliseconds));return;}
@@ -1913,19 +1646,128 @@ export default class SendToT3 extends Plugin {
     });
   }
   private async refreshNoteCommandHost():Promise<void>{
-    if(Platform.isMobile||this.stopped)return;
-    if(this.noteCommandOpening)return this.noteCommandOpening;
+    if(this.stopped||this.noteCommandOpening)return this.noteCommandOpening;
     const work=(async()=>{
-      if(this.noteCommandServer?.active)return;
-      const root=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
-      if(!root)return;
-      const {NoteCommandServer}=await import('../notes/note-command-desktop');
-      const configDir=this.app.vault.configDir;
-      this.clientMaintenance??=new (await import('./client-maintenance-desktop')).DesktopClientMaintenance(this.app,root,configDir,pluginManifest.version);
-      const server=await NoteCommandServer.open(root,configDir,command=>this.executeAgentCommand(command),()=>!this.stopped,undefined,async(command,result)=>isClientCommand(command)?this.clientMaintenance!.acknowledged(command,result):false);
-      if(this.stopped){await server.dispose();return;}this.noteCommandServer=server;
-    })();
-    this.noteCommandOpening=work;try{await work;}finally{if(this.noteCommandOpening===work)this.noteCommandOpening=undefined;}
+      const environments=[...new Set([...this.settings.paired].sort((a,b)=>this.connectionScore(b)-this.connectionScore(a)).map(connection=>connection.environmentId))].slice(0,16);
+      for(const [environmentId,entry] of this.commandHosts)if(!environments.includes(environmentId)||entry.rpc.closed){this.commandHosts.delete(environmentId);await entry.host.dispose();entry.rpc.close();}
+      await forEachBounded(environments,4,environmentId=>this.openCommandHost(environmentId));
+    })();this.noteCommandOpening=work;try{await work;}finally{if(this.noteCommandOpening===work)this.noteCommandOpening=undefined;}
+  }
+  private async openCommandHost(environmentId:string){
+    if(this.stopped||this.commandHosts.has(environmentId))return;
+    let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined,host:ConnectCommandHost|undefined;
+    try{
+      const access=await this.inlineThreadAccess(environmentId),project=await this.commandProject(environmentId);rpc=await connectT3Rpc(access.api,access.origin);
+      const route={environmentId,workspaceRoot:project.workspaceRoot,base:commandBase(this.settings.vaultId,this.deviceId)},files=connectCommandFiles(rpc,project.workspaceRoot);
+      host=new ConnectCommandHost({files,route,identity:{vaultId:this.settings.vaultId,vaultName:this.app.vault.getName(),vaultPath:this.localVaultPath(),clientId:this.deviceId,instanceId:this.clientMaintenance!.client.instanceId,loadedVersion:pluginManifest.version},
+        serialize:action=>this.serializeCommand(action),
+        validate:command=>{validateAgentCommand(command);},
+        load:id=>deviceState(`connect-receipt:${this.settings.vaultId}:${this.deviceId}:${id}`),
+        save:(id,receipt)=>this.retainCommandReceipt(id,receipt),
+        execute:async(command,target)=>{if(this.stopped||!this.settings.paired.some(connection=>connection.environmentId===target.environmentId))throw Error('This T3 machine was disconnected.');const result=await this.executeAgentCommand(command,target);if(!isRecord(result))throw Error('Invalid command result.');return result;},
+        acknowledged:async(command,result)=>{if(isClientCommand(command))await this.clientMaintenance!.acknowledged(command,result as unknown as import('./client-command').ClientCommandResult);},
+      });
+      if(this.stopped||!this.settings.paired.some(connection=>connection.environmentId===environmentId)){await host.dispose();rpc.close();return;}
+      this.commandHosts.set(environmentId,{host,rpc,files});await host.tick();
+    }catch(error){if(this.commandHosts.get(environmentId)?.rpc===rpc)this.commandHosts.delete(environmentId);await host?.dispose();rpc?.close();logFailure('commands.connect',error,{environmentId});}
+  }
+  private async commandProject(environmentId:string){
+    const cached=this.commandProjects.get(environmentId);if(cached)return cached;
+    const access=await this.inlineThreadAccess(environmentId);try{const project=await ensureNoProject(access.api);this.commandProjects.set(environmentId,project);return project;}finally{await access.close?.();}
+  }
+  private async commandFiles(route:CommandRoute):Promise<CommandFiles>{
+    const project=await this.commandProject(route.environmentId);
+    if(!sameWorkspacePath(project.workspaceRoot,route.workspaceRoot)||!new RegExp('^\\.t3-obsidian/clients/'+this.settings.vaultId+'/[0-9a-f-]{36}$','i').test(route.base))throw Error('The edit transport belongs to another vault or T3 workspace.');
+    const entry=this.commandHosts.get(route.environmentId);if(entry&&!entry.rpc.closed)return entry.files;
+    const access=await this.inlineThreadAccess(route.environmentId),rpc=await connectT3Rpc(access.api,access.origin);
+    this.register(()=>rpc.close());return connectCommandFiles(rpc,project.workspaceRoot);
+  }
+  private serializeCommand<T>(action:()=>Promise<T>):Promise<T>{const work=this.commandSerial.catch(()=>{}).then(action);this.commandSerial=work.then(()=>{},()=>{});return work;}
+  private async retainCommandReceipt(id:string,receipt:unknown){
+    await retainDeviceState(`connect-receipt:${this.settings.vaultId}:${this.deviceId}`,id,receipt,{records:512,bytes:32_000_000,ttl:24*60*60*1000},isRecord(receipt)&&receipt.phase==='executing');
+  }
+  private saveCheckedEdit(snapshot:EditSnapshot){return retainDeviceState(`checked-edit:${this.settings.vaultId}:${this.deviceId}`,snapshot.editId,snapshot,{records:64,bytes:32_000_000,ttl:24*60*60*1000},snapshot.status==='submitted');}
+  private checkedEdits(){
+    return this.noteEdits??=new CheckedNoteEdits({
+      load:async id=>await deviceState<EditSnapshot>(`checked-edit:${this.settings.vaultId}:${this.deviceId}:${id}`)??undefined,
+      save:snapshot=>this.saveCheckedEdit(snapshot),
+      read:path=>deviceNoteIO(this.app).readNote(path),binding:id=>responseBindingRequests(this.settings.responseBindings??{}).find(binding=>binding.id===id),
+      files:route=>this.commandFiles(route),
+      attach:async(binding,stage,attached)=>{
+        const release=await nativeResponses(this.app).beginFinalSave(binding.notePath);
+        try{
+          const current=await deviceNoteIO(this.app).readNote(binding.notePath),latest=responseBindingRequests(this.settings.responseBindings??{}).find(value=>value.id===binding.id);
+          if(current===undefined||!responseIds(current).includes(binding.id)||!latest||latest.notePath!==binding.notePath)throw Error('The reply finished or moved before the proposal could be attached.');
+          if(latest.localStage&&latest.localStage.editId!==stage.editId)throw Error('Another edit is already waiting for this reply.');
+          await this.saveResponseBinding({...latest,localStage:stage});await attached();
+        }finally{release();}
+        this.deviceInline?.resume();
+      },
+      detach:async(binding,editId,expectedHash,detached)=>{
+        const release=await nativeResponses(this.app).beginFinalSave(binding.notePath);
+        try{
+          const current=await deviceNoteIO(this.app).readNote(binding.notePath),latest=responseBindingRequests(this.settings.responseBindings??{}).find(value=>value.id===binding.id);
+          if(current===undefined||contentHash(current)!==expectedHash||!latest||latest.notePath!==binding.notePath||latest.localStage?.editId!==editId||!responseIds(current).includes(binding.id))throw Error('The reviewed reply changed before its proposal could be withdrawn.');
+          await this.saveResponseBinding({...latest,localStage:undefined});await detached();
+        }finally{release();}
+        this.deviceInline?.resume();
+      },
+      commit:async(path,before,after)=>{const notes=deviceFinalNoteIO(this.app,()=>!this.stopped);if(await notes.read(path)!==before)return false;return notes.compareAndSet(path,before,after);},
+      create:async(path,content)=>{if(this.app.vault.getAbstractFileByPath(path))throw Error('The new note path already exists.');await this.app.vault.create(path,content);},
+      rename:async(path,destination,expectedHash)=>{
+        const release=await nativeResponses(this.app).beginFinalSave(path);
+        try{const file=this.app.vault.getFileByPath(path),current=await deviceNoteIO(this.app).readNote(path);if(!file||current===undefined||contentHash(current)!==expectedHash)throw Error('The note changed before its move. Prepare it again.');if(this.app.vault.getAbstractFileByPath(destination))throw Error('The destination already exists.');await this.app.fileManager.renameFile(file,destination);}finally{release();}
+      },
+      remember:async(path,id,before,after)=>{if(await rememberNoteEdits(this.smartData(),path,id,before,after))await this.save(true);},
+    });
+  }
+  private async markEditSaved(binding:ResponseRequest){
+    const id=binding.localStage?.editId;if(!id)return;
+    const key=`checked-edit:${this.settings.vaultId}:${this.deviceId}:${id}`,snapshot=await deviceState<EditSnapshot>(key);
+    if(snapshot?.status==='submitted'){snapshot.status='saved';snapshot.notePath=binding.notePath;await this.saveCheckedEdit(snapshot);}
+  }
+  private tickCommandHosts(){
+    // Each host coalesces its own tick. An offline machine must not hold the
+    // ready clients behind a global poll promise. The registration cap bounds
+    // these independent channels; command dispatch remains serialized.
+    for(const [environmentId,entry] of this.commandHosts)void entry.host.tick().catch(async error=>{if(this.commandHosts.get(environmentId)!==entry)return;this.commandHosts.delete(environmentId);logFailure('commands.poll',error,{environmentId});await entry.host.dispose();entry.rpc.close();});
+  }
+  private async startThreadDisplays(){
+    if(this.threadDisplays||this.stopped)return;if(this.threadDisplayOpening)return this.threadDisplayOpening;
+    const work=this.openThreadDisplays();this.threadDisplayOpening=work;try{await work;}finally{if(this.threadDisplayOpening===work)this.threadDisplayOpening=undefined;}
+  }
+  private async legacyReplyDisplays(){
+    const root=this.vaultConnection();if(!root)return;
+    const environmentId=root.environmentId??this.settings.paired.find(connection=>connection.id===root.connectionId)?.environmentId;if(!environmentId)return;
+    const access=await this.inlineThreadAccess(environmentId),rpc=await connectT3Rpc(access.api,access.origin);
+    const read=async(cwd:string,path:string)=>{try{const result=await rpc.call('projects.readFile',{cwd,relativePath:path});if(!isRecord(result)||result.truncated||typeof result.contents!=='string')throw Error('The prior reply-following data is incomplete.');return result.contents;}catch(error){if(isRecord(error)&&error.kind==='ProjectReadFileError')return;throw error;}};
+    try{
+      const configDir=this.app.vault.configDir,route=readPrivateStorageRoute(await read(root.workspaceRoot,`${configDir}/t3-code/storage-route.json`),root.workspaceRoot,configDir);
+      const raw=await read(route?.storageRoot??root.workspaceRoot,`${configDir}/t3-code/events/v1/state.json`);if(!raw)return;
+      const prior=parseJson(raw);if(!isRecord(prior)||!isRecord(prior.host)||prior.host.vaultId!==this.settings.vaultId||prior.host.environmentId!==environmentId||prior.host.workspaceRoot!==root.workspaceRoot||!isRecord(prior.state))throw Error('The prior reply registrations belong to another vault or machine.');
+      return {version:1,displays:prior.state.displays,responseReservations:prior.state.responseReservations};
+    }finally{rpc.close();await access.close?.();}
+  }
+  private async openThreadDisplays(){
+    const key=`reply-displays:${this.settings.vaultId}:${this.deviceId}`;
+    const service=new ThreadDisplays({load:async()=>await deviceState(key)??await deviceState(`events:${this.settings.vaultId}:${this.deviceId}`)??await this.legacyReplyDisplays(),save:async state=>{await deviceState(key,state);},now:()=>Date.now(),displayHost:{
+      validateRelation:(target,paths)=>this.assertNoteMode(undefined,target,paths),confirmRelation:(target,paths)=>this.confirmModeRelation(target,paths),
+      validateDestination:async path=>{const text=await deviceNoteIO(this.app).readNote(path);if(text===undefined)throw Error('Destination note unavailable.');endInsertionOffset(text);},
+      responseBindings:target=>this.displayResponseBindings(target),
+      readThread:async target=>{const snapshot=await this.eventThreadSnapshot(target);return applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;},
+      prepareDisplay:async(display,destination,input)=>{const host=await this.inlineHostTarget(),id=commandId(display.id,`response:${input.id}:${destination.id}`);return {localOnly:true,nativeProjection:true,responseContainer:true,destinationSection:destination.section,version:4,finalAnswerFormat:finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat),independent:true,id,initialInput:{messageId:input.id,text:input.text,label:incomingLabel(input)},initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath:destination.path,threadId:display.threadId,messageId:input.id,projectId:display.projectId,threadEnvironmentId:display.environmentId,initialHash:initialRegion(id,{messageId:input.id,text:input.text,label:incomingLabel(input)},undefined,'collapse',{startedAt:input.createdAt??display.createdAt}).bodyHash,createdAt:input.createdAt??display.createdAt,keepIntermediate:true,intermediateMode:'collapse'};},
+      attachDisplay:async(request,path)=>{
+        if(this.stopped||!this.deviceInline)throw Error('The reply client is unavailable.');
+        await this.confirmModeRelation({threadId:request.threadId,projectId:request.projectId,environmentId:request.threadEnvironmentId},[path]);
+        const io=deviceNoteIO(this.app),known=responseBindingRequests(this.settings.responseBindings??{}).find(binding=>binding.id===request.id),document=await io.readNote(path);if(document===undefined)throw Error('The streaming destination is unavailable.');
+        if(known){if(localResponseRange(document,request.id,[known]))await this.deviceInline.register({...known,notePath:path});return;}
+        await this.assertNoteMode(path,{threadId:request.threadId,projectId:request.projectId,environmentId:request.threadEnvironmentId});
+        const current={...request,localOnly:true as const,nativeProjection:true,responseContainer:true,notePath:path};await editorStream(current,path,io,()=>!this.stopped,request.id);await this.deviceInline.register(current);
+      },
+    },watchThread:(target,item,sequence,reconnecting)=>watchThread(target.threadId,()=>this.inlineThreadAccess(target.environmentId),{item:value=>{if(value.kind==='snapshot'&&value.snapshot?.thread?.projectId!==target.projectId)return;item(value);},reconnecting:()=>reconnecting()},undefined,undefined,{afterSequence:sequence,pollSnapshots:false})});
+    await service.initialize();if(this.stopped){service.stop();return;}this.threadDisplays=service;
+    this.registerInlineInterval(()=>{if(service.active)void service.tick().catch(error=>logFailure('reply.follow',error));},1000);
+    this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void service.rename(oldPath,file.path).catch(error=>logFailure('reply.rename',error));}));
   }
   private async reloadForConnection(beforeDispatch:()=>boolean){
     if(this.stopped||Platform.isMobile)return false;
@@ -1937,20 +1779,15 @@ export default class SendToT3 extends Plugin {
   }
 
   private async inlineHostTarget():Promise<ResponseStorageTarget>{
-    let root=this.vaultConnection();
-    if(!root&&!Platform.isMobile){const workspaceRoot=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');if(workspaceRoot)root={workspaceRoot,connectionId:'',environmentId:await this.localInlineEnvironment()};}
-    if(!root){await this.configureVaultConnection();root=this.vaultConnection();}
-    if(!root)throw Error('Choose a vault connection machine before streaming replies.');
-    const environmentId=root.environmentId??this.settings.paired.find(c=>c.id===root.connectionId)?.environmentId??(!root.connectionId?await this.localInlineEnvironment():undefined);
-    if(!environmentId)throw Error('Reconnect the vault connection machine before streaming replies.');
-    return {environmentId,workspaceRoot:root.workspaceRoot,directory:`${this.app.vault.configDir}/t3-code/inline/v1`,...(root.connectionId?{connectionId:root.connectionId}:{})};
+    const machine=this.defaultNoProjectMachine(),paired=this.settings.paired.find(connection=>connection.id===machine)??this.settings.paired[0];
+    if(!paired)throw Error('Connect T3 before streaming replies.');
+    const project=await this.commandProject(paired.environmentId);
+    return {environmentId:paired.environmentId,workspaceRoot:project.workspaceRoot,directory:`${this.app.vault.configDir}/t3-code/inline/v1`,connectionId:paired.id};
   }
   private async localResponseTarget(request:Request):Promise<ResponseStorageTarget>{
-    if(!Platform.isMobile&&request.connection.host==='local'&&request.connection.transport!=='direct'){
-      const workspaceRoot=(this.app.vault.adapter as {getFullPath?:(path:string)=>string}).getFullPath?.('');
-      if(workspaceRoot)return {environmentId:request.connection.environmentId??await this.localInlineEnvironment(),workspaceRoot,directory:`${this.app.vault.configDir}/t3-code/inline/v1`};
-    }
-    return this.inlineHostTarget();
+    const connection=this.connection(request.project),environmentId=request.connection.environmentId??connection.environmentId;
+    if(!environmentId)throw Error('The reply has no verified T3 environment.');
+    return {environmentId,workspaceRoot:request.project.workspaceRoot,directory:`${this.app.vault.configDir}/t3-code/inline/v1`,...(connection.connectionId?{connectionId:connection.connectionId}:{})};
   }
   private async prepareHostedInline(job:InlineJob,request:Request){
     const host=await this.localResponseTarget(request);
@@ -1959,22 +1796,7 @@ export default class SendToT3 extends Plugin {
     request.inlineHost={localOnly:true,nativeProjection:true,responseContainer:true,version:4,finalAnswerFormat:finalAnswerFormat(job.finalAnswerFormat),independent:true,threadTitle:request.title,initialOwner:this.inlineActor,id:job.id,vaultId:this.settings.vaultId,host,notePath:job.path,threadId:job.threadId!,messageId:job.messageId!,projectId:request.project.id,threadEnvironmentId,initialHash:job.bodyHash,createdAt:job.createdAt,keepIntermediate:job.keepIntermediate===true,intermediateMode:intermediateMode(job.intermediateMode,job.keepIntermediate),...(job.initialInput?{initialInput:job.initialInput}:{})};
 
   }
-  private async localResponseFiles(target:ResponseStorageTarget,_waitForHost=true):Promise<{files:ResponseFiles;readonly closed:boolean;close():void}>{
-    const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
-    if(!Platform.isMobile&&adapter.getFullPath&&sameWorkspacePath(adapter.getFullPath(''),target.workspaceRoot)&&await this.isLocalStorageEnvironment(target.environmentId)){
-      const {ensurePrivateStorage}=await import('../storage/private-storage-desktop');await ensurePrivateStorage(target.workspaceRoot,this.app.vault.configDir);
-      const files=(await import('../responses/response-storage-desktop')).localInlineFiles(target.workspaceRoot,target.directory);
-      return {closed:false,files,close:()=>{void files.close?.();}};
-    }
-    const paired=this.settings.paired.find(c=>c.environmentId===target.environmentId&&(c.id===target.connectionId||!target.connectionId))??this.settings.paired.find(c=>c.environmentId===target.environmentId);
-    if(!paired)throw Error('Connect the vault connection machine on this device before streaming replies.');
-    const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId},await this.sessionFor(paired.id));
-    try{
-      if(!await remote.matches(target.workspaceRoot,`${this.app.vault.configDir}/plugins/${this.manifest?.id||'send-to-t3-code'}/data.json`,this.settings.vaultId))throw Error('The streaming host no longer matches this vault. Reconnect the vault connection machine.');
-      const storage=privateStorageResolver(path=>remote.readFile(target.workspaceRoot,path),target.workspaceRoot,this.app.vault.configDir);
-      return {get closed(){return remote.closed;},files:{read:async path=>remote.readFile(await storage(),path),write:async(path,contents)=>remote.writeFile(await storage(),path,contents)},close:()=>remote.close()};
-    }catch(error){remote.close();throw error;}
-  }
+
   private async stopLocalInline(job:InlineJob){
     const current=this.deviceInline?.localResponse(job.id);
     if(current)return this.deviceInline!.stopResponse(current.host,job.id,nativeResponses(this.app).stoppedBody(job.id),job.remoteStopOperationId);
@@ -1998,81 +1820,40 @@ export default class SendToT3 extends Plugin {
   }
   vaultConnection():VaultHost|undefined {
     const host=vaultHost(this.settings);if(!host)return;
-    const localRoot=!Platform.isMobile?(this.app.vault.adapter as {getFullPath?:(path:string)=>string})?.getFullPath?.(''):undefined;
+    const localRoot=this.localVaultPath();
     if(!host.connectionId&&localRoot&&sameWorkspacePath(host.workspaceRoot,localRoot)&&(!host.environmentId||host.environmentId===this.eventLocalEnvironmentId))return host;
     const legacy=!this.settings.vaultHost?this.settings.folderLinks.find(link=>link.folderPath==='/'):undefined;
     const candidates=legacy&&!host.connectionId&&!host.environmentId?this.settings.directProjects.filter(project=>project.connectionId&&sameWorkspacePath(project.workspaceRoot,host.workspaceRoot)&&project.id===legacy.projectId):[];
     const paired=this.settings.paired.find(item=>item.id===host.connectionId&&(!host.environmentId||item.environmentId===host.environmentId))??this.settings.paired.find(item=>item.environmentId===host.environmentId)??(candidates.length===1?this.settings.paired.find(item=>item.id===candidates[0].connectionId):undefined);
     return paired?{...host,connectionId:paired.id,environmentId:paired.environmentId}:host;
   }
-  private defaultNoProjectMachine():string|undefined {
-    if(!Platform.isMobile)return 'local';
-    const host=this.vaultConnection();
-    if(host)return host.connectionId||'local';
-    return this.settings.paired.length===1?this.settings.paired[0].id:undefined;
+  private defaultNoProjectMachine():string|undefined{
+    const local=this.settings.paired.find(connection=>['localhost','127.0.0.1','[::1]'].includes(new URL(connection.url).hostname));
+    const selected=this.settings.paired.find(connection=>connection.id===this.settings.directScanId);
+    return local?.id??this.fallbackNoProjectMachine()??selected?.id;
   }
   private fallbackNoProjectMachine():string|undefined {
     const host=this.vaultConnection();
-    if(host?.connectionId&&this.settings.paired.some(item=>item.id===host.connectionId))return host.connectionId;
+    if(host?.connectionId)return host.connectionId;
     return this.settings.paired.length===1?this.settings.paired[0].id:undefined;
   }
-  private localNoProjectEnvironment(){return import('../connection/desktop').then(desktop=>desktop.availableDesktopEnvironment(this.settings.connection));}
-  private async isLocalStorageEnvironment(environmentId:string):Promise<boolean>{
-    // These identities were verified on this device. Its vault files remain
-    // local when T3 stops; file access must not depend on server availability.
-    if(environmentId===this.eventLocalEnvironmentId||environmentId===this.localNoProjectId)return true;
-    try{return environmentId===await this.localNoProjectEnvironment();}catch{return false;}
-  }
-  private localThreadAccess():Promise<ThreadAccess>{
-    if(!Platform.isDesktop)return Promise.reject(Error('Local T3 access requires a desktop.'));
-    return import('../connection/desktop').then(desktop=>desktop.desktopThreadAccess({...this.settings.connection,host:'local'}));
-  }
-  private desktopAccess(){
-    this.localDesktopAccess??=new ThreadAccessCache(()=>this.localThreadAccess());
-    return this.localDesktopAccess.get(JSON.stringify([this.settings.connection.executable,this.settings.connection.baseDir??'']));
-  }
-  private refreshLocalNoProject():Promise<string|undefined>{
-    if(Platform.isMobile||this.stopped)return Promise.resolve(undefined);
-    if(this.localNoProjectCheck)return this.localNoProjectCheck;
-    const work=this.localNoProjectEnvironment().catch(()=>undefined).then(id=>{
-      if(!this.stopped){this.localNoProjectId=id;this.localNoProjectCheckedAt=Date.now();if(id){this.inlineEnvironment=Promise.resolve(id);void this.desktopAccess().catch(()=>{});}}
-      return id;
-    });
-    this.localNoProjectCheck=work;void work.finally(()=>{if(this.localNoProjectCheck===work)this.localNoProjectCheck=undefined;});return work;
-  }
+
+
   private async readNoProjectProject(connection:Connection,signal?:AbortSignal):Promise<Project>{return parseProjects({projects:[await runBridge(connection,['no-project'],'',{signal})]})[0];}
   private async noProjectTarget(key=NO_PROJECT,interactive=true):Promise<{project:Project;link:FolderLink}>{
-    const explicit=noProjectMachine(key);let machine=explicit??this.defaultNoProjectMachine();
-    if(!explicit&&machine==='local'&&!Platform.isMobile){
-      const available=Date.now()<this.localNoProjectRetryAt?undefined:Date.now()-this.localNoProjectCheckedAt<1000?this.localNoProjectId:await this.refreshLocalNoProject();
-      if(!available){machine=this.fallbackNoProjectMachine();if(!machine)throw Error('Local T3 is unavailable. Connect another T3 machine before sending.');}
-    }
+    let machine=noProjectMachine(key)??this.defaultNoProjectMachine();
+    if(machine==='local'){machine=this.settings.paired.find(connection=>['localhost','127.0.0.1','[::1]'].includes(new URL(connection.url).hostname))?.id;if(!machine)throw Error('Pair the selected local T3 machine through T3 Connect.');}
     if(!machine){
-      if(!interactive)throw Error('Choose a No project machine in T3 Code settings before sending.');
-      const host=await this.configureVaultConnection();machine=host.connectionId||'local';
+      if(!interactive)throw Error('Choose a connected T3 machine before sending.');
+      const choices=this.vaultMachines();if(!choices.length){this.openSettings();throw Error('Sign in or pair T3 before sending.');}
+      machine=await new Promise<string>((resolve,reject)=>new ConnectedMachineModal(this.app,choices,resolve,reject).open());
     }
-    if(machine.startsWith('environment:')){
-      const discovered=this.cloudMachines.find(item=>'environment:'+item.environmentId===machine);
-      if(!discovered)throw Error('This machine is no longer available. Refresh connections.');
-      await this.connectAccountMachine(discovered);
-      machine=this.settings.paired.find(item=>item.environmentId===discovered.environmentId)?.id;
-      if(!machine)throw Error('Connect this T3 machine before sending.');
-    }
-    if(machine==='local'&&Platform.isMobile)throw Error('The default machine is local to another desktop. Choose a connected computer.');
-    const paired=machine==='local'?undefined:this.settings.paired.find(item=>item.id===machine);
-    if(machine!=='local'&&!paired)throw Error('The selected T3 machine is unavailable. Reconnect it or choose another machine.');
-    const connection:Connection=paired?{transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId}:{...this.settings.connection,host:'local',transport:'desktop',...(this.localNoProjectId?{environmentId:this.localNoProjectId}:{})};
-    const fallback=!explicit&&machine==='local'?this.fallbackNoProjectMachine():undefined;
-    const controller=fallback?new AbortController():undefined,timer=controller?setTimeout(()=>controller.abort(Error('Local No project setup is unavailable.')),1000):undefined;
-    let found:Project;
-    try{found=await abortableRead(this.readNoProjectProject(connection,controller?.signal),controller?.signal);}
-    catch(error){if(!fallback||this.stopped)throw error;this.localNoProjectRetryAt=Date.now()+15_000;return this.noProjectTarget(noProjectKey(fallback),interactive);}
-    finally{if(timer!==undefined)clearTimeout(timer);}
-    const project:Project={...found,...(paired?{connectionId:paired.id,connectionName:paired.name}:{})};
-    this.noProjectProjects.set(machine,project);
-    if(paired)this.settings.directProjects=[...this.settings.directProjects.filter(item=>projectKey(item)!==projectKey(project)),project];
-    else this.settings.projects=[...this.settings.projects.filter(item=>item.id!==project.id),project];
-    return {project,link:{id:'no-project',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false}};
+    if(machine.startsWith('environment:')){const discovered=this.cloudMachines.find(value=>'environment:'+value.environmentId===machine);if(!discovered)throw Error('Refresh T3 connections.');await this.connectAccountMachine(discovered);machine=this.settings.paired.find(connection=>connection.environmentId===discovered.environmentId)?.id;}
+    const paired=this.settings.paired.find(connection=>connection.id===machine);if(!paired)throw Error('Reconnect the selected T3 machine.');
+    const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId};
+    const found=await this.readNoProjectProject(connection),project={...found,connectionId:paired.id,connectionName:paired.name};
+    this.noProjectProjects.set(paired.id,project);this.settings.directProjects=[...this.settings.directProjects.filter(item=>projectKey(item)!==projectKey(project)),project];
+    return {project,link:{id:'no-project',folderPath:'/',connectionId:paired.id,projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false,environmentId:paired.environmentId}};
   }
   private async folderTarget(notePath:string,create:boolean,interactive=true):Promise<{project:Project;link:FolderLink}|undefined>{
     const folderPath=notePath.slice(0,notePath.lastIndexOf('/'));
@@ -2099,7 +1880,7 @@ export default class SendToT3 extends Plugin {
   vaultMachines():VaultMachine[]{
     const remote=this.settings.paired.filter((c,index,list)=>list.findIndex(other=>other.environmentId===c.environmentId)===index).map(c=>({id:c.id,name:c.name,environmentId:c.environmentId,detail:this.machineErrors[c.environmentId]?'Unavailable — retry connection':undefined}));
     const discovered=this.cloudMachines.filter(m=>!this.settings.paired.some(c=>c.environmentId===m.environmentId)).map(m=>({id:'environment:'+m.environmentId,name:m.name,environmentId:m.environmentId,detail:this.machineErrors[m.environmentId]?'Unavailable — retry connection':undefined}));
-    return [...(!Platform.isMobile?[{id:'local',name:'This computer',local:true,environmentId:this.eventLocalEnvironmentId}]:[]),...remote,...discovered];
+    return [...remote,...discovered];
   }
   async configureVaultConnection():Promise<VaultHost>{
     if(this.vaultSetup)return this.vaultSetup;
@@ -2196,7 +1977,7 @@ export default class SendToT3 extends Plugin {
     this.busy=true;
     const startedAt=Date.now();let request:Request|undefined;
     try{
-      await this.recoverNoteThread(note?.path);
+
       let smartCapture:SmartCapture|undefined,steeringSource:SteeringSource|undefined;
       let preparedInput=prompt;
       const historical=note&&options?.threadId&&!options.expectedProjectKey?this.previousNoteThread(note.path,options.threadId):undefined;
@@ -2264,11 +2045,9 @@ export default class SendToT3 extends Plugin {
     const log=sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId);
     modal.contentEl.createEl('p',{text:'The last 64 send failures on this device. Message text and credentials are excluded.'});
     const field=modal.contentEl.createEl('textarea',{cls:'send-to-t3-failure-log'});field.readOnly=true;field.value=JSON.stringify(log,null,2);
-    new Setting(modal.contentEl).addButton(button=>button.setButtonText('Copy log').onClick(async()=>{try{const clipboard=field.ownerDocument.defaultView?.navigator.clipboard;if(!clipboard)throw Error('Clipboard access is unavailable.');await clipboard.writeText(field.value);}catch(error){new Notice(`Could not copy the log: ${message(error)}`);}}));modal.open();
   }
 
   projects(){
-    if(this.mode==='desktop')return this.settings.projects;
     const catalog=new Map<string,{project:Project;score:number}>();
     for(const project of this.settings.directProjects){
       const c=this.settings.paired.find(c=>c.id===project.connectionId);
@@ -2281,9 +2060,18 @@ export default class SendToT3 extends Plugin {
   private connectionScore(connection?:PairedConnection){
     const session=connection&&this.pairedSessions[connection.id];
     const credential=!!session&&session.environmentId===connection?.environmentId&&session.url===connection.url&&session.expiresAt>Date.now()+5000;
-    return (this.projectDiscovery?.status(this.sourceKey(connection))==='available'?4:0)+(this.cloudMachines.some(machine=>machine.environmentId===connection?.environmentId&&machine.url===connection.url)?2:0)+(credential?1:0);
+    return (this.projectDiscovery?.status(this.sourceKey(connection))==='available'?4:0)+(this.cloudMachines.some(machine=>machine.environmentId===connection?.environmentId&&machine.url===connection.url)?2:0)+(credential?1:0)+(connection&&['localhost','127.0.0.1','[::1]'].includes(new URL(connection.url).hostname)?8:0);
   }
-  connection(project:Project):Connection {if(project.connectionId){const c=this.settings.paired.find(c=>c.id===project.connectionId);if(!c)throw Error('Pair a T3 connection in settings first.');return {transport:'direct',url:c.url,connectionId:c.id,environmentId:c.environmentId,host:'direct',executable:''};}return {...this.settings.connection,host:'local',transport:'desktop',...(this.localNoProjectId?{environmentId:this.localNoProjectId}:{})};}
+  connection(project:Project):Connection {
+    const exact=this.settings.paired.find(connection=>connection.id===project.connectionId);
+    if(project.connectionId&&!exact)throw Error('Reconnect the selected project machine through T3 Connect.');
+    const environmentId=this.settings.folderLinks.find(link=>link.projectId===project.id&&sameWorkspacePath(link.workspaceRoot,project.workspaceRoot))?.environmentId;
+    const catalogs=this.settings.directProjects.filter(item=>item.id===project.id&&sameWorkspacePath(item.workspaceRoot,project.workspaceRoot)).flatMap(item=>this.settings.paired.filter(connection=>connection.id===item.connectionId));
+    const environments=[...new Set(catalogs.map(connection=>connection.environmentId))];
+    const paired=exact??[...this.settings.paired].sort((a,b)=>this.connectionScore(b)-this.connectionScore(a)).find(connection=>connection.environmentId===(environmentId??(environments.length===1?environments[0]:undefined)));
+    if(!paired)throw Error('Connect this project through T3 Connect before sending.');
+    return {transport:'direct',host:'direct',executable:'',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId};
+  }
   async pairConnection(name:string,address:string,code:string,expectedEnvironmentId?:string){
     const result=await pair(address,code,undefined,expectedEnvironmentId);
     const existing=this.settings.paired.find(c=>c.environmentId===result.descriptor.environmentId&&c.url===result.session.url);
@@ -2414,10 +2202,7 @@ export default class SendToT3 extends Plugin {
     if(!this.projectDiscovery)return;
     const generation=this.cloudGeneration;
     const connections=new Map([...this.accountCandidates.values(),...this.settings.paired].map(c=>[c.id,c]));
-    const sources:ProjectSource[]=[{key:this.sourceKey(),enabled:!Platform.isMobile&&this.mode==='desktop',read:async()=>{
-      const result=await runBridge({...this.settings.connection,host:'local',transport:'desktop'},['projects']);
-      if(isRecord(result)&&result.cached)throw Error(typeof result.warning==='string'?result.warning:'Local T3 is offline.');return parseProjects(result);
-    }}];
+    const sources:ProjectSource[]=[];
     for(const c of connections.values())sources.push({key:this.sourceKey(c),enabled:this.mode==='direct',read:async()=>{
       const active=()=>!this.stopped&&generation===this.cloudGeneration&&(this.settings.paired.includes(c)||this.accountCandidates.get(this.machineKey(c))===c);
       if(!active())throw Error('Connection cancelled.');
@@ -2442,7 +2227,6 @@ export default class SendToT3 extends Plugin {
   }
   private refreshProjectsInBackground(force=false){
     if(this.stopped)return;
-    void this.refreshLocalNoProject();
     this.syncProjectSources();
     void this.refreshMachines(force).catch(error=>{this.cloudError=message(error);this.cloudChanged?.();});
   }
@@ -2497,22 +2281,11 @@ export default class SendToT3 extends Plugin {
   }
 
   private async localFolderProject(folder:TFolder):Promise<Project>{
-    if(Platform.isMobile)throw Error('Link to self is available when Obsidian and T3 Code run on the same desktop computer.');
-    const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};
-    if(typeof adapter.getFullPath!=='function')throw Error('This vault does not expose a local filesystem path.');
-    const workspaceRoot=adapter.getFullPath(folder.path==='/'?'':folder.path);
-    const localConnection={...this.settings.connection,host:'local',transport:'desktop' as const};
-    // Discover first: another client may already have registered this directory.
-    this.settings.projects=parseProjects(await runBridge(localConnection,['projects']));
-    let project=this.settings.projects.find(item=>sameWorkspacePath(item.workspaceRoot,workspaceRoot));
-    if(!project){
-      const id=await (await import('../connection/desktop')).addDesktopProject(localConnection,workspaceRoot,folder.path==='/'?this.app.vault.getName():folder.name);
-      this.settings.projects=parseProjects(await runBridge(localConnection,['projects']));
-      project=this.settings.projects.find(item=>item.id===id);
-    }
-    if(!project)throw Error('T3 created the project, but it was not returned by project discovery.');
-    if(!this.settings.selected.includes(project.id))this.settings.selected.push(project.id);
-    return project;
+    const root=this.localVaultPath(folder.path==='/'?'':folder.path);
+    if(!root)throw Error('Choose this folder on its connected T3 machine.');
+    const environmentId=await this.localInlineEnvironment(),paired=this.settings.paired.find(connection=>connection.environmentId===environmentId)!;
+    const remote=await connectVaultRemote({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id},await this.sessionFor(paired.id));
+    try{return {...await remote.ensureProject(vaultRegistration(environmentId,root,this.settings.vaultId,folder.name)),connectionId:paired.id,connectionName:paired.name};}finally{remote.close();}
   }
   private rememberProjectLocation(project:Project,environmentId?:string){
     const c=this.settings.paired.find(c=>c.id===project.connectionId);
@@ -2566,33 +2339,10 @@ export default class SendToT3 extends Plugin {
     const roots=this.settings.vaultLocations.filter(location=>location.environmentId===c?.environmentId).map(location=>location.workspaceRoot);
     roots.push(...this.settings.folderLinks.filter(link=>link.folderPath==='/'&&(machine.local?!link.connectionId:link.connectionId===c?.id||!!c&&link.environmentId===c.environmentId)).map(link=>link.workspaceRoot));
     const host=this.vaultConnection();if(host&&(machine.local?!host.connectionId:host.connectionId===c?.id||host.environmentId===c?.environmentId))roots.push(host.workspaceRoot);
-    if(machine.local){const adapter=this.app.vault.adapter as {getFullPath?:(path:string)=>string};if(adapter.getFullPath)roots.push(adapter.getFullPath(''));}
+    if(machine.local||c&&['localhost','127.0.0.1','[::1]'].includes(new URL(c.url).hostname)){const root=this.localVaultPath();if(root)roots.push(root);}
     if(roots.some(root=>workspaceInsideVault(path,root)))throw Error('Choose a workspace outside the Obsidian vault.');
   }
   async projectLocation(machine:VaultMachine):Promise<ProjectLocation>{
-    if(machine.local){
-      const desktop=await import('../connection/desktop');
-      const connection={...this.settings.connection,host:'local',transport:'desktop' as const};
-      const createdFolders=new Set<string>();
-      return {
-        browse:desktop.browseDesktopFolder,
-        create:async(root,title,newFolder)=>{
-          if(newFolder&&!sameWorkspacePath(root,workspaceChildPath(newFolder.parentPath,newFolder.name)))throw Error('The new workspace folder does not match its parent.');
-          this.checkProjectWorkspace(machine,root);
-          let project=parseProjects(await runBridge(connection,['projects'])).find(p=>sameWorkspacePath(p.workspaceRoot,root));
-          if(newFolder&&!project&&!createdFolders.has(root)){
-            const parent=(await desktop.browseDesktopFolder(newFolder.parentPath)).parentPath;
-            const canonical=workspaceChildPath(parent,newFolder.name);
-            if(!sameWorkspacePath(root,canonical))throw Error('The parent folder changed. Choose the new folder again.');
-            this.checkProjectWorkspace(machine,canonical);
-            await desktop.createDesktopFolder(parent,newFolder.name);createdFolders.add(root);
-          }
-          if(!project){const id=await desktop.addDesktopProject(connection,root,title);project=parseProjects(await runBridge(connection,['projects'])).find(p=>p.id===id);}
-          if(!project)throw Error('T3 created the project, but discovery has not returned it yet. Try again.');
-          return project;
-        },close:()=>{},
-      };
-    }
     if(machine.id.startsWith('environment:')){const cloud=this.cloudMachines.find(m=>'environment:'+m.environmentId===machine.id);if(cloud)await this.connectAccountMachine(cloud);}
     const c=this.settings.paired.find(c=>c.id===machine.id||'environment:'+c.environmentId===machine.id);
     if(!c)throw Error('This machine connection changed. Open the dialog again.');
@@ -2696,7 +2446,7 @@ export default class SendToT3 extends Plugin {
     const startedAt=Date.now();let request:Request|undefined;
     const completion = {...this.settings.completion};
     try {
-      await this.recoverNoteThread(file.path);
+
       const savedThread=this.noteThread(file.path);
       const remembered=!options?.newThread&&!options?.threadId&&!options?.folderPicker&&(!options?.projectOverrideKey||savedThread&&`${savedThread.connectionId?savedThread.connectionId+':':''}${savedThread.projectId}`===options.projectOverrideKey)?savedThread:undefined;
       const historical=options?.threadId&&!options.folderPicker&&!options.projectOverrideKey?this.previousNoteThread(file.path,options.threadId):undefined;
@@ -2850,7 +2600,7 @@ export default class SendToT3 extends Plugin {
       try{if(!this.settings.pending.some(item=>item.id===request!.id)){this.settings.pending.push(request);await this.save();}threadId=await this.dispatch(request,true);}finally{this.busy=false;}
     }else{
       const file=this.app.vault.getFileByPath(command.notePath);if(!file)throw Error('Source note not found.');
-      await this.recoverNoteThread(file.path);
+
       const paired=threadNoteMode(this.settings.threadNoteMode)==='one-to-one'?this.noteThread(file.path):undefined;
       const selected=command.threadId??paired?.threadId;
       const {project,link}=await this.chatTarget(file.path,paired,!paired,undefined,false);
@@ -2903,7 +2653,7 @@ export default class SendToT3 extends Plugin {
     const io=deviceNoteIO(this.app),document=await io.readNote(path);
     if(document===undefined)throw Error('Save the note before sending so its T3 identity can be retained.');
     const previous=noteIdentity(document);if(previous===id)return;
-    if(previous){const original=this.smartData().notes[previous];if(!original||original.path===path||!this.app.vault.getFileByPath(original.path))throw Error('The note identity changed while sending. Send again from its current note.');}
+    if(previous){const original=this.smartData().notes[previous];if(!original||original.path===path)throw Error('The note identity changed while sending. Send again from its current note.');}
     const next=await io.updateNote(path,current=>{if(noteIdentity(current)!==previous)throw Error('The note identity changed while sending. Send again.');return withNoteIdentity(current,id);},()=>!this.stopped);
     if(next===undefined)throw Error('The note changed before its T3 identity was saved. Send again.');
     for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===path&&view.editor&&view.getMode?.()!=='preview')await view.save();}
@@ -2975,7 +2725,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }
   }
-  onunload(){this.sendPreviews.dispose();void this.localDesktopAccess?.dispose().catch(error=>logFailure('unload.desktop-access',error));closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();void this.noteCommandServer?.dispose().catch(error=>logFailure('unload.note-command',error));void this.eventHostServer?.dispose().catch(error=>logFailure('unload.event-host',error));this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.eventSubscriptions?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring || this.stopped || this.busy) return;
     this.monitoring=true;
@@ -3055,7 +2805,7 @@ export default class SendToT3 extends Plugin {
           if(inline==='ready'&&this.settings.autoSettleThreads&&this.settings.settlementJobs.includes(job)){
             const access=job.connection.transport==='direct'
               ?{api:await environmentApi(job.connection,await this.sessionFor(job.connection.connectionId??'')),close:()=>{}}
-              :await (await import('../connection/desktop')).desktopThreadAccess(job.connection);
+              :await this.inlineThreadAccess(job.connection.environmentId??'');
             try{await access.api('/api/orchestration/dispatch',{type:'thread.settle',commandId:commandId(job.requestId,'settle'),threadId:job.threadId});}
             finally{await access.close?.();}
           }
@@ -3103,13 +2853,11 @@ class FolderLinkModal extends Modal{
   }
 }
 
-// Shared renderer data works on older clients; it is not a new SDK instance.
+// Plain metadata for native indexed settings.
 interface SettingsRow {name:string;desc?:string;aliases?:string[];render:(setting:Setting)=>void}
 export class T3Settings extends PluginSettingTab {
   constructor(app:App,private plugin:SendToT3){super(app,plugin);}
-  /** Obsidian 1.13+ indexes these names, descriptions and aliases. Older
-   * supported clients keep the existing four-tab display() renderer. Custom
-   * account controls keep the credential and save path used on older clients. */
+  /** Native indexed settings on supported Obsidian clients. */
   getSettingDefinitions():SettingDefinitionItem[]{
     const block=(name:string,aliases:string[],render:(el:HTMLElement)=>void):SettingDefinition=>({name,aliases,render:setting=>{setting.settingEl.empty();setting.settingEl.removeClass('setting-item');render(setting.settingEl);}});
     this.plugin.cloudChanged=()=>this.refresh();
@@ -3117,29 +2865,14 @@ export class T3Settings extends PluginSettingTab {
       {type:'page',name:'Connection',items:this.connectionDefinitions()},
       {type:'page',name:'Replies',items:this.replyPageDefinitions()},
       {type:'page',name:'Projects',items:[block('Linked folders and project files',['Vault connection','Connect vault','Change machine','Unlink','Codebase view','Open project files'],el=>this.projectsUI(el))]},
-      {type:'page',name:'Advanced',items:[block('Troubleshooting and manual pairing',['Send failure log','Connection name','T3 address or pairing link','Pairing code','Manage connections','Forget pairing','Remove connection','Legacy cleanup defaults','Archive folder','Task completion monitoring'],el=>this.advancedUI(el))]},
+      {type:'page',name:'Advanced',items:[block('Troubleshooting and manual pairing',['Send failure log','Connection name','T3 address or pairing link','Pairing code','Manage connections','Forget pairing','Remove connection','Task completion monitoring'],el=>this.advancedUI(el))]},
     ];
   }
-  refresh(){
-    if(typeof requireApiVersion==='function'){
-      if(requireApiVersion('1.13.0')){this.update();return;}
-    }
-    this.display();
-  }
-  private connectionDefinitions():Array<SettingsRow>{
-    const rows:Array<SettingsRow>=[{name:'Connect with',desc:'Choose how this device reaches T3.',render:setting=>{setting.addDropdown(d=>{d.addOptions({direct:'T3 Connect (recommended)',...(!Platform.isMobile?{desktop:'This computer only'}:{})});d.setValue(this.plugin.mode).onChange(async value=>{this.plugin.mode=value as 'desktop'|'direct';await this.plugin.save();void this.plugin.refreshMachines().catch(error=>new Notice(message(error)));this.refresh();});});}}];
-    if(this.plugin.mode==='direct')rows.push({name:'T3 account',aliases:['Sign in','T3 account email','Email verification code','Refresh connections','Sign out'],render:setting=>{setting.settingEl.empty();setting.settingEl.removeClass('setting-item');this.cloudUI(setting.settingEl);}});
-    else rows.push(
-      {name:'Official T3 executable',desc:'Leave blank to find t3 automatically, or enter the full executable path.',render:setting=>{setting.addText(t=>t.setValue(this.plugin.settings.connection.executable).onChange(async value=>{this.plugin.settings.connection.executable=value.trim();await this.plugin.save();}));}},
-      {name:'T3 data directory',desc:'Usually ~/.t3. Must match the running T3 installation.',render:setting=>{setting.addText(t=>t.setValue(this.plugin.settings.connection.baseDir??'').onChange(async value=>{this.plugin.settings.connection.baseDir=value.trim();await this.plugin.save();}));}},
-    );
-    return rows;
-  }
+  refresh(){this.update();}
+  private connectionDefinitions():Array<SettingsRow>{return [{name:'T3 account',aliases:['Sign in','T3 account email','Email verification code','Refresh connections','Sign out'],render:setting=>{setting.settingEl.empty();setting.settingEl.removeClass('setting-item');this.cloudUI(setting.settingEl);}}];}
   private selectedMachine:CloudMachine|null=null;
-  private section:'connection'|'replies'|'projects'|'advanced'='connection';
-  private readonly tabId=`t3-settings-${randomId()}`;
   private readonly expanded=new Set<string>();
-  showConnection(){this.section='connection';}
+  showConnection(){}
   private details(el:HTMLElement,title:string){
     const details=el.createEl('details',{cls:'t3-settings-details'});
     details.open=this.expanded.has(title);
@@ -3174,49 +2907,8 @@ export class T3Settings extends PluginSettingTab {
     }
     if(p.cloudError)el.createEl('p',{text:p.cloudError,cls:'t3-error'});
   }
-  display(){
-    const el=this.containerEl;el.empty();el.addClass('t3-settings');
-    this.plugin.cloudChanged=()=>this.refresh();
-    const header=el.createDiv({cls:'t3-settings-header'});
-    header.createEl('p',{text:'Connect T3, choose how replies appear, and link your projects.'});
-    const tabs=el.createDiv({cls:'t3-settings-tabs',attr:{role:'tablist','aria-label':'T3 Code settings'}});
-    const panel=el.createDiv({cls:'t3-settings-panel',attr:{role:'tabpanel',id:`${this.tabId}-panel`,tabindex:'0'}});
-    const sections=[['connection','Connection'],['replies','Replies'],['projects','Projects'],['advanced','Advanced']] as const;
-    const buttons:HTMLButtonElement[]=[];
-    const select=(section:typeof this.section)=>{
-      this.section=section;
-      for(let i=0;i<buttons.length;i++){
-        const active=sections[i][0]===section;
-        buttons[i].setAttribute('aria-selected',String(active));
-        buttons[i].tabIndex=active?0:-1;
-      }
-      panel.setAttribute('aria-labelledby',`${this.tabId}-${section}`);
-      panel.empty();
-      if(section==='connection')this.connectionUI(panel);
-      else if(section==='replies')this.repliesUI(panel);
-      else if(section==='projects')this.projectsUI(panel);
-      else this.advancedUI(panel);
-    };
-    for(const [section,label] of sections){
-      const button=tabs.createEl('button',{text:label,attr:{type:'button',role:'tab',id:`${this.tabId}-${section}`,'aria-controls':`${this.tabId}-panel`}});
-      buttons.push(button);
-      button.addEventListener('click',()=>select(section));
-      button.addEventListener('keydown',event=>{
-        const index=sections.findIndex(([id])=>id===section);
-        const next=event.key==='Home'?0:event.key==='End'?sections.length-1:event.key==='ArrowRight'?(index+1)%sections.length:event.key==='ArrowLeft'?(index+sections.length-1)%sections.length:-1;
-        if(next<0)return;
-        event.preventDefault();select(sections[next][0]);buttons[next].focus();
-      });
-    }
-    select(this.section);
-  }
-  private connectionUI(el:HTMLElement){
-    for(const definition of this.connectionDefinitions()){
-      const row=new Setting(el).setName(definition.name);if(definition.desc)row.setDesc(definition.desc);
-      definition.render(row);
-    }
-    if(this.plugin.mode==='direct')el.createEl('p',{cls:'t3-settings-hint',text:'Computers must be online to receive notes. For a pairing link, open Advanced → Manual pairing.'});
-  }
+
+
   private advancedUI(el:HTMLElement){
     new Setting(el).setName('Troubleshooting').setHeading();
     new Setting(el).setName('Send failure log').setDesc('View failed sends on this device. Failed sends are not queued for retry.').addButton(button=>button.setButtonText('View log').onClick(()=>this.plugin.exportDiagnostics()));
@@ -3258,26 +2950,14 @@ export class T3Settings extends PluginSettingTab {
       {name:'Thread and note mode',desc:'Free is the default and allows many-to-many links. 1:1 keeps one thread per note and one note per thread. The most recent links select existing 1:1 pairs. Saved replies and link history are kept when you switch.',render:setting=>{setting.addDropdown(d=>d.addOptions({free:'Free · Many-to-many','one-to-one':'1:1 · One thread per note'}).setValue(threadNoteMode(this.plugin.settings.threadNoteMode)).onChange(async value=>{this.plugin.settings.threadNoteMode=threadNoteMode(value);await this.plugin.save();}));}},
     ];
   }
-  private renderDefinition(el:HTMLElement,definition:SettingsRow){
-    const setting=new Setting(el).setName(definition.name);if(definition.desc)setting.setDesc(definition.desc);
-    return definition.render(setting);
-  }
-  private repliesUI(el:HTMLElement){
-    const definitions=this.replyDefinitions();
-    new Setting(el).setName('Inline responses').setHeading();
-    for(const definition of definitions.slice(0,2))this.renderDefinition(el,definition);
-    el.createEl('p',{cls:'t3-settings-hint',text:'Progress appears in an open box while T3 works. The box closes when the final answer is complete. Click its header to reopen it.'});
-    new Setting(el).setName('Threads').setHeading();
-    for(const definition of definitions.slice(2,-1))this.renderDefinition(el,definition);
-    el.createEl('p',{cls:'t3-settings-hint',text:this.plugin.paletteChatStatus()==='active'?'Use the first T3 Code row in the command palette to send the note or ask a question.':'The live T3 Code row is unavailable. Check that the core Command palette is enabled.'});
-    this.renderDefinition(this.details(el,'Beta'),definitions.at(-1)!);
-  }
+
+
   private projectsUI(el:HTMLElement){
     new Setting(el).setName('Linked folders').setHeading();
     el.createEl('p',{text:'Link a folder from its right-click menu to route notes and questions to a T3 project.'});
     const root=this.plugin.vaultConnection();
     const machine=root?.connectionId?this.plugin.settings.paired.find(c=>c.id===root.connectionId)?.name:undefined;
-    new Setting(el).setName('Vault connection').setDesc(root?`${machine??(Platform.isMobile?'Linked computer':'This computer')} · ${root.workspaceRoot} · Hosts subscriptions and staged note edits.`:'Choose the synced vault location for subscriptions and staged note edits. New unlinked conversations use No project.').addButton(b=>b.setButtonText(root?'Change machine':'Connect vault').onClick(async()=>{try{await this.plugin.configureVaultConnection();this.refresh();}catch(e){if(!(e instanceof VaultSetupCancelled))new Notice(message(e),10000);}}));
+    new Setting(el).setName('Vault connection').setDesc(root?`${machine??(Platform.isMobile?'Linked computer':'This computer')} · ${root.workspaceRoot} · Verified vault location.`:'Choose an existing vault location on a connected T3 machine. New unlinked conversations use No project.').addButton(b=>b.setButtonText(root?'Change machine':'Connect vault').onClick(async()=>{try{await this.plugin.configureVaultConnection();this.refresh();}catch(e){if(!(e instanceof VaultSetupCancelled))new Notice(message(e),10000);}}));
     const links=this.plugin.settings.folderLinks.filter(link=>link.folderPath!=='/');
     if(!links.length)el.createEl('p',{cls:'t3-settings-hint',text:'No folders are linked. Right-click a folder and choose Link to T3 Code.'});
     for(const link of links){
@@ -3303,4 +2983,13 @@ class StreamDestinationsModal extends Modal {
       catch(error){new Notice(message(error),10000);button.setDisabled(false);}
     }));
   }
+}
+
+class ConnectedMachineModal extends FuzzySuggestModal<VaultMachine>{
+  private chosen=false;
+  constructor(app:App,private machines:VaultMachine[],private choose:(id:string)=>void,private cancelled:(error:Error)=>void){super(app);this.setPlaceholder('Choose a connected T3 machine');}
+  getItems(){return this.machines;}
+  getItemText(machine:VaultMachine){return machine.name;}
+  onChooseItem(machine:VaultMachine){this.chosen=true;this.choose(machine.id);}
+  onClose(){super.onClose();if(!this.chosen)this.cancelled(Error('Machine selection was cancelled.'));}
 }

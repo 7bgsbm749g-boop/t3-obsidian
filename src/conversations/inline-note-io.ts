@@ -36,7 +36,7 @@ export function deviceNoteIO(app:App){
     return file.path!==undefined&&(file.path!==path||app.vault.getFileByPath(path)!==file)?undefined:document;
   };
   let locator=locators.get(app);
-  if(!locator){locator=new ResponseNoteLocator(()=>app.vault.getMarkdownFiles?.().map(file=>file.path)??[],readNote);locators.set(app,locator);}
+  if(!locator){locator=new ResponseNoteLocator(()=>[],readNote);locators.set(app,locator);}
   const locations=locator;
   return {
     locateNote:(id:string,path:string)=>locations.locate(id,path),

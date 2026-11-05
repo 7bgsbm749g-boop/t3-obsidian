@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {loadSmartSend,mergeSmartSend,prepareSmartSend,explicitSelectionText,confirmSmartSend,rememberResponse,rememberNoteEdits,smartNote,sourceProjection,moveSmartNotes,recoverSmartNote,packText,unpackText} from '../src/notes/smart-send';
+import {loadSmartSend,mergeSmartSend,prepareSmartSend,explicitSelectionText,confirmSmartSend,rememberResponse,rememberNoteEdits,smartNote,sourceProjection,moveSmartNotes,packText,unpackText} from '../src/notes/smart-send';
 import {responseAnchor} from '../src/responses/native-response-projection';
 import {findRunImport,runImportReceipt} from '../src/conversations/run-import-receipt';
 const path='Jobs/Smart.md',destination='machine/project/thread';
@@ -211,25 +211,21 @@ test('a synced old-path deletion cannot overwrite a rename, including a rename b
   const back=mergeSmartSend(renamed,deleted);assert.equal(back.notes[id].path,path);assert.ok(!back.notes[id].deleted);
   moveSmartNotes(back,path);assert.ok(mergeSmartSend(renamed,back).notes[id].deleted);
 });
-test('verified rename recovery joins independently discovered coverage and reply records',async()=>{
+test('an observed rename joins independently discovered coverage and reply records',async()=>{
   const {data}=await send(),old=smartNote(data,path);
-  await rememberResponse(data,path,'reply','Agent reply.','','',0);moveSmartNotes(data,path);
+  await rememberResponse(data,path,'reply','Agent reply.','','',0);
   const next='Moved.md',newId=smartNote(data,next);
   const branch=await prepareSmartSend(data,next,destination,'First request. Added.');confirmSmartSend(data,'branch',destination,branch.capture);
-  assert.ok(recoverSmartNote(data,next,[old],()=>false));assert.notEqual(old,newId);
+  moveSmartNotes(data,path,next);assert.notEqual(old,newId);
   const plan=await prepareSmartSend(data,next,destination,'First request. Added.\nAgent reply.\nMore.');
   assert.equal(plan.text.trim(),'More.');assert.deepEqual(new Set(plan.capture.parents),new Set(['one','branch']));
   confirmSmartSend(data,'successor',destination,plan.capture);
   assert.deepEqual(Object.keys(data.heads),['successor']);
 });
-test('recovery requires an absent original and unambiguous source identity',async()=>{
-  const {data}=await send(),id=smartNote(data,path);
-  assert.equal(recoverSmartNote(data,'Copy.md',[id],()=>true),false);
-  assert.equal((await prepareSmartSend(data,'Copy.md',destination,'First request.')).text,'First request.');
-  const other=smartNote(data,'Other.md');
-  assert.equal(recoverSmartNote(data,'Moved.md',[id,other],()=>false),false);
-  moveSmartNotes(data,path);assert.equal(recoverSmartNote(data,path,[id],()=>false),false);
-  assert.notEqual(smartNote(data,path),id);
+test('an unrelated path starts with independent coverage and deleting the original never grants its old identity',async()=>{
+ const {data}=await send(),id=smartNote(data,path);
+ assert.equal((await prepareSmartSend(data,'Copy.md',destination,'First request.')).text,'First request.');
+ moveSmartNotes(data,path);assert.notEqual(smartNote(data,path),id);
 });
 test('binding provenance survives accepted successors and settings reloads',async()=>{
   const data=fresh(),first=await prepareSmartSend(data,path,destination,'First request.');

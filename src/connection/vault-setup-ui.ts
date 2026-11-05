@@ -28,7 +28,7 @@ export class VaultSetupModal extends Modal {
   private draw(){
     if(this.ended)return;
     this.titleEl.setText(`Connect ${this.host.vaultName}`);this.contentEl.empty();
-    this.contentEl.createEl('p',{text:'Choose the computer that has a synced copy of this vault. It hosts subscriptions and staged note edits. New unlinked conversations use No project on this computer.'});
+    this.contentEl.createEl('p',{text:'Choose the connected computer that has this vault. This identifies its folder for project links. Agent edits go to the running Obsidian client through T3 Connect.'});
     const machines=this.host.machines();
     if(!machines.some(m=>m.id===this.machineId))this.machineId=machines[0]?.id??'';
     new Setting(this.contentEl).setName('Machine').addDropdown(d=>{

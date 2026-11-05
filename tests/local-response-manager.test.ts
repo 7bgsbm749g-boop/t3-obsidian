@@ -8,9 +8,7 @@ import {localResponseBindings,localResponseRange,withLocalResponseBinding} from 
 import {localSyncReady} from '../src/storage/local-sync-state';
 import {responseAnchor} from '../src/responses/native-response-projection';
 import {NativeResponseView} from '../src/responses/native-response-view';
-import {localStageCommand,localStagedDraft} from '../src/responses/local-response-staging';
-import {promises as fs} from 'node:fs';
-import {dirname} from 'node:path';
+import {checkedStageDraft,editPath} from '../src/notes/checked-note-edits';
 import {retainedLocalFinal,restoredLocalFinal} from '../src/responses/local-final-cache';
 import type {ResponseRequest} from '../src/responses/response-model';
 import type {DirectInlineUpdate} from '../src/responses/direct-inline-preview';
@@ -313,18 +311,44 @@ test('a metadata change during final-write preparation cancels the old answer',a
   h.emit();await drain();assert.equal(h.writes(),0);assert.match(h.read(),/data-t3-response=/);h.manager.dispose();
 });
 
-test('agent staging retains checked immutable input and merges ordinary edits on another device',async()=>{
-  const binding=request(),document=withLocalResponseBinding(`Before\n\n${responseAnchor(binding.id)}\n\nAfter`,binding),stored=new Map<string,string>();
-  const files={read:async(path:string)=>stored.get(path),write:async(path:string,value:string)=>{stored.set(path,value);}};
-  const stage=await localStageCommand('stage-note-edit',binding,document,files);assert.ok('stagingPath' in stage);
-  try{
-    await fs.writeFile(stage.stagingPath!,document.replace('After','Agent edit after'));
-    const submitted=await localStageCommand('submit-note-edit',binding,document,files,stage.originalHash);assert.ok(submitted.request);
-    const current=withLocalResponseBinding(document,binding).replace('Before','Local edit before').replace(encodeURIComponent(JSON.stringify(binding)).replace(/-/g,'%2D'),encodeURIComponent(JSON.stringify(submitted.request)).replace(/-/g,'%2D'));
-    const merged=await localStagedDraft(current,submitted.request!,files);
-    assert.match(merged,/Local edit before/);assert.match(merged,/Agent edit after/);assert.ok(localResponseRange(merged,binding.id,[submitted.request!]));assert.doesNotMatch(merged,/t3-response-binding/);
-    await assert.rejects(localStageCommand('submit-note-edit',binding,document,files,'0'.repeat(64)),/original hash/);
-  }finally{await fs.rm(dirname(stage.stagingPath!),{recursive:true,force:true});}
+test('checked immutable proposals merge compatible ordinary edits on another device',async()=>{
+  const binding=request(),document=`Before\n\n${responseAnchor(binding.id)}\n\nAfter`,proposed=document.replace('After','Agent edit after'),stored=new Map<string,string>();
+  const localStage={editId:randomUUID(),originalHash:contentHash(document),stagedHash:contentHash(proposed),transport:{environmentId:'env',workspaceRoot:'/scratch',base:'.t3-obsidian/clients/vault/'+randomUUID()}};
+  stored.set(editPath(localStage,'original'),document);stored.set(editPath(localStage,'proposed'),proposed);
+  const files={read:async(path:string)=>stored.get(path),write:async()=>{},list:async()=>[]},submitted={...binding,localStage};
+  const merged=await checkedStageDraft(document.replace('Before','Local edit before'),submitted,files);
+  assert.match(merged,/Local edit before/);assert.match(merged,/Agent edit after/);assert.ok(localResponseRange(merged,binding.id,[submitted]));
+  stored.set(editPath(localStage,'proposed'),'Changed payload');await assert.rejects(checkedStageDraft(document,submitted,files),/changed/);
+});
+
+test('completion and Stop save checked proposals with the reply before marking the edit saved',async()=>{
+  for(const stop of [false,true]){
+    const binding=request(),document=`Before\n\n${responseAnchor(binding.id)}\n\nAfter`,proposed=document.replace('After','Agent edit after'),localStage={editId:randomUUID(),originalHash:contentHash(document),stagedHash:contentHash(proposed),transport:{environmentId:'env',workspaceRoot:'/scratch',base:'.t3-obsidian/clients/vault/'+randomUUID()}};
+    const h=fixture({...binding,localStage},document),saved:any[]=[],files={read:async(path:string)=>path===editPath(localStage,'original')?document:path===editPath(localStage,'proposed')?proposed:undefined,write:async()=>{},list:async()=>[]};
+h.io.localFinalDraft=(text:string,request:ResponseRequest)=>checkedStageDraft(text,request,files);h.io.localEditSaved=async(_request:any,text:string)=>{assert.equal(text,h.read());saved.push(text);};
+    await h.manager.register(h.binding);h.ready(false);h.emit('Final reply');await drain();assert.equal(saved.length,0);h.write(h.read().replace('Before','Typed before'));
+    if(stop)await h.manager.stop(binding.id,'Frozen reply');else{h.ready(true);h.advance();h.manager.tick();await drain();}
+    assert.equal(saved.length,1);assert.match(h.read(),/Typed before/);assert.match(h.read(),/Agent edit after/);assert.ok(h.read().includes(stop?'Frozen reply':'Final reply'));assert.ok(!h.read().includes(responseAnchor(binding.id)));h.manager.dispose();
+  }
+});
+
+test('a merge conflict still sends Stop and never records the proposal as saved',async()=>{
+  const h=fixture(),commands:any[]=[],saved:any[]=[];h.io.localFinalDraft=async()=>{throw Error('Checked proposal overlap');};h.io.localEditSaved=async()=>saved.push(true);
+  h.io.access=async()=>({origin:'https://synthetic.invalid',api:async(_path:string,payload:unknown)=>{if(payload){commands.push(payload);return {};}return {thread:{id:h.binding.threadId,projectId:h.binding.projectId,messages:[],activities:[],latestTurn:{turnId:'exact-turn',state:'running',requestedAt:h.binding.createdAt},session:{status:'running',activeTurnId:'exact-turn'}}};}});
+  await h.manager.register(h.binding);h.emit('Live reply',false);await drain();const before=h.read();await assert.rejects(h.manager.stop(h.binding.id,'Frozen reply'),/overlap/);assert.equal(commands.length,1);assert.equal(commands[0].type,'thread.turn.interrupt');assert.equal(h.read(),before);assert.equal(saved.length,0);assert.equal(h.manager.status(h.binding.id)?.finalSaved,false);h.manager.dispose();
+});
+test('reviewed frozen-save retry preserves user text and does not repeat the remote interrupt',async()=>{
+ const h=fixture(),commands:any[]=[];let conflict=true;
+ h.io.localFinalDraft=async(text:string)=>{if(conflict)throw Error('proposal overlap');return text;};
+ h.io.access=async()=>({origin:'https://synthetic.invalid',api:async(_path:string,payload:unknown)=>{if(payload){commands.push(payload);return {};}return {thread:{id:h.binding.threadId,projectId:h.binding.projectId,messages:[],activities:[],latestTurn:{turnId:'exact-turn',state:'running',requestedAt:h.binding.createdAt},session:{status:'running',activeTurnId:'exact-turn'}}};}});
+ await h.manager.register(h.binding);h.emit('Live reply',false);await drain();await assert.rejects(h.manager.stop(h.binding.id,'Frozen reply'),/overlap/);
+ h.write(h.read().replace('Before','User retained'));const reviewed=contentHash(h.read());
+ await assert.rejects(h.manager.retrySave(h.binding,'a'.repeat(64)),/reviewed note changed/);assert.equal(commands.length,1);
+ conflict=false;const result=await h.manager.retrySave(h.binding,reviewed);assert.equal(result.saved,true);assert.match(h.read(),/User retained/);assert.match(h.read(),/Frozen reply/);assert.equal(commands.length,1);h.manager.dispose();
+});
+test('a frozen reply can retry after reload from its exact retained body without opening a remote stream',async()=>{
+ const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'test'));let opens=0;h.io.access=async()=>{opens++;throw Error('No remote operation is permitted');};
+ const result=await h.manager.retrySave(h.binding,contentHash(h.read()),'Retained frozen reply');assert.equal(result.saved,true);assert.equal(opens,0);assert.match(h.read(),/Retained frozen reply/);assert.ok(!h.read().includes(responseAnchor(h.binding.id)));h.manager.dispose();
 });
 
 test('a refused steering preparation removes only its pending input and keeps the original stream',async()=>{

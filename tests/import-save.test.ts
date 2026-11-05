@@ -1,3 +1,4 @@
+import {moveSmartNotes} from '../src/notes/smart-send';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -19,7 +20,7 @@ async function fixture(){
   const module={exports:{} as any};
   runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(id:string)=>{assert.equal(id,'obsidian');return api;},crypto:webcrypto,URL,TextEncoder,TextDecoder,console,setTimeout,clearTimeout,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})}});
   const plugin=new module.exports.default();
-  plugin.app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:(path:string)=>path===file.path?file:undefined,getMarkdownFiles:()=>[file],read:async()=>document,process:async(_file:any,change:(value:string)=>string)=>document=change(document)}};
+  plugin.app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:(path:string)=>path===file.path?file:undefined,getMarkdownFiles:()=>assert.fail('Vault enumeration is retired'),read:async()=>document,process:async(_file:any,change:(value:string)=>string)=>document=change(document)}};
   plugin.settings={vaultId:randomUUID(),inlineStreaming:{enabled:true},responseBindings:{},noteThreads:[]};
   plugin.save=async()=>{};
   let saveResult:any={saved:false,reason:'sync'};
@@ -28,7 +29,7 @@ async function fixture(){
   plugin.localResponseTarget=async()=>({environmentId:source.environmentId,workspaceRoot:'/synthetic',directory:'.obsidian/inline'});
   const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:{messages:[{id:messageId,role:'user',text:'Synthetic prompt',createdAt:'2026-10-20T00:00:00Z',turnId:'synthetic-run',streaming:false},{id:'answer',role:'assistant',text:'Synthetic final',createdAt:'2026-10-20T00:01:00Z',turnId:'synthetic-run',streaming:false}],activities:[],latestTurn:{turnId:'synthetic-run',messageId,requestedAt:'2026-10-20T00:00:00Z',completedAt:'2026-10-20T00:01:00Z',state:'completed'},session:{status:'ready',activeTurnId:null}}}}).state;
   plugin.readImportHistory=async()=>({source,state,title:'Synthetic completed run'});
-  return {plugin,source,messageId,registered,waits,read:()=>document,write:(text:string)=>{document=text;},move:(path:string)=>{file.path=path;},saveResult:(value:any)=>{saveResult=value;},import:()=>plugin.importRun(file.path,{id:source.projectId},source.threadId,messageId,false)};
+  return {plugin,source,messageId,registered,waits,read:()=>document,write:(text:string)=>{document=text;},move:(path:string)=>{moveSmartNotes(plugin.smartData(),file.path,path);file.path=path;},saveResult:(value:any)=>{saveResult=value;},import:()=>plugin.importRun(file.path,{id:source.projectId},source.threadId,messageId,false)};
 }
 
 test('a completed import cannot report success before its checked save finishes',async()=>{
@@ -44,7 +45,7 @@ test('a Sync wait reports a pending import, and reimport resumes its settings bi
   const second=await h.import();assert.equal(second.duplicate,true);assert.equal(second.saveState,'pending');assert.equal(h.registered.length,2);assert.equal(h.waits.length,2);
   assert.equal(h.registered[0].id,h.registered[1].id);assert.equal(h.read(),original);assert.equal(h.read().match(/:::send-to-t3-response /g)?.length,1);
 });
-test('a missing settings record can be recovered with the existing receipt identity after a note move',async()=>{
+test('a missing settings record can be recovered with the existing receipt identity after an observed note move',async()=>{
   const h=await fixture();await h.import();const original=h.read(),receipt=findRunImport(original,h.source,h.messageId)!;
   h.plugin.settings.responseBindings={};h.move('Moved.md');await h.import();
   assert.equal(h.registered.length,2);assert.equal(h.registered[1].id,receipt.bindingId);assert.equal(h.registered[1].notePath,'Moved.md');assert.equal(h.read(),original);

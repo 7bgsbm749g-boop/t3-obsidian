@@ -31,11 +31,11 @@ export function parseProjects(value: unknown): Project[] {
     ids.add(p.id); return {id:p.id,title:p.title,workspaceRoot:p.workspaceRoot};
   });
 }
-interface Runtime {mobile:boolean; localAccess?:()=>Promise<ThreadAccess>;pairedSession?:(id:string)=>PairedSession|undefined|Promise<PairedSession|undefined>;saveRequest?:(request:Request)=>Promise<void>}
+interface Runtime {mobile:boolean;access?:(environmentId:string)=>Promise<ThreadAccess>;pairedSession?:(id:string)=>PairedSession|undefined|Promise<PairedSession|undefined>;saveRequest?:(request:Request)=>Promise<void>}
 let runtime:Runtime|undefined;
 export function configureBridge(value:Runtime) {runtime=value;}
 // The retired value remains readable only to reject old persisted work safely.
-export function retiredConnection(c:Connection){return c.transport==='https'||(c.host!=='local'&&c.transport!=='direct');}
+export function retiredConnection(c:Connection){return c.transport!=='direct';}
 export const RETIRED_MESSAGE='The old companion mode was removed. Check this request in T3 before sending again through Direct T3 pairing; it may already have started. The note is kept.';
 export async function withTimeout<T>(promise:Promise<T>, milliseconds:number):Promise<T> {
   let timer:ReturnType<typeof setTimeout>|undefined;
@@ -46,21 +46,19 @@ export async function runBridge(connection:Connection,args:string[],input='',opt
   const operation=args[0],started=Date.now();logEvent('transport.operation.started',{operation,control:options.control,transport:connection.transport??'desktop',environmentId:connection.environmentId});
   try{
   requestAborted(options.signal);let result:unknown;
-  if(connection.transport==='direct')result=await readDirect(connection,args,await abortableRead(Promise.resolve(runtime?.pairedSession?.(connection.connectionId??'')),options.signal),undefined,options);
-  else{
-  if(retiredConnection(connection))throw new Error(RETIRED_MESSAGE);
-  if(runtime?.mobile)throw new Error('This saved request uses the local T3 connection. Retry it on the desktop where it was sent. On mobile, create new sends using Direct T3 pairing.');
-  const desktop=await import('../connection/desktop');
-  result=runtime?.localAccess?await desktop.runDesktopWithAccess(connection,args,input,await abortableRead(runtime.localAccess(),options.signal),options):await desktop.runDesktop(connection,args,input,options);
+  if(connection.transport==='direct'){
+    const access=connection.environmentId&&runtime?.access?await abortableRead(runtime.access(connection.environmentId),options.signal):undefined;
+    try{result=await readDirect(connection,args,access?undefined:await abortableRead(Promise.resolve(runtime?.pairedSession?.(connection.connectionId??'')),options.signal),undefined,{...options,access});}finally{await access?.close?.();}
   }
+  else throw Error('Reconnect this saved request through T3 Connect. Check its existing thread before sending again.');
   logEvent('transport.operation.completed',{operation,control:options.control,elapsedMs:Date.now()-started,transport:connection.transport??'desktop',environmentId:connection.environmentId});return result;
   }catch(error){logFailure('transport.operation.failed',error,{operation,control:options.control,cancelled:options.signal?.aborted,elapsedMs:Date.now()-started,transport:connection.transport??'desktop',environmentId:connection.environmentId});throw error;}
 }
 export async function sendRequest(request: Request) {
-  if(request.connection.transport==='direct'){if(!runtime?.saveRequest)throw Error('Direct request storage is unavailable.');return sendDirect(request,await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request));}
-  const hasPayload = Boolean(request.attachments?.length||request.threadId);
-  const result = await runBridge(request.connection, ['start','--project',request.project.id,'--title',request.title,'--request-id',request.id,hasPayload ? '--payload-file' : '--prompt-file','-'], hasPayload ? JSON.stringify({prompt:request.prompt,attachments:request.attachments,context:request.context,threadId:request.threadId}) : request.prompt);
-  if (!isRecord(result)||result.ok !== true || result.phase!=='started' || typeof result.threadId !== 'string' || result.projectId !== request.project.id) throw new Error('T3 did not confirm the new turn. Retry the saved request.');
-  request.acceptedThreadId=result.threadId;
-  return result as {threadId:string;phase:'started'};
+  if(request.connection.transport==='direct'){
+    if(!runtime?.saveRequest)throw Error('Direct request storage is unavailable.');
+    const access=request.connection.environmentId&&runtime.access?await runtime.access(request.connection.environmentId):undefined;
+    try{return await sendDirect(request,access?undefined:await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request),undefined,access);}finally{await access?.close?.();}
+  }
+  throw Error('Reconnect this request through T3 Connect before sending.');
 }

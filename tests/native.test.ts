@@ -4,7 +4,7 @@ import {mkdtemp,rm,writeFile,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
-import {uuid5,canonical,start,cli,parseOperation,requestJson} from '../src/connection/desktop';
+import {uuid5,canonical,start,cli,parseOperation,requestJson} from './fixtures/baseline-native/desktop';
 import {resolveNewThreadDefaults} from '../src/conversations/model-defaults';
 import {modelConfig} from './rpc-fixture';
 import {noteThreadTitle} from '../src/conversations/thread-title';

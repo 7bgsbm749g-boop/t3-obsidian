@@ -1,5 +1,7 @@
 # Response authority liveness and safe historical catch-up
 
+> Historical implementation. Its local command/event runtime was removed. See [checked note edits](checked-note-edits.md) for the current protocol.
+
 On October 5, the purchase response stopped at the checkpoint saved at
 00:18:03.942 UTC (T3 sequence 194039). All authority replies stopped by
 00:18:05.376; later checkpoints and both registration commands remained

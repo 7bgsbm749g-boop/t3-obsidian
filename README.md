@@ -8,7 +8,7 @@ The plugin appears as **T3 Code** in Obsidian. This is an independent community 
 
 ## Get started
 
-You need Obsidian **1.8.7 or later** and a running T3 Code installation with Orchestrator v2.
+You need Obsidian **1.13.0 or later** and a running T3 Code installation with Orchestrator v2.
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the [newest alpha release](https://github.com/7bgsbm749g-boop/t3-obsidian/releases). Put them in your vault’s `.obsidian/plugins/t-three-code/` folder, then enable **T3 Code** under **Settings → Community plugins**.
 2. In T3 Code, sign in and enable **T3 Connect** on the computer you want to use.
@@ -29,7 +29,7 @@ You need Obsidian **1.8.7 or later** and a running T3 Code installation with Orc
 - **Import a response.** Use **Import T3 run into this note…** from the editor menu or command palette. Choose an existing response without sending a new message. Hover on a run for half a second to preview its response, including HTML, or use the arrow keys. Status icons keep the list compact, and unavailable runs are hidden.
 - **Browse project files.** Run **Open Codebase view** from the command palette to work with code, Markdown, images, and supported documents.
 
-Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projects** to manage folder links. **Advanced** includes manual pairing and the desktop-only local connection option.
+Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projects** to manage folder links. **Advanced** includes manual pairing and connection diagnostics.
 
 ---
 

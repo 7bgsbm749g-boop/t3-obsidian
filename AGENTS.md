@@ -29,6 +29,14 @@ use `import()` type queries for Node types, and do not introduce static Node
 imports or require-style imports. CSS priority overrides are forbidden. Changes
 to the response-height spacer require native viewport and rendered-pixel proof.
 
+Agent note changes use the checked T3 Connect command-file protocol and native
+Obsidian editing APIs. Preserve active reply boundaries, compatible user edits,
+and checked final saves on completion and Stop. Do not restore plugin runtime
+filesystem/process imports, local HTTP command servers, vault enumeration,
+custom clipboard access, event emissions, or the legacy settings renderer.
+Historical native adapters belong only in test fixtures. See
+[Checked note edits](docs/checked-note-edits.md).
+
 Keep credentials and real vault content out of committed fixtures and reports.
 Use synthetic fixtures in a separate test vault. Preserve installed `data.json`.
 Desktop checks do not prove native mobile behavior. Clean up temporary test

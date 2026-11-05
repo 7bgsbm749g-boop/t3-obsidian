@@ -1,4 +1,5 @@
 import {toError} from '../shared/values';
+import {contentHash} from './completion';
 import {scheduleTimeout as setTimeout} from '../shared/clock';
 import {DirectInlinePreview,type DirectInlineUpdate} from './direct-inline-preview';
 import {localResponseBindings,localResponseRange,withoutLocalResponseBinding} from './local-response-binding';
@@ -20,7 +21,7 @@ export interface LocalFinalNoteIO {
   read(path:string):Promise<string|undefined>;
   compareAndSet(path:string,before:string,after:string,guard?:()=>boolean):Promise<boolean>;
 }
-type Runtime={request:ResponseRequest;record:ResponseRecord;preview:DirectInlinePreview;update?:DirectInlineUpdate;restoring?:boolean;retained?:Promise<void>;work?:Promise<void>;stopped?:boolean;stopAcknowledged?:boolean;done?:boolean;saved?:boolean;pendingSave?:LocalSavePendingReason;retryAt:number};
+type Runtime={request:ResponseRequest;record:ResponseRecord;preview:DirectInlinePreview;update?:DirectInlineUpdate;restoring?:boolean;retained?:Promise<void>;work?:Promise<void>;stopped?:boolean;stopBody?:string;stopAcknowledged?:boolean;done?:boolean;saved?:boolean;pendingSave?:LocalSavePendingReason;retryAt:number};
 type RecoveryNote={requests:ResponseRequest[];version:number;pending:boolean;retryAt:number};
 /** A saved anchor and its synced settings record reconnect independently of
  * any remote writer. Identical device final writes converge through Sync. */
@@ -222,32 +223,53 @@ export class LocalResponseManager {
       const after=document.slice(0,range.from)+body+document.slice(range.to);
       const expected=JSON.stringify(range.request),guard=()=>!this.closed&&!runtime.stopped&&runtime.update===update&&runtime.request.notePath===path&&this.io.syncReady?.(path)!==false&&JSON.stringify(this.range(document,runtime.request.id)?.request)===expected;
       if(!await this.notes.compareAndSet(path,current,after,guard)){runtime.pendingSave='note-changed';return;}
+      if(range.request.localStage)await this.io.localEditSaved?.(range.request,after).catch(error=>logFailure('response.edit.receipt',error));
       runtime.done=true;runtime.saved=true;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,path);
     })().catch(error=>{runtime.pendingSave='save-error';logFailure('response.local.final-save',error,{bindingId:runtime.request.id});this.io.completionFailed?.(error,runtime.request.id);}).finally(()=>{runtime.work=undefined;runtime.retryAt=this.now()+1000;});
   }
   status(id:string):ResponseStopReceipt|undefined{
     const runtime=this.jobs.get(id);if(!runtime)return;
     const save=this.saveResult(runtime);
-    return {version:1,bindingId:id,commandId:'',epoch:1,revision:1,hostRecorded:!!runtime.stopAcknowledged,runTerminal:!!runtime.update?.completionVerified&&['complete','interrupted'].includes(runtime.update.phase??''),finalSaved:!!runtime.done,finalWriterPending:!!runtime.update?.completionVerified&&!runtime.update.questionsPending&&!runtime.done,...(!save.saved&&!runtime.done?{pendingSaveReason:save.reason}:{})};
+    return {version:1,bindingId:id,commandId:'',epoch:1,revision:1,hostRecorded:!!runtime.stopAcknowledged,runTerminal:!!runtime.update?.completionVerified&&['complete','interrupted'].includes(runtime.update.phase??''),finalSaved:runtime.saved===true,finalWriterPending:!!runtime.update?.completionVerified&&!runtime.update.questionsPending&&!runtime.done,...(!save.saved&&!runtime.done?{pendingSaveReason:save.reason}:{})};
   }
   stopLocally(id:string){this.stoppedIds.add(id);const runtime=this.jobs.get(id);if(runtime){runtime.stopped=true;runtime.preview.dispose();}}
   async stop(id:string,body?:string){
     const runtime=this.jobs.get(id);if(!runtime)throw Error('The response is not loaded.');
     const turnId=runtime.update?.turnId;this.stopLocally(id);
-    await this.saveStopped(runtime,body??runtime.update?.body??'');
+    runtime.stopBody=body??runtime.update?.body??'';
+    let saveFailure:unknown;
+    try{await this.saveStopped(runtime,runtime.stopBody);}catch(error){saveFailure=error;}
     let failure:unknown;
     try{if(!runtime.stopAcknowledged&&!runtime.update?.completionVerified)await interruptStoppedResponse(()=>this.io.access(runtime.request.threadEnvironmentId),id,runtime.request.threadId,turnId,10_000,runtime.request.localMessageId??runtime.request.messageId,runtime.request.projectId,runtime.request.createdAt);runtime.stopAcknowledged=true;}catch(error){failure=error;}
     if(failure)throw toError(failure);
+    if(saveFailure)throw toError(saveFailure);
     return this.status(id)!;
   }
   async cancel(id:string){const runtime=this.jobs.get(id);if(!runtime)return;this.stopLocally(id);await this.saveStopped(runtime,'');}
-  private async saveStopped(runtime:Runtime,body:string){
+  frozenBody(id:string){return this.jobs.get(id)?.stopBody;}
+  async retrySave(binding:ResponseRequest,expectedHash:string,frozenBody?:string):Promise<LocalResponseSaveResult>{
+    if(this.closed||binding.vaultId!==this.vaultId)throw Error('This reply is unavailable on this client.');
+    const current=await this.notes.read(binding.notePath);if(current===undefined||contentHash(current)!==expectedHash)throw Error('The reviewed note changed.');
+    if(!this.range(current,binding.id))throw Error('The reply anchor is missing. No content was replaced.');
+    const prior=this.jobs.get(binding.id),body=prior?.stopBody??frozenBody;
+    if(prior?.stopped&&body===undefined)throw Error('The frozen reply is unavailable on this device.');
+    const runtime=this.adopt(binding);
+    if(body!==undefined){runtime.stopBody=body;this.stopLocally(binding.id);await this.saveStopped(runtime,body,expectedHash);return this.saveResult(runtime);}
+    runtime.retryAt=0;this.finish(runtime);return this.waitForSave(binding.id);
+  }
+  private async saveStopped(runtime:Runtime,body:string,expectedHash?:string){
     await runtime.work;if(runtime.done)return;
     const path=runtime.request.notePath,current=await this.notes.read(path);if(current===undefined)throw Error('The frozen response note is unavailable.');
-    const range=this.range(current,runtime.request.id);
-    if(range)await this.io.rememberResponse?.(runtime.request,body,current.slice(0,range.from),current.slice(range.to),range.from);
-    if(range&&!await this.notes.compareAndSet(path,current,current.slice(0,range.from)+body+current.slice(range.to)))throw Error('The frozen response is waiting for its local save.');
-    runtime.done=true;this.io.localCompleted?.(runtime.request.id,path);
+    if(expectedHash!==undefined&&contentHash(current)!==expectedHash)throw Error('The reviewed note changed.');
+    const document=await this.io.localFinalDraft?.(current,this.range(current,runtime.request.id)?.request??runtime.request)??current;
+    if(document!==current)await this.io.rememberNoteEdits?.(runtime.request,current,document);
+    const range=this.range(document,runtime.request.id);
+    if(!range&&runtime.request.localStage)throw Error('The reply was removed before its proposed note edit could be saved. The proposal is retained.');
+    if(range)await this.io.rememberResponse?.(runtime.request,body,document.slice(0,range.from),document.slice(range.to),range.from);
+    const after=range?document.slice(0,range.from)+body+document.slice(range.to):document;
+    if(range&&!await this.notes.compareAndSet(path,current,after))throw Error('The frozen response is waiting for its local save.');
+    if(range?.request.localStage)await this.io.localEditSaved?.(range.request,after).catch(error=>logFailure('response.edit.receipt',error));
+    runtime.done=true;runtime.saved=!!range;this.io.localCompleted?.(runtime.request.id,path);
   }
   private async changeBinding(id:string,change:(request:ResponseRequest)=>ResponseRequest){
     const runtime=this.jobs.get(id);if(!runtime||runtime.done||runtime.stopped)throw Error('The response is no longer active.');

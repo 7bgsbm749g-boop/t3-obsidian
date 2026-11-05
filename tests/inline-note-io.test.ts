@@ -139,13 +139,13 @@ test('a move during final-save verification does not certify the previous path',
   assert.equal(await io.isSaved('Note.md','old hash',{id,body}),false);
 });
 
-test('stale Obsidian file entries after an external folder move do not prevent recovery scans',async()=>{
+test('stale file entries after an unobserved external move remain unavailable without scanning the vault',async()=>{
   const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',old={path:'Old/Note.md'},moved={path:'Moved/Note.md'},text=initialRegion(id).text;
   const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[]},vault:{
     getFileByPath:(path:string)=>path===old.path?old:path===moved.path?moved:undefined,
-    getMarkdownFiles:()=>[old,moved],read:async(file:any)=>{if(file===old)throw Object.assign(Error('ENOENT: stale cached file'),{code:'ENOENT'});return text;},
+    getMarkdownFiles:()=>assert.fail('Vault enumeration is retired'),read:async(file:any)=>{if(file===old)throw Object.assign(Error('ENOENT: stale cached file'),{code:'ENOENT'});return text;},
   }} as any);
-  assert.equal(await io.locateNote(id,old.path),moved.path);
+  assert.equal(await io.locateNote(id,old.path),undefined);
   assert.equal(await io.readNote(old.path),undefined);
   assert.equal(await io.isSaved(old.path,'hash'),false);
   assert.equal(await io.updateNote(old.path,()=>{throw Error('Must not mutate');},()=>true),undefined);

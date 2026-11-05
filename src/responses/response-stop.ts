@@ -103,7 +103,16 @@ export async function interruptStoppedResponse(accessFor:()=>Promise<ThreadAcces
       if(turn?.state!=='running'&&state.session?.activeTurnId&&state.session.activeTurnId!==turnId)throw Error('The response turn is no longer active; its final state is waiting for confirmation.');
       if(expired)return;
       const handedOff=Object.values(state.worktreeHandoffs??{}).some(handoff=>handoff.turnId===turnId);
-      await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(requestId,handedOff?'interrupt:'+turnId:'interrupt'),threadId,turnId,createdAt});
+      try{await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(requestId,handedOff?'interrupt:'+turnId:'interrupt'),threadId,turnId,createdAt});}
+      catch(error){
+        if(expired)throw error;
+        // The exact run can finish between the read and interrupt. Confirm that
+        // outcome with a read; never replay the interrupt or touch a newer run.
+        const latest=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:await readInlineSnapshot(access,threadId,projectId,{messageIds:messageId?[messageId]:[],turnIds:[turnId]})}).state;
+        const finished=latest.turns?.[turnId]??(latest.latestTurn?.turnId===turnId?latest.latestTurn:undefined);
+        if(finished&&['completed','interrupted','cancelled','error'].includes(finished.state)||latest.checkpoints?.some(checkpoint=>checkpoint.turnId===turnId&&checkpoint.status==='ready'&&!!checkpoint.completedAt))return;
+        throw error;
+      }
     }finally{close('stop-complete');}
   })();
   try{await Promise.race([work,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{expired=true;close('stop-timeout');reject(Error('The response was finished in the note, but T3 did not acknowledge the interrupt.'));},timeoutMs);})]);}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send notes, manage folder routing, attach responses, or subscribe to Obsidian events."""
+"""Send checked commands to a connected Obsidian client through T3."""
 import argparse
 import importlib.util
 import json
@@ -9,6 +9,10 @@ import urllib.request
 import urllib.error
 import urllib.parse
 import socket
+try:
+    from connect_commands import send_command, select_client
+except ModuleNotFoundError:
+    from scripts.connect_commands import send_command, select_client
 import uuid
 import os
 import sys
@@ -47,241 +51,30 @@ def remote_failure_log(host, vault, command, retry=False):
     return module.mailbox({'host': host, 'vault': str(vault)}, command, retry=retry)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--vault', required=True, help='Local vault root or exact registered vault name')
-    parser.add_argument('--config-dir', default='.obsidian')
-    parser.add_argument('--request-id', default=None, help='Reuse this UUID to inspect/retry the same command')
-    parser.add_argument('--timeout', type=float, default=90)
-    parser.add_argument('--retry', action='store_true', help='Retry a failed result with the original prepared send')
-    parser.add_argument('--ssh-host', help='Private Windows SSH alias, for read-only send-failure-log from the VPS')
-    parser.add_argument('kind', choices=['note-context', 'client-status', 'send-failure-log', 'reload-client', 'archive-reply-imports', 'response-recovery-info', 'retry-response-save', 'resolve-response-location', 'response-status', 'response-import-info', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response', 'send-note', 'attach-response', 'inspect-folder', 'link-folder', 'unlink-folder', 'stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination', 'subscribe-job', 'subscribe', 'subscriptions', 'update-subscription', 'pause-subscription', 'resume-subscription', 'cancel-subscription'])
-    parser.add_argument('--since', help='Read failure log entries at or after this UTC timestamp')
-    parser.add_argument('--release-version', help='Exact immutable release for reload-client')
-    parser.add_argument('--runtime-hashes', help='JSON object of exact release runtime SHA-256 hashes')
-    parser.add_argument('--archive-directory', help='Directory inside a linked local project for old reply imports')
-    parser.add_argument('note', nargs='?', help='Vault-relative note or folder path; / means vault root')
-    parser.add_argument('--destination', action='append', default=[])
-    parser.add_argument('--destination-section', help='Exact unique Markdown heading for response placement')
-    parser.add_argument('--binding-id', help='Exact independent response binding UUID')
-    parser.add_argument('--note-path', help='Reviewed intended destination for duplicate recovery')
-    parser.add_argument('--hash', help='Reviewed original hash for staging, current saved hash for repair')
-    parser.add_argument('--thread-id')
-    parser.add_argument('--stream-scope', choices=['thread'], help='Explicit opt-in for thread-wide display')
-    parser.add_argument('--start', choices=['future', 'history'], default='future')
-    parser.add_argument('--job-id')
-    parser.add_argument('--job-request-id', help='Original job dispatch request ID')
-    parser.add_argument('--job-thread-id')
-    parser.add_argument('--job-project-id')
-    parser.add_argument('--job-environment-id')
-    parser.add_argument('--turn-id')
-    parser.add_argument('--remove-destination')
-    parser.add_argument('--message-id')
-    parser.add_argument('--no-stream', action='store_true')
-    parser.add_argument('--scope', help='Vault-relative note/folder to watch; / means vault root')
-    parser.add_argument('--scope-kind', choices=['note', 'folder'])
-    parser.add_argument('--no-subfolders', action='store_true')
-    parser.add_argument('--event', action='append', choices=['create', 'modify', 'property', 'rename', 'delete'])
-    parser.add_argument('--property', help='Exact frontmatter property name')
-    parser.add_argument('--equals', help='JSON value the changed property must become')
-    parser.add_argument('--project-id')
-    parser.add_argument('--environment-id')
-    parser.add_argument('--subscription-id')
-    parser.add_argument('--action', help='Direct action JSON: move-note or set-property; replaces the receiving thread')
-    parser.add_argument('--job-state', action='append', choices=['running', 'waiting-approval', 'waiting-input', 'completed', 'failed', 'interrupted', 'cancelled'], help='Job action transition (default: completed)')
-    parser.add_argument('--connection-id', help='Exact paired connection ID, or local for this desktop')
-    parser.add_argument('--mode', choices=['project', 'self'], help='Link mode (default: project); self requires an existing project at the folder')
-    parser.add_argument('--relink', action='store_true', help='Deliberately replace a different direct folder link')
-    parser.add_argument('--image-folder', help='Image subfolder inside the linked folder (link-folder only)')
-    parser.add_argument('--file-folder', help='Document subfolder inside the linked folder (link-folder only)')
-    args = parser.parse_args()
-    if args.ssh_host and (args.kind != 'send-failure-log' or args.config_dir != '.obsidian' or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', args.ssh_host)):
-        parser.error('--ssh-host requires send-failure-log, a Windows SSH alias, and the default configuration directory.')
-    if args.since is not None and args.kind != 'send-failure-log':
-        parser.error('--since requires send-failure-log.')
-    if args.image_folder is not None or args.file_folder is not None:
-        if args.kind != 'link-folder' or not args.image_folder or not args.file_folder:
-            parser.error('--image-folder and --file-folder must be supplied together with link-folder.')
-    config_path = Path(args.config_dir)
-    if (not args.config_dir or config_path.is_absolute() or '..' in config_path.parts
-            or '\\' in args.config_dir or ':' in args.config_dir
-            or any(ord(char) < 32 or ord(char) == 127 for char in args.config_dir)):
-        parser.error('--config-dir must be a directory inside the requested vault.')
-    if args.action is not None and args.kind not in ['subscribe', 'subscribe-job']:
-        parser.error('--action requires subscribe or subscribe-job.')
-    if args.job_state and (args.kind != 'subscribe-job' or args.action is None):
-        parser.error('--job-state requires a direct job action.')
-    direct_action = None
-    if args.action is not None:
-        try:
-            direct_action = json.loads(args.action)
-        except ValueError:
-            parser.error('--action must contain valid JSON.')
-        if not isinstance(direct_action, dict):
-            parser.error('--action must be a JSON object.')
-        if any([args.thread_id, args.project_id, args.environment_id]):
-            parser.error('Choose an action or a receiving thread, not both.')
-    folder_kind = args.kind in ['inspect-folder', 'link-folder', 'unlink-folder']
-    if not folder_kind and (args.connection_id is not None or args.mode is not None or args.relink):
-        parser.error('Folder linking options require a folder command.')
-    try:
-        command_id = str(uuid.UUID(args.request_id)) if args.request_id else str(uuid.uuid4())
-    except ValueError:
-        parser.error('--request-id must be a UUID.')
-    if args.archive_directory is not None and args.kind != 'archive-reply-imports':
-        parser.error('--archive-directory requires archive-reply-imports.')
-    if args.kind == 'note-context':
-        if any([args.destination, args.binding_id, args.no_stream, args.scope, args.event, args.subscription_id, args.project_id]):
-            parser.error('Context lookup is read-only and accepts a note, thread, message and environment only.')
-        if not any([args.note, args.thread_id, args.message_id]):
-            parser.error('note-context requires a source note or exact T3 identity.')
-        command = dict(version=1, id=command_id, kind=args.kind)
-        for key, value in [('notePath', args.note), ('threadId', args.thread_id), ('messageId', args.message_id), ('environmentId', args.environment_id)]:
-            if value is not None:
-                command[key] = value
-    elif args.kind in ['client-status', 'send-failure-log', 'reload-client', 'archive-reply-imports']:
-        if any([args.note, args.destination, args.thread_id, args.message_id, args.binding_id, args.scope, args.event]):
-            parser.error('Client commands do not send notes, prompts, or subscriptions.')
-        command = dict(version=1, id=command_id, kind=args.kind)
-        if args.kind == 'archive-reply-imports':
-            if not all([args.project_id, args.environment_id, args.archive_directory]):
-                parser.error('archive-reply-imports requires --project-id, --environment-id and --archive-directory.')
-            command.update(projectId=args.project_id, environmentId=args.environment_id, archiveDirectory=args.archive_directory)
-        if args.since is not None:
-            command['since'] = args.since
-        if args.kind == 'reload-client':
-            if not args.release_version or not args.runtime_hashes:
-                parser.error('reload-client requires --release-version and --runtime-hashes.')
-            try:
-                command.update(releaseVersion=args.release_version, runtimeSha256=json.loads(args.runtime_hashes))
-            except ValueError:
-                parser.error('--runtime-hashes must be valid JSON.')
-        elif args.release_version or args.runtime_hashes:
-            parser.error('Read-only client commands do not reload the client.')
-    elif args.kind in ['response-recovery-info', 'retry-response-save', 'resolve-response-location', 'response-status', 'response-import-info', 'resume-response', 'stage-note-edit', 'submit-note-edit', 'repair-response', 'remove-response']:
-        if not args.binding_id or args.note or args.destination:
-            parser.error('Response commands require --binding-id and do not take note destinations.')
-        command = dict(version=1, id=command_id, kind=args.kind, bindingId=args.binding_id)
-        if args.hash:
-            command['hash'] = args.hash
-        if args.note_path:
-            command['notePath'] = args.note_path
-    elif folder_kind:
-        if not args.note:
-            parser.error('Folder commands require a vault-relative folder; / means the vault root.')
-        if any([args.destination, args.thread_id, args.message_id, args.no_stream, args.scope,
-                args.scope_kind, args.no_subfolders, args.event, args.property,
-                args.equals is not None, args.subscription_id]):
-            parser.error('Folder commands do not take note-send or subscription arguments.')
-        command = dict(version=1, id=command_id, kind=args.kind, folderPath=args.note)
-        if args.kind == 'link-folder':
-            if not all([args.project_id, args.connection_id, args.environment_id]):
-                parser.error('link-folder requires --project-id, --connection-id, and --environment-id.')
-            command.update(projectId=args.project_id, connectionId=args.connection_id,
-                           environmentId=args.environment_id, mode=args.mode or 'project', relink=args.relink)
-            if args.image_folder is not None:
-                command['replyFolders'] = dict(images=args.image_folder, files=args.file_folder)
-        elif any([args.project_id, args.connection_id, args.environment_id, args.mode, args.relink]):
-            parser.error('Project selection and relinking options require link-folder.')
-    elif args.kind in ['stream-thread', 'thread-streams', 'pause-thread-stream', 'resume-thread-stream', 'cancel-thread-stream', 'remove-stream-destination']:
-        if args.note or args.no_stream or args.message_id or args.scope or args.event:
-            parser.error('Thread display registration does not send notes or prompts.')
-        command = dict(version=1, id=command_id, kind=args.kind)
-        if args.kind == 'stream-thread':
-            if not all([args.thread_id, args.project_id, args.environment_id, args.destination, args.stream_scope]):
-                parser.error('stream-thread requires --stream-scope thread, source --thread-id, --project-id, --environment-id, and --destination.')
-            command.update(scope=args.stream_scope, source=dict(threadId=args.thread_id, projectId=args.project_id, environmentId=args.environment_id), destinations=list(dict.fromkeys(args.destination)), start=args.start)
-        elif args.kind != 'thread-streams':
-            if not args.subscription_id:
-                parser.error('Management requires --subscription-id.')
-            command['subscriptionId'] = args.subscription_id
-            if args.kind == 'remove-stream-destination':
-                if not args.remove_destination:
-                    parser.error('Removing a destination requires --remove-destination.')
-                command['destination'] = args.remove_destination
-    elif args.kind in ['send-note', 'attach-response']:
-        if not args.note:
-            parser.error('Note sends and attachments require a source note.')
-        command = dict(version=1, id=command_id, kind=args.kind, notePath=args.note,
-                       destinations=list(dict.fromkeys(args.destination)), streamReply=not args.no_stream)
-        if args.thread_id:
-            command['threadId'] = args.thread_id
-        if args.message_id:
-            command['messageId'] = args.message_id
-    else:
-        if args.note or args.destination or args.message_id and args.kind != 'subscribe-job' or args.no_stream:
-            parser.error('Subscription commands do not take notes or streaming destinations.')
-        command = dict(version=1, id=command_id, kind=args.kind)
-        if args.kind in ['subscribe', 'subscribe-job']:
-            if args.kind == 'subscribe' and not all([args.scope, args.scope_kind]):
-                parser.error('subscribe requires --scope and --scope-kind.')
-            if direct_action is not None:
-                command['action'] = direct_action
-                if args.job_state:
-                    command['jobStates'] = list(dict.fromkeys(args.job_state))
-            else:
-                if not all([args.thread_id, args.project_id, args.environment_id]):
-                    parser.error('subscribe requires receiving --thread-id, --project-id, and --environment-id, or --action.')
-                command['target'] = dict(threadId=args.thread_id, projectId=args.project_id, environmentId=args.environment_id)
-        elif args.kind != 'subscriptions':
-            if not args.subscription_id:
-                parser.error('This command requires --subscription-id.')
-            command['subscriptionId'] = args.subscription_id
-        if args.kind == 'subscribe-job':
-            if not all([args.job_id, args.job_request_id, args.message_id, args.job_thread_id, args.job_project_id, args.job_environment_id]):
-                parser.error('subscribe-job requires --job-id, --job-request-id, --message-id, --job-thread-id, --job-project-id, and --job-environment-id.')
-            if args.scope or args.event or args.property or args.equals is not None:
-                parser.error('Job subscriptions do not take note filters.')
-            command['job'] = dict(jobId=args.job_id, requestId=args.job_request_id, messageId=args.message_id, threadId=args.job_thread_id, projectId=args.job_project_id, environmentId=args.job_environment_id)
-            if args.turn_id:
-                command['job']['turnId'] = args.turn_id
-        if args.scope:
-            if not args.scope_kind:
-                parser.error('--scope requires --scope-kind.')
-            command['scope'] = dict(path=args.scope, kind=args.scope_kind, recursive=not args.no_subfolders)
-        if args.kind == 'subscribe' or args.event:
-            command['filter'] = dict(events=list(dict.fromkeys(args.event or ['modify'])))
-            if args.property:
-                command['filter']['property'] = args.property
-            if args.equals is not None:
-                try:
-                    command['filter']['equals'] = json.loads(args.equals)
-                except ValueError:
-                    parser.error('--equals must be a JSON value, for example true or '"completed"'.')
-        elif args.property or args.equals is not None:
-            parser.error('A property filter requires --event property.')
-    if args.destination_section:
-        if args.kind not in ['send-note', 'attach-response', 'stream-thread']:
-            parser.error('--destination-section requires a streaming destination command.')
-        command['destinationSection'] = args.destination_section
-    if args.ssh_host:
-        outcome = remote_failure_log(args.ssh_host, Path(args.vault), command, args.retry)
-        print(json.dumps(outcome))
-        return
-    try:
-        args.vault = resolve_vault(args.vault, args.config_dir)
-    except ValueError as error:
-        parser.error(str(error))
-    storage_root = args.vault
-    route_path = args.vault / args.config_dir / 't3-code' / 'storage-route.json'
+def legacy_client(vault,config_dir,command,retry=False,timeout=5):
+    """One upgrade bridge for old clients; never used for note edits or sends."""
+    if command['kind'] not in ['client-status','send-failure-log','reload-client']:
+        return None
+    storage_root = vault
+    route_path = vault / config_dir / 't3-code' / 'storage-route.json'
     if route_path.exists():
         route = json.loads(route_path.read_text())
         destination = Path(route.get('storageRoot', ''))
-        if (route.get('version') != 1 or route.get('configDir') != args.config_dir
-                or Path(route.get('workspaceRoot', '')).resolve() != args.vault.resolve()
+        if (route.get('version') != 1 or route.get('configDir') != config_dir
+                or Path(route.get('workspaceRoot', '')).resolve() != vault.resolve()
                 or not destination.is_absolute()
-                or destination.resolve().is_relative_to(args.vault.resolve())):
-            parser.error('Invalid private vault storage route.')
+                or destination.resolve().is_relative_to(vault.resolve())):
+            raise ValueError('Invalid private vault storage route.')
         storage_root = destination
-    base = storage_root / args.config_dir / 't3-code' / 'commands' / 'v1'
+    base = storage_root / config_dir / 't3-code' / 'commands' / 'v1'
     try:
         endpoint = json.loads((base / 'endpoint.json').read_text())
         target = urllib.parse.urlsplit(endpoint.get('url', ''))
         if (endpoint.get('version') != 1 or target.scheme != 'http' or target.hostname != '127.0.0.1'
                 or not target.port or target.path != '/commands' or target.query or target.fragment
                 or target.username or target.password or not re.fullmatch(r'[0-9a-f]{64}', endpoint.get('token', ''))):
-            parser.error('Invalid direct command endpoint.')
-        data = json.dumps(dict(command=command, retry=args.retry)).encode()
+            raise ValueError('Invalid direct command endpoint.')
+        data = json.dumps(dict(command=command, retry=retry)).encode()
         request = urllib.request.Request(endpoint['url'], data=data, method='POST', headers={
             'Authorization': 'Bearer ' + endpoint['token'], 'Content-Type': 'application/json'})
         # Loopback traffic never uses proxy settings or follows redirects.
@@ -290,20 +83,131 @@ def main():
                 return None
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         try:
-            with opener.open(request, timeout=args.timeout) as response:
+            with opener.open(request, timeout=timeout) as response:
                 result = json.load(response)
         except urllib.error.HTTPError as error:
             result = json.load(error)
-        print(json.dumps(result))
-        raise SystemExit(0 if result.get('ok') else 1)
+        return result
     except (FileNotFoundError, ConnectionRefusedError):
-        print(json.dumps(dict(id=command_id, ok=False, error='The direct Obsidian command endpoint is unavailable. Open the vault with the updated plugin enabled. No request was queued.')))
-        raise SystemExit(1)
+        return None
     except (TimeoutError, socket.timeout, urllib.error.URLError, ConnectionError):
-        print(json.dumps(dict(id=command_id, ok=False, pending=True,
-                             error='The direct request was not confirmed. Reuse this request ID; do not create a replacement send.')))
-        raise SystemExit(2)
+        return dict(id=command['id'],ok=False,pending=True,error='The legacy client did not confirm this command. Reuse its request ID.')
 
 
-if __name__ == '__main__':
-    main()
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--vault',required=True,help='Exact vault name, UUID, or registered local path')
+    parser.add_argument('--vault-id')
+    parser.add_argument('--client-id',help='Exact connected Obsidian device UUID when multiple clients match')
+    parser.add_argument('--transport-root',help="T3's No project workspace root on this agent machine")
+    parser.add_argument('--config-dir',default='.obsidian')
+    parser.add_argument('--request-id')
+    parser.add_argument('--timeout',type=float,default=90)
+    parser.add_argument('--retry',action='store_true',help='Explicitly retry a failed command; ambiguous executions never replay')
+    parser.add_argument('--ssh-host',help='Existing private Windows route for read-only failure logs')
+    parser.add_argument('--output',help='Write the JSON result to an agent-owned file instead of stdout')
+    parser.add_argument('kind',choices=['connected-clients','note-context','client-status','send-failure-log','reload-client','response-recovery-info','retry-response-save','resolve-response-location','response-status','response-import-info','resume-response','prepare-note-edit','submit-note-edit','note-edit-status','cancel-note-edit','create-note','rename-note','repair-response','remove-response','send-note','attach-response','inspect-folder','link-folder','unlink-folder','stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination'])
+    parser.add_argument('note',nargs='?')
+    for name in ['since','release-version','runtime-hashes','destination-section','binding-id','note-path','hash','edit-id','proposed-file','thread-id','message-id','project-id','environment-id','subscription-id','remove-destination','connection-id','image-folder','file-folder']:
+        parser.add_argument('--'+name)
+    parser.add_argument('--destination',action='append',default=[])
+    parser.add_argument('--stream-scope',choices=['thread'])
+    parser.add_argument('--start',choices=['future','history'],default='future')
+    parser.add_argument('--no-stream',action='store_true')
+    parser.add_argument('--mode',choices=['project','self'])
+    parser.add_argument('--relink',action='store_true')
+    args=parser.parse_args()
+    try:
+        request_id=str(uuid.UUID(args.request_id)) if args.request_id else str(uuid.uuid4())
+        if not 0 < args.timeout <= 300:
+            raise ValueError('Timeout must be between 0 and 300 seconds.')
+        if args.kind=='connected-clients':
+            clients=select_client(args.vault,args.transport_root,args.client_id,args.vault_id,all_matches=True)
+            print(json.dumps({'ok':True,'clients':[{key:item.get(key) for key in ['vaultName','vaultId','clientId','instanceId','loadedVersion','environmentId','expiresAt']} for _,item in clients]}))
+            return
+        command=dict(version=1,id=request_id,kind=args.kind)
+        if args.kind in ['prepare-note-edit','submit-note-edit','note-edit-status','cancel-note-edit','create-note','rename-note']:
+            if args.kind=='create-note':
+                if not args.note or not args.proposed_file: raise ValueError('Create needs a new note path and --proposed-file.')
+                proposal=Path(args.proposed_file)
+                if proposal.stat().st_size>1_000_000: raise ValueError('The proposed note exceeds 1 MB.')
+                command.update(notePath=args.note,proposed=proposal.read_bytes().decode('utf-8'))
+            elif args.kind=='rename-note':
+                if not args.note or not args.note_path or not args.hash: raise ValueError('Rename needs the source note, new --note-path and current --hash.')
+                command.update(notePath=args.note,destination=args.note_path,originalHash=args.hash)
+            elif args.kind=='prepare-note-edit':
+                if not args.note:
+                    raise ValueError('prepare-note-edit needs the exact vault-relative note path.')
+                command['notePath']=args.note
+                if args.binding_id: command['bindingId']=args.binding_id
+            else:
+                if not args.edit_id: raise ValueError('Use the prepared edit ID.')
+                command['editId']=args.edit_id
+                if args.kind=='cancel-note-edit':
+                    if not args.hash: raise ValueError('Review the current note --hash before withdrawing a proposal.')
+                    command['hash']=args.hash
+                if args.kind=='submit-note-edit':
+                    if not args.hash or not args.proposed_file: raise ValueError('Submit the original --hash and --proposed-file.')
+                    proposal=Path(args.proposed_file)
+                    if proposal.stat().st_size>1_000_000: raise ValueError('The proposed note exceeds 1 MB.')
+                    command.update(originalHash=args.hash,proposed=proposal.read_bytes().decode('utf-8'))
+        elif args.kind in ['client-status','send-failure-log','reload-client']:
+            if args.note or args.destination: raise ValueError('Client commands do not take notes or destinations.')
+            if args.kind=='reload-client':
+                if not args.release_version or not args.runtime_hashes: raise ValueError('Reload needs the exact version and complete runtime hashes.')
+                command.update(releaseVersion=args.release_version,runtimeSha256=json.loads(args.runtime_hashes))
+            elif args.release_version or args.runtime_hashes: raise ValueError('Read-only client commands do not reload the client.')
+            if args.since:
+                if args.kind!='send-failure-log': raise ValueError('--since requires send-failure-log.')
+                command['since']=args.since
+        elif args.kind=='note-context':
+            if not any([args.note,args.thread_id,args.message_id]): raise ValueError('Supply an exact note or T3 identity.')
+            for key,value in [('notePath',args.note),('threadId',args.thread_id),('messageId',args.message_id),('environmentId',args.environment_id)]:
+                if value is not None: command[key]=value
+        elif args.kind in ['inspect-folder','link-folder','unlink-folder']:
+            if not args.note: raise ValueError('Supply a vault-relative folder, or / for the root.')
+            command['folderPath']=args.note
+            if args.kind=='link-folder':
+                if not all([args.project_id,args.environment_id,args.connection_id]): raise ValueError('Linking requires the exact project, environment and connection IDs.')
+                command.update(projectId=args.project_id,environmentId=args.environment_id,connectionId=args.connection_id,mode=args.mode or 'project',relink=args.relink)
+                if args.image_folder or args.file_folder:
+                    if not args.image_folder or not args.file_folder: raise ValueError('Supply both reply folders.')
+                    command['replyFolders']=dict(images=args.image_folder,files=args.file_folder)
+        elif args.kind in ['stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination']:
+            if args.kind=='stream-thread':
+                if not all([args.thread_id,args.project_id,args.environment_id,args.stream_scope,args.destination]): raise ValueError('Following requires thread scope, exact source IDs and destination notes.')
+                command.update(scope=args.stream_scope,source=dict(threadId=args.thread_id,projectId=args.project_id,environmentId=args.environment_id),destinations=args.destination,start=args.start)
+            elif args.kind!='thread-streams':
+                command['subscriptionId']=args.subscription_id
+                if args.kind=='remove-stream-destination': command['destination']=args.remove_destination
+        elif args.kind in ['send-note','attach-response']:
+            if not args.note: raise ValueError('Supply the source note.')
+            command.update(notePath=args.note,destinations=list(dict.fromkeys(args.destination)),streamReply=not args.no_stream)
+            if args.thread_id: command['threadId']=args.thread_id
+            if args.message_id: command['messageId']=args.message_id
+        else:
+            if not args.binding_id: raise ValueError('Supply an exact response binding ID.')
+            command['bindingId']=args.binding_id
+            if args.hash: command['hash']=args.hash
+            if args.note_path: command['notePath']=args.note_path
+        if args.destination_section:
+            if args.kind not in ['send-note','attach-response','stream-thread']: raise ValueError('A section requires a streaming destination command.')
+            command['destinationSection']=args.destination_section
+        if args.ssh_host:
+            if args.kind!='send-failure-log' or args.config_dir!='.obsidian' or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]{0,127}',args.ssh_host): raise ValueError('The SSH route is limited to failure logs from an existing private Windows alias.')
+            result=remote_failure_log(args.ssh_host,Path(args.vault),command,args.retry)
+        else:
+            result=send_command(args.vault,command,root=args.transport_root,client_id=args.client_id,vault_id=args.vault_id,timeout=args.timeout,retry=args.retry)
+            if result is None and args.kind in ['client-status','send-failure-log','reload-client']:
+                try: result=legacy_client(resolve_vault(args.vault),args.config_dir,command,args.retry,args.timeout)
+                except ValueError: pass
+            if result is None: result=dict(id=request_id,ok=False,error='No matching connected Obsidian client is ready. Open the vault and connect T3; specify --client-id if needed. No command was queued.')
+        if args.output:
+            Path(args.output).write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+        else: print(json.dumps(result,ensure_ascii=False))
+        if not result.get('ok'): raise SystemExit(2 if result.get('pending') else 1)
+    except (ValueError,OSError) as error:
+        parser.error(str(error))
+
+
+if __name__=='__main__': main()

@@ -5,7 +5,6 @@ import {editorStream} from '../src/responses/editor-stream';
 import {initialRegion,inlineTargetAt,regionBody,completionProof,hasCompletionProof} from '../src/conversations/inline-thread';
 import {validateNoteCommand} from '../src/notes/note-command';
 import type {ResponseRequest} from '../src/responses/response-model';
-import {eventContent} from '../src/app/event-subscriptions';
 import {captureCursorInsertion} from '../src/notes/cursor-insertion';
 import {responseAnchor} from '../src/responses/native-response-projection';
 
@@ -34,7 +33,7 @@ test('an explicit destination section takes precedence over a cursor hint',async
 test('native section registration preserves the watcher baseline without adding ordinary blank lines',async()=>{
   const original='# Note\n\n## CURRENT\n\n## AFTER\n\nTail\n';let document=original;
   await editorStream({...source(),nativeProjection:true,destinationSection:'CURRENT'},'A.md',{updateNote:async(_path,change)=>document=change(document)},()=>true);
-  assert.equal(eventContent(document),eventContent(original));
+  assert.ok(document.includes('## CURRENT'));assert.ok(document.endsWith('## AFTER\n\nTail\n'));
   assert.equal((document.match(/## AFTER/g)??[]).length,1);
 });
 test('bindings have independent destination IDs and retain one source message; replay never duplicates a block',async()=>{

@@ -1,5 +1,6 @@
-import {isRecord,parseJson} from '../shared/values';
-import {redact,validEvent,type DiagnosticEvent} from '../app/diagnostics';
+// Historical test adapter; not part of the plugin runtime.
+import {isRecord,parseJson} from '../../../src/shared/values';
+import {redact,validEvent,type DiagnosticEvent} from '../../../src/app/diagnostics';
 /** Root configuration JSON is included in Sync's core-plugin-data category. */
 export const eventLogPath=(configDir:string)=>`${configDir}/t3-code-log.json`;
 export const EVENT_LOG_FOLDER='T3 Code Logs'; // Retired location, migration only.

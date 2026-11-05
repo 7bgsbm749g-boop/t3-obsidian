@@ -4,7 +4,7 @@ import {readWireShell} from '../../src/connection/wire-readers';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {writeFile} from 'node:fs/promises';
-import {desktopThreadAccess} from '../../src/connection/desktop';
+import {desktopThreadAccess} from '../fixtures/baseline-native/desktop';
 import {readNewThreadDefaults} from '../../src/conversations/model-defaults';
 import {watchThread,readInlineSnapshot} from '../../src/conversations/thread-stream';
 import {applyThreadItem,turnForMessage,turnPhase,type InlineThreadState} from '../../src/conversations/inline-thread';

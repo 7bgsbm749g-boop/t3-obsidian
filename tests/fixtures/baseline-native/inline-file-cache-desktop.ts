@@ -1,3 +1,4 @@
+// Historical test/lab adapter only. Never import this file from src or ship it in the plugin.
 import {Platform} from 'obsidian';
 let fs:typeof import('node:fs').promises;
 let desktopReady:Promise<void>|undefined;
@@ -9,7 +10,7 @@ function loadDesktop():Promise<void>{
   }
   throw Error('This feature requires Obsidian on desktop.');
 }
-import {errorCode,toError} from '../shared/values';
+import {errorCode,toError} from '../../../src/shared/values';
 type BigIntStats=import('node:fs').BigIntStats;
 
 type Entry={identity:BigIntStats;value:string};

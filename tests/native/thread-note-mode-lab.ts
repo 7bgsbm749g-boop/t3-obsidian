@@ -7,7 +7,7 @@ import {deviceNoteIO,deviceFinalNoteIO} from '../../src/conversations/inline-not
 import {hiddenInlineMarkerExtension} from '../../src/conversations/inline-markers';
 import {installResponsePresentation} from '../../src/responses/response-presentation';
 import {responseBindingRequests,updateResponseBindingData} from '../../src/responses/response-binding-data';
-import {desktopDefaults,desktopEnvironment,desktopThreadAccess,uuid5} from '../../src/connection/desktop';
+import {desktopDefaults,desktopEnvironment,desktopThreadAccess,uuid5} from '../fixtures/baseline-native/desktop';
 import type {ThreadAccess} from '../../src/conversations/thread-stream';
 import {responseFrame} from '../../src/responses/response-container';
 const fs=require('node:fs'),path=require('node:path');

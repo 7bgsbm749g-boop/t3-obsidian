@@ -1,3 +1,4 @@
+// Historical test/lab adapter only. Never import this file from src or ship it in the plugin.
 import {sha1} from '@noble/hashes/legacy';
 import {Buffer as BrowserBuffer} from 'buffer/';
 import {Platform} from 'obsidian';
@@ -28,29 +29,29 @@ function loadDesktop():Promise<void>{
   }
   throw Error('This feature requires Obsidian on desktop.');
 }
-import {outgoingMessage,type StartRequest,type DesktopOperation,type CreateThreadCommand,type TurnStartCommand} from './send-contracts';
-import {isRecord,parseJson} from '../shared/values';
-import type {WireProject} from './wire-types';
-import type {T3Api} from './t3-rpc';
-import {readWireProjects,readThreadList,readMetadataSnapshot} from './wire-readers';
+import {outgoingMessage,type StartRequest,type DesktopOperation,type CreateThreadCommand,type TurnStartCommand} from '../../../src/connection/send-contracts';
+import {isRecord,parseJson} from '../../../src/shared/values';
+import type {WireProject} from '../../../src/connection/wire-types';
+import type {T3Api} from '../../../src/connection/t3-rpc';
+import {readWireProjects,readThreadList,readMetadataSnapshot} from '../../../src/connection/wire-readers';
 
-import {errorCode,toError} from '../shared/values';
-import {T3_RESPONSE_MAX_BYTES,T3ResponseTooLargeError} from './t3-response-limits';
+import {errorCode,toError} from '../../../src/shared/values';
+import {T3_RESPONSE_MAX_BYTES,T3ResponseTooLargeError} from '../../../src/connection/t3-response-limits';
 // Loaded only on desktop. T3's official CLI issues short-lived credentials;
 // all project/thread traffic goes directly to its authenticated loopback API.
 
-import type {Connection} from '../app/bridge';
-import type {ThreadAccess} from '../conversations/thread-stream';
-import {existingThreadTurn} from '../conversations/thread-target';
-import {readNewThreadDefaults,type NewThreadDefaults} from '../conversations/model-defaults';
-import {workspaceChildPath} from '../projects/workspace-picker';
-import {T3HttpError} from '../conversations/thread-access-cache';
+import type {Connection} from '../../../src/app/bridge';
+import type {ThreadAccess} from '../../../src/conversations/thread-stream';
+import {existingThreadTurn} from '../../../src/conversations/thread-target';
+import {readNewThreadDefaults,type NewThreadDefaults} from '../../../src/conversations/model-defaults';
+import {workspaceChildPath} from '../../../src/projects/workspace-picker';
+import {T3HttpError} from '../../../src/conversations/thread-access-cache';
 import {recordDesktopAuth} from './desktop-auth-audit';
-import {t3Api,requestAborted,cancelledRequest,type T3RequestOptions} from './t3-api';
-import type {DirectReadOptions} from './direct';
-import {T3_PROTOCOL_HEADER,T3_PROTOCOL_VERSION} from './orchestration-v2';
-import {ensureNoProject} from '../projects/no-project';
-import {AUTO_THREAD_TITLE} from '../conversations/thread-title';
+import {t3Api,requestAborted,cancelledRequest,type T3RequestOptions} from '../../../src/connection/t3-api';
+import type {DirectReadOptions} from '../../../src/connection/direct';
+import {T3_PROTOCOL_HEADER,T3_PROTOCOL_VERSION} from '../../../src/connection/orchestration-v2';
+import {ensureNoProject} from '../../../src/projects/no-project';
+import {AUTO_THREAD_TITLE} from '../../../src/conversations/thread-title';
 import {selectDesktopCli,desktopLauncher,DESKTOP_LAUNCHER_MAX_BYTES} from './desktop-cli';
 
 export async function desktopDefaults():Promise<Connection> {await loadDesktop();return {executable:'',host:'local',native:true,baseDir:join(homedir(),'.t3')};}
@@ -158,7 +159,7 @@ export async function requestJson(origin:string,token:string,path:string,payload
 }
 async function save(path:string,value:unknown){const temp=path+'.tmp';const f=await fs.open(temp,'w',0o600);try{await f.writeFile(JSON.stringify(value));await f.sync();}finally{await f.close();}await fs.rename(temp,path);}
 interface DesktopLedger {
-  protocolVersion?:2;launch?:boolean;generateTitle?:boolean;workspaceStrategy?:import('../conversations/model-defaults').WorkspaceStrategy;requestHash:string;requestId:string;threadId:string;
+  protocolVersion?:2;launch?:boolean;generateTitle?:boolean;workspaceStrategy?:import('../../../src/conversations/model-defaults').WorkspaceStrategy;requestHash:string;requestId:string;threadId:string;
   project:{id:string};phase:'prepared'|'created'|'started';create?:CreateThreadCommand|null;turn?:TurnStartCommand;
 }
 interface LocalSession {token:string;sessionId:string;expiresAt?:string}
@@ -292,7 +293,7 @@ export async function desktopThreadAccess(connection:Connection,component:'respo
   const issuedAt=Date.now(),expiry=Date.parse(issued.expiresAt??''),expiresAt=Number.isFinite(expiry)?expiry:undefined;
   const metadata={sessionId:issued.sessionId,component,issuedAt,expiresAt};
   const api=desktopApi(runtime.origin,issued.token);
-  const audit=(event:import('./desktop-auth-audit').DesktopAuthRecord['event'],reason?:import('../conversations/thread-stream').ThreadAccessCloseReason,caller?:string[])=>recordDesktopAuth(base,{...metadata,event,reason,caller});
+  const audit=(event:import('./desktop-auth-audit').DesktopAuthRecord['event'],reason?:import('../../../src/conversations/thread-stream').ThreadAccessCloseReason,caller?:string[])=>recordDesktopAuth(base,{...metadata,event,reason,caller});
   void audit('issued');let closed=false,rejectionRecorded=false,recoveryRecorded=false;
   const access:ThreadAccess={origin:runtime.origin,expiresAt,trace:(event,reason)=>{if(event==='recovered'){if(recoveryRecorded)return;recoveryRecorded=true;}void audit(event,reason);},async api(path,payload){
     try{return await api(path,payload);}catch(error){

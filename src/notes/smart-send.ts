@@ -80,15 +80,6 @@ export function moveSmartNotes(data:SmartSendData,before:string,after?:string,fo
   const revision=Math.max(Date.now(),...Object.values(data.notes).map(n=>n.revision+1));
   for(const [id,n] of Object.entries(data.notes))if(!n.deleted&&(n.path===before||folder&&n.path.startsWith(before+'/')))data.notes[id]={...n,path:after===undefined?n.path:after+n.path.slice(before.length),revision,...(after===undefined?{deleted:true}:{renamedAt:revision})};
 }
-/** Call only with source IDs proven by a uniquely located response binding.
- * A copy whose original is still present keeps independent source coverage. */
-export function recoverSmartNote(data:SmartSendData,path:string,ids:string[],exists:(path:string)=>boolean){
-  const candidates=[...new Set(ids)].filter(id=>data.notes[id]&&data.notes[id].path!==path);
-  if(!candidates.length||new Set(candidates.map(id=>data.notes[id].path)).size!==1||candidates.some(id=>exists(data.notes[id].path)))return false;
-  const revision=Math.max(Date.now(),...Object.values(data.notes).map(n=>n.revision+1));
-  for(const id of candidates)data.notes[id]={path,revision,renamedAt:revision};
-  return true;
-}
 function noteIdentities(data:SmartSendData,id:string){
   const note=data.notes[id];return new Set([id,...Object.entries(data.notes).filter(([,n])=>!n.deleted&&n.path===note?.path).map(([id])=>id)]);
 }
