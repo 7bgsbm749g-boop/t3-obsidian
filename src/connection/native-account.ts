@@ -19,7 +19,7 @@ const messages:Record<string,string>={
  too_many_requests:'Too many sign-in attempts. Wait a moment before trying again.',
  session_expired:'Your T3 sign-in expired. Sign in again.',
 };
-async function request(path:string,state:ClientState,body:Record<string,string>|undefined,fetcher:Fetcher,changed?:()=>Promise<void>){
+async function request(path:string,state:ClientState,body:Record<string,string>|undefined,fetcher:Fetcher,changed?:()=>Promise<void>):Promise<{data:Record<string,unknown>;client:Record<string,unknown>|undefined}>{
  const url=ORIGIN+path+'?__clerk_api_version=2026-05-12&_is_native=1';
  const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
  try{
@@ -31,7 +31,10 @@ async function request(path:string,state:ClientState,body:Record<string,string>|
   if(!response.ok){const first=Array.isArray(data.errors)?data.errors[0] as unknown:undefined;const code=isRecord(first)&&typeof first.code==='string'?first.code:'';
    if(response.status===401||['session_expired','session_revoked','session_not_found','client_invalid','client_not_found'].includes(code))throw new SignInRequiredError();
    throw new SignInError(messages[code]??(response.status===429?messages.too_many_requests:`T3 sign-in failed (HTTP ${response.status}). Try again or use advanced pairing.`));}
-  const result=data.response??data;if(!isRecord(result)||data.client!==undefined&&!isRecord(data.client))throw new SignInError('T3 sign-in returned an invalid response.');return {data:result,client:data.client};
+  // Clerk uses null when the response does not include a separate client update.
+  const result=data.response??data,client=data.client??undefined;
+  if(!isRecord(result)||client!==undefined&&!isRecord(client))throw new SignInError('T3 sign-in returned an invalid response.');
+  return {data:result,client};
  }catch(e){if(e instanceof SignInError||e instanceof SignInRequiredError)throw e;throw new SignInError('Cannot reach T3 sign-in. Check your internet connection.');}finally{clearTimeout(timer);}
 }
 export async function beginEmailLogin(email:string,fetcher:Fetcher=defaultNativeAccountFetch):Promise<EmailLogin>{
