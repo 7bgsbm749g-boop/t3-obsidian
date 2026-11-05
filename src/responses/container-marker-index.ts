@@ -1,3 +1,6 @@
+import * as cmLanguage from '@codemirror/language';
+import * as lezerCommon from '@lezer/common';
+import * as lezerMarkdown from '@lezer/markdown';
 import type {ChangeDesc,Text} from '@codemirror/state';
 import type {TreeFragment,ChangedRange,Tree} from '@lezer/common';
 import type {ResponseBoundary} from './response-container';
@@ -10,9 +13,9 @@ function editorParser(){
   if(!runtime){
     // Match the existing editor extension's lazy loading. Startup, read-only
     // commands and mobile account actions must not load the editor runtime.
-    const {DocInput}=require('@codemirror/language') as typeof import('@codemirror/language');
-    const {TreeFragment}=require('@lezer/common') as typeof import('@lezer/common');
-    const {parser}=require('@lezer/markdown') as typeof import('@lezer/markdown');
+    const {DocInput}=cmLanguage;
+    const {TreeFragment}=lezerCommon;
+    const {parser}=lezerMarkdown;
     runtime={DocInput,TreeFragment,markdown:parser.configure({remove:['HTMLBlock','HTMLTag']})};
   }
   return runtime;

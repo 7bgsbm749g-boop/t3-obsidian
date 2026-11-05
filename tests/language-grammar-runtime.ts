@@ -1,4 +1,4 @@
-import {build} from 'esbuild';
+import {build} from './build-fixture';
 import {createRequire} from 'node:module';
 import type {CodeGrammar} from '../src/projects/code-language';
 import type {LanguageSupport} from '@codemirror/language';

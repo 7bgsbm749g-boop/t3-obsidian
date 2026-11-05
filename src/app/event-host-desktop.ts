@@ -1,8 +1,22 @@
+import {Platform} from 'obsidian';
+let fs:typeof import('node:fs').promises;
+let join:typeof import('node:path').join;
+let lockfile:typeof import('proper-lockfile');
+let desktopReady:Promise<void>|undefined;
+function loadDesktop():Promise<void>{
+  if(Platform.isDesktop){
+    return desktopReady??=(async()=>{
+    ({promises:fs}=await import('node:fs'));
+    const nativePath=await import('node:path');
+    join=nativePath.join.bind(nativePath);
+    lockfile=(await import('proper-lockfile')).default;
+    })();
+  }
+  throw Error('This feature requires Obsidian on desktop.');
+}
 import {parseJsonRecord} from '../shared/values';
-import {promises as fs} from 'node:fs';
-import {join} from 'node:path';
-import lockfile from 'proper-lockfile';
-import {desktopInterval} from '../connection/desktop-timers';
+
+import {desktopTimers} from '../connection/desktop-timers';
 import {localInlineFiles} from '../responses/response-storage-desktop';
 import {ensurePrivateStorage} from '../storage/private-storage-desktop';
 import {eventCanonical,eventRequest,type EventHostIdentity} from './event-host';
@@ -13,17 +27,19 @@ export class EventHostServer {
   private active=false;
   activate(){this.active=true;}
   private stopped=false;private work?:Promise<void>;private stopTimer:()=>void;
-  private constructor(readonly identity:EventHostIdentity,private release:()=>Promise<void>,private execute:(command:EventSubscriptionCommand)=>Promise<EventCommandResult>,private ready:()=>boolean,private onStopped:()=>void){
+  private constructor(private interval:Awaited<ReturnType<typeof desktopTimers>>['interval'],readonly identity:EventHostIdentity,private release:()=>Promise<void>,private execute:(command:EventSubscriptionCommand)=>Promise<EventCommandResult>,private ready:()=>boolean,private onStopped:()=>void){
     this.files=localInlineFiles(identity.workspaceRoot,identity.directory);
-    this.stopTimer=desktopInterval(()=>void this.tick().catch(()=>{}),250);
+    this.stopTimer=this.interval(()=>void this.tick().catch(()=>{}),250);
   }
   static async open(identity:EventHostIdentity,execute:(command:EventSubscriptionCommand)=>Promise<EventCommandResult>,ready:()=>boolean,onStopped:()=>void){
+    await loadDesktop();
+    const {interval}=await desktopTimers();
     const route=await ensurePrivateStorage(identity.workspaceRoot,identity.directory.slice(0,identity.directory.indexOf('/t3-code/')));
     const base=join(route.storageRoot,identity.directory);
     for(const name of ['requests','results'])await fs.mkdir(join(base,name),{recursive:true,mode:0o700});
     let server:EventHostServer|undefined;
     const release=await lockfile.lock(base,{realpath:true,stale:30_000,update:5000,onCompromised:()=>void server?.dispose()});
-    server=new EventHostServer(identity,release,execute,ready,onStopped);return server;
+    server=new EventHostServer(interval,identity,release,execute,ready,onStopped);return server;
   }
   async load():Promise<EventState|undefined>{
     const raw=await this.files.read(this.identity.directory+'/state.json');if(!raw)return undefined;

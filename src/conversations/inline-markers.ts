@@ -1,3 +1,5 @@
+import * as cmView from '@codemirror/view';
+import * as cmState from '@codemirror/state';
 import {parseJsonRecord} from '../shared/values';
 import type {Extension} from '@codemirror/state';
 import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
@@ -17,7 +19,7 @@ export function inlineMarkerRegex():RegExp {
 export function hiddenInlineMarkerExtension():Extension {
   // Obsidian supplies its own CodeMirror instance. Load that instance only when
   // registering the extension, so the decorations share the editor's classes.
-  const {Decoration,EditorView,MatchDecorator,ViewPlugin}=require('@codemirror/view') as typeof import('@codemirror/view');
+  const {Decoration,EditorView,MatchDecorator,ViewPlugin}=cmView;
   const matcher=new MatchDecorator({regexp:inlineMarkerRegex(),maxLength:1_000_000,decoration:(match,view,pos)=>{
     if(match[0].startsWith('<!-- t3-response-binding:')||match[0].startsWith('<!-- t3-run-import:')){
       const document=view.state.doc.toString();
@@ -42,7 +44,7 @@ export function hiddenInlineMarkerExtension():Extension {
   // Multiline replacements must be direct state decorations. Hide the extra
   // container separator newline too, retaining the old comment-line geometry in
   // both Live Preview and Source mode. Literal containers in code stay visible.
-  const {StateField}=require('@codemirror/state') as typeof import('@codemirror/state');
+  const {StateField}=cmState;
   const containers=(index:ContainerMarkerIndex,doc:import('@codemirror/state').Text)=>Decoration.set(index.boundaries.map(boundary=>{
     const from=boundary.from-(boundary.kind==='end'&&doc.sliceString(Math.max(0,boundary.from-2),boundary.from)==='\n\n'?1:0);
     const to=boundary.to+(boundary.kind==='start'&&doc.sliceString(boundary.to,boundary.to+2)==='\n\n'?1:0);

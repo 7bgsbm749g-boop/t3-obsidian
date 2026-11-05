@@ -1,3 +1,4 @@
+import * as cmView from '@codemirror/view';
 import type {EditorView} from '@codemirror/view';
 import type {Editor} from 'obsidian';
 
@@ -18,7 +19,7 @@ export function replaceInlineEditorText(editor:Editor,text:string,from:number,to
         if(coords&&coords.top>=bounds.top&&coords.bottom<=bounds.bottom){anchor=line.from;top=coords.top;break;}
       }
     }
-    const {EditorView}=require('@codemirror/view') as typeof import('@codemirror/view');
+    const {EditorView}=cmView;
     const effects=anchor!==undefined&&top!==undefined&&cm.scrollDOM
       ?EditorView.scrollIntoView(anchor+text.length-(to-from),{y:'start',yMargin:top-cm.scrollDOM.getBoundingClientRect().top})
       :undefined;

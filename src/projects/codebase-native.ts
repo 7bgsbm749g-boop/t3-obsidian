@@ -83,7 +83,7 @@ export class CodebaseBridge {
   local<T=unknown>(name:string,value?:unknown):T|undefined{if(value===undefined){const stored:unknown=this.app.loadLocalStorage(this.localKey+name);return stored as T|undefined;}this.app.saveLocalStorage(this.localKey+name,value);}
   private renderViews(key?:string){if(this.stopped)return;for(const view of this.views)view.invalidate(key);if(this.rendering)return;this.rendering=true;setTimeout(()=>{this.rendering=false;if(!this.stopped)for(const view of this.views)view.render();},16);}
   async install(){
-    this.languageViews.install();
+    await this.languageViews.install();
     this.undo.push(registerProjectReferences(this.app,(reference,request,access)=>this.reply(reference,request,access)));
     try{const saved=this.storage?.load()??parseJson(await this.app.vault.adapter.read(this.metadataPath)) as CodebaseState|undefined;this.adopt(saved);}catch{/* First use or unavailable metadata. */}
     const vault=this.app.vault,cache=this.app.metadataCache,workspace=this.app.workspace;

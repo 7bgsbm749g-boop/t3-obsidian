@@ -1,6 +1,19 @@
+import {Platform} from 'obsidian';
+let fs:typeof import('node:fs').promises;
+let join:typeof import('node:path').join;
+let desktopReady:Promise<void>|undefined;
+function loadDesktop():Promise<void>{
+  if(Platform.isDesktop){
+    return desktopReady??=(async()=>{
+    ({promises:fs}=await import('node:fs'));
+    const nativePath=await import('node:path');
+    join=nativePath.join.bind(nativePath);
+    })();
+  }
+  throw Error('This feature requires Obsidian on desktop.');
+}
 import {errorCode} from '../shared/values';
-import {promises as fs} from 'node:fs';
-import {join} from 'node:path';
+
 import type {ThreadAccessCloseReason} from '../conversations/thread-stream';
 
 export const DESKTOP_AUTH_AUDIT_MAX_BYTES=256*1024;
@@ -12,7 +25,8 @@ export interface DesktopAuthRecord {
 const queues=new Map<string,Promise<void>>();
 
 /** Small, event-driven local auth audit; no vault writes, timers, or Sync. */
-export function recordDesktopAuth(baseDir:string,record:DesktopAuthRecord):Promise<void>{
+export async function recordDesktopAuth(baseDir:string,record:DesktopAuthRecord):Promise<void>{
+  await loadDesktop();
   const directory=join(baseDir,'userdata','logs'),path=join(directory,'obsidian-stream-auth.jsonl');
   const at=Date.now();
   // Allowlisted fields only. Never accept a request, response, token, or URL.

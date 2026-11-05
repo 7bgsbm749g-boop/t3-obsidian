@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {build} from 'esbuild';
+import {build} from './build-fixture';
 import {runInNewContext} from './obsidian-context';
 import {createRequire} from 'node:module';
 import {randomUUID,webcrypto} from 'node:crypto';
@@ -14,8 +14,8 @@ test('browser bundle stages through desktop require without a native dynamic imp
   const required:string[]=[],realRequire=createRequire(import.meta.url),module={exports:{} as any};
   // Electron's CommonJS plugin evaluator has require, but no browser resolution
   // for import('node:fs'). This VM deliberately has no importModuleDynamically.
-  runInNewContext(bundle.outputFiles[0].text,{module,exports:module.exports,require:(name:string)=>{required.push(name);return realRequire(name);},crypto:webcrypto,TextEncoder,TextDecoder,Buffer,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})}});
-  assert.equal(required.length,0,'Loading the shared mobile module must not load desktop built-ins');
+  runInNewContext(bundle.outputFiles[0].text,{module,exports:module.exports,require:(name:string)=>{required.push(name);return name==='obsidian'?{Platform:{isDesktop:true,isMobile:false}}:realRequire(name);},crypto:webcrypto,TextEncoder,TextDecoder,Buffer,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})}});
+  assert.equal(required.filter(name=>name!=='obsidian').length,0,'Loading the portable module may read SDK platform flags but must not load Node built-ins');
   const request:ResponseRequest={version:4,localOnly:true,nativeProjection:true,responseContainer:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:randomUUID(),host:{environmentId:'env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},notePath:'Smoke.md',threadId:randomUUID(),messageId:randomUUID(),projectId:randomUUID(),threadEnvironmentId:'env',initialHash:'a'.repeat(64),createdAt:new Date().toISOString()};
   const document=`SMOKE_FIELD: before\n\n${responseAnchor(request.id)}\n`,data=new Map<string,string>();
   const files={read:async(path:string)=>data.get(path),write:async(path:string,text:string)=>{data.set(path,text);}};

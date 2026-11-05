@@ -1,3 +1,5 @@
+import * as cmState from '@codemirror/state';
+import * as cmCommands from '@codemirror/commands';
 import {nativeMarkdownView,editorCM} from '../shared/native-editor';
 import {scheduleTimeout as setTimeout} from '../shared/clock';
 import type {MarkdownView,TFile} from 'obsidian';
@@ -176,8 +178,8 @@ export class NativeResponseView {
     const id=this.moveControl(key),target=id&&this.moveTarget(key,displayOffset),cm=editorCM(this.view.editor);
     if(!id||!target||!cm?.dispatch)return false;
     const before=this.saved(),next=movedResponse(before,id,target.saved);if(!next||next.text===before)return false;
-    const {Transaction}=require('@codemirror/state') as typeof import('@codemirror/state');
-    const {isolateHistory}=require('@codemirror/commands') as typeof import('@codemirror/commands');
+    const {Transaction}=cmState;
+    const {isolateHistory}=cmCommands;
     this.scroll.suspend();
     cm.dispatch(cm.state.update({effects:responseMoveEffect().of({id,key,before,after:next.text,edits:next.edits,inverse:next.inverse}),annotations:[Transaction.userEvent.of('move.response'),isolateHistory.of('full')],filter:false,scrollIntoView:false}));
     const moved=this.saved()===next.text;if(moved)this.view.requestSave();return moved;
@@ -359,7 +361,7 @@ export class NativeResponseView {
     if(!change){this.correctCaret();this.scroll.updated();return;}
     const cm=editorCM(this.view.editor);
     if(!clear&&this.view.getMode()!=='preview'&&cm){
-      const {Transaction}=require('@codemirror/state') as typeof import('@codemirror/state');
+      const {Transaction}=cmState;
       // Streaming updates map selections and ordinary undo history without
       // becoming user undo steps. Native rendering and folds stay in place.
       const edit={from:change.from,to:change.to,insert:change.text},changes=cm.state?.changes?.(edit);
@@ -601,7 +603,7 @@ export class NativeResponseView {
   /** Registered only on this view's native CodeMirror instance by the lab.
    * Ordinary edits, selection and history use Obsidian's normal commands. */
   extension():Extension {
-    const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');
+    const {EditorState}=cmState;
     return [EditorState.transactionFilter.of(transaction=>this.filterTransaction(transaction)),responseMoveHistory()];
   }
   private moveTransaction(transaction:CMTransaction,move:ResponseMove):TransactionSpec|undefined {
@@ -610,7 +612,7 @@ export class NativeResponseView {
       const current=this.saved(),merged=mergeSavedEdits(move.before,current,move.edits);
       if(!merged.ok)return;
       const next=this.buildProjection(merged.text,this.responses),start=transaction.startState.doc;
-      const edits=changedEdits(start.toString(),next.display).map(edit=>({from:edit.from,to:edit.to,insert:edit.text})),{ChangeSet,Transaction}=require('@codemirror/state') as typeof import('@codemirror/state');
+      const edits=changedEdits(start.toString(),next.display).map(edit=>({from:edit.from,to:edit.to,insert:edit.text})),{ChangeSet,Transaction}=cmState;
       const selection=transaction.startState.selection.map(ChangeSet.of(edits,start.length));
       this.projection=next;
       return {changes:edits,selection,annotations:[Transaction.addToHistory.of(false),Transaction.userEvent.of('send-to-t3-projection')],filter:false,scrollIntoView:false};
@@ -642,7 +644,7 @@ export class NativeResponseView {
   private outsideResponseSelection(selection:EditorSelection,previous:EditorSelection,projection:ResponseProjection):EditorSelection|undefined {
     if(this.view.getState?.().source===true)return;
     const protectedRegions=this.protectedCaretRegions(projection);if(!protectedRegions.length)return;
-    const {EditorSelection}=require('@codemirror/state') as typeof import('@codemirror/state');
+    const {EditorSelection}=cmState;
     let changed=false;
     const ranges=selection.ranges.map((caret,index)=>{
       if(!caret.empty&&caret.from===0&&caret.to===projection.display.length)return caret;

@@ -1,3 +1,6 @@
+import * as cmState from '@codemirror/state';
+import * as cmView from '@codemirror/view';
+import * as obsidianRuntime from 'obsidian';
 import type {EditorView,DecorationSet} from '@codemirror/view';
 import type {App,MarkdownView,Component} from 'obsidian';
 import {renderInlineTurn} from '../conversations/inline-thread';
@@ -12,8 +15,8 @@ export function sendPreviewBody(preview:SendPreview){
 /** A send indicator is editor UI only. It must never enter note snapshots,
  * autosave, Sync, undo history, or the prompt being prepared. */
 export function sendPreviewField(){
-  const {StateEffect,StateField}=require('@codemirror/state') as typeof import('@codemirror/state');
-  const {Decoration,EditorView,WidgetType}=require('@codemirror/view') as typeof import('@codemirror/view');
+  const {StateEffect,StateField}=cmState;
+  const {Decoration,EditorView,WidgetType}=cmView;
   const change=StateEffect.define<PreviewPosition|null>();
   class Pending extends WidgetType {
     constructor(readonly preview:SendPreview){super();}
@@ -38,7 +41,7 @@ let nextPreview=0;
 const renderings=new WeakMap<HTMLElement,Component>();
 function disposePreview(element:HTMLElement){renderings.get(element)?.unload();renderings.delete(element);}
 export function sendPreviewElement(document:Document,preview:SendPreview,measure:()=>void=()=>{}){
-  const {Component,MarkdownRenderer}=require('obsidian') as typeof import('obsidian');
+  const {Component,MarkdownRenderer}=obsidianRuntime;
   const block=document.win.createDiv();
   block.className='markdown-rendered send-to-t3-send-preview';block.contentEditable='false';
   block.setAttribute('aria-label',`${preview.title} · Sending`);

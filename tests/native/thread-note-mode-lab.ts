@@ -28,17 +28,17 @@ export default class ThreadNoteModeLab extends Plugin {
   private async initializeLab(){
     this.writeLab('STARTUP.json',{stage:'connecting-test-project'});
     const config=JSON.parse(fs.readFileSync(path.join(this.labRoot,'TEST-CONFIG.json'),'utf8'));this.labAutomated=config.automated===true;
-    this.labAccess=await desktopThreadAccess(desktopDefaults());
+    this.labAccess=await desktopThreadAccess((await desktopDefaults()));
     const project=(readWireShell(await this.labAccess.api('/api/orchestration/shell'))).projects.find((item:any)=>item.id===config.projectId);
     if(!project||project.workspaceRoot!==path.join(this.labRoot,'workspace'))throw Error('Dedicated temporary project required.');
-    const environmentId=await desktopEnvironment(desktopDefaults());
+    const environmentId=await desktopEnvironment((await desktopDefaults()));
     // Use the repository's bounded native-host pattern. Product routing,
     // dispatch, editor projection and final writer remain real; account/project
     // discovery and unrelated background services are outside this test.
     const native=nativeResponses(this.app),subject:any=new SendToT3(this.app,this.manifest);this.subject=subject;
-    subject.settings={vaultId:'mode-lab-'+crypto.randomUUID(),threadNoteMode:'free',projects:[project],directProjects:[],paired:[],connection:desktopDefaults(),autoSettleThreads:false,completion:{action:'keep',archiveFolder:'Archive'},completionJobs:[],settlementJobs:[],pending:[],noteThreads:[],noteContexts:[],vaultLocations:[],folderLinkChanges:[],projectCreationLocations:[],responseBindings:{},inlineStreaming:{enabled:true,intermediateMode:'collapse',keepIntermediate:true,finalAnswerFormat:'formatted'},folderLinks:[{id:crypto.randomUUID(),folderPath:'Fixture',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:'',environmentId,self:false}]};
+    subject.settings={vaultId:'mode-lab-'+crypto.randomUUID(),threadNoteMode:'free',projects:[project],directProjects:[],paired:[],connection:(await desktopDefaults()),autoSettleThreads:false,completion:{action:'keep',archiveFolder:'Archive'},completionJobs:[],settlementJobs:[],pending:[],noteThreads:[],noteContexts:[],vaultLocations:[],folderLinkChanges:[],projectCreationLocations:[],responseBindings:{},inlineStreaming:{enabled:true,intermediateMode:'collapse',keepIntermediate:true,finalAnswerFormat:'formatted'},folderLinks:[{id:crypto.randomUUID(),folderPath:'Fixture',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:'',environmentId,self:false}]};
     subject.mode='desktop';subject.localNoProjectId=environmentId;subject.eventLocalEnvironmentId=environmentId;
-    subject.localInlineEnvironment=async()=>environmentId;subject.inlineThreadAccess=()=>desktopThreadAccess(desktopDefaults());
+    subject.localInlineEnvironment=async()=>environmentId;subject.inlineThreadAccess=async()=>desktopThreadAccess((await desktopDefaults()));
     subject.save=async()=>{await this.saveData(subject.settings);};
     const notes=deviceNoteIO(this.app);
     this.registerEditorExtension(hiddenInlineMarkerExtension());
@@ -50,7 +50,7 @@ export default class ThreadNoteModeLab extends Plugin {
       localBindings:()=>responseBindingRequests(subject.settings.responseBindings),
       saveLocalBinding:async request=>{subject.settings.responseBindings=updateResponseBindingData(subject.settings.responseBindings,request,'mode-lab');await subject.save();},
       openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file).map(view=>({path:view.file!.path,document:native.view(view)?.recoveryDocument()??view.getViewData()})),
-      syncReady:()=>true,receiveCoordinated:record=>native.receive(record),receiveDirect:update=>native.stream(update),localCompleted:(id,note)=>native.localCompleted(id,note),completionFailed:error=>this.labErrors.push(String(error)),access:()=>desktopThreadAccess(desktopDefaults()),
+      syncReady:()=>true,receiveCoordinated:record=>native.receive(record),receiveDirect:update=>native.stream(update),localCompleted:(id,note)=>native.localCompleted(id,note),completionFailed:error=>this.labErrors.push(String(error)),access:async()=>desktopThreadAccess((await desktopDefaults())),
     });subject.deviceInline=this.device;
     this.tick=window.setInterval(()=>{native.refresh();this.device?.tick();},150);
     this.register(()=>{if(this.tick!==undefined)window.clearInterval(this.tick);this.device?.dispose();native.dispose();});
@@ -133,7 +133,7 @@ export default class ThreadNoteModeLab extends Plugin {
     const remainingThreadIds:string[]=[];
     try{
       if(this.labThread){
-        await this.labAccess?.close?.();this.labAccess=await desktopThreadAccess(desktopDefaults());
+        await this.labAccess?.close?.();this.labAccess=await desktopThreadAccess((await desktopDefaults()));
         const snapshot=readMetadataSnapshot(await this.labAccess.api('/api/orchestration/threads/'+this.labThread+'?controlOnly=true'));
         for(const run of snapshot.thread.runs??[])if(run.status==='running'||run.status==='waiting')await this.labAccess.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:crypto.randomUUID(),threadId:this.labThread,turnId:run.id,createdAt:new Date().toISOString()});
         await this.labAccess.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.labThread});

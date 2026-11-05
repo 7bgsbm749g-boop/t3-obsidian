@@ -112,7 +112,26 @@ test('Reading and documents without a retained active response do not acquire a 
   h.mode('source');guard.begin('Ordinary note text');assert.equal(h.guarded(),false);assert.equal(h.jobs.size,0);
 });
 
-test('the height rule survives native content style replacement without touching other editors',()=>{
+test('the height spacer preserves editable content styles without a priority override',()=>{
   const css=readFileSync(new URL('../styles.css',import.meta.url),'utf8');
-  assert.match(css,/\.cm-content\[data-t3-response-height-guard="true"\]\s*\{\s*min-height:\s*var\(--send-to-t3-response-min-height\)\s*!important;/);
+  assert.match(css,/\.cm-scroller > \.send-to-t3-response-height-spacer\s*\{/);
+  assert.doesNotMatch(css,/!important/);
+});
+
+
+test('native title and scroller space remains in the floor without growing on repeated updates',()=>{
+  const h=heightFixture('Retained text',108),guard=new ResponseHeightGuard(h.view);
+  for(let i=0;i<4;i++){guard.begin(display);assert.equal(h.style.getPropertyValue(responseHeightProperty),'10108px');}
+  h.rendered(false);h.height(6500);h.advance(900);
+  assert.equal(h.scroller.scrollHeight,10108);assert.equal(h.scroller.scrollTop,7000);
+  h.rendered(true);h.height(11000);guard.begin(display);
+  assert.equal(h.style.getPropertyValue(responseHeightProperty),'11108px');guard.clear();assert.equal(h.jobs.size,0);
+});
+
+
+test('a short document does not turn unused viewport space into a growing scroll floor',()=>{
+  const h=heightFixture('Short note',108),guard=new ResponseHeightGuard(h.view);h.height(300);
+  guard.begin(display);assert.equal(h.style.getPropertyValue(responseHeightProperty),'600px');
+  h.height(400);guard.begin(display);assert.equal(h.style.getPropertyValue(responseHeightProperty),'600px');
+  h.height(700);guard.begin(display);assert.equal(h.style.getPropertyValue(responseHeightProperty),'808px');guard.clear();
 });

@@ -11,10 +11,11 @@ The same command checks the static entry graph for eager Node imports and
 checks CSS for expensive `:has()` selectors, partially supported layout
 features, and undocumented priority overrides. Desktop adapters remain lazy;
 mobile does not import their filesystem, process, HTTP-server or timer APIs.
-Desktop-rule metadata belongs in the lint configuration, never source comments:
-older directory scanners do not accept the newer inline option schema. Their
-remaining static-import notices describe these isolated desktop adapters; the
-portable entry graph and mobile bundle checks establish the actual boundary.
+Every Node value import is deferred behind an explicit `Platform.isDesktop`
+guard in the adapter that uses it. Do not exempt desktop filenames from the
+rule. Editor SDK modules use ES imports from the host's shared runtime. Native
+language view adapters load after their SDK version check and before their
+synchronous view factories register; language grammars remain lazy.
 Keep version guards as direct `if (requireApiVersion(...))` branches so both
 older and current directory scanners can verify new API calls. The legacy
 `display()` fallback remains virtual for older clients and host integrations;
@@ -35,13 +36,12 @@ abort, redirect rejection and incremental body limits, which `requestUrl` does
 not expose. It uses the main window's fetch explicitly. UI listeners and timers
 belong to their workspace document, including popouts.
 
-One CSS priority override remains deliberately: the temporary measured
-`min-height` on `.cm-content[data-t3-response-height-guard="true"]`. CodeMirror
-can replace its own inline content sizing while a native widget is being
-reparsed. The guard's measured floor lives outside that inline style and must
-outrank it to prevent a false bottom and viewport jump. It is removed after
-stable layout, mode/file changes, or disposal. `check-review-styles.mjs` refuses
-additional overrides. The visual and viewport regressions cover this behavior.
+The temporary response height guard uses an invisible, noninteractive sibling
+inside the native editor scroller. It extends scrollable overflow while native
+widgets re-render, then removes only its own element. It does not change the
+editable content's inline sizing or text layout. CSS priority overrides are
+forbidden. Verify this guard in the real native editor after changes, including
+scroll position, selection, fold rendering, resize and cleanup.
 
 The review linter and Obsidian SDK are development dependencies. Their
 transitive moderate audit notices concern the development toolchain; none of

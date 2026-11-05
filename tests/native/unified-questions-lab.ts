@@ -43,11 +43,11 @@ export default class UnifiedQuestionsLab extends Plugin {
       openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file).map(view=>({path:view.file!.path,document:native.view(view)?.recoveryDocument()??view.getViewData()})),
       syncReady:()=>true,receiveCoordinated:record=>native.receive(record),receiveDirect:update=>{this.update=update;if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);native.stream(update);},
       retainLocalFinal:async update=>this.write('RECOVERY.json',retainedLocalFinal(update)),loadLocalFinal:async request=>fs.existsSync(path.join(this.root,'RECOVERY.json'))?restoredLocalFinal(JSON.parse(fs.readFileSync(path.join(this.root,'RECOVERY.json'),'utf8')),request):undefined,
-      localCompleted:(id,note)=>native.localCompleted(id,note),completionFailed:error=>this.errors.push(String(error)),access:()=>desktopThreadAccess(desktopDefaults()),
+      localCompleted:(id,note)=>native.localCompleted(id,note),completionFailed:error=>this.errors.push(String(error)),access:async()=>desktopThreadAccess((await desktopDefaults())),
     },deviceFinalNoteIO(this.app,()=>true));
   }
   private async run(){
-    await pause(900);const config=JSON.parse(fs.readFileSync(path.join(this.root,'TEST-CONFIG.json'),'utf8')),connection=desktopDefaults();this.access=await desktopThreadAccess(connection);
+    await pause(900);const config=JSON.parse(fs.readFileSync(path.join(this.root,'TEST-CONFIG.json'),'utf8')),connection=(await desktopDefaults());this.access=await desktopThreadAccess(connection);
     const api=(route:string,payload?:any)=>this.access!.api(route.startsWith('/api/')?route:'/api/orchestration/'+route,payload),source=readMetadataSnapshot(await api('threads/'+config.sourceThreadId+'?controlOnly=true'));
     const requestId=crypto.randomUUID(),stateDir=path.join(this.root,'t3-state');this.write('TEMPORARY-T3.json',{requestId,stateDir});
     const prompt='This is a bounded synthetic plugin delivery test. Do not read or change files, run commands, create tasks, or call other agents. Your only permitted tool call is request_user_input_async. Call it once with the question "Choose the test value." and options "Resume" and "Pause". Do not wait for an answer in this turn. After the tool call, finish this turn with exactly QUESTION_SOURCE_FINAL. When the user later answers Resume, use no tools and finish with exactly QUESTION_FOLLOWUP_OK.';
@@ -85,7 +85,7 @@ export default class UnifiedQuestionsLab extends Plugin {
   private async cleanup(){
     if(this.interval!==undefined)window.clearInterval(this.interval);this.modal?.close();this.local?.dispose();this.questions?.dispose();
     const remainingThreadIds:string[]=[];
-    try{if(this.threadId){await this.access?.close?.();this.access=await desktopThreadAccess(desktopDefaults());await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.threadId});let deleted=false;try{deleted=!!(readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}if(!deleted)remainingThreadIds.push(this.threadId);}}catch(error){this.errors.push(String(error));if(this.threadId)remainingThreadIds.push(this.threadId);}
+    try{if(this.threadId){await this.access?.close?.();this.access=await desktopThreadAccess((await desktopDefaults()));await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.threadId});let deleted=false;try{deleted=!!(readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.threadId+'?controlOnly=true'))).thread.deletedAt;}catch(error){deleted=(error as any)?.status===404;}if(!deleted)remainingThreadIds.push(this.threadId);}}catch(error){this.errors.push(String(error));if(this.threadId)remainingThreadIds.push(this.threadId);}
     await this.access?.close?.();for(const leaf of this.app.workspace.getLeavesOfType('markdown'))leaf.detach();for(const file of this.app.vault.getMarkdownFiles())await this.app.vault.delete(file);
     this.write('CLEANUP.json',{temporaryThreadIds:this.threadId?[this.threadId]:[],remainingThreadIds,remainingNotes:this.app.vault.getMarkdownFiles().map(file=>file.path),errors:this.errors});await pause(250);require('@electron/remote').app.quit();
   }

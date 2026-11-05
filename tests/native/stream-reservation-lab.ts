@@ -44,7 +44,7 @@ export default class StreamReservationLab extends Plugin {
   }
   private async run(){
     const config=JSON.parse(fs.readFileSync(path.join(this.root,'TEST-CONFIG.json'),'utf8'));
-    const connection=desktopDefaults(),environmentId=await desktopEnvironment(connection);
+    const connection=(await desktopDefaults()),environmentId=await desktopEnvironment(connection);
     this.access=await desktopThreadAccess(connection);
     const api=(route:string,payload?:any)=>this.access!.api(route.startsWith('/api/')?route:'/api/orchestration/'+route,payload);
     const project=(readWireShell(await this.access.api('/api/orchestration/shell'))).projects.find((entry:any)=>entry.id===config.projectId);if(!project)throw Error('The synthetic project is unavailable.');

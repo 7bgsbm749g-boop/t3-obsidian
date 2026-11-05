@@ -1,3 +1,4 @@
+import * as cmView from '@codemirror/view';
 import {editorCM} from '../shared/native-editor';
 import type {MarkdownView} from 'obsidian';
 import type {ResponseProjection} from './native-response-projection';
@@ -131,7 +132,7 @@ export class ResponseScroll {
         // CodeMirror can virtualize a block which was replaced during a stream
         // update. Reveal its source end, then measure the rendered widget.
         if(cm&&this.view.getMode()!=='preview'){
-          const {EditorView}=require('@codemirror/view') as typeof import('@codemirror/view');
+          const {EditorView}=cmView;
           this.revealScroll=scroller;
           cm.dispatch({effects:EditorView.scrollIntoView(Math.max(range.displayFrom,range.displayTo-1),{y:'end',yMargin:inset})});
         }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {promises as fs} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {build} from 'esbuild';
+import {build} from './build-fixture';
 import {createRequire} from 'node:module';
 import {runInNewContext} from './obsidian-context';
 const realRequire=createRequire(import.meta.url);
@@ -11,7 +11,7 @@ class Folder {constructor(public path:string,public children:any[]=[]){}}
 let archiveLegacyReplyImports:typeof import('../src/connection/legacy-reply-imports-desktop')['archiveLegacyReplyImports'];
 before(async()=>{
  const bundled=await build({entryPoints:['src/connection/legacy-reply-imports-desktop.ts'],bundle:true,write:false,format:'cjs',platform:'node',external:['obsidian']});
- const module={exports:{} as any};runInNewContext(bundled.outputFiles[0].text,{module,exports:module.exports,require:(name:string)=>name==='obsidian'?{TFolder:Folder}:realRequire(name),process,Buffer,TextEncoder,TextDecoder,setTimeout,clearTimeout,setInterval,clearInterval,console});
+ const module={exports:{} as any};runInNewContext(bundled.outputFiles[0].text,{module,exports:module.exports,require:(name:string)=>name==='obsidian'?{TFolder:Folder,Platform:{isDesktop:true,isMobile:false}}:realRequire(name),process,Buffer,TextEncoder,TextDecoder,setTimeout,clearTimeout,setInterval,clearInterval,console});
  archiveLegacyReplyImports=module.exports.archiveLegacyReplyImports;
 });
 import {validateClientCommand} from '../src/app/client-command';

@@ -1,3 +1,4 @@
+import * as cmView from '@codemirror/view';
 import type {Extension,StateField} from '@codemirror/state';
 import type {EditorView,ViewUpdate} from '@codemirror/view';
 import type {MarkdownFileInfo} from 'obsidian';
@@ -39,7 +40,7 @@ export function nativeMediaSource(rendered:string,vaultResourceRoot?:string):{li
 type MediaRender=(root:HTMLElement,source:string,original:(image:Element)=>string|undefined,current:()=>boolean)=>Promise<void>;
 /** Observe only this editor's rendered viewport; never the vault or document body. */
 export function codebaseMediaExtension(info:StateField<MarkdownFileInfo>,render:MediaRender):Extension {
-  const {ViewPlugin}=require('@codemirror/view') as typeof import('@codemirror/view');
+  const {ViewPlugin}=cmView;
   return ViewPlugin.fromClass(class {
     private stopped=false;
     private queued=false;

@@ -39,7 +39,7 @@ export default class AgentNoteEditsLab extends Plugin {
   private write(name:string,value:unknown){fs.writeFileSync(path.join(this.root,name),JSON.stringify(value,null,2));}
   private async until(check:()=>Promise<boolean>|boolean,label:string,timeout=90_000){const deadline=Date.now()+timeout;do{if(await check())return;await pause(100);}while(Date.now()<deadline);throw Error('Timed out: '+label);}
   private async run(){
-    const connection=desktopDefaults(),environmentId=await desktopEnvironment(connection);this.access=await desktopThreadAccess(connection);
+    const connection=(await desktopDefaults()),environmentId=await desktopEnvironment(connection);this.access=await desktopThreadAccess(connection);
     const api=(route:string,payload?:any)=>this.access!.api(route.startsWith('/api/')?route:'/api/orchestration/'+route,payload);
     const subject:any=new SendToT3(this.app,this.manifest);
     subject.settings={connection,vaultId:'synthetic-agent-note-edits',projects:[],directProjects:[],folderLinks:[],vaultLocations:[],paired:[{id:'synthetic-vps',name:'Synthetic VPS',environmentId:'synthetic-remote',url:'https://synthetic.invalid'}],vaultHost:{connectionId:'synthetic-vps',environmentId:'synthetic-remote',workspaceRoot:'/synthetic-remote-vault'}};

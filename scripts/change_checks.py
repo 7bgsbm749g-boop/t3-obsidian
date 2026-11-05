@@ -28,9 +28,9 @@ QLO2 = Path('/home/ubuntu/vaults/QLO2/.obsidian/plugins/t-three-code/manifest.js
 if not QLO2.exists():
     QLO2 = QLO2.parent.with_name('send-to-t3-code') / 'manifest.json'
 RELEASE_FILES = ('manifest.json', 'versions.json', 'styles.css', 'README.md', 'LICENSE')
-RUNNER_INPUTS = {'scripts/change_checks.py', 'scripts/test-impact.json', 'scripts/lint.mjs',
+RUNNER_INPUTS = {'tests/fixtures/desktop-sdk.cjs', 'tests/desktop-sdk-port.mjs', 'scripts/change_checks.py', 'scripts/test-impact.json', 'scripts/lint.mjs',
                  'eslint.config.mjs', 'scripts/check-platform-boundaries.mjs',
-                 'scripts/check-review-styles.mjs', 'scripts/build-review-linter.mjs'}
+                 'scripts/check-review-styles.mjs', 'scripts/build-review-linter.mjs', 'esbuild.config.d.mts'}
 CODE_SUFFIXES = {'.ts', '.tsx', '.js', '.mjs', '.cjs', '.py', '.css'}
 IMPORTS = re.compile(r'''(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"']+)''')
 FILE_READS = re.compile(r'''(?:\breadFile(?:Sync)?|\bnew\s+URL|\.with_name)\s*\(\s*["'`]([^"'`\r\n]+)["'`]''')
@@ -239,7 +239,7 @@ def cached_build(root: Path, files: dict[str, bytes], context: dict, cache: Path
     # Retain the type-check inputs and include the builder's transitive reads.
     dependencies = closure({'esbuild.config.mjs'}, dependency_graph(files))
     inputs = {name: digest(value) for name, value in files.items()
-              if name in dependencies or name.endswith(('.ts', '.tsx', '.mjs')) or name in
+              if name in dependencies or name.endswith(('.ts', '.tsx', '.mts', '.cts', '.mjs')) or name in
               ('package.json', 'package-lock.json', 'manifest.json', 'tsconfig.json')}
     key = digest(json_bytes({'inputs': inputs, 'context': context}))
     directory = cache / 'builds' / key
@@ -319,7 +319,7 @@ def run_validation(root: Path = ROOT, *, base: str | None = None, all_tests: boo
             if javascript:
                 for offset in range(0, len(javascript), 8):
                     batch = javascript[offset:offset + 8]
-                    commands.append((batch, [str(root / 'node_modules/.bin/tsx'), '--test', '--test-concurrency=2', *batch]))
+                    commands.append((batch, [str(root / 'node_modules/.bin/tsx'), '--import', './tests/desktop-sdk-port.mjs', '--test', '--test-concurrency=2', *batch]))
             if python:
                 commands.append((python, [sys.executable, '-m', 'unittest', *[name.removesuffix('.py').replace('/', '.') for name in python]]))
             for index, (tests, command) in enumerate(commands):

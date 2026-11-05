@@ -49,12 +49,12 @@ export default class WorktreeContinuationLab extends Plugin {
     return item;
   }
   private async reader():Promise<ThreadAccess>{
-    const access=await desktopThreadAccess(desktopDefaults());
+    const access=await desktopThreadAccess((await desktopDefaults()));
     return {...access,api:async(route,payload)=>this.loseResult(await access.api(route,payload))};
   }
   private async run(){
     const config=JSON.parse(fs.readFileSync(path.join(this.root,'TEST-CONFIG.json'),'utf8'));
-    const connection=desktopDefaults(),environmentId=await desktopEnvironment(connection);
+    const connection=(await desktopDefaults()),environmentId=await desktopEnvironment(connection);
     this.access=await desktopThreadAccess(connection);
     const api=(route:string,payload?:any)=>this.access!.api(route.startsWith('/api/')?route:'/api/orchestration/'+route,payload);
     const project=(readWireShell(await api('shell'))).projects.find((item:any)=>item.id===config.projectId);

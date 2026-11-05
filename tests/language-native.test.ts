@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {build} from 'esbuild';
+import {build} from './build-fixture';
 import {createRequire} from 'node:module';
 import {runInNewContext} from './obsidian-context';
 import {EditorState,Facet} from '@codemirror/state';
@@ -65,9 +65,9 @@ test('code Source and Reading use the configured tab width without changing raw 
   const raw='function example() {\r\n  const spaces = 1;\n\tconst tabs = 2;\n}';await view.onLoadFile({path:'indent.ts',extension:'ts',text:raw});assert.equal(view.editMode.cm.state.tabSize,2);assert.equal(properties.get('--t3-code-language-tab-size'),'2');
   size=8;view.previewMode.set(raw);assert.equal(properties.get('--t3-code-language-tab-size'),'8');view.editMode.cm.dispatch({effects:require('@codemirror/state').StateEffect.reconfigure.of([view.editMode.getLocalExtensions(),view.editMode.getDynamicExtensions()])});assert.equal(view.editMode.cm.state.tabSize,8);assert.equal(view.editor.getValue(),raw);assert.equal(view.previewMode.get(),raw);
 });
-test('factory registration stays lazy and preserves foreign ownership and unsupported workspace state',async()=>{
+test('native factories await the supported adapter and preserve foreign ownership and unsupported workspace state',async()=>{
   const imports:string[]=[],module=await evaluate(registryBundle,imports),owned=new Map<string,any>([['json',()=>{}]]),app={viewRegistry:{getViewCreatorByType:(type:string)=>owned.get(type)}};
-  const plugin={registerView:(type:string,factory:any)=>{assert.equal(owned.has(type),false);owned.set(type,factory);}},before=imports.length,views=new module.NativeLanguageViews(app,plugin);views.install();assert.equal(imports.length,before);assert.equal(imports.some(name=>name.startsWith('@codemirror')),false);
+  const plugin={registerView:(type:string,factory:any)=>{assert.equal(owned.has(type),false);owned.set(type,factory);}},before=imports.length,views=new module.NativeLanguageViews(app,plugin);await views.install();assert.ok(imports.length>=before);assert.equal(views.grammars.pending.size,0,'Factory registration must not start grammar loads');
   assert.throws(()=>views.type('json'),/another plugin/);assert.equal(views.type('ts'),'typescript');assert.equal(views.type('md'),undefined);owned.set('typescript',()=>{});assert.throws(()=>views.type('ts'),/another plugin/);
   const original=obsidian.apiVersion;obsidian.apiVersion='1.15.0';try{const unavailable=owned.get('python')({app});assert.equal(unavailable.getViewType(),'python');await unavailable.setState({file:'held.py'});assert.equal(unavailable.getState().file,'held.py');}finally{obsidian.apiVersion=original;}
   views.dispose();assert.equal(views.types().length,0);

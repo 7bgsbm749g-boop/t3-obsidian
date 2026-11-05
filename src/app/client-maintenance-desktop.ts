@@ -1,5 +1,5 @@
 import {nativeHost} from '../shared/native-host';
-import {randomUUID} from 'node:crypto';
+import {randomId} from '../shared/uuid';
 import type {App} from 'obsidian';
 import {validateClientCommand,type ClientCommand,type ClientCommandResult} from './client-command';
 
@@ -7,7 +7,7 @@ import {validateClientCommand,type ClientCommand,type ClientCommandResult} from 
 export class DesktopClientMaintenance {
   readonly client:{instanceId:string;loadedVersion:string};
   private initiated=false;
-  constructor(private app:App,_root:string,_configDir:string,loadedVersion:string,_codeViewTypes:()=>readonly string[]=()=>[],_beforeReload?:()=>Promise<void>){this.client={instanceId:randomUUID(),loadedVersion};}
+  constructor(private app:App,_root:string,_configDir:string,loadedVersion:string,_codeViewTypes:()=>readonly string[]=()=>[],_beforeReload?:()=>Promise<void>){this.client={instanceId:randomId(),loadedVersion};}
   async reloadCurrent(beforeDispatch:()=>boolean){return this.dispatchReload(beforeDispatch);}
   async execute(input:ClientCommand):Promise<ClientCommandResult>{
     const command=validateClientCommand(input);

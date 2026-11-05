@@ -26,7 +26,7 @@ export default class SelectionResendLab extends Plugin {
   private async until(check:()=>Promise<boolean>|boolean,label:string,timeout=120_000){const end=Date.now()+timeout;do{if(await check())return;await pause(350);}while(Date.now()<end);throw Error('Timed out: '+label);}
   private async capture(name:string){fs.writeFileSync(path.join(this.root,name),(await require('@electron/remote').getCurrentWebContents().capturePage()).toPNG());}
   private async run(){
-    const config=JSON.parse(fs.readFileSync(path.join(this.root,'TEST-CONFIG.json'),'utf8')),connection=desktopDefaults();
+    const config=JSON.parse(fs.readFileSync(path.join(this.root,'TEST-CONFIG.json'),'utf8')),connection=(await desktopDefaults());
     this.access=await desktopThreadAccess(connection);
     const project=(readWireShell(await this.access.api('/api/orchestration/shell'))).projects.find((item:any)=>item.id===config.projectId);if(!project)throw Error('The synthetic project is unavailable.');
     this.assert(project?.workspaceRoot===path.join(this.root,'workspace'),'A dedicated temporary project is required.');

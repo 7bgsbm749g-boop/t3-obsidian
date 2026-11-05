@@ -2,7 +2,7 @@ import {EditorState} from '@codemirror/state';
 import {responseHeightAttribute,responseHeightProperty} from '../../src/responses/response-height';
 import {EditorView} from '@codemirror/view';
 
-export function heightFixture(document='Before\n\nAfter'){
+export function heightFixture(document='Before\n\nAfter',extra=0){
   let now=0,sequence=0,nativeHeight=10000,scrollTop=7000,rendered=true,parsing=false,mode='source',live=true,measures=0;
   const jobs=new Map<number,{at:number;run:()=>void}>(),attributes=new Map<string,string>(),properties=new Map<string,{value:string;priority:string}>(),listeners=new Map<string,Set<Function>>();
   const add=(name:string,fn:Function)=>{if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name)!.add(fn);};
@@ -13,8 +13,8 @@ export function heightFixture(document='Before\n\nAfter'){
   const style={getPropertyValue:(name:string)=>properties.get(name)?.value??'',getPropertyPriority:(name:string)=>properties.get(name)?.priority??'',setProperty:(name:string,value:string,priority='')=>properties.set(name,{value,priority}),removeProperty:(name:string)=>{const old=properties.get(name)?.value??'';properties.delete(name);return old;}};
   const floor=()=>attributes.get(responseHeightAttribute)==='true'?Number.parseFloat(style.getPropertyValue(responseHeightProperty))||0:0;
   const fold={querySelector:()=>({dataset:{t3Fold:'thread:active'}}),getBoundingClientRect:()=>({height:8000,top:100-scrollTop,bottom:8100-scrollTop})};
-  const scroller:any={style,clientHeight:600,clientWidth:600,clientTop:0,get scrollTop(){return scrollTop;},set scrollTop(value:number){scrollTop=Math.min(value,this.scrollHeight-this.clientHeight);},get scrollHeight(){return Math.max(nativeHeight,floor());},querySelectorAll:(selector:string)=>rendered&&!selector.includes('is-collapsed')?[fold]:[],getBoundingClientRect:()=>({top:0,bottom:600})};
-  const content:any={style:{},isConnected:true,getBoundingClientRect:()=>({height:Math.max(nativeHeight,floor())}),getAttribute:(name:string)=>attributes.get(name)??null,setAttribute:(name:string,value:string)=>attributes.set(name,value),removeAttribute:(name:string)=>attributes.delete(name)};
+  const scroller:any={createDiv:()=>({remove:()=>{}}),style,clientHeight:600,clientWidth:600,clientTop:0,get scrollTop(){return scrollTop;},set scrollTop(value:number){scrollTop=Math.min(value,this.scrollHeight-this.clientHeight);},get scrollHeight(){return Math.max(this.clientHeight,nativeHeight+extra,floor());},querySelectorAll:(selector:string)=>rendered&&!selector.includes('is-collapsed')?[fold]:[],getBoundingClientRect:()=>({top:0,bottom:600})};
+  const content:any={style:{},isConnected:true,getBoundingClientRect:()=>({height:nativeHeight,top:extra-scrollTop}),getAttribute:(name:string)=>attributes.get(name)??null,setAttribute:(name:string,value:string)=>attributes.set(name,value),removeAttribute:(name:string)=>attributes.delete(name)};
   let state=EditorState.create({doc:document});
   const cm:any={get state(){return state;},contentDOM:content,scrollDOM:scroller,scaleY:1,viewport:{from:0,to:state.doc.length},plugin:()=>({isWorking:()=>parsing}),requestMeasure:()=>{measures++;},dispatch:(spec:any)=>{
     const transaction=spec.startState?spec:state.update(spec);state=transaction.state;

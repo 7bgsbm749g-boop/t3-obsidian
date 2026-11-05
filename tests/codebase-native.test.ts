@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {build} from 'esbuild';
+import {build} from './build-fixture';
 import {runInNewContext} from './obsidian-context';
 import {virtualPath,type CodebaseIO} from '../src/projects/codebase-core';
 const editorExternals=['obsidian','@codemirror/state','@codemirror/view','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight'];

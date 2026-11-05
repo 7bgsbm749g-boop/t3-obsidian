@@ -91,7 +91,7 @@ export default class AutosaveRecoveryLab extends Plugin {
     this.check('recoveryPreservesTyping',(await this.app.vault.read(second.file)).includes('Type here: ab\n')&&second.view.editor.getValue().includes('RECOVERED_FINAL_REPLY'));
     await this.capture('recovered.png');this.local.dispose();this.local=undefined;
 
-    const config=JSON.parse(fs.readFileSync(path.join(this.root,'TEST-CONFIG.json'),'utf8')),connection=desktopDefaults();
+    const config=JSON.parse(fs.readFileSync(path.join(this.root,'TEST-CONFIG.json'),'utf8')),connection=(await desktopDefaults());
     this.access=await desktopThreadAccess(connection);const api=(route:string,payload?:any)=>this.access!.api(route.startsWith('/api/')?route:'/api/orchestration/'+route,payload);
     const source=readMetadataSnapshot(await api('threads/'+config.sourceThreadId+'?controlOnly=true')),project={id:source.thread.projectId};
     const requestId=crypto.randomUUID(),stateDir=path.join(this.root,'t3-state');this.write('TEMPORARY-T3.json',{requestId,stateDir});

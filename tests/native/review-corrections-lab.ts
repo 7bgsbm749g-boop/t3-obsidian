@@ -43,7 +43,7 @@ export default class ReviewCorrectionsLab extends Plugin {
   private write(name:string,value:unknown){fs.writeFileSync(path.join(this.root,name),JSON.stringify(value,null,2));}
   private async until(check:()=>Promise<boolean>|boolean,label:string,timeout=120_000){const deadline=Date.now()+timeout;do{if(await check())return;await pause(100);}while(Date.now()<deadline);throw Error('Timed out: '+label);}
   private async run(){
-    const connection={...desktopDefaults(),stateDir:path.join(this.root,'t3-state')},environmentId=await desktopEnvironment(connection);
+    const connection={...(await desktopDefaults()),stateDir:path.join(this.root,'t3-state')},environmentId=await desktopEnvironment(connection);
     this.access=await desktopThreadAccess(connection);
     const project=expectProject(await runDesktopWithAccess(connection,['no-project'],'',this.access));
     const requestId=crypto.randomUUID(),id=crypto.randomUUID(),note='Review corrections.md',vaultId='synthetic-review-corrections';

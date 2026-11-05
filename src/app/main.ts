@@ -1,3 +1,4 @@
+import * as cmState from '@codemirror/state';
 import {loadQuestionRecords} from '../interaction/question-controller';
 import {loadApprovalRecords} from '../interaction/approval-controller';
 import {readThreadList} from '../connection/wire-readers';
@@ -280,7 +281,7 @@ export default class SendToT3 extends Plugin {
   private stopContentHash?:()=>void;
   async onload() {
     const document=workspaceDocument(this.app);
-    if(!Platform.isMobile)this.stopContentHash=(await import('../connection/content-hash-desktop')).installDesktopContentHash();
+    if(!Platform.isMobile)this.stopContentHash=await (await import('../connection/content-hash-desktop')).installDesktopContentHash();
     if(typeof this.register==='function'&&MarkdownView?.prototype)this.register(nativeResponses(this.app).installLoading(MarkdownView.prototype));
     if(typeof this.registerDomEvent==='function')this.register(watchWorkspaceDocuments(this.app,root=>{
       const review=(event:Event)=>{const detail=(event as CustomEvent<unknown>).detail;if(isRecord(detail)&&typeof detail.bindingId==='string')new ResponseLocationModal(this.app,detail.bindingId,command=>this.executeAgentCommand(command)).open();};
@@ -309,7 +310,7 @@ export default class SendToT3 extends Plugin {
     this.deviceId=local?.deviceId??randomId();
     this.compactNoteCommandReceipts();
     const state=await deviceState<Partial<Pick<Settings,'pending'|'completionJobs'|'settlementJobs'>>&{queued?:Array<Request&{threadId:string;superseded?:boolean}>}>(this.deviceId);
-    const defaults:Connection = Platform.isMobile ? {executable:'',host:'local'} : (await import('../connection/desktop')).desktopDefaults();
+    const defaults:Connection = Platform.isMobile ? {executable:'',host:'local'} : await (await import('../connection/desktop')).desktopDefaults();
     this.mode=Platform.isMobile||local?.mode!=='desktop'?'direct':'desktop';
     this.pairedSessions=local?.pairedSessions??{};
     this.cloudAccount=local?.cloudAccount??null;
@@ -386,7 +387,7 @@ export default class SendToT3 extends Plugin {
       return !continuation?.host||responseBindingRequests(this.settings.responseBindings??{}).some(binding=>binding.id===continuation.jobId);
     });
     this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>job.localOnly?this.stopLocalInline(job):this.stopHostedInline(job.id,job.hostTarget,job.remoteStopOperationId),status:job=>this.deviceInline?.responseStatus(job.id)},()=>'collapse',()=>finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat));
-    if(typeof this.registerEditorExtension==='function'){const {EditorState}=require('@codemirror/state') as typeof import('@codemirror/state');this.registerEditorExtension([EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)),responseMoveHistory()]);}
+    if(typeof this.registerEditorExtension==='function'){const {EditorState}=cmState;this.registerEditorExtension([EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)),responseMoveHistory()]);}
     if(typeof this.registerMarkdownCodeBlockProcessor==='function'){
       const prefix=`html-result:v1:${this.settings.vaultId}:`;
       const store=new HtmlResultStore({read:key=>deviceState(prefix+key),write:async(key,value)=>{await deviceState(prefix+key,value);}},environmentId=>this.inlineThreadAccess(environmentId),async url=>{
@@ -1041,7 +1042,7 @@ export default class SendToT3 extends Plugin {
       if(eventCanonical(current.host)!==eventCanonical(route.host))throw Error('This command belongs to the previous vault connection machine. Restore that host to retry, or use a new request ID.');
       await this.refreshEventHost();
       const opened=await this.eventHostFiles(route);
-      const pause=Platform.isMobile?(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms)):async(ms:number)=>(await import('../connection/desktop-timers')).desktopPause(ms);
+      const pause=Platform.isMobile?(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms)):async(ms:number)=>(await (await import('../connection/desktop-timers')).desktopTimers()).pause(ms);
       try{return await forwardEventCommand(route.host,input,opened.files,pause);}finally{opened.close();}
     }
     return this.executeNoteCommand(input);
@@ -1907,8 +1908,8 @@ export default class SendToT3 extends Plugin {
   }
   private registerInlineInterval(callback:()=>void,milliseconds:number){
     if(Platform.isMobile){this.registerInterval(window.setInterval(callback,milliseconds));return;}
-    void import('../connection/desktop-timers').then(({desktopInterval})=>{
-      if(!this.stopped)this.register(desktopInterval(callback,milliseconds));
+    void import('../connection/desktop-timers').then(d=>d.desktopTimers()).then(({interval})=>{
+      if(!this.stopped)this.register(interval(callback,milliseconds));
     });
   }
   private async refreshNoteCommandHost():Promise<void>{
@@ -3108,8 +3109,9 @@ export class T3Settings extends PluginSettingTab {
   }
   refresh(){
     if(typeof requireApiVersion==='function'){
-      if(requireApiVersion('1.13.0'))this.update();else this.display();
-    }else this.display();
+      if(requireApiVersion('1.13.0')){this.update();return;}
+    }
+    this.display();
   }
   private connectionDefinitions():Array<SettingsRow>{
     const rows:Array<SettingsRow>=[{name:'Connect with',desc:'Choose how this device reaches T3.',render:setting=>{setting.addDropdown(d=>{d.addOptions({direct:'T3 Connect (recommended)',...(!Platform.isMobile?{desktop:'This computer only'}:{})});d.setValue(this.plugin.mode).onChange(async value=>{this.plugin.mode=value as 'desktop'|'direct';await this.plugin.save();void this.plugin.refreshMachines().catch(error=>new Notice(message(error)));this.refresh();});});}}];

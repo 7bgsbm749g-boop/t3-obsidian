@@ -30,13 +30,13 @@ export default class NoteThreadMovesLab extends Plugin {
   private async shot(name:string){fs.writeFileSync(path.join(this.root,name),(await require('@electron/remote').getCurrentWebContents().capturePage()).toPNG());}
   private async run(){
     const config=JSON.parse(fs.readFileSync(path.join(this.root,'TEST-CONFIG.json'),'utf8'));
-    this.access=await desktopThreadAccess(desktopDefaults());
+    this.access=await desktopThreadAccess((await desktopDefaults()));
     const project=(readWireShell(await this.access.api('/api/orchestration/shell'))).projects.find((item:any)=>item.id===config.projectId);
     if(!project||project.workspaceRoot!==path.join(this.root,'workspace'))throw Error('Dedicated synthetic project required.');
-    const environmentId=await desktopEnvironment(desktopDefaults()),native=nativeResponses(this.app),p:any=new SendToT3(this.app,this.manifest);this.subject=p;
+    const environmentId=await desktopEnvironment((await desktopDefaults())),native=nativeResponses(this.app),p:any=new SendToT3(this.app,this.manifest);this.subject=p;
     const recordFailure=p.recordSendFailure.bind(p);p.recordSendFailure=(...args:any[])=>{this.write('SEND-FAILURE.json',args.map(value=>value instanceof Error?{error:String(value),stack:value.stack}:value));return recordFailure(...args);};
-    p.settings={vaultId:crypto.randomUUID(),threadNoteMode:'free',projects:[project],directProjects:[],paired:[],connection:desktopDefaults(),autoSettleThreads:false,completion:{action:'keep',archiveFolder:'Archive'},completionJobs:[],settlementJobs:[],pending:[],noteThreads:[],noteContexts:[],vaultLocations:[],folderLinkChanges:[],projectCreationLocations:[],responseBindings:{},inlineStreaming:{enabled:true,intermediateMode:'collapse',keepIntermediate:true,finalAnswerFormat:'formatted'},folderLinks:[{id:crypto.randomUUID(),folderPath:'Fixture',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:'',environmentId,self:false}]};
-    p.mode='desktop';p.localNoProjectId=environmentId;p.eventLocalEnvironmentId=environmentId;p.localInlineEnvironment=async()=>environmentId;p.inlineThreadAccess=()=>desktopThreadAccess(desktopDefaults());p.save=async()=>this.saveData(p.settings);
+    p.settings={vaultId:crypto.randomUUID(),threadNoteMode:'free',projects:[project],directProjects:[],paired:[],connection:(await desktopDefaults()),autoSettleThreads:false,completion:{action:'keep',archiveFolder:'Archive'},completionJobs:[],settlementJobs:[],pending:[],noteThreads:[],noteContexts:[],vaultLocations:[],folderLinkChanges:[],projectCreationLocations:[],responseBindings:{},inlineStreaming:{enabled:true,intermediateMode:'collapse',keepIntermediate:true,finalAnswerFormat:'formatted'},folderLinks:[{id:crypto.randomUUID(),folderPath:'Fixture',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,connectionId:'',environmentId,self:false}]};
+    p.mode='desktop';p.localNoProjectId=environmentId;p.eventLocalEnvironmentId=environmentId;p.localInlineEnvironment=async()=>environmentId;p.inlineThreadAccess=async()=>desktopThreadAccess((await desktopDefaults()));p.save=async()=>this.saveData(p.settings);
     configureBridge({mobile:false,localAccess:async()=>this.access!});
     this.registerEditorExtension(hiddenInlineMarkerExtension());
     this.registerEditorExtension(require('@codemirror/state').EditorState.transactionFilter.of((transaction:any)=>native.filter(transaction)));
@@ -47,7 +47,7 @@ export default class NoteThreadMovesLab extends Plugin {
       localBindings:()=>responseBindingRequests(p.settings.responseBindings),
       saveLocalBinding:async request=>{p.settings.responseBindings=updateResponseBindingData(p.settings.responseBindings,request,'moves-lab');await p.save();},
       openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file).map(view=>({path:view.file!.path,document:native.view(view)?.recoveryDocument()??view.getViewData()})),
-      syncReady:()=>true,receiveCoordinated:record=>native.receive(record),receiveDirect:update=>native.stream(update),localCompleted:(id,note)=>native.localCompleted(id,note),completionFailed:error=>this.failures.push(String(error)),access:()=>desktopThreadAccess(desktopDefaults()),
+      syncReady:()=>true,receiveCoordinated:record=>native.receive(record),receiveDirect:update=>native.stream(update),localCompleted:(id,note)=>native.localCompleted(id,note),completionFailed:error=>this.failures.push(String(error)),access:async()=>desktopThreadAccess((await desktopDefaults())),
     });p.deviceInline=this.device;this.tick=window.setInterval(()=>{native.refresh();this.device?.tick();},150);
     this.register(()=>{if(this.tick!==undefined)window.clearInterval(this.tick);this.device?.dispose();native.dispose();});
     this.registerEvent(this.app.vault.on('rename',(file,before)=>{if(this.observeMoves)void p.relocateNoteThreads(before,file.path,file instanceof TFolder);}));
@@ -88,7 +88,7 @@ export default class NoteThreadMovesLab extends Plugin {
     if(this.tick!==undefined)window.clearInterval(this.tick);this.device?.dispose();let remainingThreadIds:string[]=[];
     try{
       if(this.thread){
-        await this.access?.close?.();this.access=await desktopThreadAccess(desktopDefaults());
+        await this.access?.close?.();this.access=await desktopThreadAccess((await desktopDefaults()));
         const snapshot=readMetadataSnapshot(await this.access.api('/api/orchestration/threads/'+this.thread+'?controlOnly=true'));
         for(const run of snapshot.thread.runs??[])if(run.status==='running'||run.status==='waiting')await this.access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:crypto.randomUUID(),threadId:this.thread,turnId:run.id,createdAt:new Date().toISOString()});
         await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId:this.thread});

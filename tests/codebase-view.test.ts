@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {build} from 'esbuild';
+import {build} from './build-fixture';
 import {runInNewContext} from './obsidian-context';
 import {CodebaseBrowseCache,folderKey} from '../src/projects/codebase-cache';
 import type {CodebaseIO} from '../src/projects/codebase-core';

@@ -1,7 +1,20 @@
+import {Platform} from 'obsidian';
+let fs:typeof import('node:fs').promises;
+let path:typeof import('node:path');
+let os:typeof import('node:os');
+let desktopReady:Promise<void>|undefined;
+function loadDesktop():Promise<void>{
+  if(Platform.isDesktop){
+    return desktopReady??=(async()=>{
+    ({promises:fs}=await import('node:fs'));
+    path=await import('node:path');
+    os=await import('node:os');
+    })();
+  }
+  throw Error('This feature requires Obsidian on desktop.');
+}
 import {errorCode,toError} from '../shared/values';
-import {promises as fs} from 'node:fs';
-import * as path from 'node:path';
-import * as os from 'node:os';
+
 import {contentHash} from './completion';
 import {localResponseRange} from './local-response-binding';
 import {responseIds} from './response-container';
@@ -13,6 +26,7 @@ import type {ResponseRequest,ResponseFiles} from './response-model';
  * outside the live vault. Immutable checked inputs travel through T3's file
  * transport; they grant no remote writer and create no background service. */
 export async function localStageCommand(kind:'stage-note-edit'|'submit-note-edit',request:ResponseRequest,document:string,files:ResponseFiles,expectedHash?:string){
+  await loadDesktop();
   const root=path.join(os.tmpdir(),'send-to-t3-code-local-staging',contentHash(request.vaultId).slice(0,24),request.id);
   const originalPath=path.join(root,'original.md'),stagingPath=path.join(root,'staged.md');
   if(kind==='stage-note-edit'){

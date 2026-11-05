@@ -2,11 +2,16 @@
 import assert from 'node:assert/strict';
 import {readFile,writeFile,rm} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
-import {cli} from '../../src/connection/desktop';
+import {execFile} from 'node:child_process';
+import {T3_RESPONSE_MAX_BYTES} from '../../src/connection/t3-response-limits';
 import {environmentApi} from '../../src/connection/direct';
 import {connectT3Rpc,T3RpcError} from '../../src/connection/t3-rpc';
 import {connectVaultRemote} from '../../src/connection/vault-connection';
 import {identityPathForSettings} from '../../src/app/vault-identity';
+
+const officialCli=(args:string[])=>new Promise<string>((resolve,reject)=>{
+  execFile('/home/ubuntu/.local/bin/t3',args,{shell:false,windowsHide:true,timeout:45_000,maxBuffer:T3_RESPONSE_MAX_BYTES,encoding:'utf8'},(error,stdout)=>error?reject(Error('The official T3 test command failed; credential output withheld.')):resolve(stdout));
+});
 
 async function main(){
   const evidence=resolve(process.argv[2]??''),phase=process.argv[3];
@@ -28,9 +33,9 @@ async function main(){
       try{await remote.writeFile(evidence,'synthetic-rpc.tmp','synthetic');assert.equal(await remote.readFile(evidence,'synthetic-rpc.tmp'),'synthetic');result.writeReadVerified=true;}finally{await rm(join(evidence,'synthetic-rpc.tmp'),{force:true});}
     }
   }finally{rpc.close();remote.close();}
-  const issued=JSON.parse(await cli(['/home/ubuntu/.local/bin/t3'],['auth','session','issue','--base-dir','/home/ubuntu/.t3','--ttl','5m','--label','synthetic-old-grant-negative-test','--json','--scope','orchestration:read','--scope','orchestration:operate']));
+  const issued=JSON.parse(await officialCli(['auth','session','issue','--base-dir','/home/ubuntu/.t3','--ttl','5m','--label','synthetic-old-grant-negative-test','--json','--scope','orchestration:read','--scope','orchestration:operate']));
   const old=await connectVaultRemote(connection,{...session,token:issued.token,expiresAt:Date.parse(issued.expiresAt)});
-  try{await assert.rejects(old.matches(lab.hostRoot,settingsPath,lab.vaultId),(e:any)=>e instanceof T3RpcError&&e.requiredPermission==='filesystem:read');result.oldGrantsRejected=true;}finally{old.close();await cli(['/home/ubuntu/.local/bin/t3'],['auth','session','revoke','--base-dir','/home/ubuntu/.t3',issued.sessionId]);}
+  try{await assert.rejects(old.matches(lab.hostRoot,settingsPath,lab.vaultId),(e:any)=>e instanceof T3RpcError&&e.requiredPermission==='filesystem:read');result.oldGrantsRejected=true;}finally{old.close();await officialCli(['auth','session','revoke','--base-dir','/home/ubuntu/.t3',issued.sessionId]);}
   await writeFile(join(evidence,`api-${phase}.json`),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
 }
 void main().catch(error=>{console.error(JSON.stringify({message:error.message,kind:error.kind,rpcMethod:error.rpcMethod}));process.exitCode=1;});

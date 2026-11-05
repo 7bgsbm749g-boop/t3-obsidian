@@ -75,7 +75,7 @@ test('official CLI receives literal arguments with no shell',async()=>{
  try{const path=join(dir,'CLI with spaces.cjs');await writeFile(path,'console.log(JSON.stringify(process.argv.slice(2)))');const args=['$(touch /tmp/unsafe)','`whoami`','; & "quoted"'];assert.deepEqual(JSON.parse(await cli([process.execPath,path],args)),args);}finally{await rm(dir,{recursive:true,force:true});}
 });
 test('direct HTTP refuses remote origins and does not follow credential redirects',async()=>{
- assert.throws(()=>requestJson('https://example.com','secret','shell'),/loopback/);
+ await assert.rejects(requestJson('https://example.com','secret','shell'),/loopback/);
  const server=createServer((_req,res)=>{res.writeHead(302,{Location:'http://example.com'});res.end();});await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
  try{const port=(server.address() as any).port;await assert.rejects(requestJson('http://127.0.0.1:'+port,'secret','shell'),/302/);}finally{server.close();}
 });

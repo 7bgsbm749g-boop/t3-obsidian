@@ -1,13 +1,37 @@
-import {Buffer} from 'node:buffer';
+type Buffer=import('node:buffer').Buffer;
+import {Platform} from 'obsidian';
+let Buffer:typeof import('node:buffer').Buffer;
+let fs:typeof import('node:fs').promises;
+let join:typeof import('node:path').join;
+let createServer:typeof import('node:http').createServer;
+let randomBytes:typeof import('node:crypto').randomBytes;
+let randomUUID:typeof import('node:crypto').randomUUID;
+let timingSafeEqual:typeof import('node:crypto').timingSafeEqual;
+let isDeepStrictEqual:typeof import('node:util').isDeepStrictEqual;
+let lockfile:typeof import('proper-lockfile');
+let desktopReady:Promise<void>|undefined;
+function loadDesktop():Promise<void>{
+  if(Platform.isDesktop){
+    return desktopReady??=(async()=>{
+    ({Buffer}=await import('node:buffer'));
+    ({promises:fs}=await import('node:fs'));
+    const nativePath=await import('node:path');
+    join=nativePath.join.bind(nativePath);
+    ({createServer}=await import('node:http'));
+    ({randomBytes,randomUUID,timingSafeEqual}=await import('node:crypto'));
+    ({isDeepStrictEqual}=await import('node:util'));
+    lockfile=(await import('proper-lockfile')).default;
+    })();
+  }
+  throw Error('This feature requires Obsidian on desktop.');
+}
+
 import {parseJsonRecord,parseJson} from '../shared/values';
 import {errorCode,toError} from '../shared/values';
-import {promises as fs} from 'node:fs';
-import {join} from 'node:path';
-import {createServer,type Server,type IncomingMessage,type ServerResponse} from 'node:http';
-import {randomBytes,randomUUID,timingSafeEqual} from 'node:crypto';
-import {isDeepStrictEqual} from 'node:util';
-import lockfile from 'proper-lockfile';
-import {desktopInterval} from '../connection/desktop-timers';
+
+import type {Server,IncomingMessage,ServerResponse} from 'node:http';
+
+import {desktopTimers} from '../connection/desktop-timers';
 import {validateAgentCommand,type AgentCommand,type AgentCommandResult} from './note-command';
 import {ensurePrivateStorage} from '../storage/private-storage-desktop';
 
@@ -23,13 +47,15 @@ export class NoteCommandServer {
   private received=0;private executed=0;private replayed=0;
   status(){return {transport:'direct',received:this.received,executed:this.executed,replayed:this.replayed,activeRequests:this.work.size,pendingReloads:this.reloads.size};}
   get active(){return !this.stopped;}
-  private constructor(private base:string,private release:()=>Promise<void>,private execute:(command:AgentCommand)=>Promise<AgentCommandResult>,private ready:()=>boolean,private onStopped?:()=>void,private acknowledged?:(command:AgentCommand,result:AgentCommandResult)=>Promise<boolean>){}
+  private constructor(private interval:Awaited<ReturnType<typeof desktopTimers>>['interval'],private base:string,private release:()=>Promise<void>,private execute:(command:AgentCommand)=>Promise<AgentCommandResult>,private ready:()=>boolean,private onStopped?:()=>void,private acknowledged?:(command:AgentCommand,result:AgentCommandResult)=>Promise<boolean>){}
   static async open(root:string,configDir:string,execute:(command:AgentCommand)=>Promise<AgentCommandResult>,ready:()=>boolean,onStopped?:()=>void,acknowledged?:(command:AgentCommand,result:AgentCommandResult)=>Promise<boolean>){
+    await loadDesktop();
+    const {interval}=await desktopTimers();
     const route=await ensurePrivateStorage(root,configDir),base=join(route.storageRoot,configDir,'t3-code','commands','v1');
     for(const directory of ['requests','results'])await fs.mkdir(join(base,directory),{recursive:true,mode:0o700});
     let instance:NoteCommandServer|undefined;
     const release=await lockfile.lock(base,{realpath:true,stale:30_000,update:5000,onCompromised:()=>void instance?.dispose()});
-    instance=new NoteCommandServer(base,release,execute,ready,onStopped,acknowledged);
+    instance=new NoteCommandServer(interval,base,release,execute,ready,onStopped,acknowledged);
     try{await instance.listen();return instance;}catch(error){await instance.dispose();throw error;}
   }
   private async listen(){
@@ -57,7 +83,7 @@ export class NoteCommandServer {
       // receipt and HTTP response are written, and retry only this live request.
       if(this.acknowledged&&result.ok&&'reloadScheduled' in result&&result.reloadScheduled){
         this.reloads.set(command.id,{command,result});
-        this.stopTimer??=desktopInterval(()=>void this.tick().catch(()=>{}),250);
+        this.stopTimer??=this.interval(()=>void this.tick().catch(()=>{}),250);
         setImmediate(()=>void this.tick().catch(()=>{}));
       }
     }catch(error){if(!response.headersSent)send(400,{id,ok:false,error:error instanceof Error?error.message:String(error)});}

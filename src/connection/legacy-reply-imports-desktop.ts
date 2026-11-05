@@ -1,8 +1,26 @@
+import {Platform} from 'obsidian';
+let fs:typeof import('node:fs').promises;
+let resolve:typeof import('node:path').resolve;
+let join:typeof import('node:path').join;
+let sep:typeof import('node:path').sep;
+let createHash:typeof import('node:crypto').createHash;
+let desktopReady:Promise<void>|undefined;
+function loadDesktop():Promise<void>{
+  if(Platform.isDesktop){
+    return desktopReady??=(async()=>{
+    ({promises:fs}=await import('node:fs'));
+    const nativePath=await import('node:path');
+    resolve=nativePath.resolve.bind(nativePath);
+    join=nativePath.join.bind(nativePath);
+    sep=nativePath.sep;
+    ({createHash}=await import('node:crypto'));
+    })();
+  }
+  throw Error('This feature requires Obsidian on desktop.');
+}
 import {errorCode,toError} from '../shared/values';
 import {TFolder,type App,type TFile} from 'obsidian';
-import {promises as fs} from 'node:fs';
-import {resolve,join,sep} from 'node:path';
-import {createHash} from 'node:crypto';
+
 import type {CodebaseScope} from '../projects/codebase-core';
 import {relativeCodebasePath} from '../projects/codebase-core';
 
@@ -12,6 +30,7 @@ const hash=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 /** Copy first, persist link identities, then remove only the checked imports.
  * This explicit maintenance operation never runs during response delivery. */
 export async function archiveLegacyReplyImports(app:App,scope:CodebaseScope,directory:string,remember:(files:Array<{source:string;path:string;sha256:string}>)=>Promise<void>){
+ await loadDesktop();
  relativeCodebasePath(directory);
  const vault=app.vault,adapter=vault.adapter as typeof vault.adapter&{getBasePath():string};
  const vaultRoot=await fs.realpath(adapter.getBasePath()),projectRoot=await fs.realpath(scope.root);

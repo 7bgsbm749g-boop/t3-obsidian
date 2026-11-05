@@ -1,3 +1,5 @@
+import * as cmState from '@codemirror/state';
+import * as cmCommands from '@codemirror/commands';
 import {cursorInsertionOffset} from '../notes/cursor-insertion';
 import {responseAnchor,responseRegion} from './native-response-projection';
 import {localResponseRange} from './local-response-binding';
@@ -8,13 +10,13 @@ import {applySavedEdits,type SavedEdit} from './coordinated-merge';
 export interface ResponseMove {id:string;key:string;before:string;after:string;edits:SavedEdit[];inverse:SavedEdit[]}
 let effect:StateEffectType<ResponseMove>|undefined;
 export function responseMoveEffect(){
-  const {StateEffect}=require('@codemirror/state') as typeof import('@codemirror/state');
+  const {StateEffect}=cmState;
   return effect??=StateEffect.define<ResponseMove>();
 }
 /** History stores saved anchors, not a version of a growing response body.
  * Undo/redo are rechecked against the current response and saved note. */
 export function responseMoveHistory():Extension {
-  const {invertedEffects}=require('@codemirror/commands') as typeof import('@codemirror/commands');
+  const {invertedEffects}=cmCommands;
   return invertedEffects.of(transaction=>transaction.effects.flatMap(item=>item.is(responseMoveEffect())?[responseMoveEffect().of({...item.value,before:item.value.after,after:item.value.before,edits:item.value.inverse,inverse:item.value.edits})]:[]));
 }
 type MoveHandler=(transaction:Transaction,move:ResponseMove)=>TransactionSpec|undefined;

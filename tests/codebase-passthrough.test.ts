@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {build} from 'esbuild';
+import {build} from './build-fixture';
 import {runInNewContext} from './obsidian-context';
 import {catalogCodebases,virtualPath} from '../src/projects/codebase-core';
 class MockNotice {messageEl={classList:{add(){}},setAttribute(){}};hide(){}}

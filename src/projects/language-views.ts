@@ -11,7 +11,10 @@ export class NativeLanguageViews {
   readonly grammars=new CodeGrammarCache<LanguageSupport>(async grammar=>(await import('./language-grammars')).loadCodeGrammar(grammar));
   constructor(private app:App,private plugin:Plugin){}
   private creator(type:string){return nativeHost(this.app).viewRegistry?.getViewCreatorByType?.(type)??nativeHost(this.app).viewRegistry?.viewByType?.[type];}
-  install(){
+  async install(){
+    let native:typeof import('./language-native')|undefined,nativeError:unknown;
+    if(nativeLanguageVersion(apiVersion)){try{native=await import('./language-native');}catch(error){nativeError=error;}}
+    if(this.stopped)return;
     for(const type of CODE_VIEW_TYPES){
       if(this.creator(type))continue;
       const factory=(leaf:WorkspaceLeaf):View=>{
@@ -21,7 +24,7 @@ export class NativeLanguageViews {
           async onOpen(){this.contentEl.createEl('p',{text:message});}
         })(leaf);
         if(this.stopped||!nativeLanguageVersion(apiVersion))return unavailable('This Obsidian version cannot safely open the native code editor. Your project files and saved local edits are retained.');
-        try{const native=require('./language-native') as typeof import('./language-native');return native.createNativeLanguageView(leaf,type,this);}catch(error){return unavailable(`The native code editor is unavailable: ${error instanceof Error?error.message:String(error)}. Your project files and saved local edits are retained.`);}
+        try{if(!native)throw nativeError instanceof Error?nativeError:Error('Native editor module did not load.');return native.createNativeLanguageView(leaf,type,this);}catch(error){return unavailable(`The native code editor is unavailable: ${error instanceof Error?error.message:String(error)}. Your project files and saved local edits are retained.`);}
       };
       try{this.plugin.registerView(type,factory);this.factories.set(type,factory);}catch{/* A conflicting plugin owns this view type. */}
     }

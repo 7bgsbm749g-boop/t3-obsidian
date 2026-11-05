@@ -1,3 +1,5 @@
+import * as cmView from '@codemirror/view';
+import * as cmState from '@codemirror/state';
 import type {MarkdownView} from 'obsidian';
 import {editorLivePreviewField} from 'obsidian';
 import {Notice,editorInfoField,type App} from 'obsidian';
@@ -114,8 +116,8 @@ export class QuestionModal extends NoteTabPanel {
 
 /** Replace the readable Markdown answer link with a real Live Preview button. */
 export function questionEditorExtension(controller:QuestionController,open:(target:QuestionTarget,notePath?:string)=>void):Extension {
-  const {Decoration,EditorView,ViewPlugin,WidgetType}=require('@codemirror/view') as typeof import('@codemirror/view');
-  const {StateEffect,StateField}=require('@codemirror/state') as typeof import('@codemirror/state');
+  const {Decoration,EditorView,ViewPlugin,WidgetType}=cmView;
+  const {StateEffect,StateField}=cmState;
   const refreshDismissed=StateEffect.define<void>();
   const hidden=(document:string)=>controller.hasHiddenQuestions()?Decoration.set(questionSections(document).filter(section=>controller.isHidden(section.target)).map(section=>Decoration.replace({block:true}).range(section.from,section.to))):Decoration.none;
   // Direct StateField decorations can hide complete multiline sections. The

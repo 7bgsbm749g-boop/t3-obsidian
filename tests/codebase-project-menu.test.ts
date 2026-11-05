@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {build} from 'esbuild';
+import {build} from './build-fixture';
 import {runInNewContext} from './obsidian-context';
 const bundle=build({entryPoints:['src/projects/codebase-native.ts'],bundle:true,write:false,platform:'browser',format:'cjs',external:['obsidian']});
 const scope={environmentId:'env',projectId:'project',root:'/outside',title:'Project'};

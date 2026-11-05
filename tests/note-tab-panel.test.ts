@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {build} from 'esbuild';
+import {build} from './build-fixture';
 import {runInNewContext} from './obsidian-context';
 
 const compiled=build({entryPoints:['src/notes/note-tab-panel.ts'],bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});

@@ -1,3 +1,6 @@
+import * as cmState from '@codemirror/state';
+import * as cmView from '@codemirror/view';
+import * as cmLanguage from '@codemirror/language';
 import type {MarkdownView} from 'obsidian';
 import type {EditorView} from '@codemirror/view';
 import type {ChangeDesc} from '@codemirror/state';
@@ -12,7 +15,7 @@ type RevealHandler=Parameters<typeof EditorView.scrollHandler.of>[0];
 const revealHandlers=new WeakMap<EditorView,RevealHandler>();
 
 interface HeightGuard {
-  cm:EditorView;content:HTMLElement;scroller:HTMLElement;window:Window;file:MarkdownView['file'];mode:string;
+  cm:EditorView;content:HTMLElement;scroller:HTMLElement;spacer:HTMLElement;window:Window;file:MarkdownView['file'];mode:string;
   keys:string[];floor:number;started:number;changed:number;geometry:string;stable:number;width:number;height:number;
   previousAttribute:string|null;previousValue:string;previousPriority:string;
   anchor:number;lastReveal:number;reveals:number;
@@ -43,24 +46,30 @@ export class ResponseHeightGuard {
     const keys=(this.guard?.keys??this.folds(scroller).map(fold=>this.key(fold)).filter((key):key is string=>!!key&&key.endsWith(':active')))
       .filter(key=>display.includes(`data-t3-fold="${key}"`));
     if(!keys.length){this.clear();return;}
-    const style=window.getComputedStyle(content),pixels=(value:string)=>Number.parseFloat(value)||0;
-    const extras=style.boxSizing==='border-box'?0:pixels(style.paddingTop)+pixels(style.paddingBottom)+pixels(style.borderTopWidth)+pixels(style.borderBottomWidth);
-    const floor=Math.ceil(content.getBoundingClientRect().height/(cm.scaleY||1)-extras);
+    const rect=content.getBoundingClientRect(),scale=cm.scaleY||1;
+    // Include native titles/properties above content and scroller padding, but
+    // never count our own spacer or an empty viewport as new content height.
+    const top=(rect.top-scroller.getBoundingClientRect().top)/scale+scroller.scrollTop-scroller.clientTop;
+    const padding=Number.parseFloat(window.getComputedStyle(scroller).paddingBottom)||0;
+    const floor=Math.ceil(rect.height/scale+Math.max(0,top)+padding);
     if(!Number.isFinite(floor)||floor<=0)return;
     const now=this.now(window);
-    if(!this.guard)this.guard={cm,content,scroller,window,file:this.view.file,mode:this.mode(),keys,floor,started:now,changed:now,geometry:'',stable:0,width:scroller.clientWidth,height:scroller.clientHeight,anchor:cm.viewport?.from??0,lastReveal:-Infinity,reveals:0,
+    if(!this.guard){
+      const spacer=scroller.createDiv({cls:'send-to-t3-response-height-spacer',attr:{'aria-hidden':'true'}});
+      this.guard={cm,content,scroller,spacer,window,file:this.view.file,mode:this.mode(),keys,floor:Math.max(floor,scroller.scrollHeight),started:now,changed:now,geometry:'',stable:0,width:scroller.clientWidth,height:scroller.clientHeight,anchor:cm.viewport?.from??0,lastReveal:-Infinity,reveals:0,
       previousAttribute:content.getAttribute(responseHeightAttribute),previousValue:scroller.style.getPropertyValue(responseHeightProperty),previousPriority:scroller.style.getPropertyPriority(responseHeightProperty)};
+    }
     const guard=this.guard;
     if(cm.viewport&&cm.viewport.from<cm.viewport.to)guard.anchor=cm.viewport.from;
     if(changes)guard.anchor=changes.mapPos(guard.anchor,-1);
     guard.keys=keys;guard.floor=Math.max(guard.floor,floor);guard.started=now;guard.changed=now;guard.stable=0;guard.geometry='';
     guard.reveals=0;
-    // The variable lives on the scroller, outside CodeMirror's content style
-    // attributes. Native padding/style updates must not remove the floor.
+    // A transparent sibling extends scrollable overflow without changing the
+    // editable content, its line layout, or CodeMirror's inline sizing.
     scroller.style.setProperty(responseHeightProperty,`${guard.floor}px`);
     content.setAttribute(responseHeightAttribute,'true');
-    const {StateEffect,Prec}=require('@codemirror/state') as typeof import('@codemirror/state');
-    const {EditorView}=require('@codemirror/view') as typeof import('@codemirror/view');
+    const {StateEffect,Prec}=cmState;
+    const {EditorView}=cmView;
     let handler=revealHandlers.get(cm);
     if(!handler){handler=(_view,_range,options)=>options.y==='nearest'&&options.yMargin===0&&options.xMargin===revealMargin;revealHandlers.set(cm,handler);}
     if(!cm.state.facet(EditorView.scrollHandler).includes(handler))cm.dispatch({effects:StateEffect.appendConfig.of(Prec.highest(EditorView.scrollHandler.of(handler)))});
@@ -81,7 +90,7 @@ export class ResponseHeightGuard {
     const now=this.now(window),folds=this.folds(scroller),rects=guard.keys.map(key=>folds.find(fold=>this.key(fold)===key)?.getBoundingClientRect());
     const rendered=rects.every(rect=>rect&&rect.height>0);
     // Checking the existing parser work does not force a whole-note parse.
-    const parsing=typeof cm.plugin==='function'&&(require('@codemirror/language') as typeof import('@codemirror/language')).syntaxParserRunning(cm);
+    const parsing=typeof cm.plugin==='function'&&cmLanguage.syntaxParserRunning(cm);
     if(!rendered&&cm.viewport?.from===cm.state.doc.length&&!parsing&&now-guard.started>=minimumHold&&now-guard.lastReveal>=250&&guard.reveals<8){
       // Holding DOM height alone can leave CodeMirror's smaller height map
       // looking past the response into an empty end-of-document viewport.
@@ -104,12 +113,13 @@ export class ResponseHeightGuard {
     // implicit EOF-anchor correction when another update arrives before the
     // native widget has returned. It never requests a DOM scroll.
     const position=Math.max(0,Math.min(guard.anchor,length));
-    const {EditorView}=require('@codemirror/view') as typeof import('@codemirror/view');
+    const {EditorView}=cmView;
     return EditorView.scrollIntoView(position,{y:'nearest',yMargin:0,xMargin:revealMargin});
   }
   clear(notify=false){
     const guard=this.guard;if(!guard)return;
     this.guard=undefined;
+    guard.spacer.remove();
     if(this.frame!==undefined){guard.window.cancelAnimationFrame(this.frame);this.frame=undefined;}
     if(this.timer!==undefined){guard.window.clearTimeout(this.timer);this.timer=undefined;}
     if(guard.content.getAttribute(responseHeightAttribute)==='true'){

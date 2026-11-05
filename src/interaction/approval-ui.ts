@@ -1,3 +1,4 @@
+import * as cmView from '@codemirror/view';
 import {editorLivePreviewField} from 'obsidian';
 import {Notice} from 'obsidian';
 import type {Extension} from '@codemirror/state';
@@ -25,7 +26,7 @@ export function approvalButton(controller:ApprovalController,target:ApprovalTarg
 
 /** Source mode retains links; Live Preview replaces only valid approval controls. */
 export function approvalEditorExtension(controller:ApprovalController):Extension {
-  const {Decoration,EditorView,ViewPlugin,WidgetType}=require('@codemirror/view') as typeof import('@codemirror/view');
+  const {Decoration,EditorView,ViewPlugin,WidgetType}=cmView;
   class ApprovalWidget extends WidgetType {
     private unsubscribe?:()=>void;
     constructor(readonly target:ApprovalTarget,readonly decision:ApprovalDecision){super();}

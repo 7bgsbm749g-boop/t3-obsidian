@@ -1,20 +1,44 @@
+import {sha1} from '@noble/hashes/legacy';
+import {Buffer as BrowserBuffer} from 'buffer/';
+import {Platform} from 'obsidian';
+let clearTimeout:typeof import('node:timers').clearTimeout;
+let setTimeout:typeof import('node:timers').setTimeout;
+let spawn:typeof import('node:child_process').spawn;
+let homedir:typeof import('node:os').homedir;
+let join:typeof import('node:path').join;
+let fs:typeof import('node:fs').promises;
+let existsSync:typeof import('node:fs').existsSync;
+let createHash:typeof import('node:crypto').createHash;
+let http:typeof import('node:http');
+let lockfile:typeof import('proper-lockfile');
+let desktopReady:Promise<void>|undefined;
+function loadDesktop():Promise<void>{
+  if(Platform.isDesktop){
+    return desktopReady??=(async()=>{
+    ({clearTimeout,setTimeout}=await import('node:timers'));
+    ({spawn}=await import('node:child_process'));
+    ({homedir}=await import('node:os'));
+    const nativePath=await import('node:path');
+    join=nativePath.join.bind(nativePath);
+    ({promises:fs,existsSync}=await import('node:fs'));
+    ({createHash}=await import('node:crypto'));
+    http=await import('node:http');
+    lockfile=(await import('proper-lockfile')).default;
+    })();
+  }
+  throw Error('This feature requires Obsidian on desktop.');
+}
 import {outgoingMessage,type StartRequest,type DesktopOperation,type CreateThreadCommand,type TurnStartCommand} from './send-contracts';
 import {isRecord,parseJson} from '../shared/values';
 import type {WireProject} from './wire-types';
 import type {T3Api} from './t3-rpc';
 import {readWireProjects,readThreadList,readMetadataSnapshot} from './wire-readers';
-import {clearTimeout,setTimeout} from 'node:timers';
+
 import {errorCode,toError} from '../shared/values';
 import {T3_RESPONSE_MAX_BYTES,T3ResponseTooLargeError} from './t3-response-limits';
 // Loaded only on desktop. T3's official CLI issues short-lived credentials;
 // all project/thread traffic goes directly to its authenticated loopback API.
-import {spawn} from 'node:child_process';
-import {homedir} from 'node:os';
-import {join} from 'node:path';
-import {promises as fs, existsSync} from 'node:fs';
-import {createHash} from 'node:crypto';
-import * as http from 'node:http';
-import lockfile from 'proper-lockfile';
+
 import type {Connection} from '../app/bridge';
 import type {ThreadAccess} from '../conversations/thread-stream';
 import {existingThreadTurn} from '../conversations/thread-target';
@@ -28,8 +52,9 @@ import {T3_PROTOCOL_HEADER,T3_PROTOCOL_VERSION} from './orchestration-v2';
 import {ensureNoProject} from '../projects/no-project';
 import {AUTO_THREAD_TITLE} from '../conversations/thread-title';
 
-export function desktopDefaults():Connection {return {executable:'',host:'local',native:true,baseDir:join(homedir(),'.t3')};}
-export function cli(command:string[],args:string[],signal?:AbortSignal):Promise<string> {
+export async function desktopDefaults():Promise<Connection> {await loadDesktop();return {executable:'',host:'local',native:true,baseDir:join(homedir(),'.t3')};}
+export async function cli(command:string[],args:string[],signal?:AbortSignal):Promise<string> {
+ await loadDesktop();
  return new Promise((resolve,reject)=>{
   try{requestAborted(signal);}catch(error){reject(toError(error));return;}
   const child=spawn(command[0],[...command.slice(1),...args],{shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});
@@ -44,23 +69,26 @@ export function cli(command:string[],args:string[],signal?:AbortSignal):Promise<
   child.on('close',code=>finish(code===0?undefined:new Error('T3 CLI failed. Check that the official CLI matches your T3 installation.')));
  });
 }
-export function findCli(connection:Connection):string[] {
+export async function findCli(connection:Connection):Promise<string[]> {await loadDesktop();
  if(connection.native && connection.executable.trim())return [connection.executable];
  const paths=process.platform==='win32'?[join(homedir(),'.t3','bin','t3.exe'),join(homedir(),'AppData','Local','Programs','t3-code-desktop','resources','t3.exe')]:[join(homedir(),'.local','bin','t3'),'/usr/local/bin/t3','/opt/homebrew/bin/t3'];
  const found=paths.find(p=>existsSync(p));return [found??'t3'];
 }
 export async function addDesktopProject(connection:Connection,workspaceRoot:string,title:string):Promise<string>{
+ await loadDesktop();
  if(connection.host!=='local')throw Error('A folder can only become a project on the computer that stores it.');
  if(!workspaceRoot.trim()||!title.trim())throw Error('The folder path or project title is empty.');
- const output=await cli(findCli(connection),['project','add','--base-dir',connection.baseDir||join(homedir(),'.t3'),'--title',title,workspaceRoot]);
+ const output=await cli(await findCli(connection),['project','add','--base-dir',connection.baseDir||join(homedir(),'.t3'),'--title',title,workspaceRoot]);
  const match=/Added project ([0-9a-f-]{36})\b/i.exec(output);if(!match)throw Error('T3 did not confirm the new project.');return match[1];
 }
 export async function browseDesktopFolder(path:string){
+ await loadDesktop();
  const root=await fs.realpath(path==='~'?homedir():path);
  const entries=(await fs.readdir(root,{withFileTypes:true})).filter(entry=>entry.isDirectory()).sort((a,b)=>a.name.localeCompare(b.name));
  return {parentPath:root,entries:entries.map(entry=>({name:entry.name,fullPath:join(root,entry.name)}))};
 }
 export async function createDesktopFolder(parentPath:string,name:string):Promise<string>{
+ await loadDesktop();
  const parent=await fs.realpath(parentPath);
  const path=workspaceChildPath(parent,name);
  try{await fs.mkdir(path);}catch(error:unknown){
@@ -72,7 +100,7 @@ export async function createDesktopFolder(parentPath:string,name:string):Promise
 }
 export function uuid5(id:string,name:string):string {
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))throw new Error('Invalid request ID.');
- const b=createHash('sha1').update(Buffer.from(id.replace(/-/g,''),'hex')).update(name).digest().subarray(0,16);b[6]=(b[6]&15)|80;b[8]=(b[8]&63)|128;
+ const b=BrowserBuffer.from(sha1(BrowserBuffer.concat([BrowserBuffer.from(id.replace(/-/g,''),'hex'),BrowserBuffer.from(name)])).subarray(0,16));b[6]=(b[6]&15)|80;b[8]=(b[8]&63)|128;
  const h=b.toString('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
 }
 // Compatible with earlier persisted Python request fingerprints, including Unicode.
@@ -113,7 +141,8 @@ function desktopApi(origin:string,token:string){
   const url=new URL(origin);if(url.protocol!=='http:' || !['localhost','127.0.0.1','[::1]'].includes(url.hostname) || url.username || url.password || url.pathname!=='/' || url.search || url.hash)throw new Error('T3 runtime must use a loopback HTTP origin.');
   return t3Api((target,body,options)=>rawRequestJson(origin,token,target,body,options),origin);
 }
-export function requestJson(origin:string,token:string,path:string,payload?:unknown):Promise<unknown> {
+export async function requestJson(origin:string,token:string,path:string,payload?:unknown):Promise<unknown> {
+  await loadDesktop();
   const apiPath=path.startsWith('/api/')||path==='/.well-known/t3/environment'?path:'/api/orchestration/'+path;
   return desktopApi(origin,token)(apiPath,payload);
 }
@@ -141,6 +170,7 @@ function storedLedger(value:unknown):DesktopLedger{
 }
 const locks=new Map<string,Promise<unknown>>();
 export async function start(api:T3Api,req:StartRequest,stateDir:string,loadDefaults?:(project:WireProject)=>Promise<NewThreadDefaults>){
+ await loadDesktop();
  const id=req.requestId;const path=join(stateDir,'requests',id+'.json');
  if(locks.has(path))throw new Error('This request is in progress. Retry its original ID later.');
  const work=(async()=>{
@@ -187,12 +217,13 @@ export async function start(api:T3Api,req:StartRequest,stateDir:string,loadDefau
  })();locks.set(path,work);try{return await work;}finally{locks.delete(path);}
 }
 export async function runDesktop(connection:Connection,args:string[],input='',options:DirectReadOptions={}):Promise<unknown> {
+ await loadDesktop();
  requestAborted(options.signal);
  if(connection.host!=='local')throw new Error('Use Direct T3 pairing for remote destinations. Local T3 connects only to this computer.');
  const req=parseOperation(args,input);
  if(req.action==='capabilities')return {imagePayloadVersion:1,imageContextVersion:1,native:true};
  const base=connection.baseDir||join(homedir(),'.t3');const runtime=localRuntime(parseJson(await fs.readFile(join(base,'userdata','server-runtime.json'),'utf8')));
- const command=findCli(connection);let session:LocalSession|undefined;
+ const command=await findCli(connection);let session:LocalSession|undefined;
  try{
   const issued=await cli(command,['auth','session','issue','--base-dir',base,'--ttl','5m','--label','send-to-t3-code','--json'],options.signal);
   try{session=localSession(parseJson(issued));}catch{throw new Error('Invalid T3 session response; credential output withheld.');}
@@ -215,6 +246,7 @@ export async function runDesktop(connection:Connection,args:string[],input='',op
 /** Borrow the plugin-owned local credential, preserving the same durable
  * request ledger and native launch path without per-operation CLI startup. */
 export async function runDesktopWithAccess(connection:Connection,args:string[],input:string,access:ThreadAccess,options:DirectReadOptions={}):Promise<unknown>{
+ await loadDesktop();
   requestAborted(options.signal);
   if(connection.host!=='local')throw Error('Local T3 connects only to this computer.');
   const req=parseOperation(args,input),base=connection.baseDir||join(homedir(),'.t3');
@@ -228,10 +260,11 @@ export async function runDesktopWithAccess(connection:Connection,args:string[],i
 
 /** A short-lived local session dedicated to one live thread subscription. */
 export async function desktopThreadAccess(connection:Connection,component:'response-host'|'thread-reader'='thread-reader'):Promise<ThreadAccess>{
+ await loadDesktop();
   if(connection.host!=='local')throw Error('Local T3 is available only on this computer.');
   const base=connection.baseDir||join(homedir(),'.t3');
   const runtime=localRuntime(parseJson(await fs.readFile(join(base,'userdata','server-runtime.json'),'utf8')));
-  const command=findCli(connection);
+  const command=await findCli(connection);
   const issued=localSession(parseJson(await cli(command,['auth','session','issue','--base-dir',base,'--ttl','5m','--label','send-to-t3-code-inline','--json'])));
   if(typeof issued.token!=='string'||!issued.token||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(issued.sessionId??''))throw Error('T3 did not issue a local stream session.');
   const issuedAt=Date.now(),expiry=Date.parse(issued.expiresAt??''),expiresAt=Number.isFinite(expiry)?expiry:undefined;
@@ -253,6 +286,7 @@ export async function desktopThreadAccess(connection:Connection,component:'respo
 }
 
 export async function desktopEnvironment(connection:Connection):Promise<string>{
+ await loadDesktop();
   const base=connection.baseDir||join(homedir(),'.t3');
   const runtime=localRuntime(parseJson(await fs.readFile(join(base,'userdata','server-runtime.json'),'utf8')));
   const descriptor=await requestJson(runtime.origin,'','/.well-known/t3/environment');
@@ -263,6 +297,7 @@ export async function desktopEnvironment(connection:Connection):Promise<string>{
 /** Public loopback discovery only: no CLI, credential, or remote round trip.
  * Missing/stopped local T3 fails immediately; an unresponsive listener is bounded. */
 export async function availableDesktopEnvironment(connection:Connection,timeoutMs=150):Promise<string|undefined>{
+ await loadDesktop();
   try{
     const base=connection.baseDir||join(homedir(),'.t3'),runtime=localRuntime(parseJson(await fs.readFile(join(base,'userdata','server-runtime.json'),'utf8')));
     const origin=new URL(runtime.origin);

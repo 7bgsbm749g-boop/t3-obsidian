@@ -1,5 +1,16 @@
+import {Platform} from 'obsidian';
+let fs:typeof import('node:fs').promises;
+let desktopReady:Promise<void>|undefined;
+function loadDesktop():Promise<void>{
+  if(Platform.isDesktop){
+    return desktopReady??=(async()=>{
+    ({promises:fs}=await import('node:fs'));
+    })();
+  }
+  throw Error('This feature requires Obsidian on desktop.');
+}
 import {errorCode,toError} from '../shared/values';
-import {promises as fs,type BigIntStats} from 'node:fs';
+import type {BigIntStats} from 'node:fs';
 
 type Entry={identity:BigIntStats;value:string};
 const sameIdentity=(a:BigIntStats,b:BigIntStats)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs&&a.mode===b.mode;
@@ -8,6 +19,7 @@ const sameIdentity=(a:BigIntStats,b:BigIntStats)=>a.dev===b.dev&&a.ino===b.ino&&
  * without allocating its full text again. Symlinks cannot authenticate the
  * target bytes; they always retain ordinary fresh-read behavior. */
 export async function inlineFileVersion(path:string):Promise<string|undefined>{
+  await loadDesktop();
   try{const stat=await fs.lstat(path,{bigint:true});return stat.isFile()?[stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs,stat.mode].join(':'):undefined;}
   catch(error:unknown){if(errorCode(error)==='ENOENT')return;throw toError(error);}
 }
@@ -23,6 +35,7 @@ export class DesktopInlineReadCache {
   status(){return {entries:this.entries.size,characters:this.characters,maxCharacters:this.maxCharacters,maxEntries:this.maxEntries,hits:this.hits,sourceReads:this.sourceReads};}
   invalidate(path:string){const old=this.entries.get(path);if(old){this.characters-=old.value.length;this.entries.delete(path);}}
   async read(path:string,retain=true):Promise<string|undefined>{
+    await loadDesktop();
     if(!retain)this.invalidate(path);
     let before:BigIntStats;
     try{before=await fs.lstat(path,{bigint:true});}catch(error:unknown){this.invalidate(path);if(errorCode(error)==='ENOENT')return;throw toError(error);}

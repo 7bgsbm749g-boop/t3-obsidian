@@ -1,11 +1,39 @@
-import {Buffer} from 'node:buffer';
+import {Platform} from 'obsidian';
+let Buffer:typeof import('node:buffer').Buffer;
+let fs:typeof import('node:fs').promises;
+let relative:typeof import('node:path').relative;
+let join:typeof import('node:path').join;
+let resolve:typeof import('node:path').resolve;
+let dirname:typeof import('node:path').dirname;
+let isAbsolute:typeof import('node:path').isAbsolute;
+let homedir:typeof import('node:os').homedir;
+let createHash:typeof import('node:crypto').createHash;
+let randomUUID:typeof import('node:crypto').randomUUID;
+let createReadStream:typeof import('node:fs').createReadStream;
+let lockfile:typeof import('proper-lockfile');
+let desktopReady:Promise<void>|undefined;
+function loadDesktop():Promise<void>{
+  if(Platform.isDesktop){
+    return desktopReady??=(async()=>{
+    ({Buffer}=await import('node:buffer'));
+    ({promises:fs}=await import('node:fs'));
+    const nativePath=await import('node:path');
+    join=nativePath.join.bind(nativePath);
+    resolve=nativePath.resolve.bind(nativePath);
+    dirname=nativePath.dirname.bind(nativePath);
+    isAbsolute=nativePath.isAbsolute.bind(nativePath);
+    relative=nativePath.relative.bind(nativePath);
+    ({homedir}=await import('node:os'));
+    ({createHash,randomUUID}=await import('node:crypto'));
+    ({createReadStream}=await import('node:fs'));
+    lockfile=(await import('proper-lockfile')).default;
+    })();
+  }
+  throw Error('This feature requires Obsidian on desktop.');
+}
+
 import {errorCode,toError,isRecord,parseJson} from '../shared/values';
-import {promises as fs} from 'node:fs';
-import {join,resolve,dirname,isAbsolute} from 'node:path';
-import {homedir} from 'node:os';
-import {createHash,randomUUID} from 'node:crypto';
-import {createReadStream} from 'node:fs';
-import lockfile from 'proper-lockfile';
+
 import {contentHash} from '../responses/completion';
 import {readPrivateStorageRoute,storageRoutePath,type PrivateStorageRoute} from './private-storage';
 import {isPathInsideDirectory} from '../connection/desktop-path';
@@ -36,6 +64,7 @@ async function retireCopiedTrees(route:PrivateStorageRoute){
   await fs.rm(path,{force:true});
 }
 export async function existingPrivateStorage(root:string,configDir:string){
+  await loadDesktop();
   let raw:string|undefined;try{raw=await fs.readFile(join(root,storageRoutePath(configDir)),'utf8');}catch(error:unknown){if(errorCode(error)!=='ENOENT')throw toError(error);}
   return readPrivateStorageRoute(raw,root,configDir);
 }
@@ -45,12 +74,13 @@ export async function existingPrivateStorage(root:string,configDir:string){
 export function ensurePrivateStorage(root:string,configDir:string,options?:{storageRoot?:string}){
   const key=JSON.stringify([root,configDir]);let work=openings.get(key);if(work)return work;
   work=(async()=>{
+    await loadDesktop();
     if(!configDir||isAbsolute(configDir)||configDir.split(/[\\/]/).some(part=>part==='..'||part==='.'||!part))throw Error('Invalid vault configuration directory.');
     root=await fs.realpath(root);
     const route:PrivateStorageRoute={version:1,workspaceRoot:root,configDir,storageRoot:resolve(options?.storageRoot??join(homedir(),'.t3','send-to-t3-code','vaults',contentHash(root+'\0'+configDir)))};
     const prior=await existingPrivateStorage(root,configDir);if(prior){if(await fs.realpath(prior.storageRoot)!==prior.storageRoot)throw Error('Symlinked private storage.');await retireCopiedTrees(prior);return prior;}
     const vaults=[root,...await registeredVaults(join(homedir(),'.config/obsidian/obsidian.json'))];
-    if(vaults.some(vault=>isPathInsideDirectory(vault,route.storageRoot)))throw Error('Operational storage must be outside every synced vault.');
+    if(vaults.some(vault=>isPathInsideDirectory(vault,route.storageRoot,{relative,isAbsolute})))throw Error('Operational storage must be outside every synced vault.');
     await fs.mkdir(route.storageRoot,{recursive:true,mode:0o700});if(await fs.realpath(route.storageRoot)!==route.storageRoot)throw Error('Symlinked private storage.');
     const release=await lockfile.lock(route.storageRoot,{realpath:true,stale:30_000,update:5000,retries:{retries:8,minTimeout:250,maxTimeout:1000}}),releases:Array<()=>Promise<void>>=[];
     try{
@@ -97,6 +127,7 @@ export function ensurePrivateStorage(root:string,configDir:string,options?:{stor
 /** An unavailable registry is distinct from an unreadable or malformed one.
  * A stale missing vault does not stop checking the other registered vaults. */
 export async function registeredVaults(registryPath:string):Promise<string[]>{
+  await loadDesktop();
   let text:string;try{text=await fs.readFile(registryPath,'utf8');}catch(error){if(errorCode(error)==='ENOENT')return [];throw toError(error);}
   const registry=parseJson(text);if(!isRecord(registry)||!isRecord(registry.vaults))throw Error('Invalid Obsidian vault registry.');
   const roots:string[]=[];

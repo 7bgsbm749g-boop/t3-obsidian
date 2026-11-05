@@ -6,14 +6,14 @@ import {installDesktopContentHash} from '../src/connection/content-hash-desktop'
 
 const portable=(text:string)=>Buffer.from(sha256(new TextEncoder().encode(text))).toString('hex');
 
-test('native fingerprints match portable UTF-8 bytes including malformed UTF-16 and large whitespace-rich bodies',()=>{
+test('native fingerprints match portable UTF-8 bytes including malformed UTF-16 and large whitespace-rich bodies',async()=>{
   const texts=['','abc','café 🧪\r\n','\t    x\r\ny\n','\0\u0001','\ud800','\udfff','\ud800x\udc00','\ud800\udc00',
     '    function f() {\r\n\treturn "🧪";\r\n}\n'.repeat(20000)];
   let seed=12345;
   for(let i=0;i<100;i++){
     let value='';for(let j=0;j<1000;j++){seed=(Math.imul(seed,1664525)+1013904223)>>>0;value+=String.fromCharCode(seed>>>16);}texts.push(value);
   }
-  const expected=texts.map(portable),stop=installDesktopContentHash();
+  const expected=texts.map(portable),stop=await installDesktopContentHash();
   try{for(let i=0;i<texts.length;i++)assert.equal(contentHash(texts[i]),expected[i]);}finally{stop();}
   assert.equal(contentHash('abc'),'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
 });

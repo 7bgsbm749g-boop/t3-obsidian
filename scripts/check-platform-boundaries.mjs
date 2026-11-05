@@ -10,6 +10,8 @@ for(const file of files){
  const text=await readFile(file,'utf8');
  if(/eslint[^\n]*obsidianmd\/no-nodejs-modules/.test(text))throw Error(`Unsupported inline desktop-rule options in ${relative(root,file)}`);
  const source=ts.createSourceFile(file,text,ts.ScriptTarget.Latest,true),edges=[];
+ function check(node){if(ts.isCallExpression(node)&&ts.isIdentifier(node.expression)&&node.expression.text==='require')throw Error(`Use ES imports in ${relative(root,file)}`);ts.forEachChild(node,check)}
+ check(source);
  for(const declaration of source.statements){
   if(!ts.isImportDeclaration(declaration)&&!ts.isExportDeclaration(declaration)||!declaration.moduleSpecifier||!ts.isStringLiteral(declaration.moduleSpecifier)||declaration.isTypeOnly)continue;
   const clause=declaration.importClause;
@@ -17,8 +19,7 @@ for(const file of files){
   const name=declaration.moduleSpecifier.text;
   if(isBuiltin(name)){
    if(name==='buffer')throw Error(`${relative(root,file)} must select the browser buffer/ package explicitly`);
-   if(!/(?:^|\/)desktop(?:-|\.)|\-desktop\.ts$/.test(relative(root,file)))throw Error(`${relative(root,file)} has no explicit desktop boundary`);
-   nodeFiles.add(file);
+   throw Error(`${relative(root,file)} eagerly imports Node; use a guarded dynamic import instead`);
   }
   if(name.startsWith('.')){const prefix=resolve(dirname(file),name),target=[prefix,prefix+'.ts',join(prefix,'index.ts')].find(candidate=>known.has(candidate));if(target)edges.push(target)}
  }
@@ -26,4 +27,4 @@ for(const file of files){
 }
 const visited=new Set();function visit(file){if(visited.has(file))return;visited.add(file);if(nodeFiles.has(file))throw Error(`Portable entry eagerly loads ${relative(root,file)}`);for(const next of graph.get(file)??[])visit(next)}
 visit(join(root,'src/app/main.ts'));
-console.log(`Platform boundaries: ${visited.size} portable modules; ${nodeFiles.size} lazy desktop adapters; no eager Node imports.`);
+console.log(`Platform boundaries: ${visited.size} portable modules; all Node imports deferred and no require-style source imports.`);

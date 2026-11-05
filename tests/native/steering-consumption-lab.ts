@@ -35,7 +35,7 @@ export default class SteeringConsumptionLab extends Plugin {
   private async until(check:()=>Promise<boolean>|boolean,label:string,timeout=120_000){const deadline=Date.now()+timeout;do{if(await check())return;await pause(100);}while(Date.now()<deadline);throw Error('Timed out: '+label);}
   private async capture(name:string){await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));fs.writeFileSync(path.join(this.root,name),(await require('@electron/remote').getCurrentWebContents().capturePage()).toPNG());}
   private async run(){
-    const connection=desktopDefaults(),environmentId=await desktopEnvironment(connection);this.access=await desktopThreadAccess(connection);
+    const connection=(await desktopDefaults()),environmentId=await desktopEnvironment(connection);this.access=await desktopThreadAccess(connection);
     const api=(route:string,payload?:any)=>this.access!.api(route.startsWith('/api/')?route:'/api/orchestration/'+route,payload);
     const project=(readWireShell(await api('shell'))).projects.find((item:any)=>item.workspaceRoot==='/home/ubuntu/projects/send-to-t3-code');if(!project)throw Error('The plugin project is unavailable.');
     const requestId=crypto.randomUUID(),messageId=uuid5(requestId,'message'),id=crypto.randomUUID(),text='STEER_MOVE_CONFIRMED: Keep the final answer brief.';

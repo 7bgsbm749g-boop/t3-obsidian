@@ -45,9 +45,9 @@ export default class AutoContinuationLab extends Plugin {
   if(item.kind==='event'&&item.event.type==='thread.run-updated'&&item.event.payload?.id===this.sourceId)return {...item,event:{...item.event,payload:{...item.event.payload,status:'failed'}}};
   return item;
  }
- private async reader():Promise<ThreadAccess>{const access=await desktopThreadAccess(desktopDefaults());return {...access,api:async(route,payload)=>this.failedSource(await access.api(route,payload))};}
+ private async reader():Promise<ThreadAccess>{const access=await desktopThreadAccess((await desktopDefaults()));return {...access,api:async(route,payload)=>this.failedSource(await access.api(route,payload))};}
  private async run(){
-  const connection=desktopDefaults(),environmentId=await desktopEnvironment(connection);this.access=await desktopThreadAccess(connection);
+  const connection=(await desktopDefaults()),environmentId=await desktopEnvironment(connection);this.access=await desktopThreadAccess(connection);
   const api=async(route:string,payload?:any)=>{try{return await this.access!.api(route.startsWith('/api/')?route:'/api/orchestration/'+route,payload);}catch(error){throw Object.assign(error as Error,{route});}},project=await ensureNoProject(this.access.api);
   const requestId=crypto.randomUUID(),messageId=uuid5(requestId,'message'),id=crypto.randomUUID(),note='Auto continuation.md';this.threadId=uuid5(requestId,'thread');
   this.write('TEMPORARY-T3.json',{threadId:this.threadId,requestId,messageId,notePath:note});
