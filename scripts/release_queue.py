@@ -152,6 +152,11 @@ def submission(root: Path, canonical: Path, commit: str, *, bump: str = 'patch',
         raise SystemExit('Commit all intended task files before submitting; uncommitted files are not released.')
     commit = git(root, 'rev-parse', '--verify', '--end-of-options', commit + '^{commit}')
     canonical_commit = git(canonical, 'rev-parse', 'HEAD')
+    if validation:
+        candidate_version = json.loads(git(root, 'show', commit + ':manifest.json'))['version']
+        installed_version = json.loads(git(canonical, 'show', canonical_commit + ':manifest.json'))['version']
+        if not release_policy.newer(root, candidate_version, installed_version):
+            raise SystemExit('A development validation is not a prepared release. Enqueue without --validation so the queue assigns a new version and reuses matching checks.')
     context = integration_context(root, canonical_commit, queue)
     base = git(root, 'merge-base', context, commit)
     # Requests contain committed source only; no task can deploy another task's
@@ -324,6 +329,78 @@ def retry(job_id: str, *, replacement: dict | None = None, queue: Path = QUEUE) 
         write(directory / 'state.json', state)
         (queue / 'wake').touch()
     return {'jobId': job_id, **state}
+
+
+def recover_version_collision(release, canonical: Path, job_id: str, *, queue: Path = QUEUE) -> dict:
+    """Revert only an unshipped integration that selected another release's bytes.
+
+    A development validation was historically accepted as a prepared version.
+    Existing archives/receipts must remain immutable, including during recovery.
+    """
+    directory = job_path(queue, job_id)
+    journal_path = directory / 'version-collision-recovery.json'
+    with locked(queue / 'worker.lock', nonblocking=True), locked(release.BACKUPS / 'release.lock'), locked(queue / 'queue.lock'):
+        if journal_path.exists() and read(journal_path).get('status') == 'complete':
+            return {'jobId': job_id, 'status': 'already-recovered', 'journal': str(journal_path)}
+        state = read(directory / 'state.json')
+        if state['status'] not in {'failed', 'awaiting-smoke'} or state.get('integrationStyle') != 'squash':
+            raise SystemExit('Collision recovery requires a failed, unshipped squash integration.')
+        candidate = state.get('releaseCommit')
+        if not candidate or state.get('ownedIntegrations') != [{'commit': candidate, 'merge': False}]:
+            raise SystemExit('Collision recovery cannot prove one owned integration.')
+        version = state['version']
+        archive = release.archive_path(version)
+        receipt = release.release_receipt_dir(version) / 'deployment.json'
+        deployed = read(receipt)
+        archived_commit = deployed.get('gitCommit')
+        if not archived_commit or archived_commit == candidate or not ancestor(canonical, archived_commit, candidate):
+            raise SystemExit('These immutable bytes belong to this candidate, or their owner is unproven. Resume them; do not revert.')
+        archive_hash = release.sha256_file(archive)
+        receipt_hash = release.sha256_file(receipt)
+        if deployed.get('archiveSha256') != archive_hash:
+            raise SystemExit('The existing archive does not match its immutable receipt.')
+        if git(canonical, 'status', '--porcelain=v1'):
+            raise SystemExit('Canonical checkout contains uncommitted work.')
+        head = git(canonical, 'rev-parse', 'HEAD')
+        journal = read(journal_path) if journal_path.exists() else None
+        if not journal:
+            if not ancestor(canonical, candidate, head):
+                raise SystemExit('The owned integration is not on the canonical branch.')
+            owned_paths = set(git(canonical, 'diff-tree', '--no-commit-id', '--name-only', '-r', candidate).splitlines())
+            newer_paths = set(git(canonical, 'diff', '--name-only', candidate, head).splitlines())
+            if owned_paths & newer_paths:
+                raise SystemExit('Later changes overlap this integration. Automatic collision recovery stopped.')
+            journal = {'status': 'prepared', 'version': version, 'candidate': candidate,
+                       'archivedCommit': archived_commit, 'archiveSha256': archive_hash,
+                       'receiptSha256': receipt_hash, 'baseHead': head, 'beforeState': state.copy()}
+            write(journal_path, journal)
+        elif any(journal.get(key) != value for key, value in
+                 [('version', version), ('candidate', candidate), ('archiveSha256', archive_hash), ('receiptSha256', receipt_hash)]):
+            raise SystemExit('Collision recovery inputs changed.')
+        source = release.ROOT
+        release.ROOT = canonical
+        try:
+            if head == journal['baseHead']:
+                revert_owned(release, candidate)
+                reverted = git(canonical, 'rev-parse', 'HEAD')
+            elif (git(canonical, 'rev-parse', 'HEAD^') == journal['baseHead'] and
+                  f'This reverts commit {candidate}.' in git(canonical, 'show', '-s', '--format=%B', 'HEAD')):
+                reverted = head  # Crash after the journalled revert committed.
+            else:
+                raise SystemExit('Canonical HEAD moved outside the recovery journal.')
+            if release.sha256_file(archive) != archive_hash or release.sha256_file(receipt) != receipt_hash:
+                raise SystemExit('Immutable release verification changed during recovery.')
+            for key in ('version', 'releaseCommit', 'archive', 'deploymentReceipt'):
+                state.pop(key, None)
+            state.update(status='failed', ownedIntegrations=[], rollbackCommits=[reverted],
+                         versionCollisionRecovery=str(journal_path), failures=0,
+                         error='An unshipped integration selected an existing release version; it was reverted without changing those bytes.',
+                         nextAction='Retry corrected source without a development --validation argument.')
+            write(directory / 'state.json', state)
+            write(journal_path, {**journal, 'status': 'complete', 'revertCommit': reverted})
+            return {'jobId': job_id, 'status': 'recovered', 'revertCommit': reverted, 'immutableVersionPreserved': version}
+        finally:
+            release.ROOT = source
 
 
 def defer_memory(directory: Path, state: dict, memory: str, *, phase: str,
@@ -684,6 +761,10 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
             git(root, 'diff', '--name-only', '--no-renames', request['mergeBase'], request['commit']).splitlines())}
     version = state.get('version')
     deployed = version and (release.release_receipt_dir(version) / 'deployment.json').is_file()
+    if deployed and state.get('integrationStyle') == 'squash' and state.get('releaseCommit'):
+        owner = read(release.release_receipt_dir(version) / 'deployment.json').get('gitCommit')
+        if owner != state['releaseCommit']:
+            raise SystemExit('Another release owns this deployment. Use --recover-version-collision; its archive and client proof cannot satisfy this job.')
     if not request.get('maintenanceOnly') and not request.get('evidence') and not version:
         update(directory, state, status='needs-evidence',
                nextAction='Supply changed-behavior evidence with --retry-queued --replacement before publication. Later jobs continue.')

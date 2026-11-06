@@ -18,6 +18,56 @@ SPEC.loader.exec_module(publisher)
 
 
 class ReleaseQueueTests(unittest.TestCase):
+    def test_development_validation_cannot_reuse_the_canonical_release_version(self):
+        source = self.source('development-proof')
+        proof = self.directory / 'development-validation.json'; proof.write_text('{}')
+        with self.assertRaisesRegex(SystemExit, 'development validation'):
+            queue.enqueue(source, self.root, 'HEAD', validation=proof, queue=self.store)
+        self.assertFalse((self.store / 'jobs').exists())
+
+    def test_collision_recovery_preserves_archives_and_reverts_only_the_unshipped_integration(self):
+        original = self.git('rev-parse', 'HEAD')
+        archive = self.release.archive_path('1.0.0'); archive.write_text('original immutable bytes')
+        receipt = self.release.release_receipt_dir('1.0.0') / 'deployment.json'
+        queue.write(receipt, {'version': '1.0.0', 'gitCommit': original, 'archiveSha256': self.release.sha256_file(archive)})
+        before = (archive.read_bytes(), receipt.read_bytes())
+        source = self.source('bad-prepared'); job = self.submit(source)
+        directory = self.store / 'jobs' / job['jobId']; state = queue.read(directory / 'state.json')
+        legacy = {**queue.read(directory / 'request.json'), 'validation': 'historically-accepted-development-proof'}
+        queue.integrate_job(self.release, directory, legacy, state)
+        candidate = state['releaseCommit']; self.assertEqual(state['version'], '1.0.0')
+        queue.update(directory, state, status='awaiting-smoke')
+        with self.assertRaisesRegex(SystemExit, 'Another release owns'):
+            queue.run_job(self.release, directory, legacy, state, queue.engine_hash(self.root))
+        (self.root / 'scripts').mkdir(); (self.root / 'scripts/repair.py').write_text('# separate reviewed tooling repair')
+        self.git('add', '.'); self.git('commit', '-qm', 'maintenance repair')
+        result = queue.recover_version_collision(self.release, self.root, job['jobId'], queue=self.store)
+        self.assertEqual(result['immutableVersionPreserved'], '1.0.0')
+        self.assertFalse((self.root / 'bad-prepared.ts').exists()); self.assertTrue((self.root / 'scripts/repair.py').exists())
+        self.assertEqual((archive.read_bytes(), receipt.read_bytes()), before)
+        self.assertTrue(queue.ancestor(self.root, candidate, 'HEAD'))
+        recovered = queue.read(directory / 'state.json'); self.assertNotIn('version', recovered); self.assertEqual(recovered['ownedIntegrations'], [])
+        head = self.git('rev-parse', 'HEAD')
+        self.assertEqual(queue.recover_version_collision(self.release, self.root, job['jobId'], queue=self.store)['status'], 'already-recovered')
+        self.assertEqual(self.git('rev-parse', 'HEAD'), head)
+        corrected = self.source('corrected'); subprocess.run(['git', 'cherry-pick', queue.git(source, 'rev-parse', 'HEAD')], cwd=corrected, check=True, capture_output=True)
+        replacement = queue.submission(corrected, self.root, 'HEAD', evidence=self.evidence, notes='same verified behavior', queue=self.store)
+        queue.retry(job['jobId'], replacement=replacement, queue=self.store); queue.drain(self.release, queue=self.store)
+        self.assertEqual(self.published, ['1.0.1'])
+        self.assertEqual((archive.read_bytes(), receipt.read_bytes()), before)
+        self.assertTrue((self.root / 'bad-prepared.ts').exists())
+
+    def test_collision_recovery_refuses_to_revert_a_candidate_that_owns_its_release(self):
+        source = self.source('owned-release'); job = self.submit(source); directory = self.store / 'jobs' / job['jobId']
+        state = queue.read(directory / 'state.json'); queue.integrate_job(self.release, directory, queue.read(directory / 'request.json'), state)
+        self.publish(None, False, state['version'])
+        receipt = self.release.release_receipt_dir(state['version']) / 'deployment.json'; value = queue.read(receipt)
+        value['archiveSha256'] = self.release.sha256_file(self.release.archive_path(state['version'])); queue.write(receipt, value)
+        queue.update(directory, state, status='awaiting-smoke'); head = self.git('rev-parse', 'HEAD')
+        with self.assertRaisesRegex(SystemExit, 'belong to this candidate'):
+            queue.recover_version_collision(self.release, self.root, job['jobId'], queue=self.store)
+        self.assertEqual(self.git('rev-parse', 'HEAD'), head)
+
     def test_finished_source_cleanup_retries_busy_checkout_and_rechecks_resolved_blocker(self):
         source = self.source('finished-source')
         submitted = self.submit(source)

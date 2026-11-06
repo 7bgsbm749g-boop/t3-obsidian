@@ -752,6 +752,7 @@ def parser() -> argparse.ArgumentParser:
     action.add_argument('--bootstrap-queue', metavar='JOB_ID', help='Integrate a queued, reviewed tooling repair when the canonical worker cannot start; never publish here.')
     action.add_argument('--install-queue', action='store_true', help='Install the event-driven local queue worker once.')
     action.add_argument('--retry-queued', metavar='JOB_ID', help='Resume recovery or retry a repaired candidate; retain immutable release bytes.')
+    action.add_argument('--recover-version-collision', metavar='JOB_ID', help='Revert one proven unshipped queue integration that selected an existing immutable release; preserve that release.')
     action.add_argument('--wait-for-memory', metavar='JOB_ID', help='Defer unintegrated native verification with an automatic recovery watch.')
     action.add_argument('--probe-memory', metavar='JOB_ID', help='Read or run a due memory probe; preserve backoff and evidence requirements.')
     result.add_argument('--memory-budget', help='With --wait-for-memory: the refused allowance, such as 768M.')
@@ -815,12 +816,14 @@ def dispatch(args: argparse.Namespace) -> None:
         print(json.dumps(result, indent=2))
         release_queue.kick()
         return
-    if args.queue_status or args.install_queue or args.drain_queue or args.retry_queued or args.bootstrap_queue or args.wait_for_memory or args.probe_memory:
+    if args.queue_status or args.install_queue or args.drain_queue or args.retry_queued or args.bootstrap_queue or args.wait_for_memory or args.probe_memory or args.recover_version_collision:
         if args.prepare or args.allow_dirty or args.skip_tests_reason or args.skip_laptop_reload or args.base or args.device:
             raise SystemExit('Queue management accepts only its action and job ID.')
         if (args.validation or args.evidence or args.notes) and not (args.retry_queued and args.replacement):
             raise SystemExit('Replacement evidence is valid only with --retry-queued and --replacement.')
-        if args.wait_for_memory:
+        if args.recover_version_collision:
+            print(json.dumps(release_queue.recover_version_collision(sys.modules[__name__], CANONICAL_ROOT, args.recover_version_collision), indent=2))
+        elif args.wait_for_memory:
             if not args.memory_budget or not args.resume_task_id:
                 raise SystemExit('Supply --memory-budget and the returned native --resume-task-id; verification must have an automatic owner.')
             print(json.dumps(release_queue.wait_for_memory(args.wait_for_memory, args.memory_budget, args.resume_task_id), indent=2))
@@ -904,7 +907,7 @@ def main() -> None:
         if release_policy.order_key(ROOT, read_json(QLO2_PLUGIN / 'manifest.json')['version']) > release_policy.order_key(ROOT, args.complete_smoke):
             dispatch(args)
             return
-    if args.prepare or args.enqueue or args.queue_status or args.install_queue or args.drain_queue or args.retry_queued or args.bootstrap_queue:
+    if args.prepare or args.enqueue or args.queue_status or args.install_queue or args.drain_queue or args.retry_queued or args.bootstrap_queue or args.recover_version_collision:
         dispatch(args)
     else:
         with change_checks.lock(BACKUPS / 'release.lock'):
