@@ -1,93 +1,131 @@
 ---
 name: obsidian-t3
-description: "Edit Obsidian notes through the t3-obsidian MCP tools when a message sent from Obsidian asks for note changes. Use for creating, editing, moving, renaming or settling notes. A source footer alone does not request a note edit; normal conversation replies stream into Obsidian automatically."
+description: "Manipulate or edit Obsidian notes only when BOTH conditions hold: the message was sent from Obsidian, and the user explicitly or implicitly asks to change notes (for example, create, rewrite, insert, replace, move, rename, settle, or organize them). Agents may invoke this skill when both conditions hold. An Obsidian source footer alone never triggers it. Do not use for ordinary chat, questions, explanations, or code/repository work that does not request note changes."
 ---
 
-# Checked Obsidian note edits
+# Obsidian notes through T3 Connect
 
-Use the `t3-obsidian` MCP tools for a requested note change. `Sent from Obsidian.`,
-`Vault:` and `Note:` identify the source. A source footer alone grants no editing
-permission. For an ordinary answer, reply in the current conversation: the plugin
-streams and saves it. Do not append another copy to the note.
+Use this skill when the user's message comes from Obsidian and asks for a note
+change. `Sent from Obsidian.`, `Vault:` and `Note:` identify the source; the
+footer alone gives no permission to edit or send. For ordinary replies, answer
+in the existing thread using the supplied text. The plugin streams and saves
+that answer. Do not append a second copy to a note.
 
-The MCP server runs on the T3 machine. The running Obsidian plugin receives its
-requests through authenticated T3 Connect and uses native editing APIs. Keep
-Obsidian open and connected to the machine running these tools. Mobile delivery
-while the app is in the background is not guaranteed.
+Use checked requests to the running plugin for note changes. The agent can be
+on another machine. The plugin accesses request files through authenticated T3
+Connect, then edits notes with Obsidian's editor and vault APIs. No incoming
+laptop connection, Obsidian CLI, vault filesystem write, or Sync command
+fallback is needed. The relevant Obsidian client must remain open and connected.
+Mobile background delivery is not guaranteed.
 
-## Choose the exact client and note
+The maintained helper is
+`scripts/obsidian-command.py` in this skill’s owning repository. Resolve the
+installed skill directory to its real path; the repository is two directories
+above that directory. In the examples, replace `REPOSITORY` with that root.
+Run it on the T3 machine handling this conversation. `--vault` accepts the exact
+vault name or UUID; an absolute local vault path can identify a desktop client.
+It reads only client registrations outside the vault. Its default transport
+root is the T3 base directory's `scratch` workspace. For a different No project
+workspace, get the exact root from T3's project metadata and pass
+`--transport-root ROOT`. Do not infer a vault path from a project checkout.
 
-Use the exact `vault` name or UUID from the source context. If several clients
-match, call `connected_clients` and select the intended `clientId`. Never send
-the same edit to multiple devices, guess another vault after a failed lookup,
-or use direct filesystem edits to bypass a refusal.
+If more than one client matches, use `connected-clients` to get the nonsecret
+client IDs and pass `--client-id ID`. Select the intended device; do not send the
+same mutation to several devices. Never display registration tokens. Request
+and edit files belong on the T3 machine outside every vault.
 
-For a request about a sent note or its reply, call `note_context` with `notePath`
-or exact `threadId`, `messageId` and `environmentId`. The source note and reply
-destination can differ. Use the returned destination path and binding UUID; a
-thread ID is not a response binding.
+## Read the right note and reply destination
 
-## Prepare and submit
+For a request about the original send or its reply, use `note-context NOTE.md`.
+Add `--thread-id`, `--message-id`, and `--environment-id` when several sends
+match. This returns the exact source and response bindings, including destination
+note paths. The source note and the reply destination can differ.
 
-1. Call `prepare_note_edit` with the exact `notePath`. Include `bindingId` for
-   an active response. This returns `editId`, `original`, `originalHash`, and
-   protected response IDs. Use that original text as the editing base.
-2. Change only the requested ordinary note content. Preserve all active reply
-   frames, their boundaries, bytes, and order exactly. Do not incorporate your
-   still-streaming answer into a second copy of the note.
-3. Call `submit_note_edit` with `editId`, the returned `originalHash`, and the
-   complete `proposed` Markdown (at most 1 MB). Use a stable `requestId` UUID.
+To obtain current content for an edit, use `prepare-note-edit`. Pass an active
+`--binding-id` when the destination contains a response block. Do not guess a
+binding, use a thread ID as a binding, or read another vault after a lookup fails.
 
-For an ordinary note, a successful checked write can report `saved` immediately.
-For a streaming reply, `submitted` means the proposal is attached to the safe
-final save. It does not mean the note has been saved. Submit before finishing
-the current reply; waiting inside that reply for its own final save would prevent
-completion. Report the confirmed state accurately. `note_edit_status` can later
-confirm the actual save.
+## Prepare and submit a checked edit
 
-Compatible user edits made since preparation are merged. Overlapping changes
-preserve both versions and block the save. Stop still reaches T3 and retains the
-frozen reply for the same checked save path. If a reply finished, moved or changed
-before submission, prepare the current note again and review the retained
-proposal. Never force a raw vault write.
+```sh
+python3 REPOSITORY/scripts/obsidian-command.py \
+  --vault VAULT --output /agent/work/edit.json \
+  prepare-note-edit 'Folder/Note.md' --binding-id BINDING_ID
+```
 
-Unconfirmed commands return their request UUID. Reuse the exact `requestId` and
-input; do not issue the same mutation under a new UUID. Set `retry` only after a
-confirmed failure and inspection. Ambiguous execution cannot automatically replay.
-Keep IDs unique across different operations; completed receipts are retained
-for 24 hours.
+Omit `--binding-id` for an ordinary note with no active response. The JSON result
+contains `editId`, `original`, `originalHash`, and protected response IDs. Save
+`original` exactly to an agent-owned working copy outside the vault. Edit that
+copy. Preserve every active response block, its boundaries and order exactly;
+change only the requested ordinary note content.
 
-## Create, move or rename
+```sh
+python3 REPOSITORY/scripts/obsidian-command.py \
+  --vault VAULT --request-id SUBMIT_UUID \
+  submit-note-edit --edit-id EDIT_ID --hash ORIGINAL_HASH \
+  --proposed-file /agent/work/proposed.md
+```
 
-`create_note` takes an exact new `notePath` and complete `proposed` Markdown.
-The parent folders must exist. Existing destinations and response frames are
-refused. `rename_note` takes the source `notePath`, new `destination`, and its
-current `originalHash` from preparation. Obsidian performs the rename and native
-link updates. Rename before preparing a content proposal for the new path.
+For a streaming reply, `status: submitted` means the proposal is attached to its
+safe final save. It does not mean the note has been saved. Compatible user edits
+made since preparation are merged. Conflicts preserve both the note and proposal
+and stop that save. Stop still reaches T3 and uses the same checked final-save
+path for a frozen reply.
 
-For a request to settle a note, use the project's existing Settled folder and
-prepend the version actually delivered to its existing title. Preserve content
-and response anchors. A move does not require an unrelated content change.
+Submit **before finishing the current reply**. Waiting for that reply's final
+save inside the still-running reply can prevent it from finishing. Say the edit
+is submitted when that is the confirmed state. A later
+`note-edit-status --edit-id EDIT_ID` can confirm `saved`. Ordinary notes can save
+immediately through a checked write. If the reply finished, moved, or changed
+before submission, prepare the current note again and review the preserved
+proposal. Never replace a failed merge with a raw vault write.
 
-## Conflicts and retained replies
+Keep the same request UUID for an unconfirmed retry. Use `--retry` only after a
+confirmed failure and inspection. An interrupted dispatch stays ambiguous and
+cannot execute again automatically. Do not create a replacement send to work
+around a missing acknowledgement. Completed command receipts remain private
+for 24 hours; never reuse old request IDs for new work.
 
-`note_edit_status` returns the current note checksum. After inspecting the note,
-`cancel_note_edit` with `editId` and `hash` withdraws only the pending proposal;
-it does not undo saved text. `response_recovery_info` returns the current hash
-for a frozen reply. After reviewing conflicts, `retry_response_save` with the
-exact `bindingId` and `hash` retries its checked save without another prompt or
-remote Stop. None of these commands force an overwrite.
+## Create, move, or rename
 
-## Other requested operations
+`create-note 'Folder/New.md' --proposed-file /agent/work/new.md` creates an
+ordinary Markdown note through Obsidian and refuses an existing destination.
+The parent folder must exist. It cannot create response blocks.
 
-`send_note` starts T3 work and requires an explicit request to send a note.
-`attach_response` imports an existing exact thread/message without a new prompt.
-Do not use either to save a normal conversation answer. Read-only `client_status`
-and `response_status` check the selected client or response. `inspect_folder`,
-`link_folder`, and `unlink_folder` manage an explicitly selected folder's project
-routing. Linking requires verified project, connection and environment IDs.
+For a move or rename, prepare the source first and use its current checksum:
+`rename-note 'Draft/Note.md' --note-path 'Settled/VERSION Note.md' --hash HASH`.
+Obsidian performs the rename and normal link updates; an existing destination or
+changed source is refused. A settle request uses the project's existing Settled
+folder and prepends the version actually delivered to the existing title.
+Preserve note content and response anchors. Rename before preparing a content
+proposal so its snapshot uses the final path.
 
-If these MCP tools are unavailable, the plugin's Settings → Connection → Agent
-tools can configure Codex or Claude Code on the selected T3 machine. A new agent
-session loads the setup. Do not silently substitute the old local server,
-Obsidian CLI, vault scans, or Sync as a command queue.
+## Other explicit plugin operations
+
+Use `--help` for complete current arguments. Note sends require an actual user
+request to send: `send-note NOTE.md` creates or continues a T3 conversation;
+`attach-response NOTE.md --thread-id THREAD --message-id MESSAGE` attaches an
+existing reply without sending another prompt. Destinations use repeated
+`--destination NOTE.md` and optional `--destination-section HEADING`.
+
+`inspect-folder`, `link-folder`, and `unlink-folder` manage project routing.
+Linking requires exact project, connection and environment IDs. Thread-wide
+following remains explicit: `stream-thread --stream-scope thread` with source
+IDs and destinations; `thread-streams` lists its registrations. Pausing,
+resuming, cancelling and removing one destination do not dispatch prompts.
+Automatic note, property, folder and job event subscriptions have been removed.
+
+Read-only response status and explicit response recovery commands remain.
+`client-status` and `send-failure-log` do not change notes. `reload-client` is a
+maintainer operation for an authorized exact release; it requires complete
+runtime hashes. An acknowledgement is not proof that the new client loaded.
+The external helper retains only the old maintenance endpoint for upgrading an
+older installed client; note edits and sends always use the connected protocol.
+
+A conflicting proposal can be withdrawn with `cancel-note-edit --edit-id EDIT_ID
+--hash CURRENT_HASH`. Read `note-edit-status` first to obtain the current note
+checksum. This removes only the pending proposal; it does not undo saved text.
+To save a retained frozen reply, use `response-recovery-info --binding-id ID`,
+then `retry-response-save --binding-id ID --hash CURRENT_HASH`. The same checked
+writer runs again without sending input or another remote Stop. Conflicting
+text must be reviewed; these commands never force an overwrite.

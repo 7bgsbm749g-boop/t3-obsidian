@@ -51,11 +51,6 @@ single documentation commit with `python3 scripts/integrate_docs.py COMMIT`.
 This runs a normal Git cherry-pick under the repository lock, not the release
 queue. Mixed product changes still require the product release process.
 
-The MCP editing skill and server are bundled product assets. Changes to
-`skills/obsidian-t3/SKILL.md`, `agent/mcp_server.py`, or its transport that change
-the installed agent integration use the product checks and release path. Keep
-that skill self-contained: a library installation has no repository checkout.
-
 ## GitHub pushes and publication
 
 `push`, `push to GitHub`, and `push to main` mean upload reviewed commits only.

@@ -1,28 +1,5 @@
 # Checked agent note edits
 
-Community-library installations include the optional agent setup under
-Settings → Connection → Agent tools. It uploads the reviewed stdlib-only Python
-MCP server, checked transport and skill through T3's existing file APIs. It
-requires Python 3.10 or later on the selected T3 machine. No repository clone, package
-download, incoming endpoint, or plugin-side program execution is involved.
-
-The selected Codex or Claude Code instance receives an additional MCP launch
-configuration through T3's settings API. Existing options, other instances and
-credential-redaction markers are preserved. Conflicting custom MCP launch
-options and changed setup receipts stop installation rather than overwrite user
-configuration. Source files are checked after upload and kept under immutable
-content hashes in `.t3-obsidian/agent-tools/`. A prepared receipt supports an
-interrupted setup; removal restores the recorded launch arguments only while
-they still match. It does not delete files a running agent may use.
-
-The agent runtime starts the stdio server in a new session. The server supplies
-the maintained skill in its initialize instructions, resource, prompt and
-`instructions` tool, so no separate skill installation is needed. Setup reports
-configuration separately from a verified MCP initialize handshake. Existing
-agent sessions need a new session to load the tools. There is no claim of a
-working runtime merely because configuration was written. Other provider kinds
-remain explicit unsupported choices for automatic setup.
-
 Agents exchange data with the running Obsidian plugin through the existing T3
 Connect file APIs. The plugin makes outbound authenticated connections; it
 opens no incoming command port and executes no local program. No T3 server

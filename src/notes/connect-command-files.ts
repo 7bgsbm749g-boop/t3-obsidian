@@ -5,10 +5,10 @@ import {COMMAND_DIRECTORY,COMMAND_MAX_BYTES,type CommandFiles} from './connect-c
 
 type Rpc={call(tag:string,payload:unknown):Promise<unknown>};
 const CHUNK_BYTES=24_000;
+function checked(path:string){if(!path.startsWith(COMMAND_DIRECTORY+'/')||path.length>1000||!/^[a-zA-Z0-9_./-]+$/.test(path)||path.split('/').some(part=>!part||part==='.'||part==='..'))throw Error('Invalid Obsidian transport path.');return path;}
 /** T3 bounds text reads. Large snapshots use immutable, checksum-addressed
  * chunks so a truncated read can never become a valid edit proposal. */
-function scopedFiles(rpc:Rpc,workspaceRoot:string,directory:string):CommandFiles {
-  function checked(path:string){if(!path.startsWith(directory+'/')||path.length>1000||!/^[a-zA-Z0-9_./-]+$/.test(path)||path.split('/').some(part=>!part||part==='.'||part==='..'))throw Error('Invalid Obsidian transport path.');return path;}
+export function connectCommandFiles(rpc:Rpc,workspaceRoot:string):CommandFiles {
   const rawRead=async(path:string)=>{
     try{
       const result=await rpc.call('projects.readFile',{cwd:workspaceRoot,relativePath:checked(path)});
@@ -47,6 +47,3 @@ function scopedFiles(rpc:Rpc,workspaceRoot:string,directory:string):CommandFiles
     },
   };
 }
-export function connectCommandFiles(rpc:Rpc,workspaceRoot:string):CommandFiles{return scopedFiles(rpc,workspaceRoot,COMMAND_DIRECTORY);}
-/** Separate allowlisted scope: installing agent tools never widens commands. */
-export function connectAgentFiles(rpc:Rpc,workspaceRoot:string):CommandFiles{return scopedFiles(rpc,workspaceRoot,'.t3-obsidian/agent-tools');}
