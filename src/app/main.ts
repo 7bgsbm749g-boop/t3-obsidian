@@ -1,6 +1,9 @@
 import {forEachBounded} from '../shared/bounded-work';
+import {AgentSetup,type AgentProvider} from '../agents/setup';
+import {agentAssets,agentBundleHash} from '../agents/assets';
+import {AgentToolsSettings} from '../agents/settings';
 import {ConnectCommandHost,commandBase,type CommandFiles,type CommandRoute} from '../notes/connect-command-host';
-import {connectCommandFiles} from '../notes/connect-command-files';
+import {connectAgentFiles,connectCommandFiles} from '../notes/connect-command-files';
 import {CheckedNoteEdits,isNoteEditCommand,checkedStageDraft,type EditSnapshot} from '../notes/checked-note-edits';
 import {connectT3Rpc} from '../connection/t3-rpc';
 import {ThreadDisplays,isThreadCommand,type ThreadDisplayResult} from '../conversations/thread-displays';
@@ -1675,6 +1678,19 @@ export default class SendToT3 extends Plugin {
     const cached=this.commandProjects.get(environmentId);if(cached)return cached;
     const access=await this.inlineThreadAccess(environmentId);try{const project=await ensureNoProject(access.api);this.commandProjects.set(environmentId,project);return project;}finally{await access.close?.();}
   }
+  agentToolMachines(){return [...new Map(this.settings.paired.map(connection=>[connection.environmentId,{id:connection.environmentId,name:connection.name}])).values()];}
+  private async withAgentTools<T>(environmentId:string,action:(setup:AgentSetup)=>Promise<T>):Promise<T>{
+    if(!this.settings.paired.some(connection=>connection.environmentId===environmentId))throw Error('Connect the selected T3 machine first.');
+    const access=await this.inlineThreadAccess(environmentId);let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
+    try{
+      const project=await this.commandProject(environmentId);rpc=await connectT3Rpc(access.api,access.origin);
+      return await action(new AgentSetup(rpc,connectAgentFiles(rpc,project.workspaceRoot),environmentId,project.workspaceRoot,{files:agentAssets,hash:agentBundleHash}));
+    }finally{rpc?.close();await access.close?.();}
+  }
+  agentToolsInspect(environmentId:string){return this.withAgentTools(environmentId,setup=>setup.inspect());}
+  agentToolsInstall(environmentId:string,provider:AgentProvider,runtime:string){return this.serializeCommand(()=>this.withAgentTools(environmentId,setup=>setup.install(provider,runtime)));}
+  agentToolsRemove(environmentId:string,provider:AgentProvider){return this.serializeCommand(()=>this.withAgentTools(environmentId,setup=>setup.remove(provider)));}
+  agentToolsStatus(environmentId:string,provider:AgentProvider){return this.withAgentTools(environmentId,setup=>setup.status(provider));}
   private async commandFiles(route:CommandRoute):Promise<CommandFiles>{
     const project=await this.commandProject(route.environmentId);
     if(!sameWorkspacePath(project.workspaceRoot,route.workspaceRoot)||!new RegExp('^\\.t3-obsidian/clients/'+this.settings.vaultId+'/[0-9a-f-]{36}$','i').test(route.base))throw Error('The edit transport belongs to another vault or T3 workspace.');
@@ -2856,6 +2872,7 @@ class FolderLinkModal extends Modal{
 // Plain metadata for native indexed settings.
 interface SettingsRow {name:string;desc?:string;aliases?:string[];render:(setting:Setting)=>void}
 export class T3Settings extends PluginSettingTab {
+  private agentTools?:AgentToolsSettings;
   constructor(app:App,private plugin:SendToT3){super(app,plugin);}
   /** Native indexed settings on supported Obsidian clients. */
   getSettingDefinitions():SettingDefinitionItem[]{
@@ -2869,7 +2886,14 @@ export class T3Settings extends PluginSettingTab {
     ];
   }
   refresh(){this.update();}
-  private connectionDefinitions():Array<SettingsRow>{return [{name:'T3 account',aliases:['Sign in','T3 account email','Email verification code','Refresh connections','Sign out'],render:setting=>{setting.settingEl.empty();setting.settingEl.removeClass('setting-item');this.cloudUI(setting.settingEl);}}];}
+  private connectionDefinitions():Array<SettingsRow>{return [
+    {name:'T3 account',aliases:['Sign in','T3 account email','Email verification code','Refresh connections','Sign out'],render:setting=>{setting.settingEl.empty();setting.settingEl.removeClass('setting-item');this.cloudUI(setting.settingEl);}},
+    {name:'Agent tools',aliases:['MCP','Skill','Set up agent','Safe note editing'],render:setting=>{
+      setting.settingEl.empty();setting.settingEl.removeClass('setting-item');
+      this.agentTools??=new AgentToolsSettings({machines:()=>this.plugin.agentToolMachines(),inspect:id=>this.plugin.agentToolsInspect(id),install:(id,provider,runtime)=>this.plugin.agentToolsInstall(id,provider,runtime),remove:(id,provider)=>this.plugin.agentToolsRemove(id,provider),status:(id,provider)=>this.plugin.agentToolsStatus(id,provider)});
+      this.agentTools.render(setting.settingEl);
+    }},
+  ];}
   private selectedMachine:CloudMachine|null=null;
   private readonly expanded=new Set<string>();
   showConnection(){}
