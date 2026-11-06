@@ -11,9 +11,10 @@ from pathlib import Path
 import subprocess
 
 try:
-    from . import release_policy
+    from . import release_policy, maintainer_config
 except ImportError:
     import release_policy
+    import maintainer_config
 
 ACTUAL = 'Published alpha version'
 
@@ -34,7 +35,7 @@ def file_hash(path):
 
 
 def initialize(root: Path, seed: Path | None = None) -> Path:
-    directory = root / 'evidence/version-history'
+    directory = maintainer_config.evidence_root(root) / 'version-history'
     state = directory / 'history.json'
     if state.exists():
         return state
@@ -123,6 +124,12 @@ def refresh(release, job: Path, request: dict, version: str, *, seed: Path | Non
 
 
 def mirror_allowed(root: Path, directory: Path) -> bool:
+    external = maintainer_config.evidence_root(root)
+    resolved = directory.resolve()
+    if maintainer_config.configuration(root).get('evidenceRoot'):
+        # Existing mirrors moved with the evidence store. Never recreate an old
+        # checkout, escape this project's store, or admit a different project.
+        return directory.is_dir() and resolved.is_relative_to(external)
     # Register only existing evidence directories inside a checkout of this
     # same repository. Never recreate a removed worktree or follow symlinks.
     if not directory.is_dir() or directory.is_symlink() or directory.parent.name != 'evidence':
@@ -160,7 +167,7 @@ def render(root: Path, state: dict) -> None:
                     'Delivery / evidence status': record['status'] + '; source ' + record['sourceCommit'] + '; queue job ' + record['jobId']})
         rows.append(row)
         threads.append(dict(row))
-    directories = [root / 'evidence/version-history']
+    directories = [maintainer_config.evidence_root(root) / 'version-history']
     directories.extend(Path(p) for p in state.get('mirrors', []) if mirror_allowed(root, Path(p)))
     for directory in dict.fromkeys(directories):
         directory.mkdir(parents=True, exist_ok=True)

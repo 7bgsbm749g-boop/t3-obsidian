@@ -12,6 +12,10 @@ never committed. `T3_OBSIDIAN_MAINTAINER_CONFIG` can select a different local fi
 The JSON object accepts these local values:
 
 - `canonicalRoot`: the integration checkout's absolute path.
+- `evidenceRoot`: an absolute directory outside every source checkout, shared by
+  the project's linked worktrees. Release locks, queues, checks, receipts, and
+  private version tables use this location. Existing legacy symlinks can retain
+  historical paths while new evidence uses the external directory directly.
 - `developmentPlugins` and `productionPlugins`: the plugin-parent directories in
   the development and production vaults. Existing device settings are preserved.
 - `obsidianCli`: the local Obsidian Sync CLI executable.
@@ -66,6 +70,15 @@ requests removal through T3, then removes the local branch. Active processes,
 pending T3 work, uncommitted files, unexpected ignored files, other checkouts,
 and newer branch commits prevent removal. Cleanup status is retained in the job.
 Historical requests without the source-branch record are not deleted in bulk.
+
+After a fresh native T3 idle check, a finished clean task branch can be aligned
+with its exact integrated commit once that commit is on `origin/main`. The
+original source stays reachable through private queue refs. A Git ref transaction
+rejects a newer commit racing the check; local edits and colliding ignored files
+also block alignment. This clears already-published changes from T3's branch
+comparison without changing published history. Retained files can still prevent
+checkout removal after alignment. An external evidence compatibility symlink
+can be removed with the checkout; its external target is preserved.
 
 The existing queue retry timer retries busy checkout cleanup with bounded
 backoff. The queue's directory watch also wakes when Git worktrees are removed.

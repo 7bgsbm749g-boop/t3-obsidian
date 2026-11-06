@@ -9,6 +9,7 @@ import re
 import subprocess
 import zipfile
 from release_policy import release_title
+import maintainer_config
 
 REPO = '7bgsbm749g-boop/t3-obsidian'
 ASSETS = ('main.js', 'manifest.json', 'styles.css')
@@ -17,14 +18,6 @@ CANONICAL = Path('/home/ubuntu/projects/send-to-t3-code')
 
 def checksum(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
-
-
-def publication_directory(project_root: Path, requested: Path) -> Path:
-    evidence = requested.resolve()
-    # Existing project links identify the approved external evidence store.
-    if not evidence.is_relative_to((project_root / 'evidence').resolve()):
-        raise ValueError('Keep publication evidence inside the configured project evidence directory.')
-    return evidence
 
 
 def require_delivery(directory: Path, version: str) -> dict:
@@ -48,6 +41,13 @@ def attestation_command(gh: str, asset: Path, version: str, commit: str) -> list
             '--signer-workflow', REPO + '/.github/workflows/release-provenance.yml', '--format', 'json']
 
 
+def publication_directory(root: Path, destination: Path) -> Path:
+    evidence = destination.resolve()
+    if not evidence.is_relative_to(maintainer_config.evidence_root(root)):
+        raise ValueError('Keep publication evidence inside the configured external project evidence directory.')
+    return evidence
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('version')
@@ -59,7 +59,7 @@ def main():
     root = Path(__file__).resolve().parent.parent
     evidence = publication_directory(root, args.evidence)
     evidence.mkdir(parents=True, exist_ok=False)
-    receipt = require_delivery(CANONICAL / 'evidence/releases' / args.version, args.version)
+    receipt = require_delivery(maintainer_config.evidence_root(CANONICAL) / 'releases' / args.version, args.version)
     commit = receipt['gitCommit']
     archive = Path(receipt['archive'])
     if checksum(archive.read_bytes()) != receipt['archiveSha256']:

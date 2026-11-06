@@ -22,7 +22,7 @@ except ImportError:
     import maintainer_config
     import source_cleanup
 
-QUEUE = maintainer_config.canonical_root() / 'evidence/release-queue'
+QUEUE = maintainer_config.evidence_root() / 'release-queue'
 UNIT = maintainer_config.setting('releaseQueueUnit', 'send-to-t3-release-queue')
 JOB_ID = re.compile(r'^\d{12}-[0-9a-f]{16}$')
 VERSION_FILES = {'package.json', 'package-lock.json', 'manifest.json', 'versions.json'}
@@ -34,7 +34,7 @@ def maintenance_only(names: list[str]) -> bool:
     return bool(names) and all(name.startswith(('scripts/', 'tests/', 'docs/')) or
                                (name.startswith('.github/workflows/') and Path(name).suffix in {'.yml', '.yaml'}) or
                                (name.startswith('skills/') and Path(name).suffix == '.md') or
-                               name in {'AGENTS.md', 'README.md', 'LICENSE'} for name in names)
+                               name in {'AGENTS.md', 'README.md', 'LICENSE', '.gitignore'} for name in names)
 
 
 def now() -> str:
@@ -618,7 +618,7 @@ def merged_tree(root: Path, context: str, source: str, directory: Path) -> str:
 
 def engine_hash(root: Path) -> dict:
     return {name: hashlib.sha256((root / 'scripts' / name).read_bytes()).hexdigest()
-            for name in ('release-qlo2.py', 'release_queue.py', 'release_memory.py', 'release_policy.py', 'release_history.py', 'change_checks.py', 'plugin_id_migration.py')
+            for name in ('release-qlo2.py', 'release_queue.py', 'release_memory.py', 'release_policy.py', 'release_history.py', 'change_checks.py', 'plugin_id_migration.py', 'maintainer_config.py', 'source_cleanup.py', 'cleanup-worktree.mjs')
             if (root / 'scripts' / name).is_file()}
 
 
@@ -907,7 +907,7 @@ def cleanup_finished_sources(release, pending: list) -> str | None:
             deadlines.append(previous['nextAttemptAt'])
             continue
         try:
-            outcome = source_cleanup.cleanup(release.ROOT, request)
+            outcome = source_cleanup.cleanup(release.ROOT, request, target_commit=state.get('integratedCommit'))
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             outcome = {'status': 'pending', 'reason': 'Checkout cleanup could not finish: ' + type(error).__name__}
         if outcome.get('status') == 'pending':

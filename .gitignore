@@ -7,7 +7,7 @@ data.json
 /main.js.map
 
 # Local validation artifacts and packaged releases.
-/evidence/
+/evidence
 /release/
 
 # Python bytecode from local deployment tooling.
