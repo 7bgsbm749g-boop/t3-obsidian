@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 // Obsidian provides one shared editor runtime. Grammar packages must not bundle
 // a second state, language, or parser runtime with incompatible identities.
 export const editorExternals=['@codemirror/view','@codemirror/state','@codemirror/language','@codemirror/commands','@codemirror/autocomplete','@lezer/common','@lezer/lr','@lezer/highlight'];
+export const agentAssetLoaders={'':'text','.py':'text','.md':'text'};
 
 export function desktopTimersPlugin(){
   return {name:'desktop-lock-timers',setup(build){
@@ -23,7 +24,7 @@ export function desktopTimersPlugin(){
 async function main(){
   await mkdir('dist',{recursive:true});
   const notices=await readFile('THIRD_PARTY_NOTICES.md','utf8');
-  const result=await build({entryPoints:['src/app/main.ts'],bundle:true,metafile:true,external:['obsidian',...editorExternals,'node:*',...builtinModules.filter(n=>n!=='buffer')],platform:'browser',format:'cjs',supported:{'dynamic-import':false},target:'es2022',outfile:'dist/main.js',banner:{js:'/*\n'+notices.replaceAll('*/','* /')+'\n*/'}});
+  const result=await build({entryPoints:['src/app/main.ts'],bundle:true,metafile:true,loader:agentAssetLoaders,external:['obsidian',...editorExternals,'node:*',...builtinModules.filter(n=>n!=='buffer')],platform:'browser',format:'cjs',supported:{'dynamic-import':false},target:'es2022',outfile:'dist/main.js',banner:{js:'/*\n'+notices.replaceAll('*/','* /')+'\n*/'}});
   for(const input of Object.keys(result.metafile.inputs))if(/(?:^|\/)tests\/|proper-lockfile|graceful-fs/.test(input))throw Error(`A historical native test adapter entered the product bundle: ${input}`);
   for(const output of Object.values(result.metafile.outputs))for(const item of output.imports)if(/^(?:node:)?(?:fs(?:\/promises)?|child_process|http|https|net|tls)$/.test(item.path))throw Error(`A retired native capability entered the product bundle: ${item.path}`);
 }

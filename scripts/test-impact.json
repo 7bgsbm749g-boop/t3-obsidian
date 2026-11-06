@@ -42,7 +42,14 @@
       "esbuild.config.mjs",
       "manifest.json",
       "THIRD_PARTY_NOTICES.md",
-      "src/shared/obsidian-window.d.ts"
+      "src/shared/obsidian-window.d.ts",
+      "src/agents/asset-modules.d.ts"
+    ],
+    "src/agents/assets.ts": [
+      "agent/mcp_server.py",
+      "scripts/connect_commands.py",
+      "skills/obsidian-t3/SKILL.md",
+      "LICENSE"
     ],
     "src/app/main.ts": [
       "styles.css"

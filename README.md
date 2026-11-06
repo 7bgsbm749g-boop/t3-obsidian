@@ -31,6 +31,12 @@ You need Obsidian **1.13.0 or later** and a running T3 Code installation with Or
 
 Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projects** to manage folder links. **Advanced** includes manual pairing and connection diagnostics.
 
+## Let agents edit notes
+
+In **Settings → T3 Code → Connection → Agent tools**, choose the T3 computer and a Codex or Claude Code agent, then choose **Set up agent**. Python 3.10 or later must be available on that computer. Start a new agent session to load the tools and skill. The setup is included in the plugin; no repository checkout or Python packages are needed.
+
+Agents can prepare and submit checked note edits through the running plugin. Compatible changes merge, conflicts are kept for review, and active replies use the same safe final save. Keep Obsidian open and connected while editing.
+
 ---
 
-Your chosen note content and attachments go to the connected T3 computer and its configured model provider. T3 and provider accounts or usage charges are separate from this free plugin. [Report an issue](https://github.com/7bgsbm749g-boop/t3-obsidian/issues) · [MIT license](LICENSE)
+Your chosen note content and attachments go to the connected T3 computer and its configured model provider. Optional agent setup writes the bundled MCP tools and changes the selected agent’s launch settings on that computer through T3 Connect, outside the vault. Obsidian does not run the helper or open an incoming command port. T3 and provider accounts or usage charges are separate from this free plugin. [Report an issue](https://github.com/7bgsbm749g-boop/t3-obsidian/issues) · [MIT license](LICENSE)
