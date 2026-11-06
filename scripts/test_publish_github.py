@@ -12,6 +12,23 @@ spec.loader.exec_module(publish)
 
 
 class PublicationTests(unittest.TestCase):
+    def test_external_evidence_store_accepts_its_link_and_rejects_escapes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checkout, external = root / 'checkout', root / 'external'
+            checkout.mkdir()
+            external.mkdir()
+            (checkout / 'evidence').symlink_to(external, target_is_directory=True)
+            expected = external / 'publication'
+            self.assertEqual(publish.publication_directory(checkout, expected), expected)
+            self.assertEqual(publish.publication_directory(checkout, checkout / 'evidence/publication'), expected)
+            outside = root / 'another-project'
+            outside.mkdir()
+            (external / 'escape').symlink_to(outside, target_is_directory=True)
+            for candidate in [outside / 'publication', external / 'escape/publication']:
+                with self.assertRaises(ValueError):
+                    publish.publication_directory(checkout, candidate)
+
     def test_attestation_enforces_exact_source_tag_commit_and_workflow(self):
         command = publish.attestation_command('/verified/gh', Path('/immutable/main.js'), '0.0.999', 'a' * 40)
         for flag, value in [('--repo', publish.REPO), ('--source-ref', 'refs/tags/0.0.999'), ('--source-digest', 'a' * 40), ('--signer-workflow', publish.REPO + '/.github/workflows/release-provenance.yml')]:

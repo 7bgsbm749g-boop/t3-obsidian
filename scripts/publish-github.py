@@ -19,6 +19,14 @@ def checksum(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def publication_directory(project_root: Path, requested: Path) -> Path:
+    evidence = requested.resolve()
+    # Existing project links identify the approved external evidence store.
+    if not evidence.is_relative_to((project_root / 'evidence').resolve()):
+        raise ValueError('Keep publication evidence inside the configured project evidence directory.')
+    return evidence
+
+
 def require_delivery(directory: Path, version: str) -> dict:
     if not re.fullmatch(r'0\.0\.(0|[1-9][0-9]*)', version):
         raise ValueError('Supply the exact delivered numeric alpha version.')
@@ -49,9 +57,7 @@ def main():
     parser.add_argument('--publish', action='store_true', help='Create the regular Alpha release after verification')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
-    evidence = args.evidence.resolve()
-    if not evidence.is_relative_to(root / 'evidence'):
-        raise ValueError('Keep publication evidence inside this project evidence directory.')
+    evidence = publication_directory(root, args.evidence)
     evidence.mkdir(parents=True, exist_ok=False)
     receipt = require_delivery(CANONICAL / 'evidence/releases' / args.version, args.version)
     commit = receipt['gitCommit']

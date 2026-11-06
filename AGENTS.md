@@ -102,10 +102,11 @@ contributions. Only explicit user direction can end the Alpha stage.
 
 ## Evidence and completion
 
-Keep evidence under this repository's ignored `evidence/` directory, outside
-synced vaults. Retained release evidence and referenced attachments must be
-stored under the configured canonical checkout, not a temporary task checkout.
-The queue retains submitted evidence; verify any attachment references as well.
+Store evidence outside all project checkouts and worktrees, in the external
+project evidence root set by fleet guidance and local maintainer configuration.
+Use separate task subdirectories and link directly to the retained files.
+Legacy in-project symlinks preserve existing references only. The queue retains
+submitted evidence; verify that referenced attachments are retained as well.
 
 A completed release can remove its task checkout and local branch only when
 its submitted commit is still the branch tip, tracked and untracked files are
