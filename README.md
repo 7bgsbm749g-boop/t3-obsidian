@@ -4,6 +4,8 @@ The **t3-obsidian** plugin brings [T3 Code](https://github.com/pingdotgg/t3code)
 
 The plugin appears as **T3 Code** in Obsidian. This is an independent community plugin, with support for desktop and mobile.
 
+The plugin connects to an existing T3 Code environment on this computer or another computer through **T3 Connect (recommended)**, direct HTTPS (including Tailscale HTTPS), or an SSH tunnel set up outside Obsidian. Obsidian is a client; the plugin does not include or start a T3 server.
+
 ![An agent response inside an Obsidian note](docs/images/inline-response.png)
 
 ## Get started
@@ -13,6 +15,8 @@ You need Obsidian **1.13.0 or later** and a running T3 Code installation with Or
 1. Download `main.js`, `manifest.json`, and `styles.css` from the [newest alpha release](https://github.com/7bgsbm749g-boop/t3-obsidian/releases). Put them in your vault’s `.obsidian/plugins/t-three-code/` folder, then enable **T3 Code** under **Settings → Community plugins**.
 2. In T3 Code, sign in and enable **T3 Connect** on the computer you want to use.
 3. Open **Settings → T3 Code → Connection** in Obsidian. Enter your T3 account email, choose **Send sign-in code**, then enter the code and choose **Verify and connect**. Your computers and projects appear automatically. Sign in on each device you use.
+
+For direct local or remote connections, use **Settings → T3 Code → Advanced → Manual pairing**.
 
 ## Work from your notes
 
