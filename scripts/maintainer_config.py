@@ -28,6 +28,19 @@ def canonical_root(root: Path = ROOT) -> Path:
     return Path(configuration(root)['canonicalRoot']).expanduser().resolve()
 
 
+def evidence_root(root: Path = ROOT) -> Path:
+    """Use the maintainer's external store, with a legacy contributor fallback."""
+    value = configuration(root)
+    path = value.get('evidenceRoot') or str(canonical_root(root) / 'evidence')
+    directory = Path(path).expanduser()
+    if value.get('evidenceRoot') and (not directory.is_absolute() or directory.resolve().is_relative_to(canonical_root(root)) or directory.resolve().is_relative_to(root.resolve())):
+        raise ValueError('Configure an absolute evidenceRoot outside source checkouts.')
+    for name in ('developmentPlugins', 'productionPlugins'):
+        if value.get(name) and directory.resolve().is_relative_to(Path(value[name]).expanduser().resolve().parent.parent):
+            raise ValueError('Configure evidenceRoot outside synced vaults.')
+    return directory.resolve()
+
+
 def path_setting(name: str, default: Path, root: Path = ROOT) -> Path:
     return Path(configuration(root).get(name, str(default))).expanduser()
 
@@ -49,8 +62,11 @@ def require_deployment(root: Path = ROOT) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--instructions', action='store_true')
+    parser.add_argument('--evidence-root', action='store_true', help='Print the resolved external evidence directory')
     args = parser.parse_args()
-    if args.instructions:
+    if args.evidence_root:
+        print(evidence_root())
+    elif args.instructions:
         guide = common_directory() / 't3-obsidian/AGENTS.md'
         print(guide.read_text() if guide.is_file() else 'No local maintainer instructions are installed.')
     else:

@@ -1,21 +1,22 @@
 /** Real file RPC preconditions for the isolated desktop delivery regression. */
 import assert from 'node:assert/strict';
 import {readFile,writeFile,rm} from 'node:fs/promises';
-import {join,resolve} from 'node:path';
+import {join} from 'node:path';
 import {execFile} from 'node:child_process';
 import {T3_RESPONSE_MAX_BYTES} from '../../src/connection/t3-response-limits';
 import {environmentApi} from '../../src/connection/direct';
 import {connectT3Rpc,T3RpcError} from '../../src/connection/t3-rpc';
 import {connectVaultRemote} from '../../src/connection/vault-connection';
 import {identityPathForSettings} from '../../src/app/vault-identity';
+import {requireEvidenceDirectory} from '../../scripts/evidence-paths.mjs';
 
 const officialCli=(args:string[])=>new Promise<string>((resolve,reject)=>{
   execFile('/home/ubuntu/.local/bin/t3',args,{shell:false,windowsHide:true,timeout:45_000,maxBuffer:T3_RESPONSE_MAX_BYTES,encoding:'utf8'},(error,stdout)=>error?reject(Error('The official T3 test command failed; credential output withheld.')):resolve(stdout));
 });
 
 async function main(){
-  const evidence=resolve(process.argv[2]??''),phase=process.argv[3];
-  if(!evidence.startsWith('/home/ubuntu/projects/send-to-t3-code/evidence/')||!['before','after'].includes(phase))throw Error('Supply a private lab directory and before/after phase.');
+  const evidence=await requireEvidenceDirectory(process.argv[2]??'','Supply a private lab directory and before/after phase.'),phase=process.argv[3];
+  if(!['before','after'].includes(phase))throw Error('Supply a private lab directory and before/after phase.');
   const lab=JSON.parse(await readFile(join(evidence,'LAB.json'),'utf8')),local=JSON.parse(await readFile(join(evidence,'credential-b.json'),'utf8'));
   const session=local.pairedSessions[lab.connectionId],connection={transport:'direct' as const,host:'direct',executable:'',url:session.url,environmentId:lab.environmentId};
   const settingsPath='.obsidian/plugins/send-to-t3-code/data.json',rpc=await connectT3Rpc(await environmentApi(connection,session),session.url),remote=await connectVaultRemote(connection,session);

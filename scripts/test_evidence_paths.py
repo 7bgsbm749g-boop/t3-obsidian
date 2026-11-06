@@ -1,4 +1,4 @@
-"""Project evidence must not recreate the retired shared backup directory."""
+"""Evidence belongs in the configured external store, outside real vaults."""
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -6,12 +6,25 @@ import tempfile
 import json
 import unittest
 import ast
+from scripts import maintainer_config
 
 ROOT = Path(__file__).resolve().parent.parent
 NATIVE_LAB = Path(__file__).with_name('build-native-response-lab.mjs')
 
 
 class EvidencePathTests(unittest.TestCase):
+    def test_external_path_guard_accepts_direct_paths_and_refuses_symlink_escapes(self):
+        evidence = maintainer_config.evidence_root(ROOT)
+        with tempfile.TemporaryDirectory(dir=evidence, prefix='external-path-guard-') as temporary, tempfile.TemporaryDirectory() as outside:
+            task = Path(temporary)
+            (task / 'escape').symlink_to(outside, target_is_directory=True)
+            code = "import {requireEvidenceDirectory} from './scripts/evidence-paths.mjs'; console.log(await requireEvidenceDirectory(process.argv[1]));"
+            for candidate, accepted in [(task / 'new-lab', True), (task / 'escape/new-lab', False), (Path(outside) / 'new-lab', False)]:
+                result = subprocess.run(['node', '--input-type=module', '-e', code, str(candidate)], cwd=ROOT, capture_output=True, text=True, timeout=20)
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+                if accepted: self.assertEqual(Path(result.stdout.strip()), candidate)
+                self.assertFalse(candidate.exists())
+
     def test_native_sync_driver_resolves_the_repository_after_the_fixture_move(self):
         script = ROOT / 'tests/native/local-response-sync-lab.py'
         tree = ast.parse(script.read_text())
@@ -24,14 +37,14 @@ class EvidencePathTests(unittest.TestCase):
         self.assertTrue((resolved / 'scripts/obsidian-sync-lab.py').is_file())
         self.assertTrue((resolved / 'tests/native/local-response-sync-case.ts').is_file())
 
-    def test_sync_lab_keeps_evidence_inside_the_plugin_project(self):
+    def test_sync_lab_keeps_evidence_in_the_external_project_store(self):
         spec = importlib.util.spec_from_file_location('sync_lab', Path(__file__).with_name('obsidian-sync-lab.py'))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        self.assertEqual(module.EVIDENCE.parent, Path('/home/ubuntu/projects/send-to-t3-code/evidence'))
+        self.assertEqual(module.EVIDENCE.parent, maintainer_config.evidence_root(ROOT))
 
-    def test_native_lab_build_accepts_gitignored_project_evidence_and_refuses_synced_vaults(self):
-        evidence = ROOT / 'evidence'
+    def test_native_lab_build_accepts_external_evidence_and_refuses_synced_vaults(self):
+        evidence = maintainer_config.evidence_root(ROOT)
         evidence.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=evidence, prefix='native-path-contract-') as temporary:
             lab = Path(temporary) / 'native-lab'
@@ -45,7 +58,7 @@ class EvidencePathTests(unittest.TestCase):
             result = subprocess.run(['node', str(NATIVE_LAB), path, '--run-import'],
                                     cwd=ROOT, capture_output=True, text=True, timeout=20)
             self.assertNotEqual(result.returncode, 0)
-            self.assertRegex(result.stderr, 'outside synced vaults|gitignored evidence/')
+            self.assertRegex(result.stderr, 'outside synced vaults|external project evidence root')
 
     def test_lab_commands_reject_the_retired_directory_before_accessing_vaults_or_credentials(self):
         for script, extra, message in [

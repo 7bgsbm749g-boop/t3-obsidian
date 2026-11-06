@@ -4,9 +4,9 @@ import {build} from 'esbuild';
 import {readFile,writeFile,mkdir,cp,rm,access} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {join,resolve} from 'node:path';
-const evidence=resolve(process.argv[2]||'');
-if(!evidence.startsWith('/home/ubuntu/projects/send-to-t3-code/evidence/'))throw Error('Private evidence directory required.');
+import {join} from 'node:path';
+import {requireEvidenceDirectory} from './evidence-paths.mjs';
+const evidence=await requireEvidenceDirectory(process.argv[2]||'','Private evidence directory required.');
 await mkdir(evidence,{recursive:true});
 const record=join(evidence,'SETUP.json');
 // Refresh only the reviewed runtime in an already prepared synthetic lab.

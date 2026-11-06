@@ -4,10 +4,10 @@ import {resolve,join,relative,isAbsolute} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {createHash,randomBytes} from 'node:crypto';
 import {editorExternals} from '../esbuild.config.mjs';
+import {requireEvidenceDirectory} from './evidence-paths.mjs';
 const [destination,asar]=process.argv.slice(2);if(!destination||!asar)throw Error('Use a new canonical evidence directory and supported Obsidian ASAR.');
-const config=JSON.parse(execFileSync('python3',['scripts/maintainer_config.py'],{encoding:'utf8',timeout:10000})),root=resolve(destination),evidence=resolve(config.canonicalRoot,'evidence');
+const config=JSON.parse(execFileSync('python3',['scripts/maintainer_config.py'],{encoding:'utf8',timeout:10000})),root=await requireEvidenceDirectory(destination);
 const inside=(parent,child)=>{const part=relative(parent,child);return !part||!isAbsolute(part)&&part!=='..'&&!part.startsWith('../');};
-if(!inside(evidence,root)||root===evidence)throw Error('Keep the lab in canonical ignored evidence.');
 for(const plugins of [config.developmentPlugins,config.productionPlugins].filter(Boolean))if(inside(await realpath(resolve(plugins,'../..')),root))throw Error('Refuse a synced vault.');
 try{await access(root);throw Error('Use a fresh lab directory.');}catch(error){if(error.code!=='ENOENT')throw error;}
 const vault=join(root,'vault'),profile=join(root,'profile'),product=join(vault,'.obsidian/plugins/t-three-code'),controller=join(vault,'.obsidian/plugins/agent-mcp-lab');

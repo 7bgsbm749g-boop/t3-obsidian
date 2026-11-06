@@ -2,12 +2,13 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
-import {join,resolve} from 'node:path';
+import {join} from 'node:path';
 import {connectT3Rpc,T3ConnectionTimeoutError} from '../../src/connection/t3-rpc';
 import {environmentApi} from '../../src/connection/direct';
+import {requireEvidenceDirectory} from '../../scripts/evidence-paths.mjs';
 
 async function main(){
- const evidence=resolve(process.argv[2]??'');if(!evidence.startsWith('/home/ubuntu/projects/send-to-t3-code/evidence/'))throw Error('Private evidence directory required.');await mkdir(evidence,{recursive:true});
+ const evidence=await requireEvidenceDirectory(process.argv[2]??'','Private evidence directory required.');await mkdir(evidence,{recursive:true});
  const settings=JSON.parse(await readFile('/home/ubuntu/vaults/QLO2/.obsidian/plugins/send-to-t3-code/data.json','utf8')),paired=settings.paired.find((c:any)=>c.environmentId==='3630e7fa-f1df-4631-b5a2-6086ddaf28a1');
  const cli='/home/ubuntu/.local/bin/t3',base='/home/ubuntu/.t3',issued=JSON.parse(execFileSync(cli,['auth','session','issue','--base-dir',base,'--ttl','5m','--label','connection-health-read-only-validation','--json','--scope','filesystem:read'],{encoding:'utf8'}));
  let drop=false,pongs=0;

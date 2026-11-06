@@ -2,13 +2,14 @@ import {readWireShell} from '../../src/connection/wire-readers';
 import assert from 'node:assert/strict';
 import {readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-import {join,resolve} from 'node:path';
+import {join} from 'node:path';
 import {environmentApi,commandId} from '../../src/connection/direct';
 import {readInlineSnapshot} from '../../src/conversations/thread-stream';
 import {applyThreadItem,turnForMessage,turnPhase} from '../../src/conversations/inline-thread';
+import {requireEvidenceDirectory} from '../../scripts/evidence-paths.mjs';
 
 async function main(){
-  const evidence=resolve(process.argv[2]??'');if(!evidence.startsWith('/home/ubuntu/projects/send-to-t3-code/evidence/'))throw Error('Private lab evidence directory required.');
+  const evidence=await requireEvidenceDirectory(process.argv[2]??'','Private lab evidence directory required.');
   const json=async(name:string)=>JSON.parse(await readFile(join(evidence,name),'utf8'));
   const lab=await json('LAB.json'),local=await json('credential-b.json'),session=local.pairedSessions[lab.connectionId];
   const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:session.url,environmentId:lab.environmentId},session),access={origin:session.url,api};
