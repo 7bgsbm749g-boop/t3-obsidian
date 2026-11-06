@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {connectT3Rpc,T3ConnectionTimeoutError,T3RequestTimeoutError,type RpcClock} from '../src/connection/t3-rpc';
+import {connectT3Rpc,T3ConnectionTimeoutError,T3RequestTimeoutError,type RpcClock,type T3Api} from '../src/connection/t3-rpc';
 import {T3ResponseTooLargeError} from '../src/connection/t3-response-limits';
 
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
@@ -9,7 +9,7 @@ function fixture(){
   const time:RpcClock={now:()=>now,timer:(fn,ms)=>{const id=++serial;timers.set(id,{at:now+ms,fn});return id as any;},clear:id=>{timers.delete(id as any);}};
   const emit=(frame:any)=>ws.onmessage?.({data:JSON.stringify(frame)});
   const ws:any={send:(raw:string)=>{const frame=JSON.parse(raw);requests.push(frame);if(frame._tag==='Ping'&&pongs)emit({_tag:'Pong'});},close:()=>{closes++;ws.onclose?.();}};
-  const open=()=>connectT3Rpc(async()=>({ticket:'synthetic-only'}),'https://synthetic.example',()=>{queueMicrotask(()=>ws.onopen?.());return ws;},time);
+  const open=(observe?:T3Api['trackConnection'])=>connectT3Rpc(Object.assign(async()=>({ticket:'synthetic-only'}),{trackConnection:observe}),'https://synthetic.example',()=>{queueMicrotask(()=>ws.onopen?.());return ws;},time);
   const advance=async(ms:number)=>{
     const until=now+ms;
     for(;;){const next=[...timers].filter(([,t])=>t.at<=until).sort((a,b)=>a[1].at-b[1].at)[0];if(!next)break;now=next[1].at;timers.delete(next[0]);next[1].fn();await flush();}
@@ -17,6 +17,12 @@ function fixture(){
   };
   return {open,advance,requests,emit,reply:(id:string,value:any)=>emit({_tag:'Exit',requestId:id,exit:{_tag:'Success',value}}),silent:()=>{pongs=false;},closes:()=>closes,timers};
 }
+
+test('route observers see an actual opened socket and lose active status after health failure',async()=>{
+ const h=fixture(),seen:Array<{readonly closed:boolean;readonly error?:Error}>=[];
+ assert.equal(seen.length,0);const rpc=await h.open(connection=>seen.push(connection));assert.equal(seen.length,1);assert.equal(seen[0].closed,false);
+ h.silent();await h.advance(8000);assert.equal(seen[0].closed,true);assert.ok(seen[0].error instanceof T3ConnectionTimeoutError);assert.equal(rpc.closed,true);
+});
 
 test('a socket that appears open but drops every frame is confirmed dead before the old request deadline',async()=>{
   const h=fixture(),rpc=await h.open();h.silent();

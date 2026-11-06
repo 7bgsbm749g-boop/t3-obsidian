@@ -3,8 +3,10 @@ import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../sh
 import {T3_RESPONSE_MAX_BYTES,T3ResponseTooLargeError} from './t3-response-limits';
 import {Buffer} from 'buffer/';
 import {T3_PROTOCOL_VERSION} from './orchestration-v2';
+import type {RouteConnection} from './route-status';
 
-export type T3Api=(path:string,payload?:unknown)=>Promise<unknown>;
+export type T3Api=((path:string,payload?:unknown,options?:{signal?:AbortSignal})=>Promise<unknown>)&{trackConnection?:(connection:RouteConnection)=>void};
+export interface T3RpcConnection extends RouteConnection {call(tag:string,payload:unknown):Promise<unknown>;close():void}
 export type SocketFactory=(url:string)=>WebSocket;
 export const RPC_REQUEST_TIMEOUT_MS=15_000,RPC_HEALTH_INTERVAL_MS=5_000,RPC_HEALTH_TIMEOUT_MS=3_000;
 export interface RpcClock {now():number;timer(callback:()=>void,milliseconds:number):ReturnType<typeof setTimeout>;clear(timer:ReturnType<typeof setTimeout>):void}
@@ -23,17 +25,17 @@ export class T3RpcError extends Error {
 }
 
 /** Unary requests over T3's authenticated Effect RPC protocol. */
-export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFactory=url=>new WebSocket(url),time:RpcClock=clock){
+export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFactory=url=>new WebSocket(url),time:RpcClock=clock):Promise<T3RpcConnection>{
   const issued=await api('/api/auth/websocket-ticket',{});
   if(!isRecord(issued)||typeof issued.ticket!=='string'||!issued.ticket)throw Error('T3 did not issue a connection ticket.');
   const url=new URL('/ws',origin);url.protocol=url.protocol==='https:'?'wss:':'ws:';
   url.searchParams.set('wsTicket',issued.ticket);url.searchParams.set('orchestrationProtocol',String(T3_PROTOCOL_VERSION));
-  const socket=makeSocket(url.href),connectionId=`rpc-${++connections}`;let closed=false,nextId=0,lastReply=time.now(),healthTimer:ReturnType<typeof setTimeout>|undefined;
+  const socket=makeSocket(url.href),connectionId=`rpc-${++connections}`;let closed=false,failure:Error|undefined,nextId=0,lastReply=time.now(),healthTimer:ReturnType<typeof setTimeout>|undefined;
   const pending=new Map<string,{resolve:(value:unknown)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>;method:string;started:number}>();
   let probe:{work:Promise<void>;resolve():void;reject(error:Error):void;timer:ReturnType<typeof setTimeout>}|undefined;
   const finish=(error:Error)=>{for(const task of pending.values()){time.clear(task.timer);task.reject(error instanceof T3ConnectionTimeoutError?new T3ConnectionTimeoutError(connectionId,task.method,Math.max(0,time.now()-task.started),error.pendingCount,error.idleMs):error);}pending.clear();};
   const fail=(error:Error)=>{
-    if(closed)return;closed=true;if(healthTimer!==undefined)time.clear(healthTimer);healthTimer=undefined;
+    if(closed)return;closed=true;failure=error;if(healthTimer!==undefined)time.clear(healthTimer);healthTimer=undefined;
     if(probe){time.clear(probe.timer);probe.reject(error);probe=undefined;}finish(error);
     try{socket.close();}catch{/* The dead socket cannot prevent recovery. */}
   };
@@ -92,5 +94,7 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
     });
     return result;
   };
-  return {call:rpc,get closed(){return closed;},close(){time.clear(openTimer);fail(Error('T3 connection closed.'));}};
+  const connection={call:rpc,get closed(){return closed;},get error(){return failure;},close(){if(closed)return;time.clear(openTimer);fail(Error('T3 connection closed.'));failure=undefined;}};
+  api.trackConnection?.(connection);
+  return connection;
 }

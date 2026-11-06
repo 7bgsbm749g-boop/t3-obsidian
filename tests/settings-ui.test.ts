@@ -26,7 +26,7 @@ async function harness(mobile=false){
   class Setting {
     el:Element;get settingEl(){return this.el;}
     constructor(parent:Element){this.el=parent.createEl('setting');}
-    setName(text:string){this.el.text=text;return this;}setDesc(){return this;}setHeading(){return this;}
+    description='';setName(text:string){this.el.text=text;return this;}setDesc(text:string){this.description=text;return this;}setHeading(){return this;}
     add(callback:any){const control:any={inputEl:{},options:{} as Record<string,string>,setPlaceholder(){return this;},setValue(value:any){this.value=value;return this;},setButtonText(text:string){this.text=text;return this;},setCta(){return this;},setDisabled(){return this;},addOption(key:string,value:string){this.options[key]=value;return this;},addOptions(options:any){Object.assign(this.options,options);return this;},onChange(run:any){this.change=run;return this;},onClick(run:any){this.click=run;return this;}};callback(control);this.el.controls.push(control);return this;}
     addText(callback:any){return this.add(callback);}addDropdown(callback:any){return this.add(callback);}
     addButton(callback:any){return this.add(callback);}addToggle(callback:any){return this.add(callback);}
@@ -54,4 +54,12 @@ test('native controls save their values and refresh through the supported index 
 test('thread and note mode changes preserve links and reply streaming',async()=>{
  const h=await harness(true);h.plugin.settings.noteThreads=[{notePath:'A.md',threadId:'thread'}];const before=JSON.stringify(h.plugin.settings.noteThreads),pages=h.tab.getSettingDefinitions(),beta=pages.find((page:any)=>page.name==='Replies').items.find((item:any)=>item.name==='Beta');
  const setting=new h.Setting(new Element());beta.items[0].render(setting);assert.equal(setting.el.controls[0].value,'free');await setting.el.controls[0].change('one-to-one');assert.equal(h.plugin.settings.threadNoteMode,'one-to-one');assert.equal(JSON.stringify(h.plugin.settings.noteThreads),before);assert.equal(h.plugin.settings.inlineStreaming.enabled,true);
+});
+
+test('route text updates in place and detached rows stop receiving updates',async()=>{
+ const h=await harness(),root=new Element(),setting=new h.Setting(root);let text='Active · Connected';
+ const input=root.createEl('input');input.focus();Object.assign(setting.settingEl,{isConnected:true});
+ h.plugin.routeDescription=()=>text;h.tab.routeRows.set('route',{setting,description:text});
+ text='Disconnected · machine offline';h.tab.refreshRouteStatus();assert.equal(setting.description,text);assert.equal(input.focused,true);assert.equal(h.updates(),0);
+ Object.assign(setting.settingEl,{isConnected:false});text='Active · Connected';h.tab.refreshRouteStatus();assert.equal(setting.description,'Disconnected · machine offline');assert.equal(h.tab.routeRows.size,0);
 });

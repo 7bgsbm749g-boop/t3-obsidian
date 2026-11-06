@@ -13,15 +13,6 @@ Investigation and review are read-only unless implementation is requested.
 Commit all intended tracked changes, including instruction and skill files,
 before reporting them complete. Report failed checks and unfinished work.
 
-Before assessing current behavior or editing product code, and after a resume
-or fork, establish the source baseline. Compare the task HEAD with the canonical
-checkout and latest relevant release receipt. For installed-client questions,
-also verify the installed manifest/bundle and the client's actual loaded version
-on the device in question. Retain these identities in ignored evidence. Resolve
-source, installed, loaded, and screenshot differences before claiming a feature
-exists, is missing, or has parity. Preserve task edits while refreshing source;
-never assume a task checkout or an installed manifest proves the live baseline.
-
 ## Development and validation
 
 Use Node.js 22, npm, and Python 3. Preserve the existing lockfile and resolved

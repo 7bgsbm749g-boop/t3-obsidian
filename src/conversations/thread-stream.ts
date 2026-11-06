@@ -10,9 +10,10 @@ import {applyThreadItem,turnForMessage,type InlineThreadState} from './inline-th
 import {T3_PROTOCOL_VERSION,normalizeV2StreamItem,normalizeV2Snapshot,normalizeV2TitleItem} from '../connection/orchestration-v2';
 import {responseTooLarge} from '../connection/t3-response-limits';
 import {readWorktreeSetup,workspacePreparation} from '../projects/worktree-setup';
+import type {T3Api} from '../connection/t3-rpc';
 
 export type ThreadAccessCloseReason='cache-expired'|'auth-rejected'|'host-disposed'|'stop-complete'|'stop-timeout'|'stream-reconnect'|'stream-stopped'|'late-access'|'caller-closed';
-export interface ThreadAccess {origin:string;api:(path:string,payload?:unknown,options?:{signal?:AbortSignal})=>Promise<unknown>;expiresAt?:number;close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
+export interface ThreadAccess {origin:string;api:T3Api;expiresAt?:number;close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
 export type ThreadAccessFactory=()=>Promise<ThreadAccess>;
 export interface ThreadStreamCallbacks {item:(item:ThreadStreamItem)=>void;reconnecting:(error:Error)=>void;failure?:(error:Error)=>void}
 export interface InlineHistoryTargets {messageIds:string[];turnIds:string[]}

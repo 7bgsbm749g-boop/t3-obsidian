@@ -1,3 +1,4 @@
+import {RouteStatus} from '../connection/route-status';
 import {orderedRoutes,routeGroups,routePairing,routeMethod,localRoute,routeNames,type ConnectionMethod} from '../connection/routes';
 import {forEachBounded} from '../shared/bounded-work';
 import {AgentSetup,type AgentProvider} from '../agents/setup';
@@ -147,7 +148,7 @@ export default class SendToT3 extends Plugin {
   connectionMethod:ConnectionMethod='connect';
   routeOrder:string[]=[];
   readonly routeFailures=new Map<string,string>();
-  readonly usedRoutes=new Map<string,string>();
+  readonly routeStatus=new RouteStatus();
   private smartReplica=loadSmartSend(undefined);
   private smartRecovered=new Set<string>();
   private smartRecovering=new Map<string,Promise<void>>();
@@ -1604,7 +1605,7 @@ export default class SendToT3 extends Plugin {
     new Notice('The latest T3 turn is attached to this response.');
   }
   private async inlineThreadAccess(environmentId:string,forceRefresh=false):Promise<ThreadAccess>{
-    return environmentAccess(environmentId,{paired:orderedRoutes(this.settings.paired,this.routeOrder,c=>this.connectionScore(c)),openPaired:async paired=>{try{const access=await this.pairedThreadAccess(paired,forceRefresh);this.usedRoutes.set(environmentId,paired.id);this.routeFailures.delete(paired.id);return access;}catch(error){this.routeFailures.set(paired.id,message(error));throw error;}}});
+    return environmentAccess(environmentId,{paired:orderedRoutes(this.settings.paired,this.routeOrder,c=>this.connectionScore(c)),openPaired:async paired=>{try{const access=await this.pairedThreadAccess(paired,forceRefresh);this.routeFailures.delete(paired.id);return access;}catch(error){this.routeFailures.set(paired.id,message(error));throw error;}}});
   }
   private async pairedThreadAccess(paired:PairedConnection,forceRefresh=false):Promise<ThreadAccess>{
     const environmentId=paired.environmentId;
@@ -1616,27 +1617,31 @@ export default class SendToT3 extends Plugin {
     const key=JSON.stringify([paired.url,environmentId,session?.token,session?.expiresAt,session?.dpopKeyId]);
     let verified=this.verifiedConnections.get(key);
     if(forceRefresh||!verified||verified.until<=Date.now()){
-      const work=api('/api/orchestration/shell').then(()=>{});verified={work,until:Date.now()+30_000};this.verifiedConnections.set(key,verified);
+      const work=this.routeStatus.request(paired.id,()=>api('/api/orchestration/shell')).then(()=>{});verified={work,until:Date.now()+30_000};this.verifiedConnections.set(key,verified);
       while(this.verifiedConnections.size>16)this.verifiedConnections.delete(this.verifiedConnections.keys().next().value!);
       void work.catch(()=>{if(this.verifiedConnections.get(key)?.work===work)this.verifiedConnections.delete(key);});
     }
     await verified.work;
     if(!Platform.isMobile&&localRoute(paired))this.eventLocalEnvironmentId=environmentId;
     let renewing:Promise<void>|undefined;
-    return {origin:endpoint(paired.url),get expiresAt(){return session?.expiresAt;},api:async(path,payload,options)=>{
-      const attemptedApi=api;
-      try{return await attemptedApi(path,payload,options);}catch(error){
-        // Retrying reads can recover a revoked environment token. Dispatch is
-        // never replayed; account expiry is handled by nativeCredential.
-        const safe=payload===undefined||['/api/auth/websocket-ticket','/api/orchestration/turn-item','/api/assets/create-url'].includes(path);
-        if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed||!safe)throw error;
-        if(api===attemptedApi){
-          renewing??=(async()=>{session=await this.sessionFor(paired.id,true);api=await environmentApi(connection,session);})().finally(()=>{renewing=undefined;});
-          await renewing;
+    const routed:ThreadAccess['api']=async(path,payload,options)=>this.routeStatus.request(paired.id,async()=>{
+      try{
+        const attemptedApi=api;
+        try{return await attemptedApi(path,payload,options);}catch(error){
+          // Retrying reads can recover a revoked environment token. Dispatch is
+          // never replayed; account expiry is handled by nativeCredential.
+          const safe=payload===undefined||['/api/auth/websocket-ticket','/api/orchestration/turn-item','/api/assets/create-url'].includes(path);
+          if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed||!safe)throw error;
+          if(api===attemptedApi){
+            renewing??=(async()=>{session=await this.sessionFor(paired.id,true);api=await environmentApi(connection,session);})().finally(()=>{renewing=undefined;});
+            await renewing;
+          }
+          return await api(path,payload,options);
         }
-        return api(path,payload,options);
-      }
-    }};
+      }catch(error){this.routeFailures.set(paired.id,message(error));throw error;}
+    });
+    routed.trackConnection=connection=>this.routeStatus.track(paired.id,connection);
+    return {origin:endpoint(paired.url),get expiresAt(){return session?.expiresAt;},api:routed};
   }
   private async localInlineEnvironment():Promise<string>{
     const local=this.settings.paired.find(connection=>localRoute(connection));
@@ -1744,6 +1749,8 @@ export default class SendToT3 extends Plugin {
     if(snapshot?.status==='submitted'){snapshot.status='saved';snapshot.notePath=binding.notePath;await this.saveCheckedEdit(snapshot);}
   }
   private tickCommandHosts(){
+    this.routeStatus.retain(this.settings.paired.map(route=>route.id));
+    this.settingsTab?.refreshRouteStatus();
     // Each host coalesces its own tick. An offline machine must not hold the
     // ready clients behind a global poll promise. The registration cap bounds
     // these independent channels; command dispatch remains serialized.
@@ -2100,6 +2107,11 @@ export default class SendToT3 extends Plugin {
     this.syncProjectSources();this.deviceInline?.reconnect();await this.htmlResults?.recover(c.environmentId);
     await this.projectDiscovery?.refresh(true);
   }
+  routeDescription(id:string){
+    const route=this.settings.paired.find(item=>item.id===id);if(!route)return 'Connection removed';
+    const active=this.routeStatus.active(id),failure=this.routeFailures.get(id)??this.routeStatus.failure(id);
+    return `${route.url} · ${active?'Active · Connected':this.routeStatus.pending(id)?'Connecting…':failure?'Disconnected · '+failure:'Standby · '+this.pairingStatus(route)}`;
+  }
   connectionGroups(){return routeGroups(orderedRoutes(this.settings.paired,this.routeOrder,c=>this.connectionScore(c)));}
   async preferRoute(id:string,direction:number){
     const route=this.settings.paired.find(c=>c.id===id);if(!route)return;
@@ -2108,7 +2120,7 @@ export default class SendToT3 extends Plugin {
     [routes[index],routes[next]]=[routes[next],routes[index]];const ids=new Set(routes.map(c=>c.id));
     this.routeOrder=[...this.routeOrder.filter(id=>!ids.has(id)),...routes.map(c=>c.id)];await this.saveDeviceState();
   }
-  async checkRoute(id:string){const route=this.settings.paired.find(c=>c.id===id);if(!route)throw Error('This route was removed.');try{await this.pairedThreadAccess(route);this.routeFailures.delete(id);this.usedRoutes.set(route.environmentId,id);}catch(error){this.routeFailures.set(id,message(error));throw error;}}
+  async checkRoute(id:string){const route=this.settings.paired.find(c=>c.id===id);if(!route)throw Error('This route was removed.');try{await this.pairedThreadAccess(route);this.routeFailures.delete(id);}catch(error){this.routeFailures.set(id,message(error));throw error;}}
   async connectionChoice(method:ConnectionMethod){this.connectionMethod=method;await this.saveDeviceState();}
   pairingStatus(c:PairedConnection){const s=this.pairedSessions[c.id];return !s?'Pair on this device':s.expiresAt<=Date.now()?'Pairing expired':`Paired on this device until ${new Date(s.expiresAt).toLocaleDateString()}`;}
   async startEmailSignIn(email:string){
@@ -2750,7 +2762,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring||this.stopped||this.busy)return;
     this.monitoring=true;try{await this.monitorSettlements();}finally{this.monitoring=false;}
@@ -2871,9 +2883,16 @@ export class T3Settings extends PluginSettingTab {
     details.addEventListener('toggle',()=>{if(details.open)this.expanded.add(title);else this.expanded.delete(title);});
     return details;
   }
+  private routeRows=new Map<string,{setting:Setting;description:string}>();
+  refreshRouteStatus(){
+    for(const [id,row] of this.routeRows){
+      if(!row.setting.settingEl.isConnected){this.routeRows.delete(id);continue;}
+      const description=this.plugin.routeDescription(id);if(description!==row.description){row.description=description;row.setting.setDesc(description);}
+    }
+  }
   private pairingDraft={name:'',address:'',code:''};
   private connectionUI(el:HTMLElement){
-    const p=this.plugin,method=p.connectionMethod;
+    const p=this.plugin,method=p.connectionMethod;this.routeRows.clear();
     el.addClass('t3-settings-section');
     new Setting(el).setName('Add a connection').setDesc('Choose a route to a running T3 environment. Existing connections stay available.').addDropdown(dropdown=>dropdown.addOptions({connect:'T3 Connect (recommended)',local:'This computer only',https:'HTTPS / Tailscale',ssh:'Existing SSH tunnel'}).setValue(method).onChange(async value=>{
       this.selectedMachine=null;this.pairingDraft={name:'',address:value==='local'?'http://127.0.0.1:3773':'',code:''};await p.connectionChoice(value as ConnectionMethod);this.refresh();
@@ -2894,8 +2913,8 @@ export class T3Settings extends PluginSettingTab {
       const projects=new Set(p.settings.directProjects.filter(project=>group.routes.some(route=>route.id===project.connectionId)).map(project=>project.id));
       new Setting(el).setName(group.name).setDesc(`${projects.size} projects · ${group.routes.length} ${group.routes.length===1?'route':'routes'}. Routes are tried in this device’s preferred order.`).addButton(button=>button.setButtonText('Add route').onClick(async()=>{this.selectedMachine={environmentId:group.environmentId,name:group.name,url:''};this.pairingDraft={name:group.name,address:'',code:''};await p.connectionChoice('https');this.refresh();}));
       for(const [index,route] of group.routes.entries()){
-        const status=p.routeFailures.get(route.id)??(p.usedRoutes.get(group.environmentId)===route.id?'Last verified route':p.pairingStatus(route));
-        new Setting(el).setName(routeNames[routeMethod(route)]).setDesc(`${route.url} · ${status}`).addButton(button=>button.setIcon('arrow-up').setTooltip('Prefer this route').setDisabled(index===0).onClick(async()=>{await p.preferRoute(route.id,-1);this.refresh();})).addButton(button=>button.setIcon('arrow-down').setTooltip('Try this route later').setDisabled(index===group.routes.length-1).onClick(async()=>{await p.preferRoute(route.id,1);this.refresh();})).addButton(button=>button.setButtonText('Check').onClick(async()=>{button.setDisabled(true);try{await p.checkRoute(route.id);new Notice('Connection verified.');}catch(error){new Notice(message(error),12000);}this.refresh();})).addButton(button=>button.setButtonText('Remove').onClick(async()=>{try{await p.removeConnection(route.id);this.refresh();}catch(error){new Notice(message(error),12000);}}));
+        const description=p.routeDescription(route.id),row=new Setting(el);this.routeRows.set(route.id,{setting:row,description});
+        row.setName(routeNames[routeMethod(route)]).setDesc(description).addButton(button=>button.setIcon('arrow-up').setTooltip('Prefer this route').setDisabled(index===0).onClick(async()=>{await p.preferRoute(route.id,-1);this.refresh();})).addButton(button=>button.setIcon('arrow-down').setTooltip('Try this route later').setDisabled(index===group.routes.length-1).onClick(async()=>{await p.preferRoute(route.id,1);this.refresh();})).addButton(button=>button.setButtonText('Check').onClick(async()=>{button.setDisabled(true);try{await p.checkRoute(route.id);new Notice('Connection verified.');}catch(error){new Notice(message(error),12000);}this.refresh();})).addButton(button=>button.setButtonText('Remove').onClick(async()=>{try{await p.removeConnection(route.id);this.refresh();}catch(error){new Notice(message(error),12000);}}));
       }
     }
   }
