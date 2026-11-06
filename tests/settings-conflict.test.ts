@@ -67,13 +67,13 @@ test('rapid folder move and reverse move survive queued saves, a stale Sync file
   assert.deepEqual(JSON.parse(JSON.stringify(restarted.plugin.settings.folderLinks)),[link]);
 });
 
-test('external refresh adopts all shared preferences and unrelated saves preserve them',async()=>{
+test('external refresh preserves shared preferences but cannot reactivate retired note cleanup',async()=>{
   const h=await harness({vaultId:'vault'});
   h.setCurrent({...h.current(),inlineStreaming:{enabled:false,keepIntermediate:true,intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'},vaultHost:{connectionId:'c',environmentId:'env',workspaceRoot:'/vault'},completion:{action:'archive',archiveFolder:'Remote'}});
   await h.plugin.onExternalSettingsChange();
   assert.equal(h.plugin.settings.inlineStreaming.enabled,false);assert.equal(h.plugin.settings.vaultHost.workspaceRoot,'/vault');
   h.plugin.settings.completion.archiveFolder='Local';await h.plugin.save();
-  assert.equal(h.current().inlineStreaming.enabled,false);assert.equal(h.current().inlineStreaming.finalAnswerFormat,'raw-markdown');assert.equal(h.current().completion.action,'archive');
+  assert.equal(h.current().inlineStreaming.enabled,false);assert.equal(h.current().inlineStreaming.finalAnswerFormat,'raw-markdown');assert.equal(h.current().completion.action,'keep');
 });
 
 test('general attachment folders default without writes and merge distinct synced edits',async()=>{

@@ -16,7 +16,7 @@ You need Obsidian **1.13.0 or later** and a running T3 Code installation with Or
 2. In T3 Code, sign in and enable **T3 Connect** on the computer you want to use.
 3. Open **Settings → T3 Code → Connection** in Obsidian. Enter your T3 account email, choose **Send sign-in code**, then enter the code and choose **Verify and connect**. Your computers and projects appear automatically. Sign in on each device you use.
 
-For direct local or remote connections, use **Settings → T3 Code → Advanced → Manual pairing**.
+For a local, HTTPS/Tailscale, or existing SSH tunnel connection, choose that method under **Settings → T3 Code → Connection** and use a fresh T3 pairing link or code. Start SSH tunnels outside Obsidian.
 
 ## Work from your notes
 
@@ -43,4 +43,4 @@ Agents can prepare and submit checked note edits through the running plugin. Com
 
 ---
 
-Your chosen note content and attachments go to the connected T3 computer and its configured model provider. Optional agent setup writes the bundled MCP tools and changes the selected agent’s launch settings on that computer through T3 Connect, outside the vault. Obsidian does not run the helper or open an incoming command port. T3 and provider accounts or usage charges are separate from this free plugin. [Report an issue](https://github.com/7bgsbm749g-boop/t3-obsidian/issues) · [MIT license](LICENSE)
+Your chosen note content and attachments go to the connected T3 computer and its configured model provider. Optional agent setup writes the bundled MCP tools and changes the selected agent’s launch settings on that computer through the authenticated T3 connection, outside the vault. Obsidian does not run the helper or open an incoming command port. T3 and provider accounts or usage charges are separate from this free plugin. [Report an issue](https://github.com/7bgsbm749g-boop/t3-obsidian/issues) · [MIT license](LICENSE)

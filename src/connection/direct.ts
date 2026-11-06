@@ -21,7 +21,7 @@ import {PLUGIN_SCOPE,hasPluginPermissions} from './environment-permissions';
 import {ensureNoProject} from '../projects/no-project';
 import {AUTO_THREAD_TITLE} from '../conversations/thread-title';
 export interface RemoteEnvironmentDescriptor extends Record<string,unknown>{environmentId:string;label:string;orchestrationProtocolVersion:2}
-export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean}
+export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean;routeKind?:'local'|'https'|'ssh'}
 export interface PairedSession {token:string;expiresAt:number;environmentId:string;url:string;dpopKeyId?:string;accountId?:string;permissions?:string[]}
 export interface DirectPlan {protocolVersion?:2;launch?:boolean;generateTitle?:boolean;workspaceStrategy?:import('../conversations/model-defaults').WorkspaceStrategy;hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:CreateThreadCommand|null;turn:TurnStartCommand;observedActiveTurnId?:string;delivery?:InlineStartRequest}
 export type Fetcher=typeof fetch;

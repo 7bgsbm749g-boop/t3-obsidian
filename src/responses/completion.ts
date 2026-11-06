@@ -1,6 +1,5 @@
 import {isRecord} from '../shared/values';
 import type {NormalizedThread} from '../connection/wire-types';
-import {hasControlCharacters} from '../shared/values';
 import { sha256 } from '@noble/hashes/sha2';
 import { sha1 } from '@noble/hashes/legacy';
 import { Buffer } from 'buffer/';
@@ -22,13 +21,6 @@ export function installContentHasher(hash:(text:string)=>string){
   return ()=>{if(desktopContentHash===hash)desktopContentHash=undefined;};
 }
 export function contentHash(text: string) {return desktopContentHash?desktopContentHash(text):Buffer.from(sha256(new TextEncoder().encode(text))).toString('hex');}
-export function archiveFolder(value: string): string {
-  const path=value.trim().replace(/\\/g,'/');
-  if (!path || path.startsWith('/') || (hasControlCharacters(path)||/[:]/.test(path)) || path.split('/').some(p=>!p || p==='.' || p==='..' || p.startsWith('.') || /[<>"|?*]/.test(p) || /[. ]$/.test(p))) {
-    throw new Error('Choose a normal folder inside the vault, such as Archive/T3 Code.');
-  }
-  return path;
-}
 // The integration derives the initial user-message ID from the request ID using UUID v5.
 export function initialMessageId(requestId: string): string {
   const bytes=Buffer.from(sha1(Buffer.concat([Buffer.from(requestId.replace(/-/g,''),'hex'),Buffer.from('message')]))).slice(0,16);
@@ -59,29 +51,7 @@ export interface CleanupIO {
   save():Promise<void>;
   active():boolean;
 }
-export async function cleanCompletedNote(job:CompletionJob, io:CleanupIO):Promise<string> {
-  if(!io.active()) throw new Error('Monitoring stopped.');
-  const file=io.find(job.notePath);
-  if(!file) return 'Note no longer at its original path; no action taken.';
-  const unchanged=async()=>file.ctime===job.ctime && contentHash(await io.read(file))===job.contentHash && !io.hasUnsavedChanges(file,job.contentHash);
-  if(!await unchanged()) return 'Kept note because it changed after sending.';
-  if(job.action==='keep') return 'Kept note.';
-  if(job.action==='archive') {
-    const folder=archiveFolder(job.archiveFolder);
-    if(job.notePath.startsWith(folder+'/')) return 'Note is already in the archive folder.';
-    if(!job.destination){
-      const base=`${folder}/${job.notePath}`;let candidate=base;let suffix=1;
-      while(io.exists(candidate)) candidate=base.replace(/\.md$/i,` (${suffix++}).md`);
-      job.destination=candidate;await io.save();
-    }
-    if(io.exists(job.destination)) return 'Kept note because the archive destination is occupied.';
-    const parts=job.destination.split('/').slice(0,-1);let path='';
-    for(const part of parts){path=path?`${path}/${part}`:part;if(!io.exists(path))await io.mkdir(path);}
-    if(!io.active())throw new Error('Monitoring stopped.');
-    if(!await unchanged())return 'Kept note because it changed during completion handling.';
-    if(!io.active())throw new Error('Monitoring stopped.');
-    await io.move(file,job.destination);return `Archived to ${job.destination}`;
-  }
-  if(!io.active())throw new Error('Monitoring stopped.');
-  await io.trash(file);return 'Removed note using the vault deletion preference.';
+/** Legacy callers retain notes unconditionally. No archive or deletion path remains. */
+export async function cleanCompletedNote(_job:CompletionJob, _io:CleanupIO):Promise<string> {
+  return 'Kept note.';
 }

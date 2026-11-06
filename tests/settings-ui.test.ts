@@ -42,7 +42,7 @@ async function harness(mobile=false){
 test('native settings definitions expose the supported pages without credential writes or legacy renderers',async()=>{
  const h=await harness(),pages=h.tab.getSettingDefinitions();assert.deepEqual(Array.from(pages,(page:any)=>page.name),['Connection','Replies','Projects','Advanced']);
  const names:string[]=[],aliases:string[]=[];const scan=(items:any[])=>{for(const item of items){names.push(item.name);aliases.push(...item.aliases??[]);if(item.items)scan(item.items);}};scan(pages);
- for(const name of ['T3 account','Stream replies into the editor','Final answer format','Thread title generation','Settle completed threads','Beta','Thread and note mode'])assert.ok(names.includes(name),name);
+ for(const name of ['Connections','Stream replies into the editor','Final answer format','Thread title generation','Settle completed threads','Beta','Thread and note mode'])assert.ok(names.includes(name),name);
  assert.equal(names.includes('Connect with'),false);assert.equal(aliases.includes('Archive folder'),false);assert.equal(h.saves(),0);assert.equal(h.refreshes(),0);assert.equal(Object.hasOwn(Object.getPrototypeOf(h.tab),'display'),false);
 });
 test('native controls save their values and refresh through the supported index API',async()=>{

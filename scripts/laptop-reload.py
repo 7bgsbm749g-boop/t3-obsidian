@@ -57,22 +57,24 @@ def mailbox(config: dict, command: dict, *, retry: bool = False, cleanup: bool =
     # Legacy HTTP below is restricted to the first reload from an older plugin.
     if command.get('kind') not in ['client-status', 'send-failure-log', 'reload-client']:
         raise ValueError('The release helper accepts maintenance commands only.')
-    helper = Path(__file__).with_name('connect_commands.py').read_text() + '\nimport sys\n_p=json.loads(sys.stdin.read())\ntry:\n _r=send_command(_p["vault"],_p["command"],timeout=5,retry=_p["retry"])\nexcept (ValueError,OSError) as _e:\n _r=dict(id=_p["command"]["id"],ok=False,error=str(_e))\nprint(json.dumps(_r))\n'
-    helper64 = base64.b64encode(helper.encode()).decode()
-    # Structured data is base64; neither paths nor user strings become shell code.
+    # Send one bounded Python program directly over SSH. Nesting Python's
+    # stdin pipe inside a PowerShell ReadToEnd bootstrap can hang before the
+    # legacy bridge is reached, leaving a successfully synced client stale.
     payload = base64.b64encode(json.dumps({'vault': config['vault'], 'command': command, 'retry': retry, 'cleanup': cleanup}).encode()).decode()
+    helper = Path(__file__).with_name('connect_commands.py').read_text() + "\n_p=json.loads(base64.b64decode('" + payload + "').decode())\ntry:\n _r=send_command(_p['vault'],_p['command'],timeout=5,retry=_p['retry'])\nexcept (ValueError,OSError) as _e:\n _r=dict(id=_p['command']['id'],ok=False,error=str(_e))\nprint(json.dumps(_r))\n"
+    remote = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', config['host']]
+    result = subprocess.run([*remote, 'python.exe -c "import sys;exec(sys.stdin.read())"'],
+                            input=helper, capture_output=True, text=True, timeout=15)
+    if result.returncode == 0:
+        answer = json.loads(result.stdout.lstrip('\ufeff'))
+        if answer is not None:
+            return answer
+    elif not any(text in result.stderr.lower() for text in ['not recognized', 'was not found', 'not found']):
+        result.check_returncode()
     script = r'''
 $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 $p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('PAYLOAD')) | ConvertFrom-Json
-$python=Get-Command python.exe -ErrorAction SilentlyContinue
-if($python) {
-  $code=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('HELPER64'))
-  $inputJson=$p | ConvertTo-Json -Depth 20 -Compress
-  $connectedJson=$inputJson | & $python.Source -c $code
-  if($LASTEXITCODE -ne 0) { throw 'The connected command helper failed. No fallback command was dispatched.' }
-  if($connectedJson -and $connectedJson.Trim() -ne 'null') { $connectedJson; exit }
-}
 $routePath=Join-Path $p.vault '.obsidian/t3-code/storage-route.json'
 if(-not (Test-Path $routePath)) {
   @{id=$p.command.id;ok=$false;pending=$true;bootstrapRequired=$true;error='The plugin command bridge is not initialized. Load the current plugin once to create its private mailbox.'} | ConvertTo-Json -Compress; exit
@@ -106,12 +108,10 @@ if($endpoint.version -ne 1 -or $uri.Scheme -ne 'http' -or $uri.Host -ne '127.0.0
 $body=@{command=$p.command;retry=[bool]$p.retry} | ConvertTo-Json -Depth 12 -Compress
 $answer=Invoke-RestMethod -Method Post -Uri $uri -Headers @{Authorization=('Bearer '+$endpoint.token)} -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 5 -MaximumRedirection 0
 $answer | ConvertTo-Json -Depth 20 -Compress
-'''.replace('PAYLOAD', payload).replace('HELPER64', helper64)
-    bootstrap = '[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); & ([ScriptBlock]::Create([Console]::In.ReadToEnd()))'
-    encoded = base64.b64encode(bootstrap.encode('utf-16le')).decode()
-    result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', config['host'],
-                             'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + encoded],
-                            input=script, capture_output=True, text=True, check=True, timeout=15)
+'''.replace('PAYLOAD', payload)
+    encoded = base64.b64encode(script.encode('utf-16le')).decode()
+    result = subprocess.run([*remote, 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + encoded],
+                            capture_output=True, text=True, check=True, timeout=15)
     return json.loads(result.stdout.lstrip('\ufeff'))
 
 

@@ -1,3 +1,12 @@
+.t3-settings-section {
+  container-type: inline-size;
+  min-width: 0;
+  padding-inline: var(--size-4-4);
+}
+.t3-settings-section > .setting-item { padding-block: var(--size-4-3); }
+.t3-settings-section .setting-item-info { min-width: 0; }
+.t3-settings-section .setting-item-description { overflow-wrap: anywhere; }
+.t3-settings-section .setting-item-control { flex-wrap: wrap; gap: var(--size-4-2); }
 .t3-settings { container-type: inline-size; }
 .t3-settings-header p { color: var(--text-muted); margin: 0 0 20px; }
 .t3-settings-tabs {
