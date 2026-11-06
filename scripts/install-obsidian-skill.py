@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import shutil
 import uuid
-import maintainer_config
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / 'skills' / 'obsidian-t3'
@@ -44,7 +43,7 @@ def install(home, source=SOURCE, backups=None, check=False):
             try:
                 temporary.symlink_to(source, target_is_directory=True)
                 if target.exists():
-                    directory = backups or maintainer_config.evidence_root(ROOT) / 'skills'
+                    directory = backups or ROOT / 'evidence' / 'skills'
                     directory.mkdir(parents=True, exist_ok=True)
                     backup = directory / (dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex)
                     shutil.move(str(target), str(backup))

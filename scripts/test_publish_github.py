@@ -4,7 +4,6 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 spec = importlib.util.spec_from_file_location('publish_github', Path(__file__).with_name('publish-github.py'))
@@ -13,19 +12,6 @@ spec.loader.exec_module(publish)
 
 
 class PublicationTests(unittest.TestCase):
-    def test_configured_external_store_needs_no_project_local_link(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            base = Path(temporary); source = base / 'source'; source.mkdir()
-            external = base / 'external'; external.mkdir()
-            other = base / 'other-project'; other.mkdir()
-            (external / 'escape').symlink_to(other, target_is_directory=True)
-            config = {'canonicalRoot': str(source), 'evidenceRoot': str(external)}
-            with patch.object(publish.maintainer_config, 'configuration', return_value=config):
-                self.assertEqual(publish.publication_directory(source, external / 'round'), external / 'round')
-                for path in [source / 'evidence/round', other / 'round', external / 'escape/round']:
-                    with self.assertRaises(ValueError):
-                        publish.publication_directory(source, path)
-
     def test_external_evidence_store_accepts_its_link_and_rejects_escapes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

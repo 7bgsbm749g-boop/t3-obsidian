@@ -36,13 +36,6 @@ async function cleanup(){
   const git=(...args)=>execFileSync('git',['--no-optional-locks','-C',target,...args],{encoding:'utf8',timeout:10000,maxBuffer:1024*1024}).trim();
   if(git('rev-parse','HEAD')!==input.commit||git('symbolic-ref','--short','HEAD')!==input.branch)return busy('The source branch changed before checkout removal.');
   if(git('status','--porcelain=v1'))return {status:'blocked',reason:'The source has uncommitted files.'};
-  let alignment;
-  if(input.targetCommit){
-    alignment=JSON.parse(execFileSync('python3',[path.join(input.canonical,'scripts/source_cleanup.py'),'--align'],{input:JSON.stringify(input),encoding:'utf8',timeout:15000,maxBuffer:1024*1024}));
-    if(alignment.status!=='aligned')return alignment;
-    input.commit=alignment.alignedCommit;
-  }
-  if(input.preserveCheckout)return {status:'blocked',reason:'The source has retained local files outside generated output.',...(alignment?{alignedCommit:alignment.alignedCommit}:{})};
   const {ticket}=await request('/api/auth/websocket-ticket',{});
   if(!ticket)throw Error('T3 did not issue a cleanup socket ticket.');
   const url=new URL('/ws',origin);url.protocol='ws:';url.searchParams.set('wsTicket',ticket);url.searchParams.set('orchestrationProtocol','2');
@@ -62,7 +55,7 @@ async function cleanup(){
       }catch{done(Error('T3 returned an invalid cleanup acknowledgement.'));}
     };
   });
-  return {status:'removed',...(alignment?{alignedCommit:alignment.alignedCommit}:{})};
+  return {status:'removed'};
 }
 try{console.log(JSON.stringify(await cleanup()));}
 catch{console.log(JSON.stringify({status:'pending',reason:'T3 checkout cleanup is unavailable; the checkout and branch remain protected.'}));}

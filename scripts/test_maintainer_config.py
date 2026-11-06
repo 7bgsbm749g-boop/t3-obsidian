@@ -22,22 +22,3 @@ class MaintainerConfigurationTests(unittest.TestCase):
     def test_deployment_requires_explicit_installation_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(SystemExit, 'Configure local deployment'): maintainer_config.require_deployment(Path(directory))
-
-    def test_external_evidence_is_shared_by_worktrees_without_creating_local_stores(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / 'canonical'; root.mkdir()
-            subprocess.run(['git', 'init', '-q', str(root)], check=True)
-            external = Path(directory) / 'external-evidence'
-            private = root / '.git/t3-obsidian'; private.mkdir()
-            (private / 'maintainer.json').write_text(json.dumps({'evidenceRoot': str(external)}))
-            self.assertEqual(maintainer_config.evidence_root(root), external)
-            self.assertFalse((root / 'evidence').exists())
-            self.assertFalse(external.exists())
-
-    def test_configured_evidence_cannot_be_relative_or_inside_the_checkout(self):
-        from unittest.mock import patch
-        root = Path('/synthetic/source')
-        for value in ['local-evidence', str(root / 'evidence')]:
-            with self.subTest(value=value), patch.object(maintainer_config, 'configuration', return_value={'canonicalRoot': str(root), 'evidenceRoot': value}):
-                with self.assertRaisesRegex(ValueError, 'outside source checkouts'):
-                    maintainer_config.evidence_root(root)

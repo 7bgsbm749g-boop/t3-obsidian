@@ -35,7 +35,7 @@ def integrate(source: Path, canonical: Path, commit: str) -> dict:
         raise SystemExit('This commit includes product or tooling changes. Use the release process for those.')
     if git(source, 'rev-parse', '--path-format=absolute', '--git-common-dir') != git(canonical, 'rev-parse', '--path-format=absolute', '--git-common-dir'):
         raise SystemExit('The documentation source is not a checkout of this repository.')
-    with locked(maintainer_config.evidence_root(canonical) / 'release-queue/worker.lock'), locked(maintainer_config.evidence_root(canonical) / 'release.lock'):
+    with locked(canonical / 'evidence/release-queue/worker.lock'), locked(canonical / 'evidence/release.lock'):
         if git(canonical, 'status', '--porcelain=v1'):
             raise SystemExit('The canonical checkout contains uncommitted work.')
         if subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'HEAD'], cwd=canonical).returncode == 0:

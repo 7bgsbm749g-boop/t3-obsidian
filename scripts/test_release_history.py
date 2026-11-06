@@ -3,7 +3,6 @@ from types import SimpleNamespace
 import json
 import tempfile
 import unittest
-from unittest.mock import patch
 from scripts import release_history as history
 
 
@@ -14,21 +13,6 @@ def seed_value():
 
 
 class ReleaseHistoryTests(unittest.TestCase):
-    def test_external_store_retains_history_and_existing_mirrors(self):
-        external_temp = tempfile.TemporaryDirectory(); self.addCleanup(external_temp.cleanup)
-        external = Path(external_temp.name)
-        mirror = external / 'worktrees/old-task/version-audit-alpha'
-        mirror.mkdir(parents=True)
-        seed = seed_value(); seed['mirrors'] = [str(mirror)]
-        self.seed.write_text(json.dumps(seed))
-        (self.root / 'evidence').symlink_to(external, target_is_directory=True)
-        with patch.object(history.maintainer_config, 'configuration', return_value={'canonicalRoot': str(self.root), 'evidenceRoot': str(external)}):
-            self.refresh('0.0.377-alpha', seed=self.seed)
-            self.assertTrue((external / 'version-history/history.json').is_file())
-            self.assertTrue((mirror / 'RELEASE-LEDGER.csv').is_file())
-            self.assertTrue((self.root / 'evidence').is_symlink())
-            self.assertFalse(history.mirror_allowed(self.root, self.root))
-
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
         (self.root/'release-policy.json').write_text(json.dumps({'schemaVersion':1,'stage':'alpha','firstAlphaVersion':'0.0.377-alpha','transitionFrom':'2.45.81'}))

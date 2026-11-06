@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG = Path.home() / '.config/send-to-t3-code/laptop-reload.json'
 STATE = Path.home() / '.local/state/send-to-t3-code/native-laptop-reload'
 import maintainer_config
-RECEIPTS = maintainer_config.evidence_root() / 'releases'
+RECEIPTS = maintainer_config.canonical_root() / 'evidence/releases'
 RUNTIME = ('main.js', 'manifest.json', 'styles.css')
 
 

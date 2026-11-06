@@ -92,7 +92,7 @@ authorize these steps.
    python3 scripts/publish-github.py VERSION \
      --gh /path/to/verified/gh \
      --notes-file /path/to/release-notes.txt \
-     --evidence /path/to/external-project-evidence/publication-VERSION --publish
+     --evidence evidence/publication-VERSION --publish
    ```
 
    The helper checks delivery receipts, completed smoke evidence, the loaded
