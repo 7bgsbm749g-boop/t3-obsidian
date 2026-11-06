@@ -12,10 +12,17 @@ spec.loader.exec_module(reload)
 
 
 class LaptopReloadTests(unittest.TestCase):
+    def setUp(self):
+        self.runtime = patch.object(reload, 'installed_runtime', side_effect=lambda config: self.release)
+        self.runtime.start()
+        self.addCleanup(self.runtime.stop)
+        self.release = {}
+
     def test_acknowledgement_is_not_loaded_version_proof_and_retries_preserve_the_reload_id(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(reload, 'STATE', Path(directory)):
             config = {'host': 'laptop', 'vault': r'C:\Vault'}
             release = {'version': '3.4.5', 'hashes': {n: 'a' * 64 for n in reload.RUNTIME}}
+            self.release = release
             state = {'release': release, 'target': config}
             calls = []
             def mailbox(config, command, **kwargs):
@@ -35,6 +42,7 @@ class LaptopReloadTests(unittest.TestCase):
     def test_same_instance_is_not_confirmation_of_a_requested_reload(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(reload, 'STATE', Path(directory)), patch.object(reload, 'mailbox', return_value={'ok': True, 'client': {'loadedVersion': '3.4.5', 'instanceId': 'old'}}):
             state = {'beforeInstanceId': 'old'}
+            self.release = {'version': '3.4.5', 'hashes': {}}
             result = reload.attempt({'host': 'laptop', 'vault': 'vault'}, {'version': '3.4.5', 'hashes': {}}, state)
             self.assertEqual(result['status'], 'pending')
 
@@ -51,6 +59,7 @@ class LaptopReloadTests(unittest.TestCase):
                     calls.append(command)
                     return {'ok':True,'client':{'loadedVersion':'2.45.81','instanceId':'old'}} if command['kind']=='client-status' else {'ok':True,'reloadScheduled':True}
                 with patch.object(reload,'mailbox',mailbox):
+                    self.release = {'version':'0.0.377-alpha','hashes':{}}
                     result=reload.attempt({'host':'laptop','vault':'vault'},{'version':'0.0.377-alpha','hashes':{}},{})
                 self.assertEqual(result['status'],'pending');self.assertEqual(calls[-1]['releaseVersion'],'2.45.81')
 
@@ -76,9 +85,46 @@ class LaptopReloadTests(unittest.TestCase):
                 return {'ok': True, 'client': {'loadedVersion': '2.45.81', 'instanceId': 'legacy'}} if command['kind'] == 'client-status' else {'ok': True, 'reloadScheduled': True}
             with patch.object(reload, 'ROOT', root), patch.object(reload, 'RECEIPTS', receipts), patch.object(reload, 'STATE', root), patch.object(reload, 'mailbox', mailbox):
                 latest = reload.latest_release()
+                self.release = latest
                 self.assertEqual(latest['version'], '0.0.382')
                 self.assertEqual(reload.attempt({'host': 'laptop', 'vault': 'vault'}, latest, {})['status'], 'pending')
                 self.assertEqual(calls[-1]['releaseVersion'], '0.0.382')
+
+    def test_sync_must_deliver_all_three_exact_runtime_files_before_reload(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(reload, 'STATE', Path(directory)):
+            release = {'version':'0.0.400','hashes':{n:'a'*64 for n in reload.RUNTIME}}
+            for installed in [{}, {'version':'0.0.400','hashes':{**release['hashes'],'styles.css':'b'*64}}]:
+                self.release = installed
+                calls = []
+                def mailbox(config, command, **kwargs):
+                    calls.append(command)
+                    return {'ok':True,'client':{'loadedVersion':'0.0.399','instanceId':'old'}}
+                with patch.object(reload,'mailbox',mailbox):
+                    result = reload.attempt({'host':'laptop','vault':'vault'},release,{})
+                self.assertEqual(result['status'],'pending')
+                self.assertIn('runtime files', result['reason'])
+                self.assertFalse(any(c['kind']=='reload-client' for c in calls))
+
+    def test_completed_stale_reload_gets_one_new_request_only_after_a_new_instance(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(reload, 'STATE', Path(directory)):
+            self.release = {'version':'0.0.400','hashes':{}}
+            state = {'beforeInstanceId':'first','reloadId':'completed-first-reload'}
+            requests = []
+            instance = 'second'
+            def mailbox(config, command, **kwargs):
+                if command['kind']=='client-status':
+                    return {'ok':True,'client':{'loadedVersion':'0.0.399','instanceId':instance}}
+                requests.append(command['id'])
+                return {'ok':True,'reloadScheduled':True}
+            with patch.object(reload, 'mailbox', mailbox):
+                result = reload.attempt({'host':'laptop','vault':'vault'},self.release,state)
+                self.assertEqual(result['beforeInstanceId'],'second')
+                self.assertNotEqual(result['reloadId'],'completed-first-reload')
+                reload.attempt({'host':'laptop','vault':'vault'},self.release,result)
+                instance = 'third'
+                refused = reload.attempt({'host':'laptop','vault':'vault'},self.release,result)
+                self.assertIn('inspection is required', refused['reason'])
+            self.assertEqual(requests,[result['reloadId']]*2)
 
 
 if __name__ == '__main__':

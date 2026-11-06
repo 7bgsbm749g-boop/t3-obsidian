@@ -131,12 +131,47 @@ def attempt(config: dict, release: dict, state: dict) -> dict:
         return {**state, 'status': 'complete', 'client': client, 'completedAt': dt.datetime.now(dt.timezone.utc).isoformat()}
     if release_policy.order_key(ROOT, client['loadedVersion']) > release_policy.order_key(ROOT, release['version']):
         return {**state, 'status': 'complete', 'client': client, 'reason': 'client already newer'}
+    installed = installed_runtime(config)
+    if installed.get('version') != release['version'] or installed.get('hashes') != release['hashes']:
+        return {**state, 'status': 'pending', 'reason': 'waiting for all laptop runtime files to match the release'}
+    # An acknowledged reload may have run before Sync delivered this release.
+    # A different live instance proves that dispatch finished. A fresh request
+    # can now reload the verified installed bytes; uncertain dispatches still
+    # retain their stable ID and never repeat against the same instance.
+    if state.get('beforeInstanceId') and state['beforeInstanceId'] != client['instanceId']:
+        if state.get('syncedReloadRetried'):
+            return {**state, 'status': 'pending', 'reason': 'the client still loaded an older version after a verified reload; inspection is required'}
+        state.pop('reloadId', None)
+        state['beforeInstanceId'] = client['instanceId']
+        state['syncedReloadRetried'] = True
+    state['verifiedRuntime'] = installed
     state.setdefault('beforeInstanceId', client['instanceId'])
     state.setdefault('reloadId', str(uuid.uuid4()))
     atomic_json(STATE / 'pending.json', state)
     command = {'version': 1, 'id': state['reloadId'], 'kind': 'reload-client', 'releaseVersion': release_policy.reload_request_version(ROOT, release['version'], client['loadedVersion']), 'runtimeSha256': release['hashes']}
     scheduled = mailbox(config, command, retry=True)
     return {**state, 'status': 'pending', 'reason': 'waiting for a new loaded client' if scheduled.get('ok') else scheduled.get('error', 'waiting for Sync')}
+
+
+def installed_runtime(config: dict) -> dict:
+    """Read only the target runtime through the external maintainer helper."""
+    payload = base64.b64encode(json.dumps({'vault': config['vault']}).encode()).decode()
+    program = """from pathlib import Path
+import base64,hashlib,json
+p=json.loads(base64.b64decode('PAYLOAD').decode())
+directory=Path(p['vault'])/'.obsidian/plugins/t-three-code'
+try:
+ manifest=json.loads((directory/'manifest.json').read_text(encoding='utf-8-sig'))
+ hashes={name:hashlib.sha256((directory/name).read_bytes()).hexdigest() for name in ['main.js','manifest.json','styles.css']}
+ result={'version':manifest['version'],'hashes':hashes} if manifest.get('id')=='t-three-code' else {}
+except (OSError,ValueError,KeyError):
+ result={}
+print(json.dumps(result))
+""".replace('PAYLOAD', payload)
+    result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', config['host'],
+                             'python.exe -c "import sys;exec(sys.stdin.read())"'],
+                            input=program, capture_output=True, text=True, check=True, timeout=15)
+    return json.loads(result.stdout.lstrip('\ufeff'))
 
 
 def retry() -> dict:
