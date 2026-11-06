@@ -349,7 +349,12 @@ def recover_version_collision(release, canonical: Path, job_id: str, *, queue: P
         if not candidate or state.get('ownedIntegrations') != [{'commit': candidate, 'merge': False}]:
             raise SystemExit('Collision recovery cannot prove one owned integration.')
         version = state['version']
-        archive = release.archive_path(version)
+        source_root = release.ROOT
+        release.ROOT = canonical
+        try:
+            archive = release.archive_path(version)
+        finally:
+            release.ROOT = source_root
         receipt = release.release_receipt_dir(version) / 'deployment.json'
         deployed = read(receipt)
         archived_commit = deployed.get('gitCommit')
@@ -927,6 +932,11 @@ def drain(release, *, queue: Path = QUEUE) -> dict:
                         # remains visible without owning the installation lane.
                         for path, item in pending:
                             if item['status'] == 'awaiting-smoke' and completed_smoke(release, item['version']):
+                                deployed = read(release.release_receipt_dir(item['version']) / 'deployment.json')
+                                if item.get('integrationStyle') == 'squash' and deployed.get('gitCommit') != item.get('releaseCommit'):
+                                    update(path, item, error='Another release owns this deployment. Use --recover-version-collision.',
+                                           nextAction='Recover the unshipped version collision; older smoke records cannot complete it.')
+                                    continue
                                 completed_request = read(path / item.get('requestFile', 'request.json'))
                                 release_history.refresh(release, path, completed_request, item['version'])
                                 update(path, item, status='complete', completedAt=now(), nextAction=None, error=None)

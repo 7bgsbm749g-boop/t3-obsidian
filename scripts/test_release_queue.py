@@ -57,6 +57,35 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertEqual((archive.read_bytes(), receipt.read_bytes()), before)
         self.assertTrue((self.root / 'bad-prepared.ts').exists())
 
+    def test_collision_recovery_resolves_archive_from_canonical_not_task_worktree(self):
+        original = self.git('rev-parse', 'HEAD')
+        source = self.source('task-root-recovery'); job = self.submit(source)
+        directory = self.store / 'jobs' / job['jobId']; state = queue.read(directory / 'state.json')
+        queue.integrate_job(self.release, directory, {**queue.read(directory / 'request.json'), 'validation': 'legacy'}, state)
+        self.release.archive_path = lambda version: self.release.ROOT / '.git' / (version + '.zip')
+        archive = self.release.archive_path('1.0.0'); archive.write_text('canonical bytes')
+        receipt = self.release.release_receipt_dir('1.0.0') / 'deployment.json'
+        queue.write(receipt, {'gitCommit': original, 'archiveSha256': self.release.sha256_file(archive)})
+        queue.update(directory, state, status='awaiting-smoke')
+        self.release.ROOT = source
+        queue.recover_version_collision(self.release, self.root, job['jobId'], queue=self.store)
+        self.assertEqual(self.release.ROOT, source)
+        self.assertEqual(archive.read_text(), 'canonical bytes')
+
+    def test_older_release_smoke_cannot_complete_a_colliding_job_or_block_later_maintenance(self):
+        original = self.git('rev-parse', 'HEAD')
+        source = self.source('smoke-collision'); job = self.submit(source)
+        directory = self.store / 'jobs' / job['jobId']; state = queue.read(directory / 'state.json')
+        queue.integrate_job(self.release, directory, {**queue.read(directory / 'request.json'), 'validation': 'legacy'}, state)
+        queue.write(self.release.release_receipt_dir('1.0.0') / 'deployment.json', {'gitCommit': original})
+        self.smoke('1.0.0', 'old-client', self.evidence, 'older completed release')
+        queue.update(directory, state, status='awaiting-smoke')
+        with patch.object(queue.release_history, 'refresh') as refresh:
+            self.assertEqual(queue.drain(self.release, queue=self.store)['status'], 'idle')
+        refresh.assert_not_called()
+        self.assertEqual(queue.read(directory / 'state.json')['status'], 'awaiting-smoke')
+        self.assertIn('Another release owns', queue.read(directory / 'state.json')['error'])
+
     def test_collision_recovery_refuses_to_revert_a_candidate_that_owns_its_release(self):
         source = self.source('owned-release'); job = self.submit(source); directory = self.store / 'jobs' / job['jobId']
         state = queue.read(directory / 'state.json'); queue.integrate_job(self.release, directory, queue.read(directory / 'request.json'), state)
